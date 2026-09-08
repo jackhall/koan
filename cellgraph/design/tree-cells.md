@@ -16,12 +16,12 @@ root's terminal nothing outside the subtree can pin a cell inside it, and
 inside it every hold points up the chain. A hold that always points at a live
 ancestor needs no bit and no count.
 
-So a third region habitat beside the slab cell and the sealed record: the
-**tree cell**.
+So a third region habitat beside the slab cell and the sealed cell: the **tree
+cell**.
 
 ## Three habitats
 
-| | slab cell | sealed record | tree cell |
+| | slab cell | sealed cell | tree cell |
 |---|---|---|---|
 | identity | `Handle` (slot + generation) | `SealedId` | `TreeHandle` (pool index + generation) |
 | liveness | pin column, birth column | holder count | structural: a parent outlives its children |
@@ -84,8 +84,8 @@ cross free — made structural: an operand homed in the producer's own tree cell
 is producer-born. The rule is named for what it turns on: every row of the
 table above is an ancestry question, and nothing else is asked.
 
-Operands homed in slab cells or in records take the ordinary path whichever
-kind the destination is, with the mint redirected to the root.
+Operands homed in slab cells or in sealed cells take the ordinary path
+whichever kind the destination is, with the mint redirected to the root.
 
 ## Death
 
@@ -170,7 +170,7 @@ executing cell, and read "root of `E`" as `E` itself when `E` is a slab cell.
 |---|---|---|
 | a live or dead-resident tree cell `T` | `root(T)` is `E`'s root | `{root(T)}`, homed in `T` |
 | a live slab slot `S` | `S` is `E`'s root, or `E`'s root's pin row or birth row names it | the mask stored in that cell's resident table |
-| a record `id` | `E`'s root holds `id` | `{id}` |
+| a sealed cell `id` | `E`'s root holds `id` | `{id}` |
 | nowhere — a recycled slot, or a chain that ends in a reclaim | — | `Gone` |
 
 Same-root entitlement is sound because a redeem yields a **read**, which is
@@ -193,7 +193,7 @@ what a region does.
 ## What this retires
 
 Group sealing. A subtree's internal holds never exist, so there is no chain of
-records to collapse into one.
+sealed cells to collapse into one.
 
 ## Kind selection is the embedder's
 

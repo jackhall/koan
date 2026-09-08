@@ -9,8 +9,8 @@
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
 use cellgraph::{
-    Active, CellRef, CellTable, CreateError, CrossedOperand, Dormant, DropFree, EnterError, Erased,
-    Handle, Operand, Prices, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError,
+    Active, CellHandle, CellTable, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
+    Erased, Handle, Operand, Prices, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError,
     ReleaseTreeError, Resident, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
 
@@ -69,7 +69,7 @@ where
 /// only where the embedder has said copying is cheap and the slab is under pressure.
 fn weigh(prices: Prices) -> Verdict {
     let pressure = prices.occupied * 2 >= prices.cap
-        || prices.records > 0
+        || prices.sealed_cells > 0
         || prices.retained_bytes > 0
         || prices.destination_bytes > 1 << 20;
     if pressure && prices.copy_bytes < prices.pin_bytes {
@@ -145,7 +145,7 @@ fn every_public_door_answers_from_outside_the_crate() {
     let mut kept: Option<Resident<Number>> = None;
     let carried = table
         .enter(child, |context| {
-            assert_eq!(context.cell(), CellRef::Slab(child));
+            assert_eq!(context.cell(), CellHandle::Slab(child));
 
             // Placement: into the running cell, and into a named one with an operand embedded.
             let number = context.alloc::<Number>(build_number);
@@ -301,7 +301,7 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     let mut kept: Option<Resident<Number>> = None;
     let carried = table
         .enter(inner, |context| {
-            assert_eq!(context.cell(), CellRef::Tree(inner));
+            assert_eq!(context.cell(), CellHandle::Tree(inner));
             let value = context.alloc::<Number>(build_number);
 
             // Into the cell's own tree parent: an upward pin, priced at the splice and pledging
@@ -357,14 +357,14 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     let EnterError::Stale(stale) = error else {
         unreachable!("the cell is not executing")
     };
-    let stale: Stale<CellRef> = stale;
-    assert_eq!(stale.name(), CellRef::Tree(inner));
+    let stale: Stale<CellHandle> = stale;
+    assert_eq!(stale.name(), CellHandle::Tree(inner));
 
     let Err(stale) = table.create_tree(inner, None) else {
         panic!("a dead tree parent must refuse");
     };
-    let stale: Stale<CellRef> = stale;
-    assert_eq!(stale.name(), CellRef::Tree(inner));
+    let stale: Stale<CellHandle> = stale;
+    assert_eq!(stale.name(), CellHandle::Tree(inner));
 
     table.release_tree(outer).unwrap();
     table.release(root, ReleaseAbsorption::IntoHolder).unwrap();

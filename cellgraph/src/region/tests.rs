@@ -23,7 +23,7 @@ fn a_memo_survives_its_region_moving_and_absorbing() {
     assert!(written > 0, "the memo mints the region's first chunk");
     assert_eq!(region.memo(), Some(&recorded[..]));
 
-    // The move a seal makes: the region leaves the slot and lands in the record, by value. The
+    // The move a seal makes: the region leaves the slot and lands in the sealed cell, by value. The
     // bump moves; the chunk the memo sits in does not.
     let mut region = Box::new(region);
     assert_eq!(region.memo(), Some(&recorded[..]));

@@ -26,7 +26,7 @@ mod table;
 mod tree;
 
 pub use carrier::{Active, Dormant};
-pub use handle::{CellRef, Handle, Stale, TreeHandle};
+pub use handle::{CellHandle, Handle, Stale, TreeHandle};
 pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
 pub use resident::Resident;

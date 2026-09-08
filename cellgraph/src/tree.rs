@@ -13,7 +13,7 @@
 //! resident, the **pledge** naming the ancestor its bump will splice into, and the tombstone links
 //! that say where its bytes went once it did.
 
-use crate::handle::{CellRef, Handle, Stale, TreeHandle};
+use crate::handle::{CellHandle, Handle, Stale, TreeHandle};
 use crate::reattach::{Erased, Reattachable};
 use crate::region::Region;
 use crate::scratch::Scratch;
@@ -97,7 +97,7 @@ struct TreeSlot<C: Reattachable> {
     /// `Absorbed` only: where this cell's bytes went. Never repointed when *that* cell's bytes move
     /// on in turn — the chain lengthens instead — which is what keeps a splice O(1) list work
     /// however many tombstones hang off the dying cell.
-    into: Option<CellRef>,
+    into: Option<CellHandle>,
     /// The head of the list of tombstones whose bytes spliced into this cell.
     tombstones: Option<u32>,
     /// The next tombstone on the tombstone list this one sits in.
@@ -219,7 +219,7 @@ impl<C: Reattachable> TreePool<C> {
     }
 
     #[cfg(test)]
-    pub(crate) fn tombstone_target(&self, index: u32) -> Option<CellRef> {
+    pub(crate) fn tombstone_target(&self, index: u32) -> Option<CellHandle> {
         self.slots[index as usize].into
     }
 
@@ -374,7 +374,7 @@ impl<C: Reattachable> TreePool<C> {
     /// Turn a disposed cell into a tombstone pointing at `into`, pushed onto the tombstone list
     /// whose current head is `head`. The caller stores the new head, since the list may hang off a
     /// slab slot rather than a pool slot.
-    pub(crate) fn entomb(&mut self, index: u32, into: CellRef, head: Option<u32>) {
+    pub(crate) fn entomb(&mut self, index: u32, into: CellHandle, head: Option<u32>) {
         let slot = &mut self.slots[index as usize];
         slot.state = TreeState::Absorbed;
         slot.into = Some(into);
@@ -450,8 +450,8 @@ impl<C: Reattachable> TreePool<C> {
             match slot.state {
                 TreeState::Live | TreeState::Dead => return Some(TreeForward::Tree(index)),
                 TreeState::Absorbed => match slot.into? {
-                    CellRef::Slab(handle) => return Some(TreeForward::Slab(handle)),
-                    CellRef::Tree(next) => {
+                    CellHandle::Slab(handle) => return Some(TreeForward::Slab(handle)),
+                    CellHandle::Tree(next) => {
                         index = next.index();
                         generation = next.generation();
                     }

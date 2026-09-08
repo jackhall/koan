@@ -3,8 +3,9 @@
 //! sealed namer. See [liveness-matrix.md § Locality
 //! tactics](../../../design/liveness-matrix.md#locality-tactics).
 //!
-//! Each merge is a record the tier never mints, so what these tests read is an absence: no id, no
-//! index entry, no accessor indirection — and the storage still there, in the bundle that took it.
+//! Each merge is a sealed cell the tier never mints, so what these tests read is an absence: no id,
+//! no index entry, no accessor indirection — and the storage still there, in the bundle that took
+//! it.
 
 use proptest::prelude::*;
 
@@ -21,10 +22,14 @@ fn region_bytes<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> usize 
         .map_or(0, Region::allocated_bytes)
 }
 
-/// The one record in a table that has exactly one.
-fn only_record<C: Reattachable>(table: &CellTable<C>) -> SealedId {
+/// The one sealed cell in a table that has exactly one.
+fn only_sealed_cell<C: Reattachable>(table: &CellTable<C>) -> SealedId {
     assert_eq!(table.sealed.len(), 1);
-    table.sealed.ids().next().expect("the tier holds a record")
+    table
+        .sealed
+        .ids()
+        .next()
+        .expect("the tier holds a sealed cell")
 }
 
 #[test]
@@ -94,7 +99,7 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
         .release(producer, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
-    // No id, no index entry, no record: the storage is the consumer's own now.
+    // No id, no index entry, no sealed cell: the storage is the consumer's own now.
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(state_of(&table, producer), SlotState::Free);
     assert!(!table.holds(consumer, producer));
@@ -144,13 +149,13 @@ fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
         .unwrap();
 
     table.release(shared, ReleaseAbsorption::Refused).unwrap();
-    let shared_id = only_record(&table);
+    let shared_id = only_sealed_cell(&table);
     table.release(alone, ReleaseAbsorption::Refused).unwrap();
     let alone_id = table
         .sealed
         .ids()
         .find(|id| *id != shared_id)
-        .expect("the second seal minted a record");
+        .expect("the second seal minted a sealed cell");
     assert_eq!(table.sealed.get(shared_id).unwrap().holders, 2);
     assert_eq!(table.sealed.get(alone_id).unwrap().holders, 1);
 
@@ -187,7 +192,7 @@ fn a_refused_release_seals_as_before() {
 
     // The very shape a merge would have collapsed, sealed instead: the embedder's refusal is the
     // whole difference.
-    let id = only_record(&table);
+    let id = only_sealed_cell(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
 
     assert!(continuation_reach_index(&table, consumer).names_sealed(id));
@@ -290,22 +295,22 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
     let middle_bytes = region_bytes(&table, middle);
 
     table.release(base, ReleaseAbsorption::Refused).unwrap();
-    let base_id = only_record(&table);
+    let base_id = only_sealed_cell(&table);
     assert!(table.naming[reached.slot() as usize].contains(base_id));
 
     table
         .release(middle, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
-    // The base's record had one holder — the sealing cell — so the seal folds it in rather than
-    // leaving a chain of two records with one indirection each.
-    let middle_id = only_record(&table);
+    // The base's sealed cell had one holder — the sealing cell — so the seal folds it in rather
+    // than leaving a chain of two sealed cells with one indirection each.
+    let middle_id = only_sealed_cell(&table);
     assert_ne!(middle_id, base_id);
-    let record = table.sealed.get(middle_id).unwrap();
-    assert_eq!(record.holders, 2);
-    assert!(record.aggregate.names(reached.slot()));
-    assert!(!record.aggregate.names_sealed(base_id));
-    assert_eq!(record.retained_bytes(), base_bytes + middle_bytes);
+    let sealed_cell = table.sealed.get(middle_id).unwrap();
+    assert_eq!(sealed_cell.holders, 2);
+    assert!(sealed_cell.aggregate.names(reached.slot()));
+    assert!(!sealed_cell.aggregate.names_sealed(base_id));
+    assert_eq!(sealed_cell.retained_bytes(), base_bytes + middle_bytes);
     assert!(!table.naming[reached.slot() as usize].contains(base_id));
     assert!(table.naming[reached.slot() as usize].contains(middle_id));
 
@@ -360,9 +365,10 @@ fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
 
     table.release(top, ReleaseAbsorption::IntoHolder).unwrap();
 
-    // The worklist is what makes this one record rather than three: absorbing the middle record
-    // transfers the base's id onto the new one, where its count of one qualifies it in turn.
-    let id = only_record(&table);
+    // The worklist is what makes this one sealed cell rather than three: absorbing the middle
+    // sealed cell transfers the base's id onto the new one, where its count of one qualifies it in
+    // turn.
+    let id = only_sealed_cell(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 2);
 
     for keeper in [first_keeper, second_keeper] {
@@ -374,7 +380,7 @@ fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
 }
 
 #[test]
-fn a_count_one_record_held_by_a_live_cell_stays_sealed() {
+fn a_count_one_sealed_cell_held_by_a_live_cell_stays_sealed() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let holder = table.create(None, None).unwrap();
     let extra = table.create(None, None).unwrap();
@@ -400,21 +406,22 @@ fn a_count_one_record_held_by_a_live_cell_stays_sealed() {
         .unwrap();
 
     table.release(held, ReleaseAbsorption::Refused).unwrap();
-    let id = only_record(&table);
+    let id = only_sealed_cell(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 2);
     let holder_bytes = region_bytes(&table, holder);
-    let record_bytes = table.sealed.get(id).unwrap().retained_bytes();
+    let sealed_bytes = table.sealed.get(id).unwrap().retained_bytes();
     let slab_bytes = live_bytes(&table, 4);
-    assert!(record_bytes > 0);
+    assert!(sealed_bytes > 0);
 
     table.release(extra, ReleaseAbsorption::IntoHolder).unwrap();
 
     // A count of one is not by itself a merge: storage that has already sealed never re-enters the
-    // live tier, so the record waits for the cascade instead of folding into the live cell. The
-    // provenance is read from the two tiers' byte totals rather than tracked through the release —
-    // the record keeps every byte it had, and the whole slab tier is no larger than it was.
+    // live tier, so the sealed cell waits for the cascade instead of folding into the live cell.
+    // The provenance is read from the two tiers' byte totals rather than tracked through the
+    // release — the sealed cell keeps every byte it had, and the whole slab tier is no larger than
+    // it was.
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
-    assert_eq!(table.sealed.get(id).unwrap().retained_bytes(), record_bytes);
+    assert_eq!(table.sealed.get(id).unwrap().retained_bytes(), sealed_bytes);
     assert_eq!(region_bytes(&table, holder), holder_bytes);
     assert!(live_bytes(&table, 4) <= slab_bytes);
 
@@ -432,8 +439,8 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     let dying = table.create(None, None).unwrap();
     let reached = table.create(None, None).unwrap();
 
-    // The keeper's continuation lives over the namer's storage, and the namer holds the dying
-    // cell — so once the namer seals, the dying cell's only name is that record's aggregate.
+    // The keeper's continuation lives over the namer's storage, and the namer holds the dying cell
+    // — so once the namer seals, the dying cell's only name is that sealed cell's aggregate.
     table
         .enter(namer, |context| context.hold(dying))
         .unwrap()
@@ -458,24 +465,24 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     assert!(dying_bytes > 0);
 
     table.release(namer, ReleaseAbsorption::Refused).unwrap();
-    let id = only_record(&table);
+    let id = only_sealed_cell(&table);
     assert!(table.sealed.get(id).unwrap().aggregate.names(dying.slot()));
     let namer_bytes = table.sealed.get(id).unwrap().retained_bytes();
 
     table.release(dying, ReleaseAbsorption::IntoHolder).unwrap();
 
-    // No second record: the dying cell's storage and holds go into the aggregate that already
-    // named it, and the slots its row named trade its bit for the record's name.
+    // No second sealed cell: the dying cell's storage and holds go into the aggregate that already
+    // named it, and the slots its row named trade its bit for the sealed cell's name.
     assert_eq!(table.sealed.len(), 1);
     assert_eq!(state_of(&table, dying), SlotState::Free);
-    let record = table.sealed.get(id).unwrap();
-    assert_eq!(record.holders, 1);
-    assert!(!record.aggregate.names(dying.slot()));
-    assert!(record.aggregate.names(reached.slot()));
-    assert_eq!(record.retained_bytes(), namer_bytes + dying_bytes);
+    let sealed_cell = table.sealed.get(id).unwrap();
+    assert_eq!(sealed_cell.holders, 1);
+    assert!(!sealed_cell.aggregate.names(dying.slot()));
+    assert!(sealed_cell.aggregate.names(reached.slot()));
+    assert_eq!(sealed_cell.retained_bytes(), namer_bytes + dying_bytes);
     assert!(table.naming[reached.slot() as usize].contains(id));
 
-    // The read still goes through the record, whose bundle grew a bump under the borrow.
+    // The read still goes through the sealed cell, whose bundle grew a bump under the borrow.
     assert!(continuation_reach_index(&table, keeper).names_sealed(id));
     let value = table
         .enter(keeper, |context| *context.continuation().unwrap().value())
@@ -524,7 +531,7 @@ fn absorb_work_for(resident: usize, reached: u32, shared: u32, alone: u32) -> u6
             }
         })
         .unwrap();
-    // Refused, so each becomes a record rather than absorbing into the producer first.
+    // Refused, so each becomes a sealed cell rather than absorbing into the producer first.
     for cell in shared_cells.iter().chain(&alone_cells) {
         table.release(*cell, ReleaseAbsorption::Refused).unwrap();
     }
@@ -591,9 +598,9 @@ fn a_sealed_ring_dissolves_through_its_last_namer() {
         .unwrap();
 
     // Two holders, so the first cell seals; its aggregate names the second, and the second holds
-    // the record.
+    // the sealed cell.
     table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
-    let id = only_record(&table);
+    let id = only_sealed_cell(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 2);
     assert!(table.sealed.get(id).unwrap().aggregate.names(second.slot()));
 
@@ -602,8 +609,8 @@ fn a_sealed_ring_dissolves_through_its_last_namer() {
         .unwrap();
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
 
-    // The second cell's only namer is the record it itself holds: the fold turns that hold into a
-    // self-hold, the count reaches zero, and the ring is freed rather than leaked.
+    // The second cell's only namer is the sealed cell it itself holds: the fold turns that hold
+    // into a self-hold, the count reaches zero, and the ring is freed rather than leaked.
     table
         .release(second, ReleaseAbsorption::IntoHolder)
         .unwrap();
@@ -635,8 +642,8 @@ fn a_seal_that_absorbs_every_holder_it_had_reclaims_itself() {
     assert_eq!(table.sealed.len(), 2);
 
     // Two namers and no slab holder, so this is a plain seal — and both namers are count-1 regions
-    // the new record holds, so both fold in. Each fold turns a hold on the new record into a
-    // self-hold, and the second takes its count to zero: the whole ring goes in one release.
+    // the new sealed cell holds, so both fold in. Each fold turns a hold on the new sealed cell
+    // into a self-hold, and the second takes its count to zero: the whole ring goes in one release.
     table.release(held, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
     assert_eq!(table.free.len(), 4);

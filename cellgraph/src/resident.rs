@@ -11,16 +11,16 @@
 //! table interns on content, so a cell kept into every step of a run holds one mask per distinct
 //! reach rather than one per keep.
 //!
-//! It carries no *live value* either, and that is what separates this state from the in-step one.
-//! A resident outlives the step that built it, so by the time one is redeemed its home's storage
-//! may be gone — reclaimed, or retired with the record it sealed into. A reference into freed
+//! It carries no *live value* either, and that is what separates this state from the in-step one. A
+//! resident outlives the step that built it, so by the time one is redeemed its home's storage may
+//! be gone — reclaimed, or retired with the sealed cell it sealed into. A reference into freed
 //! chunks is an invalid value the moment it is moved, whether or not anything reads through it, so
-//! the value rests here as **bytes**: parked at the `keep`, reconstituted only once the redeem
-//! door has established a claim on the storage it names.
+//! the value rests here as **bytes**: parked at the `keep`, reconstituted only once the redeem door
+//! has established a claim on the storage it names.
 
 use std::mem::MaybeUninit;
 
-use crate::handle::CellRef;
+use crate::handle::CellHandle;
 use crate::mask::GraphReach;
 use crate::reattach::{DropFree, Erased, Reattachable};
 
@@ -69,8 +69,9 @@ impl<T: Reattachable + DropFree> Resident<T> {
     ///
     /// The storage the value's referents name must still be there. The redeem door establishes
     /// exactly that before it calls: the key's home resolves to a live slab slot or a present
-    /// record, and the executing cell holds it. A resident whose home resolves to neither must be
-    /// refused rather than opened — the bytes are still bytes, but the references in them are not.
+    /// sealed cell, and the executing cell holds it. A resident whose home resolves to neither must
+    /// be refused rather than opened — the bytes are still bytes, but the references in them are
+    /// not.
     pub(crate) unsafe fn take(self) -> Erased<T> {
         // SAFETY: `new` is the only constructor and it always initializes; the caller's contract
         // is what makes the referents in those bytes valid again.
@@ -102,7 +103,7 @@ impl<T: Reattachable + DropFree> Copy for Resident<T> where Erased<T>: Copy {}
 /// it back.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ResidentKey {
-    pub(crate) home: CellRef,
+    pub(crate) home: CellHandle,
     pub(crate) index: u32,
 }
 

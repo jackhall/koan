@@ -51,10 +51,10 @@ pub(crate) struct Region {
     /// walk: the byte figure is read once per priced operand, and a chain of splices would
     /// otherwise make each reading linear in the bundle it has accumulated.
     absorbed_bytes: usize,
-    /// The frozen-closure memo of the record this region belongs to, written once by a price query
-    /// and never cleared — see [`SealedRecord`](crate::sealed::SealedRecord) for why it can never
-    /// go stale. Region state because its bytes are region bytes: the record's price counts them
-    /// like any other chunk.
+    /// The frozen-closure memo of the sealed cell this region belongs to, written once by a price
+    /// query and never cleared — see [`SealedCell`](crate::sealed::SealedCell) for why it can never
+    /// go stale. Region state because its bytes are region bytes: the sealed cell's price counts
+    /// them like any other chunk.
     memo: OnceCell<BumpRun<SealedId>>,
 }
 
@@ -68,7 +68,7 @@ impl Region {
         }
     }
 
-    /// The memoized record set, or `None` while nothing has primed it.
+    /// The memoized sealed-cell set, or `None` while nothing has primed it.
     pub(crate) fn memo(&self) -> Option<&[SealedId]> {
         let run = self.memo.get()?;
         // SAFETY: the `BumpRun` is a private field of this region, minted by `set_memo` out of this
@@ -80,7 +80,8 @@ impl Region {
     }
 
     /// Write the memo into this region's own bytes, once. Reports the chunk bytes the write cost,
-    /// which is what keeps the record's retained total in step — `0` when a memo is already there.
+    /// which is what keeps the sealed cell's retained total in step — `0` when a memo is already
+    /// there.
     pub(crate) fn set_memo(&self, ids: &[SealedId]) -> usize {
         if self.memo.get().is_some() {
             return 0;
@@ -122,8 +123,8 @@ impl Region {
         self.absorbed_bytes += other.absorbed_bytes;
     }
 
-    /// Splice an optional region into a region — the storage half of every merge into a record. A
-    /// source with no region contributes nothing.
+    /// Splice an optional region into a region — the storage half of every merge into a sealed
+    /// cell. A source with no region contributes nothing.
     pub(crate) fn splice(into: &mut Region, from: Option<Region>) {
         if let Some(from) = from {
             into.absorb(from);

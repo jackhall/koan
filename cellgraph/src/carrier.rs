@@ -40,8 +40,8 @@ pub struct Dormant<'home, T: Reattachable + DropFree, const W: usize = 1> {
     reach: GraphReach<W>,
     /// The cell whose region stores this value: the one a [`keep`](crate::StepContext::keep)
     /// registers the reach under. For a door-built carrier that is the cell the value was placed
-    /// into; for one redeemed out of a record it is the slab cell whose hold set names the record —
-    /// the executing cell, or its root when the step is running in a tree cell.
+    /// into; for one redeemed out of a sealed cell it is the slab cell whose hold set names the
+    /// sealed cell — the executing cell, or its root when the step is running in a tree cell.
     home: CellHome,
     _home: PhantomData<&'home ()>,
 }

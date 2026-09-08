@@ -5,7 +5,8 @@
 //! What these pin: the verdict sees both prices and both tiers' occupancy; a pin mints the
 //! operand's reach into the destination and a copy mints nothing; the marginal pin price discounts
 //! what the destination already holds and prices a frozen closure through its memo; and the ruled
-//! loop shape — a cart plus two hop cells — runs to a bounded slab with no record and no merge.
+//! loop shape — a cart plus two hop cells — runs to a bounded slab with no sealed cell and no
+//! merge.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -75,7 +76,7 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
         assert_eq!(prices.cap, occupancy.cap);
         // The cap the table was built at, not the width of the row its type fixes.
         assert_eq!(prices.cap, 4);
-        assert_eq!(prices.records, occupancy.records);
+        assert_eq!(prices.sealed_cells, occupancy.sealed_cells);
         assert_eq!(prices.retained_bytes, occupancy.retained_bytes);
         assert_eq!(
             prices.destination_bytes,
@@ -116,9 +117,9 @@ fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
         assert_eq!(names_producer, verdict == Verdict::Pin);
         assert_eq!(table.holds(destination, producer), verdict == Verdict::Pin);
 
-        // The whole point of the copy: the producer's column is zero, so its death is a
-        // reclamation rather than a record the destination now retains. The slot comes back
-        // either way — retention lives in the sealed tier, never in the slab.
+        // The whole point of the copy: the producer's column is zero, so its death is a reclamation
+        // rather than a sealed cell the destination now retains. The slot comes back either way —
+        // retention lives in the sealed tier, never in the slab.
         table.release(producer, ReleaseAbsorption::Refused).unwrap();
         assert_eq!(super::state_of(&table, producer), SlotState::Free);
         assert_eq!(table.sealed.len(), usize::from(verdict == Verdict::Pin));
@@ -193,7 +194,7 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
         .enter(destination, |context| context.hold(held))
         .unwrap()
         .unwrap();
-    // A chain the destination does not hold: a cell, a cell it holds, and a record it holds.
+    // A chain the destination does not hold: a cell, a cell it holds, and a sealed cell it holds.
     table
         .enter(driver, |context| {
             context
@@ -212,7 +213,7 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
         .unwrap()
         .unwrap();
     table.release(doomed, ReleaseAbsorption::Refused).unwrap();
-    let record = table.sealed.ids().next().unwrap();
+    let sealed_id = table.sealed.ids().next().unwrap();
 
     table
         .enter(driver, |context| {
@@ -243,7 +244,7 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
         seen[1].pin_bytes,
         table.region_bytes(head).unwrap()
             + table.region_bytes(tail).unwrap()
-            + table.sealed_retained_bytes(record).unwrap()
+            + table.sealed_retained_bytes(sealed_id).unwrap()
     );
 }
 
@@ -348,16 +349,19 @@ fn a_frozen_closure_prices_through_its_memo() {
         })
         .unwrap();
     table.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let record = table.sealed.ids().next().unwrap();
+    let sealed_id = table.sealed.ids().next().unwrap();
 
     // The closure is frozen, so its price is memoized once and never recomputed.
-    let closure = table.unique_retentions(&[record]).remove(0).unwrap();
+    let closure = table.unique_retentions(&[sealed_id]).remove(0).unwrap();
     assert!(closure.frozen);
 
     table
         .enter(consumer, |context| {
-            let carrier = context.redeem(kept).expect("the consumer holds the record");
-            // A carrier whose reach is a record alone: the price is the record's whole closure.
+            let carrier = context
+                .redeem(kept)
+                .expect("the consumer holds the sealed cell");
+            // A carrier whose reach is a sealed cell alone: the price is the sealed cell's whole
+            // closure.
             context
                 .alloc_into::<Number, Number>(
                     destination,
@@ -365,7 +369,7 @@ fn a_frozen_closure_prices_through_its_memo() {
                     |writer, views| take(&views[0], writer),
                 )
                 .unwrap();
-            // The pin above minted the record into the destination's sealed holds, so the same
+            // The pin above minted the sealed cell into the destination's sealed holds, so the same
             // operand is free the second time.
             context
                 .alloc_into::<Number, Number>(
@@ -381,7 +385,7 @@ fn a_frozen_closure_prices_through_its_memo() {
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].pin_bytes, closure.bytes);
     assert_eq!(seen[1].pin_bytes, 0);
-    assert!(table.sealed_holds[destination.slot() as usize].contains(record));
+    assert!(table.sealed_holds[destination.slot() as usize].contains(sealed_id));
 }
 
 /// Hops the ruled loop shape runs. Miri takes the shortest run that still alternates the two hop
@@ -444,12 +448,12 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
         accumulated = next_accumulated;
 
         // The retiring hop's column is zero: neither the cart nor the next hop took a hold on it,
-        // so its death frees the slot outright — no record, no merge.
+        // so its death frees the slot outright — no sealed cell, no merge.
         table
             .release(running, ReleaseAbsorption::IntoHolder)
             .unwrap();
         assert_eq!(super::state_of(&table, running), SlotState::Free);
-        assert_eq!(table.sealed.len(), 0, "hop {hop} left a record behind");
+        assert_eq!(table.sealed.len(), 0, "hop {hop} left a sealed cell behind");
         assert_eq!(table.merges, Merges::default(), "hop {hop} took a merge");
         assert!(!table.holds(cart, waiting));
 

@@ -143,7 +143,7 @@ one step further — they *must* be capitalized
 
 `:(A | B | C)` is the untagged structural disjunction — a first-class type value,
 distinct from a nominal `UNION`. The `|` is a single-member `Unary`-mode
-[operator group](../expressions-and-parsing.md#operator-chains), so a run
+[operator group](../expressions-and-parsing.md), so a run
 `A | B | C` reduces to `[Keyword("|"), ListLiteral([A B C])]` and folds every member
 in one pass; a two-member run `A | B` stays a plain keyworded call. Both forms are
 overloads of the `|` union builtin

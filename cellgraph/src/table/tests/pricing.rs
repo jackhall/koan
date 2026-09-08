@@ -1,10 +1,10 @@
-//! The price queries an embedder decides copy-versus-hold with: what a hold on a record keeps
+//! The price queries an embedder decides copy-versus-hold with: what a hold on a sealed cell keeps
 //! alive, the slice of that only one of several candidates reaches, what a live cart has accreted,
 //! and how full the two tiers are. See [liveness-matrix.md § Bounding the two
 //! tiers](../../../design/liveness-matrix.md#bounding-the-two-tiers).
 //!
-//! Every shape here keeps a record above the count a locality merge would absorb it at — an extra
-//! live holder, or a refused release — because a merge that fires leaves nothing to price.
+//! Every shape here keeps a sealed cell above the count a locality merge would absorb it at — an
+//! extra live holder, or a refused release — because a merge that fires leaves nothing to price.
 
 use super::super::*;
 use super::{Number, Owned, pin};
@@ -26,25 +26,30 @@ fn hold(table: &mut CellTable<Owned>, holder: Handle, held: Handle) {
         .unwrap();
 }
 
-/// What a hold on one record keeps alive. A single candidate's slice is its whole closure, so
+/// What a hold on one sealed cell keeps alive. A single candidate's slice is its whole closure, so
 /// one-id pricing goes through the same door the marginal query does.
 fn closure(table: &CellTable<Owned>, id: SealedId) -> Option<RetentionPrice> {
     table.unique_retentions(&[id]).remove(0)
 }
 
-/// The record minted most recently — ids are monotone and never reused, so this is the one the
+/// The sealed cell minted most recently — ids are monotone and never reused, so this is the one the
 /// release just before the call produced.
 fn newest(table: &CellTable<Owned>) -> SealedId {
-    table.sealed.ids().max().expect("the tier holds a record")
+    table
+        .sealed
+        .ids()
+        .max()
+        .expect("the tier holds a sealed cell")
 }
 
 fn retained(table: &CellTable<Owned>, id: SealedId) -> usize {
     table
         .sealed_retained_bytes(id)
-        .expect("the record is present")
+        .expect("the sealed cell is present")
 }
 
-/// A chain of three records, `s` → `a` → `b`, each holding the next through its frozen aggregate.
+/// A chain of three sealed cells, `s` → `a` → `b`, each holding the next through its frozen
+/// aggregate.
 ///
 /// Every link keeps a second live holder so the seal-time merge finds no count of one, and the head
 /// refuses death-time absorption so it seals rather than folding into its keeper.
@@ -75,7 +80,7 @@ fn sealed_chain(table: &mut CellTable<Owned>) -> (SealedId, SealedId, SealedId) 
 }
 
 #[test]
-fn a_closure_prices_everything_a_hold_on_the_record_reaches() {
+fn a_closure_prices_everything_a_hold_on_the_sealed_cell_reaches() {
     let mut table: CellTable<Owned> = CellTable::new(8, pin);
     let (s_id, a_id, b_id) = sealed_chain(&mut table);
 
@@ -166,7 +171,7 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     assert_eq!(open.bytes, retained(&table, s_id) + live_bytes);
     assert!(table.sealed.get(s_id).unwrap().memo().is_none());
 
-    // The cell's slab column is empty and its only namer is the record, so it seals into it.
+    // The cell's slab column is empty and its only namer is the sealed cell, so it seals into it.
     table.release(live, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 1);
 
@@ -183,16 +188,17 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     );
 }
 
-/// The memo is region state, so the record's price counts it like any other chunk. A record whose
-/// cell never allocated is where that shows plainly: nothing retains anything until the price
-/// query writes the memo, and then the record retains exactly what its region does.
+/// The memo is region state, so the sealed cell's price counts it like any other chunk. A sealed
+/// cell whose cell never allocated is where that shows plainly: nothing retains anything until the
+/// price query writes the memo, and then the sealed cell retains exactly what its region does.
 #[test]
-fn priming_a_memo_costs_the_record_the_bytes_it_writes() {
+fn priming_a_memo_costs_the_sealed_cell_the_bytes_it_writes() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let bare = table.create(None, None).unwrap();
     let keep = table.create(None, None).unwrap();
     let keep_too = table.create(None, None).unwrap();
-    // No `allocate`: the cell writes nothing, so the record it seals into starts with no chunk.
+    // No `allocate`: the cell writes nothing, so the sealed cell it seals into starts with no
+    // chunk.
     hold(&mut table, keep, bare);
     hold(&mut table, keep_too, bare);
 
@@ -204,10 +210,13 @@ fn priming_a_memo_costs_the_record_the_bytes_it_writes() {
     let priced = closure(&table, id).unwrap();
     assert!(priced.frozen, "nothing live is left in the closure");
 
-    // The memo landed in the record's own region, so both the record's price and the tier's total
-    // grew by exactly the chunk it minted.
+    // The memo landed in the sealed cell's own region, so both the sealed cell's price and the
+    // tier's total grew by exactly the chunk it minted.
     let after = retained(&table, id);
-    assert!(after > 0, "the record's price counts the memo it now holds");
+    assert!(
+        after > 0,
+        "the sealed cell's price counts the memo it now holds"
+    );
     assert_eq!(
         after,
         table.sealed.get(id).unwrap().storage.allocated_bytes()
@@ -267,7 +276,7 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
 }
 
 #[test]
-fn a_walk_that_reaches_a_memoized_record_merges_its_set() {
+fn a_walk_that_reaches_a_memoized_sealed_cell_merges_its_set() {
     let mut table: CellTable<Owned> = CellTable::new(8, pin);
     let b = table.create(None, None).unwrap();
     let a = table.create(None, None).unwrap();
@@ -366,7 +375,7 @@ fn unique_slices_do_not_double_bill_a_shared_sub_tier() {
             }),
         ]
     );
-    // The shared record is in neither slice, but it is in each whole closure.
+    // The shared sealed cell is in neither slice, but it is in each whole closure.
     assert_eq!(
         closure(&table, first_id).unwrap().bytes,
         slices[0].unwrap().bytes + retained(&table, c_id)
@@ -413,7 +422,8 @@ fn an_absent_id_prices_as_none() {
     let gone_id = newest(&table);
     assert!(closure(&table, gone_id).is_some());
 
-    // The last holder goes, the record retires, and the id prices as nothing rather than as zero.
+    // The last holder goes, the sealed cell retires, and the id prices as nothing rather than as
+    // zero.
     table
         .release(keeper, ReleaseAbsorption::IntoHolder)
         .unwrap();
@@ -443,7 +453,7 @@ fn occupancy_tracks_both_tiers() {
         Occupancy {
             occupied: 3,
             cap: 4,
-            records: 0,
+            sealed_cells: 0,
             retained_bytes: 0,
         }
     );
@@ -455,21 +465,21 @@ fn occupancy_tracks_both_tiers() {
         Occupancy {
             occupied: 2,
             cap: 4,
-            records: 1,
+            sealed_cells: 1,
             retained_bytes: first_bytes,
         }
     );
     assert_eq!(retained(&table, first_id), first_bytes);
 
-    // The second seal absorbs the first record rather than minting beside it, so the tier's byte
-    // total grows while its record count does not.
+    // The second seal absorbs the first sealed cell rather than minting beside it, so the tier's
+    // byte total grows while its sealed-cell count does not.
     table.release(second, ReleaseAbsorption::Refused).unwrap();
     assert_eq!(
         table.occupancy(),
         Occupancy {
             occupied: 1,
             cap: 4,
-            records: 1,
+            sealed_cells: 1,
             retained_bytes: first_bytes + second_bytes,
         }
     );
@@ -480,7 +490,7 @@ fn occupancy_tracks_both_tiers() {
         Occupancy {
             occupied: 0,
             cap: 4,
-            records: 0,
+            sealed_cells: 0,
             retained_bytes: 0,
         }
     );
@@ -491,7 +501,8 @@ fn occupancy_tracks_both_tiers() {
 fn pricing_mutates_no_hold() {
     let mut table: CellTable<Owned> = CellTable::new(10, pin);
     let (s_id, ..) = sealed_chain(&mut table);
-    // A record naming a live cell, so the sweep meets an unfrozen closure as well as a frozen one.
+    // A sealed cell naming a live cell, so the sweep meets an unfrozen closure as well as a frozen
+    // one.
     let live = table.create(None, None).unwrap();
     let open = table.create(None, None).unwrap();
     let keep_open = table.create(None, None).unwrap();
@@ -511,11 +522,11 @@ fn pricing_mutates_no_hold() {
     let births: Vec<Bits<1>> = (0..10).map(|slot| *table.birth.row(slot)).collect();
     let sealed_holds: Vec<SealedSet> = table.sealed_holds.to_vec();
     let naming: Vec<SealedSet> = table.naming.to_vec();
-    let records: Vec<(u32, GraphReach<1>)> = ids
+    let sealed_cells: Vec<(u32, GraphReach<1>)> = ids
         .iter()
         .map(|id| {
-            let record = table.sealed.get(*id).unwrap();
-            (record.holders, record.aggregate.clone())
+            let sealed_cell = table.sealed.get(*id).unwrap();
+            (sealed_cell.holders, sealed_cell.aggregate.clone())
         })
         .collect();
 
@@ -552,9 +563,9 @@ fn pricing_mutates_no_hold() {
     }
     assert_eq!(table.sealed_holds.to_vec(), sealed_holds);
     assert_eq!(table.naming.to_vec(), naming);
-    for (id, (holders, aggregate)) in ids.iter().zip(&records) {
-        let record = table.sealed.get(*id).unwrap();
-        assert_eq!(record.holders, *holders);
-        assert_eq!(&record.aggregate, aggregate);
+    for (id, (holders, aggregate)) in ids.iter().zip(&sealed_cells) {
+        let sealed_cell = table.sealed.get(*id).unwrap();
+        assert_eq!(sealed_cell.holders, *holders);
+        assert_eq!(&sealed_cell.aggregate, aggregate);
     }
 }

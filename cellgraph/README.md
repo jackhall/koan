@@ -28,15 +28,15 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 
 - [src/lib.rs](src/lib.rs) — the module wiring and the public surface.
 - [src/handle.rs](src/handle.rs) — cell identity over both habitats: a slab
-  slot or a tree-pool index paired with a generation, `CellRef` naming either
-  kind, and the stale refusals.
+  slot or a tree-pool index paired with a generation, `CellHandle` naming
+  either kind, and the stale refusals.
 - [src/table.rs](src/table.rs) — the slab, the `create` / `enter` / `release`
   verbs, the step context's doors, the seal transition, the three locality
   merges a dying cell can take instead, the cascade that retires cells and
-  records, the relocation map that forwards a resident through a merge, and
-  the read-only price queries. The price queries are internal: what retention
-  costs is a number the substrate computes, not a door an embedder opens, and
-  it reaches the embedder through the crossing verdict
+  sealed cells, the relocation map that forwards a resident through a merge,
+  and the read-only price queries. The price queries are internal: what
+  retention costs is a number the substrate computes, not a door an embedder
+  opens, and it reaches the embedder through the crossing verdict
   ([cellgraph.md § The crossing
   verdict](design/cellgraph.md#the-crossing-verdict)).
 - [src/tree.rs](src/tree.rs) — the tree pool: the slab-free habitat for a
@@ -57,10 +57,10 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   compared without touching the allocator.
 - [src/sealed.rs](src/sealed.rs) — the sealed tier: ids packed as a serial
   beside a slab index, sparse sets, frozen aggregates, holder counts, and the
-  dense slab of records with its free list.
+  dense slab of sealed cells with its free list.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
   locality merge performs, the write surface a build closure receives, and the
-  record's frozen-closure memo, kept in the region's own bytes.
+  sealed cell's frozen-closure memo, kept in the region's own bytes.
 - [src/scratch.rs](src/scratch.rs) — the table's one scratch region: a bump
   sized at construction, reset at the entry of every verb and never inside
   one, and the doors every transient a verb builds is taken through — the

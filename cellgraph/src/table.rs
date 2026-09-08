@@ -12,14 +12,14 @@ mod tests;
 use smallvec::SmallVec;
 
 use crate::carrier::{Active, CellHome, Dormant};
-use crate::handle::{CellRef, Handle, Stale, TreeHandle};
+use crate::handle::{CellHandle, Handle, Stale, TreeHandle};
 use crate::mask::GraphReach;
 use crate::matrix::{Bits, Matrix};
 use crate::reattach::{DropFree, Erased, Reattachable};
 use crate::region::{Region, Writer};
 use crate::resident::{ReachTable, Resident, ResidentKey};
 use crate::scratch::{Scratch, ScratchVec};
-use crate::sealed::{ScratchSet, SealedId, SealedRecord, SealedSet, SealedTier};
+use crate::sealed::{ScratchSet, SealedCell, SealedId, SealedSet, SealedTier};
 use crate::tree::{Ancestry, Pledge, TreeForward, TreePool, TreeState};
 
 /// Refusals from [`CellTable::create`].
@@ -35,7 +35,7 @@ pub enum CreateError {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EnterError {
     /// The named cell is not a live cell of either kind.
-    Stale(Stale<CellRef>),
+    Stale(Stale<CellHandle>),
     /// The cell is already executing; a cell is entered by one step at a time.
     AlreadyExecuting,
 }
@@ -62,19 +62,19 @@ pub enum ReleaseTreeError {
 /// around it, so meeting one whose home has moved on is ordinary, not a bug.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RedeemError {
-    /// The storage the value names is gone — its home cell reclaimed, or the record it sealed into
-    /// retired. Nothing could have read it, so nothing was lost by refusing.
+    /// The storage the value names is gone — its home cell reclaimed, or the sealed cell it sealed
+    /// into retired. Nothing could have read it, so nothing was lost by refusing.
     Gone,
     /// The storage is alive, but this cell has no claim on it: it is not the home, its pin row and
-    /// birth row do not name the home, and it does not hold the record the home sealed into. A
+    /// birth row do not name the home, and it does not hold the sealed cell the home sealed into. A
     /// hold reached only transitively does not entitle — the entitling relations are the two that
     /// keep the home in the slab with its storage intact.
     Unheld,
 }
 
-/// Whether a dying cell's storage may fold into a unique live holder rather than mint a record of
-/// its own — the embedder's per-release say over death-time absorption
-/// ([liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)).
+/// Whether a dying cell's storage may fold into a unique live holder rather than mint a sealed cell
+/// of its own — the embedder's per-release say over death-time absorption ([liveness-matrix.md §
+/// Locality tactics](../design/liveness-matrix.md#locality-tactics)).
 ///
 /// The choice is recorded on the slot at the release and consulted when the slot *disposes*, which
 /// may be later: a dead cell a descendant's birth row still names waits in the slab first.
@@ -82,8 +82,8 @@ pub enum RedeemError {
 /// **`Release` is in the name because three other things go by the word**, and none of them is
 /// this one — none is refusable, and none is the embedder's to weigh:
 ///
-/// - *Seal-time absorption* (`absorb_singletons`, `Merges::at_seal`) — a count-1 record folding
-///   into the record sealing over it.
+/// - *Seal-time absorption* (`absorb_singletons`, `Merges::at_seal`) — a count-1 sealed cell
+///   folding into the sealed cell sealing over it.
 /// - *Fold into namer* (`fold_into_namer`, `Merges::into_namer`) — a column-zero cell sealing into
 ///   its single sealed namer.
 /// - The *mechanism* all three run on: bumps spliced into a bundle (a cell region's absorbed list)
@@ -135,9 +135,9 @@ pub struct Prices {
     pub occupied: u32,
     /// The slab's fixed cap.
     pub cap: u32,
-    /// Records in the sealed tier, which has no cap of its own.
-    pub records: usize,
-    /// Chunk bytes those records retain between them.
+    /// Cells in the sealed tier, which has no cap of its own.
+    pub sealed_cells: usize,
+    /// Chunk bytes those sealed cells retain between them.
     pub retained_bytes: usize,
     /// Chunk bytes the destination's own region bundle occupies. A loop's storage cell accretes
     /// only the values built into it, so this figure is the accretion signal a consolidation copy
@@ -290,9 +290,9 @@ pub(crate) struct Occupancy {
     pub occupied: u32,
     /// The slab's fixed cap.
     pub cap: u32,
-    /// Records in the sealed tier, which has no cap of its own.
-    pub records: usize,
-    /// Chunk bytes those records retain between them.
+    /// Cells in the sealed tier, which has no cap of its own.
+    pub sealed_cells: usize,
+    /// Chunk bytes those sealed cells retain between them.
     pub retained_bytes: usize,
 }
 
@@ -318,8 +318,8 @@ enum SlotNode {
 /// split by tier. A walk with no cells is frozen — nothing in it will ever seal, merge, or retire
 /// again — and [`RetentionPrice`] is this same set weighed in bytes.
 ///
-/// Pins and nothing else. The walk steps along `pins` rows and `sealed_holds`, and through a
-/// record's aggregate; the birth relation is never traversed, so a cell a parent's row names but
+/// Pins and nothing else. The walk steps along `pins` rows and `sealed_holds`, and through a sealed
+/// cell's aggregate; the birth relation is never traversed, so a cell a parent's row names but
 /// nothing pins is not here.
 ///
 /// Test-only: a walk reports each node as it visits it, and the two readings the crate takes —
@@ -328,7 +328,7 @@ enum SlotNode {
 #[cfg(test)]
 struct TransitivePins {
     cells: Vec<u32>,
-    records: Vec<SealedId>,
+    sealed: Vec<SealedId>,
 }
 
 /// What a slab slot currently holds. `Dead` is the resident state: the embedder declared the
@@ -344,12 +344,12 @@ enum SlotState {
 /// mask that names its reach.
 ///
 /// `Slab` is a merge into a live cell: the masks moved into that cell's table at `base`, re-homed.
-/// `Record` is a seal or a fold: the masks are gone, and a redeemed value's reach is derived from
-/// the record instead.
+/// `Sealed` is a seal or a fold: the masks are gone, and a redeemed value's reach is derived from
+/// the sealed cell instead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SlabForward {
     Slab { slot: u32, base: u32 },
-    Record(SealedId),
+    Sealed(SealedId),
 }
 
 /// Where one departed cell's residents went, plus the link to the next departed cell whose
@@ -445,7 +445,7 @@ struct Destination {
 /// [`classify_crossing`](CellTable::classify_crossing) takes before any price is asked for, and
 /// the whole of the **ancestry rule** an operand homed in a tree cell is held to.
 ///
-/// An operand homed in a slab cell or a record is always `Ordinary`: nothing about the tree
+/// An operand homed in a slab cell or a sealed cell is always `Ordinary`: nothing about the tree
 /// habitat touches it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Crossing {
@@ -484,8 +484,8 @@ pub struct CellTable<C: Reattachable, const W: usize = 1> {
     /// [tree](crate::tree).
     trees: TreePool<C>,
     /// Where the residents of a cell that has left the slab went, one list per slab slot. A
-    /// departed handle maps to the live cell whose table absorbed its masks, or to the record its
-    /// storage sealed into; a cell with an empty reach table leaves no entry. Rewritten at
+    /// departed handle maps to the live cell whose table absorbed its masks, or to the sealed cell
+    /// its storage sealed into; a cell with an empty reach table leaves no entry. Rewritten at
     /// every merge and dropped at the target's reclamation, so a slot's list is bounded by merges
     /// rather than by values — which is what keeps a generation search short and two entries
     /// inline.
@@ -643,7 +643,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// ```
     pub fn enter<R>(
         &mut self,
-        cell: impl Into<CellRef>,
+        cell: impl Into<CellHandle>,
         step: impl FnOnce(&mut StepContext<'_, C, W>) -> R,
     ) -> Result<R, EnterError> {
         let cell = cell.into();
@@ -701,12 +701,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// travels with the root's bit ([design/tree-cells.md](../design/tree-cells.md)).
     pub fn create_tree(
         &mut self,
-        parent: impl Into<CellRef>,
+        parent: impl Into<CellHandle>,
         continuation: Option<C::At<'static>>,
-    ) -> Result<TreeHandle, Stale<CellRef>> {
+    ) -> Result<TreeHandle, Stale<CellHandle>> {
         let (root, tree_parent, depth) = match parent.into() {
-            CellRef::Slab(handle) => (self.live_slot(handle)?, None, 1),
-            CellRef::Tree(handle) => {
+            CellHandle::Slab(handle) => (self.live_slot(handle)?, None, 1),
+            CellHandle::Tree(handle) => {
                 let index = self.trees.live_index(handle)?;
                 (
                     self.trees.root(index),
@@ -799,11 +799,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             Some(Pledge::Root) => {
                 let root = self.trees.root(index);
                 Region::splice_optional(&mut self.slots[root as usize].region, region);
-                Some(CellRef::Slab(self.occupant(root)))
+                Some(CellHandle::Slab(self.occupant(root)))
             }
             Some(Pledge::Tree(dest)) => {
                 self.trees.splice_into(dest, region);
-                Some(CellRef::Tree(self.trees.occupant(dest)))
+                Some(CellHandle::Tree(self.trees.occupant(dest)))
             }
         };
         match into {
@@ -811,13 +811,13 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             // pointing at where they went, and the tombstones already hanging off it stay hanging
             // off it, so the chain lengthens rather than being repointed.
             Some(into) if self.trees.leaves_tombstone(index) => match into {
-                CellRef::Tree(dest) => {
-                    self.trees.entomb(index, CellRef::Tree(dest), None);
+                CellHandle::Tree(dest) => {
+                    self.trees.entomb(index, CellHandle::Tree(dest), None);
                     self.trees.adopt_tombstone(dest.index(), index);
                 }
-                CellRef::Slab(root) => {
+                CellHandle::Slab(root) => {
                     let head = self.slots[root.slot() as usize].tree_tombstones;
-                    self.trees.entomb(index, CellRef::Slab(root), head);
+                    self.trees.entomb(index, CellHandle::Slab(root), head);
                     self.slots[root.slot() as usize].tree_tombstones = Some(index);
                 }
             },
@@ -853,10 +853,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// Whether the name is a cell of either kind that is still live — false for a slot or pool
     /// index that is free, holds a later generation, or holds a cell whose death was already
     /// declared, and false for a tree tombstone.
-    pub fn is_live(&self, cell: impl Into<CellRef>) -> bool {
+    pub fn is_live(&self, cell: impl Into<CellHandle>) -> bool {
         match cell.into() {
-            CellRef::Slab(handle) => self.live_slot(handle).is_ok(),
-            CellRef::Tree(handle) => self.trees.live_index(handle).is_ok(),
+            CellHandle::Slab(handle) => self.live_slot(handle).is_ok(),
+            CellHandle::Tree(handle) => self.trees.live_index(handle).is_ok(),
         }
     }
 
@@ -900,9 +900,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Set the executing flag, or refuse. Paired with the clear in [`StepContext`]'s `Drop`, so
     /// the flag falls even if the step panics.
-    fn begin(&mut self, cell: CellRef) -> Result<(), EnterError> {
+    fn begin(&mut self, cell: CellHandle) -> Result<(), EnterError> {
         match cell {
-            CellRef::Slab(handle) => {
+            CellHandle::Slab(handle) => {
                 let slot = self
                     .live_slot(handle)
                     .map_err(|stale| EnterError::Stale(stale.into()))?;
@@ -911,7 +911,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 }
                 self.executing.set(slot);
             }
-            CellRef::Tree(handle) => {
+            CellHandle::Tree(handle) => {
                 let index = self
                     .trees
                     .live_index(handle)
@@ -1036,7 +1036,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     }
 
     /// Move every handle on `head`'s chain onto `onto`'s chain, pointing each at `target`. What an
-    /// absorbed record's lineage takes, and what a run of freshly departed handles takes at a
+    /// absorbed sealed cell's lineage takes, and what a run of freshly departed handles takes at a
     /// seal.
     fn relink_chain(&mut self, head: Option<Handle>, target: SealedId, onto: &mut Option<Handle>) {
         let mut next = head;
@@ -1045,7 +1045,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 .relocation_mut(handle)
                 .expect("a chain entry is in its slot's list");
             next = entry.next;
-            entry.location = SlabForward::Record(target);
+            entry.location = SlabForward::Sealed(target);
             entry.next = *onto;
             *onto = Some(handle);
         }
@@ -1100,10 +1100,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Point every handle of `lineage` at `target`, and record them on the target so its own
     /// retirement can drop them again.
-    fn relocate_to_record(&mut self, lineage: &[Handle], target: SealedId) {
-        // The head comes out of the record for the walk and goes back after it: the walk writes
-        // the relocation lists, and holding a borrow of the record across that would name two
-        // fields of the table at once.
+    fn relocate_to_sealed(&mut self, lineage: &[Handle], target: SealedId) {
+        // The head comes out of the sealed cell for the walk and goes back after it: the walk
+        // writes the relocation lists, and holding a borrow of the sealed cell across that would
+        // name two fields of the table at once.
         let mut head = std::mem::take(
             &mut self
                 .sealed
@@ -1112,7 +1112,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 .lineage,
         );
         for handle in lineage {
-            self.relocate(*handle, SlabForward::Record(target), head);
+            self.relocate(*handle, SlabForward::Sealed(target), head);
             head = Some(*handle);
         }
         self.sealed
@@ -1127,7 +1127,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// ([liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)).
     ///
     /// The two merges are the degenerate shapes the model is designed around — a chain of
-    /// single-consumer producers — and each one is a record the tier never mints. A refused
+    /// single-consumer producers — and each one is a sealed cell the tier never mints. A refused
     /// release falls through to the plain seal.
     fn dispose(&mut self, slot: u32, scratch: &Scratch) {
         let namers = std::mem::take(&mut self.naming[slot as usize]);
@@ -1167,7 +1167,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     }
 
     /// Merge 1: fold a dying cell's storage and holds into the one slab occupant that holds it,
-    /// minting no record at all.
+    /// minting no sealed cell at all.
     ///
     /// The target is any occupant, live or dead-resident: "live holder" in the design means the
     /// slab tier as opposed to the sealed one, and a dead-resident cell's row is still a maintained
@@ -1251,7 +1251,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 .expect("a slot's lineage entry points at that slot")
                 .location
             else {
-                unreachable!("a slot's lineage entry points at a slab slot, not a record");
+                unreachable!("a slot's lineage entry points at a slab slot, not a sealed cell");
             };
             self.relocate(
                 *handle,
@@ -1273,8 +1273,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         self.slots[into as usize].lineage = head;
     }
 
-    /// Merge 3: a cell nothing in the slab holds, named by exactly one sealed aggregate, folds
-    /// into that record instead of minting one beside it.
+    /// Merge 3: a cell nothing in the slab holds, named by exactly one sealed aggregate, folds into
+    /// that sealed cell instead of minting one beside it.
     ///
     /// No stored mask needs rewriting: a stored mask naming a slot implies a pin hold on it, and
     /// this cell's slab column is empty by the precondition.
@@ -1282,15 +1282,15 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let holds = self.take_holds(dead);
         let storage = self.slots[dead as usize].region.take();
         // The namer's hold on the dead cell is structural; the slots its row named trade the dead
-        // cell's bit for the record's own name inside the fold.
+        // cell's bit for the sealed cell's own name inside the fold.
         self.sealed
             .get_mut(namer)
             .expect("the namer came out of the reverse index")
             .aggregate
             .remove_slot(dead);
-        let (_, dups) = self.fold_into_record(namer, holds, storage, scratch);
+        let (_, dups) = self.fold_into_sealed(namer, holds, storage, scratch);
         let (lineage, has_occupant) = self.take_lineage(dead, scratch);
-        self.relocate_to_record(lineage, namer);
+        self.relocate_to_sealed(lineage, namer);
         if has_occupant {
             let departing = *lineage.last().expect("an included occupant is on the run");
             self.carry_tree_tombstones(dead, departing);
@@ -1309,14 +1309,16 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         self.absorb_singletons(namer, scratch);
     }
 
-    /// Fold a hold set and a region into an existing record: the shared body of merges 2 and 3.
+    /// Fold a hold set and a region into an existing sealed cell: the shared body of merges 2 and
+    /// 3.
     ///
     /// Returns the sealed ids that *transferred* (absent from the target's aggregate, so the hold
     /// changed owner without changing count) and the ones that *duplicated* (already there, so one
-    /// hold on each vanishes). The caller releases the duplicates, since the borrow of the record
-    /// has to end first, and then checks whether the target still has a holder: a source that held
-    /// its own target contributes a self-hold, which has no representation and drops the count.
-    fn fold_into_record<'s>(
+    /// hold on each vanishes). The caller releases the duplicates, since the borrow of the sealed
+    /// cell has to end first, and then checks whether the target still has a holder: a source that
+    /// held its own target contributes a self-hold, which has no representation and drops the
+    /// count.
+    fn fold_into_sealed<'s>(
         &mut self,
         target: SealedId,
         holds: GraphReach<W>,
@@ -1324,7 +1326,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         scratch: &'s Scratch,
     ) -> (ScratchVec<'s, SealedId>, ScratchVec<'s, SealedId>) {
         let naming = &mut self.naming;
-        let record = self
+        let sealed_cell = self
             .sealed
             .get_mut(target)
             .expect("the merge target is in the tier");
@@ -1333,11 +1335,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // aggregate: after it, every slot the fold names is one the aggregate names.
         for slot in holds
             .slab_slots()
-            .filter(|slot| !record.aggregate.names(*slot))
+            .filter(|slot| !sealed_cell.aggregate.names(*slot))
         {
             naming[slot as usize].insert(target);
         }
-        record.aggregate.union_slab_with(&holds);
+        sealed_cell.aggregate.union_slab_with(&holds);
 
         // Two lists, not sets: the source's sealed half is already distinct and ascending, and a
         // fold puts each id in exactly one of them.
@@ -1348,56 +1350,57 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 // The source held its own target. The hold becomes a self-hold, which no aggregate
                 // can express, so it simply goes.
                 debug_assert!(
-                    record.holders >= 1,
-                    "a record with no holder is still in the tier"
+                    sealed_cell.holders >= 1,
+                    "a sealed cell with no holder is still in the tier"
                 );
-                record.holders -= 1;
+                sealed_cell.holders -= 1;
                 continue;
             }
-            if record.aggregate.add_sealed(id) {
+            if sealed_cell.aggregate.add_sealed(id) {
                 transferred.push(id);
             } else {
                 duplicated.push(id);
             }
         }
         debug_assert!(
-            !record.aggregate.names_sealed(target),
-            "a record's aggregate names itself"
+            !sealed_cell.aggregate.names_sealed(target),
+            "a sealed cell's aggregate names itself"
         );
         self.sealed.splice_storage(target, storage);
         (transferred, duplicated)
     }
 
-    /// Merge 2: absorb every count-1 sealed region the record `target` holds, to a fixpoint.
+    /// Merge 2: absorb every count-1 sealed region the sealed cell `target` holds, to a fixpoint.
     ///
-    /// A count of 1 on a record the target names means the target *is* that holder, so the cell
-    /// region is reachable through this record and nothing else — exactly the chain of
-    /// single-consumer producers the tier would otherwise keep as a chain of records. The candidate
-    /// set is a worklist rather than one pass: a fold transfers ids the target did not hold before,
-    /// and drops a duplicate's count, either of which can newly qualify.
+    /// A count of 1 on a sealed cell the target names means the target *is* that holder, so the
+    /// cell region is reachable through this sealed cell and nothing else — exactly the chain of
+    /// single-consumer producers the tier would otherwise keep as a chain of sealed cells. The
+    /// candidate set is a worklist rather than one pass: a fold transfers ids the target did not
+    /// hold before, and drops a duplicate's count, either of which can newly qualify.
     fn absorb_singletons(&mut self, target: SealedId, scratch: &Scratch) {
         let mut pending = scratch.vec();
         {
-            let Some(record) = self.sealed.get(target) else {
+            let Some(sealed_cell) = self.sealed.get(target) else {
                 return;
             };
-            pending.extend(record.aggregate.sealed().iter());
+            pending.extend(sealed_cell.aggregate.sealed().iter());
         }
         while let Some(source) = pending.pop() {
             if source == target {
                 continue;
             }
             match self.sealed.get(source) {
-                Some(record) if record.holders == 1 => {}
+                Some(sealed_cell) if sealed_cell.holders == 1 => {}
                 _ => continue,
             }
             let absorbed = self
                 .sealed
                 .remove(source)
-                .expect("the record was just read");
+                .expect("the sealed cell was just read");
             {
-                // The absorbed record's chain moves onto the target's whole, each entry repointed
-                // as it goes. The target's head comes out for the walk and goes back after it.
+                // The absorbed sealed cell's chain moves onto the target's whole, each entry
+                // repointed as it goes. The target's head comes out for the walk and goes back
+                // after it.
                 let mut head = std::mem::take(
                     &mut self
                         .sealed
@@ -1426,9 +1429,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             #[cfg(test)]
             let sealed_width = absorbed.aggregate.sealed().len() as u64;
             let (transferred, duplicated) =
-                self.fold_into_record(target, absorbed.aggregate, Some(absorbed.storage), scratch);
-            // Each duplicate had at least two holders — the target and the absorbed record — so
-            // none of these counts reaches zero, and the target survives the call.
+                self.fold_into_sealed(target, absorbed.aggregate, Some(absorbed.storage), scratch);
+            // Each duplicate had at least two holders — the target and the absorbed sealed cell —
+            // so none of these counts reaches zero, and the target survives the call.
             self.release_sealed_holds(&duplicated, scratch);
             #[cfg(test)]
             {
@@ -1436,7 +1439,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 self.merges.at_seal += 1;
             }
 
-            // The absorbed record held its own holder, and was its last: the ring dissolves.
+            // The absorbed sealed cell held its own holder, and was its last: the ring dissolves.
             if self.reclaim_if_unheld(target, scratch) {
                 return;
             }
@@ -1520,7 +1523,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     fn seal(&mut self, slot: u32, holders: &[u32], namers: &SealedSet, scratch: &Scratch) {
         let id = self.sealed.mint_id();
         // The cell's hold set, both halves, frozen rather than cleared. Its sealed half moves from
-        // the cell to the record, so the ids it names change holder without changing count.
+        // the cell to the sealed cell, so the ids it names change holder without changing count.
         let aggregate = self.take_holds(slot);
         let storage = self.slots[slot as usize]
             .region
@@ -1545,12 +1548,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
         // 2. Frozen aggregates convert, located through the reverse naming index.
         for namer in namers.iter() {
-            if let Some(record) = self.sealed.get_mut(namer) {
-                record.aggregate.replace_slot(slot, id);
+            if let Some(sealed_cell) = self.sealed.get_mut(namer) {
+                sealed_cell.aggregate.replace_slot(slot, id);
             }
         }
-        // 3. The new record registers under every slab bit it names, so the next seal of one of
-        //    those slots finds it. The aggregate is a local and `naming` is a field, so the walk
+        // 3. The new sealed cell registers under every slab bit it names, so the next seal of one
+        //    of those slots finds it. The aggregate is a local and `naming` is a field, so the walk
         //    down one writes the other with no copy of the bits in between.
         for named in aggregate.slab_slots() {
             self.naming[named as usize].insert(id);
@@ -1563,7 +1566,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
         self.sealed.insert(
             id,
-            SealedRecord {
+            SealedCell {
                 aggregate,
                 storage,
                 holders: count,
@@ -1573,72 +1576,75 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             },
         );
         // The cell's own resident masks are dead bytes from here on: the storage they named is in
-        // the record, and a redeem under one of these keys derives its reach from the record's id.
+        // the sealed cell, and a redeem under one of these keys derives its reach from the sealed
+        // cell's id.
         let (lineage, has_occupant) = self.take_lineage(slot, scratch);
-        self.relocate_to_record(lineage, id);
+        self.relocate_to_sealed(lineage, id);
         if has_occupant {
             let departing = *lineage.last().expect("an included occupant is on the run");
             self.carry_tree_tombstones(slot, departing);
         }
-        // The dying cell's sealed half moved into the record above, so the exit releases nothing.
+        // The dying cell's sealed half moved into the sealed cell above, so the exit releases
+        // nothing.
         self.vacate(slot, &[], scratch);
-        // 4. Every count-1 region the new record holds folds into it: a chain of single-consumer
-        //    producers collapses to the one record at its head rather than one record per link.
+        // 4. Every count-1 region the new sealed cell holds folds into it: a chain of
+        //    single-consumer producers collapses to the one sealed cell at its head rather than one
+        //    sealed cell per link.
         self.absorb_singletons(id, scratch);
     }
 
-    /// Drop one hold on each of `released`, reclaiming every record whose count reaches zero and
-    /// cascading through the holds that record's own aggregate named.
+    /// Drop one hold on each of `released`, reclaiming every sealed cell whose count reaches zero
+    /// and cascading through the holds that sealed cell's own aggregate named.
     fn release_sealed_holds(&mut self, released: &[SealedId], scratch: &Scratch) {
         let mut pending = scratch.vec_with_capacity(released.len());
         pending.extend_from_slice(released);
         while let Some(id) = pending.pop() {
-            let Some(record) = self.sealed.get_mut(id) else {
+            let Some(sealed_cell) = self.sealed.get_mut(id) else {
                 continue;
             };
             debug_assert!(
-                record.holders >= 1,
-                "a record with no holder is still in the tier"
+                sealed_cell.holders >= 1,
+                "a sealed cell with no holder is still in the tier"
             );
-            record.holders -= 1;
-            if record.holders > 0 {
+            sealed_cell.holders -= 1;
+            if sealed_cell.holders > 0 {
                 continue;
             }
-            pending.extend(self.retire_record(id, scratch).iter());
+            pending.extend(self.retire_sealed(id, scratch).iter());
         }
     }
 
-    /// Retire a record whose count has reached zero: out of the tier, out of the reverse naming
-    /// index, and its storage dropped. Hands back the holds its aggregate named, which the caller
-    /// releases in turn.
-    fn retire_record(&mut self, id: SealedId, scratch: &Scratch) -> SealedSet {
-        let Some(record) = self.sealed.remove(id) else {
+    /// Retire a sealed cell whose count has reached zero: out of the tier, out of the reverse
+    /// naming index, and its storage dropped. Hands back the holds its aggregate named, which the
+    /// caller releases in turn.
+    fn retire_sealed(&mut self, id: SealedId, scratch: &Scratch) -> SealedSet {
+        let Some(sealed_cell) = self.sealed.remove(id) else {
             return SealedSet::new();
         };
-        for slot in record.aggregate.slab_slots() {
+        for slot in sealed_cell.aggregate.slab_slots() {
             self.naming[slot as usize].remove(id);
         }
-        self.forget_chain(record.lineage, scratch);
-        // The record's storage drops here: nothing reaches these chunks any more.
-        record.aggregate.into_sealed()
+        self.forget_chain(sealed_cell.lineage, scratch);
+        // The sealed cell's storage drops here: nothing reaches these chunks any more.
+        sealed_cell.aggregate.into_sealed()
     }
 
-    /// Reclaim a record nothing holds any more — the zero-count exit, reached directly when a
+    /// Reclaim a sealed cell nothing holds any more — the zero-count exit, reached directly when a
     /// merge dissolves the last hold on its own target rather than through a holder's release.
-    fn reclaim_record(&mut self, id: SealedId, scratch: &Scratch) {
-        let released = self.retire_record(id, scratch);
+    fn reclaim_sealed(&mut self, id: SealedId, scratch: &Scratch) {
+        let released = self.retire_sealed(id, scratch);
         self.release_sealed_holds(released.as_slice(), scratch);
     }
 
     /// Reclaim `id` if a fold has just taken its last holder. `true` when it did, so the caller
-    /// stops working on a record that is no longer in the tier.
+    /// stops working on a sealed cell that is no longer in the tier.
     fn reclaim_if_unheld(&mut self, id: SealedId, scratch: &Scratch) -> bool {
         let unheld = self
             .sealed
             .get(id)
-            .is_some_and(|record| record.holders == 0);
+            .is_some_and(|sealed_cell| sealed_cell.holders == 0);
         if unheld {
-            self.reclaim_record(id, scratch);
+            self.reclaim_sealed(id, scratch);
         }
         unheld
     }
@@ -1653,12 +1659,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         self.pins.hold(into, reach);
         for id in reach.sealed().iter() {
             if self.sealed_holds[into as usize].insert(id)
-                && let Some(record) = self.sealed.get_mut(id)
+                && let Some(sealed_cell) = self.sealed.get_mut(id)
             {
-                record.holders += 1;
+                sealed_cell.holders += 1;
                 #[cfg(test)]
                 {
-                    record.peak_holders = record.peak_holders.max(record.holders);
+                    sealed_cell.peak_holders = sealed_cell.peak_holders.max(sealed_cell.holders);
                 }
             }
         }
@@ -1674,7 +1680,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// ([liveness-matrix.md § Bounding the two tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
     #[cfg(test)]
     pub(crate) fn sealed_retained_bytes(&self, id: SealedId) -> Option<usize> {
-        self.sealed.get(id).map(SealedRecord::retained_bytes)
+        self.sealed.get(id).map(SealedCell::retained_bytes)
     }
 
     /// The slice of each candidate's closure that no *other* candidate reaches — the marginal price
@@ -1682,8 +1688,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     ///
     /// The walk spans both tiers, so a live cell a closure names is priced at its region and walked
     /// through in turn. An answer is [`frozen`](RetentionPrice::frozen) once no live cell is left
-    /// in the whole closure, and a frozen answer is memoized on the record and reused forever —
-    /// nothing inside a frozen closure can change, which is the argument the memo field carries.
+    /// in the whole closure, and a frozen answer is memoized on the sealed cell and reused forever
+    /// — nothing inside a frozen closure can change, which is the argument the memo field carries.
     ///
     /// One answer per input position, `None` where the id is no longer in the tier; a repeated id
     /// gets the same answer at every position naming it. A single candidate's slice is its whole
@@ -1708,20 +1714,20 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // The slab half indexes by slot; the sparse half is an association list, scanned rather
         // than hashed — a candidate set is a handful of ids, and the crate keeps no hash map.
         let mut cell_count = vec![0u32; self.cap as usize];
-        let mut record_count: Vec<(SealedId, u32)> = Vec::new();
+        let mut sealed_count: Vec<(SealedId, u32)> = Vec::new();
         for (_, pins) in &walks {
             for slot in &pins.cells {
                 cell_count[*slot as usize] += 1;
             }
-            for id in &pins.records {
-                match record_count.iter_mut().find(|(named, _)| named == id) {
+            for id in &pins.sealed {
+                match sealed_count.iter_mut().find(|(named, _)| named == id) {
                     Some((_, count)) => *count += 1,
-                    None => record_count.push((*id, 1)),
+                    None => sealed_count.push((*id, 1)),
                 }
             }
         }
         let counted = |id: &SealedId| {
-            record_count
+            sealed_count
                 .iter()
                 .find(|(named, _)| named == id)
                 .map_or(0, |(_, count)| *count)
@@ -1736,16 +1742,16 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                     .filter(|slot| cell_count[**slot as usize] == 1)
                     .map(|slot| self.cell_bytes(*slot))
                     .sum();
-                let records: usize = pins
-                    .records
+                let sealed: usize = pins
+                    .sealed
                     .iter()
                     .filter(|inner| counted(inner) == 1)
-                    .map(|inner| self.record_bytes(*inner))
+                    .map(|inner| self.sealed_bytes(*inner))
                     .sum();
                 (
                     *id,
                     RetentionPrice {
-                        bytes: cells + records,
+                        bytes: cells + sealed,
                         // The whole closure's, not the slice's: a live cell anywhere in it can
                         // still redraw the partition.
                         frozen: pins.cells.is_empty(),
@@ -1808,11 +1814,15 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         self.relocation(handle).map(|entry| entry.location)
     }
 
-    /// The handles on a record's lineage chain, collected. Chain order is reverse insertion, so a
-    /// caller comparing more than one handle compares sets.
+    /// The handles on a sealed cell's lineage chain, collected. Chain order is reverse insertion,
+    /// so a caller comparing more than one handle compares sets.
     #[cfg(test)]
     pub(crate) fn lineage_of(&self, id: SealedId) -> Vec<Handle> {
-        self.chain(self.sealed.get(id).and_then(|record| record.lineage))
+        self.chain(
+            self.sealed
+                .get(id)
+                .and_then(|sealed_cell| sealed_cell.lineage),
+        )
     }
 
     /// The handles on a slot's lineage chain, collected.
@@ -1862,7 +1872,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         Occupancy {
             occupied: self.cap - self.free.len() as u32,
             cap: self.cap,
-            records: self.sealed.len(),
+            sealed_cells: self.sealed.len(),
             retained_bytes: self.sealed.retained_bytes(),
         }
     }
@@ -1883,9 +1893,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             .map_or(0, Region::allocated_bytes)
     }
 
-    /// Chunk bytes a record retains, `0` for an id no longer in the tier.
-    fn record_bytes(&self, id: SealedId) -> usize {
-        self.sealed.get(id).map_or(0, SealedRecord::retained_bytes)
+    /// Chunk bytes a sealed cell retains, `0` for an id no longer in the tier.
+    fn sealed_bytes(&self, id: SealedId) -> usize {
+        self.sealed.get(id).map_or(0, SealedCell::retained_bytes)
     }
 
     #[cfg(test)]
@@ -1895,26 +1905,26 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             .map(|slot| self.cell_bytes(*slot))
             .sum::<usize>()
             + pins
-                .records
+                .sealed
                 .iter()
-                .map(|id| self.record_bytes(*id))
+                .map(|id| self.sealed_bytes(*id))
                 .sum::<usize>()
     }
 
-    /// Walk from a record and memoize the result when it comes back frozen. `None` for an id no
-    /// longer in the tier.
+    /// Walk from a sealed cell and memoize the result when it comes back frozen. `None` for an id
+    /// no longer in the tier.
     #[cfg(test)]
     fn transitive_pins_of(&self, id: SealedId) -> Option<TransitivePins> {
-        let record = self.sealed.get(id)?;
-        if let Some(memo) = record.memo() {
+        let sealed_cell = self.sealed.get(id)?;
+        if let Some(memo) = sealed_cell.memo() {
             return Some(TransitivePins {
                 cells: Vec::new(),
-                records: memo.to_vec(),
+                sealed: memo.to_vec(),
             });
         }
         let pins = self.transitive_pins(SlotNode::Sealed(id), true);
         if pins.cells.is_empty() {
-            self.sealed.prime(id, &pins.records);
+            self.sealed.prime(id, &pins.sealed);
         }
         Some(pins)
     }
@@ -1923,16 +1933,16 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// folds the memo in rather than descending. Written once and never cleared: a closure that has
     /// frozen is walked exactly once for the table's whole life.
     fn prime_memo(&self, id: SealedId, scratch: &Scratch) {
-        let Some(record) = self.sealed.get(id) else {
+        let Some(sealed_cell) = self.sealed.get(id) else {
             return;
         };
-        if record.memo().is_some() {
+        if sealed_cell.memo().is_some() {
             return;
         }
-        // Priming wants the record set and nothing else: a closure that names a live cell is not
-        // frozen and is not recorded, so a cell only has to be noticed, and the set the walk
+        // Priming wants the sealed-cell set and nothing else: a closure that names a live cell is
+        // not frozen and is not recorded, so a cell only has to be noticed, and the set the walk
         // reports moves into the memo rather than being copied into it.
-        let mut records = scratch.vec();
+        let mut sealed_ids = scratch.vec();
         let mut frozen = true;
         let mut worklist = scratch.vec_with_capacity(1);
         worklist.push(id);
@@ -1944,24 +1954,24 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             true,
             |node| match node {
                 SlotNode::Cell(_) => frozen = false,
-                SlotNode::Sealed(inner) => records.push(inner),
+                SlotNode::Sealed(inner) => sealed_ids.push(inner),
             },
         );
-        // The memo is durable and lands in the record's own region, so the bytes it costs are
-        // bytes the record's price already counts.
+        // The memo is durable and lands in the sealed cell's own region, so the bytes it costs are
+        // bytes the sealed cell's price already counts.
         if frozen {
-            self.sealed.prime(id, &records);
+            self.sealed.prime(id, &sealed_ids);
         }
     }
 
     /// Every node of the hold graph reachable from `start`, `start` itself included, over both
     /// tiers. A ring terminates on the seen sets rather than looping.
     ///
-    /// A record that already carries a memo *is* its own frozen closure, so with `use_memos` the
-    /// walk folds the memo's record set in instead of descending. The set is merged, never summed:
-    /// two branches of one closure may share a sub-tier, and adding two memoized totals would bill
-    /// the shared part twice. `use_memos` is false only where a test recomputes a memo from
-    /// scratch to check it against what was recorded.
+    /// A sealed cell that already carries a memo *is* its own frozen closure, so with `use_memos`
+    /// the walk folds the memo's sealed-cell set in instead of descending. The set is merged, never
+    /// summed: two branches of one closure may share a sub-tier, and adding two memoized totals
+    /// would bill the shared part twice. `use_memos` is false only where a test recomputes a memo
+    /// from scratch to check it against what was recorded.
     #[cfg(test)]
     fn transitive_pins(&self, start: SlotNode, use_memos: bool) -> TransitivePins {
         let mut frontier = Bits::new();
@@ -1976,7 +1986,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
         let mut pins = TransitivePins {
             cells: Vec::new(),
-            records: Vec::new(),
+            sealed: Vec::new(),
         };
         self.walk(
             frontier,
@@ -1986,7 +1996,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             use_memos,
             |node| match node {
                 SlotNode::Cell(slot) => pins.cells.push(slot),
-                SlotNode::Sealed(id) => pins.records.push(id),
+                SlotNode::Sealed(id) => pins.sealed.push(id),
             },
         );
         pins
@@ -2008,7 +2018,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         mut frontier: Bits<W>,
         mut worklist: ScratchVec<'s, SealedId>,
         mut seen_cells: Bits<W>,
-        mut seen_records: ScratchSet<'s>,
+        mut seen_sealed: ScratchSet<'s>,
         use_memos: bool,
         mut visit: impl FnMut(SlotNode),
     ) {
@@ -2023,25 +2033,25 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 continue;
             }
             let Some(id) = worklist.pop() else { return };
-            if !seen_records.insert(id) {
+            if !seen_sealed.insert(id) {
                 continue;
             }
             visit(SlotNode::Sealed(id));
             let memo = use_memos
-                .then(|| self.sealed.get(id).and_then(SealedRecord::memo))
+                .then(|| self.sealed.get(id).and_then(SealedCell::memo))
                 .flatten();
             match memo {
                 Some(memo) => {
                     for inner in memo {
-                        if seen_records.insert(*inner) {
+                        if seen_sealed.insert(*inner) {
                             visit(SlotNode::Sealed(*inner));
                         }
                     }
                 }
                 None => {
-                    if let Some(record) = self.sealed.get(id) {
-                        frontier.union_not_with(record.aggregate.slab(), &seen_cells);
-                        worklist.extend(record.aggregate.sealed().iter());
+                    if let Some(sealed_cell) = self.sealed.get(id) {
+                        frontier.union_not_with(sealed_cell.aggregate.slab(), &seen_cells);
+                        worklist.extend(sealed_cell.aggregate.sealed().iter());
                     }
                 }
             }
@@ -2052,7 +2062,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// given `pinned` — the reach of everything already pinned into `dest` by this placement.
     ///
     /// The walk starts from the reach with `dest` itself, everything `dest`'s pin row names, every
-    /// record `dest` holds, and both halves of `pinned` already marked as seen, so what the
+    /// sealed cell `dest` holds, and both halves of `pinned` already marked as seen, so what the
     /// destination is answerable for anyway, or has just become answerable for, is billed to
     /// nobody. An operand homed in the destination, or in a cell the destination holds directly,
     /// prices at zero — and so does one whose whole reach an earlier operand of the same placement
@@ -2072,7 +2082,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         scratch: &Scratch,
     ) -> usize {
         // Every seed already seen is a walk that reports nothing and a sum over nothing, so the
-        // price is zero without building the walk's state at all. Priming a record's memo only
+        // price is zero without building the walk's state at all. Priming a sealed cell's memo only
         // fills a cache no reading depends on, so skipping it changes no answer either.
         let row = self.pins.row(dest);
         let held = &self.sealed_holds[dest as usize];
@@ -2090,8 +2100,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let mut seen_cells = *row;
         seen_cells.set(dest);
         seen_cells.union_with(pinned.slab());
-        let mut seen_records = scratch.ids_from(held);
-        seen_records.union_with(pinned.sealed());
+        let mut seen_sealed = scratch.ids_from(held);
+        seen_sealed.union_with(pinned.sealed());
         for id in reach.sealed().iter() {
             self.prime_memo(id, scratch);
         }
@@ -2100,10 +2110,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let mut worklist = scratch.vec_with_capacity(reach.sealed().len());
         worklist.extend(reach.sealed().iter());
         let mut bytes = 0;
-        self.walk(frontier, worklist, seen_cells, seen_records, true, |node| {
+        self.walk(frontier, worklist, seen_cells, seen_sealed, true, |node| {
             bytes += match node {
                 SlotNode::Cell(slot) => self.cell_bytes(slot),
-                SlotNode::Sealed(id) => self.record_bytes(id),
+                SlotNode::Sealed(id) => self.sealed_bytes(id),
             };
         });
         bytes
@@ -2114,9 +2124,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     ///
     /// Test-only, and **not consulted on any mint or release path**: preventing rings is the
     /// embedder's crossing discipline, not a mint-time reachability check. The walk spans both
-    /// tiers, since a ring among live cells becomes a ring among sealed records the moment they
-    /// die, which is also why a seed may be a sealed region: every hold on one is an id, and a
-    /// stale handle can no longer reach it.
+    /// tiers, since a ring among live cells becomes a ring among sealed cells the moment they die,
+    /// which is also why a seed may be a sealed region: every hold on one is an id, and a stale
+    /// handle can no longer reach it.
     #[cfg(test)]
     pub(crate) fn debug_ring_from(&self, start: HoldNode) -> Option<Vec<HoldNode>> {
         let start = match start {
@@ -2159,11 +2169,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 )
                 .collect(),
             SlotNode::Sealed(id) => match self.sealed.get(id) {
-                Some(record) => record
+                Some(sealed_cell) => sealed_cell
                     .aggregate
                     .slab_slots()
                     .map(SlotNode::Cell)
-                    .chain(record.aggregate.sealed().iter().map(SlotNode::Sealed))
+                    .chain(sealed_cell.aggregate.sealed().iter().map(SlotNode::Sealed))
                     .collect(),
                 None => Vec::new(),
             },
@@ -2267,7 +2277,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let Occupancy {
             occupied,
             cap,
-            records,
+            sealed_cells,
             retained_bytes,
         } = self.occupancy();
         // The answers alone. The operands are still to hand where the views are built, so carrying
@@ -2301,7 +2311,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 copy_bytes: operand.copy_bytes,
                 occupied,
                 cap,
-                records,
+                sealed_cells,
                 retained_bytes,
                 destination_bytes: self.destination_bytes(dest),
             };
@@ -2400,7 +2410,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 pub struct StepContext<'b, C: Reattachable, const W: usize = 1> {
     table: &'b mut CellTable<C, W>,
     /// The cell this step is running in, of either kind.
-    cell: CellRef,
+    cell: CellHandle,
     /// The table's scratch region, held here for the length of the step and handed back by `Drop`.
     /// A door splits this off the table borrow so a transient and a `&mut CellTable` coexist.
     ///
@@ -2411,7 +2421,7 @@ pub struct StepContext<'b, C: Reattachable, const W: usize = 1> {
 
 impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// The cell this step is running in, of either kind.
-    pub fn cell(&self) -> CellRef {
+    pub fn cell(&self) -> CellHandle {
         self.cell
     }
 
@@ -2419,8 +2429,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// it is a slab cell, and its root when it is a tree cell.
     fn executing_slot(&self) -> u32 {
         match self.cell {
-            CellRef::Slab(handle) => handle.slot(),
-            CellRef::Tree(handle) => self.table.trees.root(handle.index()),
+            CellHandle::Slab(handle) => handle.slot(),
+            CellHandle::Tree(handle) => self.table.trees.root(handle.index()),
         }
     }
 
@@ -2428,11 +2438,11 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// a successor store writes into.
     fn executing_dest(&self) -> Destination {
         match self.cell {
-            CellRef::Slab(handle) => Destination {
+            CellHandle::Slab(handle) => Destination {
                 mint_slot: handle.slot(),
                 home: CellHome::Slab(handle.slot()),
             },
-            CellRef::Tree(handle) => Destination {
+            CellHandle::Tree(handle) => Destination {
                 mint_slot: self.table.trees.root(handle.index()),
                 home: CellHome::Tree(handle.index()),
             },
@@ -2442,8 +2452,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// Take the cell's continuation, re-anchored at the step brand.
     ///
     /// **This is the sealed tier's accessor.** A continuation captured over values in cells that
-    /// have since sealed comes back reading storage those records still retain. The door hangs on
-    /// the step context and nowhere else, so a value reaching sealed storage is only ever live
+    /// have since sealed comes back reading storage those sealed cells still retain. The door hangs
+    /// on the step context and nowhere else, so a value reaching sealed storage is only ever live
     /// inside an `enter` scope.
     ///
     /// The slot is left empty: a continuation is one-shot, and a step that wants the cell entered
@@ -2463,14 +2473,16 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// ```
     pub fn continuation(&mut self) -> Option<Active<'b, C>> {
         let stored = match self.cell {
-            CellRef::Slab(handle) => self.table.slots[handle.slot() as usize].continuation.take(),
-            CellRef::Tree(handle) => self.table.trees.take_continuation(handle.index()),
+            CellHandle::Slab(handle) => {
+                self.table.slots[handle.slot() as usize].continuation.take()
+            }
+            CellHandle::Tree(handle) => self.table.trees.take_continuation(handle.index()),
         }?;
         // SAFETY: the value's referents are region storage in the cells and sealed regions its
         // stored reach names — the resident entry `continuation_reach_index` names, which the seal
         // transition maintains, and none at all when it names no entry — and that reach was minted
         // into the executing cell's hold set when it was stored, so every one of them is either a
-        // live cell or a held sealed record, whose chunks are pointer-stable and detached unmoved.
+        // live cell or a held sealed cell, whose chunks are pointer-stable and detached unmoved.
         // For a tree step the hold set is the root's, and the captures' own storage is either the
         // root's, one of the cells it holds, or a tree cell on this one's chain — an ancestor,
         // which outlives it, or the executing cell itself. The cell is live for all of `'b` (it is
@@ -2489,14 +2501,14 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     pub fn store_successor(&mut self, continuation: C::At<'static>) {
         let stored = Erased::store(continuation);
         match self.cell {
-            CellRef::Slab(handle) => {
+            CellHandle::Slab(handle) => {
                 let cell = &mut self.table.slots[handle.slot() as usize];
                 cell.continuation_reach_index = None;
                 cell.continuation = Some(stored);
             }
             // A tree cell records no reach: it never seals, so there is nothing a stored mask would
             // have to be rewritten for.
-            CellRef::Tree(handle) => self
+            CellHandle::Tree(handle) => self
                 .table
                 .trees
                 .set_continuation(handle.index(), Some(stored)),
@@ -2627,10 +2639,10 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// billing a shared source once per operand.
     pub fn alloc_into<T, V>(
         &mut self,
-        dest: impl Into<CellRef>,
+        dest: impl Into<CellHandle>,
         operands: &[Operand<'_, 'b, V, W>],
         build: impl for<'r, 'v> FnOnce(Writer<'r>, &[CrossedOperand<'r, 'v, V>]) -> T::At<'r>,
-    ) -> Result<Dormant<'b, T, W>, Stale<CellRef>>
+    ) -> Result<Dormant<'b, T, W>, Stale<CellHandle>>
     where
         T: Reattachable + DropFree,
         V: Reattachable + DropFree,
@@ -2647,18 +2659,18 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
             .as_ref()
             .expect("a step holds the scratch region for its whole length");
         let dest = match dest.into() {
-            CellRef::Slab(handle) => {
-                let slot = table.live_slot(handle).map_err(Stale::<CellRef>::from)?;
+            CellHandle::Slab(handle) => {
+                let slot = table.live_slot(handle).map_err(Stale::<CellHandle>::from)?;
                 Destination {
                     mint_slot: slot,
                     home: CellHome::Slab(slot),
                 }
             }
-            CellRef::Tree(handle) => {
+            CellHandle::Tree(handle) => {
                 let index = table
                     .trees
                     .live_index(handle)
-                    .map_err(Stale::<CellRef>::from)?;
+                    .map_err(Stale::<CellHandle>::from)?;
                 Destination {
                     mint_slot: table.trees.root(index),
                     home: CellHome::Tree(index),
@@ -2704,18 +2716,18 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
                 let cell = &mut self.table.slots[slot as usize];
                 let index = cell.reaches.intern(reach);
                 ResidentKey {
-                    home: CellRef::Slab(Handle::new(slot, cell.generation)),
+                    home: CellHandle::Slab(Handle::new(slot, cell.generation)),
                     index,
                 }
             }
-            // A tree cell has no reach table and interns nothing: the value reaches its root
-            // and nothing else, so the redeem derives that reach rather than reading one back. What
-            // the keep does record is that the cell is now nameable, which is what decides whether
-            // its death leaves a tombstone.
+            // A tree cell has no reach table and interns nothing: the value reaches its root and
+            // nothing else, so the redeem derives that reach rather than reading one back. What the
+            // keep does record is that the cell is now nameable, which is what decides whether its
+            // death leaves a tombstone.
             CellHome::Tree(index) => {
                 self.table.trees.mark_kept(index);
                 ResidentKey {
-                    home: CellRef::Tree(self.table.trees.occupant(index)),
+                    home: CellHandle::Tree(self.table.trees.occupant(index)),
                     index: 0,
                 }
             }
@@ -2732,8 +2744,9 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     ///
     /// The executing cell must be entitled: it is the home, or its pin row or birth row names the
     /// home — both keep the home in the slab with its storage intact — or the home sealed into a
-    /// record this cell holds. A value redeemed out of a record comes back reaching that record's
-    /// id alone, which covers: a hold on a record keeps its whole aggregate alive transitively.
+    /// sealed cell this cell holds. A value redeemed out of a sealed cell comes back reaching that
+    /// sealed cell's id alone, which covers: a hold on a sealed cell keeps its whole aggregate
+    /// alive transitively.
     pub fn redeem<T>(&self, resident: Resident<T>) -> Result<Dormant<'b, T, W>, RedeemError>
     where
         T: Reattachable + DropFree,
@@ -2747,8 +2760,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         // been through since the keep, ending at a tree cell that still holds them or at the slab
         // handle the relocation map answers for from there.
         let slab_home = match key.home {
-            CellRef::Slab(handle) => handle,
-            CellRef::Tree(handle) => match table.trees.resolve(handle) {
+            CellHandle::Slab(handle) => handle,
+            CellHandle::Tree(handle) => match table.trees.resolve(handle) {
                 None => return Err(RedeemError::Gone),
                 Some(TreeForward::Tree(index)) => {
                     // Entitled by root identity, which is O(1): a slab cell is its own root, and
@@ -2777,8 +2790,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
                 // A key that started in a tree cell indexes no table: its value reached the root
                 // alone, and the slot the chain ends at is where those bytes are now.
                 let reach = match key.home {
-                    CellRef::Tree(_) => GraphReach::single(slot),
-                    CellRef::Slab(_) => table.slots[slot as usize]
+                    CellHandle::Tree(_) => GraphReach::single(slot),
+                    CellHandle::Slab(_) => table.slots[slot as usize]
                         .reaches
                         .get(base + key.index)
                         .expect("a relocated key names an entry of the table it was forwarded to")
@@ -2786,18 +2799,18 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
                 };
                 (reach, CellHome::Slab(slot))
             }
-            Some(SlabForward::Record(id)) => {
+            Some(SlabForward::Sealed(id)) => {
                 if !table.sealed_holds[executing as usize].contains(id) {
                     return Err(RedeemError::Unheld);
                 }
-                // The record's id alone: a hold on it keeps its aggregate alive transitively, and
-                // a mask naming no slab bit has nothing that can go stale under a later `keep`.
+                // The sealed cell's id alone: a hold on it keeps its aggregate alive transitively,
+                // and a mask naming no slab bit has nothing that can go stale under a later `keep`.
                 (GraphReach::single_sealed(id), CellHome::Slab(executing))
             }
         };
         // SAFETY: the match above resolved the key's home to storage that is still there — a live
-        // slab slot this cell is the home of, holds, or descends from, or a record it holds — so
-        // the referents parked in those bytes are live for the whole step, which is the contract
+        // slab slot this cell is the home of, holds, or descends from, or a sealed cell it holds —
+        // so the referents parked in those bytes are live for the whole step, which is the contract
         // `take` asks for.
         let value = unsafe { resident.take() };
         Ok(Dormant::new(value, reach, home))
@@ -2883,10 +2896,10 @@ impl<C: Reattachable, const W: usize> Drop for Parked<'_, C, W> {
 impl<C: Reattachable, const W: usize> Drop for StepContext<'_, C, W> {
     fn drop(&mut self) {
         match self.cell {
-            CellRef::Slab(handle) => {
+            CellHandle::Slab(handle) => {
                 self.table.executing.clear(handle.slot());
             }
-            CellRef::Tree(handle) => self.table.trees.set_executing(handle.index(), false),
+            CellHandle::Tree(handle) => self.table.trees.set_executing(handle.index(), false),
         }
         // Back on the table, chunk and all, so the next verb starts warm — and so a panicking step
         // hands it back exactly as an ordinary one does.

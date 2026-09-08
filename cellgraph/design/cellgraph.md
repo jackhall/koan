@@ -18,12 +18,11 @@ compile-enforced: the lower crate names no type from the higher one.
 ## The cell
 
 - **Identity** is a handle: slab slot plus generation, `Copy`. A handle names
-  one occupant; an operation on a handle whose occupant has died is an
-  error, never a silent no-op, because a stale handle means a caller kept a
-  name past a death it declared. A **tree cell** is named the same way over
-  its own pool — index plus generation — and `CellRef` is the two of them
-  under one name, which is what a door taking a destination or a parent asks
-  for.
+  one occupant; an operation on a handle whose occupant has died is an error,
+  never a silent no-op, because a stale handle means a caller kept a name past
+  a death it declared. A **tree cell** is named the same way over its own pool
+  — index plus generation — and `CellHandle` is the two of them under one name,
+  which is what a door taking a destination or a parent asks for.
 - **Habitat**, one of two. A cell either takes a slab slot, where the
   liveness matrix decides its death, or it is a
   [tree cell](tree-cells.md): a cell of a call subtree, living under a slab
@@ -101,32 +100,31 @@ how an embedder gives one unit of work two regions with different lifetimes.
   its cap. What to do on refusal is admission policy, and the embedder's.
 - **`enter(handle, step)`** sets the cell's executing bit for the scope of
   `step` and supplies a step context. Within it a step can take the cell's
-  continuation, re-anchored at the step lifetime; allocate into its own
-  region; allocate into any other live cell by handle (the destination-homed
+  continuation, re-anchored at the step lifetime; allocate into its own region;
+  allocate into any other live cell by handle (the destination-homed
   placement); mint a bare hold on another cell; read a carrier it built; and
   store a successor continuation, over captures or over nothing. It can also
-  put a carrier it holds to rest — `keep`, which hands back the at-rest
-  form — and redeem one a previous step put to rest. That
-  continuation read *is* the sealed tier's accessor — a capture whose region
-  sealed since it was stored comes back reading storage that record still
-  retains — so there is no second door out of sealed storage. What the value
-  reaches stays in the table: every reach a resident was minted with is the
-  substrate's bookkeeping, rewritten in place by the seal transition, and
-  never handed back beside the value. A cell cannot be entered while it
-  is already executing.
+  put a carrier it holds to rest — `keep`, which hands back the at-rest form —
+  and redeem one a previous step put to rest. That continuation read *is* the
+  sealed tier's accessor — a capture whose region sealed since it was stored
+  comes back reading storage that sealed cell still retains — so there is no
+  second door out of sealed storage. What the value reaches stays in the table:
+  every reach a resident was minted with is the substrate's bookkeeping,
+  rewritten in place by the seal transition, and never handed back beside the
+  value. A cell cannot be entered while it is already executing.
 
-  **`redeem`** is the one door out of the at-rest state, and it refuses
-  rather than panics. The executing cell must be entitled to the storage the
-  value names: it is the home cell itself, its pin row or its birth row names
-  the home — both keep the home in the slab with its storage intact — or the
-  home has sealed into a record this cell holds. For a value homed in a tree
+  **`redeem`** is the one door out of the at-rest state, and it refuses rather
+  than panics. The executing cell must be entitled to the storage the value
+  names: it is the home cell itself, its pin row or its birth row names the
+  home — both keep the home in the slab with its storage intact — or the home
+  has sealed into a sealed cell this cell holds. For a value homed in a tree
   cell the test is root identity, and a step inside a subtree is entitled by
-  its root's rows. Anything else is `Unheld`,
-  and a home whose storage is gone entirely, reclaimed or retired with its
-  record, is `Gone`. Nothing could have read such a value, so nothing is lost
-  by refusing it. A value redeemed out of a record comes back reaching that
-  record's id alone: a hold on a record keeps its whole aggregate alive
-  transitively, so the id covers everything the value reads.
+  its root's rows. Anything else is `Unheld`, and a home whose storage is gone
+  entirely, reclaimed or retired with its sealed cell, is `Gone`. Nothing could
+  have read such a value, so nothing is lost by refusing it. A value redeemed
+  out of a sealed cell comes back reaching that sealed cell's id alone: a hold
+  on a sealed cell keeps its whole aggregate alive transitively, so the id
+  covers everything the value reads.
 
   A placement over operands consults the **crossing verdict** once per
   operand before it builds — the one closure the table was constructed with,
@@ -149,12 +147,12 @@ how an embedder gives one unit of work two regions with different lifetimes.
   ([liveness-matrix.md § Locality tactics](liveness-matrix.md#locality-tactics));
   it is recorded on the slot and read when the slot actually leaves.
 - **`is_empty()`** asks whether the table holds nothing at all — every slot
-  free, no record left in the sealed tier, and no tree cell or tombstone left
-  in the pool. After a program's last release it
-  is the end-of-program alarm, and the only one the substrate ships: a
-  non-empty table means either a release was forgotten or a ring no merge
-  dissolved survives. Naming the nodes on such a ring is a walk of the hold
-  graph the crate's own tests carry, not a door on the table.
+  free, no sealed cell left in the sealed tier, and no tree cell or tombstone
+  left in the pool. After a program's last release it is the end-of-program
+  alarm, and the only one the substrate ships: a non-empty table means either a
+  release was forgotten or a ring no merge dissolved survives. Naming the nodes
+  on such a ring is a walk of the hold graph the crate's own tests carry, not a
+  door on the table.
 
 Every verb runs over the table's **scratch region**: one bump per table, reset
 at the entry of `create`, `enter` and `release` and never inside one. Every
@@ -170,10 +168,10 @@ the cells' own regions keep.
 
 There are no price verbs. The substrate computes what retention costs — the
 marginal price of pinning one operand into one destination, the closure a
-sealed record retains, the occupancy of both tiers — but every one of those
-queries is internal, along with the vocabulary they speak: the reach mask,
-the sealed id, the closure and occupancy answers name nothing an embedder can
-hold ([liveness-matrix.md § Bounding the two
+sealed cell retains, the occupancy of both tiers — but every one of those
+queries is internal, along with the vocabulary they speak: the reach mask, the
+sealed id, the closure and occupancy answers name nothing an embedder can hold
+([liveness-matrix.md § Bounding the two
 tiers](liveness-matrix.md#bounding-the-two-tiers)). A price returns to the
 embedder at exactly one place, the crossing verdict a placement consults per
 operand, and it returns as one answer for one decision. The substrate ships
@@ -202,8 +200,8 @@ side and `redeem` on the reading one:
   producer can then die at column zero.
 - **Pull.** The consumer mints a bare hold on the producer cell. The producer
   dies with a nonzero column and seals, and the consumer redeems in its own
-  later step: the home resolves to the record, the consumer's hold on it is
-  the entitlement, and the value comes back reaching the record's id.
+  later step: the home resolves to the sealed cell, the consumer's hold on it
+  is the entitlement, and the value comes back reaching the sealed cell's id.
 
 Which shape an edge takes is the embedder's choice, per edge. Delivering the
 at-rest carrier is the embedder's job too — the substrate ships no queue and
@@ -226,16 +224,16 @@ the chain may outlive the home while borrowing it, so no pin typechecks
 ([tree-cells.md § The ancestry rule](tree-cells.md#the-ancestry-rule)).
 Every other operand of every placement is priced and put.
 
-What the closure sees is both halves of the price and the occupancy the
-choice plays out against: the bytes a pin would *newly* keep alive, walked by
-the substrate across both tiers — marginal against what the destination
-already holds *and* against what the earlier operands of this same placement
-have already pinned, so the first operand from a shared source carries the
-shared cost and the prices sum to what the placement retains; the copy cost,
-which only the embedder can
-know and which it passes beside the operand; the slab's occupancy against its
-cap, the sealed tier's record count and retained bytes, and the destination
-region's own size. The substrate ships those numbers and no threshold.
+What the closure sees is both halves of the price and the occupancy the choice
+plays out against: the bytes a pin would *newly* keep alive, walked by the
+substrate across both tiers — marginal against what the destination already
+holds *and* against what the earlier operands of this same placement have
+already pinned, so the first operand from a shared source carries the shared
+cost and the prices sum to what the placement retains; the copy cost, which
+only the embedder can know and which it passes beside the operand; the slab's
+occupancy against its cap, the sealed tier's sealed-cell count and retained
+bytes, and the destination region's own size. The substrate ships those numbers
+and no threshold.
 
 What the closure answers decides the shape the build closure receives. A
 pinned operand arrives at the destination's own region brand, so the build

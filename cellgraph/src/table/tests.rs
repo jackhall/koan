@@ -85,8 +85,8 @@ fn number(view: &CrossedOperand<'_, '_, Number>) -> u32 {
 
 /// Bytes the slab tier holds, across every occupied cell's region bundle.
 ///
-/// A release may move these bytes between live cells (a merge into a holder), out to a record (a
-/// seal), or nowhere at all (a reclaim) — so the total is non-increasing across one. An increase
+/// A release may move these bytes between live cells (a merge into a holder), out to a sealed cell
+/// (a seal), or nowhere at all (a reclaim) — so the total is non-increasing across one. An increase
 /// would mean storage flowed back out of the sealed tier, which no path may do.
 fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
     (0..cap)
@@ -177,7 +177,7 @@ fn a_two_word_table_names_slots_across_the_chunk_boundary() {
     assert!(!table.holds(low, high));
     table.release(high, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!table.is_live(high));
-    assert_eq!(table.occupancy().records, 0);
+    assert_eq!(table.occupancy().sealed_cells, 0);
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn every_verb_rejects_a_stale_handle() {
     assert!(!table.is_live(first));
     assert_eq!(
         table.enter(first, |_| ()),
-        Err(EnterError::Stale(Stale(CellRef::Slab(first))))
+        Err(EnterError::Stale(Stale(CellHandle::Slab(first))))
     );
     assert_eq!(
         table.release(first, ReleaseAbsorption::IntoHolder),
@@ -242,7 +242,7 @@ fn a_cell_without_a_continuation_is_storage_only() {
             context.cell()
         })
         .unwrap();
-    assert_eq!(seen, CellRef::Slab(cell));
+    assert_eq!(seen, CellHandle::Slab(cell));
 }
 
 #[test]
@@ -284,9 +284,9 @@ fn a_cell_is_entered_by_one_step_at_a_time() {
     let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let cell = table.create(None, None).unwrap();
 
-    table.begin(CellRef::Slab(cell)).unwrap();
+    table.begin(CellHandle::Slab(cell)).unwrap();
     assert_eq!(
-        table.begin(CellRef::Slab(cell)),
+        table.begin(CellHandle::Slab(cell)),
         Err(EnterError::AlreadyExecuting)
     );
     assert_eq!(

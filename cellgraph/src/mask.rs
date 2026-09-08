@@ -14,10 +14,10 @@ use crate::sealed::{SealedId, SealedSet};
 /// The set of regions a value's borrows reach: slab slots as bits over the table's width, sealed
 /// regions as ids.
 ///
-/// Both halves are inline at the width that matters: the dense one always, the sparse one up to
-/// two ids. So a mask naming at most two sealed regions is built, copied, rewritten, and compared
-/// without touching the allocator — which is what keeps a reach off the per-value allocation
-/// path, and a reach naming more than two records is a shape merges keep rare.
+/// Both halves are inline at the width that matters: the dense one always, the sparse one up to two
+/// ids. So a mask naming at most two sealed regions is built, copied, rewritten, and compared
+/// without touching the allocator — which is what keeps a reach off the per-value allocation path,
+/// and a reach naming more than two sealed cells is a shape merges keep rare.
 ///
 /// Masks compose by `OR` and merge, so a value built from several operands names the union of
 /// their reaches with no deduplication step and no subsumption fold.
@@ -49,8 +49,8 @@ impl<const W: usize> GraphReach<W> {
     }
 
     /// A mask naming exactly the sealed region `id` — the reach a value takes on when it is
-    /// redeemed out of a record: a hold on the record keeps its aggregate alive transitively, so
-    /// the id alone covers everything the value reads.
+    /// redeemed out of a sealed cell: a hold on the sealed cell keeps its aggregate alive
+    /// transitively, so the id alone covers everything the value reads.
     pub(crate) fn single_sealed(id: SealedId) -> Self {
         let mut mask = GraphReach::empty();
         mask.add_sealed(id);
@@ -80,7 +80,7 @@ impl<const W: usize> GraphReach<W> {
     }
 
     /// Drop one sealed id, reporting whether it was there — how a seal-time merge strikes the
-    /// absorbed record's id out of the aggregate that named it.
+    /// absorbed sealed cell's id out of the aggregate that named it.
     pub(crate) fn remove_sealed(&mut self, id: SealedId) -> bool {
         self.sealed.remove(id)
     }
@@ -129,7 +129,7 @@ impl<const W: usize> GraphReach<W> {
         &self.sealed
     }
 
-    /// The sealed half, taken out of a mask that has no further use — a retiring record's
+    /// The sealed half, taken out of a mask that has no further use — a retiring sealed cell's
     /// aggregate, whose ids the caller releases.
     pub(crate) fn into_sealed(self) -> SealedSet {
         self.sealed

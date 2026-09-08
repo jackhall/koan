@@ -62,7 +62,7 @@ fn placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach() {
 }
 
 #[test]
-fn a_held_cell_leaves_the_slab_at_its_death_and_its_record_goes_with_its_holder() {
+fn a_held_cell_leaves_the_slab_at_its_death_and_its_sealed_cell_goes_with_its_holder() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let holder = table.create(None, None).unwrap();
     let held = table.create(None, None).unwrap();
@@ -173,8 +173,8 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
     assert_eq!(ring.len(), 2);
     assert!(ring.contains(&HoldNode::Cell(first)) && ring.contains(&HoldNode::Cell(second)));
 
-    // Every death is declared, and the ring moves into the sealed tier intact: each record holds
-    // the other, so neither count ever reaches zero. A ring is a leak, never a dangle.
+    // Every death is declared, and the ring moves into the sealed tier intact: each sealed cell
+    // holds the other, so neither count ever reaches zero. A ring is a leak, never a dangle.
     table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
     table
         .release(second, ReleaseAbsorption::IntoHolder)
@@ -284,17 +284,19 @@ fn pull_completes_after_the_producer_seals() {
         .unwrap();
 
     // The pull shape: the producer dies still held, so its storage seals and the key it minted
-    // forwards to the record rather than stopping resolving.
+    // forwards to the sealed cell rather than stopping resolving.
     table.release(producer, ReleaseAbsorption::Refused).unwrap();
     let id = table.sealed.ids().next().unwrap();
-    assert_eq!(table.relocation_of(producer), Some(SlabForward::Record(id)));
+    assert_eq!(table.relocation_of(producer), Some(SlabForward::Sealed(id)));
     assert_eq!(table.lineage_of(id), vec![producer]);
 
     let read = table
         .enter(consumer, |context| {
-            let carrier = context.redeem(kept).expect("the consumer holds the record");
-            // A value out of a record reaches the record's id and nothing in the slab: a hold on
-            // it keeps the whole aggregate alive transitively.
+            let carrier = context
+                .redeem(kept)
+                .expect("the consumer holds the sealed cell");
+            // A value out of a sealed cell reaches the sealed cell's id and nothing in the slab: a
+            // hold on it keeps the whole aggregate alive transitively.
             assert!(carrier.reach().names_sealed(id));
             assert!(carrier.reach().slab_slots().next().is_none());
             assert_eq!(carrier.reach().sealed().iter().count(), 1);
@@ -303,7 +305,7 @@ fn pull_completes_after_the_producer_seals() {
         .unwrap();
     assert_eq!(read, 41);
 
-    // The record's last holder goes, so the record retires and takes its lineage with it.
+    // The sealed cell's last holder goes, so the sealed cell retires and takes its lineage with it.
     table
         .release(consumer, ReleaseAbsorption::IntoHolder)
         .unwrap();
@@ -328,7 +330,7 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
         })
         .unwrap();
 
-    // The uniquely held producer folds into its holder rather than minting a record, and its
+    // The uniquely held producer folds into its holder rather than minting a sealed cell, and its
     // resident masks move with the storage, re-homed at the consumer's bit.
     table
         .release(producer, ReleaseAbsorption::IntoHolder)
@@ -392,11 +394,11 @@ fn a_resident_forwarded_through_two_merges_is_still_found() {
     table.release(head, ReleaseAbsorption::IntoHolder).unwrap();
     table.release(middle, ReleaseAbsorption::Refused).unwrap();
     let id = table.sealed.ids().next().unwrap();
-    assert_eq!(table.relocation_of(head), Some(SlabForward::Record(id)));
+    assert_eq!(table.relocation_of(head), Some(SlabForward::Sealed(id)));
 
     let read = table
         .enter(end, |context| {
-            let carrier = context.redeem(kept).expect("the end holds the record");
+            let carrier = context.redeem(kept).expect("the end holds the sealed cell");
             assert!(carrier.reach().names_sealed(id));
             *context.read(&carrier).value()
         })
@@ -545,7 +547,7 @@ fn a_birth_hold_entitles_a_child_to_its_parents_resident() {
 }
 
 #[test]
-fn a_redeemed_record_value_can_be_kept_again() {
+fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let producer = table.create(None, None).unwrap();
     let middle = table.create(None, None).unwrap();
@@ -566,17 +568,19 @@ fn a_redeemed_record_value_can_be_kept_again() {
         })
         .unwrap();
     table.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let record = table.sealed.ids().next().unwrap();
+    let sealed_id = table.sealed.ids().next().unwrap();
 
-    // A carrier redeemed out of a record is a carrier like any other: keeping it registers its
-    // record-only reach in the redeeming cell's own table.
+    // A carrier redeemed out of a sealed cell is a carrier like any other: keeping it registers its
+    // sealed-cell-only reach in the redeeming cell's own table.
     let again = table
         .enter(middle, |context| {
-            let carrier = context.redeem(first).expect("the middle holds the record");
+            let carrier = context
+                .redeem(first)
+                .expect("the middle holds the sealed cell");
             context.keep(carrier)
         })
         .unwrap();
-    assert!(resident_reach(&table, middle.slot(), 0).names_sealed(record));
+    assert!(resident_reach(&table, middle.slot(), 0).names_sealed(sealed_id));
     let read = table
         .enter(middle, |context| {
             *context
@@ -586,17 +590,17 @@ fn a_redeemed_record_value_can_be_kept_again() {
         .unwrap();
     assert_eq!(read, 41);
 
-    // The re-keeping cell now seals in turn, and the key forwards to its record.
+    // The re-keeping cell now seals in turn, and the key forwards to its sealed cell.
     table.release(middle, ReleaseAbsorption::Refused).unwrap();
     let outer = table.sealed_holds[end.slot() as usize]
         .iter()
         .next()
-        .expect("the end holds the record the middle sealed into");
+        .expect("the end holds the sealed cell the middle sealed into");
     let read = table
         .enter(end, |context| {
             let carrier = context
                 .redeem(again)
-                .expect("the end holds the outer record");
+                .expect("the end holds the outer sealed cell");
             assert!(carrier.reach().names_sealed(outer));
             *context.read(&carrier).value()
         })

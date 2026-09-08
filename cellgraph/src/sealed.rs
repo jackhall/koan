@@ -6,9 +6,9 @@
 //! Ids come from a monotone space and are never reused, which is what lets the tier skip
 //! generations entirely: a sealed name cannot be re-bound, so it cannot go stale. The *slot* an id
 //! names in the tier's slab is reused; the serial packed beside it is what tells a live id from a
-//! retired one whose index came back. Sealedness is
-//! enforced by what this module cannot express — a record has no write path into its aggregate
-//! beyond the seal transition's own rewrite, so a pin *out of* a sealed region is unrepresentable.
+//! retired one whose index came back. Sealedness is enforced by what this module cannot express — a
+//! sealed cell has no write path into its aggregate beyond the seal transition's own rewrite, so a
+//! pin *out of* a sealed region is unrepresentable.
 
 use std::cell::Cell;
 
@@ -34,7 +34,7 @@ impl SealedId {
         SealedId(u64::from(serial) << 32 | u64::from(index))
     }
 
-    /// Where in the tier's slab this id's record sits, live or retired.
+    /// Where in the tier's slab this id's sealed cell sits, live or retired.
     fn index(self) -> u32 {
         self.0 as u32
     }
@@ -46,8 +46,8 @@ impl SealedId {
         SealedId::pack(serial, index)
     }
 
-    /// Which mint handed this id out. What separates a live record from a retired one that gave
-    /// its index back.
+    /// Which mint handed this id out. What separates a live sealed cell from a retired one that
+    /// gave its index back.
     fn serial(self) -> u32 {
         (self.0 >> 32) as u32
     }
@@ -192,30 +192,30 @@ impl<V: IdBuffer> IdSet<V> {
 }
 
 /// One retained region: everything its cell had, minus everything a cell needs to run.
-pub(crate) struct SealedRecord<const W: usize> {
+pub(crate) struct SealedCell<const W: usize> {
     /// The cell's hold set, frozen at its death instead of cleared. Monotone holds make this
     /// exactly the union of every reach ever minted into the region, so the freeze is a word copy
     /// and consults no storage.
     pub(crate) aggregate: GraphReach<W>,
     /// The chunks, detached from the slot unmoved — a bundle with no chunk at all for a cell that
-    /// never allocated, and the record's own bytes from then on: its memo is written here too.
+    /// never allocated, and the sealed cell's own bytes from then on: its memo is written here too.
     pub(crate) storage: Region,
-    /// How many hold sets name this region — live cells' sealed halves plus other records'
+    /// How many hold sets name this region — live cells' sealed halves plus other sealed cells'
     /// aggregates. Decremented only in batch, when a holder dies or reclaims.
     pub(crate) holders: u32,
-    /// The most holders this record has ever had. Test-only, and the tell a wound-down run reads:
-    /// a region no more than one hold set ever named is one the merges reach, so a survivor of a
-    /// full wind-down must have been shared at some point.
+    /// The most holders this sealed cell has ever had. Test-only, and the tell a wound-down run
+    /// reads: a region no more than one hold set ever named is one the merges reach, so a survivor
+    /// of a full wind-down must have been shared at some point.
     #[cfg(test)]
     pub(crate) peak_holders: u32,
-    /// The head of the chain of departed cells whose residents this record now answers for,
+    /// The head of the chain of departed cells whose residents this sealed cell now answers for,
     /// threaded through the table's relocation entries themselves. Bounded by merges, never by
     /// values — a cell contributes at most one entry, however many residents it kept — and it is
-    /// what lets the record's retirement drop exactly its own entries from that map.
+    /// what lets the sealed cell's retirement drop exactly its own entries from that map.
     pub(crate) lineage: Option<Handle>,
 }
 
-impl<const W: usize> SealedRecord<W> {
+impl<const W: usize> SealedCell<W> {
     /// Bytes the detached chunks still occupy, the memo's own among them. Retention lives only in
     /// this tier, so this is the occupancy a hold on the region is answerable for — what the
     /// consolidation copy buys back, and the input a pressure model prices a release against.
@@ -223,10 +223,10 @@ impl<const W: usize> SealedRecord<W> {
         self.storage.allocated_bytes()
     }
 
-    /// What a hold on this record keeps alive, once that answer can no longer change — the record
-    /// set, written into the record's own [`storage`](Self::storage). Written by a price query and
-    /// by nothing else, and never cleared: there is no path that clears a `OnceCell`, which is the
-    /// point.
+    /// What a hold on this sealed cell keeps alive, once that answer can no longer change — the
+    /// sealed-cell set, written into the sealed cell's own [`storage`](Self::storage). Written by a
+    /// price query and by nothing else, and never cleared: there is no path that clears a
+    /// `OnceCell`, which is the point.
     ///
     /// The node *set* is what is memoized, not a byte total: two branches of one closure may share
     /// a sub-tier, so a price folds sets together and sums once at the end. Summing memoized
@@ -235,51 +235,51 @@ impl<const W: usize> SealedRecord<W> {
     /// A closure is memoized only when it names no live cell, and **nothing inside such a closure
     /// ever changes**:
     ///
-    /// - Every node of it is a record, and each is named by its predecessor's aggregate, so each
-    ///   has a holder for as long as the root does: none retires.
-    /// - A record's aggregate and storage change only in a fold, whose target is either the record
-    ///   a seal just minted or a namer whose aggregate names the dying slot. Neither is in a frozen
-    ///   closure: one is new, the other names a slab bit.
-    /// - A record is absorbed only when its sole holder is such a target. A record inside a frozen
-    ///   closure is held by a record inside it, so it is never a source either.
+    /// - Every node of it is a sealed cell, and each is named by its predecessor's aggregate, so
+    ///   each has a holder for as long as the root does: none retires.
+    /// - A sealed cell's aggregate and storage change only in a fold, whose target is either the
+    ///   sealed cell a seal just minted or a namer whose aggregate names the dying slot. Neither is
+    ///   in a frozen closure: one is new, the other names a slab bit.
+    /// - A sealed cell is absorbed only when its sole holder is such a target. A sealed cell inside
+    ///   a frozen closure is held by a sealed cell inside it, so it is never a source either.
     /// - The seal transition's conversions rewrite live rows and aggregates naming the dying slot,
     ///   none of them frozen, and a mint writes a live cell's hold set.
     ///
-    /// So the node set is fixed and the bytes are fixed, and the memo stays exact for the record's
-    /// whole life ([liveness-matrix.md § Bounding the two
+    /// So the node set is fixed and the bytes are fixed, and the memo stays exact for the sealed
+    /// cell's whole life ([liveness-matrix.md § Bounding the two
     /// tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
     pub(crate) fn memo(&self) -> Option<&[SealedId]> {
         self.storage.memo()
     }
 }
 
-/// Every sealed region in the table: a dense slab of record slots, the indices retirement handed
-/// back, and the monotone serial their ids come from.
+/// Every sealed region in the table: a dense slab of sealed-cell slots, the indices retirement
+/// handed back, and the monotone serial their ids come from.
 ///
-/// No hashing anywhere. An id carries its own index, so every lookup is a bounds-checked load and
-/// a serial compare, and the serial is what makes a retired id read as absent rather than as
-/// whatever record later took its index.
+/// No hashing anywhere. An id carries its own index, so every lookup is a bounds-checked load and a
+/// serial compare, and the serial is what makes a retired id read as absent rather than as whatever
+/// sealed cell later took its index.
 pub(crate) struct SealedTier<const W: usize> {
     /// One entry per index the tier has ever handed out. `None` while the index is on the free
-    /// list; the serial beside a present record is what tells a live id from a retired one that
-    /// reused its index.
-    records: Vec<Option<(u32, SealedRecord<W>)>>,
+    /// list; the serial beside a present sealed cell is what tells a live id from a retired one
+    /// that reused its index.
+    cells: Vec<Option<(u32, SealedCell<W>)>>,
     free: Vec<u32>,
     next_serial: u32,
     live: usize,
-    /// Retained bytes summed over every record present — the tier's half of the occupancy signal,
-    /// maintained at the places storage enters or leaves the tier rather than scanned. A `Cell`
-    /// because priming a memo grows a record's bytes and runs under `&self`.
+    /// Retained bytes summed over every sealed cell present — the tier's half of the occupancy
+    /// signal, maintained at the places storage enters or leaves the tier rather than scanned. A
+    /// `Cell` because priming a memo grows a sealed cell's bytes and runs under `&self`.
     bytes: Cell<usize>,
 }
 
 impl<const W: usize> SealedTier<W> {
-    /// A tier pre-sized to the slab's `cap`: a table cannot have more records than it has had
+    /// A tier pre-sized to the slab's `cap`: a table cannot have more sealed cells than it has had
     /// cells, up to what retention keeps beyond that. Construction is unmetered, like the slab
     /// itself, so the reserve costs no verb an allocation.
     pub(crate) fn new(cap: u32) -> Self {
         SealedTier {
-            records: Vec::with_capacity(cap as usize),
+            cells: Vec::with_capacity(cap as usize),
             free: Vec::with_capacity(cap as usize),
             next_serial: 0,
             live: 0,
@@ -294,13 +294,13 @@ impl<const W: usize> SealedTier<W> {
     /// # Panics
     ///
     /// If the serial space is exhausted. A `u32` of them outlives any run that seals at a sane
-    /// rate, and reusing one would let a retired id name a live record.
+    /// rate, and reusing one would let a retired id name a live sealed cell.
     pub(crate) fn mint_id(&mut self) -> SealedId {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
-                self.records.push(None);
-                (self.records.len() - 1) as u32
+                self.cells.push(None);
+                (self.cells.len() - 1) as u32
             }
         };
         let serial = self.next_serial;
@@ -310,57 +310,61 @@ impl<const W: usize> SealedTier<W> {
         SealedId::pack(serial, index)
     }
 
-    pub(crate) fn insert(&mut self, id: SealedId, record: SealedRecord<W>) {
-        let slot = &mut self.records[id.index() as usize];
+    pub(crate) fn insert(&mut self, id: SealedId, sealed_cell: SealedCell<W>) {
+        let slot = &mut self.cells[id.index() as usize];
         debug_assert!(slot.is_none(), "a minted index is filled once");
-        self.bytes.set(self.bytes.get() + record.retained_bytes());
-        *slot = Some((id.serial(), record));
+        self.bytes
+            .set(self.bytes.get() + sealed_cell.retained_bytes());
+        *slot = Some((id.serial(), sealed_cell));
         self.live += 1;
     }
 
-    pub(crate) fn get(&self, id: SealedId) -> Option<&SealedRecord<W>> {
-        match self.records.get(id.index() as usize)? {
-            Some((serial, record)) if *serial == id.serial() => Some(record),
+    pub(crate) fn get(&self, id: SealedId) -> Option<&SealedCell<W>> {
+        match self.cells.get(id.index() as usize)? {
+            Some((serial, sealed_cell)) if *serial == id.serial() => Some(sealed_cell),
             _ => None,
         }
     }
 
-    pub(crate) fn get_mut(&mut self, id: SealedId) -> Option<&mut SealedRecord<W>> {
-        match self.records.get_mut(id.index() as usize)? {
-            Some((serial, record)) if *serial == id.serial() => Some(record),
+    pub(crate) fn get_mut(&mut self, id: SealedId) -> Option<&mut SealedCell<W>> {
+        match self.cells.get_mut(id.index() as usize)? {
+            Some((serial, sealed_cell)) if *serial == id.serial() => Some(sealed_cell),
             _ => None,
         }
     }
 
-    pub(crate) fn remove(&mut self, id: SealedId) -> Option<SealedRecord<W>> {
-        let slot = self.records.get_mut(id.index() as usize)?;
+    pub(crate) fn remove(&mut self, id: SealedId) -> Option<SealedCell<W>> {
+        let slot = self.cells.get_mut(id.index() as usize)?;
         match slot {
             Some((serial, _)) if *serial == id.serial() => {}
             _ => return None,
         }
-        let (_, record) = slot.take().expect("the serial matched a present record");
+        let (_, sealed_cell) = slot
+            .take()
+            .expect("the serial matched a present sealed cell");
         self.free.push(id.index());
         self.live -= 1;
-        self.bytes.set(self.bytes.get() - record.retained_bytes());
-        Some(record)
+        self.bytes
+            .set(self.bytes.get() - sealed_cell.retained_bytes());
+        Some(sealed_cell)
     }
 
-    /// Splice storage into a record, keeping the running total in step. The one write into a
-    /// record's storage after its construction, so the total needs no other maintenance point.
+    /// Splice storage into a sealed cell, keeping the running total in step. The one write into a
+    /// sealed cell's storage after its construction, so the total needs no other maintenance point.
     pub(crate) fn splice_storage(&mut self, id: SealedId, from: Option<Region>) {
         self.bytes
             .set(self.bytes.get() + from.as_ref().map_or(0, Region::allocated_bytes));
-        let record = self.get_mut(id).expect("the fold target is present");
-        Region::splice(&mut record.storage, from);
+        let sealed_cell = self.get_mut(id).expect("the fold target is present");
+        Region::splice(&mut sealed_cell.storage, from);
     }
 
     /// Write `ids` into `id`'s own region as its frozen closure, once, and count the bytes that
     /// cost. Under `&self` because a price query is a read of the table everywhere else.
     pub(crate) fn prime(&self, id: SealedId, ids: &[SealedId]) {
-        let Some(record) = self.get(id) else {
+        let Some(sealed_cell) = self.get(id) else {
             return;
         };
-        let written = record.storage.set_memo(ids);
+        let written = sealed_cell.storage.set_memo(ids);
         self.bytes.set(self.bytes.get() + written);
     }
 
@@ -375,7 +379,7 @@ impl<const W: usize> SealedTier<W> {
 
     #[cfg(test)]
     pub(crate) fn ids(&self) -> impl Iterator<Item = SealedId> + '_ {
-        self.records.iter().enumerate().filter_map(|(index, slot)| {
+        self.cells.iter().enumerate().filter_map(|(index, slot)| {
             slot.as_ref()
                 .map(|(serial, _)| SealedId::pack(*serial, index as u32))
         })

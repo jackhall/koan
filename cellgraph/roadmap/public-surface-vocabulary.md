@@ -54,15 +54,9 @@ a name a reader has to translate before it means anything:
   `debug_ring_from`. `Hold` vs `Slot` names neither level, so the pair reads as
   two *kinds* of node. Candidates considered and not settled: `HoldNode` /
   `HoldSlot`, `NamedNode` / `HoldNode`, `HoldNode` / `HoldNodeBySlot`.
-- *Order against the sibling item — open.* Both sweeps rewrite most of
-  `table.rs`. Either lands first, but they should not interleave.
 
 ## Dependencies
 
-**Requires:**
-
-- [Retire the record vocabulary](sealed-cell-vocabulary.md) — that item
-  settles what `CellRef` is called, which this one's slab renames sit beside,
-  and both rewrite the same file wholesale.
+**Requires:** none.
 
 **Unblocks:** none tracked yet.

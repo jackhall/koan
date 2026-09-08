@@ -7,17 +7,18 @@
 //!   aggregate;
 //! - a cell resident after its declared death is named by an occupant's birth row — the one
 //!   relation with no sealed half to convert into — or counted by an undisposed tree child;
-//! - every sealed record's holder count equals the number of hold sets that name it, and the
-//!   reverse naming index is exactly the transpose of the aggregates;
+//! - every sealed cell's holder count equals the number of hold sets that name it, and the reverse
+//!   naming index is exactly the transpose of the aggregates;
 //! - every bit and id of a resident's mask is covered by storage its cell is answerable for —
 //!   mask validity, over the whole reach table rather than one stored continuation;
 //! - the relocation map and the lineages agree in both directions, and every relocated key names
 //!   an entry that exists — so a resident forwarded through any number of merges still redeems to
 //!   the value it was kept as, which the redeem verb reads back and checks;
-//! - no hold set names its own owner, and every present record has a holder — which together make
-//!   a record that survives a wound-down run a ring by arithmetic, with no ring walk in the loop;
+//! - no hold set names its own owner, and every present sealed cell has a holder — which together
+//!   make a sealed cell that survives a wound-down run a ring by arithmetic, with no ring walk in
+//!   the loop;
 //! - the live tier never grows across a release, so storage that has sealed never re-enters it;
-//! - a record that survives a wound-down run was named by two hold sets at some point — the
+//! - a sealed cell that survives a wound-down run was named by two hold sets at some point — the
 //!   universal the hand-written ring-dissolution tests are three instances of;
 //! - every memoized closure still equals the walk that would recompute it, and no memo exists
 //!   unless a price query put it there — the never-invalidated memo carried across every
@@ -213,21 +214,22 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
     }
 
     // Quiescence spans both tiers: the slab being clear is only half of it, and a table that
-    // reports itself empty while a record survives would hide exactly the ring this test hunts.
+    // reports itself empty while a sealed cell survives would hide exactly the ring this test
+    // hunts.
     assert_eq!(
         table.is_empty(),
         occupied.is_empty() && table.sealed.is_empty(),
         "is_empty disagrees with the two tiers it summarizes"
     );
 
-    let records: Vec<SealedId> = table.sealed.ids().collect();
-    for id in &records {
-        let record = table.sealed.get(*id).unwrap();
+    let sealed_ids: Vec<SealedId> = table.sealed.ids().collect();
+    for id in &sealed_ids {
+        let sealed_cell = table.sealed.get(*id).unwrap();
         let from_cells = occupied
             .iter()
             .filter(|slot| table.sealed_holds[**slot as usize].contains(*id))
             .count();
-        let from_records = records
+        let from_sealed = sealed_ids
             .iter()
             .filter(|other| *other != id)
             .filter(|other| {
@@ -240,30 +242,30 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             })
             .count();
         assert_eq!(
-            record.holders as usize,
-            from_cells + from_records,
-            "record {id:?} counts holders that do not name it, or misses ones that do"
+            sealed_cell.holders as usize,
+            from_cells + from_sealed,
+            "sealed cell {id:?} counts holders that do not name it, or misses ones that do"
         );
-        // A count of zero reclaims a record on the spot, so a record still in the tier at zero is
-        // stranded storage nothing can ever release.
+        // A count of zero reclaims a sealed cell on the spot, so a sealed cell still in the tier at
+        // zero is stranded storage nothing can ever release.
         assert!(
-            record.holders >= 1,
-            "record {id:?} is present with no holder"
+            sealed_cell.holders >= 1,
+            "sealed cell {id:?} is present with no holder"
         );
         assert!(
-            !record.aggregate.names_sealed(*id),
-            "record {id:?} names itself"
+            !sealed_cell.aggregate.names_sealed(*id),
+            "sealed cell {id:?} names itself"
         );
-        for named in record.aggregate.slab_slots() {
+        for named in sealed_cell.aggregate.slab_slots() {
             assert!(
                 table.naming[named as usize].contains(*id),
-                "record {id:?} names slot {named} without registering in the naming index"
+                "sealed cell {id:?} names slot {named} without registering in the naming index"
             );
         }
-        for named in record.aggregate.sealed().iter() {
+        for named in sealed_cell.aggregate.sealed().iter() {
             assert!(
-                records.contains(&named),
-                "record {id:?} names a retired record"
+                sealed_ids.contains(&named),
+                "sealed cell {id:?} names a retired sealed cell"
             );
         }
     }
@@ -274,17 +276,20 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             "slot {slot} holds itself, so its count could never reach zero"
         );
         for id in table.naming[slot as usize].iter() {
-            let record = table
+            let sealed_cell = table
                 .sealed
                 .get(id)
-                .expect("the naming index names a live record");
+                .expect("the naming index names a live sealed cell");
             assert!(
-                record.aggregate.names(slot),
-                "the naming index claims record {id:?} names slot {slot}"
+                sealed_cell.aggregate.names(slot),
+                "the naming index claims sealed cell {id:?} names slot {slot}"
             );
         }
         for id in table.sealed_holds[slot as usize].iter() {
-            assert!(records.contains(&id), "slot {slot} holds a retired record");
+            assert!(
+                sealed_ids.contains(&id),
+                "slot {slot} holds a retired sealed cell"
+            );
         }
         // Resident masks are covered: every bit and id of every entry of the cell's resident
         // table names storage the cell is answerable for, so a read through one is sound.
@@ -301,19 +306,19 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             }
             for named in mask.sealed().iter() {
                 assert!(
-                    records.contains(&named),
-                    "slot {slot} keeps a resident naming a retired record"
+                    sealed_ids.contains(&named),
+                    "slot {slot} keeps a resident naming a retired sealed cell"
                 );
                 assert!(
                     table.sealed_holds[slot as usize].contains(named),
-                    "slot {slot} keeps a resident naming record {named:?}, which it does not hold"
+                    "slot {slot} keeps a resident naming {named:?}, a sealed cell it does not hold"
                 );
             }
         }
     }
 
-    // Relocation is consistent both ways: every key the map answers for names storage that is
-    // still there and answers for that key in turn, and every lineage entry a slot or a record
+    // Relocation is consistent both ways: every key the map answers for names storage that is still
+    // there and answers for that key in turn, and every lineage entry a slot or a sealed cell
     // carries is a key of the map pointing back at it. A one-way break would strand a resident or
     // hand one storage that is not its own.
     for (handle, location) in table.relocation_entries() {
@@ -337,14 +342,14 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
                     "{handle:?} is relocated past the end of slot {slot}'s reach table"
                 );
             }
-            SlabForward::Record(id) => {
+            SlabForward::Sealed(id) => {
                 assert!(
                     table.sealed.get(id).is_some(),
-                    "a relocation entry names a retired record"
+                    "a relocation entry names a retired sealed cell"
                 );
                 assert!(
                     table.lineage_of(id).contains(&handle),
-                    "record {id:?} answers for {handle:?} without carrying it on its chain"
+                    "sealed cell {id:?} answers for {handle:?} without carrying it on its chain"
                 );
             }
         }
@@ -354,57 +359,58 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             assert_eq!(
                 table.relocation_of(handle).map(|location| match location {
                     SlabForward::Slab { slot, .. } => Some(slot),
-                    SlabForward::Record(_) => None,
+                    SlabForward::Sealed(_) => None,
                 }),
                 Some(Some(slot)),
                 "slot {slot} carries {handle:?} on its chain without the map pointing here"
             );
         }
     }
-    for id in &records {
+    for id in &sealed_ids {
         for handle in table.lineage_of(*id) {
             assert_eq!(
                 table.relocation_of(handle),
-                Some(SlabForward::Record(*id)),
-                "record {id:?} carries {handle:?} on its chain without the map pointing here"
+                Some(SlabForward::Sealed(*id)),
+                "sealed cell {id:?} carries {handle:?} on its chain without the map pointing here"
             );
         }
     }
 
     // The occupancy signal is a maintained total, not a scan, so it has to agree with one.
-    let scanned: usize = records
+    let scanned: usize = sealed_ids
         .iter()
         .map(|id| table.sealed.get(*id).unwrap().retained_bytes())
         .sum();
     let occupancy = table.occupancy();
     assert_eq!(
         occupancy.retained_bytes, scanned,
-        "the tier's running byte total drifted from what its records retain"
+        "the tier's running byte total drifted from what its sealed cells retain"
     );
-    assert_eq!(occupancy.records, records.len());
+    assert_eq!(occupancy.sealed_cells, sealed_ids.len());
     assert_eq!(occupancy.occupied as usize, occupied.len());
     assert_eq!(occupancy.cap, CAP);
 
     let mut now_memoized = Vec::new();
-    for id in &records {
-        let record = table.sealed.get(*id).unwrap();
-        let Some(memo) = record.memo() else {
+    for id in &sealed_ids {
+        let sealed_cell = table.sealed.get(*id).unwrap();
+        let Some(memo) = sealed_cell.memo() else {
             continue;
         };
         now_memoized.push(*id);
         assert!(
             priced || memoized.contains(id),
-            "record {id:?} carries a memo no price query asked for"
+            "sealed cell {id:?} carries a memo no price query asked for"
         );
         // Recomputed from scratch, consulting no memo at all: a closure memoized as frozen still
-        // names no live cell, spans the same records, and prices at the same bytes. Nothing inside
-        // a frozen closure changes, and this is the check that says so for every interleaving.
+        // names no live cell, spans the same sealed cells, and prices at the same bytes. Nothing
+        // inside a frozen closure changes, and this is the check that says so for every
+        // interleaving.
         let fresh = table.transitive_pins(SlotNode::Sealed(*id), false);
         assert!(
             fresh.cells.is_empty(),
             "the memoized closure of {id:?} has since named a live cell"
         );
-        let mut walked = fresh.records.clone();
+        let mut walked = fresh.sealed.clone();
         walked.sort();
         let mut memoized = memo.to_vec();
         memoized.sort();
@@ -413,7 +419,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             table.bytes_of(&fresh),
             memoized
                 .iter()
-                .map(|id| table.record_bytes(*id))
+                .map(|id| table.sealed_bytes(*id))
                 .sum::<usize>(),
             "the memoized closure of {id:?} no longer prices to the walked total"
         );
@@ -428,11 +434,11 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
 fn expected_redeem(
     table: &CellTable<Borrowed>,
     executing: u32,
-    home: CellRef,
+    home: CellHandle,
 ) -> Result<(), RedeemError> {
     let slab_home = match home {
-        CellRef::Slab(handle) => handle,
-        CellRef::Tree(handle) => match table.trees().resolve(handle) {
+        CellHandle::Slab(handle) => handle,
+        CellHandle::Tree(handle) => match table.trees().resolve(handle) {
             None => return Err(RedeemError::Gone),
             Some(crate::tree::TreeForward::Tree(index)) => {
                 return match table.trees().root(index) == executing {
@@ -454,7 +460,7 @@ fn expected_redeem(
                 false => Err(RedeemError::Unheld),
             }
         }
-        Some(SlabForward::Record(id)) => {
+        Some(SlabForward::Sealed(id)) => {
             match table.sealed_holds[executing as usize].contains(id) {
                 true => Ok(()),
                 false => Err(RedeemError::Unheld),
@@ -500,11 +506,11 @@ fn check_tree_invariants(table: &CellTable<Borrowed>) {
             .tombstone_target(index)
             .expect("a tombstone records where its bytes went")
         {
-            CellRef::Tree(target) => assert!(
+            CellHandle::Tree(target) => assert!(
                 pool.state(target.index()) != TreeState::Free,
                 "tombstone {index} points at a recycled pool slot"
             ),
-            CellRef::Slab(handle) => assert!(
+            CellHandle::Slab(handle) => assert!(
                 table.locate(handle).is_some(),
                 "tombstone {index} points at a slab cell nothing answers for"
             ),
@@ -622,9 +628,9 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
     let mut grown: Vec<TreeHandle> = Vec::new();
     // Every value put to rest, beside the cell it was kept in and the number it carries — so a
     // redeem that answers can be checked against what it was supposed to hand back.
-    let mut kept: Vec<(CellRef, Resident<Number>, u32)> = Vec::new();
+    let mut kept: Vec<(CellHandle, Resident<Number>, u32)> = Vec::new();
     let mut next_value: u32 = 0;
-    // Nothing has been priced yet, so no record may carry a memo.
+    // Nothing has been priced yet, so no sealed cell may carry a memo.
     let mut memoized: Vec<SealedId> = Vec::new();
 
     for step in verbs {
@@ -693,7 +699,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                             context.keep(value)
                         })
                         .unwrap();
-                    kept.push((CellRef::Slab(cell), resident, carried));
+                    kept.push((CellHandle::Slab(cell), resident, carried));
                 }
             }
             // The door back. The outcome is predicted from the table's state before the call —
@@ -727,10 +733,10 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 {
                     minted.push(handle);
                 }
-                let parent: Option<CellRef> = under_tree
-                    .then(|| wrapped(&grown, parent).map(CellRef::Tree))
+                let parent: Option<CellHandle> = under_tree
+                    .then(|| wrapped(&grown, parent).map(CellHandle::Tree))
                     .flatten()
-                    .or_else(|| wrapped(&minted, parent).map(CellRef::Slab));
+                    .or_else(|| wrapped(&minted, parent).map(CellHandle::Slab));
                 if let Some(parent) = parent
                     && let Ok(handle) = table.create_tree(parent, None)
                 {
@@ -744,9 +750,9 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 consumer,
                 into_tree,
             } => {
-                let consumer: Option<CellRef> = match into_tree {
-                    true => wrapped(&grown, consumer).map(CellRef::Tree),
-                    false => wrapped(&minted, consumer).map(CellRef::Slab),
+                let consumer: Option<CellHandle> = match into_tree {
+                    true => wrapped(&grown, consumer).map(CellHandle::Tree),
+                    false => wrapped(&minted, consumer).map(CellHandle::Slab),
                 };
                 if let (Some(producer), Some(consumer)) = (wrapped(&grown, producer), consumer)
                     && table.is_live(producer)
@@ -778,7 +784,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                             context.keep(value)
                         })
                         .unwrap();
-                    kept.push((CellRef::Tree(cell), resident, carried));
+                    kept.push((CellHandle::Tree(cell), resident, carried));
                 }
             }
             // The same door from inside the tree, where entitlement is root identity rather than a
@@ -898,14 +904,15 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
     for slot in 0..CAP {
         assert_eq!(table.slots[slot as usize].state, SlotState::Free);
     }
-    // Every surviving record is a ring by the invariants above; this says which rings can survive.
-    // A region no more than one hold set ever named is one a merge reaches — its sole holder either
-    // absorbs it, seals and folds it in, or drops the last hold — so a survivor was shared once.
+    // Every surviving sealed cell is a ring by the invariants above; this says which rings can
+    // survive. A region no more than one hold set ever named is one a merge reaches — its sole
+    // holder either absorbs it, seals and folds it in, or drops the last hold — so a survivor was
+    // shared once.
     for id in table.sealed.ids() {
-        let record = table.sealed.get(id).unwrap();
+        let sealed_cell = table.sealed.get(id).unwrap();
         assert!(
-            record.peak_holders >= 2,
-            "record {id:?} survived the wind-down having never had a second holder"
+            sealed_cell.peak_holders >= 2,
+            "sealed cell {id:?} survived the wind-down having never had a second holder"
         );
     }
     assert_eq!(table.is_empty(), table.sealed.is_empty());
@@ -964,7 +971,7 @@ fn each_merge_fires_across_generated_interleavings() {
         );
         assert!(
             total.at_seal > 0,
-            "no run absorbed a count-1 record at a seal"
+            "no run absorbed a count-1 sealed cell at a seal"
         );
         assert!(total.into_namer > 0, "no run sealed a cell into its namer");
     }

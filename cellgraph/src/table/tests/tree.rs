@@ -66,7 +66,7 @@ fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
             )
         })
         .unwrap();
-    assert_eq!(cell, CellRef::Tree(tree));
+    assert_eq!(cell, CellHandle::Tree(tree));
     assert_eq!(continuation.as_deref(), Some("next"));
 
     table.release_tree(tree).unwrap();
@@ -86,12 +86,12 @@ fn the_tree_doors_refuse_a_name_kept_past_a_declared_death() {
     let Err(stale) = table.create_tree(tree, None) else {
         panic!("a dead tree parent must refuse");
     };
-    assert_eq!(stale.name(), CellRef::Tree(tree));
+    assert_eq!(stale.name(), CellHandle::Tree(tree));
 
     let Err(EnterError::Stale(stale)) = table.enter(tree, |_| ()) else {
         panic!("a dead tree cell must refuse the step");
     };
-    assert_eq!(stale.name(), CellRef::Tree(tree));
+    assert_eq!(stale.name(), CellHandle::Tree(tree));
 
     let Err(ReleaseTreeError::Stale(stale)) = table.release_tree(tree) else {
         panic!("a second release names a death already declared");
@@ -103,7 +103,7 @@ fn the_tree_doors_refuse_a_name_kept_past_a_declared_death() {
     let Err(stale) = table.create_tree(root, None) else {
         panic!("a dead root must refuse");
     };
-    assert_eq!(stale.name(), CellRef::Slab(root));
+    assert_eq!(stale.name(), CellHandle::Slab(root));
     assert!(table.is_empty());
 }
 
@@ -192,13 +192,13 @@ fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
             let value = number_in(context, 5);
             let mut copied = Vec::new();
             for dest in [
-                CellRef::Tree(home),
-                CellRef::Tree(child),
-                CellRef::Tree(parent),
-                CellRef::Slab(root),
-                CellRef::Tree(cousin),
-                CellRef::Tree(elsewhere),
-                CellRef::Slab(stranger),
+                CellHandle::Tree(home),
+                CellHandle::Tree(child),
+                CellHandle::Tree(parent),
+                CellHandle::Slab(root),
+                CellHandle::Tree(cousin),
+                CellHandle::Tree(elsewhere),
+                CellHandle::Slab(stranger),
             ] {
                 context
                     .alloc_into::<Number, Number>(dest, &[kept_operand(&value)], |writer, views| {
@@ -259,7 +259,7 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
             context.cell()
         })
         .unwrap();
-    assert_eq!(bytes, CellRef::Tree(home));
+    assert_eq!(bytes, CellHandle::Tree(home));
     let home_bytes = table.trees().region_bytes(home.index());
     assert!(home_bytes > 0);
 
@@ -374,8 +374,8 @@ fn a_resident_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_root() {
         .unwrap();
 
     // The home itself, a cousin under the same root, and the root: all entitled by root identity.
-    for cell in [CellRef::Tree(home), CellRef::Tree(sibling)] {
-        let CellRef::Tree(handle) = cell else {
+    for cell in [CellHandle::Tree(home), CellHandle::Tree(sibling)] {
+        let CellHandle::Tree(handle) = cell else {
             unreachable!("the loop names tree cells")
         };
         let read = table
@@ -476,7 +476,7 @@ fn a_resident_whose_home_was_absorbed_redeems_from_the_destination() {
     assert_eq!(table.trees().state(home.index()), TreeState::Absorbed);
     assert_eq!(
         table.trees().tombstone_target(home.index()),
-        Some(CellRef::Slab(root))
+        Some(CellHandle::Slab(root))
     );
     assert_eq!(table.tree_tombstones_of(root), Some(home.index()));
 
@@ -591,11 +591,11 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
 
     // The whole chain lives in the pool: not one level takes a slab slot.
     let mut chain = Vec::with_capacity(DEPTH);
-    let mut parent = CellRef::Slab(root);
+    let mut parent = CellHandle::Slab(root);
     for _ in 0..DEPTH {
         let cell = table.create_tree(parent, None).unwrap();
         chain.push(cell);
-        parent = CellRef::Tree(cell);
+        parent = CellHandle::Tree(cell);
     }
     assert_eq!(
         table.create(None, None),
@@ -610,8 +610,8 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
     for level in (0..DEPTH).rev() {
         let cell = chain[level];
         let up = match level {
-            0 => CellRef::Slab(root),
-            _ => CellRef::Tree(chain[level - 1]),
+            0 => CellHandle::Slab(root),
+            _ => CellHandle::Tree(chain[level - 1]),
         };
         let taken = carried.take();
         carried = Some(

@@ -77,20 +77,20 @@ fn the_seal_transition_is_bounded_by_the_holders_residents_not_the_storage() {
     // ten thousand resident values costs what one with sixteen costs.
     assert_eq!(seal_work_for(SMALL, 4, 0), seal_work_for(LARGE, 4, 0));
 
-    // What the transition *is* proportional to: each holder's reach table, one entry at a
-    // time, because the dying slot's bit has to become the record's id in every mask that names
-    // it. Four more entries in the one holder's table, four more units of work — exactly. The
-    // count is entries, not keeps: interning is what keeps the two from diverging over a run.
+    // What the transition *is* proportional to: each holder's reach table, one entry at a time,
+    // because the dying slot's bit has to become the sealed cell's id in every mask that names it.
+    // Four more entries in the one holder's table, four more units of work — exactly. The count is
+    // entries, not keeps: interning is what keeps the two from diverging over a run.
     assert_eq!(
         seal_work_for(SMALL, 8, 0) - seal_work_for(SMALL, 4, 0),
         4,
         "the rewrite is bounded by the holders' entry counts"
     );
 
-    // And not to the dying cell's own residents: those masks are dead bytes the moment the
-    // storage they name is in the record, so the transition forwards one lineage entry for the
-    // whole table rather than touching an entry per value. The producer's keeps all share one
-    // reach and so one entry, which is the point twice over — the table did not grow either.
+    // And not to the dying cell's own residents: those masks are dead bytes the moment the storage
+    // they name is in the sealed cell, so the transition forwards one lineage entry for the whole
+    // table rather than touching an entry per value. The producer's keeps all share one reach and
+    // so one entry, which is the point twice over — the table did not grow either.
     assert_eq!(
         seal_work_for(SMALL, 4, SMALL),
         seal_work_for(SMALL, 4, LARGE)
@@ -112,14 +112,14 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
     assert!(!table.is_live(held));
     assert_eq!(
         table.enter(held, |_| ()),
-        Err(EnterError::Stale(Stale(CellRef::Slab(held))))
+        Err(EnterError::Stale(Stale(CellHandle::Slab(held))))
     );
 
     let reused = table.create(None, None).unwrap();
     assert_eq!(reused.slot(), held.slot());
     assert_eq!(reused.generation(), held.generation() + 1);
-    // The record outlives the slot: sealed ids come from their own space and are never reused, so
-    // the tier needs no generation of its own.
+    // The sealed cell outlives the slot: sealed ids come from their own space and are never reused,
+    // so the tier needs no generation of its own.
     assert_eq!(table.sealed.len(), 1);
 }
 
@@ -154,7 +154,8 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
     assert!(table.sealed_holds[consumer.slot() as usize].contains(id));
 
     // The transition rewrote the consumer's stored mask in place: the dying slot's bit traded for
-    // the record's id, and what that region reached lives on in the record's frozen aggregate.
+    // the sealed cell's id, and what that region reached lives on in the sealed cell's frozen
+    // aggregate.
     let stored = continuation_reach_index(&table, consumer);
     assert!(stored.names_sealed(id));
     assert!(!stored.names(producer.slot()));
@@ -215,7 +216,7 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
 }
 
 #[test]
-fn reclaiming_a_records_last_holder_cascades_through_its_aggregate() {
+fn reclaiming_a_sealed_cells_last_holder_cascades_through_its_aggregate() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let top = table.create(None, None).unwrap();
     let middle = table.create(None, None).unwrap();
@@ -225,8 +226,9 @@ fn reclaiming_a_records_last_holder_cascades_through_its_aggregate() {
         .enter(middle, |context| context.hold(base))
         .unwrap()
         .unwrap();
-    // The top cell holds the base as well, so the base's record keeps two holders and the middle's
-    // seal has no count-1 region to absorb: what this test is about is the cascade, not a merge.
+    // The top cell holds the base as well, so the base's sealed cell keeps two holders and the
+    // middle's seal has no count-1 region to absorb: what this test is about is the cascade, not a
+    // merge.
     table
         .enter(top, |context| {
             context.hold(middle).unwrap();
@@ -249,7 +251,7 @@ fn reclaiming_a_records_last_holder_cascades_through_its_aggregate() {
 }
 
 #[test]
-fn a_record_survives_every_holder_but_the_last() {
+fn a_sealed_cell_survives_every_holder_but_the_last() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let first = table.create(None, None).unwrap();
     let second = table.create(None, None).unwrap();

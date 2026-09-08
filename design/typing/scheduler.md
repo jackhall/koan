@@ -138,4 +138,4 @@ candidate is unambiguously most-specific is a later optimization.
 
 The companion driver-side view — what each outcome routes to in the dispatch
 pipeline — lives at
-[execution/classify-and-apply.md § post-walk fallback](../execution/classify-and-apply.md#dispatch).
+[execution/classify-and-apply.md](../execution/classify-and-apply.md).

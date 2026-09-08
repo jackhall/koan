@@ -1,8 +1,8 @@
 //! The benchmark shapes: eight traversals of the substrate, each sized to the smallest `n` that
 //! shows its trend.
 //!
-//! Every shape builds its own table, drives public doors only, and ends with an `is_empty` assert
-//! — a shape that leaks a record is wrong, not slow. Values are read back wherever a redeem
+//! Every shape builds its own table, drives public doors only, and ends with an `is_empty` assert —
+//! a shape that leaks a sealed cell is wrong, not slow. Values are read back wherever a redeem
 //! happens, so a wrong forward or a wrong reach shows up as a panic rather than as a cheap row.
 //!
 //! Two rules keep the rows meaning what the schema says. Every door call is wrapped in
@@ -11,8 +11,8 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    CellRef, CellTable, CrossedOperand, Dormant, DropFree, Handle, Operand, Prices, Reattachable,
-    ReleaseAbsorption, Resident, TreeHandle, Verdict, Writer, reattachable,
+    CellHandle, CellTable, CrossedOperand, Dormant, DropFree, Handle, Operand, Prices,
+    Reattachable, ReleaseAbsorption, Resident, TreeHandle, Verdict, Writer, reattachable,
 };
 
 use crate::meter::{Verb, measure};
@@ -218,8 +218,9 @@ fn push_chain(n: u32) {
     assert!(table.is_empty());
 }
 
-/// The seal transition and record retirement: `n` producers the consumer holds bare, each refusing
-/// the merge on death so it seals, then read out of their records and wound down together.
+/// The seal transition and sealed-cell retirement: `n` producers the consumer holds bare, each
+/// refusing the merge on death so it seals, then read out of their sealed cells and wound down
+/// together.
 fn pull_chain(n: u32) {
     let mut table = table();
     let consumer = measure(Verb::Create, || table.create(None, None)).unwrap();
@@ -360,8 +361,8 @@ fn fan_out(m: u32) {
 }
 
 /// The sealed-tier cascade: `n` bases held from two branches, so each seals rather than merges,
-/// their records unioned into one placement, then both branches wound down so every record's
-/// holder count falls to zero at once.
+/// their sealed cells unioned into one placement, then both branches wound down so every sealed
+/// cell's holder count falls to zero at once.
 fn shared_subtier(n: u32) {
     let mut table = table();
     let left = measure(Verb::Create, || table.create(None, None)).unwrap();
@@ -455,11 +456,11 @@ fn tree_chain(n: u32) {
     let root = measure(Verb::Create, || table.create(None, None)).unwrap();
 
     let mut chain: Vec<TreeHandle> = Vec::with_capacity(n as usize);
-    let mut parent = CellRef::Slab(root);
+    let mut parent = CellHandle::Slab(root);
     for _ in 0..n {
         let cell = measure(Verb::CreateTree, || table.create_tree(parent, None)).unwrap();
         chain.push(cell);
-        parent = CellRef::Tree(cell);
+        parent = CellHandle::Tree(cell);
     }
 
     // Innermost outward: each level redeems what its child pinned into it, adds one, pins the
@@ -468,8 +469,8 @@ fn tree_chain(n: u32) {
     for level in (0..n as usize).rev() {
         let cell = chain[level];
         let up = match level {
-            0 => CellRef::Slab(root),
-            _ => CellRef::Tree(chain[level - 1]),
+            0 => CellHandle::Slab(root),
+            _ => CellHandle::Tree(chain[level - 1]),
         };
         let taken = carried.take();
         carried = Some(
