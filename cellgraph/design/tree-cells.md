@@ -23,7 +23,7 @@ cell**.
 
 | | slab cell | sealed cell | tree cell |
 |---|---|---|---|
-| identity | `Handle` (slot + generation) | `SealedId` | `TreeHandle` (pool index + generation) |
+| identity | `SlabHandle` (slot + generation) | `SealedId` | `TreeHandle` (pool index + generation) |
 | liveness | pin column, birth column | holder count | structural: a parent outlives its children |
 | holds it takes | its own pin row + sealed set | none (frozen aggregate) | none — mints go to its **root's** row and set |
 | named by a mask | slab bit | id | **never** |
@@ -38,10 +38,10 @@ the call tree the embedder is running, which is the program's business.
 
 What a tree cell records is the little that death needs: its root, its tree
 parent, its depth, the count of undisposed children, the pledge below, and,
-once it has died, where its bytes went. There is no resident table, no
+once it has died, where its bytes went. There is no reach table, no
 continuation reach and no hold set.
 
-## Mints, reach, and why no table is needed
+## Mints, reach, and why no reach table is needed
 
 Every placement into a tree cell mints its pinned reach into the **root's** pin
 row and sealed-hold set, through the ordinary mint. A placement therefore
@@ -60,8 +60,8 @@ byte total rather than a walk. So nothing needs to remember it. A `keep` of a
 tree-homed carrier interns no entry.
 
 The seal transition needs no tree case. Tree cells hold nothing, so they are
-never in a column; the root is, and its table is rewritten by the ordinary
-transition.
+never in a column; the root is, and its reach table is rewritten by the
+ordinary transition.
 
 ## The ancestry rule
 
@@ -98,10 +98,10 @@ a parent, not enterable, not releasable again. Its region stays put, because a
 live child may still borrow it, and its pledge stays writable, because a
 descendant's later upward pin may still walk through it.
 
-If it has undisposed children it stops there — **dead-resident**, exactly as a
-slab cell whose birth column is still named. That is what lets an embedder tear
-a subtree down in any order: a parent failed by one branch's error is released
-at once, and the sibling branches cascade into it as they die.
+If it has undisposed children it stops there — **dead but undisposed**, exactly
+as a slab cell whose birth column is still named. That is what lets an embedder
+tear a subtree down in any order: a parent failed by one branch's error is
+released at once, and the sibling branches cascade into it as they die.
 
 Otherwise it **disposes**, and the disposal walks up: each parent's child count
 falls, a parent that is dead and childless disposes too, and at the top the
@@ -139,9 +139,10 @@ happens is a pricing decision at the placement door, not a release-time option.
 
 ## Tombstones
 
-A resident can be redeemed after its home died and spliced. Where the bytes are
-now is answered by a **tombstone**: a dead cell whose identity any resident
-could still name stays in the pool, pointing at the cell its bytes went to.
+A dormant carrier can be redeemed after its home died and spliced. Where the
+bytes are now is answered by a **tombstone**: a dead cell whose identity a
+dormant carrier could still name stays in the pool, pointing at the cell its
+bytes went to.
 
 Tombstones are **never repointed** when their target's bytes move on in turn —
 the chain lengthens instead. So a splice costs O(1) list work however many
@@ -168,8 +169,8 @@ executing cell, and read "root of `E`" as `E` itself when `E` is a slab cell.
 
 | where the key's home resolves | entitled when | reach handed back |
 |---|---|---|
-| a live or dead-resident tree cell `T` | `root(T)` is `E`'s root | `{root(T)}`, homed in `T` |
-| a live slab slot `S` | `S` is `E`'s root, or `E`'s root's pin row or birth row names it | the mask stored in that cell's resident table |
+| a live or dead-but-undisposed tree cell `T` | `root(T)` is `E`'s root | `{root(T)}`, homed in `T` |
+| a live slab slot `S` | `S` is `E`'s root, or `E`'s root's pin row or birth row names it | the mask stored in that cell's reach table |
 | a sealed cell `id` | `E`'s root holds `id` | `{id}` |
 | nowhere — a recycled slot, or a chain that ends in a reclaim | — | `Gone` |
 
@@ -178,17 +179,17 @@ step-bounded and nothing dies inside a step, and a **carrier**, whose every
 embedding goes back through the ancestry rule above — which is where ancestry
 is actually checked.
 
-A key that started in a tree cell indexes no table, whichever kind its chain
-ends at: its value reached the root alone.
+A key that started in a tree cell indexes no reach table, whichever kind its
+chain ends at: its value reached the root alone.
 
 ## Roots
 
 A slab slot counts the tree cells whose chain tops out at it. It is not
 disposable while that count is above zero, so a released root with a subtree
-under it waits dead-resident exactly as one with a live slab descendant does,
-and the last tree child's disposal is what sets its cascade off. Sealing or
-absorbing a root moves its whole bundle, spliced tree bumps included — already
-what a region does.
+under it waits dead but undisposed exactly as one with a live slab descendant
+does, and the last tree child's disposal is what sets its cascade off. Sealing
+or absorbing a root moves its whole bundle, spliced tree bumps included —
+already what a region does.
 
 ## What this retires
 

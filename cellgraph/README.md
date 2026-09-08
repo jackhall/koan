@@ -33,7 +33,8 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 - [src/graph.rs](src/graph.rs) — the slab, the `create` / `enter` / `release`
   verbs, the step context's doors, the seal transition, the three locality
   merges a dying cell can take instead, the cascade that retires cells and
-  sealed cells, the relocation map that forwards a resident through a merge,
+  sealed cells, the relocation map that forwards a dormant carrier through a
+  merge,
   and the read-only price queries. The price queries are internal: what
   retention costs is a number the substrate computes, not a door an embedder
   opens, and it reaches the embedder through the crossing verdict
@@ -42,14 +43,14 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 - [src/tree.rs](src/tree.rs) — the tree pool: the slab-free habitat for a
   call subtree, whose liveness is a stack discipline rather than a matrix
   reading. The chain links and depth the ancestry rule classifies by, the
-  child count that keeps a released parent resident, the pledge a placement
+  child count that keeps a released parent undisposed, the pledge a placement
   door leaves that says which ancestor a dying cell's bump splices into, and
-  the tombstone chain a resident redeems through once its home's bytes have
-  moved ([design/tree-cells.md](design/tree-cells.md)).
+  the tombstone chain a dormant carrier redeems through once its home's bytes
+  have moved ([design/tree-cells.md](design/tree-cells.md)).
 - [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits: `W`
   words held inline, `Copy`, and the only place word-and-bit arithmetic is
   written outside the two loops that keep a matrix's tally in step with its
-  rows. The birth and pin matrices are inline arrays of those rows, so a table
+  rows. The birth and pin matrices are inline arrays of those rows, so a graph
   carries both relations in its own bytes.
 - [src/reach.rs](src/reach.rs) — reach as a hybrid mask: an inline `Bits` row
   over slab slots plus a sparse sealed-id set that is itself inline up to two
@@ -61,7 +62,7 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
   locality merge performs, the write surface a build closure receives, and the
   sealed cell's frozen-closure memo, kept in the region's own bytes.
-- [src/scratch.rs](src/scratch.rs) — the table's one scratch region: a bump
+- [src/scratch.rs](src/scratch.rs) — the graph's one scratch region: a bump
   sized at construction, reset at the entry of every verb and never inside
   one, and the doors every transient a verb builds is taken through — the
   growable worklists a cascade nests, the exactly-sized runs a placement
@@ -69,12 +70,14 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   drop glue may go in it, since a reset runs no destructor, and each door
   asserts that at compile time.
 - [src/carrier.rs](src/carrier.rs) — the two carrier states that carry a
-  lifetime: sealed with its reach, in step, and opened at a reading borrow.
-- [src/dormant.rs](src/dormant.rs) — the third carrier state, at rest: a
-  value parked between steps with no lifetime of its own, the private key
-  naming its reach, and the per-cell resident table that reach lives in —
-  interned on content, so the table is bounded by the distinct reaches a cell
-  has been kept into rather than by how many times.
+  lifetime: `Ready`, in step and sealed with its reach, and `Active`, opened at
+  a reading borrow.
+- [src/dormant.rs](src/dormant.rs) — `Dormant`, the least live of the three
+  states and the only one that survives a step: a value parked between steps
+  with no lifetime of its own, the private key naming its reach, and the
+  per-cell reach table that reach lives in — interned on content, so the reach
+  table is bounded by the distinct reaches a cell has been kept into rather
+  than by how many times.
 - [src/reattach.rs](src/reattach.rs) — the reattachable contract and the
   single lifetime-retype the crate is built on.
 - [tests/surface.rs](tests/surface.rs) — the public surface, named and

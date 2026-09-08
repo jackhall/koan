@@ -47,7 +47,7 @@ exist, and koan sits on the one the design has moved off.
 - The delivery walk adopts a tree terminal once, into its canonical
   destination — the producer's own source edge's region, the shallowest on
   the chain — by the placement door whose `Pin` pledges the producer, and the
-  deeper destination buckets redeem that resident by reference.
+  deeper destination buckets redeem that dormant carrier by reference.
 - A non-tail recursion deeper than the slab cap runs to completion; the koan
   program that refuses admission today is the regression test, and a test pins
   the chain property — a closure returned out of a body and called from
@@ -69,11 +69,11 @@ exist, and koan sits on the one the design has moved off.
   second scheduler module over `cellgraph` grown alongside the old one until
   koan switches. Recommended: (a); koan names the carrier types directly, so
   there is no facade to hide (b) behind.
-- *Slab width — open.* A `CellTable`'s width is a constant of its type
-  (`CellTable<Work, 64>` names 4096 cells), and its two relations are inline,
-  so a wide table is `64 · W × W` words twice in its own bytes. This layer
-  picks the `W` a worker runs at and how such a table reaches the heap
-  without being built on a worker stack first — `Box::new(CellTable::new(..))`
+- *Slab width — open.* A `CellGraph`'s width is a constant of its type
+  (`CellGraph<Work, 64>` names 4096 cells), and its two relations are inline,
+  so a wide graph is `64 · W × W` words twice in its own bytes. This layer
+  picks the `W` a worker runs at and how such a graph reaches the heap
+  without being built on a worker stack first — `Box::new(CellGraph::new(..))`
   constructs in place only when the optimizer cooperates.
 - *Per-edge push/pull default — open.* Push wherever the crossing rule
   applies, pull otherwise; or pull everywhere first and add push as an

@@ -15,15 +15,14 @@ const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
 /// Seal a held cell and report the maintenance the transition performed.
 ///
 /// The producer stores `stored` values in its region and puts `kept_by_producer` more of them to
-/// rest as dormant carriers; the holder takes `kept_by_holder` **distinct** reach-table entries.
+/// rest as dormant carriers; the holder takes `kept_by_holder` **distinct** reach-table entries.
 /// The three knobs are the three quantities the transition could plausibly be proportional to, and
 /// only one of them may be.
 ///
-/// The holder's entries have to be distinct because the reach table interns on content: a dormant
-/// carrier
-/// is one entry per reach, so counting keeps would count nothing. Each is built into the holder's
-/// region from a cell of its own, capturing a value that cell homes, so its reach names the holder
-/// and that one cell and matches no other.
+/// The holder's entries have to be distinct because the reach table interns on content: a dormant
+/// carrier is one entry per reach, so counting keeps would count nothing. Each is built into the
+/// holder's region from a cell of its own, capturing a value that cell homes, so its reach names
+/// the holder and that one cell and matches no other.
 fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) -> u64 {
     let cap = 4 + kept_by_holder as u32;
     let mut graph: CellGraph<Owned> = CellGraph::new(cap, pin);
@@ -78,11 +77,10 @@ fn the_seal_transition_is_bounded_by_the_holders_dormant_carriers_not_the_storag
     // ten thousand dormant values costs what one with sixteen costs.
     assert_eq!(seal_work_for(SMALL, 4, 0), seal_work_for(LARGE, 4, 0));
 
-    // What the transition *is* proportional to: each holder's reach table, one entry at a time,
+    // What the transition *is* proportional to: each holder's reach table, one entry at a time,
     // because the dying slot's bit has to become the sealed cell's id in every mask that names it.
-    // Four more entries in the one holder's reach table, four more units of work — exactly. The
-    // count is
-    // entries, not keeps: interning is what keeps the two from diverging over a run.
+    // Four more entries in the one holder's reach table, four more units of work — exactly. The
+    // count is entries, not keeps: interning is what keeps the two from diverging over a run.
     assert_eq!(
         seal_work_for(SMALL, 8, 0) - seal_work_for(SMALL, 4, 0),
         4,
@@ -91,8 +89,8 @@ fn the_seal_transition_is_bounded_by_the_holders_dormant_carriers_not_the_storag
 
     // And not to the dying cell's own dormant carriers: those masks are dead bytes the moment the
     // storage they name is in the sealed cell, so the transition forwards one lineage entry for the
-    // whole reach table rather than touching an entry per value. The producer's keeps all share
-    // one reach and so one entry, which is the point twice over — the reach table did not grow
+    // whole reach table rather than touching an entry per value. The producer's keeps all share
+    // one reach and so one entry, which is the point twice over — the reach table did not grow
     // either.
     assert_eq!(
         seal_work_for(SMALL, 4, SMALL),

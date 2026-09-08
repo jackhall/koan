@@ -118,9 +118,8 @@ fn keep_redeem(n: u32) {
 }
 
 /// Dormant interning against many shapes: `n` sources each build one value into `dest`, so every
-/// keep in `dest` carries a reach no earlier keep did and the reach table holds `n` entries. Each
-/// keep
-/// scans the entries before it, which is the linear term interning is priced at.
+/// keep in `dest` carries a reach no earlier keep did and the reach table holds `n` entries. Each
+/// keep scans the entries before it, which is the linear term interning is priced at.
 fn keep_shapes(n: u32) {
     let mut graph = graph();
     let dest = measure(Verb::Create, || graph.create(None, None)).unwrap();
@@ -450,7 +449,7 @@ pub struct Shape {
 /// parent, and dying — the call-subtree shape the slab cannot hold, since none of it takes a slot.
 ///
 /// The trend this reads is the one the habitat exists for: creation, entry and death are flat per
-/// level whatever the depth, because a tree cell takes no row, no column and no reach table, and
+/// level whatever the depth, because a tree cell takes no row, no column and no reach table, and
 /// its death is a bump splice into the ancestor it pledged.
 fn tree_chain(n: u32) {
     let mut graph = graph();

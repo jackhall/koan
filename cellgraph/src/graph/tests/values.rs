@@ -215,16 +215,16 @@ fn an_acyclic_hold_graph_reports_no_ring() {
     assert!(graph.debug_ring_from(HoldNode::Slab(first)).is_none());
 }
 
-// The doors a value crosses steps through: `keep` puts a carrier down in its home cell's reach
-// graph, and `redeem` takes it back up in a later step of a cell entitled to that storage. See
+// The doors a value crosses steps through: `keep` puts a carrier down in the reach table of its
+// home cell, and `redeem` takes it back up in a later step of a cell entitled to that storage. See
 // [design/cellgraph.md § Passing values between cells](../../../design/cellgraph.md).
 
-/// The one entry a cell's reach table holds, by the index a key names.
+/// The one entry a cell's reach table holds, by the index a key names.
 fn dormant_reach<C: Reattachable>(graph: &CellGraph<C>, slot: u32, index: u32) -> &GraphReach<1> {
     graph.slots[slot as usize]
         .reaches
         .get(index)
-        .expect("the entry the key names is in the reach table")
+        .expect("the entry the key names is in the reach table")
 }
 
 #[test]
@@ -571,7 +571,7 @@ fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
     let sealed_id = graph.sealed.ids().next().unwrap();
 
     // A carrier redeemed out of a sealed cell is a carrier like any other: keeping it registers its
-    // sealed-cell-only reach in the redeeming cell's own reach table.
+    // sealed-cell-only reach in the redeeming cell's own reach table.
     let again = graph
         .enter(middle, |context| {
             let carrier = context
@@ -670,7 +670,7 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
     assert_eq!(
         graph.slots[cell.slot() as usize].reaches.len(),
         1,
-        "a reach table holds one entry per distinct reach, not one per store"
+        "a reach table holds one entry per distinct reach, not one per store"
     );
 
     capturing(&mut graph, 7);

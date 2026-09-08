@@ -464,9 +464,9 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
         waiting = fresh;
     }
 
-    // The cart is kept into once per hop and its reach table did not grow: every accumulator
+    // The cart is kept into once per hop and its reach table did not grow: every accumulator
     // reaches the cart and nothing else, so all of them intern to the entry the seed minted. This
-    // is what keeps the seal transition's bound — work per holder's reach-table entry — a bound
+    // is what keeps the seal transition's bound — work per holder's reach-table entry — a bound
     // on a run of any length rather than one that grows with it.
     assert_eq!(
         graph.slots[cart.slot() as usize].reaches.len(),

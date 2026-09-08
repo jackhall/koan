@@ -204,7 +204,7 @@ fn every_public_door_answers_from_outside_the_crate() {
     assert_eq!(carried, "done");
 
     // The value kept in the last step redeems in this one: the child holds root, whose region the
-    // value lives in, so the door hands it back with reach derived from the reach table.
+    // value lives in, so the door hands it back with reach derived from the reach table.
     let kept = kept.unwrap();
     let redeemed = graph
         .enter(child, |context| {

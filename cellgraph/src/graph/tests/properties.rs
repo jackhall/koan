@@ -10,7 +10,7 @@
 //! - every sealed cell's holder count equals the number of hold sets that name it, and the reverse
 //!   naming index is exactly the transpose of the aggregates;
 //! - every bit and id of a dormant carrier's mask is covered by storage its cell is answerable
-//!   for — mask validity, over the whole reach table rather than one stored continuation;
+//!   for — mask validity, over the whole reach table rather than one stored continuation;
 //! - the relocation map and the lineages agree in both directions, and every relocated key names
 //!   an entry that exists — so a dormant carrier forwarded through any number of merges still
 //!   redeems to the value it was kept as, which the redeem verb reads back and checks;
@@ -293,7 +293,7 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
             );
         }
         // Dormant carriers' masks are covered: every bit and id of every entry of the cell's
-        // reach table names storage the cell is answerable for, so a read through one is sound.
+        // reach table names storage the cell is answerable for, so a read through one is sound.
         for mask in graph.slots[slot as usize].reaches.iter() {
             for named in mask.slab_slots() {
                 assert!(
@@ -340,7 +340,7 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
                 );
                 assert!(
                     first_index < cell.reaches.len(),
-                    "{handle:?} is relocated past the end of slot {slot}'s reach table"
+                    "{handle:?} is relocated past the end of slot {slot}'s reach table"
                 );
             }
             SlabForward::Sealed(id) => {
@@ -668,7 +668,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 }
             }
             // A continuation kept over a value homed elsewhere takes an entry of the cell's
-            // reach table, interned on its reach like any other keep.
+            // reach table, interned on its reach like any other keep.
             Verb::Continue { cell, over } => {
                 if let (Some(cell), Some(over)) =
                     (minted.get(cell).copied(), minted.get(over).copied())
@@ -687,7 +687,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 }
             }
             // A value put to rest in the cell that built it. Its mask lives in that cell's
-            // reach table from here on, where every merge and every seal has to maintain it.
+            // reach table from here on, where every merge and every seal has to maintain it.
             Verb::Keep { cell } => {
                 if let Some(cell) = minted.get(cell).copied()
                     && graph.is_live(cell)

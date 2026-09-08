@@ -85,7 +85,7 @@ impl<T: Reattachable + DropFree, const W: usize> Ready<'_, T, W> {
     }
 
     /// Split the carrier into the three things a [`keep`](crate::StepContext::keep) needs: the
-    /// erased value, the reach the graph takes over, and the cell whose reach table takes it.
+    /// erased value, the reach the graph takes over, and the cell whose reach table takes it.
     pub(crate) fn into_parts(self) -> (Erased<T>, GraphReach<W>, CellHome) {
         (self.value, self.reach, self.home)
     }
@@ -111,7 +111,7 @@ where
 /// The in-use carrier: the value re-anchored at the reading borrow `'r`. The borrow checker keeps
 /// it inside `'r`, so it cannot outlive the step that read it.
 ///
-/// The reach stays behind in the reach table: it is the substrate's bookkeeping, and the borrow
+/// The reach stays behind in the reach table: it is the substrate's bookkeeping, and the borrow
 /// the reader gets is already bounded by the cell's life. Bounded only by [`Reattachable`], since a
 /// continuation comes back through this state too and rests in its cell's slot rather than a
 /// region, where drop glue is fine.

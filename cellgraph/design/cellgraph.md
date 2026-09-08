@@ -29,7 +29,7 @@ compile-enforced: the lower crate names no type from the higher one.
   **root** through a chain of tree parents, in an uncapped pool that no mask
   and no relation ever names. A tree cell's liveness is structural — a parent
   outlives its children — so it takes no row, no column, no holder count and
-  no resident table; a placement into it mints into its root's holds, and its
+  no reach table; a placement into it mints into its root's holds, and its
   region either reclaims at death or splices into an ancestor's bundle. Which
   kind a creation takes is the embedder's admission decision; the substrate
   ships both and no rule.
@@ -40,8 +40,8 @@ compile-enforced: the lower crate names no type from the higher one.
   stores and hands back under `enter`, re-anchored at the step lifetime, and
   never calls. It rests beside the reach of whatever it captured, minted into
   its own cell's holds when it is stored — a cell holds what its continuation
-  reads — which makes it a resident like any other: its reach is interned into
-  the cell's resident table, rewritten by the seal transition exactly like
+  reads — which makes it a dormant carrier like any other: its reach is
+  interned into the cell's reach table, rewritten by the seal transition like
   every other entry, and the read that hands it back the sealed tier's
   accessor. Storing a successor repoints the cell at the entry the new reach
   interns to; it overwrites none, so a cell that alternates between a few
@@ -66,25 +66,28 @@ compile-enforced: the lower crate names no type from the higher one.
   [witnessed-memory.md](../../workgraph/design/witnessed-memory.md)).
   Everything an embedder knows about a cell that the substrate does not — its
   name-resolution state, its semantic frame, any output obligation — rides
-  inside the continuation's captures, or as a value resident in the cell's
+  inside the continuation's captures, or as a value at rest in the cell's
   region.
 - **Value** — what passes between cells. A one-lifetime reattachable family
   carried witnessed: born in a region, duplicated per reader, read only under
   a hold. It is held in exactly three states, and the type of each is what
   says which:
-  - **At rest** — lifetime-free, opaque, and the only state an embedder may
-    keep across an `enter` scope. It carries no reach and no method: its
-    borrows rest as bytes in the region it was built into, and a private key
-    names the entry of its home cell's resident table where its mask lives.
-    That table interns on content, so two values reaching the same thing name
-    one entry and a cell kept into every step of a run holds one entry per
-    distinct reach rather than one per keep. Born only from an in-step
-    carrier, at the `keep` door.
-  - **In step** — branded to the step that built or redeemed it, and paired
-    with the reach the substrate composed for it. Handed back by the
+  - **`Dormant`**, at rest — lifetime-free, opaque, and the only state an
+    embedder may keep across an `enter` scope. It carries no reach and no
+    method: its borrows rest as bytes in the region it was built into, and a
+    private key names the entry of its home cell's reach table where its mask
+    lives. That reach table interns on content, so two values reaching the
+    same thing name one entry and a cell kept into every step of a run holds
+    one entry per distinct reach rather than one per keep. Born only from a
+    `Ready` carrier, at the `keep` door.
+  - **`Ready`**, in step — branded to the step that built or redeemed it, and
+    paired with the reach the substrate composed for it. Handed back by the
     placement doors and by `redeem`; it dies with the step.
-  - **Active** — the value itself, at a reading borrow strictly inside the
+  - **`Active`** — the value itself, at a reading borrow strictly inside the
     step.
+
+  The three are named in order of liveness: a `Dormant` is the deepest sleep,
+  a `Ready` is alive for the step, an `Active` for the reading borrow.
 
   The pairing of a value with a reach is only ever one the substrate made:
   the mask is crate-private in every state, so there is nothing an embedder
@@ -108,10 +111,10 @@ how an embedder gives one unit of work two regions with different lifetimes.
   and redeem one a previous step put to rest. That continuation read *is* the
   sealed tier's accessor — a capture whose region sealed since it was stored
   comes back reading storage that sealed cell still retains — so there is no
-  second door out of sealed storage. What the value reaches stays in the table:
-  every reach a resident was minted with is the substrate's bookkeeping,
-  rewritten in place by the seal transition, and never handed back beside the
-  value. A cell cannot be entered while it is already executing.
+  second door out of sealed storage. What the value reaches stays in the reach
+  table: every reach a dormant carrier was minted with is the substrate's
+  bookkeeping, rewritten in place by the seal transition, and never handed back
+  beside the value. A cell cannot be entered while it is already executing.
 
   **`redeem`** is the one door out of the at-rest state, and it refuses rather
   than panics. The executing cell must be entitled to the storage the value
@@ -127,7 +130,7 @@ how an embedder gives one unit of work two regions with different lifetimes.
   covers everything the value reads.
 
   A placement over operands consults the **crossing verdict** once per
-  operand before it builds — the one closure the table was constructed with,
+  operand before it builds — the one closure the graph was constructed with,
   described under Passing values below.
 - **`create_tree(parent)`** / **`release_tree(handle)`** are birth and death
   over the tree pool; `enter` is one door over both kinds. `create_tree` takes
@@ -136,8 +139,8 @@ how an embedder gives one unit of work two regions with different lifetimes.
   placements mint into the root; `release_tree` takes no absorption argument,
   because where a tree cell's bytes go was settled at the placement door that
   pinned a value homed there into an ancestor. A parent released before its
-  children waits dead-resident and disposes when the last of them does. See
-  [tree-cells.md](tree-cells.md).
+  children waits dead-but-undisposed and disposes when the last of them does.
+  See [tree-cells.md](tree-cells.md).
 - **`release(handle, absorption)`** declares death: the embedder promises
   never to enter the cell again. The slot leaves the slab once no descendant's
   birth row names the cell: reclaimed if nothing reaches its storage, folded
@@ -146,20 +149,20 @@ how an embedder gives one unit of work two regions with different lifetimes.
   the only one that retains more than a plain seal would
   ([liveness-matrix.md § Locality tactics](liveness-matrix.md#locality-tactics));
   it is recorded on the slot and read when the slot actually leaves.
-- **`is_empty()`** asks whether the table holds nothing at all — every slot
+- **`is_empty()`** asks whether the graph holds nothing at all — every slot
   free, no sealed cell left in the sealed tier, and no tree cell or tombstone
   left in the pool. After a program's last release it is the end-of-program
-  alarm, and the only one the substrate ships: a non-empty table means either a
+  alarm, and the only one the substrate ships: a non-empty graph means either a
   release was forgotten or a ring no merge dissolved survives. Naming the nodes
   on such a ring is a walk of the hold graph the crate's own tests carry, not a
-  door on the table.
+  door on the graph.
 
-Every verb runs over the table's **scratch region**: one bump per table, reset
+Every verb runs over the graph's **scratch region**: one bump per graph, reset
 at the entry of `create`, `enter` and `release` and never inside one. Every
 transient a verb builds lives there — the worklists a disposal cascade nests,
 the runs a placement builds per operand, the views a build closure receives —
 so a transient lives exactly as long as the verb that built it, and a verb on a
-table whose region is already warm asks the allocator for nothing. The reset
+graph whose region is already warm asks the allocator for nothing. The reset
 sits at a verb's entry rather than its exit because a `release` cascades
 outside any step: what the region has to be is empty when a verb starts, not
 when the one before it finished. A reset runs no destructor — a bump releases
@@ -185,7 +188,7 @@ above it.
 
 ## Passing values between cells
 
-There is no delivery protocol. A value is always resident in a live cell's
+There is no delivery protocol. A value always rests in a live cell's
 region, transient inside an executing cell's step, or sealed with its region.
 Nothing else holds a value: there is no free-standing envelope with pins of
 its own. Crossing a step boundary therefore takes one of two shapes, both
@@ -210,11 +213,11 @@ no mailbox, only the two doors.
 ### The crossing verdict
 
 A placement over operands is where the copy-versus-pin choice is made, and
-the substrate does not make it. The table is constructed with one embedder
+the substrate does not make it. The graph is constructed with one embedder
 closure, the **crossing verdict**, and consults it once per operand of every
 placement — the destination-homed placement and the capturing successor store
 alike, and for every operand, including one whose pin price is zero. There is
-no verdict-free constructor: a table that can place a value can price the
+no verdict-free constructor: a graph that can place a value can price the
 placement.
 
 The verdict is skipped in exactly one case, and only because there is no

@@ -1,5 +1,5 @@
 //! The cell graph: a slab capped at construction, the two hold relations over its slots, the
-//! executing flag, the per-cell regions and reach tables, the sealed tier a still-reached cell
+//! executing flag, the per-cell regions and reach tables, the sealed tier a still-reached cell
 //! falls into, the relocation map that forwards a dormant carrier through a merge, and the
 //! `create` / `enter` / `release` verbs. The embedder's crossing verdict is taken here too, at
 //! construction, and consulted once per operand of every placement. See
@@ -343,10 +343,9 @@ enum SlabState {
 /// Where a departed cell's dormant carriers ended up, so a key minted under its handle still finds
 /// the mask that names its reach.
 ///
-/// `Slab` is a merge into a live cell: the masks moved into that cell's reach table starting at
-/// `first_index`, re-homed.
-/// `Sealed` is a seal or a fold: the masks are gone, and a redeemed value's reach is derived from
-/// the sealed cell instead.
+/// `Slab` is a merge into a live cell: the masks moved into that cell's reach table starting at
+/// `first_index`, re-homed. `Sealed` is a seal or a fold: the masks are gone, and a redeemed
+/// value's reach is derived from the sealed cell instead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SlabForward {
     Slab { slot: u32, first_index: u32 },
@@ -486,9 +485,8 @@ pub struct CellGraph<C: Reattachable, const W: usize = 1> {
     /// [tree](crate::tree).
     trees: TreePool<C>,
     /// Where the dormant carriers of a cell that has left the slab went, one list per slab slot. A
-    /// departed handle maps to the live cell whose reach table absorbed its masks, or to the
-    /// sealed cell
-    /// its storage sealed into; a cell with an empty reach table leaves no entry. Rewritten at
+    /// departed handle maps to the live cell whose reach table absorbed its masks, or to the sealed
+    /// cell its storage sealed into; a cell with an empty reach table leaves no entry. Rewritten at
     /// every merge and dropped at the target's reclamation, so a slot's list is bounded by merges
     /// rather than by values — which is what keeps a generation search short and two entries
     /// inline.
@@ -610,7 +608,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         cell.state = SlabState::Live;
         cell.parent = parent_slot;
         // A continuation handed in from outside is at `'static`: it captures nothing any region
-        // owns, so it reaches nothing and takes no reach-table entry.
+        // owns, so it reaches nothing and takes no reach-table entry.
         cell.continuation = continuation.map(Erased::store);
         let generation = cell.generation;
         if let Some(parent_slot) = parent_slot {
@@ -1232,8 +1230,8 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
     /// becomes bit `into` throughout, since that storage is the target's own bundle from here on.
     ///
     /// Every key minted under a handle the dead cell answered for is forwarded to the target's
-    /// reach table at its new first index, so a dormant carrier survives any number of merges. A
-    /// dead cell with an empty reach table forwards nothing and leaves no entry behind. The moved
+    /// reach table at its new first index, so a dormant carrier survives any number of merges. A
+    /// dead cell with an empty reach table forwards nothing and leaves no entry behind. The moved
     /// block is appended without interning: its position is what forwards the keys minted under it.
     fn migrate_reaches(&mut self, dead: u32, into: u32, scratch: &Scratch) {
         // The target's own dormant carriers lose the dead cell's bit: those chunks are its
@@ -1242,7 +1240,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
             mask.remove_slot(dead);
         }
         let first_index = self.slots[into as usize].reaches.len();
-        // Taken before the reach table is, so the run carries the departing occupant exactly when
+        // Taken before the reach table is, so the run carries the departing occupant exactly when
         // something — a kept dormant carrier or a tree tombstone — still has to find its way to it.
         let (lineage, has_occupant) = self.take_lineage(dead, scratch);
         let moved = self.slots[dead as usize].reaches.take();
@@ -1561,7 +1559,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         let count = (holders.len() + namers.len()) as u32;
 
         // 1. Holders convert: the slab bit becomes the id, in the hold set and in every mask of
-        //    the holder's reach table — the only durable habitat a mask has on the slab side. The
+        //    the holder's reach table — the only durable habitat a mask has on the slab side. The
         //    scan is bounded by the holders' entry counts, never by what the cell region stores.
         for holder in holders {
             self.pins.clear(*holder, slot);
@@ -2512,7 +2510,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
             CellHandle::Tree(handle) => self.graph.trees.take_continuation(handle.index()),
         }?;
         // SAFETY: the value's referents are region storage in the cells and sealed regions its
-        // stored reach names — the reach-table entry `continuation_reach_index` names, which the
+        // stored reach names — the reach-table entry `continuation_reach_index` names, which the
         // seal transition maintains, and none at all when it names no entry — and that reach was
         // minted into the executing cell's hold set when it was stored, so every one of them is
         // either a live cell or a held sealed cell, whose chunks are pointer-stable and detached
@@ -2529,9 +2527,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     ///
     /// Crossing nothing takes no entry: the cell stops naming one rather than naming an entry that
     /// names nothing, so a cell whose continuations never capture keeps an empty reach table.
-    /// Whatever
-    /// entry an earlier store pointed at stays as it is — entries are content, and nothing rewrites
-    /// one because the value that minted it moved on.
+    /// Whatever entry an earlier store pointed at stays as it is — entries are content, and nothing
+    /// rewrites one because the value that minted it moved on.
     pub fn store_successor(&mut self, continuation: C::At<'static>) {
         let stored = Erased::store(continuation);
         match self.cell {
@@ -2556,8 +2553,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// alive across the gap between this step and the next.
     ///
     /// That reach is kept exactly as [`keep`](Self::keep) keeps one — interned into this cell's
-    /// reach table, with the continuation pointing at the entry it landed in. Storing over an
-    /// earlier continuation writes no entry, so a reach-table entry is content that only the seal
+    /// reach table, with the continuation pointing at the entry it landed in. Storing over an
+    /// earlier continuation writes no entry, so a reach-table entry is content that only the seal
     /// transition's uniform rewrite ever changes.
     ///
     /// `build` also receives this cell's own write surface, since a continuation that captures
@@ -2732,15 +2729,14 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         Ok(())
     }
 
-    /// Put a carrier to rest: register its reach in its home cell's reach table and hand back
+    /// Put a carrier to rest: register its reach in its home cell's reach table and hand back
     /// the lifetime-free form an embedder may keep between steps.
     ///
-    /// The value is neither read nor moved — it stays where the placement wrote it. What changes
-    /// is where its reach lives: off the carrier, which dies with this step, and into the reach
-    /// graph,
+    /// The value is neither read nor moved — it stays where the placement wrote it. What changes is
+    /// where its reach lives: off the carrier, which dies with this step, and into the reach table,
     /// where the seal transition rewrites it as the cells it names seal. The
-    /// [`Dormant`](crate::Dormant) that comes back names that entry and carries no mask of its
-    /// own, so nothing pairs a value with a reach outside the reach table.
+    /// [`Dormant`](crate::Dormant) that comes back names that entry and carries no mask of its own,
+    /// so nothing pairs a value with a reach outside the reach table.
     pub fn keep<T>(&mut self, carrier: Ready<'b, T, W>) -> Dormant<T>
     where
         T: Reattachable + DropFree,
@@ -2755,7 +2751,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
                     index,
                 }
             }
-            // A tree cell has no reach table and interns nothing: the value reaches its root and
+            // A tree cell has no reach table and interns nothing: the value reaches its root and
             // nothing else, so the redeem derives that reach rather than reading one back. What the
             // keep does record is that the cell is now nameable, which is what decides whether its
             // death leaves a tombstone.
@@ -2822,15 +2818,14 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
                 if !entitled {
                     return Err(RedeemError::Unheld);
                 }
-                // A key that started in a tree cell indexes no reach table: its value reached the
-                // root
-                // alone, and the slot the chain ends at is where those bytes are now.
+                // A key that started in a tree cell indexes no reach table: its value reached the
+                // root alone, and the slot the chain ends at is where those bytes are now.
                 let reach = match key.home {
                     CellHandle::Tree(_) => GraphReach::single(slot),
                     CellHandle::Slab(_) => graph.slots[slot as usize]
                         .reaches
                         .get(first_index + key.index)
-                        .expect("a relocated key names an entry of the reach table it landed in")
+                        .expect("a relocated key names an entry of the reach table it landed in")
                         .clone(),
                 };
                 (reach, CellHome::Slab(slot))

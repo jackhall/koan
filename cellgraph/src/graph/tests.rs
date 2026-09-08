@@ -96,7 +96,7 @@ fn live_bytes<C: Reattachable>(graph: &CellGraph<C>, cap: u32) -> usize {
         .sum()
 }
 
-/// The reach of a cell's stored continuation, read out of the reach table entry it occupies. The
+/// The reach of a cell's stored continuation, read out of the reach table entry it occupies. The
 /// continuation is a dormant carrier like any other, so this is the same lookup a redeem performs.
 fn continuation_reach_index<C: Reattachable>(
     graph: &CellGraph<C>,
@@ -108,7 +108,7 @@ fn continuation_reach_index<C: Reattachable>(
         .expect("the cell stored a continuation over captures");
     cell.reaches
         .get(index)
-        .expect("the entry the continuation names is in the reach table")
+        .expect("the entry the continuation names is in the reach table")
 }
 
 /// What a slot currently holds, by handle — the state assertions read the slab directly, since
@@ -150,7 +150,7 @@ fn a_cap_above_the_width_is_refused_at_construction() {
 }
 
 #[test]
-fn a_two_word_table_names_slots_across_the_chunk_boundary() {
+fn a_two_word_graph_names_slots_across_the_chunk_boundary() {
     // The shape that exercises the matrices' chunk arithmetic: a birth chain and a pin whose ends
     // sit in different chunks of the same row.
     let mut graph: CellGraph<Owned, 2> = CellGraph::new(128, pin);

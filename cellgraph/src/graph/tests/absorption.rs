@@ -33,7 +33,7 @@ fn only_sealed_cell<C: Reattachable>(graph: &CellGraph<C>) -> SealedId {
 }
 
 #[test]
-fn an_empty_table_is_quiescent_and_a_surviving_ring_is_not() {
+fn an_empty_graph_is_quiescent_and_a_surviving_ring_is_not() {
     let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
     assert!(graph.is_empty());
 
