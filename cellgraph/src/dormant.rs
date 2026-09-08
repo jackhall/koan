@@ -21,7 +21,7 @@
 use std::mem::MaybeUninit;
 
 use crate::handle::CellHandle;
-use crate::mask::GraphReach;
+use crate::reach::GraphReach;
 use crate::reattach::{DropFree, Erased, Reattachable};
 
 /// The at-rest carrier: a value's bytes, parked, plus the key naming its reach.

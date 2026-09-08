@@ -17,7 +17,7 @@
 
 use std::marker::PhantomData;
 
-use crate::mask::GraphReach;
+use crate::reach::GraphReach;
 use crate::reattach::{DropFree, Erased, Reattachable};
 
 /// Which region a carrier's value was written into: a slab slot, or a tree cell's pool index.

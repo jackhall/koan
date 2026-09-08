@@ -15,7 +15,7 @@ use std::cell::Cell;
 use smallvec::SmallVec;
 
 use crate::handle::SlabHandle;
-use crate::mask::GraphReach;
+use crate::reach::GraphReach;
 use crate::region::Region;
 use crate::scratch::ScratchVec;
 

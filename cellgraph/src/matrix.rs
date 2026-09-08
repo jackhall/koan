@@ -19,7 +19,7 @@
 #[cfg(test)]
 mod tests;
 
-use crate::mask::GraphReach;
+use crate::reach::GraphReach;
 
 /// A row of bits indexed by slab slot: `W` words held inline, naming `64 · W` slots.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

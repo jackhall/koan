@@ -51,7 +51,7 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   written outside the two loops that keep a matrix's tally in step with its
   rows. The birth and pin matrices are inline arrays of those rows, so a table
   carries both relations in its own bytes.
-- [src/mask.rs](src/mask.rs) — reach as a hybrid mask: an inline `Bits` row
+- [src/reach.rs](src/reach.rs) — reach as a hybrid mask: an inline `Bits` row
   over slab slots plus a sparse sealed-id set that is itself inline up to two
   ids, so a reach naming at most two sealed regions is built, copied, and
   compared without touching the allocator.
