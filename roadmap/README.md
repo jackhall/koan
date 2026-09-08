@@ -63,6 +63,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One structural walk over `TypeNode`](refactor/type-structure-combinator.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
-- [SIG operator members](type_language/sig-operator-members.md)
+- [Expression shapes are their own kind of function](type_language/expression-shapes.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

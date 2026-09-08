@@ -71,9 +71,10 @@ A unary operator takes the **whole run as one list**: the body binds `operands`
 of type `:(LIST OF Operand)`, and infix (`a ~ b ~ c`) and prefix (`~ [a b c]`)
 forms reduce to the same keyword-first call. The `-> Result` segment is mandatory
 — the body consumes a list of operands, so there is nothing to default the result
-type from. The result-less shape therefore has no success reading at all: both its
-spellings (`UNARY OP … OVER <Operand> = (…)` and the `LET`-combined twin) are
-**reserved** keys, registered by nothing and refused to user registration at the
+type from. The result-less shape therefore has no success reading at all: all three
+of its spellings (`UNARY OP … OVER <Operand> = (…)`, the `LET`-combined twin, and the
+bodyless head a SIG body would declare it with) are **reserved** keys, registered by
+nothing and refused to user registration at the
 overload write door, so they always reach the
 [dispatch-miss diagnosis table](../src/machine/model/miss_diagnostics.rs)'s pointed
 "must declare its result type" message. A two-operand use (`a ~ b`) names one keyword and so dispatches as a
@@ -254,6 +255,146 @@ Within one scope, one operator has one chaining mode: two `OP` statements over t
 same symbol and distinct operand types are two bucket overloads and one registry
 entry (an idempotent upsert), while two that disagree on the mode are an error.
 
+## Operators as signature members
+
+A [signature](typing/modules.md) declares an operator with the definition's own
+head, minus the `= (<body>)`:
+
+```
+(OP #(<sym>) OVER <Operand>)                            -- a fold member
+(UNARY OP #(<sym>) OVER <Operand> -> <Result>)          -- the whole unary triple
+(GROUP FOLD <LEFT|RIGHT> = (<heads>))                   -- a chaining group
+(GROUP PAIRWISE FOLD #(<combiner>) <LEFT|RIGHT> = (<heads>))
+(OP #(<sym>) OVER <Operand> -> <Result>)                -- inside a SIG PAIRWISE group only
+```
+
+The bodyless `GROUP` is the definition minus its **name**: a SIG binds no value, so
+there is nothing to name, and the `=` plus the head list carry over unchanged. Its
+members are read by the same structural scan of the unevaluated body a definition's
+members are ([`group_def.rs`](../src/builtins/group_def.rs)), and a SIG group body
+holds heads and nothing else — a statement the scan would skip is refused rather
+than silently left out of the record.
+
+Both halves of what a definition writes are declared. A head derives its bucket
+key(s), parameter names and slot types from `operator_shape`
+([`op_def.rs`](../src/builtins/op_def.rs)) — the one derivation the definition
+registers through — so a head and the `OP` satisfying it cannot spell different
+shapes, and the operand and result slots accept every type spelling the definition's
+do (`Carrier`, `:(LIST OF Elt)`, `(LIST OF Elt)`). What each statement records:
+
+| statement | keyworded channel | operator channel |
+|-----------|-------------------|------------------|
+| `OP #(s) OVER O` | `[Slot s Slot]` → `(left :O, right :O) -> O` | `{s}` → `FoldLeft` |
+| `OP #(s) OVER O -> R` (in a SIG pairwise group) | `[Slot s Slot]` → `(left :O, right :O) -> R` | — the group's |
+| `UNARY OP #(s) OVER O -> R` | `[s Slot]` → `(operands :(LIST OF O)) -> R` and `[Slot s Slot]` → `(left :O, right :O) -> R` | `{s}` → `Unary` |
+| `GROUP <mode> = (<heads>)` | — its heads' | `{scanned members}` → the mode |
+
+A head standing on its own declares the singleton record its surface implies, exactly
+as a bare `OP` writes one; inside a group body the group is the sole registrar, the
+same split the definitions take. One signature declares one chaining mode per
+operator: a symbol named by two records is refused at the collector, as it is in a
+scope's registry.
+
+The heads and the bodyless group are meaningful only inside a SIG body. Outside one
+each is refused naming the definition spelling, and an operator *definition* — any
+arity, including the `LET`-combined form — inside a SIG body is refused naming the
+head. The heterogeneous `OP #(<sym>) OVER <Operand> -> <Result>` head is admissible
+exactly where the definition's heterogeneous form is, inside a `PAIRWISE` group, and
+the result-less `UNARY OP` head is a **reserved** key carrying the same pointed "must
+declare its result type" message the definition spellings carry.
+
+### The operator channel is signature content
+
+A schema's operator channel is a set of **chaining records** — a sorted member set
+plus a mode — held in canonical order
+([`sig_schema.rs`](../src/machine/model/types/sig_schema.rs)). It is content like
+every other channel: it feeds the schema's content digest, so two signatures
+differing only in how their operators chain are two types; it renders in a
+signature's name (each member as its own head, then every record a member's head does
+not already spell in full, as the `GROUP` head declaring it — `GROUP FOLD RIGHT {+ -}`);
+it rides `TYPE OF`; it clones through a `WITH` pin, which names no operator; and it
+intersects in a signature join, pairing same-mode records and keeping the intersection
+of their members.
+
+A record is spelled in full by its own member's head in exactly two cases: a bare `OP`
+head declares a fold-left singleton, and a `UNARY OP` head a unary one. Every other
+record renders — a wider one, and equally a *singleton at a mode no bare head implies*,
+such as `(GROUP FOLD RIGHT = ((OP #(-) OVER Carrier)))`. Rendering that one matters:
+it is a different interface from the bare `(OP #(-) OVER Carrier)`, and a name that
+dropped the `GROUP` head would print the two identically — including in the mismatch
+diagnostic that names the signature a module failed.
+
+A member is rendered as an operator head — `OP #(+) OVER Carrier` — precisely when its
+bucket key is an operator key, its symbol belongs to one of the schema's records, *and*
+its own parameters are the operand binders an operator body binds (`left` / `right`, or
+`operands` for a unary list form). The last clause is per-overload rather than
+per-symbol: a bucket may hold an operator member beside an `FN`-declared overload at
+other types, and each renders as the head that declared it. Both keys of a unary triple
+render as the one `UNARY OP` head that declares them.
+
+### Satisfaction: equal mode, member inclusion
+
+A declared operator member is a keyworded member, satisfied by the same
+most-specific overload selection every keyworded member takes
+([modules.md § Keyworded members](typing/modules.md#keyworded-members)); the three
+keyworded failures name it by its operator head.
+
+Each declared **record** additionally needs a record in the module's own registry
+whose member set *includes* the declared one — width, as in every other channel —
+under an **equal** mode. At most one module record can cover a declared one, since
+two records never share a member. Mode is matched exactly, not covariantly: a run
+folded right and the same run folded left compute different things, so two modules
+differing only in chaining mode are distinguished. The two failures name the members
+and the modes — `no chaining mode covers ⊕` when the module supplies the buckets but
+declares no group over them, and `operators ⊕ chain fold-left in the signature but
+fold-right in the module` when it groups them another way.
+
+### A declared pairwise group's combiner
+
+A pairwise group's combiner is resolved by the ordinary scope walk at the run's use
+site, so inside a `USING <view> SCOPE` window it must be one of the members the view
+installs. A declared `PAIRWISE` group therefore names a combiner the signature itself
+declares, checked at the SIG finish — after the whole body, so a combiner declared
+below its group still counts.
+
+**Where the combiner is declared is part of the interface.** Declared *inside* the
+group body it is one of that record's members; declared beside it in the SIG body it
+is its own singleton fold-left record. Both spellings pass the combiner check and
+each is satisfied by the module that groups its combiner the same way, so a signature
+mirrors the grouping it means to require — which, since declaring the combiner inside
+the group body is what carries it through `USING`, is normally the inside spelling.
+
+### A view installs both halves
+
+An [ascription view](typing/modules.md#block-scoped-opening-using--scope) publishes
+the declared members' overloads into its buckets — each coerced across the barrier
+exactly as any keyworded member is — and **births one fresh record per declared
+group**, over exactly the declared members, into its own registry. The record is born
+in the view's region rather than adopted from the source: a record's whole content is
+lifetime-free, so re-birth costs nothing and leaves the view holding no borrow into
+the source.
+
+Birthing over the *declared* members is what makes the registry half a narrowing like
+the other two. A source group chaining `⊕`, `⊖` and `⊗` against a signature naming
+`⊕` and `⊖` gives a window in which `a ⊕ b ⊖ c` reduces and `a ⊕ b ⊗ c` finds no
+group at all.
+
+The replay installs **without** the builtin-shadow guard. That guard exists to stop a
+user `FN` from joining a builtin's bucket, and the source's own overload already
+passed it where it was declared; a replay is not a second declaration. So a signature
+may declare `OP #(+) OVER Elt` and a view over it ascribes, while shadowing stays
+type-gated as everywhere else — inside the same window an arithmetic run still
+resolves to the builtin.
+
+### The FN-head spelling declares the bucket only
+
+The bodyless `FN` head spelling of an operator key —
+`(FN (left :Carrier + right :Carrier) -> Carrier)` — stays legal and means exactly
+what it says: the bucket, and no claim about chaining. It declares no record, renders
+as an FN head, and is satisfied by any module supplying the overload, grouped or not.
+A module supplying only that half fails a signature that declares `OP #(+) OVER
+Carrier`, because the head declares a `{+}` fold-left record the module has not.
+
 ## Visibility
 
 An `OP` writes into its **enclosing scope** — a module body's child scope, a
@@ -263,6 +404,9 @@ finds it by the ordinary innermost-wins scope walk with lexical cutoff. The
 alongside its values and function overloads, so opening a group puts both its
 member bodies and its chaining mode in scope
 ([modules.md § Block-scoped opening](typing/modules.md#block-scoped-opening-using--scope)).
+An ascription view surfaces both halves too, narrowed to what its signature declares
+([Operators as signature members](#operators-as-signature-members)): the declared
+members' overloads in its buckets, and one record per declared group in its registry.
 
 An operator declared *after* a run is invisible to it (lexical cutoff), while one
 declared before it in the same submitted block resolves whatever order the

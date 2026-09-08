@@ -53,7 +53,7 @@ token-class rule that distinguishes `MODULE` (keyword: ≥2 uppercase, no lowerc
 from `Ordered` (Type token) and `int_ord` (Identifier) is described in
 [tokens.md](tokens.md).
 
-SIG bodies accept four declarators, split by what a satisfying module must
+SIG bodies accept six declarators, split by what a satisfying module must
 supply:
 
 - `TYPE <TypeName>` declares an **abstract** type member — a witness-less slot
@@ -73,28 +73,44 @@ supply:
   member**: an entry in the module's dispatch buckets, the half of a module's
   callable surface `VAL` cannot name. See
   [Keyworded members](#keyworded-members) below.
+- `(OP #(<sym>) OVER <Operand>)` and `(UNARY OP #(<sym>) OVER <Operand> -> <Result>)`
+  — bodyless **operator heads** — declare an operator member: its dispatch bucket(s)
+  *and* the chaining record a run of it reduces by.
+- `(GROUP FOLD <LEFT|RIGHT> = (<heads>))` and its `PAIRWISE` form — the bodyless
+  **group** — declare one chaining record over the operators its heads name. Both
+  operator declarators are covered by
+  [operators.md § Operators as signature members](../operators.md#operators-as-signature-members).
 
-A SIG body's declarators write three separate channels. The decl scope's `types` map records
+A SIG body's declarators write four separate channels. The decl scope's `types` map records
 each `TYPE <Name>` abstract member and each `LET <Name> = <Type>` manifest member under its
 Type-token name — genuine type bindings. Each `VAL <name> :<Type>` value slot instead records
 its declared type into a **slot collector** on the decl scope
 ([`Scope::sig_slot`](../../src/machine/core/scope.rs) / `sig_value_slots`), keyed by the slot's
-value name — a schema in progress, off the binding map. Each bodyless `FN` head records its
+value name — a schema in progress, off the binding map. Each bodyless `FN` head — and each
+operator head, whose buckets are ordinary keyworded members — records its
 `(params) -> ret` type into the slot collector's twin, a **keyworded collector**
 (`Scope::write_sig_keyworded` / `sig_keyworded_members`) keyed by the head's untyped bucket key.
-At SIG finish all three channels project once
+The third collector is the **operator collector** (`Scope::write_sig_operator_group` /
+`sig_operator_groups`), keyed by a record's own member-run digest, which a bare head fills with
+the singleton its surface implies and a bodyless `GROUP` with one record over all its members.
+At SIG finish all four channels project once
 into the signature's stored [`SigSchema`](../../src/machine/model/types/sig_schema.rs): the
 `types` map splits by representation into abstract vs manifest members, the slot collector
-supplies `value_slots`, and the keyworded collector supplies `keyworded`. Because neither
-collector enters `types`, the token-class partition needs
+supplies `value_slots`, the keyworded collector supplies `keyworded`, and the operator collector
+supplies `operators`. Because no collector enters `types`, the token-class partition needs
 no exemption ([elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)) and
-a SIG body's `Bindings` is an ordinary `Bindings::new()`.
+a SIG body's `Bindings` is an ordinary `Bindings::new()`. A bodyless `GROUP` runs its heads in a
+`ScopeKind::SigGroup` child scope carrying the declared mode; the child is transparent to the
+SIG-body gate, so a head inside it still records into the enclosing signature's collectors and
+reads the mode only to know the group is the sole registrar for its members.
 
-`VAL`, `TYPE` and the bodyless `FN` head are meaningful only inside a SIG body; outside it the
+`VAL`, `TYPE`, the bodyless `FN` head and the two operator declarators are meaningful only
+inside a SIG body; outside it the
 declarator is unbound and a bodyless head is an error naming the definition spelling. The
 lowercase-name `(LET name = <value>)` form is
-rejected inside SIG bodies with a diagnostic directing to `VAL`, and a bare `FN` *with* a body
-there is rejected with one directing to the bodyless head. The implementation lives at
+rejected inside SIG bodies with a diagnostic directing to `VAL`, and a bare `FN` *with* a body —
+or an `OP`, `UNARY OP` or `GROUP` definition — there is rejected with one directing to the
+corresponding bodyless declarator. The implementation lives at
 [`val_decl.rs`](../../src/builtins/val_decl.rs); ascription
 ([`ascribe.rs`](../../src/builtins/ascribe.rs)) checks a module against a signature
 through the **signature-subtyping relation**
@@ -310,8 +326,13 @@ parameter-name *set* equals the slot's — see
 [functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)), and each value slot
 covariantly compatible — the module's member type must be `satisfied_by`-admissible for the
 slot's declared type, after the slot's references to `Super`'s abstract members are substituted
-with `Sub`'s bindings for them — and each keyworded member satisfied by a most-specific overload
-under the same key ([Keyworded members](#keyworded-members) below). Each ascription view is born
+with `Sub`'s bindings for them — each keyworded member satisfied by a most-specific overload
+under the same key ([Keyworded members](#keyworded-members) below), and each declared chaining
+record covered by a record in the module's own operator registry, at an **equal** mode over a
+superset of its members — so two modules differing only in how their operators chain are
+distinguished, and a module that supplies an operator's bucket but declares no group over it
+satisfies no operator member ([operators.md § Satisfaction: equal mode, member
+inclusion](../operators.md#satisfaction-equal-mode-member-inclusion)). Each ascription view is born
 carrying a self-sig recording those
 substituted slot and keyworded types, so a view structurally satisfies its own signature. The
 result is
@@ -422,6 +443,18 @@ A module overload no declared member selects is **not** installed: under a signa
 declaring `(PICK x :Number)`, a module's `(PICK x :Any)` is unreachable through the
 view. Two declared overloads may legitimately select one source overload; the pair
 they publish under dedupes them.
+
+**Operator members are keyworded members.** A bodyless `OP` head declares the same
+bucket entries the definition registers — one for a binary operator, the list form and
+the binary bridge for a unary one — so they are declared, digested, satisfied and
+installed by everything above with no operator-specific handling. What the head adds is
+the schema's fourth channel, the chaining record; a member whose key is an operator
+key, whose symbol one of those records names, *and* whose parameters are the operand
+binders an operator body binds, renders as its own head (`OP #(+) OVER Carrier`,
+`UNARY OP #(~) OVER Carrier -> Result`) wherever a signature's name or a keyworded
+failure spells it; the `FN`-head spelling of the same key keeps the FN rendering,
+overload by overload, because it declares the bucket and claims no chaining
+([operators.md § Operators as signature members](../operators.md#operators-as-signature-members)).
 
 A keyworded member is reached by dispatch, so it is called through a
 `USING <view> SCOPE` window rather than by qualified name — see
@@ -707,7 +740,12 @@ in the window at all (the call walks out to the enclosing scope), and the two la
 one function agree. Because the registry rides the same façade, opening a module
 that declares operators ([operators.md](../operators.md)) puts both their bodies
 and their chaining mode in scope: a run inside the block reduces by the module's
-own group.
+own group. A view's `operators` table is narrowed the same way its buckets are — it
+holds one record per chaining record the signature declares, born fresh over exactly
+the declared members, so a run of declared members reduces inside the window by the
+declared mode and a run naming an operator the signature never declared finds no
+group at all
+([operators.md § A view installs both halves](../operators.md#a-view-installs-both-halves)).
 
 Binds made inside the block are local to it and die when it closes; only the
 tail expression's value escapes. Locality is structural rather than a teardown

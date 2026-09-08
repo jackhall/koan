@@ -139,10 +139,10 @@ Three consequences of the conflation, all live:
   a sigiled use inside a SIG body on the type-value path.
 - *`EXPR` at the definition site — decided.* Definitions respell in this item: bare keyworded
   definitions to `EXPR … = (body)`, the combined statement to `LET <name> = FN EXPR … = (body)`.
-- *Operator members — decided per prerequisite.* An `OP`'s overloads are keyworded members
-  already, so they take shape types with no operator-specific handling; the declaration surface
-  and the registry half are settled first by
-  [SIG operator members](sig-operator-members.md).
+- *Operator members — decided.* An `OP`'s overloads are keyworded members already, so they take
+  shape types with no operator-specific handling; the declaration surface and the registry half
+  are settled
+  ([design/operators.md § Operators as signature members](../../design/operators.md#operators-as-signature-members)).
 
 ## Dependencies
 
@@ -151,10 +151,7 @@ The keyworded surface this re-spells and re-types is shipped —
 overload's identity, satisfaction as a dispatch-mirrored most-specific pick, and the ascription
 barrier's treatment of it.
 
-**Requires:**
-
-- [SIG operator members](sig-operator-members.md) — the shape representation must cover operator
-  members, so their surface is settled first.
+**Requires:** none — the keyworded and operator surfaces it re-spells are shipped.
 
 **Unblocks:**
 

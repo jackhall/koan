@@ -26,7 +26,7 @@ use super::signature::{KeyElement, Specificity, UntypedKey, fn_type_specificity}
 use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::values::ModuleDraft;
-use crate::machine::model::{FoldDirection, ReductionMode};
+use crate::machine::model::{FoldDirection, MACHINE_BINDERS, ReductionMode};
 use crate::machine::model::{display_label, render_label};
 
 /// A schema's type-member table: Type-class name → the member's type, identity-hashed on the
@@ -124,11 +124,26 @@ fn direction_byte(direction: FoldDirection) -> u8 {
 
 /// Render one declared record as the `GROUP` head declaring it — `GROUP FOLD RIGHT {+ -}`,
 /// `GROUP PAIRWISE FOLD #(BOTH) LEFT {< <=}`. The members render in their stored (sorted) order,
-/// so a signature's name and a satisfaction diagnostic spell one record alike. A `Unary` record is
-/// never rendered this way: its head is the `UNARY OP` member itself.
-pub fn render_declared_group(group: &DeclaredGroup, registries: &RunRegistries) -> String {
+/// so a signature's name and a satisfaction diagnostic spell one record alike.
+///
+/// `None` for a record one of its own members' heads already spells in full: a bare `OP` head
+/// declares exactly a **fold-left singleton**, and a `UNARY OP` head exactly a unary one, so
+/// rendering those again would print one declaration twice. Every other record is a claim only a
+/// `GROUP` head makes — a wider one, or a singleton at a mode no bare head implies, such as
+/// `(GROUP FOLD RIGHT = ((OP #(-) OVER Carrier)))`. Deciding that here rather than at the call
+/// site is what keeps two signatures differing only in a singleton's mode from sharing a name.
+pub fn render_declared_group(group: &DeclaredGroup, registries: &RunRegistries) -> Option<String> {
     use std::fmt::Write;
+    if group.members.len() == 1
+        && matches!(group.mode, ReductionMode::FoldLeft | ReductionMode::Unary)
+    {
+        return None;
+    }
     let mut out = match group.mode {
+        // Unreachable by construction — a `Unary` record is written only by a `UNARY OP` head,
+        // always over its one symbol, so the singleton test above already returned. Rendered
+        // rather than panicked: a rendering path must never abort, and there is no `GROUP UNARY`
+        // declarator for this to be mistaken for.
         ReductionMode::Unary => "GROUP UNARY".to_string(),
         ReductionMode::FoldLeft => "GROUP FOLD LEFT".to_string(),
         ReductionMode::FoldRight => "GROUP FOLD RIGHT".to_string(),
@@ -152,7 +167,30 @@ pub fn render_declared_group(group: &DeclaredGroup, registries: &RunRegistries) 
         let _ = write!(out, "{}", display_label(member.symbol(), registries));
     }
     out.push('}');
-    out
+    Some(out)
+}
+
+/// Whether `params` are the operand binders an operator body binds — `operands` for a unary
+/// operator's list form, `left` / `right` for either binary form. The names come from
+/// [`MACHINE_BINDERS`], the same static the declaration reads them from, so this and the
+/// registration cannot drift.
+fn binds_machine_operands(
+    params: &[(BinderSymbol, KType)],
+    is_list_form: bool,
+    registries: &RunRegistries,
+) -> bool {
+    let named = |index: usize, name: &crate::machine::model::StaticName<ValueSymbol>| {
+        params.get(index).is_some_and(|(binder, _)| {
+            *binder == BinderSymbol::Value(registries.labels.record(name))
+        })
+    };
+    if is_list_form {
+        params.len() == 1 && named(0, &MACHINE_BINDERS.operands)
+    } else {
+        params.len() == 2
+            && named(0, &MACHINE_BINDERS.operand_left)
+            && named(1, &MACHINE_BINDERS.operand_right)
+    }
 }
 
 /// The member run of every declared record, joined for a diagnostic that names a record by its
@@ -297,12 +335,21 @@ fn render_operator_head(
         .iter()
         .find(|record| record.members.contains(&symbol))?
         .mode;
-    // Owns: the first parameter's type feeds the write below, past the node read that yields it.
-    let (first_param, ret) = types.with_node(fn_type, |node| match node {
-        TypeNode::KFunction { params, ret } => (params.values().next().copied(), Some(*ret)),
+    // Owns: the parameter pair feeds the checks and the write below, past the node read.
+    let (params, ret) = types.with_node(fn_type, |node| match node {
+        TypeNode::KFunction { params, ret } => (Some(params.as_slice().to_vec()), Some(*ret)),
         _ => (None, None),
     });
-    let (first_param, ret) = (first_param?, ret?);
+    let (params, ret) = (params?, ret?);
+    // An operator head names its operands by the machine-fixed binders its body binds, so an
+    // overload under an operator key that spells them differently was declared by an `FN` head and
+    // keeps the FN-head rendering. Classifying on the overload rather than on the symbol is what
+    // keeps a bucket holding both kinds reading correctly: the head declares one shape, not the
+    // key.
+    if !binds_machine_operands(&params, is_list_form, registries) {
+        return None;
+    }
+    let first_param = params.first()?.1;
     // The list form's sole parameter is the whole run, so the declared operand is its element.
     let operand = if is_list_form {
         types.with_node(first_param, |node| match node {

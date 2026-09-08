@@ -68,11 +68,21 @@ fn check_pairwise_combiners(
     registries: &RunRegistries,
 ) -> Result<(), crate::machine::KError> {
     use crate::machine::model::{ReductionMode, binary_key, display_label};
+    let groups = decl_scope.sig_operator_groups();
+    // The keyworded read is a deep copy of every declared bucket, so it is taken only once a
+    // pairwise group is known to be there — which most signatures never have.
+    let combiners: Vec<crate::machine::model::KeywordSymbol> = groups
+        .iter()
+        .filter_map(|group| match group.mode {
+            ReductionMode::Pairwise { combiner, .. } => Some(combiner),
+            _ => None,
+        })
+        .collect();
+    if combiners.is_empty() {
+        return Ok(());
+    }
     let declared = decl_scope.sig_keyworded_members();
-    for group in decl_scope.sig_operator_groups() {
-        let ReductionMode::Pairwise { combiner, .. } = group.mode else {
-            continue;
-        };
+    for combiner in combiners {
         let key = binary_key(combiner);
         if declared
             .iter()

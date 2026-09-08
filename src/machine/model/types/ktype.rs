@@ -428,17 +428,17 @@ fn write_sig_schema(
         f.write_str(&head)?;
         written += 1;
     }
-    // The chaining records follow the members, each as the `GROUP` head declaring it. A singleton
-    // record is skipped: the bare `OP` / `UNARY OP` head above already says how its one operator
-    // chains, so naming it again would be a second spelling of one declaration.
+    // The chaining records follow the members, each as the `GROUP` head declaring it. A record one
+    // of its own members' heads already spells in full renders nothing —
+    // [`render_declared_group`] owns that call, so the skip and the spelling cannot disagree.
     for group in &schema.operators {
-        if group.members.len() < 2 {
+        let Some(head) = render_declared_group(group, registries) else {
             continue;
-        }
+        };
         if written > 0 {
             f.write_str(", ")?;
         }
-        f.write_str(&render_declared_group(group, registries))?;
+        f.write_str(&head)?;
         written += 1;
     }
     f.write_str(")")

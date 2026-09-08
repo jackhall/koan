@@ -826,13 +826,11 @@ impl<'a> Bindings<'a> {
             .operators
             .iter()
             .filter_map(|(_, entry)| {
-                seen.contains(&entry.address).then_some(()).map_or_else(
-                    || {
-                        seen.push(entry.address);
-                        Some(entry.sealed.duplicate())
-                    },
-                    |()| None,
-                )
+                if seen.contains(&entry.address) {
+                    return None;
+                }
+                seen.push(entry.address);
+                Some(entry.sealed.duplicate())
             })
             .collect()
     }

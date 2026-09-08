@@ -251,6 +251,83 @@ fn a_unary_triple_renders_as_one_head() {
     );
 }
 
+/// A record whose mode a bare head does **not** imply renders its own `GROUP` head, singleton or
+/// not. A bare head declares a fold-*left* singleton specifically, so a one-member
+/// `GROUP FOLD RIGHT` is a different interface and must not print the same name — otherwise a
+/// mode-mismatch diagnostic would name a signature spelled identically to the module it rejects.
+#[test]
+fn a_singleton_record_at_an_unimplied_mode_renders_its_group_head() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Alpha = ((OP #(⊕) OVER Number))\n\
+         SIG Beta = ((GROUP FOLD RIGHT = ((OP #(⊕) OVER Number))))",
+    );
+    let alpha = lookup_type(scope, "Alpha").expect("Alpha binds");
+    let beta = lookup_type(scope, "Beta").expect("Beta binds");
+    assert_eq!(
+        alpha.name(test_run.registries()),
+        "SIG (OP #(⊕) OVER Number)",
+        "a bare head's own singleton is fold-left, which the head already says",
+    );
+    assert_eq!(
+        beta.name(test_run.registries()),
+        "SIG (OP #(⊕) OVER Number, GROUP FOLD RIGHT {⊕})",
+        "the fold-right singleton is a claim only the GROUP head makes",
+    );
+    assert_ne!(
+        alpha.name(test_run.registries()),
+        beta.name(test_run.registries()),
+        "two signatures that differ must not share a name",
+    );
+}
+
+/// The same rule for a one-member pairwise group: its mode carries a combiner and a direction,
+/// none of which its member's head spells.
+#[test]
+fn a_singleton_pairwise_record_renders_its_group_head() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Cmp = ((OP #(BOTH) OVER Bool) \
+         (GROUP PAIRWISE FOLD #(BOTH) LEFT = ((OP #(≺) OVER Number -> Bool))))",
+    );
+    let rendered = lookup_type(scope, "Cmp")
+        .expect("Cmp binds")
+        .name(test_run.registries());
+    assert!(
+        rendered.contains("GROUP PAIRWISE FOLD #(BOTH) LEFT {≺}"),
+        "got {rendered}",
+    );
+}
+
+/// Operator-head rendering classifies per **overload**, not per symbol. A second overload in a
+/// declared operator's own bucket, declared by an `FN` head under other parameter names, keeps the
+/// FN-head rendering — the head declares one shape, not the whole key.
+#[test]
+fn an_fn_overload_in_a_declared_operators_bucket_keeps_its_own_names() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("SIG Mixed = ((OP #(⊕) OVER Number) (FN (x :Str ⊕ y :Str) -> Str))");
+    let rendered = lookup_type(scope, "Mixed")
+        .expect("Mixed binds")
+        .name(test_run.registries());
+    assert!(
+        rendered.contains("OP #(⊕) OVER Number"),
+        "the operator member renders as its head, got {rendered}",
+    );
+    assert!(
+        rendered.contains("(x :Str ⊕ y :Str) -> Str"),
+        "the FN overload keeps the names it was declared with, got {rendered}",
+    );
+}
+
 /// An FN head over an operator key claims the bucket and no chaining, so it keeps the FN-head
 /// rendering — the schema's operator channel is what makes a member an operator member.
 #[test]
