@@ -35,6 +35,9 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) newtype: StaticName<KeywordSymbol>,
     pub(crate) fn_: StaticName<KeywordSymbol>,
     pub(crate) expr: StaticName<KeywordSymbol>,
+    /// The two tokens of a quantifier group's head, `EXPR FOR ALL (<names>) …`.
+    pub(crate) for_: StaticName<KeywordSymbol>,
+    pub(crate) all: StaticName<KeywordSymbol>,
     pub(crate) arrow: StaticName<KeywordSymbol>,
     pub(crate) op: StaticName<KeywordSymbol>,
     pub(crate) over: StaticName<KeywordSymbol>,
@@ -73,6 +76,8 @@ pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
     newtype: crate::static_name!(KeywordSymbol, "NEWTYPE"),
     fn_: crate::static_name!(KeywordSymbol, "FN"),
     expr: crate::static_name!(KeywordSymbol, "EXPR"),
+    for_: crate::static_name!(KeywordSymbol, "FOR"),
+    all: crate::static_name!(KeywordSymbol, "ALL"),
     arrow: crate::static_name!(KeywordSymbol, "->"),
     op: crate::static_name!(KeywordSymbol, "OP"),
     over: crate::static_name!(KeywordSymbol, "OVER"),

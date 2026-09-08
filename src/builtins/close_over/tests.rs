@@ -839,8 +839,17 @@ fn single_expression_close_over_leaves_run_root_flat() {
 ///
 /// The countdown is the `Nat` (`Zero | Succ Nat`) unwind `fn_def::tests::tail_region_turnover`
 /// uses, with the form as a leading statement of the body so the recursion carries it.
+///
+/// Both windows run the *same* program — the chain is built to its full length either way and only
+/// the entry level differs — so the two regions are the same size when the measurement starts.
+/// That matters because reserved capacity arrives in doubling chunks and a bigger region takes
+/// bigger steps: windows read at different region scales would differ by more than the one step
+/// [`CHUNK_SLACK`] admits, for reasons that have nothing to do with recursion depth.
 #[test]
 fn recursion_carried_close_over_stays_flat_in_depth() {
+    /// The chain both windows build, whatever depth they enter it at.
+    const CHAIN: usize = 40;
+
     fn countdown_growth(depth: usize) -> u64 {
         const WARMUP: usize = 20;
         const RUNS: usize = 200;
@@ -858,7 +867,7 @@ fn recursion_carried_close_over_stays_flat_in_depth() {
              )\n\
              LET n0 = (Nat.Zero null)\n",
         );
-        for level in 1..=depth {
+        for level in 1..=CHAIN {
             source.push_str(&format!("LET n{level} = (Nat.Succ n{})\n", level - 1));
         }
         test_run.run(&source);
@@ -874,7 +883,7 @@ fn recursion_carried_close_over_stays_flat_in_depth() {
     }
 
     let shallow = countdown_growth(4);
-    let deep = countdown_growth(40);
+    let deep = countdown_growth(CHAIN);
     let budget = 2 * shallow + CHUNK_SLACK;
     assert!(
         deep < budget,

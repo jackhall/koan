@@ -196,6 +196,20 @@ fn combined_fn_value_named_return(
     identifier_at(expr, 6, registries).map(value_named_return)
 }
 
+fn quantified_value_named_return(
+    expr: &WorkingExpression<'_>,
+    registries: &RunRegistries,
+) -> Option<String> {
+    identifier_at(expr, 6, registries).map(value_named_return)
+}
+
+fn combined_quantified_value_named_return(
+    expr: &WorkingExpression<'_>,
+    registries: &RunRegistries,
+) -> Option<String> {
+    identifier_at(expr, 10, registries).map(value_named_return)
+}
+
 fn combined_expr_value_named_return(
     expr: &WorkingExpression<'_>,
     registries: &RunRegistries,
@@ -404,6 +418,60 @@ pub static MISS_DIAGNOSTICS: &[MissDiagnostic] = &[
             Slot,
         ],
         render: combined_expr_value_named_return,
+        reserved: false,
+    },
+    // The quantified twins of the two rows above, whose group shifts every slot after it.
+    MissDiagnostic {
+        key: &[
+            Kw(&KEYWORDS.expr),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            Slot,
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        render: quantified_value_named_return,
+        reserved: false,
+    },
+    MissDiagnostic {
+        key: &[
+            Kw(&KEYWORDS.let_),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.expr),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            Slot,
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        render: function_bound_type_named,
+        reserved: false,
+    },
+    MissDiagnostic {
+        key: &[
+            Kw(&KEYWORDS.let_),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.expr),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            Slot,
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        render: combined_quantified_value_named_return,
         reserved: false,
     },
 ];

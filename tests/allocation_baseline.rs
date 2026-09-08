@@ -103,7 +103,7 @@ const FORCED_PIN_ALLOWANCE: u64 = if cfg!(feature = "seam-force-pin") {
 /// that a seeding change of any real size fails it rather than being absorbed.
 #[test]
 fn the_empty_program_stays_within_its_startup_bound() {
-    const BOUND: u64 = 1023;
+    const BOUND: u64 = 1058;
     let delta = allocations_for(
         include_str!("../audit/shapes/empty.koan"),
         "audit/shapes/empty.koan",
@@ -134,7 +134,7 @@ fn the_empty_program_stays_within_its_startup_bound() {
 /// [`FORCED_PIN_ALLOWANCE`] on top.
 #[test]
 fn the_wide_shape_stays_within_its_per_step_bound() {
-    const BOUND: u64 = 22_151;
+    const BOUND: u64 = 22_186;
     let delta = allocations_for(
         include_str!("../audit/shapes/wide_n100.koan"),
         "audit/shapes/wide_n100.koan",
@@ -161,7 +161,7 @@ fn the_wide_shape_stays_within_its_per_step_bound() {
 /// doc gives.
 #[test]
 fn the_deep_shape_stays_within_its_per_frame_bound() {
-    const BOUND: u64 = 22_761;
+    const BOUND: u64 = 22_796;
     let delta = allocations_for(
         include_str!("../audit/shapes/deep_n100.koan"),
         "audit/shapes/deep_n100.koan",

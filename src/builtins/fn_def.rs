@@ -1,5 +1,6 @@
 pub(crate) mod finalize;
 mod param_refs;
+mod quantifiers;
 pub(crate) mod return_type;
 pub(crate) mod signature;
 
@@ -15,12 +16,15 @@ use super::{arg, arg_labeled, kw, sig};
 
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
-use finalize::{FnKind, FnPlan, ParamListResult, classify, finalize_fn_with_kind, fn_action};
+use finalize::{
+    FnKind, FnPlan, FnSurface, ParamListResult, Quantification, classify, finalize_fn_with_kind,
+    fn_action,
+};
 use return_type::classify_return_type;
 use signature::ParamListOutcome;
 
 // This builtin's slot spellings, minted once and read back by symbol.
-crate::slots! { SLOTS { body, name, return_type, signature } }
+crate::slots! { SLOTS { body, name, quantifiers, return_type, signature } }
 
 /// Shared FN elaboration: extract the `signature` / return / `body` slots from
 /// `BodyCtx::args`, collect param names, classify the return type, parse the param
@@ -30,7 +34,7 @@ crate::slots! { SLOTS { body, name, return_type, signature } }
 pub(crate) fn build_fn_like<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     builtin: &str,
-    kind: FnKind,
+    surface: FnSurface<'a>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::{Action, require_kexpression};
     use finalize::defer;
@@ -41,6 +45,10 @@ pub(crate) fn build_fn_like<'a>(
     // form at `VAL`, the bare form at the bodyless head. The declaration is the mirror — it records
     // into a signature under construction, so outside one it has nothing to record into. Guarded
     // here, ahead of any deferral, so the synchronous and dep-finish paths are covered once.
+    let FnSurface {
+        kind,
+        quantification,
+    } = surface;
     let in_sig_body = ctx.scope.is_in_sig_body();
     match kind {
         FnKind::Function {
@@ -78,13 +86,15 @@ pub(crate) fn build_fn_like<'a>(
         }
         _ => crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body)),
     };
-    let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
+    let mut elaborator = Elaborator::new(quantification.scope).with_chain(ctx.chain.clone());
     // A definition's return slot captures raw, because it may name a parameter and has to survive
     // verbatim to the per-call boundary. A bodyless head's cannot: there is no call to elaborate it
     // at, so its slot is an ordinary kind expectation the lane resolves against the SIG body's own
     // scope — which is what lets `-> Carrier` read the signature's abstract member.
-    let return_type_state = match kind {
-        FnKind::Declaration | FnKind::Shape { .. } => match ctx.args.ktype(&SLOTS.return_type) {
+    let eager_return = matches!(kind, FnKind::Declaration | FnKind::Shape { .. })
+        && quantification.names.is_empty();
+    let return_type_state = match eager_return {
+        true => match ctx.args.ktype(&SLOTS.return_type) {
             Some(ret) => return_type::ReturnTypeState::Done(ret),
             None => {
                 return Action::done(Err(KError::new(KErrorKind::MissingArg(
@@ -92,7 +102,7 @@ pub(crate) fn build_fn_like<'a>(
                 ))));
             }
         },
-        _ => {
+        false => {
             let return_type_raw =
                 crate::try_action!(extract_return_type_raw(ctx.args, ctx.scope.brand()));
             let param_names =
@@ -100,7 +110,7 @@ pub(crate) fn build_fn_like<'a>(
             crate::try_action!(classify_return_type(
                 return_type_raw,
                 &param_names,
-                ctx.scope,
+                quantification.scope,
                 ctx.chain.clone(),
                 "FN return-type slot",
                 ctx.registries,
@@ -137,7 +147,7 @@ pub(crate) fn build_fn_like<'a>(
                 &elements,
                 return_type,
                 body_expr,
-                kind,
+                surface,
                 bind_index,
                 ctx.registries,
             ),
@@ -147,7 +157,7 @@ pub(crate) fn build_fn_like<'a>(
             signature_expr,
             inputs,
             body_expr,
-            kind,
+            surface,
             bind_index,
         ),
     }
@@ -161,7 +171,14 @@ pub(crate) fn build_fn_like<'a>(
 /// a fixed token. The keyword-less `FN :{…}` record-schema form is
 /// [`body_record_schema`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    build_fn_like(ctx, "FN", FnKind::Function { bound_name: None })
+    build_fn_like(
+        ctx,
+        "FN",
+        FnSurface {
+            kind: FnKind::Function { bound_name: None },
+            quantification: Quantification::none(ctx.scope),
+        },
+    )
 }
 
 /// `FN (<head>) -> <Return>` — the bodyless head, SIG-body-only, which declares a keyworded
@@ -171,7 +188,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 pub fn body_sig_declaration<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    build_fn_like(ctx, "FN", FnKind::Declaration)
+    build_fn_like(
+        ctx,
+        "FN",
+        FnSurface {
+            kind: FnKind::Declaration,
+            quantification: Quantification::none(ctx.scope),
+        },
+    )
 }
 
 /// `EXPR (<head>) -> <Return>` — the bodyless head, whose carrier is the head's expression shape as
@@ -181,8 +205,83 @@ pub fn body_sig_declaration<'a>(
 /// signature to record into either way. Same head shape and same parse path as the definition form,
 /// so a declaration and the definition that satisfies it derive one shape.
 pub fn body_shape<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    let declare = ctx.scope.is_in_sig_body() && !ctx.under_type_sigil;
-    build_fn_like(ctx, "EXPR", FnKind::Shape { declare })
+    build_fn_like(
+        ctx,
+        "EXPR",
+        FnSurface {
+            kind: FnKind::Shape {
+                declare: declares_here(ctx),
+            },
+            quantification: Quantification::none(ctx.scope),
+        },
+    )
+}
+
+/// Whether a bodyless `EXPR` head standing here also declares: bare inside a SIG body it records a
+/// keyworded member of the signature under construction, and under `:(…)` — the type-context stamp
+/// the enclosing expression leaves — it is the type value alone.
+fn declares_here(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> bool {
+    ctx.scope.is_in_sig_body() && !ctx.under_type_sigil
+}
+
+/// The `FOR ALL (<names>)` group of a quantified form, read and bound before the head elaborates.
+fn quantification_of<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> Result<Quantification<'a>, KError> {
+    let group = crate::machine::require_kexpression(ctx.args, "EXPR", &SLOTS.quantifiers)?;
+    quantifiers::read_quantification(ctx, &group)
+}
+
+/// `EXPR FOR ALL (<names>) (<head>) -> <Return>` — the quantified bodyless head. The group binds
+/// first, so the head's slot types and its return lower against it.
+pub fn body_quantified_shape<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
+    let quantification = crate::try_action!(quantification_of(ctx));
+    build_fn_like(
+        ctx,
+        "EXPR",
+        FnSurface {
+            kind: FnKind::Shape {
+                declare: declares_here(ctx),
+            },
+            quantification,
+        },
+    )
+}
+
+/// `EXPR FOR ALL (<names>) (<head>) -> <Return> = (<body>)` — the quantified definition.
+pub fn body_quantified<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
+    let quantification = crate::try_action!(quantification_of(ctx));
+    build_fn_like(
+        ctx,
+        "EXPR",
+        FnSurface {
+            kind: FnKind::Function { bound_name: None },
+            quantification,
+        },
+    )
+}
+
+/// `LET <name> = FN EXPR FOR ALL (<names>) (<head>) -> <Return> = (<body>)` — the quantified
+/// combined statement.
+pub fn body_quantified_let_combined<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
+    let name = crate::try_action!(combined_bound_name(ctx.args));
+    let quantification = crate::try_action!(quantification_of(ctx));
+    build_fn_like(
+        ctx,
+        "EXPR",
+        FnSurface {
+            kind: FnKind::Function {
+                bound_name: Some(name),
+            },
+            quantification,
+        },
+    )
 }
 
 /// The `name` slot of a combined `LET <name> = …` statement, as the symbol the parse minted —
@@ -203,8 +302,11 @@ pub fn body_let_combined<'a>(
     build_fn_like(
         ctx,
         "FN",
-        FnKind::Function {
-            bound_name: Some(name),
+        FnSurface {
+            kind: FnKind::Function {
+                bound_name: Some(name),
+            },
+            quantification: Quantification::none(ctx.scope),
         },
     )
 }
@@ -283,7 +385,10 @@ pub fn body_record_schema<'a>(
                 &elements,
                 return_type,
                 body_expr,
-                FnKind::Anonymous,
+                FnSurface {
+                    kind: FnKind::Anonymous,
+                    quantification: Quantification::none(ctx.scope),
+                },
                 bind_index,
                 ctx.registries,
             ),
@@ -295,7 +400,10 @@ pub fn body_record_schema<'a>(
                 crate::machine::model::KExpression::new(ctx.scope.brand(), &[]),
                 inputs,
                 body_expr,
-                FnKind::Anonymous,
+                FnSurface {
+                    kind: FnKind::Anonymous,
+                    quantification: Quantification::none(ctx.scope),
+                },
                 bind_index,
             )
         }
@@ -480,6 +588,51 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
+    // The quantified twins. `FOR ALL (<names>)` is a group of its own, captured raw beside the
+    // head — its tokens name nothing until this form binds them — so each quantified key sits in
+    // its own bucket beside its unquantified twin, as `OP … -> R` sits beside `OP …`. The bodyless
+    // twin's return takes the raw carrier union rather than a kind expectation, because a
+    // quantified return names the group and so resolves against the group's own scope.
+    let quantified_head = |extra: Vec<SignatureElement>| {
+        let mut elements = vec![
+            kw(registries, "EXPR"),
+            kw(registries, "FOR"),
+            kw(registries, "ALL"),
+            arg(registries, &SLOTS.quantifiers, KType::KEXPRESSION),
+            arg(registries, &SLOTS.signature, KType::KEXPRESSION),
+            kw(registries, "->"),
+            arg(registries, &SLOTS.return_type, return_union),
+        ];
+        elements.extend(extra);
+        sig(KType::ANY, elements)
+    };
+    let quantified_shape_sig = || quantified_head(vec![]);
+    let quantified_definition_sig = || {
+        quantified_head(vec![
+            kw(registries, "="),
+            arg(registries, &SLOTS.body, KType::KEXPRESSION),
+        ])
+    };
+    let quantified_combined_sig = || {
+        sig(
+            KType::ANY,
+            vec![
+                kw(registries, "LET"),
+                arg(registries, &SLOTS.name, KType::IDENTIFIER),
+                kw(registries, "="),
+                kw(registries, "FN"),
+                kw(registries, "EXPR"),
+                kw(registries, "FOR"),
+                kw(registries, "ALL"),
+                arg(registries, &SLOTS.quantifiers, KType::KEXPRESSION),
+                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
+                kw(registries, "->"),
+                arg(registries, &SLOTS.return_type, return_union),
+                kw(registries, "="),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
+            ],
+        )
+    };
     use crate::builtins::register_builtin;
     register_builtin(scope, keyworded_sig(), body, registries, gate);
     register_builtin(
@@ -497,6 +650,27 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         scope,
         shape_combined_sig(),
         body_let_combined,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        quantified_definition_sig(),
+        body_quantified,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        quantified_shape_sig(),
+        body_quantified_shape,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        quantified_combined_sig(),
+        body_quantified_let_combined,
         registries,
         gate,
     );

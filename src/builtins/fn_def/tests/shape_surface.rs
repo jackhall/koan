@@ -5,7 +5,7 @@
 //! bodyless head additionally declares.
 
 use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_type};
-use crate::machine::model::{KObject, KType, SigSchema, TypeNode};
+use crate::machine::model::{DispatchTokenElement, KObject, KType, SigSchema, TypeNode};
 use crate::machine::{KErrorKind, program_storage, run_root_storage};
 
 /// The stored schema of the signature `name` binds in `scope`.
@@ -185,4 +185,111 @@ fn a_keyword_free_head_is_refused() {
             if message.contains("a shape has at least one keyword")),
         "got {error}",
     );
+}
+
+// ---------- the quantifier group ----------
+
+/// `FOR ALL (<names>)` binds each name to the `Quantified(index)` leaf at its position, in a child
+/// scope the head elaborates against — so a quantifier reaches a slot type and the return through
+/// the ordinary type-name lookup, and the shape carries the group.
+#[test]
+fn a_quantified_head_binds_its_group_for_the_head_and_the_return() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("LET Identity = :(EXPR FOR ALL (Elt) (IDENT _ :Elt) -> Elt)");
+
+    let shape = lookup_type(scope, "Identity").expect("the alias binds a type");
+    let TypeNode::ExpressionShape {
+        quantifiers,
+        elements,
+        ret,
+    } = test_run.types().node(shape)
+    else {
+        panic!("a quantified head carries an expression shape");
+    };
+    assert_eq!(quantifiers.len(), 1);
+    let quantified = test_run.types().quantified(0);
+    assert_eq!(ret, quantified);
+    assert_eq!(
+        elements
+            .iter()
+            .filter_map(|element| match element {
+                DispatchTokenElement::Slot(kt) => Some(*kt),
+                DispatchTokenElement::Keyword(_) => None,
+            })
+            .collect::<Vec<_>>(),
+        [quantified],
+        "the slot lowered to the group's first name",
+    );
+}
+
+/// The names are render-only: two groups differing only in what they spell intern one shape.
+#[test]
+fn quantified_shapes_are_equal_up_to_the_names() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "LET One = :(EXPR FOR ALL (Elt) (IDENT _ :Elt) -> Elt)\n\
+         LET Two = :(EXPR FOR ALL (Other) (IDENT _ :Other) -> Other)",
+    );
+
+    let one = lookup_type(scope, "One").expect("One binds a type");
+    let two = lookup_type(scope, "Two").expect("Two binds a type");
+    assert_eq!(one, two);
+}
+
+/// A quantified definition registers and runs; its group rides the callable, and the type it
+/// reports on the value lane erases the quantified positions, which no lambda type can name.
+#[test]
+fn a_quantified_definition_dispatches() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("EXPR FOR ALL (Elt) (IDENT x :Elt) -> Elt = (x)");
+
+    let result = test_run.run_one(test_run.parse_one("IDENT 7"));
+    assert!(matches!(result, KObject::Number(n) if *n == 7.0));
+}
+
+/// The quantified bodyless head declares in a SIG body exactly as its unquantified twin does.
+#[test]
+fn a_quantified_bodyless_head_declares_in_a_sig_body() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Pure = ((EXPR FOR ALL (Elt) (PURE _ :Elt) -> Elt))\n\
+         LET Shape = :(EXPR FOR ALL (Elt) (PURE _ :Elt) -> Elt)",
+    );
+
+    let schema = sig_schema(scope, test_run.types(), "Pure");
+    let shape = lookup_type(scope, "Shape").expect("the alias binds a type");
+    assert_eq!(schema.keyworded.as_slice(), [shape]);
+}
+
+/// A quantifier is a name the call solves, so the group admits Type tokens and nothing else, names
+/// each once, and names at least one.
+#[test]
+fn a_malformed_quantifier_group_is_refused() {
+    for (group, fragment) in [
+        ("()", "names at least one quantifier"),
+        ("(Elt Elt)", "twice"),
+        ("(x)", "is not one"),
+    ] {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let source = format!("LET Bad = :(EXPR FOR ALL {group} (PURE _ :Number) -> Number)");
+        let error = test_run.run_one_err(test_run.parse_one(&source));
+        assert!(
+            matches!(&error.kind, KErrorKind::ShapeError(message)
+                if message.contains(fragment)),
+            "`FOR ALL {group}` must be refused with `{fragment}`, got {error}",
+        );
+    }
 }

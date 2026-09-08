@@ -2,11 +2,12 @@ use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
 use std::rc::{Rc, Weak};
 
-use crate::machine::DeliveredOperatorGroup;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::machine::model::{IdentityBuildHasher, KType, TypeSymbol, ValueSymbol};
 use crate::machine::model::{OperatorGroup, ReductionMode};
+use crate::machine::{DeliveredOperatorGroup, KError, WriteGate};
 use crate::witnessed::{And, BumpAllocator, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
@@ -473,6 +474,33 @@ impl<'a> Scope<'a> {
     /// Allocate an anonymous same-region child of `self` — the plain block / body scope.
     pub fn alloc_child_under(&'a self) -> &'a Scope<'a> {
         Self::bump_child(self, Scope::child_under(self))
+    }
+
+    /// Allocate an anonymous same-region child with `bindings` already standing on its type
+    /// channel — the scope a quantifier group's names are bound in, so a head's slot types reach
+    /// them through the ordinary type-name lookup whether a name is spelled bare (`x :Elt`) or
+    /// inside a sub-dispatched expression (`:(Elt AS Wrap)`).
+    ///
+    /// The mint and the writes are one door because the construction gate applies structurally
+    /// only while they are: the scope is unreachable between the two, so nothing else can observe
+    /// a half-seeded state, and no caller has to assert that it cannot.
+    pub(crate) fn alloc_child_binding_types(
+        &'a self,
+        bindings: impl IntoIterator<Item = (TypeSymbol, KType)>,
+        registries: &RunRegistries,
+    ) -> Result<&'a Scope<'a>, KError> {
+        let child = self.alloc_child_under();
+        let gate = &mut WriteGate::for_unpublished_scope();
+        for (name, ktype) in bindings {
+            child.register_type_direct(
+                name,
+                ktype,
+                crate::machine::core::bindings::DeclarationSite::AT_CONSTRUCTION,
+                registries,
+                gate,
+            )?;
+        }
+        Ok(child)
     }
 
     /// Allocate a same-region child stamped as a SIG decl_scope with an empty VAL slot collector.

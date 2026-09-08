@@ -19,6 +19,7 @@ use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
+use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{Elaborator, ReturnType};
 use crate::machine::model::{SignatureElement, shape_type_of};
 use crate::machine::{BindingIndex, Body, CarrierWitness, KError, KErrorKind, Scope};
@@ -79,6 +80,46 @@ impl FnKind {
             FnKind::Function { .. } | FnKind::Anonymous => Wildcards::Refused,
         }
     }
+}
+
+/// The `FOR ALL (<names>)` group a head declares, threaded through the whole elaboration: the
+/// names in `Quantified(index)` order, and the child scope they are bound in. That scope is what
+/// the head's slot types and its return elaborate against, so a quantifier reaches them through
+/// the ordinary type-name lookup however it is spelled.
+///
+/// An unquantified head is the empty group standing in its own defining scope
+/// ([`Quantification::none`]), so every surface takes one path.
+#[derive(Clone, Copy)]
+pub(crate) struct Quantification<'a> {
+    pub(crate) names: &'a [TypeSymbol],
+    pub(crate) scope: &'a Scope<'a>,
+}
+
+impl<'a> Quantification<'a> {
+    /// The empty group: an unquantified head, elaborated in its own defining scope.
+    pub(crate) fn none(scope: &'a Scope<'a>) -> Self {
+        Quantification { names: &[], scope }
+    }
+
+    /// Where a slot's sub-dispatch runs. A quantified head's slots must see the group, so they
+    /// enter its scope; an unquantified head's take the slot's own node scope, as every other
+    /// binder's type sub-dispatch does.
+    fn placement(self) -> crate::machine::DepPlacement<'a> {
+        if self.names.is_empty() {
+            crate::machine::DepPlacement::OwnScope
+        } else {
+            crate::machine::DepPlacement::InScope(self.scope)
+        }
+    }
+}
+
+/// What a finalize is finalizing: the surface's [`FnKind`] and the [`Quantification`] its head
+/// stood under. The two travel together everywhere — the kind decides what is installed, the group
+/// decides what the head elaborated against — so they cross as one operand.
+#[derive(Clone, Copy)]
+pub(crate) struct FnSurface<'a> {
+    pub(crate) kind: FnKind,
+    pub(crate) quantification: Quantification<'a>,
 }
 
 /// Local mirror of [`ParamListOutcome`] minus the structural-error variant
@@ -304,10 +345,14 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     elements: &[SignatureElement],
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
-    kind: FnKind,
+    surface: FnSurface<'a>,
     bind_index: BindingIndex,
     registries: &RunRegistries,
 ) -> Result<FinalizedFn<'a>, KError> {
+    let FnSurface {
+        kind,
+        quantification,
+    } = surface;
     check_value_type_kinds(elements, &return_type, registries)?;
 
     match kind {
@@ -315,7 +360,14 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         // sharing a name collide over nothing. Every other surface binds its arguments by name in
         // a body, where a repeat has no reading that works.
         FnKind::Declaration | FnKind::Shape { .. } => {
-            return finalize_bodyless_head(scope, elements, return_type, kind, registries);
+            return finalize_bodyless_head(
+                scope,
+                elements,
+                return_type,
+                kind,
+                quantification,
+                registries,
+            );
         }
         FnKind::Function { .. } | FnKind::Anonymous => {
             check_distinct_parameter_names(elements, registries)?;
@@ -335,7 +387,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         scope,
         return_type,
         elements,
-        &[],
+        quantification.names,
         Body::UserDefined(body_expr),
         registries,
     );
@@ -402,6 +454,7 @@ fn finalize_bodyless_head<'a>(
     elements: &[SignatureElement],
     return_type: ReturnType<'a>,
     kind: FnKind,
+    quantification: Quantification<'a>,
     registries: &RunRegistries,
 ) -> Result<FinalizedFn<'a>, KError> {
     let declare = match kind {
@@ -430,7 +483,7 @@ fn finalize_bodyless_head<'a>(
             return_type.name(registries),
         ))));
     };
-    let shape = shape_type_of(elements, &[], ret, registries);
+    let shape = shape_type_of(elements, quantification.names, ret, registries);
     Ok((
         scope.resident(Carried::Type(shape)),
         [declare.then_some(WriteOp::SigKeyworded { shape }), None],
@@ -462,11 +515,15 @@ pub(crate) fn defer<'a>(
     signature_expr: KExpression<'a>,
     inputs: DeferredInputs<'a>,
     body_expr: KExpression<'a>,
-    kind: FnKind,
+    surface: FnSurface<'a>,
     bind_index: BindingIndex,
 ) -> crate::machine::Action<'a> {
     use crate::machine::model::WorkingExpression;
-    use crate::machine::{Action, AwaitContinue, DepPlacement, SubDispatch};
+    use crate::machine::{Action, AwaitContinue, SubDispatch};
+    let FnSurface {
+        kind,
+        quantification,
+    } = surface;
     let DeferredInputs {
         capture,
         awaited_producers,
@@ -483,7 +540,7 @@ pub(crate) fn defer<'a>(
     let return_type_dep = return_type_sub.map(|rt_expr| {
         deps.request(SubDispatch {
             expr: WorkingExpression::from_ast(brand, rt_expr),
-            placement: DepPlacement::OwnScope,
+            placement: quantification.placement(),
         })
     });
     // `splice_layout` is read by the finish closure below, which runs at a later drain pop than
@@ -494,7 +551,7 @@ pub(crate) fn defer<'a>(
     for (slot_idx, sub_expr) in sub_dispatches {
         let dep_index = deps.request(SubDispatch {
             expr: WorkingExpression::from_ast(brand, sub_expr),
-            placement: DepPlacement::OwnScope,
+            placement: quantification.placement(),
         });
         splice_layout.push((slot_idx, dep_index));
     }
@@ -520,7 +577,7 @@ pub(crate) fn defer<'a>(
         }
         let return_type: ReturnType<'a> = crate::try_action!(resolve_capture_at_finish(
             capture,
-            fctx.scope,
+            quantification.scope,
             results,
             return_type_dep,
             fctx.registries
@@ -528,7 +585,7 @@ pub(crate) fn defer<'a>(
         let elements = match prebuilt_elements {
             Some(es) => es,
             None => {
-                let mut elaborator = Elaborator::new(fctx.scope);
+                let mut elaborator = Elaborator::new(quantification.scope);
                 match parse_fn_param_list(
                     &signature_expr,
                     &mut elaborator,
@@ -555,7 +612,7 @@ pub(crate) fn defer<'a>(
                 &elements,
                 return_type,
                 body_expr,
-                kind,
+                surface,
                 bind_index,
                 fctx.registries,
             ),

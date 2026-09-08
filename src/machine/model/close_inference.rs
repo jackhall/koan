@@ -255,6 +255,62 @@ static FORM_SPECS: &[FormSpec] = &[
             body: Some(9),
         },
     },
+    // EXPR FOR ALL <names> <head> -> <return type> — the quantified bodyless head.
+    FormSpec {
+        key: &[
+            Kw(&KEYWORDS.expr),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            Slot,
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+        ],
+        rule: FormRule::Signature {
+            signature: 4,
+            body: None,
+        },
+    },
+    // EXPR FOR ALL <names> <head> -> <return type> = <body>
+    FormSpec {
+        key: &[
+            Kw(&KEYWORDS.expr),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            Slot,
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        rule: FormRule::Signature {
+            signature: 4,
+            body: Some(8),
+        },
+    },
+    // LET <name> = FN EXPR FOR ALL <names> <head> -> <return type> = <body>
+    FormSpec {
+        key: &[
+            Kw(&KEYWORDS.let_),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.expr),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            Slot,
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        rule: FormRule::Signature {
+            signature: 8,
+            body: Some(12),
+        },
+    },
     // OP <symbol> OVER <operand> = <body>
     FormSpec {
         key: &[

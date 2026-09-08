@@ -310,6 +310,66 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
         ],
         slots: &[(5, CODE), (7, TYPE_EXPR.with(RECORD_TYPE)), (9, CODE)],
     },
+    // EXPR FOR ALL <names> <head> -> <return type> — the quantified bodyless head. The names group
+    // captures raw beside the head: its tokens name nothing yet, so the lane must not try to
+    // resolve them. The return stages too, because it may name a quantifier and so resolves
+    // against the group's own scope rather than the surrounding one.
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.expr),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            Slot,
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+        ],
+        slots: &[(3, CODE), (4, CODE), (6, TYPE_EXPR.with(RECORD_TYPE))],
+    },
+    // EXPR FOR ALL <names> <head> -> <return type> = <body>
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.expr),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            Slot,
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        slots: &[
+            (3, CODE),
+            (4, CODE),
+            (6, TYPE_EXPR.with(RECORD_TYPE)),
+            (8, CODE),
+        ],
+    },
+    // LET <name> = FN EXPR FOR ALL <names> <head> -> <return type> = <body>
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.let_),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.expr),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            Slot,
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        slots: &[
+            (7, CODE),
+            (8, CODE),
+            (10, TYPE_EXPR.with(RECORD_TYPE)),
+            (12, CODE),
+        ],
+    },
     // The SIG-body operator heads. Only the quoted symbol captures raw: the operand and result are
     // ordinary kind expectations, so a `:(…)` there sub-dispatches to a type eagerly, exactly as
     // the bodyless `FN` head's return slot does.
