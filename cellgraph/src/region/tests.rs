@@ -1,7 +1,7 @@
-//! The memo's pointer stability: a `Kept` run is read back through the region that wrote it, and
+//! The memo's pointer stability: a `BumpRun` is read back through the region that wrote it, and
 //! that region moves.
 //!
-//! `Kept` is the crate's second use of the argument `Resident` and `redeem` already stand on — a
+//! `BumpRun` is the crate's second use of the argument `Resident` and `redeem` already stand on — a
 //! bump allocates in pointer-stable chunks, a `Bump` moves without moving a chunk byte, and a
 //! region never resets and frees its chunks only at its own drop. These run under Miri, where a
 //! stale pointer or a leaked chunk is a failure rather than a coincidence.

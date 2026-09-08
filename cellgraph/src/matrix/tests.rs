@@ -50,7 +50,7 @@ fn the_tally_follows_every_write() {
     let mut reach = GraphReach::empty();
     reach.add(4);
     reach.add(5);
-    matrix.mint(5, &reach);
+    matrix.hold(5, &reach);
     assert!(!matrix.test(5, 5));
     assert_eq!(matrix.holders(4), 3);
     assert_eq!(matrix.holders(5), 0);

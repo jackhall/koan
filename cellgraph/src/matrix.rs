@@ -1,4 +1,7 @@
-//! Bit storage for the two cell relations, and the single row the executing flag occupies. See
+//! Bit storage for the two cell relations, and the single row the executing flag occupies. **The
+//! relations are exactly these two** — birth and pin, both over slab slots. A tree cell is in
+//! neither, and where one sits on its chain is [`Ancestry`](crate::tree::Ancestry), which is not a
+//! relation and reads no bits. See
 //! [design/liveness-matrix.md](../design/liveness-matrix.md) § Two relations, two structures.
 //!
 //! Both relations take the same square shape, indexed the same way: row `holder`, bit `held`, so a
@@ -202,7 +205,7 @@ impl<const W: usize> Matrix<W> {
     /// only write into the pin relation ([liveness-matrix.md § Reach as a hybrid
     /// mask](../design/liveness-matrix.md#reach-as-a-hybrid-mask)). The and-not is the self rule: a
     /// cell that held itself alive would never reach a zero hold count.
-    pub(crate) fn mint(&mut self, holder: u32, reach: &GraphReach<W>) {
+    pub(crate) fn hold(&mut self, holder: u32, reach: &GraphReach<W>) {
         self.union_into(holder, reach.slab());
         self.clear(holder, holder);
     }

@@ -11,8 +11,8 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    Absorption, CellRef, CellTable, Crossed, Dormant, DropFree, Handle, Operand, Prices,
-    Reattachable, Resident, TreeHandle, Verdict, Writer, reattachable,
+    CellRef, CellTable, CrossedOperand, Dormant, DropFree, Handle, Operand, Prices, Reattachable,
+    ReleaseAbsorption, Resident, TreeHandle, Verdict, Writer, reattachable,
 };
 
 use crate::meter::{Verb, measure};
@@ -60,17 +60,17 @@ fn pinned<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Dormant<'b, V>) -> Op
     }
 }
 
-fn build_number<'r, 'v>(writer: Writer<'r>, views: &[Crossed<'r, 'v, Number>]) -> &'r u32 {
+fn build_number<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Number>]) -> &'r u32 {
     match views[0] {
-        Crossed::Pinned(value) | Crossed::Copied(value) => writer.value(*value),
+        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => writer.value(*value),
     }
 }
 
-fn build_slice<'r, 'v>(writer: Writer<'r>, views: &[Crossed<'r, 'v, Number>]) -> &'r [u32] {
+fn build_slice<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Number>]) -> &'r [u32] {
     let mut buffer = [0u32; MAX_OPERANDS];
     for (cell, view) in buffer.iter_mut().zip(views) {
         *cell = match view {
-            Crossed::Pinned(value) | Crossed::Copied(value) => **value,
+            CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => **value,
         };
     }
     writer.slice(&buffer[..views.len()])
@@ -111,7 +111,7 @@ fn keep_redeem(n: u32) {
     }
 
     measure(Verb::Release, || {
-        table.release(cell, Absorption::IntoHolder)
+        table.release(cell, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     assert!(table.is_empty());
@@ -159,12 +159,12 @@ fn keep_shapes(n: u32) {
 
     for source in &sources {
         measure(Verb::Release, || {
-            table.release(*source, Absorption::IntoHolder)
+            table.release(*source, ReleaseAbsorption::IntoHolder)
         })
         .unwrap();
     }
     measure(Verb::Release, || {
-        table.release(dest, Absorption::IntoHolder)
+        table.release(dest, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     assert!(table.is_empty());
@@ -195,7 +195,7 @@ fn push_chain(n: u32) {
         .unwrap();
         residents.push(resting);
         measure(Verb::Release, || {
-            table.release(producer, Absorption::IntoHolder)
+            table.release(producer, ReleaseAbsorption::IntoHolder)
         })
         .unwrap();
     }
@@ -212,7 +212,7 @@ fn push_chain(n: u32) {
     .unwrap();
 
     measure(Verb::Release, || {
-        table.release(consumer, Absorption::IntoHolder)
+        table.release(consumer, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     assert!(table.is_empty());
@@ -245,7 +245,7 @@ fn pull_chain(n: u32) {
         })
         .unwrap();
         measure(Verb::Release, || {
-            table.release(producer, Absorption::Refused)
+            table.release(producer, ReleaseAbsorption::Refused)
         })
         .unwrap();
     }
@@ -262,7 +262,7 @@ fn pull_chain(n: u32) {
     .unwrap();
 
     measure(Verb::Release, || {
-        table.release(consumer, Absorption::IntoHolder)
+        table.release(consumer, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     assert!(table.is_empty());
@@ -287,7 +287,7 @@ fn birth_chain(n: u32) {
     // birth row names the whole chain above it.
     for handle in &handles {
         measure(Verb::Release, || {
-            table.release(*handle, Absorption::IntoHolder)
+            table.release(*handle, ReleaseAbsorption::IntoHolder)
         })
         .unwrap();
     }
@@ -349,11 +349,11 @@ fn fan_out(m: u32) {
     .unwrap();
 
     measure(Verb::Release, || {
-        table.release(source, Absorption::IntoHolder)
+        table.release(source, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     measure(Verb::Release, || {
-        table.release(dest, Absorption::IntoHolder)
+        table.release(dest, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     assert!(table.is_empty());
@@ -398,7 +398,10 @@ fn shared_subtier(n: u32) {
     }
 
     for base in &bases {
-        measure(Verb::Release, || table.release(*base, Absorption::Refused)).unwrap();
+        measure(Verb::Release, || {
+            table.release(*base, ReleaseAbsorption::Refused)
+        })
+        .unwrap();
     }
 
     measure(Verb::Enter, || {
@@ -423,11 +426,11 @@ fn shared_subtier(n: u32) {
     .unwrap();
 
     measure(Verb::Release, || {
-        table.release(left, Absorption::IntoHolder)
+        table.release(left, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     measure(Verb::Release, || {
-        table.release(right, Absorption::IntoHolder)
+        table.release(right, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     assert!(table.is_empty());
@@ -445,7 +448,7 @@ pub struct Shape {
 /// parent, and dying — the call-subtree shape the slab cannot hold, since none of it takes a slot.
 ///
 /// The trend this reads is the one the habitat exists for: creation, entry and death are flat per
-/// level whatever the depth, because a tree cell takes no row, no column and no resident table, and
+/// level whatever the depth, because a tree cell takes no row, no column and no reach table, and
 /// its death is a bump splice into the ancestor it pledged.
 fn tree_chain(n: u32) {
     let mut table = table();
@@ -512,7 +515,7 @@ fn tree_chain(n: u32) {
     assert_eq!(read, n - 1);
 
     measure(Verb::Release, || {
-        table.release(root, Absorption::IntoHolder)
+        table.release(root, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     assert!(table.is_empty());

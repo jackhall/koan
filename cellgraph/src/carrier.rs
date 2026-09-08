@@ -24,7 +24,7 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 /// Crate-private and paired with the value, like the mask beside it. A tree home is not a mask bit
 /// — no relation names a tree cell — so the two kinds are a sum here rather than one number.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum CellPool {
+pub(crate) enum CellHome {
     Slab(u32),
     Tree(u32),
 }
@@ -42,14 +42,14 @@ pub struct Dormant<'home, T: Reattachable + DropFree, const W: usize = 1> {
     /// registers the reach under. For a door-built carrier that is the cell the value was placed
     /// into; for one redeemed out of a record it is the slab cell whose hold set names the record —
     /// the executing cell, or its root when the step is running in a tree cell.
-    home: CellPool,
+    home: CellHome,
     _home: PhantomData<&'home ()>,
 }
 
 impl<T: Reattachable + DropFree, const W: usize> Dormant<'_, T, W> {
     /// Bundle a value the table itself just wrote into a region with the reach it composed for it.
     /// Crate-private, so the value-to-reach pairing is only ever the one a door established.
-    pub(crate) fn new(value: Erased<T>, reach: GraphReach<W>, home: CellPool) -> Self {
+    pub(crate) fn new(value: Erased<T>, reach: GraphReach<W>, home: CellHome) -> Self {
         Dormant {
             value,
             reach,
@@ -77,15 +77,15 @@ impl<T: Reattachable + DropFree, const W: usize> Dormant<'_, T, W> {
         self.value
     }
 
-    /// The cell whose region stores this value — what the crossing rule classifies by, and what a
+    /// The cell whose region stores this value — what the ancestry rule classifies by, and what a
     /// [`keep`](crate::StepContext::keep) registers under.
-    pub(crate) fn home(&self) -> CellPool {
+    pub(crate) fn home(&self) -> CellHome {
         self.home
     }
 
     /// Split the carrier into the three things a [`keep`](crate::StepContext::keep) needs: the
     /// erased value, the reach the table takes over, and the cell whose table takes it.
-    pub(crate) fn into_parts(self) -> (Erased<T>, GraphReach<W>, CellPool) {
+    pub(crate) fn into_parts(self) -> (Erased<T>, GraphReach<W>, CellHome) {
         (self.value, self.reach, self.home)
     }
 }

@@ -28,8 +28,8 @@ fn hold(table: &mut CellTable<Owned>, holder: Handle, held: Handle) {
 
 /// What a hold on one record keeps alive. A single candidate's slice is its whole closure, so
 /// one-id pricing goes through the same door the marginal query does.
-fn closure(table: &CellTable<Owned>, id: SealedId) -> Option<Closure> {
-    table.unique_closures(&[id]).remove(0)
+fn closure(table: &CellTable<Owned>, id: SealedId) -> Option<RetentionPrice> {
+    table.unique_retentions(&[id]).remove(0)
 }
 
 /// The record minted most recently — ids are monotone and never reused, so this is the one the
@@ -64,11 +64,11 @@ fn sealed_chain(table: &mut CellTable<Owned>) -> (SealedId, SealedId, SealedId) 
     hold(table, keep_a, a);
     hold(table, keep_s, s);
 
-    table.release(b, Absorption::Refused).unwrap();
+    table.release(b, ReleaseAbsorption::Refused).unwrap();
     let b_id = newest(table);
-    table.release(a, Absorption::Refused).unwrap();
+    table.release(a, ReleaseAbsorption::Refused).unwrap();
     let a_id = newest(table);
-    table.release(s, Absorption::Refused).unwrap();
+    table.release(s, ReleaseAbsorption::Refused).unwrap();
     let s_id = newest(table);
     assert_eq!(table.sealed.len(), 3);
     (s_id, a_id, b_id)
@@ -88,7 +88,7 @@ fn a_closure_prices_everything_a_hold_on_the_record_reaches() {
     // The tail of the chain reaches nothing, so it prices at its own storage and no more.
     assert_eq!(
         closure(&table, b_id).unwrap(),
-        Closure {
+        RetentionPrice {
             bytes: retained(&table, b_id),
             frozen: true,
         }
@@ -116,13 +116,13 @@ fn a_shared_sub_tier_is_billed_once_within_one_closure() {
     hold(&mut table, keep_b, b);
     hold(&mut table, keep_s, s);
 
-    table.release(c, Absorption::Refused).unwrap();
+    table.release(c, ReleaseAbsorption::Refused).unwrap();
     let c_id = newest(&table);
-    table.release(a, Absorption::Refused).unwrap();
+    table.release(a, ReleaseAbsorption::Refused).unwrap();
     let a_id = newest(&table);
-    table.release(b, Absorption::Refused).unwrap();
+    table.release(b, ReleaseAbsorption::Refused).unwrap();
     let b_id = newest(&table);
-    table.release(s, Absorption::Refused).unwrap();
+    table.release(s, ReleaseAbsorption::Refused).unwrap();
     let s_id = newest(&table);
     assert_eq!(table.sealed.len(), 4);
 
@@ -154,7 +154,7 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     hold(&mut table, s, live);
     hold(&mut table, keep_s, s);
 
-    table.release(s, Absorption::Refused).unwrap();
+    table.release(s, ReleaseAbsorption::Refused).unwrap();
     let s_id = newest(&table);
     let live_bytes = table.region_bytes(live).unwrap();
     assert!(live_bytes > 0);
@@ -167,7 +167,7 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     assert!(table.sealed.get(s_id).unwrap().memo().is_none());
 
     // The cell's slab column is empty and its only namer is the record, so it seals into it.
-    table.release(live, Absorption::IntoHolder).unwrap();
+    table.release(live, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 1);
 
     let frozen = closure(&table, s_id).unwrap();
@@ -196,7 +196,7 @@ fn priming_a_memo_costs_the_record_the_bytes_it_writes() {
     hold(&mut table, keep, bare);
     hold(&mut table, keep_too, bare);
 
-    table.release(bare, Absorption::Refused).unwrap();
+    table.release(bare, ReleaseAbsorption::Refused).unwrap();
     let id = newest(&table);
     assert_eq!(retained(&table, id), 0);
     assert_eq!(table.occupancy().retained_bytes, 0);
@@ -237,9 +237,9 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     hold(&mut table, keep_s, s);
     hold(&mut table, keep_s_too, s);
 
-    table.release(a, Absorption::Refused).unwrap();
+    table.release(a, ReleaseAbsorption::Refused).unwrap();
     let a_id = newest(&table);
-    table.release(s, Absorption::Refused).unwrap();
+    table.release(s, ReleaseAbsorption::Refused).unwrap();
     let s_id = newest(&table);
 
     let priced = closure(&table, s_id).unwrap();
@@ -250,14 +250,18 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     );
 
     // Holders come and go above the closure; nothing inside it moves, so the memo stays exact.
-    table.release(keep_a, Absorption::IntoHolder).unwrap();
-    table.release(keep_s, Absorption::IntoHolder).unwrap();
+    table
+        .release(keep_a, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    table
+        .release(keep_s, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(table.sealed.get(a_id).unwrap().holders, 2);
     assert_eq!(table.sealed.get(s_id).unwrap().holders, 1);
     assert_eq!(closure(&table, s_id).unwrap(), priced);
 
     // And a walk that consults no memo at all agrees with what was recorded.
-    let fresh = table.reached_from(SlotNode::Sealed(s_id), false);
+    let fresh = table.transitive_pins(SlotNode::Sealed(s_id), false);
     assert!(fresh.cells.is_empty());
     assert_eq!(table.bytes_of(&fresh), priced.bytes);
 }
@@ -282,13 +286,13 @@ fn a_walk_that_reaches_a_memoized_record_merges_its_set() {
     hold(&mut table, keep_a, a);
     hold(&mut table, keep_s, s);
 
-    table.release(b, Absorption::Refused).unwrap();
+    table.release(b, ReleaseAbsorption::Refused).unwrap();
     let b_id = newest(&table);
-    table.release(a, Absorption::Refused).unwrap();
+    table.release(a, ReleaseAbsorption::Refused).unwrap();
     let a_id = newest(&table);
     // The middle of the chain is frozen and priced first, so it carries a memo the head will meet.
     assert!(closure(&table, a_id).unwrap().frozen);
-    table.release(s, Absorption::Refused).unwrap();
+    table.release(s, ReleaseAbsorption::Refused).unwrap();
     let s_id = newest(&table);
 
     let open = closure(&table, s_id).unwrap();
@@ -301,7 +305,7 @@ fn a_walk_that_reaches_a_memoized_record_merges_its_set() {
             + table.region_bytes(live).unwrap()
     );
 
-    table.release(live, Absorption::IntoHolder).unwrap();
+    table.release(live, ReleaseAbsorption::IntoHolder).unwrap();
     let frozen = closure(&table, s_id).unwrap();
     assert!(frozen.frozen);
     assert_eq!(frozen.bytes, open.bytes);
@@ -335,28 +339,28 @@ fn unique_slices_do_not_double_bill_a_shared_sub_tier() {
     hold(&mut table, keep_first, first);
     hold(&mut table, keep_second, second);
 
-    table.release(c, Absorption::Refused).unwrap();
+    table.release(c, ReleaseAbsorption::Refused).unwrap();
     let c_id = newest(&table);
-    table.release(a, Absorption::Refused).unwrap();
+    table.release(a, ReleaseAbsorption::Refused).unwrap();
     let a_id = newest(&table);
-    table.release(b, Absorption::Refused).unwrap();
+    table.release(b, ReleaseAbsorption::Refused).unwrap();
     let b_id = newest(&table);
-    table.release(first, Absorption::Refused).unwrap();
+    table.release(first, ReleaseAbsorption::Refused).unwrap();
     let first_id = newest(&table);
-    table.release(second, Absorption::Refused).unwrap();
+    table.release(second, ReleaseAbsorption::Refused).unwrap();
     let second_id = newest(&table);
 
     // The sub-tier both candidates reach is billed to neither: releasing one hold buys back only
     // the part the other cannot reach.
-    let slices = table.unique_closures(&[first_id, second_id]);
+    let slices = table.unique_retentions(&[first_id, second_id]);
     assert_eq!(
         slices,
         vec![
-            Some(Closure {
+            Some(RetentionPrice {
                 bytes: retained(&table, first_id) + retained(&table, a_id),
                 frozen: true,
             }),
-            Some(Closure {
+            Some(RetentionPrice {
                 bytes: retained(&table, second_id) + retained(&table, b_id),
                 frozen: true,
             }),
@@ -369,7 +373,7 @@ fn unique_slices_do_not_double_bill_a_shared_sub_tier() {
     );
 
     // A repeated id is one candidate, answered the same way at every position naming it.
-    let repeated = table.unique_closures(&[first_id, first_id]);
+    let repeated = table.unique_retentions(&[first_id, first_id]);
     assert_eq!(repeated[0], repeated[1]);
     assert_eq!(repeated[0], closure(&table, first_id));
 }
@@ -382,13 +386,13 @@ fn a_candidate_inside_another_candidates_closure_is_shared_throughout() {
     // Releasing the head buys back only the head: everything below it the other candidate reaches
     // too, and releasing the inner candidate on its own buys back nothing at all.
     assert_eq!(
-        table.unique_closures(&[s_id, a_id]),
+        table.unique_retentions(&[s_id, a_id]),
         vec![
-            Some(Closure {
+            Some(RetentionPrice {
                 bytes: retained(&table, s_id),
                 frozen: true,
             }),
-            Some(Closure {
+            Some(RetentionPrice {
                 bytes: 0,
                 frozen: true,
             }),
@@ -405,15 +409,17 @@ fn an_absent_id_prices_as_none() {
     allocate(&mut table, gone);
     hold(&mut table, keeper, gone);
 
-    table.release(gone, Absorption::Refused).unwrap();
+    table.release(gone, ReleaseAbsorption::Refused).unwrap();
     let gone_id = newest(&table);
     assert!(closure(&table, gone_id).is_some());
 
     // The last holder goes, the record retires, and the id prices as nothing rather than as zero.
-    table.release(keeper, Absorption::IntoHolder).unwrap();
+    table
+        .release(keeper, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(closure(&table, gone_id), None);
     assert_eq!(table.sealed_retained_bytes(gone_id), None);
-    let slices = table.unique_closures(&[gone_id, s_id]);
+    let slices = table.unique_retentions(&[gone_id, s_id]);
     assert_eq!(slices[0], None);
     assert_eq!(slices[1], closure(&table, s_id));
 }
@@ -442,7 +448,7 @@ fn occupancy_tracks_both_tiers() {
         }
     );
 
-    table.release(first, Absorption::Refused).unwrap();
+    table.release(first, ReleaseAbsorption::Refused).unwrap();
     let first_id = newest(&table);
     assert_eq!(
         table.occupancy(),
@@ -457,7 +463,7 @@ fn occupancy_tracks_both_tiers() {
 
     // The second seal absorbs the first record rather than minting beside it, so the tier's byte
     // total grows while its record count does not.
-    table.release(second, Absorption::Refused).unwrap();
+    table.release(second, ReleaseAbsorption::Refused).unwrap();
     assert_eq!(
         table.occupancy(),
         Occupancy {
@@ -468,7 +474,7 @@ fn occupancy_tracks_both_tiers() {
         }
     );
 
-    table.release(third, Absorption::IntoHolder).unwrap();
+    table.release(third, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(
         table.occupancy(),
         Occupancy {
@@ -493,7 +499,7 @@ fn pricing_mutates_no_hold() {
     allocate(&mut table, open);
     hold(&mut table, open, live);
     hold(&mut table, keep_open, open);
-    table.release(open, Absorption::Refused).unwrap();
+    table.release(open, ReleaseAbsorption::Refused).unwrap();
 
     let handles: Vec<Handle> = (0..10)
         .map(|slot| Handle::new(slot, table.slots[slot as usize].generation))
@@ -535,7 +541,7 @@ fn pricing_mutates_no_hold() {
     for id in &ids {
         let _ = closure(&table, *id).unwrap();
     }
-    let _ = table.unique_closures(&ids);
+    let _ = table.unique_retentions(&ids);
     let _ = table.occupancy();
     assert!(closure(&table, s_id).unwrap().frozen);
 

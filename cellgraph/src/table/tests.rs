@@ -54,32 +54,32 @@ fn operand<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Dormant<'b, V>) -> O
 
 /// The pinned view of a crossed operand. Every test that uses it runs under [`pin`], so the copy
 /// arm is unreachable rather than merely unexpected.
-fn pinned<'r, V: Reattachable>(view: &Crossed<'r, '_, V>) -> V::At<'r>
+fn pinned<'r, V: Reattachable>(view: &CrossedOperand<'r, '_, V>) -> V::At<'r>
 where
     V::At<'r>: Copy,
 {
     match view {
-        Crossed::Pinned(value) => *value,
-        Crossed::Copied(_) => unreachable!("the test's verdict always pins"),
+        CrossedOperand::Pinned(value) => *value,
+        CrossedOperand::Copied(_) => unreachable!("the test's verdict always pins"),
     }
 }
 
 /// The deep copy a severed view allows and the embed a pinned one allows, in one build — what a
 /// test that runs under both verdicts passes.
-fn take<'r>(view: &Crossed<'r, '_, Number>, writer: Writer<'r>) -> &'r u32 {
+fn take<'r>(view: &CrossedOperand<'r, '_, Number>, writer: Writer<'r>) -> &'r u32 {
     match view {
         // Pinned: the borrow itself, embedded in the destination's storage.
-        Crossed::Pinned(value) => value,
+        CrossedOperand::Pinned(value) => value,
         // Copied: severed, so the only thing that typechecks is a fresh allocation.
-        Crossed::Copied(value) => writer.value(**value),
+        CrossedOperand::Copied(value) => writer.value(**value),
     }
 }
 
 /// What a view reads, whichever brand it arrived at — for a build that only needs the number.
-fn number(view: &Crossed<'_, '_, Number>) -> u32 {
+fn number(view: &CrossedOperand<'_, '_, Number>) -> u32 {
     match view {
-        Crossed::Pinned(value) => **value,
-        Crossed::Copied(value) => **value,
+        CrossedOperand::Pinned(value) => **value,
+        CrossedOperand::Copied(value) => **value,
     }
 }
 
@@ -96,14 +96,17 @@ fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
         .sum()
 }
 
-/// The reach of a cell's stored continuation, read out of the resident table entry it occupies.
+/// The reach of a cell's stored continuation, read out of the reach table entry it occupies.
 /// The continuation is a resident like any other, so this is the same lookup a redeem performs.
-fn continuation_reach<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> &GraphReach<1> {
+fn continuation_reach_index<C: Reattachable>(
+    table: &CellTable<C>,
+    handle: Handle,
+) -> &GraphReach<1> {
     let cell = &table.slots[handle.slot() as usize];
     let index = cell
-        .continuation_reach
+        .continuation_reach_index
         .expect("the cell stored a continuation over captures");
-    cell.residents
+    cell.reaches
         .get(index)
         .expect("the entry the continuation names is in the table")
 }
@@ -120,7 +123,9 @@ fn the_slab_refuses_past_its_cap_and_reuses_a_freed_slot() {
     let cells: Vec<Handle> = (0..4).map(|_| table.create(None, None).unwrap()).collect();
     assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
 
-    table.release(cells[1], Absorption::IntoHolder).unwrap();
+    table
+        .release(cells[1], ReleaseAbsorption::IntoHolder)
+        .unwrap();
     let reused = table.create(None, None).unwrap();
     assert_eq!(reused.slot(), cells[1].slot());
     assert_eq!(reused.generation(), cells[1].generation() + 1);
@@ -168,9 +173,9 @@ fn a_two_word_table_names_slots_across_the_chunk_boundary() {
     assert!(table.holds(low, high));
 
     // Releasing the holder drops the whole row, both chunks of it, so the held cell reclaims.
-    table.release(low, Absorption::IntoHolder).unwrap();
+    table.release(low, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!table.holds(low, high));
-    table.release(high, Absorption::IntoHolder).unwrap();
+    table.release(high, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!table.is_live(high));
     assert_eq!(table.occupancy().records, 0);
 }
@@ -179,7 +184,7 @@ fn a_two_word_table_names_slots_across_the_chunk_boundary() {
 fn every_verb_rejects_a_stale_handle() {
     let mut table: CellTable<Owned> = CellTable::new(1, pin);
     let first = table.create(None, None).unwrap();
-    table.release(first, Absorption::IntoHolder).unwrap();
+    table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
     let second = table.create(None, None).unwrap();
 
     assert_eq!(second.slot(), first.slot());
@@ -189,7 +194,7 @@ fn every_verb_rejects_a_stale_handle() {
         Err(EnterError::Stale(Stale(CellRef::Slab(first))))
     );
     assert_eq!(
-        table.release(first, Absorption::IntoHolder),
+        table.release(first, ReleaseAbsorption::IntoHolder),
         Err(ReleaseError::Stale(Stale(first)))
     );
     assert_eq!(
@@ -212,18 +217,18 @@ fn a_birth_row_contains_the_parent_chain_and_outlives_the_middle_cell() {
     assert!(table.birth.test(c.slot(), b.slot()));
     assert!(table.birth.test(c.slot(), a.slot()));
 
-    table.release(b, Absorption::IntoHolder).unwrap();
+    table.release(b, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!table.is_live(b));
     assert_eq!(table.slots[b.slot() as usize].state, SlotState::Dead);
     assert!(table.birth.test(c.slot(), a.slot()));
     assert!(table.is_live(a));
 
-    table.release(c, Absorption::IntoHolder).unwrap();
+    table.release(c, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.slots[c.slot() as usize].state, SlotState::Free);
     assert_eq!(table.slots[b.slot() as usize].state, SlotState::Free);
     assert!(table.is_live(a));
 
-    table.release(a, Absorption::IntoHolder).unwrap();
+    table.release(a, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.free.len(), 4);
 }
 
@@ -285,7 +290,7 @@ fn a_cell_is_entered_by_one_step_at_a_time() {
         Err(EnterError::AlreadyExecuting)
     );
     assert_eq!(
-        table.release(cell, Absorption::IntoHolder),
+        table.release(cell, ReleaseAbsorption::IntoHolder),
         Err(ReleaseError::Executing)
     );
 
@@ -317,6 +322,6 @@ fn reclaiming_a_slot_drops_the_continuation_it_held() {
     let cell = table.create(None, Some(Rc::clone(&anchor))).unwrap();
     assert_eq!(Rc::strong_count(&anchor), 2);
 
-    table.release(cell, Absorption::IntoHolder).unwrap();
+    table.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(Rc::strong_count(&anchor), 1);
 }

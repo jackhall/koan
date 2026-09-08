@@ -3,7 +3,7 @@
 //! ([design/cellgraph.md](../design/cellgraph.md) § The contract: two embedder types), and the
 //! only one an embedder may hold across an `enter` scope.
 //!
-//! A resident carries **no reach**. Its mask lives in its home cell's resident table, where the
+//! A resident carries **no reach**. Its mask lives in its home cell's reach table, where the
 //! seal transition can rewrite it as the slab bit it names becomes a sealed id; the resident names
 //! that entry by a private key and nothing else. So an embedder cannot pair a value with a reach
 //! from outside — there is nothing pairable — and a mask a resident depends on cannot go stale,
@@ -89,7 +89,7 @@ where
 
 impl<T: Reattachable + DropFree> Copy for Resident<T> where Erased<T>: Copy {}
 
-/// Which entry of which cell's resident table holds one resident's reach.
+/// Which entry of which cell's reach table holds one resident's reach.
 ///
 /// Crate-private, like the mask itself: an embedder cannot name an entry, so it cannot hand a
 /// value a reach that is not its own. The home is the cell as it stood at the
@@ -106,12 +106,14 @@ pub(crate) struct ResidentKey {
     pub(crate) index: u32,
 }
 
-/// One cell's resident table: the reach of every value kept in its region, indexed by the position
-/// a [`keep`](crate::StepContext::keep) handed out.
+/// One cell's reach table: the reach of every value kept in its cell region, indexed by the
+/// position a [`keep`](crate::StepContext::keep) handed out.
 ///
 /// This is the **only** durable habitat of a mask on the slab side, so the seal transition's step 1
-/// rewrites exactly this collection per holder and the work is bounded by the holders' resident
-/// counts. Entries are **interned on content**, which is what bounds that count: a table holds one
+/// rewrites exactly this collection per holder and the work is bounded by the holders' entry
+/// counts. It holds *reaches*, not [`Resident`]s — a resident carries no reach of its own and names
+/// an entry here by a private key, which is what keeps a value and its reach unpairable from
+/// outside. Entries are **interned on content**, which is what bounds that count: a table holds one
 /// entry per *distinct* reach ever kept into the cell, not one per keep, so a cell kept into every
 /// step for a whole run settles at the handful of shapes its keeps take. Nothing is ever removed —
 /// an index is a name — and a cell's whole table goes when its slot recycles.
@@ -121,11 +123,11 @@ pub(crate) struct ResidentKey {
 /// which carry equal masks to equal masks. The continuation is no exception — it interns its reach
 /// like any other keep and repoints, rather than owning an entry it overwrites.
 #[derive(Default)]
-pub(crate) struct Residents<const W: usize> {
+pub(crate) struct ReachTable<const W: usize> {
     masks: Vec<GraphReach<W>>,
 }
 
-impl<const W: usize> Residents<W> {
+impl<const W: usize> ReachTable<W> {
     /// Take a reach in, handing back the index that names it from here on — the entry that already
     /// holds an equal mask when there is one, so a cell kept into repeatedly with the same reach
     /// takes one entry rather than one per keep.
@@ -171,7 +173,7 @@ impl<const W: usize> Residents<W> {
     }
 
     /// Take the entries out whole, leaving the table empty — how a cell absorbed into another
-    /// hands its residents over.
+    /// hands its reaches over.
     pub(crate) fn take(&mut self) -> Vec<GraphReach<W>> {
         std::mem::take(&mut self.masks)
     }

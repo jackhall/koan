@@ -41,7 +41,7 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   verdict](design/cellgraph.md#the-crossing-verdict)).
 - [src/tree.rs](src/tree.rs) — the tree pool: the slab-free habitat for a
   call subtree, whose liveness is a stack discipline rather than a matrix
-  reading. The chain links and depth the one crossing rule classifies by, the
+  reading. The chain links and depth the ancestry rule classifies by, the
   child count that keeps a released parent resident, the pledge a placement
   door leaves that says which ancestor a dying cell's bump splices into, and
   the tombstone chain a resident redeems through once its home's bytes have
@@ -141,7 +141,7 @@ machinery and not the `alloc` within it.
     invariants and the staleness argument, absorption, pricing.
   - [tree-cells.md](design/tree-cells.md) — the third region habitat: a cell
     of a call subtree, living under a slab root in an uncapped pool that no
-    mask names. Mints redirected to the root, the one crossing rule an
+    mask names. Mints redirected to the root, the ancestry rule an
     operand homed in a tree cell meets, the pledge and the splice that
     replace a seal at its death, and the tombstone chain a redeem follows.
 - [roadmap/](roadmap/README.md) — the slices that build the crate, in

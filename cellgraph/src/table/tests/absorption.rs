@@ -10,7 +10,7 @@ use proptest::prelude::*;
 
 use super::super::*;
 use super::{
-    Borrowed, Number, Owned, continuation_reach, live_bytes, operand, pin, pinned, state_of,
+    Borrowed, Number, Owned, continuation_reach_index, live_bytes, operand, pin, pinned, state_of,
 };
 
 /// Bytes a cell's region bundle occupies, or zero for a cell that never allocated.
@@ -34,7 +34,7 @@ fn an_empty_table_is_quiescent_and_a_surviving_ring_is_not() {
 
     let cell = table.create(None, None).unwrap();
     assert!(!table.is_empty());
-    table.release(cell, Absorption::IntoHolder).unwrap();
+    table.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 
     // A ring an outside holder kept above every merge's count survives the wind-down, and that is
@@ -58,7 +58,7 @@ fn an_empty_table_is_quiescent_and_a_surviving_ring_is_not() {
         .unwrap()
         .unwrap();
     for cell in [first, second, bystander] {
-        table.release(cell, Absorption::IntoHolder).unwrap();
+        table.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
     }
 
     assert!(!table.is_empty());
@@ -90,7 +90,9 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
     let consumer_bytes = region_bytes(&table, consumer);
     assert!(producer_bytes > 0);
 
-    table.release(producer, Absorption::IntoHolder).unwrap();
+    table
+        .release(producer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
 
     // No id, no index entry, no record: the storage is the consumer's own now.
     assert_eq!(table.sealed.len(), 0);
@@ -103,7 +105,7 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
 
     // The merge rewrote the consumer's stored mask: the dead cell's bit became the holder's, and
     // nothing sealed, so the mask stays a plain slab row over live cells.
-    let stored = continuation_reach(&table, consumer);
+    let stored = continuation_reach_index(&table, consumer);
     assert!(stored.names(consumer.slot()));
     assert!(!stored.names(producer.slot()));
     assert_eq!(stored.sealed().len(), 0);
@@ -141,9 +143,9 @@ fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
         .unwrap()
         .unwrap();
 
-    table.release(shared, Absorption::Refused).unwrap();
+    table.release(shared, ReleaseAbsorption::Refused).unwrap();
     let shared_id = only_record(&table);
-    table.release(alone, Absorption::Refused).unwrap();
+    table.release(alone, ReleaseAbsorption::Refused).unwrap();
     let alone_id = table
         .sealed
         .ids()
@@ -152,7 +154,9 @@ fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
     assert_eq!(table.sealed.get(shared_id).unwrap().holders, 2);
     assert_eq!(table.sealed.get(alone_id).unwrap().holders, 1);
 
-    table.release(producer, Absorption::IntoHolder).unwrap();
+    table
+        .release(producer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
 
     // The slab half arrives through the standard mint.
     assert!(table.pins.test(consumer.slot(), reached.slot()));
@@ -179,14 +183,14 @@ fn a_refused_release_seals_as_before() {
         })
         .unwrap();
 
-    table.release(producer, Absorption::Refused).unwrap();
+    table.release(producer, ReleaseAbsorption::Refused).unwrap();
 
     // The very shape a merge would have collapsed, sealed instead: the embedder's refusal is the
     // whole difference.
     let id = only_record(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
 
-    assert!(continuation_reach(&table, consumer).names_sealed(id));
+    assert!(continuation_reach_index(&table, consumer).names_sealed(id));
     let value = table
         .enter(consumer, |context| *context.continuation().unwrap().value())
         .unwrap();
@@ -208,16 +212,18 @@ fn a_dead_resident_holder_absorbs_too() {
     // The holder's death is declared, but its child's birth row keeps it in the slab. Its pin row
     // is still a maintained row, so it is still a merge target: "live holder" means the slab tier,
     // not a cell that may still execute.
-    table.release(holder, Absorption::IntoHolder).unwrap();
+    table
+        .release(holder, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(state_of(&table, holder), SlotState::Dead);
 
-    table.release(held, Absorption::IntoHolder).unwrap();
+    table.release(held, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(state_of(&table, held), SlotState::Free);
 
     // Absorbing into a dead-resident cell only brings forward the fold its own disposal would have
     // performed: when the child goes, the whole bundle goes with the holder.
-    table.release(child, Absorption::IntoHolder).unwrap();
+    table.release(child, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -238,12 +244,14 @@ fn a_two_cell_ring_dissolves_when_one_side_dies() {
 
     // The merge runs even though the source held its own target: the mint's and-not is where the
     // hold on itself lands, so what would have been a sealed ring is a cell holding nothing.
-    table.release(first, Absorption::IntoHolder).unwrap();
+    table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert!(!table.holds(second, first));
     assert!(!table.holds(second, second));
 
-    table.release(second, Absorption::IntoHolder).unwrap();
+    table
+        .release(second, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert!(table.is_empty());
     assert_eq!(table.free.len(), 4);
 }
@@ -281,11 +289,13 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
     let base_bytes = region_bytes(&table, base);
     let middle_bytes = region_bytes(&table, middle);
 
-    table.release(base, Absorption::Refused).unwrap();
+    table.release(base, ReleaseAbsorption::Refused).unwrap();
     let base_id = only_record(&table);
     assert!(table.naming[reached.slot() as usize].contains(base_id));
 
-    table.release(middle, Absorption::IntoHolder).unwrap();
+    table
+        .release(middle, ReleaseAbsorption::IntoHolder)
+        .unwrap();
 
     // The base's record had one holder — the sealing cell — so the seal folds it in rather than
     // leaving a chain of two records with one indirection each.
@@ -299,11 +309,13 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
     assert!(!table.naming[reached.slot() as usize].contains(base_id));
     assert!(table.naming[reached.slot() as usize].contains(middle_id));
 
-    table.release(top, Absorption::IntoHolder).unwrap();
+    table.release(top, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 1);
-    table.release(other, Absorption::IntoHolder).unwrap();
+    table.release(other, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
-    table.release(reached, Absorption::IntoHolder).unwrap();
+    table
+        .release(reached, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert!(table.is_empty());
 }
 
@@ -336,17 +348,17 @@ fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
             .unwrap();
     }
 
-    table.release(base, Absorption::Refused).unwrap();
+    table.release(base, ReleaseAbsorption::Refused).unwrap();
     // Two holders, so the middle cell's own seal finds nothing to absorb.
-    table.release(middle, Absorption::Refused).unwrap();
+    table.release(middle, ReleaseAbsorption::Refused).unwrap();
     assert_eq!(table.sealed.len(), 2);
 
     // The extra holder goes, and the base's count drops to one — but nothing seals here, so the
     // candidate is only noticed at the next seal.
-    table.release(extra, Absorption::IntoHolder).unwrap();
+    table.release(extra, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 2);
 
-    table.release(top, Absorption::IntoHolder).unwrap();
+    table.release(top, ReleaseAbsorption::IntoHolder).unwrap();
 
     // The worklist is what makes this one record rather than three: absorbing the middle record
     // transfers the base's id onto the new one, where its count of one qualifies it in turn.
@@ -354,7 +366,9 @@ fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
     assert_eq!(table.sealed.get(id).unwrap().holders, 2);
 
     for keeper in [first_keeper, second_keeper] {
-        table.release(keeper, Absorption::IntoHolder).unwrap();
+        table
+            .release(keeper, ReleaseAbsorption::IntoHolder)
+            .unwrap();
     }
     assert!(table.is_empty());
 }
@@ -385,7 +399,7 @@ fn a_count_one_record_held_by_a_live_cell_stays_sealed() {
         .unwrap()
         .unwrap();
 
-    table.release(held, Absorption::Refused).unwrap();
+    table.release(held, ReleaseAbsorption::Refused).unwrap();
     let id = only_record(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 2);
     let holder_bytes = region_bytes(&table, holder);
@@ -393,7 +407,7 @@ fn a_count_one_record_held_by_a_live_cell_stays_sealed() {
     let slab_bytes = live_bytes(&table, 4);
     assert!(record_bytes > 0);
 
-    table.release(extra, Absorption::IntoHolder).unwrap();
+    table.release(extra, ReleaseAbsorption::IntoHolder).unwrap();
 
     // A count of one is not by itself a merge: storage that has already sealed never re-enters the
     // live tier, so the record waits for the cascade instead of folding into the live cell. The
@@ -404,7 +418,9 @@ fn a_count_one_record_held_by_a_live_cell_stays_sealed() {
     assert_eq!(region_bytes(&table, holder), holder_bytes);
     assert!(live_bytes(&table, 4) <= slab_bytes);
 
-    table.release(holder, Absorption::IntoHolder).unwrap();
+    table
+        .release(holder, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert!(table.is_empty());
 }
 
@@ -441,12 +457,12 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     let dying_bytes = region_bytes(&table, dying);
     assert!(dying_bytes > 0);
 
-    table.release(namer, Absorption::Refused).unwrap();
+    table.release(namer, ReleaseAbsorption::Refused).unwrap();
     let id = only_record(&table);
     assert!(table.sealed.get(id).unwrap().aggregate.names(dying.slot()));
     let namer_bytes = table.sealed.get(id).unwrap().retained_bytes();
 
-    table.release(dying, Absorption::IntoHolder).unwrap();
+    table.release(dying, ReleaseAbsorption::IntoHolder).unwrap();
 
     // No second record: the dying cell's storage and holds go into the aggregate that already
     // named it, and the slots its row named trade its bit for the record's name.
@@ -460,7 +476,7 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     assert!(table.naming[reached.slot() as usize].contains(id));
 
     // The read still goes through the record, whose bundle grew a bump under the borrow.
-    assert!(continuation_reach(&table, keeper).names_sealed(id));
+    assert!(continuation_reach_index(&table, keeper).names_sealed(id));
     let value = table
         .enter(keeper, |context| *context.continuation().unwrap().value())
         .unwrap();
@@ -510,11 +526,13 @@ fn absorb_work_for(resident: usize, reached: u32, shared: u32, alone: u32) -> u6
         .unwrap();
     // Refused, so each becomes a record rather than absorbing into the producer first.
     for cell in shared_cells.iter().chain(&alone_cells) {
-        table.release(*cell, Absorption::Refused).unwrap();
+        table.release(*cell, ReleaseAbsorption::Refused).unwrap();
     }
 
     let before = table.seal_work;
-    table.release(producer, Absorption::IntoHolder).unwrap();
+    table
+        .release(producer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(table.sealed.len(), (shared + alone) as usize);
     table.seal_work - before
 }
@@ -574,17 +592,21 @@ fn a_sealed_ring_dissolves_through_its_last_namer() {
 
     // Two holders, so the first cell seals; its aggregate names the second, and the second holds
     // the record.
-    table.release(first, Absorption::IntoHolder).unwrap();
+    table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
     let id = only_record(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 2);
     assert!(table.sealed.get(id).unwrap().aggregate.names(second.slot()));
 
-    table.release(bystander, Absorption::IntoHolder).unwrap();
+    table
+        .release(bystander, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
 
     // The second cell's only namer is the record it itself holds: the fold turns that hold into a
     // self-hold, the count reaches zero, and the ring is freed rather than leaked.
-    table.release(second, Absorption::IntoHolder).unwrap();
+    table
+        .release(second, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert!(table.is_empty());
     assert_eq!(table.free.len(), 4);
 }
@@ -608,14 +630,14 @@ fn a_seal_that_absorbs_every_holder_it_had_reclaims_itself() {
             .enter(namer, |context| context.hold(held))
             .unwrap()
             .unwrap();
-        table.release(namer, Absorption::Refused).unwrap();
+        table.release(namer, ReleaseAbsorption::Refused).unwrap();
     }
     assert_eq!(table.sealed.len(), 2);
 
     // Two namers and no slab holder, so this is a plain seal — and both namers are count-1 regions
     // the new record holds, so both fold in. Each fold turns a hold on the new record into a
     // self-hold, and the second takes its count to zero: the whole ring goes in one release.
-    table.release(held, Absorption::IntoHolder).unwrap();
+    table.release(held, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
     assert_eq!(table.free.len(), 4);
 }

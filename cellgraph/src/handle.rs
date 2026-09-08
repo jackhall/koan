@@ -60,10 +60,12 @@ impl TreeHandle {
 /// Either kind of cell, by name — exactly the two things a step can name as a placement
 /// destination, a parent, or the cell it is running in.
 ///
-/// There is no sealed variant: a record is not a cell. Nothing is minted into one, it is never
-/// entered, and it parents nothing, so an embedder never holds its id. "Root" is a role rather than
-/// a kind — any slab cell becomes one the moment it parents a tree cell, and nothing about it
-/// changes.
+/// There is no sealed variant, because a sealed region is not named this way: it has no generation
+/// — its id is drawn once and never re-bound — so there is nothing for a handle to re-check, and
+/// [`SealedId`](crate::sealed::SealedId) names it instead. Nothing is minted into one, it is never
+/// entered, and it parents nothing, so an embedder never holds its id at all. "Root" is a role
+/// rather than a kind — any slab cell becomes one the moment it parents a tree cell, and nothing
+/// about it changes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum CellRef {
     Slab(Handle),

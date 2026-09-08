@@ -1,10 +1,14 @@
-//! The table's scratch region: the one place a verb's transients live. Reset at the entry of
-//! every verb, never inside one, so a value in it lives exactly as long as the verb that built
-//! it. See [design/cellgraph.md](../design/cellgraph.md) § Verbs.
+//! The **scratch region**: the one place a verb's transients live. Reset at the entry of every
+//! verb, never inside one, so a value in it lives exactly as long as the verb that built it. See
+//! [design/cellgraph.md](../design/cellgraph.md) § Verbs.
 //!
 //! A reset runs no destructor — a bump releases its chunks whole — which is why nothing with drop
-//! glue may go in it. The doors below assert that at compile time, the way the region doors assert
-//! [`DropFree`](crate::DropFree).
+//! glue may go in it. The doors below assert that at compile time, the way the cell-region doors
+//! assert [`DropFree`](crate::DropFree).
+//!
+//! One table has one scratch region and each cell has its own **cell region**
+//! ([`Region`](crate::region::Region)); both are bumps, and the qualifier is what tells them
+//! apart: outside these two modules' own bodies, "the region" alone names neither.
 
 use std::cell::Cell;
 
@@ -25,10 +29,11 @@ use crate::sealed::{IdBuffer, IdSet, ScratchSet};
 /// a door with the final length to hand takes [`Scratch::run`] instead.
 pub(crate) type ScratchVec<'s, T> = allocator_api2::vec::Vec<T, &'s Bump>;
 
-/// One table's scratch bump, sized at construction and reset at every verb's entry.
+/// One table's scratch region, sized at construction and reset at every verb's entry.
 ///
-/// Deliberately not `Default`: a table has exactly one region, minted with its first chunk, and
-/// every path that moves it moves that one — there is no shape of this type worth conjuring.
+/// Deliberately not `Default`: a table has exactly one scratch region, minted with its first
+/// chunk, and every path that moves it moves that one — there is no shape of this type worth
+/// conjuring.
 pub(crate) struct Scratch {
     bump: Bump,
     /// Whether a door has handed anything out since the last reset. `Cell`, because the doors take

@@ -2,7 +2,7 @@
 //! discipline ([design/tree-cells.md](../../../design/tree-cells.md)).
 //!
 //! What these pin: the three verbs and their refusals; a chain deeper than the slab cap running to
-//! completion on a two-slot slab; the one crossing rule's three answers and the pledge an upward
+//! completion on a two-slot slab; the ancestry rule's three answers and the pledge an upward
 //! pin leaves; disposal by pledge, in any release order, cascading through dead-resident ancestors
 //! into the slab's own walk; and a resident redeeming through the tombstone chain after its home's
 //! bytes have moved — into a live cell, into a root that later absorbs, seals, or reclaims.
@@ -72,7 +72,7 @@ fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
     table.release_tree(tree).unwrap();
     assert!(!table.is_live(tree));
     assert_eq!(table.tree_children_of(root), 0);
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -99,7 +99,7 @@ fn the_tree_doors_refuse_a_name_kept_past_a_declared_death() {
     assert_eq!(stale.name(), tree);
 
     // And a slab parent whose own death was declared refuses to take a new tree child.
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     let Err(stale) = table.create_tree(root, None) else {
         panic!("a dead root must refuse");
     };
@@ -113,7 +113,7 @@ fn a_root_released_before_its_tree_child_waits_dead_resident() {
     let root = table.create(None, None).unwrap();
     let tree = table.create_tree(root, None).unwrap();
 
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(state_of(&table, root), SlotState::Dead);
     assert!(!table.is_empty(), "the root waits on its tree child");
 
@@ -144,7 +144,7 @@ fn a_tree_parent_released_first_disposes_when_its_last_child_does() {
     table.release_tree(child).unwrap();
     assert_eq!(table.trees().occupied().count(), 0);
     assert_eq!(table.tree_children_of(root), 0);
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -168,8 +168,8 @@ fn a_tree_cell_nothing_was_kept_in_leaves_no_tombstone() {
     // identity recycles rather than staying behind to answer for them.
     table.release_tree(tree).unwrap();
     assert_eq!(table.trees().occupied().count(), 0);
-    assert_eq!(table.tree_lineage_of(root), None);
-    table.release(root, Absorption::IntoHolder).unwrap();
+    assert_eq!(table.tree_tombstones_of(root), None);
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -202,7 +202,7 @@ fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
             ] {
                 context
                     .alloc_into::<Number, Number>(dest, &[kept_operand(&value)], |writer, views| {
-                        copied.push(matches!(views[0], Crossed::Copied(_)));
+                        copied.push(matches!(views[0], CrossedOperand::Copied(_)));
                         take(&views[0], writer)
                     })
                     .unwrap();
@@ -269,7 +269,7 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
     assert_eq!(table.trees().region_bytes(parent.index()), 0);
 
     table.release_tree(parent).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -322,7 +322,7 @@ fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
     assert_eq!(table.region_bytes(root).unwrap(), home_bytes);
     assert_eq!(table.trees().region_bytes(parent.index()), 0);
     table.release_tree(parent).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -351,8 +351,10 @@ fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
     assert_eq!(table.region_bytes(root).unwrap(), 0);
 
     table.release_tree(tree).unwrap();
-    table.release(source, Absorption::IntoHolder).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table
+        .release(source, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -401,8 +403,10 @@ fn a_resident_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_root() {
 
     table.release_tree(home).unwrap();
     table.release_tree(sibling).unwrap();
-    table.release(outsider, Absorption::IntoHolder).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table
+        .release(outsider, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -433,7 +437,7 @@ fn a_resident_whose_home_reclaimed_answers_gone() {
         })
         .unwrap();
     assert_eq!(error, RedeemError::Gone);
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -474,7 +478,7 @@ fn a_resident_whose_home_was_absorbed_redeems_from_the_destination() {
         table.trees().tombstone_target(home.index()),
         Some(CellRef::Slab(root))
     );
-    assert_eq!(table.tree_lineage_of(root), Some(home.index()));
+    assert_eq!(table.tree_tombstones_of(root), Some(home.index()));
 
     let read = table
         .enter(root, |context| {
@@ -484,7 +488,7 @@ fn a_resident_whose_home_was_absorbed_redeems_from_the_destination() {
     assert_eq!(read, 21);
 
     table.release_tree(parent).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty(), "the reclaim took the tombstone with it");
 }
 
@@ -502,7 +506,7 @@ fn a_tree_value_spliced_into_a_root_survives_the_root_absorbing_into_its_holder(
     table
         .enter(holder, |context| context.hold(root).unwrap())
         .unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
 
     let read = table
         .enter(holder, |context| {
@@ -511,7 +515,9 @@ fn a_tree_value_spliced_into_a_root_survives_the_root_absorbing_into_its_holder(
         .unwrap();
     assert_eq!(read, 21);
 
-    table.release(holder, Absorption::IntoHolder).unwrap();
+    table
+        .release(holder, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert!(table.is_empty());
     assert_eq!(table.relocations(), 0);
 }
@@ -532,7 +538,7 @@ fn a_tree_root_that_seals_carries_its_spliced_bumps() {
             .enter(holder, |context| context.hold(root).unwrap())
             .unwrap();
     }
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
 
     let read = table
         .enter(first, |context| {
@@ -541,8 +547,10 @@ fn a_tree_root_that_seals_carries_its_spliced_bumps() {
         .unwrap();
     assert_eq!(read, 21);
 
-    table.release(first, Absorption::IntoHolder).unwrap();
-    table.release(second, Absorption::IntoHolder).unwrap();
+    table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
+    table
+        .release(second, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert!(table.is_empty());
     assert_eq!(table.relocations(), 0);
 }
@@ -554,7 +562,7 @@ fn a_tree_value_whose_root_reclaimed_answers_gone() {
     let (kept, parent, home) = spliced_into_root(&mut table, root);
     table.release_tree(home).unwrap();
     table.release_tree(parent).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty(), "the root's reclaim freed the tombstone");
 
     let bystander = table.create(None, None).unwrap();
@@ -565,7 +573,9 @@ fn a_tree_value_whose_root_reclaimed_answers_gone() {
         })
         .unwrap();
     assert_eq!(error, RedeemError::Gone);
-    table.release(bystander, Absorption::IntoHolder).unwrap();
+    table
+        .release(bystander, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert!(table.is_empty());
 }
 
@@ -643,8 +653,10 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
     assert_eq!(read as usize, DEPTH - 1);
     assert!(spliced > 0, "the levels' storage arrived in the root");
 
-    table.release(filler, Absorption::IntoHolder).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table
+        .release(filler, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty(), "the tombstones went with the root");
     assert_eq!(table.relocations(), 0);
 }
@@ -687,7 +699,7 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
     assert_eq!(read, 33);
 
     table.release_tree(destination).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
 
@@ -699,14 +711,14 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
     let next = table.create_tree(root, None).unwrap();
 
     // The next hop's arguments are built into a sibling, which is off this cell's chain — so the
-    // crossing rule forces the copy, and the old hop's storage is free to go.
+    // ancestry rule forces the copy, and the old hop's storage is free to go.
     let kept = table
         .enter(hop, |context| {
             let value = number_in(context, 6);
             let placed = context
                 .alloc_into::<Number, Number>(next, &[kept_operand(&value)], |writer, views| {
                     assert!(
-                        matches!(views[0], Crossed::Copied(_)),
+                        matches!(views[0], CrossedOperand::Copied(_)),
                         "a sibling is off the chain"
                     );
                     take(&views[0], writer)
@@ -731,6 +743,6 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
     assert_eq!(read, 6);
 
     table.release_tree(next).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }

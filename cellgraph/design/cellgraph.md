@@ -223,7 +223,7 @@ The verdict is skipped in exactly one case, and only because there is no
 choice to put: an operand homed in a tree cell, crossing to a destination
 neither on that cell's chain nor under it, is a **forced copy** — nothing off
 the chain may outlive the home while borrowing it, so no pin typechecks
-([tree-cells.md § The one crossing rule](tree-cells.md#the-one-crossing-rule)).
+([tree-cells.md § The ancestry rule](tree-cells.md#the-ancestry-rule)).
 Every other operand of every placement is priced and put.
 
 What the closure sees is both halves of the price and the occupancy the

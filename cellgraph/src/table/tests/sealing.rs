@@ -4,7 +4,7 @@
 //! tier.
 
 use super::super::*;
-use super::{Borrowed, Number, Owned, continuation_reach, operand, pin, pinned};
+use super::{Borrowed, Number, Owned, continuation_reach_index, operand, pin, pinned};
 
 /// Two resident-value counts far enough apart that a transition proportional to storage could not
 /// produce the same work for both. The Miri run takes the smaller pair — the shapes are what it
@@ -56,7 +56,7 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
             .unwrap();
     }
     assert_eq!(
-        table.slots[holder.slot() as usize].residents.len() as usize,
+        table.slots[holder.slot() as usize].reaches.len() as usize,
         kept_by_holder
     );
 
@@ -66,7 +66,7 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
         .unwrap();
 
     let before = table.seal_work;
-    table.release(producer, Absorption::Refused).unwrap();
+    table.release(producer, ReleaseAbsorption::Refused).unwrap();
     assert_eq!(table.sealed.len(), 1);
     table.seal_work - before
 }
@@ -77,14 +77,14 @@ fn the_seal_transition_is_bounded_by_the_holders_residents_not_the_storage() {
     // ten thousand resident values costs what one with sixteen costs.
     assert_eq!(seal_work_for(SMALL, 4, 0), seal_work_for(LARGE, 4, 0));
 
-    // What the transition *is* proportional to: each holder's resident table, one entry at a
+    // What the transition *is* proportional to: each holder's reach table, one entry at a
     // time, because the dying slot's bit has to become the record's id in every mask that names
     // it. Four more entries in the one holder's table, four more units of work — exactly. The
     // count is entries, not keeps: interning is what keeps the two from diverging over a run.
     assert_eq!(
         seal_work_for(SMALL, 8, 0) - seal_work_for(SMALL, 4, 0),
         4,
-        "the rewrite is bounded by the holders' resident counts"
+        "the rewrite is bounded by the holders' entry counts"
     );
 
     // And not to the dying cell's own residents: those masks are dead bytes the moment the
@@ -107,7 +107,7 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
         .enter(holder, |context| context.hold(held))
         .unwrap()
         .unwrap();
-    table.release(held, Absorption::Refused).unwrap();
+    table.release(held, ReleaseAbsorption::Refused).unwrap();
 
     assert!(!table.is_live(held));
     assert_eq!(
@@ -149,13 +149,13 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
         .unwrap();
     assert!(table.holds(consumer, producer));
 
-    table.release(producer, Absorption::Refused).unwrap();
+    table.release(producer, ReleaseAbsorption::Refused).unwrap();
     let id = table.sealed.ids().next().unwrap();
     assert!(table.sealed_holds[consumer.slot() as usize].contains(id));
 
     // The transition rewrote the consumer's stored mask in place: the dying slot's bit traded for
     // the record's id, and what that region reached lives on in the record's frozen aggregate.
-    let stored = continuation_reach(&table, consumer);
+    let stored = continuation_reach_index(&table, consumer);
     assert!(stored.names_sealed(id));
     assert!(!stored.names(producer.slot()));
     assert!(
@@ -195,13 +195,13 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
         })
         .unwrap();
 
-    table.release(first, Absorption::Refused).unwrap();
-    table.release(second, Absorption::Refused).unwrap();
+    table.release(first, ReleaseAbsorption::Refused).unwrap();
+    table.release(second, ReleaseAbsorption::Refused).unwrap();
     let mut minted: Vec<SealedId> = table.sealed.ids().collect();
     minted.sort();
     assert_eq!(minted.len(), 2);
 
-    let named: Vec<SealedId> = continuation_reach(&table, consumer)
+    let named: Vec<SealedId> = continuation_reach_index(&table, consumer)
         .sealed()
         .iter()
         .collect();
@@ -235,15 +235,15 @@ fn reclaiming_a_records_last_holder_cascades_through_its_aggregate() {
         .unwrap()
         .unwrap();
 
-    table.release(base, Absorption::Refused).unwrap();
+    table.release(base, ReleaseAbsorption::Refused).unwrap();
     assert_eq!(table.sealed.len(), 1);
     // The middle cell's hold on the base is a sealed id by now, so its own aggregate carries it.
-    table.release(middle, Absorption::Refused).unwrap();
+    table.release(middle, ReleaseAbsorption::Refused).unwrap();
     assert_eq!(table.sealed.len(), 2);
 
     // One release retires both: the outer count reaches zero, and releasing its aggregate takes
     // the inner count with it.
-    table.release(top, Absorption::IntoHolder).unwrap();
+    table.release(top, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
 }
@@ -261,13 +261,15 @@ fn a_record_survives_every_holder_but_the_last() {
             .unwrap()
             .unwrap();
     }
-    table.release(held, Absorption::IntoHolder).unwrap();
+    table.release(held, ReleaseAbsorption::IntoHolder).unwrap();
     let id = table.sealed.ids().next().unwrap();
     assert_eq!(table.sealed.get(id).unwrap().holders, 2);
 
-    table.release(first, Absorption::IntoHolder).unwrap();
+    table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
-    table.release(second, Absorption::IntoHolder).unwrap();
+    table
+        .release(second, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
 }
@@ -280,11 +282,13 @@ fn a_cell_that_only_a_birth_row_names_waits_in_the_slab_rather_than_sealing() {
 
     // Birth holds are the one relation with no sealed half: a descendant that can still walk to
     // its parent keeps the parent in place, so nothing seals here.
-    table.release(parent, Absorption::IntoHolder).unwrap();
+    table
+        .release(parent, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(super::state_of(&table, parent), SlotState::Dead);
     assert_eq!(table.sealed.len(), 0);
 
-    table.release(child, Absorption::IntoHolder).unwrap();
+    table.release(child, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
 }

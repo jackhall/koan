@@ -92,7 +92,7 @@ fn a_release_clears_the_region_at_its_entry() {
     // again, which is also the state a release meets in a run that is doing anything.
     place_over(&mut table, producer, consumer, WIDE);
     resets_at_its_entry(&mut table, |table| {
-        table.release(producer, Absorption::Refused).unwrap();
+        table.release(producer, ReleaseAbsorption::Refused).unwrap();
     });
 }
 
@@ -115,7 +115,7 @@ fn a_warm_scratch_grows_no_chunk_across_repeated_verbs() {
         table
             .enter(consumer, |context| context.hold(producer).unwrap())
             .unwrap();
-        table.release(producer, Absorption::Refused).unwrap();
+        table.release(producer, ReleaseAbsorption::Refused).unwrap();
     };
 
     round(&mut table);

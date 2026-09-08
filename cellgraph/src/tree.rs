@@ -3,13 +3,13 @@
 //!
 //! A tree cell lives **under a root** — a slab cell — through a chain of tree parents, and owns its
 //! region outright. It takes no slab slot, so the pool grows without a cap; it has no row, no
-//! column, no holder count and no resident table, because a parent outlives its children and every
+//! column, no holder count and no reach table, because a parent outlives its children and every
 //! hold a value inside the subtree can take points up its own chain at a cell that is still there.
 //! No mask ever names a tree cell: a placement into one mints into its root, and a carrier homed in
 //! one travels with the root's bit as its reach.
 //!
 //! What a slot does carry is the little that death needs: the chain links and the depth the
-//! crossing rule classifies by, the count of undisposed children that keeps a released parent
+//! ancestry rule classifies by, the count of undisposed children that keeps a released parent
 //! resident, the **pledge** naming the ancestor its bump will splice into, and the tombstone links
 //! that say where its bytes went once it did.
 
@@ -46,9 +46,13 @@ pub(crate) enum Pledge {
 }
 
 /// Where a tree cell sits relative to a placement destination on the same root — the classification
-/// the one crossing rule turns on.
+/// the ancestry rule turns on.
+///
+/// Not one of the crate's **relations**. Those are the two square bit matrices over slab slots,
+/// birth and pin ([`Matrix`](crate::matrix::Matrix)), and no tree cell is in either. Ancestry is
+/// read off the chain links instead, at a cost of the level distance between the two cells.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Relation {
+pub(crate) enum Ancestry {
     /// The destination is the cell itself, or a tree cell under it. It dies first, so a borrow into
     /// this cell's storage embedded there stays valid without any promise.
     Under,
@@ -63,7 +67,7 @@ pub(crate) enum Relation {
 
 /// One tree cell.
 ///
-/// There is no `Residents` table, no continuation reach and no hold set: a value homed here reaches
+/// There is no reach table, no continuation reach and no hold set: a value homed here reaches
 /// its root and nothing else, and the root's row and sealed-hold set are where every mint from
 /// inside the subtree lands.
 struct TreeSlot<C: Reattachable> {
@@ -76,7 +80,7 @@ struct TreeSlot<C: Reattachable> {
     /// The pool index of the tree parent, and `None` when the parent is the root itself.
     parent: Option<u32>,
     /// `1` for a child of the root, and the parent's depth plus one otherwise. What makes the
-    /// crossing rule's ancestry test cost the level distance rather than the depth of the tree.
+    /// ancestry rule's test cost the level distance rather than the depth of the tree.
     depth: u32,
     /// Tree children that have not disposed — live and dead-resident alike. A parent disposes only
     /// once this reaches zero, which is what lets an embedder tear a subtree down in any order.
@@ -95,8 +99,8 @@ struct TreeSlot<C: Reattachable> {
     /// however many tombstones hang off the dying cell.
     into: Option<CellRef>,
     /// The head of the list of tombstones whose bytes spliced into this cell.
-    lineage: Option<u32>,
-    /// The next tombstone on the lineage list this one sits in.
+    tombstones: Option<u32>,
+    /// The next tombstone on the tombstone list this one sits in.
     next: Option<u32>,
 }
 
@@ -115,7 +119,7 @@ impl<C: Reattachable> TreeSlot<C> {
             continuation: None,
             region: None,
             into: None,
-            lineage: None,
+            tombstones: None,
             next: None,
         }
     }
@@ -210,8 +214,8 @@ impl<C: Reattachable> TreePool<C> {
         self.slots[index as usize].pledge
     }
 
-    pub(crate) fn lineage(&self, index: u32) -> Option<u32> {
-        self.slots[index as usize].lineage
+    pub(crate) fn tombstones(&self, index: u32) -> Option<u32> {
+        self.slots[index as usize].tombstones
     }
 
     #[cfg(test)]
@@ -285,20 +289,20 @@ impl<C: Reattachable> TreePool<C> {
     /// The walk is depth-bounded: the deeper side steps up by exactly the level distance and the
     /// identities are compared once. Cost is the distance between the two, never the depth of the
     /// tree.
-    pub(crate) fn relation(&self, home: u32, dest: u32) -> Relation {
+    pub(crate) fn ancestry(&self, home: u32, dest: u32) -> Ancestry {
         if home == dest {
-            return Relation::Under;
+            return Ancestry::Under;
         }
         let (home_depth, dest_depth) = (self.depth(home), self.depth(dest));
         if dest_depth > home_depth {
             match self.walk_up(dest, dest_depth - home_depth) == Some(home) {
-                true => Relation::Under,
-                false => Relation::Apart,
+                true => Ancestry::Under,
+                false => Ancestry::Apart,
             }
         } else {
             match self.walk_up(home, home_depth - dest_depth) == Some(dest) {
-                true => Relation::Above,
-                false => Relation::Apart,
+                true => Ancestry::Above,
+                false => Ancestry::Apart,
             }
         }
     }
@@ -367,9 +371,9 @@ impl<C: Reattachable> TreePool<C> {
         }
     }
 
-    /// Turn a disposed cell into a tombstone pointing at `into`, pushed onto the lineage list whose
-    /// current head is `head`. The caller stores the new head, since the list may hang off a slab
-    /// slot rather than a pool slot.
+    /// Turn a disposed cell into a tombstone pointing at `into`, pushed onto the tombstone list
+    /// whose current head is `head`. The caller stores the new head, since the list may hang off a
+    /// slab slot rather than a pool slot.
     pub(crate) fn entomb(&mut self, index: u32, into: CellRef, head: Option<u32>) {
         let slot = &mut self.slots[index as usize];
         slot.state = TreeState::Absorbed;
@@ -388,14 +392,14 @@ impl<C: Reattachable> TreePool<C> {
     /// something spliced into it and is a tombstone in its own right.
     pub(crate) fn leaves_tombstone(&self, index: u32) -> bool {
         let slot = &self.slots[index as usize];
-        slot.kept || slot.lineage.is_some()
+        slot.kept || slot.tombstones.is_some()
     }
 
-    /// Push a tombstone onto this cell's own lineage list.
+    /// Push a tombstone onto this cell's own tombstone list.
     pub(crate) fn adopt_tombstone(&mut self, index: u32, tombstone: u32) {
-        let head = self.slots[index as usize].lineage;
+        let head = self.slots[index as usize].tombstones;
         self.slots[tombstone as usize].next = head;
-        self.slots[index as usize].lineage = Some(tombstone);
+        self.slots[index as usize].tombstones = Some(tombstone);
     }
 
     /// Return a slot to the free list under a fresh generation, so every handle minted for the
@@ -406,8 +410,9 @@ impl<C: Reattachable> TreePool<C> {
         self.free.push(index);
     }
 
-    /// Free a whole lineage list and everything hanging off it: the bytes those tombstones point at
-    /// are gone, so a redeem under one of their keys must answer `Gone` rather than find a target.
+    /// Free a whole tombstone list and everything hanging off it: the bytes those tombstones point
+    /// at are gone, so a redeem under one of their keys must answer `Gone` rather than find a
+    /// target.
     pub(crate) fn free_tombstones(&mut self, head: Option<u32>, scratch: &Scratch) {
         // Checked before the worklist is built: every slab reclaim and every retired relocation
         // entry calls this, and almost none of them has a tombstone under it.
@@ -421,10 +426,10 @@ impl<C: Reattachable> TreePool<C> {
             debug_assert_eq!(
                 slot.state,
                 TreeState::Absorbed,
-                "a lineage list holds tombstones"
+                "only tombstones hang off a tombstone list"
             );
             pending.extend(slot.next);
-            pending.extend(slot.lineage);
+            pending.extend(slot.tombstones);
             self.recycle(index);
         }
     }
@@ -434,7 +439,7 @@ impl<C: Reattachable> TreePool<C> {
     /// the chain reaches a slot that has recycled, which means the bytes were reclaimed.
     ///
     /// One array load per hop, and one hop per splice the bytes have been through since the keep.
-    pub(crate) fn resolve(&self, handle: TreeHandle) -> Option<Resolved> {
+    pub(crate) fn resolve(&self, handle: TreeHandle) -> Option<TreeForward> {
         let mut index = handle.index();
         let mut generation = handle.generation();
         loop {
@@ -443,9 +448,9 @@ impl<C: Reattachable> TreePool<C> {
                 return None;
             }
             match slot.state {
-                TreeState::Live | TreeState::Dead => return Some(Resolved::Tree(index)),
+                TreeState::Live | TreeState::Dead => return Some(TreeForward::Tree(index)),
                 TreeState::Absorbed => match slot.into? {
-                    CellRef::Slab(handle) => return Some(Resolved::Slab(handle)),
+                    CellRef::Slab(handle) => return Some(TreeForward::Slab(handle)),
                     CellRef::Tree(next) => {
                         index = next.index();
                         generation = next.generation();
@@ -472,7 +477,7 @@ impl<C: Reattachable> TreePool<C> {
 /// Where a tombstone chain ends: a tree cell that still holds the bytes, or the slab handle the
 /// relocation map answers for from there on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Resolved {
+pub(crate) enum TreeForward {
     Tree(u32),
     Slab(Handle),
 }

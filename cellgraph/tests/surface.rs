@@ -9,9 +9,9 @@
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
 use cellgraph::{
-    Absorption, Active, CellRef, CellTable, CreateError, Crossed, Dormant, DropFree, EnterError,
-    Erased, Handle, Operand, Prices, Reattachable, RedeemError, ReleaseError, ReleaseTreeError,
-    Resident, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
+    Active, CellRef, CellTable, CreateError, CrossedOperand, Dormant, DropFree, EnterError, Erased,
+    Handle, Operand, Prices, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError,
+    ReleaseTreeError, Resident, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -71,7 +71,7 @@ fn weigh(prices: Prices) -> Verdict {
     let pressure = prices.occupied * 2 >= prices.cap
         || prices.records > 0
         || prices.retained_bytes > 0
-        || prices.dest_bytes > 1 << 20;
+        || prices.destination_bytes > 1 << 20;
     if pressure && prices.copy_bytes < prices.pin_bytes {
         Verdict::Copy
     } else {
@@ -138,7 +138,9 @@ fn every_public_door_answers_from_outside_the_crate() {
     assert!(table.is_live(child));
     assert!(!table.is_empty());
 
-    table.release(doomed, Absorption::IntoHolder).unwrap();
+    table
+        .release(doomed, ReleaseAbsorption::IntoHolder)
+        .unwrap();
 
     let mut kept: Option<Resident<Number>> = None;
     let carried = table
@@ -152,8 +154,8 @@ fn every_public_door_answers_from_outside_the_crate() {
             let pushed = context
                 .alloc_into::<Number, Number>(root, &[pinned_operand(&number)], |writer, views| {
                     match views[0] {
-                        Crossed::Pinned(value) => writer.value(*value + 1),
-                        Crossed::Copied(value) => writer.value(*value + 1),
+                        CrossedOperand::Pinned(value) => writer.value(*value + 1),
+                        CrossedOperand::Copied(value) => writer.value(*value + 1),
                     }
                 })
                 .unwrap();
@@ -167,8 +169,8 @@ fn every_public_door_answers_from_outside_the_crate() {
                         copy_bytes: 0,
                     }],
                     |writer, views| match views[0] {
-                        Crossed::Copied(value) => writer.slice(&[*value, *value]),
-                        Crossed::Pinned(value) => writer.slice(&[*value, *value]),
+                        CrossedOperand::Copied(value) => writer.slice(&[*value, *value]),
+                        CrossedOperand::Pinned(value) => writer.slice(&[*value, *value]),
                     },
                 )
                 .unwrap();
@@ -190,8 +192,8 @@ fn every_public_door_answers_from_outside_the_crate() {
             context.store_successor(String::from("plain"));
             context.store_successor_capturing(&[pinned_operand(&pushed)], |_writer, views| {
                 match views[0] {
-                    Crossed::Pinned(value) => value.to_string(),
-                    Crossed::Copied(value) => value.to_string(),
+                    CrossedOperand::Pinned(value) => value.to_string(),
+                    CrossedOperand::Copied(value) => value.to_string(),
                 }
             });
 
@@ -227,7 +229,9 @@ fn every_public_door_answers_from_outside_the_crate() {
         })
         .unwrap();
     assert_eq!(name_redeem_error(error), "unheld");
-    table.release(bystander, Absorption::IntoHolder).unwrap();
+    table
+        .release(bystander, ReleaseAbsorption::IntoHolder)
+        .unwrap();
 
     // The successor comes back re-anchored at the next step's brand.
     let echoed = table
@@ -246,8 +250,8 @@ fn every_public_door_answers_from_outside_the_crate() {
     assert_eq!(born_with.as_deref(), Some("root"));
 
     // Both dispositions of a death: fold into a unique holder, or seal rather than merge.
-    table.release(child, Absorption::IntoHolder).unwrap();
-    table.release(root, Absorption::Refused).unwrap();
+    table.release(child, ReleaseAbsorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::Refused).unwrap();
     assert!(!table.is_live(root));
 }
 
@@ -259,7 +263,7 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
 
     // Every door refuses a handle kept past the death the embedder declared itself, and every
     // refusal hands the handle back rather than swallowing it.
-    full.release(taken, Absorption::IntoHolder).unwrap();
+    full.release(taken, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(full.is_empty());
 
     let Err(CreateError::StaleParent(stale)) = full.create(Some(taken), None) else {
@@ -273,7 +277,7 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
     };
     assert_eq!(name_enter_error(error), "stale");
 
-    let Err(error) = full.release(taken, Absorption::Refused) else {
+    let Err(error) = full.release(taken, ReleaseAbsorption::Refused) else {
         panic!("a second release names a death already declared");
     };
     assert_eq!(name_release_error(error), "stale");
@@ -305,8 +309,8 @@ fn the_tree_pool_answers_from_outside_the_crate() {
             let up = context
                 .alloc_into::<Number, Number>(outer, &[pinned_operand(&value)], |writer, views| {
                     match views[0] {
-                        Crossed::Pinned(value) => writer.value(*value + 1),
-                        Crossed::Copied(value) => writer.value(*value + 1),
+                        CrossedOperand::Pinned(value) => writer.value(*value + 1),
+                        CrossedOperand::Copied(value) => writer.value(*value + 1),
                     }
                 })
                 .unwrap();
@@ -363,6 +367,6 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     assert_eq!(stale.name(), CellRef::Tree(inner));
 
     table.release_tree(outer).unwrap();
-    table.release(root, Absorption::IntoHolder).unwrap();
+    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }

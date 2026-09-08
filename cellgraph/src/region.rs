@@ -1,5 +1,5 @@
-//! [`Region`] — the per-cell bump: the only place a value with reach may rest, in pointer-stable
-//! chunks that a sealing cell's storage detaches with unmoved. See
+//! [`Region`] — the **cell region**: one cell's bump, the only place a value with reach may rest,
+//! in pointer-stable chunks that a sealing cell's storage detaches with unmoved. See
 //! [design/cellgraph.md](../design/cellgraph.md) § The cell.
 //!
 //! The bump is lifetime-free, so a region borrow `'r` enters only at the allocating call. That is
@@ -34,7 +34,7 @@ mod tests;
 /// way to reach the values is [`Region::memo`], whose `&self` bounds the slice it hands back.
 /// Holding a raw pointer is what makes a `Region` `!Send`, which costs nothing — a table is not
 /// `Send` either, since it carries the embedder's boxed verdict.
-struct Kept<T: Copy> {
+struct BumpRun<T: Copy> {
     ptr: NonNull<T>,
     len: usize,
 }
@@ -55,7 +55,7 @@ pub(crate) struct Region {
     /// and never cleared — see [`SealedRecord`](crate::sealed::SealedRecord) for why it can never
     /// go stale. Region state because its bytes are region bytes: the record's price counts them
     /// like any other chunk.
-    memo: OnceCell<Kept<SealedId>>,
+    memo: OnceCell<BumpRun<SealedId>>,
 }
 
 impl Region {
@@ -70,13 +70,13 @@ impl Region {
 
     /// The memoized record set, or `None` while nothing has primed it.
     pub(crate) fn memo(&self) -> Option<&[SealedId]> {
-        let kept = self.memo.get()?;
-        // SAFETY: the `Kept` is a private field of this region, minted by `set_memo` out of this
+        let run = self.memo.get()?;
+        // SAFETY: the `BumpRun` is a private field of this region, minted by `set_memo` out of this
         // region's own bump and reachable through no other path. The bump is never reset and frees
         // its chunks only when this `Region` drops, and moving the `Bump` moves no chunk byte, so
         // the run stays where it was written for as long as the region lives. `SealedId: Copy`, so
         // nothing there was ever dropped in place. The returned borrow is bounded by `&self`.
-        Some(unsafe { std::slice::from_raw_parts(kept.ptr.as_ptr(), kept.len) })
+        Some(unsafe { std::slice::from_raw_parts(run.ptr.as_ptr(), run.len) })
     }
 
     /// Write the memo into this region's own bytes, once. Reports the chunk bytes the write cost,
@@ -87,13 +87,13 @@ impl Region {
         }
         let before = self.allocated_bytes();
         let written = self.bump.alloc_slice_copy(ids);
-        let kept = Kept {
+        let run = BumpRun {
             // An empty run gets bumpalo's dangling, aligned pointer, which `from_raw_parts` takes
             // at length zero.
             ptr: NonNull::from(&mut *written).cast::<SealedId>(),
             len: written.len(),
         };
-        let _ = self.memo.set(kept);
+        let _ = self.memo.set(run);
         self.allocated_bytes() - before
     }
 
@@ -102,7 +102,7 @@ impl Region {
     }
 
     /// Take `other`'s chunks into this bundle. The bumps move; the chunks do not, so a borrow
-    /// minted before the merge still names its bytes — `other`'s own memo included, whose `Kept`
+    /// minted before the merge still names its bytes — `other`'s own memo included, whose `BumpRun`
     /// goes with `other` and leaves its bytes behind as a bump's dead bytes.
     ///
     /// The shorter list moves into the longer one rather than the source into the target, which is

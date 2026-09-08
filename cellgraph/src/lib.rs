@@ -31,6 +31,6 @@ pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
 pub use resident::Resident;
 pub use table::{
-    Absorption, CellTable, CreateError, Crossed, EnterError, Operand, Prices, RedeemError,
-    ReleaseError, ReleaseTreeError, StepContext, Verdict,
+    CellTable, CreateError, CrossedOperand, EnterError, Operand, Prices, RedeemError,
+    ReleaseAbsorption, ReleaseError, ReleaseTreeError, StepContext, Verdict,
 };

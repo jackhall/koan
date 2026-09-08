@@ -2,7 +2,9 @@
 //! both relations, and the ring detector.
 
 use super::super::*;
-use super::{ANCHOR, Borrowed, Number, Owned, continuation_reach, operand, pin, pinned, state_of};
+use super::{
+    ANCHOR, Borrowed, Number, Owned, continuation_reach_index, operand, pin, pinned, state_of,
+};
 
 #[test]
 fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
@@ -72,14 +74,16 @@ fn a_held_cell_leaves_the_slab_at_its_death_and_its_record_goes_with_its_holder(
     assert!(table.holds(holder, held));
 
     // The slot comes straight back: retention lives in the sealed tier, never in the slab.
-    table.release(held, Absorption::Refused).unwrap();
+    table.release(held, ReleaseAbsorption::Refused).unwrap();
     assert_eq!(state_of(&table, held), SlotState::Free);
     assert_eq!(table.sealed.len(), 1);
     let id = table.sealed.ids().next().unwrap();
     assert!(table.sealed_holds[holder.slot() as usize].contains(id));
     assert!(!table.holds(holder, held));
 
-    table.release(holder, Absorption::IntoHolder).unwrap();
+    table
+        .release(holder, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
 }
@@ -130,7 +134,7 @@ fn a_bare_hold_on_a_dead_cell_refuses() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let holder = table.create(None, None).unwrap();
     let other = table.create(None, None).unwrap();
-    table.release(other, Absorption::IntoHolder).unwrap();
+    table.release(other, ReleaseAbsorption::IntoHolder).unwrap();
 
     let refusal = table.enter(holder, |context| context.hold(other)).unwrap();
     assert_eq!(refusal, Err(Stale(other)));
@@ -171,9 +175,13 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
 
     // Every death is declared, and the ring moves into the sealed tier intact: each record holds
     // the other, so neither count ever reaches zero. A ring is a leak, never a dangle.
-    table.release(first, Absorption::IntoHolder).unwrap();
-    table.release(second, Absorption::IntoHolder).unwrap();
-    table.release(bystander, Absorption::IntoHolder).unwrap();
+    table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
+    table
+        .release(second, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    table
+        .release(bystander, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(table.free.len(), 4);
     assert_eq!(table.sealed.len(), 2);
 
@@ -211,10 +219,10 @@ fn an_acyclic_hold_graph_reports_no_ring() {
 // table, and `redeem` takes it back up in a later step of a cell entitled to that storage. See
 // [design/cellgraph.md § Passing values between cells](../../../design/cellgraph.md).
 
-/// The one entry a cell's resident table holds, by the index a key names.
+/// The one entry a cell's reach table holds, by the index a key names.
 fn resident_reach<C: Reattachable>(table: &CellTable<C>, slot: u32, index: u32) -> &GraphReach<1> {
     table.slots[slot as usize]
-        .residents
+        .reaches
         .get(index)
         .expect("the entry the key names is in the table")
 }
@@ -235,13 +243,15 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
             context.keep(placed)
         })
         .unwrap();
-    assert_eq!(table.slots[consumer.slot() as usize].residents.len(), 1);
+    assert_eq!(table.slots[consumer.slot() as usize].reaches.len(), 1);
     assert!(resident_reach(&table, consumer.slot(), 0).names(consumer.slot()));
     assert_eq!(table.relocations(), 0);
 
     // Nothing reaches the producer, so its death is a reclamation: the slot comes straight back
     // and the map it never entered stays empty.
-    table.release(producer, Absorption::IntoHolder).unwrap();
+    table
+        .release(producer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(state_of(&table, producer), SlotState::Free);
     assert_eq!(table.relocations(), 0);
 
@@ -275,9 +285,9 @@ fn pull_completes_after_the_producer_seals() {
 
     // The pull shape: the producer dies still held, so its storage seals and the key it minted
     // forwards to the record rather than stopping resolving.
-    table.release(producer, Absorption::Refused).unwrap();
+    table.release(producer, ReleaseAbsorption::Refused).unwrap();
     let id = table.sealed.ids().next().unwrap();
-    assert_eq!(table.relocation_of(producer), Some(Location::Record(id)));
+    assert_eq!(table.relocation_of(producer), Some(SlabForward::Record(id)));
     assert_eq!(table.lineage_of(id), vec![producer]);
 
     let read = table
@@ -294,7 +304,9 @@ fn pull_completes_after_the_producer_seals() {
     assert_eq!(read, 41);
 
     // The record's last holder goes, so the record retires and takes its lineage with it.
-    table.release(consumer, Absorption::IntoHolder).unwrap();
+    table
+        .release(consumer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.relocations(), 0);
 }
@@ -318,11 +330,13 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
 
     // The uniquely held producer folds into its holder rather than minting a record, and its
     // resident masks move with the storage, re-homed at the consumer's bit.
-    table.release(producer, Absorption::IntoHolder).unwrap();
+    table
+        .release(producer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(
         table.relocation_of(producer),
-        Some(Location::Slab {
+        Some(SlabForward::Slab {
             slot: consumer.slot(),
             base: 0,
         })
@@ -375,10 +389,10 @@ fn a_resident_forwarded_through_two_merges_is_still_found() {
 
     // Merge one: into the slab. Merge two: into the tier. The key is rewritten by each, so the
     // chain of single-consumer producers costs the map one entry per merge and none per value.
-    table.release(head, Absorption::IntoHolder).unwrap();
-    table.release(middle, Absorption::Refused).unwrap();
+    table.release(head, ReleaseAbsorption::IntoHolder).unwrap();
+    table.release(middle, ReleaseAbsorption::Refused).unwrap();
     let id = table.sealed.ids().next().unwrap();
-    assert_eq!(table.relocation_of(head), Some(Location::Record(id)));
+    assert_eq!(table.relocation_of(head), Some(SlabForward::Record(id)));
 
     let read = table
         .enter(end, |context| {
@@ -389,7 +403,7 @@ fn a_resident_forwarded_through_two_merges_is_still_found() {
         .unwrap();
     assert_eq!(read, 41);
 
-    table.release(end, Absorption::IntoHolder).unwrap();
+    table.release(end, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.relocations(), 0);
     assert_eq!(table.free.len(), 4);
@@ -454,7 +468,9 @@ fn redeem_refuses_once_the_storage_is_gone() {
         })
         .unwrap();
     // Nothing reached the home, so its death frees the chunks the resident named.
-    table.release(reclaimed, Absorption::IntoHolder).unwrap();
+    table
+        .release(reclaimed, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     let gone = table
         .enter(onlooker, |context| context.redeem(orphan).err())
         .unwrap();
@@ -473,8 +489,12 @@ fn redeem_refuses_once_the_storage_is_gone() {
             context.keep(value)
         })
         .unwrap();
-    table.release(sealed_home, Absorption::Refused).unwrap();
-    table.release(holder, Absorption::IntoHolder).unwrap();
+    table
+        .release(sealed_home, ReleaseAbsorption::Refused)
+        .unwrap();
+    table
+        .release(holder, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(table.sealed.len(), 0);
 
     let gone = table
@@ -510,7 +530,9 @@ fn a_birth_hold_entitles_a_child_to_its_parents_resident() {
 
     // A birth row has no sealed half, so a declared death leaves the parent resident in the slab
     // with its storage intact — and the child's claim outlives the death.
-    table.release(parent, Absorption::IntoHolder).unwrap();
+    table
+        .release(parent, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert_eq!(state_of(&table, parent), SlotState::Dead);
     let read = table
         .enter(child, |context| {
@@ -543,7 +565,7 @@ fn a_redeemed_record_value_can_be_kept_again() {
             context.keep(value)
         })
         .unwrap();
-    table.release(producer, Absorption::Refused).unwrap();
+    table.release(producer, ReleaseAbsorption::Refused).unwrap();
     let record = table.sealed.ids().next().unwrap();
 
     // A carrier redeemed out of a record is a carrier like any other: keeping it registers its
@@ -565,7 +587,7 @@ fn a_redeemed_record_value_can_be_kept_again() {
     assert_eq!(read, 41);
 
     // The re-keeping cell now seals in turn, and the key forwards to its record.
-    table.release(middle, Absorption::Refused).unwrap();
+    table.release(middle, ReleaseAbsorption::Refused).unwrap();
     let outer = table.sealed_holds[end.slot() as usize]
         .iter()
         .next()
@@ -604,11 +626,11 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
 
     capturing(&mut table, 41);
     assert_eq!(
-        table.slots[cell.slot() as usize].continuation_reach,
+        table.slots[cell.slot() as usize].continuation_reach_index,
         Some(0)
     );
-    assert_eq!(table.slots[cell.slot() as usize].residents.len(), 1);
-    let stored = continuation_reach(&table, cell);
+    assert_eq!(table.slots[cell.slot() as usize].reaches.len(), 1);
+    let stored = continuation_reach_index(&table, cell);
     assert!(stored.names(over.slot()));
     assert!(stored.names(cell.slot()));
 
@@ -621,14 +643,17 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
             context.store_successor(&ANCHOR);
         })
         .unwrap();
-    assert_eq!(table.slots[cell.slot() as usize].continuation_reach, None);
+    assert_eq!(
+        table.slots[cell.slot() as usize].continuation_reach_index,
+        None
+    );
 
     // And the capturing store comes back to the entry it minted the first time, because its reach
     // is the same reach. Alternating for a whole run costs that one entry and nothing more.
     for value in 0..8 {
         capturing(&mut table, value);
         assert_eq!(
-            table.slots[cell.slot() as usize].continuation_reach,
+            table.slots[cell.slot() as usize].continuation_reach_index,
             Some(0)
         );
         table
@@ -639,7 +664,7 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
             .unwrap();
     }
     assert_eq!(
-        table.slots[cell.slot() as usize].residents.len(),
+        table.slots[cell.slot() as usize].reaches.len(),
         1,
         "a table holds one entry per distinct reach, not one per store"
     );
@@ -670,7 +695,7 @@ fn keeping_the_same_reach_twice_takes_one_entry_and_both_keys_redeem() {
     // Sixteen values, one reach: each is homed in the executing cell and reaches nothing else, so
     // every keep interns to the entry the first one minted.
     assert_eq!(
-        table.slots[cell.slot() as usize].residents.len(),
+        table.slots[cell.slot() as usize].reaches.len(),
         1,
         "keeps of one shape share one entry"
     );

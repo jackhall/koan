@@ -77,7 +77,10 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
         assert_eq!(prices.cap, 4);
         assert_eq!(prices.records, occupancy.records);
         assert_eq!(prices.retained_bytes, occupancy.retained_bytes);
-        assert_eq!(prices.dest_bytes, table.region_bytes(destination).unwrap());
+        assert_eq!(
+            prices.destination_bytes,
+            table.region_bytes(destination).unwrap()
+        );
     }
     // The embedder's own figures come through untouched, in the order the operands were passed.
     assert_eq!(seen[0].copy_bytes, 3);
@@ -116,7 +119,7 @@ fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
         // The whole point of the copy: the producer's column is zero, so its death is a
         // reclamation rather than a record the destination now retains. The slot comes back
         // either way — retention lives in the sealed tier, never in the slab.
-        table.release(producer, Absorption::Refused).unwrap();
+        table.release(producer, ReleaseAbsorption::Refused).unwrap();
         assert_eq!(super::state_of(&table, producer), SlotState::Free);
         assert_eq!(table.sealed.len(), usize::from(verdict == Verdict::Pin));
     }
@@ -171,7 +174,7 @@ fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
     // first: the choice to copy leaves the destination answerable for no more than it was.
     assert_eq!(seen[1].pin_bytes, seen[0].pin_bytes);
     // What the destination did take in is the deep copy itself.
-    assert!(seen[1].dest_bytes >= seen[0].dest_bytes);
+    assert!(seen[1].destination_bytes >= seen[0].destination_bytes);
 }
 
 #[test]
@@ -208,7 +211,7 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
         })
         .unwrap()
         .unwrap();
-    table.release(doomed, Absorption::Refused).unwrap();
+    table.release(doomed, ReleaseAbsorption::Refused).unwrap();
     let record = table.sealed.ids().next().unwrap();
 
     table
@@ -344,11 +347,11 @@ fn a_frozen_closure_prices_through_its_memo() {
             context.keep(value)
         })
         .unwrap();
-    table.release(producer, Absorption::Refused).unwrap();
+    table.release(producer, ReleaseAbsorption::Refused).unwrap();
     let record = table.sealed.ids().next().unwrap();
 
     // The closure is frozen, so its price is memoized once and never recomputed.
-    let closure = table.unique_closures(&[record]).remove(0).unwrap();
+    let closure = table.unique_retentions(&[record]).remove(0).unwrap();
     assert!(closure.frozen);
 
     table
@@ -442,7 +445,9 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
 
         // The retiring hop's column is zero: neither the cart nor the next hop took a hold on it,
         // so its death frees the slot outright — no record, no merge.
-        table.release(running, Absorption::IntoHolder).unwrap();
+        table
+            .release(running, ReleaseAbsorption::IntoHolder)
+            .unwrap();
         assert_eq!(super::state_of(&table, running), SlotState::Free);
         assert_eq!(table.sealed.len(), 0, "hop {hop} left a record behind");
         assert_eq!(table.merges, Merges::default(), "hop {hop} took a merge");
@@ -459,7 +464,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
     // keeps the seal transition's bound — work per holder's resident entry — a bound on a run of
     // any length rather than one that grows with it.
     assert_eq!(
-        table.slots[cart.slot() as usize].residents.len(),
+        table.slots[cart.slot() as usize].reaches.len(),
         1,
         "the cart took an entry per hop"
     );
@@ -487,7 +492,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
         .borrow()
         .iter()
         .filter(|prices| prices.copy_bytes == usize::MAX)
-        .map(|prices| prices.dest_bytes)
+        .map(|prices| prices.destination_bytes)
         .collect();
     assert_eq!(cart_sizes.len(), HOPS);
     assert!(cart_sizes.windows(2).all(|pair| pair[0] <= pair[1]));
@@ -515,7 +520,7 @@ fn captures_cross_through_the_same_verdict() {
         // copied one lives in the keeper's region and the host is free to die.
         assert_eq!(table.holds(keeper, host), verdict == Verdict::Pin);
         assert_eq!(
-            super::continuation_reach(&table, keeper).names(host.slot()),
+            super::continuation_reach_index(&table, keeper).names(host.slot()),
             verdict == Verdict::Pin
         );
 

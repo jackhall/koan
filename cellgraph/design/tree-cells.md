@@ -63,7 +63,7 @@ The seal transition needs no tree case. Tree cells hold nothing, so they are
 never in a column; the root is, and its table is rewritten by the ordinary
 transition.
 
-## The one crossing rule
+## The ancestry rule
 
 Applied to every operand homed in a tree cell `H`, at every placement door,
 before the verdict — by where the destination `D` sits relative to `H`:
@@ -81,7 +81,8 @@ O(1).
 
 This is koan's crossing rule — producer-born parts copy, references upward
 cross free — made structural: an operand homed in the producer's own tree cell
-is producer-born.
+is producer-born. The rule is named for what it turns on: every row of the
+table above is an ancestry question, and nothing else is asked.
 
 Operands homed in slab cells or in records take the ordinary path whichever
 kind the destination is, with the mint redirected to the root.
@@ -174,7 +175,7 @@ executing cell, and read "root of `E`" as `E` itself when `E` is a slab cell.
 
 Same-root entitlement is sound because a redeem yields a **read**, which is
 step-bounded and nothing dies inside a step, and a **carrier**, whose every
-embedding goes back through the crossing rule above — which is where ancestry
+embedding goes back through the ancestry rule above — which is where ancestry
 is actually checked.
 
 A key that started in a tree cell indexes no table, whichever kind its chain
