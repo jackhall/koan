@@ -346,8 +346,8 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run(
-            "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")\n\
-             FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")\n\
+            "EXPR (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")\n\
+             EXPR (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")\n\
              LET r = {x = 1, y = \"a\", z = \"b\"}",
         );
 

@@ -14,7 +14,7 @@ fn fn_typed_param_records_ktype_on_signature() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
+    test_run.run("EXPR (DOUBLE x :Number) -> Number = (x)");
 
     let f = lookup_fn(scope, "DOUBLE");
     match f.signature.elements() {
@@ -35,7 +35,7 @@ fn fn_typed_param_dispatches_on_matching_call() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
+    test_run.run("EXPR (DOUBLE x :Number) -> Number = (x)");
     let result = test_run.run_one(test_run.parse_one("DOUBLE 7"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
@@ -48,7 +48,7 @@ fn fn_typed_param_rejects_mismatched_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
+    test_run.run("EXPR (DOUBLE x :Number) -> Number = (x)");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -76,8 +76,8 @@ fn fn_typed_param_rejects_mismatched_call() {
 #[test]
 fn fn_overloads_dispatch_by_param_type() {
     let bytes = capture_program_output(
-        "FN (DESCRIBE x :Number) -> Null = (PRINT \"number\")\n\
-         FN (DESCRIBE x :Str) -> Null = (PRINT \"string\")\n\
+        "EXPR (DESCRIBE x :Number) -> Null = (PRINT \"number\")\n\
+         EXPR (DESCRIBE x :Str) -> Null = (PRINT \"string\")\n\
          DESCRIBE 7\n\
          DESCRIBE \"hi\"",
     );
@@ -93,7 +93,7 @@ fn fn_param_without_annotation_is_rejected() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("FN (DOUBLE x) -> Number = (x)"),
+            test_run.parse_one("EXPR (DOUBLE x) -> Number = (x)"),
         ),
         scope,
     );
@@ -125,7 +125,7 @@ fn fn_param_with_unknown_type_name_is_rejected() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"),
+            test_run.parse_one("EXPR (DOUBLE x :Bogus) -> Number = (x)"),
         ),
         scope,
     );
@@ -149,7 +149,7 @@ fn fn_param_with_unknown_type_name_is_rejected() {
 #[test]
 fn fn_comma_separated_typed_params_register() {
     let bytes = capture_program_output(
-        "FN (FIRST x :Number, y :Number) -> Number = (x)\n\
+        "EXPR (FIRST x :Number, y :Number) -> Number = (x)\n\
          PRINT (FIRST 1 2)",
     );
     assert_eq!(bytes, b"1\n");

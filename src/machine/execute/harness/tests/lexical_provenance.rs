@@ -113,7 +113,7 @@ fn tail_recursive_fn_does_not_balloon_chain() {
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     test_run.run(
         "UNION Counter = (more :Null done :Null)\n\
-         FN (LOOP n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
+         EXPR (LOOP n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
             more -> (LOOP (n) (Counter (more null)))\
             done -> (n)\
          ))\n\
@@ -132,7 +132,7 @@ fn fn_body_call_with_spacers_produces_value() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
-        "FN (DBL x :Number) -> Number = (x)\n\
+        "EXPR (DBL x :Number) -> Number = (x)\n\
          LET a = 1\n\
          LET b = 2\n\
          LET c = 3\n\
@@ -149,7 +149,7 @@ fn cons_head_subdispatch_inherits_parent_chain() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
+    test_run.run("EXPR (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     use crate::machine::model::KObject;
     let v = test_run.run_one(test_run.parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));

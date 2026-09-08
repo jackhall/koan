@@ -1,8 +1,8 @@
-//! The bodyless `FN (<head>) -> <Return>` declarator: a SIG body's keyworded (dispatch-bucket)
+//! The bodyless `EXPR (<head>) -> <Return>` declarator: a SIG body's keyworded (dispatch-bucket)
 //! member. The head parses through the definition form's own path, so these tests pin what the
 //! declaration *records* — the expression shape in the signature's stored schema, whose own
-//! element run is the bucket key — plus the two guards that keep declaration and definition in
-//! their own bodies.
+//! element run is the bucket key — plus the guards on what a SIG body admits: a definition belongs
+//! outside one, and a keyword-free head is no shape at all.
 
 use crate::builtins::test_support::{TestRun, key_keyword, key_keyword_symbol, type_name};
 use crate::machine::model::{KType, KeyElement, SigSchema, TypeNode, UntypedKey};
@@ -55,7 +55,7 @@ fn a_bodyless_head_records_its_key_and_function_type() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("SIG Pure = ((FN (PURE x :Number) -> Number))");
+    test_run.run("SIG Pure = ((EXPR (PURE x :Number) -> Number))");
     let schema = sig_schema(scope, test_run.types(), "Pure");
     let members = members_keyed(&schema, test_run.types(), &["PURE", "_"]);
     assert_eq!(members.len(), 1);
@@ -77,8 +77,8 @@ fn two_textually_identical_signatures_with_keyworded_members_intern_once() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
-        "SIG One = ((FN (PURE x :Number) -> Number))\n\
-         SIG Two = ((FN (PURE x :Number) -> Number))",
+        "SIG One = ((EXPR (PURE x :Number) -> Number))\n\
+         SIG Two = ((EXPR (PURE x :Number) -> Number))",
     );
     let one = crate::builtins::test_support::lookup_type(scope, "One").expect("One binds");
     let two = crate::builtins::test_support::lookup_type(scope, "Two").expect("Two binds");
@@ -91,7 +91,7 @@ fn same_key_declarations_at_different_types_accumulate_as_overloads() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("SIG Pure = ((FN (PURE x :Number) -> Number) (FN (PURE x :Str) -> Str))");
+    test_run.run("SIG Pure = ((EXPR (PURE x :Number) -> Number) (EXPR (PURE x :Str) -> Str))");
     let schema = sig_schema(scope, test_run.types(), "Pure");
     assert_eq!(
         members_keyed(&schema, test_run.types(), &["PURE", "_"]).len(),
@@ -104,10 +104,9 @@ fn an_exact_duplicate_declaration_is_a_rebind() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let error =
-        test_run.run_one_err(test_run.parse_one(
-            "SIG Pure = ((FN (PURE x :Number) -> Number) (FN (PURE x :Number) -> Number))",
-        ));
+    let error = test_run.run_one_err(test_run.parse_one(
+        "SIG Pure = ((EXPR (PURE x :Number) -> Number) (EXPR (PURE x :Number) -> Number))",
+    ));
     assert!(
         matches!(&error.kind, crate::machine::KErrorKind::Rebind { .. }),
         "expected a Rebind naming the head, got {error}",
@@ -120,7 +119,7 @@ fn a_declared_head_may_name_an_abstract_member() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("SIG Box = ((TYPE Carrier) (FN (PURE x :Carrier) -> Carrier))");
+    test_run.run("SIG Box = ((TYPE Carrier) (EXPR (PURE x :Carrier) -> Carrier))");
     let schema = sig_schema(scope, test_run.types(), "Box");
     let carrier = *schema
         .abstract_members
@@ -147,21 +146,9 @@ fn a_definition_inside_a_sig_body_points_at_the_declarator() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let error = test_run
-        .run_one_err(test_run.parse_one("SIG Pure = ((FN (PURE x :Number) -> Number = (x)))"));
+        .run_one_err(test_run.parse_one("SIG Pure = ((EXPR (PURE x :Number) -> Number = (x)))"));
     assert!(
         error.to_string().contains("declared rather than defined"),
-        "expected the message to point at the other form, got {error}",
-    );
-}
-
-#[test]
-fn a_bodyless_head_outside_a_sig_body_points_at_the_definition_form() {
-    let program = program_storage();
-    let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(test_run.parse_one("(FN (PURE x :Number) -> Number)"));
-    assert!(
-        error.to_string().contains("only valid inside a SIG body"),
         "expected the message to point at the other form, got {error}",
     );
 }
@@ -171,9 +158,12 @@ fn a_keywordless_head_has_no_bucket_to_declare() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(test_run.parse_one("SIG Pure = ((FN (x :Number) -> Number))"));
+    let error =
+        test_run.run_one_err(test_run.parse_one("SIG Pure = ((EXPR (x :Number) -> Number))"));
     assert!(
-        error.to_string().contains("at least one Keyword"),
-        "expected the message to point at the other form, got {error}",
+        error
+            .to_string()
+            .contains("a shape has at least one keyword"),
+        "expected the message to point at the lambda spelling, got {error}",
     );
 }

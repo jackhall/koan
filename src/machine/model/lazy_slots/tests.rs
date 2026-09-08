@@ -234,7 +234,7 @@ fn parsed_builtin_forms_carry_their_lazy_stamp() {
         vec![(1, LazyKinds::CODE), (5, LazyKinds::CODE)],
     );
     assert_eq!(
-        stamped_slots("FN (DOUBLE n :Number) -> Number = (n * 2)"),
+        stamped_slots("EXPR (DOUBLE n :Number) -> Number = (n * 2)"),
         vec![
             (1, LazyKinds::CODE),
             (3, LazyKinds::TYPE_EXPR.with(LazyKinds::RECORD_TYPE)),

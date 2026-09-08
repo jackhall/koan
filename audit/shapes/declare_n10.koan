@@ -24,5 +24,5 @@ MODULE store = (
   LET m9 = 9
   LET m10 = 10
 )
-FN (WIDEN p1 :Number p2 :Number p3 :Number p4 :Number p5 :Number p6 :Number p7 :Number p8 :Number p9 :Number p10 :Number) -> Number = (p1)
+EXPR (WIDEN p1 :Number p2 :Number p3 :Number p4 :Number p5 :Number p6 :Number p7 :Number p8 :Number p9 :Number p10 :Number) -> Number = (p1)
 PRINT 1

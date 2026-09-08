@@ -15,7 +15,7 @@ use super::capture_program_output;
 #[test]
 fn fn_with_record_param_accepts_matching_record() {
     let bytes = capture_program_output(
-        "FN (USE r :{x :Number, y :Str}) -> Str = (\"ok\")\n\
+        "EXPR (USE r :{x :Number, y :Str}) -> Str = (\"ok\")\n\
          PRINT (USE {x = 1, y = \"a\"})",
     );
     assert_eq!(bytes, b"ok\n");
@@ -26,7 +26,7 @@ fn fn_with_record_param_accepts_matching_record() {
 #[test]
 fn fn_with_record_param_admits_wider_value() {
     let bytes = capture_program_output(
-        "FN (USE r :{x :Number}) -> Str = (\"ok\")\n\
+        "EXPR (USE r :{x :Number}) -> Str = (\"ok\")\n\
          PRINT (USE {x = 1, y = \"a\"})",
     );
     assert_eq!(bytes, b"ok\n");
@@ -38,8 +38,8 @@ fn fn_with_record_param_admits_wider_value() {
 #[test]
 fn dispatch_picks_wider_record_overload() {
     let bytes = capture_program_output(
-        "FN (USE r :{x :Number}) -> Str = (\"narrow\")\n\
-         FN (USE r :{x :Number, y :Str}) -> Str = (\"wide\")\n\
+        "EXPR (USE r :{x :Number}) -> Str = (\"narrow\")\n\
+         EXPR (USE r :{x :Number, y :Str}) -> Str = (\"wide\")\n\
          PRINT (USE {x = 1, y = \"a\"})",
     );
     assert_eq!(bytes, b"wide\n");
@@ -49,8 +49,8 @@ fn dispatch_picks_wider_record_overload() {
 #[test]
 fn dispatch_picks_deeper_record_overload() {
     let bytes = capture_program_output(
-        "FN (PICK r :{x :Any}) -> Str = (\"any\")\n\
-         FN (PICK r :{x :Number}) -> Str = (\"num\")\n\
+        "EXPR (PICK r :{x :Any}) -> Str = (\"any\")\n\
+         EXPR (PICK r :{x :Number}) -> Str = (\"num\")\n\
          PRINT (PICK {x = 1})",
     );
     assert_eq!(bytes, b"num\n");
@@ -61,7 +61,7 @@ fn dispatch_picks_deeper_record_overload() {
 #[test]
 fn fn_returning_record_accepts_matching_value() {
     let bytes = capture_program_output(
-        "FN (MK) -> :{x :Number, y :Str} = ({x = 1, y = \"a\"})\n\
+        "EXPR (MK) -> :{x :Number, y :Str} = ({x = 1, y = \"a\"})\n\
          PRINT (MK)",
     );
     assert_eq!(bytes, b"{x = 1, y = a}\n");
@@ -97,7 +97,7 @@ fn record_field_type_mismatch_is_dispatch_failure() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET r = {x = \"s\"}");
-    test_run.run("FN (USE r :{x :Number}) -> Str = (\"ok\")");
+    test_run.run("EXPR (USE r :{x :Number}) -> Str = (\"ok\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -129,7 +129,7 @@ fn record_missing_field_is_dispatch_failure() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET r = {x = 1}");
-    test_run.run("FN (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
+    test_run.run("EXPR (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -162,8 +162,8 @@ fn record_incomparable_overloads_are_ambiguous() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
-    test_run.run("FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");
+    test_run.run("EXPR (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
+    test_run.run("EXPR (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),

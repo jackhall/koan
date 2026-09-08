@@ -17,7 +17,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     let scope = test_run.scope;
     test_run.run("SIG Ordered = (VAL compare :Number)");
     test_run.run("MODULE int_ord = (LET compare = 7)");
-    test_run.run("FN (USE_ID Er :Signature) -> Er = (int_ord :| Er)");
+    test_run.run("EXPR (USE_ID Er :Signature) -> Er = (int_ord :| Er)");
     let f = lookup_fn(scope, "USE_ID");
     assert!(
         matches!(f.signature.return_type(), ReturnType::Deferred(_)),
@@ -57,7 +57,7 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
         "int_ord_view should be an opaquely-ascribed module value satisfying WithZero's \
          VAL zero slot",
     );
-    test_run.run("FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero)");
+    test_run.run("EXPR (GET_ZERO er :WithZero) -> er.Carrier = (er.zero)");
     let f = lookup_fn(scope, "GET_ZERO");
     assert!(
         matches!(f.signature.return_type(), ReturnType::Deferred(_)),
@@ -83,7 +83,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
          MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
          LET int_ord_view = (int_ord :| WithZero)",
     );
-    test_run.run("FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero)");
+    test_run.run("EXPR (GET_ZERO er :WithZero) -> er.Carrier = (er.zero)");
     let result = test_run.run_one(test_run.parse_one("GET_ZERO int_ord_view"));
     match result {
         KObject::Wrapped { inner, type_id } => {
@@ -133,7 +133,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
          LET int_ord_view = (int_ord :! Ordered)",
     );
     test_run.run(
-        "FN (MK er :Ordered) -> :(Set WITH {Elt = er.Carrier}) = \
+        "EXPR (MK er :Ordered) -> :(Set WITH {Elt = er.Carrier}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MK");
@@ -159,7 +159,7 @@ fn functor_deferred_return_coarsens_list_carrier() {
          MODULE ints = ((LET Carrier = :(LIST OF Any)) (LET items = [1 2 3]))\n\
          LET ints_view = (ints :! Seq)",
     );
-    test_run.run("FN (ITEMS er :Seq) -> er.Carrier = (er.items)");
+    test_run.run("EXPR (ITEMS er :Seq) -> er.Carrier = (er.items)");
     let result = test_run.run_one(test_run.parse_one("ITEMS ints_view"));
     match result {
         KObject::List(_, list_type) => assert_eq!(
@@ -193,8 +193,8 @@ fn deferred_return_tail_call_stays_tco_flat() {
          MODULE ints = (LET v = 1)",
     );
     test_run.run(
-        "FN (BB Er :Signature) -> Er = (ints :| Er)\n\
-         FN (AA Er :Signature) -> Er = (BB Er)",
+        "EXPR (BB Er :Signature) -> Er = (ints :| Er)\n\
+         EXPR (AA Er :Signature) -> Er = (BB Er)",
     );
     // Measure this program's own slot footprint: release the setup phase's slots so the store's
     // high-water mark starts at zero.
@@ -241,10 +241,10 @@ fn deferred_expression_return_tail_chain_stays_flat() {
          LET view = (ints :! Seq)",
     );
     test_run.run(
-        "FN (DD er :Seq) -> er.Carrier = (er.v)\n\
-         FN (CC er :Seq) -> er.Carrier = (DD er)\n\
-         FN (BB er :Seq) -> er.Carrier = (CC er)\n\
-         FN (AA er :Seq) -> er.Carrier = (BB er)",
+        "EXPR (DD er :Seq) -> er.Carrier = (er.v)\n\
+         EXPR (CC er :Seq) -> er.Carrier = (DD er)\n\
+         EXPR (BB er :Seq) -> er.Carrier = (CC er)\n\
+         EXPR (AA er :Seq) -> er.Carrier = (BB er)",
     );
     // Parse before the snapshot: program storage's own region mint is not a call's mint.
     let call = test_run.parse_one("AA view");
@@ -294,7 +294,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     // `Number`, so the `(1)` body fails the per-call return-type check. (Referencing a real
     // member, not the builtin `Type` name — module member access is module-own and does not
     // fall through to the builtin root.)
-    test_run.run("FN (BAD er :Ordered) -> er.Carrier = (1)");
+    test_run.run("EXPR (BAD er :Ordered) -> er.Carrier = (1)");
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),

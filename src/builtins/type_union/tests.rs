@@ -170,7 +170,7 @@ fn union_with_signature_member_admits_module_and_number() {
     test_run.run(
         "SIG HasLabel = ((VAL label :Str))\n\
          MODULE widget = ((LET label = (\"button\")))\n\
-         FN (EITHER x :(Number | HasLabel)) -> Str = ((\"admitted\"))",
+         EXPR (EITHER x :(Number | HasLabel)) -> Str = ((\"admitted\"))",
     );
     for call in ["EITHER widget", "EITHER 5"] {
         match test_run.run_one(test_run.parse_one(call)) {

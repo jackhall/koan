@@ -327,7 +327,7 @@ fn fn_return_type_constructor_apply_root_scope() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("LET pure = FN (PURE a :Number) -> :(Number AS Wrap) = (1)"),
+            test_run.parse_one("LET pure = FN EXPR (PURE a :Number) -> :(Number AS Wrap) = (1)"),
         ),
         scope,
     );

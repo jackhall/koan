@@ -177,7 +177,7 @@ fn a_nested_block_binds_only_within_itself() {
 /// scope.
 #[test]
 fn fn_parameters_bind_the_body_and_annotations_are_uses() {
-    let inferred = infer("((LET f = FN (GO a :Number) -> Number = (a + b)) (f))");
+    let inferred = infer("((LET f = FN EXPR (GO a :Number) -> Number = (a + b)) (f))");
     assert_eq!(inferred.values, ["b"]);
     assert_eq!(inferred.types, ["Number"]);
 }
@@ -185,7 +185,7 @@ fn fn_parameters_bind_the_body_and_annotations_are_uses() {
 /// An annotation is walked in the *enclosing* scope, so a value name it spells is free.
 #[test]
 fn a_signature_annotation_frees_the_names_it_spells() {
-    let inferred = infer("(FN (GO a :(TYPE OF t)) -> Number = (a))");
+    let inferred = infer("(EXPR (GO a :(TYPE OF t)) -> Number = (a))");
     assert_eq!(inferred.values, ["t"]);
     assert_eq!(inferred.types, ["Number"]);
 }
@@ -202,7 +202,7 @@ fn an_anonymous_fn_schema_declares_its_parameters() {
 /// names are still labels.
 #[test]
 fn an_fn_declarator_frees_only_its_annotations() {
-    let inferred = infer("(FN (SCALE s :Shape f :Number) -> Shape)");
+    let inferred = infer("(EXPR (SCALE s :Shape f :Number) -> Shape)");
     assert!(inferred.values.is_empty());
     assert_eq!(inferred.types, ["Shape", "Number"]);
 }

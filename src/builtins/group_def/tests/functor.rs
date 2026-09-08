@@ -17,7 +17,7 @@ use crate::machine::{program_storage, run_root_storage};
 const TYPE_PARAMETER_FUNCTOR: &str = "LET xs = [1]\n\
      LET ys = [2]\n\
      LET zs = [3]\n\
-     LET make_ops = FN (MAKEOPS Elt :Type) -> Module = (\
+     LET make_ops = FN EXPR (MAKEOPS Elt :Type) -> Module = (\
        GROUP result FOLD LEFT = (\
          (OP #(+) OVER :(LIST OF Elt) = (left))\
          (OP #(-) OVER :(LIST OF Elt) = (right))))\n";
@@ -30,11 +30,11 @@ const WITNESS_MODULE_FUNCTOR: &str = "SIG Additive = (\
        (VAL combine :(FN :{x :Elt, y :Elt} -> Elt)))\n\
      MODULE sum_additive = (\
        (LET Elt = Number)\
-       (LET combine = FN (COMBINE x :Number y :Number) -> Number = (x + y)))\n\
+       (LET combine = FN EXPR (COMBINE x :Number y :Number) -> Number = (x + y)))\n\
      MODULE product_additive = (\
        (LET Elt = Number)\
-       (LET combine = FN (COMBINE x :Number y :Number) -> Number = (x * y)))\n\
-     LET make_ops = FN (MAKEOPS witness :Additive) -> Module = (\
+       (LET combine = FN EXPR (COMBINE x :Number y :Number) -> Number = (x * y)))\n\
+     LET make_ops = FN EXPR (MAKEOPS witness :Additive) -> Module = (\
        GROUP result FOLD LEFT = (\
          (OP #(⊕) OVER Number = (USING witness SCOPE (COMBINE left right)))\
          (OP #(⊖) OVER Number = (left - right))))\n";

@@ -31,8 +31,8 @@ fn monad_program() -> &'static str {
      (VAL table :(MAP Str -> Elt)) (VAL choice :(Elt | Str)))\n\
      MODULE id_monad = ((LET Wrap = Wrapper) (LET Elt = Carrier) \
      (LET boxed = (Wrapper (3))) (LET zero = (Carrier 0)) \
-     (LET pure = FN (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x))) \
-     (LET unbox = FN (UNBOX w :(Number AS Wrapper)) -> Number = (7)) \
+     (LET pure = FN EXPR (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x))) \
+     (LET unbox = FN EXPR (UNBOX w :(Number AS Wrapper)) -> Number = (7)) \
      (LET zs = [(Carrier 1), (Carrier 2)]) \
      (LET pair = {first = (Carrier 9), tag = 4}) \
      (LET table = {\"a\": (Carrier 6)}) \
@@ -106,7 +106,7 @@ fn applied_slot_read_fails_source_side_dispatch() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
     test_run.run("LET view = (id_monad :| Monad)");
-    test_run.run("FN (TAKESRC x :(Number AS Wrapper)) -> Number = (1)");
+    test_run.run("EXPR (TAKESRC x :(Number AS Wrapper)) -> Number = (1)");
     let err = test_run.run_one_err(test_run.parse_one("TAKESRC (view.boxed)"));
     assert!(
         matches!(&err.kind, crate::machine::KErrorKind::DispatchFailed { .. }),
@@ -124,7 +124,7 @@ fn applied_view_type_admits_the_view_and_rejects_the_source() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
     test_run.run("LET view = (id_monad :| Monad)");
-    test_run.run("FN (TAKEVIEW x :(Number AS view.Wrap)) -> Number = (2)");
+    test_run.run("EXPR (TAKEVIEW x :(Number AS view.Wrap)) -> Number = (2)");
 
     let admitted = test_run.run_one(test_run.parse_one("TAKEVIEW (view.boxed)"));
     assert!(
@@ -189,8 +189,8 @@ fn two_views_of_one_module_are_generative() {
         view_member(&test_run, "viewb", "Wrap"),
         "two ascriptions of one module must mint distinct `Wrap` constructors",
     );
-    test_run.run("FN (PICK x :(Number AS viewa.Wrap)) -> Number = (7)");
-    test_run.run("FN (PICK x :(Number AS viewb.Wrap)) -> Number = (8)");
+    test_run.run("EXPR (PICK x :(Number AS viewa.Wrap)) -> Number = (7)");
+    test_run.run("EXPR (PICK x :(Number AS viewb.Wrap)) -> Number = (8)");
     let picked = test_run.run_one(test_run.parse_one("PICK (viewa.boxed)"));
     assert!(
         matches!(picked, KObject::Number(n) if *n == 7.0),
@@ -208,7 +208,7 @@ fn transparent_view_applied_type_names_the_source_constructor() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
     test_run.run("LET tview = (id_monad :! Monad)");
-    test_run.run("FN (TAKETRANS x :(Number AS tview.Wrap)) -> Number = (5)");
+    test_run.run("EXPR (TAKETRANS x :(Number AS tview.Wrap)) -> Number = (5)");
     for expression in ["TAKETRANS (Wrapper (1))", "TAKETRANS (tview.boxed)"] {
         let result = test_run.run_one(test_run.parse_one(expression));
         assert!(
@@ -227,7 +227,7 @@ fn unascribed_module_applied_type_names_the_source_constructor() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
-    test_run.run("FN (TAKEPLAIN x :(Number AS id_monad.Wrap)) -> Number = (6)");
+    test_run.run("EXPR (TAKEPLAIN x :(Number AS id_monad.Wrap)) -> Number = (6)");
     let result = test_run.run_one(test_run.parse_one("TAKEPLAIN (Wrapper (1))"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 6.0),
@@ -276,8 +276,8 @@ fn function_slot_result_holds_the_barrier_in_both_directions() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
     test_run.run("LET view = (id_monad :| Monad)");
-    test_run.run("FN (TAKEVIEW x :(Number AS view.Wrap)) -> Number = (2)");
-    test_run.run("FN (TAKESRC x :(Number AS Wrapper)) -> Number = (1)");
+    test_run.run("EXPR (TAKEVIEW x :(Number AS view.Wrap)) -> Number = (2)");
+    test_run.run("EXPR (TAKESRC x :(Number AS Wrapper)) -> Number = (1)");
 
     let admitted = test_run.run_one(test_run.parse_one("TAKEVIEW (view.pure {x = 1})"));
     assert!(
@@ -438,8 +438,8 @@ fn deferred_return_elaborates_per_argument_module() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
     test_run.run("LET view = (id_monad :| Monad)");
-    test_run.run("FN (REBOX er :Monad) -> :(Number AS er.Wrap) = (er.boxed)");
-    test_run.run("FN (TAKESRC x :(Number AS Wrapper)) -> Number = (1)");
+    test_run.run("EXPR (REBOX er :Monad) -> :(Number AS er.Wrap) = (er.boxed)");
+    test_run.run("EXPR (TAKESRC x :(Number AS Wrapper)) -> Number = (1)");
 
     let plain = test_run.run_one(test_run.parse_one("REBOX (id_monad)"));
     assert_eq!(
@@ -480,7 +480,7 @@ fn a_returned_opaque_view_keeps_every_coerced_member_alive() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
-    test_run.run("FN (MAKEVIEW er :Monad) -> Module = (er :| Monad)");
+    test_run.run("EXPR (MAKEVIEW er :Monad) -> Module = (er :| Monad)");
     test_run.run("LET made = (MAKEVIEW id_monad)");
     let wrap = view_member(&test_run, "made", "Wrap");
     let elt = view_member(&test_run, "made", "Elt");
@@ -554,7 +554,7 @@ fn transparent_view_reads_stay_concrete() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
     test_run.run("LET tview = (id_monad :! Monad)");
-    test_run.run("FN (TAKESRC x :(Number AS Wrapper)) -> Number = (1)");
+    test_run.run("EXPR (TAKESRC x :(Number AS Wrapper)) -> Number = (1)");
 
     for expression in ["TAKESRC (tview.boxed)", "TAKESRC (tview.pure {x = 2})"] {
         let result = test_run.run_one(test_run.parse_one(expression));

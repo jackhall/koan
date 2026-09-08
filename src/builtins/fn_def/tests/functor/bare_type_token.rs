@@ -41,7 +41,7 @@ fn functor_admits_bare_number_token_at_type_slot() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("EXPR (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
     let result = test_run.run_one(test_run.parse_one("MAKETREE Number"));
     match result {
         KObject::Module(_) => {}
@@ -59,7 +59,7 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("EXPR (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
     for token in ["Str", "Bool", "Null"] {
         let src = format!("MAKETREE {token}");
         let result = test_run.run_one(test_run.parse_one(&src));
@@ -81,7 +81,7 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKETREE Elt :Type) -> Module = \
+        "EXPR (MAKETREE Elt :Type) -> Module = \
          (MODULE generated = ((LET ElemType = Elt) (LET inner = 1)))",
     );
     let result = test_run.run_one(test_run.parse_one("MAKETREE Number"));
@@ -116,7 +116,7 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("EXPR (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
     let expr = test_run.parse_one("MAKETREE 7");
     let err = run_expecting_dispatch_error(&mut test_run, expr);
     match &err.kind {
@@ -136,7 +136,7 @@ fn functor_module_carrier_does_not_fill_type_slot() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))\n\
+        "EXPR (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))\n\
          MODULE int_mod = (LET inner = 1)",
     );
     let expr = test_run.parse_one("MAKETREE int_mod");
@@ -153,7 +153,7 @@ fn deferred_return_resolves_against_builtin_keyed_bind() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (BUILD Elt :Type) -> :Elt = (42)");
+    test_run.run("EXPR (BUILD Elt :Type) -> :Elt = (42)");
     let f = crate::builtins::test_support::lookup_fn(scope, "BUILD");
     assert!(
         matches!(f.signature.return_type(), ReturnType::Deferred(_)),
@@ -179,7 +179,7 @@ fn deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (BUILD Elt :Type) -> :Elt = (42)");
+    test_run.run("EXPR (BUILD Elt :Type) -> :Elt = (42)");
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),

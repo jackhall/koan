@@ -24,12 +24,12 @@ fn view_program() -> &'static str {
      (VAL pure :(FN :{x :Number} -> :(Number AS Wrap))))\n\
      MODULE id_monad = ((LET Wrap = Wrapper) (LET Elt = Carrier) \
      (LET boxed = (Wrapper (3))) (LET zero = (Carrier 0)) \
-     (LET pure = FN (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x))))\n\
+     (LET pure = FN EXPR (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x))))\n\
      LET view = (id_monad :| Monad)\n\
-     FN (TAKEVIEW x :(Number AS view.Wrap)) -> Number = (2)\n\
-     FN (TAKESRC x :(Number AS Wrapper)) -> Number = (1)\n\
-     FN (TAKEELT x :(view.Elt)) -> Number = (3)\n\
-     FN (TAKECARRIER x :Carrier) -> Number = (4)"
+     EXPR (TAKEVIEW x :(Number AS view.Wrap)) -> Number = (2)\n\
+     EXPR (TAKESRC x :(Number AS Wrapper)) -> Number = (1)\n\
+     EXPR (TAKEELT x :(view.Elt)) -> Number = (3)\n\
+     EXPR (TAKECARRIER x :Carrier) -> Number = (4)"
 }
 
 /// A **first-order** abstract slot read inside the window carries the view's own mint: it
@@ -126,9 +126,9 @@ fn a_window_over_a_view_surfaces_only_the_declared_buckets() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "SIG Tagged = ((VAL tag :Number))\n\
-         MODULE tagged_m = ((LET tag = 1) (FN (HIDE x :Number) -> Number = (1)))\n\
+         MODULE tagged_m = ((LET tag = 1) (EXPR (HIDE x :Number) -> Number = (1)))\n\
          LET view = (tagged_m :| Tagged)\n\
-         FN (HIDE x :Number) -> Number = (99)",
+         EXPR (HIDE x :Number) -> Number = (99)",
     );
 
     let outer = test_run.run_one(test_run.parse_one("USING view SCOPE (HIDE 5)"));

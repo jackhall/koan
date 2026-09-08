@@ -20,7 +20,7 @@
 //! place a cost that grows with the number of standing frames shows up.
 //!
 //! `audit/shapes/declare_n{10,100}.koan` scale **declared names**: a `UNION`, a record
-//! `NEWTYPE`, a `SIG`, a `MODULE` and an `FN` signature, each carrying `n` names. Nothing
+//! `NEWTYPE`, a `SIG`, a `MODULE` and an `EXPR` signature, each carrying `n` names. Nothing
 //! runs, so this is the declaration and registration side alone — the axis the two
 //! recursion-driven shapes hold constant, and the one the symbol-mint column reads.
 //!

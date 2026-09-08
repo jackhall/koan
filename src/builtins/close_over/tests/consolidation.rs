@@ -26,8 +26,8 @@ use super::{held_and_released, output};
 #[test]
 fn a_self_referential_dispatch_bucket_copies_to_one_copied_scope() {
     let source = "LET mk = (FN :{n :Number} -> Any = (\
-         (FN (STEP s :Str) -> Number = (n))\
-         (FN (STEP k :Number) -> Number = (STEP \"x\"))\
+         (EXPR (STEP s :Str) -> Number = (n))\
+         (EXPR (STEP k :Number) -> Number = (STEP \"x\"))\
          (FN :{} -> Number = (STEP 1))))\n\
          LET esc = (mk {n = 9})\n";
     assert_eq!(

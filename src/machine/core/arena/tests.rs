@@ -1278,7 +1278,7 @@ fn run_registries_free_with_the_run_frame() {
     let seeded = test_run.registries().labels.len();
     test_run.run(
         "NEWTYPE Point = :{x :Number, y :Number}\n\
-         FN (SHIFT amount :Number BY step :Number) -> Number = (amount + step)\n\
+         EXPR (SHIFT amount :Number BY step :Number) -> Number = (amount + step)\n\
          LET origin = (Point {x = 1, y = 2})\n\
          PRINT (SHIFT 1 BY 3)\n\
          PRINT origin",

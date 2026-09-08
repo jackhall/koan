@@ -19,7 +19,7 @@ fn plain_module_type_member_types_a_dispatch_slot() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))");
     let result = test_run.run_one(test_run.parse_one(
-        "USING some_module SCOPE ((FN (SHOW c :Color) -> Str = (\"a color\")) \
+        "USING some_module SCOPE ((EXPR (SHOW c :Color) -> Str = (\"a color\")) \
          (SHOW (Color.Blue null)))",
     ));
     assert!(matches!(result, KObject::KString(s) if *s == "a color"));
@@ -34,7 +34,7 @@ fn plain_module_type_member_types_a_return_slot() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))");
     let result = test_run.run_one(test_run.parse_one(
-        "USING some_module SCOPE ((FN (PAINT c :Color) -> Color = (c)) \
+        "USING some_module SCOPE ((EXPR (PAINT c :Color) -> Color = (c)) \
          (PAINT (Color.Blue null)))",
     ));
     // A variant value is a `Wrapped` whose identity is the member's own handle, so the member name
@@ -63,7 +63,7 @@ fn opaque_view_surfaces_its_abstract_member() {
          LET sealed = (int_ord :| Pointed)",
     );
     let result = test_run.run_one(test_run.parse_one(
-        "USING sealed SCOPE ((FN (TAKES x :Elem) -> Str = (\"ok\")) (TAKES (sealed.zero)))",
+        "USING sealed SCOPE ((EXPR (TAKES x :Elem) -> Str = (\"ok\")) (TAKES (sealed.zero)))",
     ));
     assert!(matches!(result, KObject::KString(s) if *s == "ok"));
 }
@@ -81,11 +81,10 @@ fn opaque_view_hides_the_representation_inside_the_block() {
          MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          LET sealed = (int_ord :| Pointed)",
     );
-    let err =
+    let err = test_run.run_one_err(
         test_run
-            .run_one_err(test_run.parse_one(
-                "USING sealed SCOPE ((FN (TAKES x :Elem) -> Str = (\"ok\")) (TAKES 5))",
-            ));
+            .parse_one("USING sealed SCOPE ((EXPR (TAKES x :Elem) -> Str = (\"ok\")) (TAKES 5))"),
+    );
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "a raw Number must not satisfy the view's abstract `Elem`, got {err}",
@@ -104,9 +103,9 @@ fn opaque_view_surfaces_its_manifest_member_concretely() {
          MODULE int_ord = ((LET Elem = Number) (LET Tag = Str) (LET zero = 0) (LET label = \"n\"))\n\
          LET sealed = (int_ord :| Boxed)",
     );
-    let result = test_run
-        .run_one(test_run.parse_one(
-            "USING sealed SCOPE ((FN (NAMEOF t :Tag) -> Str = (t)) (NAMEOF \"plain\"))",
+    let result =
+        test_run.run_one(test_run.parse_one(
+            "USING sealed SCOPE ((EXPR (NAMEOF t :Tag) -> Str = (t)) (NAMEOF \"plain\"))",
         ));
     assert!(
         matches!(result, KObject::KString(s) if *s == "plain"),
@@ -127,11 +126,10 @@ fn transparent_view_surfaces_the_concrete_type() {
          MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          LET opened = (int_ord :! Pointed)",
     );
-    let result =
+    let result = test_run.run_one(
         test_run
-            .run_one(test_run.parse_one(
-                "USING opened SCOPE ((FN (TAKES x :Elem) -> Str = (\"ok\")) (TAKES 5))",
-            ));
+            .parse_one("USING opened SCOPE ((EXPR (TAKES x :Elem) -> Str = (\"ok\")) (TAKES 5))"),
+    );
     assert!(matches!(result, KObject::KString(s) if *s == "ok"));
 }
 
@@ -150,7 +148,7 @@ fn block_type_declaration_shadows_a_surfaced_member() {
          LET sealed = (int_ord :| Pointed)",
     );
     let result = test_run.run_one(test_run.parse_one(
-        "USING sealed SCOPE ((LET Elem = Str) (FN (TAKES x :Elem) -> Str = (x)) \
+        "USING sealed SCOPE ((LET Elem = Str) (EXPR (TAKES x :Elem) -> Str = (x)) \
          (TAKES \"shadowed\"))",
     ));
     assert!(
@@ -175,7 +173,7 @@ fn block_type_alias_types_a_later_statement_of_the_same_block() {
         "MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))\n\
          USING some_module SCOPE (\n  \
          LET Alias = Color\n  \
-         FN (SHOW c :Alias) -> Str = (\"a color\")\n  \
+         EXPR (SHOW c :Alias) -> Str = (\"a color\")\n  \
          (SHOW (Alias.Blue null))\n\
          )",
     );
@@ -211,7 +209,7 @@ fn block_type_declaration_dies_with_the_block() {
          LET sealed = (int_ord :| Pointed)",
     );
     test_run.run("USING sealed SCOPE (LET Other = Str)");
-    let err = test_run.run_one_err(test_run.parse_one("FN (WIDEN s :Other) -> Str = (s)"));
+    let err = test_run.run_one_err(test_run.parse_one("EXPR (WIDEN s :Other) -> Str = (s)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("unknown type name `Other`")),
@@ -234,7 +232,7 @@ fn announced_group_member_reaches_bare_through_using() {
          )",
     );
     // Outside the window the members are `listy`'s, not this scope's.
-    let err = test_run.run_one_err(test_run.parse_one("FN (WRAP c :Cell) -> Number = (1)"));
+    let err = test_run.run_one_err(test_run.parse_one("EXPR (WRAP c :Cell) -> Number = (1)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("unknown type name `Cell`")),

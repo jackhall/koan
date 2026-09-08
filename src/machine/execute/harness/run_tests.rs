@@ -149,7 +149,7 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     for (i, e) in parse_all(
         &program,
         labels,
-        "FN (ADD a :Number BY b :Number) -> Number = (a)\n\
+        "EXPR (ADD a :Number BY b :Number) -> Number = (a)\n\
          LET aa = 3\n\
          LET bb = 4\n\
          LET out = (ADD aa BY bb)",
@@ -180,7 +180,7 @@ fn forward_keyword_function_reference_is_unbound() {
             &program,
             labels,
             "LET out = (DOUBLE 7)\n\
-             FN (DOUBLE x :Number) -> Number = (x)",
+             EXPR (DOUBLE x :Number) -> Number = (x)",
         ),
         scope,
     );
@@ -212,7 +212,7 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     for (i, e) in parse_all(
         &program,
         labels,
-        "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
+        "EXPR (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 11\n\
          LET bb = 22\n\
          LET out = (ADD aa BY bb)",
@@ -247,7 +247,7 @@ fn park_and_replay_minimal_program_for_miri() {
         labels,
         "LET z = 11\n\
          LET y = z\n\
-         FN (DOUBLE x :Number) -> Number = (x)\n\
+         EXPR (DOUBLE x :Number) -> Number = (x)\n\
          LET out = (DOUBLE y)",
     )
     .into_iter()

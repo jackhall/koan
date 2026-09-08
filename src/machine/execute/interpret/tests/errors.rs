@@ -19,7 +19,7 @@ fn unbound_name_at_top_level_returns_error() {
 #[test]
 fn error_inside_user_fn_body_carries_frame() {
     let result = interpret_with_writer(
-        "FN (BAD) -> Any = (undefined_thing)\nBAD",
+        "EXPR (BAD) -> Any = (undefined_thing)\nBAD",
         Box::new(std::io::sink()),
     );
     match result {
@@ -123,8 +123,8 @@ fn parse_error_carries_span_and_renders_location() {
 #[test]
 fn frame_chain_walks_nested_user_fn_calls() {
     let result = interpret_with_writer(
-        "FN (INNER) -> Any = (undefined)\n\
-         FN (OUTER) -> Any = (LET xx = (INNER))\n\
+        "EXPR (INNER) -> Any = (undefined)\n\
+         EXPR (OUTER) -> Any = (LET xx = (INNER))\n\
          OUTER",
         Box::new(std::io::sink()),
     );
@@ -155,8 +155,8 @@ fn frame_chain_walks_nested_user_fn_calls() {
 #[test]
 fn deferred_bind_frame_renders_expression_and_location() {
     let result = interpret_with_writer_path(
-        "FN (INNER) -> Any = (undefined)\n\
-         FN (OUTER) -> Any = (LET xx = (INNER))\n\
+        "EXPR (INNER) -> Any = (undefined)\n\
+         EXPR (OUTER) -> Any = (LET xx = (INNER))\n\
          OUTER",
         Some("trace.koan"),
         Box::new(std::io::sink()),
@@ -185,7 +185,7 @@ fn deferred_bind_frame_renders_expression_and_location() {
     assert_eq!(&*location.path, "trace.koan");
     assert_eq!(
         (location.line, location.col_utf16),
-        (2, 21),
+        (2, 23),
         "the location resolves to OUTER's `LET xx = ...` on line 2",
     );
 }

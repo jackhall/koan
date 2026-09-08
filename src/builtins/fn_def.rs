@@ -63,14 +63,14 @@ pub(crate) fn build_fn_like<'a>(
         FnKind::Function { bound_name: None } if in_sig_body => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "inside a SIG body, a keyworded member is declared rather than defined — drop \
-                 the `= (<body>)` and write `(FN (<head>) -> <Return>)`"
+                 the `= (<body>)` and write `(EXPR (<head>) -> <Return>)`"
                     .to_string(),
             ))));
         }
         FnKind::Declaration if !in_sig_body => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "a bodyless FN head declares a SIG member and is only valid inside a SIG body — \
-                 write `FN (<head>) -> <Return> = (<body>)` to define a function"
+                 write `EXPR (<head>) -> <Return> = (<body>)` to define a function"
                     .to_string(),
             ))));
         }
@@ -181,7 +181,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     )
 }
 
-/// `FN (<head>) -> <Return>` — the bodyless head, SIG-body-only, which declares a keyworded
+/// `EXPR (<head>) -> <Return>` — the bodyless head, SIG-body-only, which declares a keyworded
 /// (dispatch-bucket) member of the signature under construction rather than defining a function.
 /// Same head shape and same parse path as the definition form, so the bucket key and the slot types
 /// derive identically for a declaration and the definition that satisfies it.
@@ -504,7 +504,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
-    // The SIG-body declaration form: `FN (<head>) -> <Return>`, with no `=` / body slots. Full
+    // The SIG-body declaration form: `EXPR (<head>) -> <Return>`, with no `=` / body slots. Full
     // bucket-key matching keeps `[FN, Slot, ->, Slot]` disjoint from every definition spelling, so
     // the two never compete — the shorter key simply is not the longer one. The body guards the
     // rest: outside a SIG body this form errors and points at the definition spelling, and inside

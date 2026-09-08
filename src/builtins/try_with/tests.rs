@@ -61,7 +61,7 @@ fn dispatch_failed_arm_catches_keyworded_dispatch_failure() {
     // A Keyworded overload miss (type-mismatched arg, no matching FN) is slot-terminal,
     // so TRY intercepts it rather than the run aborting at the `execute()` boundary.
     let bytes = run_program(
-        "FN (DOUBLE x :Number) -> Number = (x)\n\
+        "EXPR (DOUBLE x :Number) -> Number = (x)\n\
          TRY (DOUBLE \"hi\") -> :Str WITH (\
             Ok -> (PRINT \"ok\")\
             DispatchFailed -> (PRINT \"caught\")\
@@ -225,7 +225,7 @@ fn frames_non_empty_after_recursive_call() {
     // PRINT renders a List as `[item, …]`, so a non-empty frames list starts
     // with `[in ` and an empty list is `[]`.
     let bytes = run_program(
-        "FN (BAD n :Number) -> Any = (missing_name)\n\
+        "EXPR (BAD n :Number) -> Any = (missing_name)\n\
          TRY (BAD 1) -> :Str WITH (\
             UnboundName -> (PRINT it.frames)\
          )",
@@ -272,7 +272,7 @@ fn try_inside_tco_position_preserves_frame_chain() {
     // the catch path must keep the call-site frame Rc chained on the new frame.
     let bytes = run_program(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Any) -> Any = (TRY (MATCH (b) OVER Bit -> :Str WITH (\
+         EXPR (HOP b :Any) -> Any = (TRY (MATCH (b) OVER Bit -> :Str WITH (\
             One -> (HOP (Bit.Zero null))\
             Zero -> (PRINT \"done\")\
          )) -> :Str WITH (Ok -> it))\n\

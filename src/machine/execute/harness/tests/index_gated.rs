@@ -130,11 +130,11 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
         &program,
         &test_run.registries().labels,
         "UNION Tick = (More :Null Done :Null)\n\
-         FN (PING n :Number c :Any) -> Number = (MATCH (c) OVER Tick -> :Number WITH (\
+         EXPR (PING n :Number c :Any) -> Number = (MATCH (c) OVER Tick -> :Number WITH (\
             More -> (PONG (n) (Tick.Done null))\
             Done -> (n)\
          ))\n\
-         FN (PONG n :Number c :Any) -> Number = (MATCH (c) OVER Tick -> :Number WITH (\
+         EXPR (PONG n :Number c :Any) -> Number = (MATCH (c) OVER Tick -> :Number WITH (\
             More -> (PING (n) (Tick.Done null))\
             Done -> (n)\
          ))\n\
@@ -187,10 +187,10 @@ fn overload_pre_filter_hides_later_sibling_overload() {
     let test_run = run_scope(
         &program,
         &region,
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
+        "EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
          LET xs = [1 2 3]\n\
          LET result = (DESCRIBE xs)\n\
-         FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
+         EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
     );
     let scope = test_run.scope;
     assert!(
@@ -207,7 +207,7 @@ fn overload_pre_filter_hides_later_sibling_overload() {
 #[test]
 fn struct_forward_reference_in_fn_param_is_position_error() {
     let err = run_collect_err(
-        "FN (TAKES p :Pt) -> Number = (p.x)\n\
+        "EXPR (TAKES p :Pt) -> Number = (p.x)\n\
          NEWTYPE Pt = :{x :Number, y :Number}",
     )
     .expect("a forward STRUCT reference in a FN signature should error");
@@ -249,7 +249,7 @@ fn value_let_after_reference_is_unbound_not_carved_out() {
 #[test]
 fn fn_return_type_forward_reference_is_position_error() {
     let err = run_collect_err(
-        "FN (FOO x :Number) -> Later = (x)\n\
+        "EXPR (FOO x :Number) -> Later = (x)\n\
          NEWTYPE Later = :{n :Number}",
     )
     .expect("a forward STRUCT reference in a FN return type should error");
@@ -268,7 +268,7 @@ fn fn_return_type_backward_reference_resolves() {
         &program,
         &region,
         "NEWTYPE Early = :{n :Number}\n\
-         FN (FOO x :Number) -> Early = (Early {n = x})\n\
+         EXPR (FOO x :Number) -> Early = (Early {n = x})\n\
          LET out = (FOO 5)",
     );
     let scope = test_run.scope;

@@ -161,7 +161,7 @@ fn pairwise_group_evaluates_a_shared_operand_once() {
     let region = run_root_storage();
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     test_run.run(
-        "FN (LOUD x :Number) -> Number = ((PRINT x) (x))\n\
+        "EXPR (LOUD x :Number) -> Number = ((PRINT x) (x))\n\
          GROUP tally PAIRWISE FOLD #(⊖) LEFT = (\
            (OP #(%) OVER Number = (left + right))\
            (OP #(⊖) OVER Number = (left - right))\
@@ -291,7 +291,7 @@ fn a_call_naming_the_op_keyword_is_not_a_member() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (a :Number OP b :Number) -> Number = (a)\n\
+        "EXPR (a :Number OP b :Number) -> Number = (a)\n\
          GROUP vec_ops FOLD LEFT = (\
            (OP #(⊞) OVER Number = (left + right))\
            (1 OP 2)\

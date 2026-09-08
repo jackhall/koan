@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn eval_of_function_returning_kexpression() {
         let bytes = run_program(
-            "FN (MAKE_AST) -> KExpression = (#(1))\n\
+            "EXPR (MAKE_AST) -> KExpression = (#(1))\n\
              PRINT $(MAKE_AST)",
         );
         assert_eq!(bytes, b"1\n");
@@ -160,7 +160,7 @@ mod tests {
         // through its `outer` pointer.
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\
-             FN (HOP b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
+             EXPR (HOP b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
                  One -> $(#(HOP (Bit.Zero null)))\
                  Zero -> (PRINT \"done\")\
              ))\n\

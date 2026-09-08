@@ -948,8 +948,8 @@ mod tests {
         let scope = test_run.scope;
         test_run.run(
             "NEWTYPE Distance = Number\n\
-             FN (TAKES_NUM x :Number) -> Str = (\"num\")\n\
-             FN (TAKES_DIST x :Distance) -> Str = (\"dist\")",
+             EXPR (TAKES_NUM x :Number) -> Str = (\"num\")\n\
+             EXPR (TAKES_DIST x :Distance) -> Str = (\"dist\")",
         );
         let r1 = test_run.run_one(test_run.parse_one("TAKES_DIST (Distance (3.0))"));
         match r1 {
@@ -1051,7 +1051,7 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run(
             "NEWTYPE Distance = Number\n\
-             FN (MAKE_NUM x :Number) -> Number = (x)",
+             EXPR (MAKE_NUM x :Number) -> Number = (x)",
         );
         let result = test_run.run_one(test_run.parse_one("Distance (MAKE_NUM 3.0)"));
         match result {
@@ -1316,7 +1316,7 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run(
             "NEWTYPE (Type AS Wrapper)\n\
-             FN (UNPACK x :(Number AS Wrapper)) -> Str = (\"hit\")",
+             EXPR (UNPACK x :(Number AS Wrapper)) -> Str = (\"hit\")",
         );
         // A matching applied-type value dispatches.
         let hit = test_run.run_one(test_run.parse_one("UNPACK (Wrapper (3.0))"));
@@ -1398,7 +1398,7 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run(
             "NEWTYPE (Type AS Wrapper)\n\
-             FN (ANYUNPACK x :(Any AS Wrapper)) -> Str = (\"hit\")",
+             EXPR (ANYUNPACK x :(Any AS Wrapper)) -> Str = (\"hit\")",
         );
         for probe in ["ANYUNPACK (Wrapper (3.0))", "ANYUNPACK (Wrapper (\"s\"))"] {
             let hit = test_run.run_one(test_run.parse_one(probe));

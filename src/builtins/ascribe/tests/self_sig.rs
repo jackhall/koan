@@ -305,7 +305,7 @@ fn identical_modules_share_satisfaction_verdict() {
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1) (LET extra = 9))\n\
          MODULE b = ((LET x = 2) (LET extra = 9))\n\
-         FN (TAKE m :Ord) -> Number = (m.x)\n\
+         EXPR (TAKE m :Ord) -> Number = (m.x)\n\
          TAKE a",
         "TAKE b",
     );
@@ -338,7 +338,7 @@ fn differing_module_interface_misses_the_shared_verdict() {
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1))\n\
          MODULE c = ((LET x = 1) (LET extra = \"tag\"))\n\
-         FN (TAKE m :Ord) -> Number = (m.x)\n\
+         EXPR (TAKE m :Ord) -> Number = (m.x)\n\
          TAKE a",
         "TAKE c",
     );
@@ -446,8 +446,9 @@ fn an_fn_head_over_an_operator_symbol_declares_no_record() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run
-        .run("MODULE strs = ((FN (left :Str \u{2295} right :Str) -> Str = ((left CONCAT right))))");
+    test_run.run(
+        "MODULE strs = ((EXPR (left :Str \u{2295} right :Str) -> Str = ((left CONCAT right))))",
+    );
     let m = module_named(scope, "strs", test_run.registries());
     assert!(operator_records(m, &test_run).is_empty());
 }

@@ -21,14 +21,14 @@ use crate::machine::{program_storage, run_root_storage};
 fn box_program() -> &'static str {
     "NEWTYPE Carrier = Number\n\
      SIG Box = ((TYPE Elt) (VAL zero :Elt) (VAL pure :(FN :{x :Elt} -> Elt)) \
-     (FN (PURE x :Elt) -> Elt))\n\
+     (EXPR (PURE x :Elt) -> Elt))\n\
      MODULE bx = ((LET Elt = Carrier) (LET zero = (Carrier 0)) \
-     (LET pure = FN (PURE x :Carrier) -> Carrier = (x)) \
-     (FN (HIDE x :Number) -> Number = (x)))\n\
+     (LET pure = FN EXPR (PURE x :Carrier) -> Carrier = (x)) \
+     (EXPR (HIDE x :Number) -> Number = (x)))\n\
      LET view = (bx :| Box)\n\
      LET tview = (bx :! Box)\n\
-     FN (TAKEELT x :(view.Elt)) -> Number = (3)\n\
-     FN (TAKECARRIER x :Carrier) -> Number = (4)"
+     EXPR (TAKEELT x :(view.Elt)) -> Number = (3)\n\
+     EXPR (TAKECARRIER x :Carrier) -> Number = (4)"
 }
 
 // ---------- The boundary ----------
@@ -135,8 +135,8 @@ fn two_declared_overloads_under_one_key_are_both_callable() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "SIG Two = ((FN (PURE x :Number) -> Number) (FN (PURE x :Str) -> Str))\n\
-         MODULE m2 = ((FN (PURE x :Number) -> Number = (1)) (FN (PURE x :Str) -> Str = (\"s\")))\n\
+        "SIG Two = ((EXPR (PURE x :Number) -> Number) (EXPR (PURE x :Str) -> Str))\n\
+         MODULE m2 = ((EXPR (PURE x :Number) -> Number = (1)) (EXPR (PURE x :Str) -> Str = (\"s\")))\n\
          LET v2 = (m2 :| Two)",
     );
 
@@ -161,8 +161,8 @@ fn only_the_most_specific_satisfier_is_installed() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "SIG Wide = ((FN (PICK x :Number) -> Number))\n\
-         MODULE both = ((FN (PICK x :Number) -> Number = (1)) (FN (PICK x :Any) -> Number = (2)))\n\
+        "SIG Wide = ((EXPR (PICK x :Number) -> Number))\n\
+         MODULE both = ((EXPR (PICK x :Number) -> Number = (1)) (EXPR (PICK x :Any) -> Number = (2)))\n\
          LET wv = (both :| Wide)",
     );
 
@@ -186,9 +186,9 @@ fn incomparable_satisfiers_fail_the_ascription() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "SIG Amb = ((FN (COMBINE a :Number AND b :Number) -> Number))\n\
-         MODULE amb = ((FN (COMBINE a :Any AND b :Number) -> Number = (1)) \
-         (FN (COMBINE a :Number AND b :Any) -> Number = (2)))",
+        "SIG Amb = ((EXPR (COMBINE a :Number AND b :Number) -> Number))\n\
+         MODULE amb = ((EXPR (COMBINE a :Any AND b :Number) -> Number = (1)) \
+         (EXPR (COMBINE a :Number AND b :Any) -> Number = (2)))",
     );
     let error = test_run.run_one_err(test_run.parse_one("(amb :| Amb)"));
     let rendered = error.to_string();
@@ -207,8 +207,8 @@ fn an_unsatisfied_keyworded_member_names_the_head_it_wanted() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "SIG Need = ((FN (PURE x :Number) -> Number))\n\
-         MODULE wrong = ((FN (PURE x :Str) -> Str = (\"z\")))\n\
+        "SIG Need = ((EXPR (PURE x :Number) -> Number))\n\
+         MODULE wrong = ((EXPR (PURE x :Str) -> Str = (\"z\")))\n\
          MODULE absent = (LET val = 1)",
     );
 
@@ -240,11 +240,11 @@ fn a_keyworded_slot_admits_a_module_and_orders_by_specificity() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "SIG Bare = ((VAL tag :Number))\n\
-         SIG Need = ((VAL tag :Number) (FN (PURE x :Number) -> Number))\n\
-         MODULE has = ((LET tag = 1) (FN (PURE x :Number) -> Number = (1)))\n\
+         SIG Need = ((VAL tag :Number) (EXPR (PURE x :Number) -> Number))\n\
+         MODULE has = ((LET tag = 1) (EXPR (PURE x :Number) -> Number = (1)))\n\
          MODULE lacks = ((LET tag = 2))\n\
-         FN (CLASSIFY er :Need) -> Number = (10)\n\
-         FN (CLASSIFY er :Bare) -> Number = (20)",
+         EXPR (CLASSIFY er :Need) -> Number = (10)\n\
+         EXPR (CLASSIFY er :Bare) -> Number = (20)",
     );
 
     let specific = test_run.run_one(test_run.parse_one("CLASSIFY has"));
@@ -299,10 +299,10 @@ fn a_with_pin_folds_through_a_keyworded_member() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "NEWTYPE Carrier = Number\n\
-         SIG Box = ((TYPE Elt) (FN (PURE x :Elt) -> Elt))\n\
-         MODULE bx = ((LET Elt = Carrier) (FN (PURE x :Carrier) -> Carrier = (x)))\n\
+         SIG Box = ((TYPE Elt) (EXPR (PURE x :Elt) -> Elt))\n\
+         MODULE bx = ((LET Elt = Carrier) (EXPR (PURE x :Carrier) -> Carrier = (x)))\n\
          LET pinned = (bx :| (Box WITH {Elt = Carrier}))\n\
-         FN (TAKECARRIER x :Carrier) -> Number = (4)",
+         EXPR (TAKECARRIER x :Carrier) -> Number = (4)",
     );
 
     let result =
@@ -324,13 +324,13 @@ fn a_nested_keyworded_member_reports_the_outer_views_types() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "NEWTYPE Carrier = Number\n\
-         SIG Inner = ((TYPE Item) (VAL one :Item) (FN (ONE x :Item) -> Item))\n\
+         SIG Inner = ((TYPE Item) (VAL one :Item) (EXPR (ONE x :Item) -> Item))\n\
          SIG Outer = ((TYPE Elt) (VAL sub :{inner :(Inner WITH {Item = Elt})}))\n\
          MODULE carrier_inner = ((LET Item = Carrier) (LET one = (Carrier 1)) \
-         (FN (ONE x :Carrier) -> Carrier = (x)) (FN (EXTRA x :Number) -> Number = (x)))\n\
+         (EXPR (ONE x :Carrier) -> Carrier = (x)) (EXPR (EXTRA x :Number) -> Number = (x)))\n\
          MODULE outer_m = ((LET Elt = Carrier) (LET sub = {inner = carrier_inner}))\n\
          LET view = (outer_m :| Outer)\n\
-         FN (TAKEELT x :(view.Elt)) -> Number = (3)",
+         EXPR (TAKEELT x :(view.Elt)) -> Number = (3)",
     );
 
     let result =
@@ -369,12 +369,12 @@ fn a_returned_views_keyworded_member_stays_callable() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "NEWTYPE Carrier = Number\n\
-         SIG Box = ((TYPE Elt) (VAL zero :Elt) (FN (PURE x :Elt) -> Elt))\n\
+         SIG Box = ((TYPE Elt) (VAL zero :Elt) (EXPR (PURE x :Elt) -> Elt))\n\
          MODULE bx = ((LET Elt = Carrier) (LET zero = (Carrier 0)) \
-         (FN (PURE x :Carrier) -> Carrier = (x)))\n\
-         FN (MAKEVIEW er :Box) -> Module = (er :| Box)\n\
+         (EXPR (PURE x :Carrier) -> Carrier = (x)))\n\
+         EXPR (MAKEVIEW er :Box) -> Module = (er :| Box)\n\
          LET made = (MAKEVIEW bx)\n\
-         FN (TAKEELT x :(made.Elt)) -> Number = (3)",
+         EXPR (TAKEELT x :(made.Elt)) -> Number = (3)",
     );
 
     let result =

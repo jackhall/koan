@@ -52,7 +52,7 @@ fn quote_inside_a_list_literal_becomes_an_element_value() {
 #[test]
 fn kexpression_parameter_captures_a_quote_raw() {
     let bytes = run_program(
-        "FN (KEEP q :KExpression) -> KExpression = (q)\n\
+        "EXPR (KEEP q :KExpression) -> KExpression = (q)\n\
          LET kept = (KEEP #(PRINT 1))\n\
          PRINT \"held\"\n\
          $(kept)",

@@ -20,10 +20,10 @@ fn functor_body_module_dispatch_does_not_dangle() {
          MODULE int_ord = (LET compare = 7)",
     );
     test_run.run("LET int_ord_a = (int_ord :! Ordered)");
-    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     test_run.run("LET held_set = (MAKESET (int_ord_a))");
 
-    test_run.run("FN (NOOP) -> Number = (1)");
+    test_run.run("EXPR (NOOP) -> Number = (1)");
     for _ in 0..20 {
         test_run.run_one(test_run.parse_one("NOOP"));
     }
@@ -51,7 +51,7 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
          MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
          LET int_ord_view = (int_ord :| Ordered)",
     );
-    test_run.run("FN (USE_TYPE er :Ordered) -> Any = (er.Carrier)");
+    test_run.run("EXPR (USE_TYPE er :Ordered) -> Any = (er.Carrier)");
     let result = test_run.run_one_type(test_run.parse_one("USE_TYPE int_ord_view"));
     // Opaque ascription mints a fresh abstract `Carrier` member; the body must return
     // that identity, not the underlying concrete `Number`.
@@ -83,8 +83,8 @@ fn functor_closure_escape_pins_type_class_bind() {
          LET int_ord_view = (int_ord :| Ordered)",
     );
     test_run.run(
-        "FN (MAKE_LOOKUP er :Ordered) -> Any = \
-            (FN (LOOKUP x :Number) -> Any = (er.Carrier))",
+        "EXPR (MAKE_LOOKUP er :Ordered) -> Any = \
+            (EXPR (LOOKUP x :Number) -> Any = (er.Carrier))",
     );
     test_run.run("LET maker = (MAKE_LOOKUP int_ord_view)");
     // Churn the per-call region's drop discipline before invoking the inner FN.
@@ -105,7 +105,7 @@ fn functor_closure_escape_pins_type_class_bind() {
     }
 }
 
-/// `FN (MAKESET er :Ordered) -> Ordered = (er)` dispatches and the
+/// `EXPR (MAKESET er :Ordered) -> Ordered = (er)` dispatches and the
 /// auto-wrapped `(er)` body resolves `er` through the per-call value-side binding,
 /// returning the passed-through module without surfacing `UnboundName`.
 #[test]
@@ -117,7 +117,7 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
          LET ord_view = (int_ord :! Ordered)\n\
-         FN (MAKESET er :Ordered) -> Ordered = (er)",
+         EXPR (MAKESET er :Ordered) -> Ordered = (er)",
     );
     let result = test_run.run_one(test_run.parse_one("MAKESET ord_view"));
     match result {

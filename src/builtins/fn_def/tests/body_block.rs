@@ -12,7 +12,7 @@ fn multi_statement_fn_body_returns_last_value() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
+    test_run.run("EXPR (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     let v = test_run.run_one(test_run.parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));
 }
@@ -22,7 +22,7 @@ fn multi_statement_fn_body_returns_last_value() {
 #[test]
 fn multi_statement_fn_body_runs_each_statement() {
     let bytes = capture_program_output(
-        "FN (FOO) -> Str = ((PRINT \"a\") (PRINT \"b\") (PRINT \"c\"))\nFOO",
+        "EXPR (FOO) -> Str = ((PRINT \"a\") (PRINT \"b\") (PRINT \"c\"))\nFOO",
     );
     assert!(
         bytes.windows(2).any(|w| w == b"a\n"),
@@ -48,7 +48,7 @@ fn backward_reference_across_statements_works() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (FOO) -> Number = ((LET a = 10) (LET b = (a)) (b))");
+    test_run.run("EXPR (FOO) -> Number = ((LET a = 10) (LET b = (a)) (b))");
     let v = test_run.run_one(test_run.parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 10.0));
 }

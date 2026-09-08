@@ -270,7 +270,7 @@ fn fn_named_install_lets_sibling_call_resolve() {
     let test_run = run_block(
         &program,
         &region,
-        "FN (DOUBLE x :Number) -> Number = (x + x)\n\
+        "EXPR (DOUBLE x :Number) -> Number = (x + x)\n\
          LET out = (DOUBLE 5)",
     );
     assert_eq!(number(&test_run, "out"), 10.0);
@@ -295,7 +295,7 @@ fn op_install_lets_sibling_use_resolve() {
 // Combined statement forms: one binder, both install channels.
 // ---------------------------------------------------------------------------
 
-/// The functor idiom in its combined spelling: `LET make_set = FN (MAKESET …) …` installs the
+/// The functor idiom in its combined spelling: `LET make_set = FN EXPR (MAKESET …) …` installs the
 /// statement's own pending-overload bucket `[MAKESET, Slot]` at submission alongside the name, so a
 /// later sibling `(MAKESET …)` call parks and resolves when the statement completes.
 #[test]
@@ -308,7 +308,7 @@ fn functor_chain_sibling_call_parks_then_resolves() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
          LET make_set = \
-            FN (MAKESET er :Ordered) -> Module = (MODULE result = (LET inner = 1))\n\
+            FN EXPR (MAKESET er :Ordered) -> Module = (MODULE result = (LET inner = 1))\n\
          LET the_set = (MAKESET int_ord)",
     );
     assert!(

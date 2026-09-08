@@ -132,7 +132,7 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run(
         &program,
-        "FN (EMPTY) -> :(LIST OF Number) = ([])\nLET xs = (EMPTY)\n",
+        "EXPR (EMPTY) -> :(LIST OF Number) = ([])\nLET xs = (EMPTY)\n",
         &region,
         captured,
     );

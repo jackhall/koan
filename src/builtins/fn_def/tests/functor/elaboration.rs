@@ -52,7 +52,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
-         FN (USE_ORD er :Ordered) -> Null = (PRINT \"ok\")",
+         EXPR (USE_ORD er :Ordered) -> Null = (PRINT \"ok\")",
     );
     // SIG installs a single type-side identity; read it from `bindings.types`.
     let ordered = lookup_type(scope, "Ordered");
@@ -99,7 +99,7 @@ fn let_then_fn_in_same_batch_works() {
         test_run.program_brand(),
         &test_run.registries().labels,
         "LET MyList = :(LIST OF Number)\n\
-         FN (USE xs :MyList) -> Number = (1)",
+         EXPR (USE xs :MyList) -> Number = (1)",
     )
     .unwrap();
     for e in exprs {

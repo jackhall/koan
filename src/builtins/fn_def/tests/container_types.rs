@@ -16,7 +16,7 @@ fn fn_return_coarsens_list_carrier_to_declared() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (NUMS) -> :(LIST OF Any) = ([1 2 3])");
+    test_run.run("EXPR (NUMS) -> :(LIST OF Any) = ([1 2 3])");
     let result = test_run.run_one(test_run.parse_one("NUMS"));
     assert_eq!(result.ktype(), test_run.types().list(KType::ANY));
 }
@@ -27,7 +27,7 @@ fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (NUMS) -> :(LIST OF Number) = ([1 2 3])");
+    test_run.run("EXPR (NUMS) -> :(LIST OF Number) = ([1 2 3])");
     let result = test_run.run_one(test_run.parse_one("NUMS"));
     assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }
@@ -40,7 +40,7 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (BAD) -> :(LIST OF Number) = ([2 \"hello\"])");
+    test_run.run("EXPR (BAD) -> :(LIST OF Number) = ([2 \"hello\"])");
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -63,7 +63,7 @@ fn fn_return_list_of_type_values_rejected_by_value_element_slot() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (SNEAK) -> :(LIST OF Number) = ([Number])");
+    test_run.run("EXPR (SNEAK) -> :(LIST OF Number) = ([Number])");
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -91,7 +91,7 @@ fn fn_returning_list_of_type_accepts_stored_types() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (KINDS) -> :(LIST OF Type) = ([Number Str])");
+    test_run.run("EXPR (KINDS) -> :(LIST OF Type) = ([Number Str])");
     let result = test_run.run_one(test_run.parse_one("KINDS"));
     assert_eq!(
         result.ktype(),
@@ -108,7 +108,7 @@ fn fn_return_empty_list_stamps_declared_element_type() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (EMPTY) -> :(LIST OF Number) = ([])");
+    test_run.run("EXPR (EMPTY) -> :(LIST OF Number) = ([])");
     let result = test_run.run_one(test_run.parse_one("EMPTY"));
     assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }
@@ -119,7 +119,7 @@ fn fn_return_empty_list_stamps_declared_element_type() {
 #[test]
 fn fn_with_typed_list_param_accepts_an_empty_list() {
     let bytes = capture_program_output(
-        "FN (COUNT xs :(LIST OF Number)) -> Number = (0)\n\
+        "EXPR (COUNT xs :(LIST OF Number)) -> Number = (0)\n\
          LET empty = []\n\
          PRINT (COUNT empty)\n\
          PRINT (COUNT [])",
@@ -130,7 +130,7 @@ fn fn_with_typed_list_param_accepts_an_empty_list() {
 #[test]
 fn fn_with_typed_list_param_accepts_matching_list() {
     let bytes = capture_program_output(
-        "FN (HEAD xs :(LIST OF Number)) -> Number = (1)\n\
+        "EXPR (HEAD xs :(LIST OF Number)) -> Number = (1)\n\
          PRINT (HEAD [1 2 3])",
     );
     assert_eq!(bytes, b"1\n");
@@ -146,8 +146,8 @@ fn fn_with_signature_element_list_param_dispatches_on_satisfaction() {
         "SIG HasLabel = (VAL label :Str)\n\
          MODULE widget = (LET label = \"button\")\n\
          MODULE plain = (LET count = 3)\n\
-         FN (DESCRIBE xs :(LIST OF HasLabel)) -> Str = (\"labelled\")\n\
-         FN (DESCRIBE xs :Any) -> Str = (\"generic\")\n\
+         EXPR (DESCRIBE xs :(LIST OF HasLabel)) -> Str = (\"labelled\")\n\
+         EXPR (DESCRIBE xs :Any) -> Str = (\"generic\")\n\
          PRINT (DESCRIBE [widget, widget])\n\
          PRINT (DESCRIBE [plain, plain])",
     );
@@ -166,8 +166,8 @@ fn fn_with_signature_element_list_param_admits_distinct_self_sigs() {
          MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
          MODULE str_ord = ((LET Carrier = Str) (LET zero = \"\"))\n\
          MODULE plain = (LET count = 3)\n\
-         FN (DESCRIBE xs :(LIST OF Ordered)) -> Str = (\"ordered\")\n\
-         FN (DESCRIBE xs :Any) -> Str = (\"generic\")\n\
+         EXPR (DESCRIBE xs :(LIST OF Ordered)) -> Str = (\"ordered\")\n\
+         EXPR (DESCRIBE xs :Any) -> Str = (\"generic\")\n\
          PRINT (DESCRIBE [int_ord, str_ord])\n\
          PRINT (DESCRIBE [int_ord, plain])",
     );
@@ -200,7 +200,7 @@ fn fn_with_signature_value_map_param_dispatches() {
     let bytes = capture_program_output(
         "SIG HasLabel = (VAL label :Str)\n\
          MODULE widget = (LET label = \"button\")\n\
-         FN (LOOKUP d :(MAP Str -> HasLabel)) -> Str = (\"map-of-labelled\")\n\
+         EXPR (LOOKUP d :(MAP Str -> HasLabel)) -> Str = (\"map-of-labelled\")\n\
          PRINT (LOOKUP {\"a\": widget})",
     );
     assert_eq!(bytes, b"map-of-labelled\n");
@@ -212,7 +212,7 @@ fn fn_with_signature_value_map_param_dispatches() {
 #[test]
 fn fn_with_typed_list_param_accepts_bound_identifier_elements() {
     let bytes = capture_program_output(
-        "FN (HEAD xs :(LIST OF Number)) -> Number = (1)\n\
+        "EXPR (HEAD xs :(LIST OF Number)) -> Number = (1)\n\
          LET n = 5\n\
          LET ns = [n, n]\n\
          PRINT (HEAD ns)\n\
@@ -224,7 +224,7 @@ fn fn_with_typed_list_param_accepts_bound_identifier_elements() {
 #[test]
 fn fn_returning_typed_list_accepts_matching_value() {
     let bytes = capture_program_output(
-        "FN (NUMS) -> :(LIST OF Number) = ([1 2 3])\n\
+        "EXPR (NUMS) -> :(LIST OF Number) = ([1 2 3])\n\
          PRINT (NUMS)",
     );
     assert_eq!(bytes, b"[1, 2, 3]\n");
@@ -238,7 +238,7 @@ fn fn_returning_typed_list_rejects_wrong_element_type() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (BAD) -> :(LIST OF Number) = ([1 \"x\"])");
+    test_run.run("EXPR (BAD) -> :(LIST OF Number) = ([1 \"x\"])");
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -259,7 +259,7 @@ fn fn_returning_typed_list_rejects_wrong_element_type() {
 #[test]
 fn fn_with_typed_dict_param_accepts_matching_dict() {
     let bytes = capture_program_output(
-        "FN (SIZE d :(MAP Str -> Number)) -> Number = (1)\n\
+        "EXPR (SIZE d :(MAP Str -> Number)) -> Number = (1)\n\
          PRINT (SIZE {\"a\": 1, \"b\": 2})",
     );
     assert_eq!(bytes, b"1\n");
@@ -271,8 +271,8 @@ fn fn_with_typed_dict_param_accepts_matching_dict() {
 #[test]
 fn fn_with_typed_function_param_accepts_matching_function() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")\n\
-         LET g = FN (SHOW x :Number) -> Str = (\"hi\")\n\
+        "EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")\n\
+         LET g = FN EXPR (SHOW x :Number) -> Str = (\"hi\")\n\
          PRINT (USE g)",
     );
     assert_eq!(bytes, b"got fn\n");
@@ -287,8 +287,8 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")");
-    test_run.run("LET g = FN (SHOW n :Number) -> Str = (\"hi\")");
+    test_run.run("EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")");
+    test_run.run("LET g = FN EXPR (SHOW n :Number) -> Str = (\"hi\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -316,8 +316,8 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
 #[test]
 fn fn_with_typed_function_param_admits_contravariant_param() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")\n\
-         LET g = FN (SHOW x :Any) -> Str = (\"hi\")\n\
+        "EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")\n\
+         LET g = FN EXPR (SHOW x :Any) -> Str = (\"hi\")\n\
          PRINT (USE g)",
     );
     assert_eq!(bytes, b"got fn\n");
@@ -329,8 +329,8 @@ fn fn_with_typed_function_param_admits_contravariant_param() {
 #[test]
 fn fn_with_typed_function_param_admits_covariant_return() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN :{x :Number} -> Any)) -> Str = (\"got fn\")\n\
-         LET g = FN (SHOW x :Number) -> Number = (1)\n\
+        "EXPR (USE f :(FN :{x :Number} -> Any)) -> Str = (\"got fn\")\n\
+         LET g = FN EXPR (SHOW x :Number) -> Number = (1)\n\
          PRINT (USE g)",
     );
     assert_eq!(bytes, b"got fn\n");
@@ -341,8 +341,8 @@ fn fn_with_typed_function_param_admits_covariant_return() {
 #[test]
 fn fn_with_typed_function_param_admits_width_drop() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN :{x :Number, y :Str} -> Str)) -> Str = (\"got fn\")\n\
-         LET g = FN (SHOW x :Number) -> Str = (\"hi\")\n\
+        "EXPR (USE f :(FN :{x :Number, y :Str} -> Str)) -> Str = (\"got fn\")\n\
+         LET g = FN EXPR (SHOW x :Number) -> Str = (\"hi\")\n\
          PRINT (USE g)",
     );
     assert_eq!(bytes, b"got fn\n");
@@ -357,8 +357,8 @@ fn fn_with_typed_function_param_rejects_width_extra() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")");
-    test_run.run("LET g = FN (SHOW x :Number, y :Str) -> Str = (\"hi\")");
+    test_run.run("EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")");
+    test_run.run("LET g = FN EXPR (SHOW x :Number, y :Str) -> Str = (\"hi\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -387,16 +387,16 @@ fn fn_with_typed_function_param_rejects_width_extra() {
 #[test]
 fn fn_typed_function_param_contravariant_tiebreak() {
     let any_value = capture_program_output(
-        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"narrow\")\n\
-         FN (USE f :(FN :{x :Any} -> Str)) -> Str = (\"wide\")\n\
-         LET g = FN (GET x :Any) -> Str = (\"v\")\n\
+        "EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = (\"narrow\")\n\
+         EXPR (USE f :(FN :{x :Any} -> Str)) -> Str = (\"wide\")\n\
+         LET g = FN EXPR (GET x :Any) -> Str = (\"v\")\n\
          PRINT (USE g)",
     );
     assert_eq!(any_value, b"wide\n");
     let number_value = capture_program_output(
-        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"narrow\")\n\
-         FN (USE f :(FN :{x :Any} -> Str)) -> Str = (\"wide\")\n\
-         LET g = FN (GET x :Number) -> Str = (\"v\")\n\
+        "EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = (\"narrow\")\n\
+         EXPR (USE f :(FN :{x :Any} -> Str)) -> Str = (\"wide\")\n\
+         LET g = FN EXPR (GET x :Number) -> Str = (\"v\")\n\
          PRINT (USE g)",
     );
     assert_eq!(number_value, b"narrow\n");
@@ -411,9 +411,9 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"num\")");
-    test_run.run("FN (USE f :(FN :{x :Str} -> Str)) -> Str = (\"str\")");
-    test_run.run("LET g = FN (GET x :Any) -> Str = (\"v\")");
+    test_run.run("EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = (\"num\")");
+    test_run.run("EXPR (USE f :(FN :{x :Str} -> Str)) -> Str = (\"str\")");
+    test_run.run("LET g = FN EXPR (GET x :Any) -> Str = (\"v\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -441,8 +441,8 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
 #[test]
 fn dispatch_picks_more_specific_list_overload() {
     let bytes = capture_program_output(
-        "FN (PICK xs :(LIST OF Any)) -> Str = (\"any\")\n\
-         FN (PICK xs :(LIST OF Number)) -> Str = (\"number\")\n\
+        "EXPR (PICK xs :(LIST OF Any)) -> Str = (\"any\")\n\
+         EXPR (PICK xs :(LIST OF Number)) -> Str = (\"number\")\n\
          PRINT (PICK [1 2 3])",
     );
     assert_eq!(bytes, b"number\n");
@@ -454,14 +454,14 @@ fn dispatch_picks_more_specific_list_overload() {
 #[test]
 fn dispatch_disambiguates_element_only_overloads_on_literal() {
     let numbers = capture_program_output(
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
-         FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
+        "EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
+         EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
          PRINT (DESCRIBE [1 2 3])",
     );
     assert_eq!(numbers, b"numbers\n");
     let strings = capture_program_output(
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
-         FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
+        "EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
+         EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
          PRINT (DESCRIBE [\"a\" \"b\"])",
     );
     assert_eq!(strings, b"strings\n");
@@ -473,8 +473,8 @@ fn dispatch_disambiguates_element_only_overloads_on_literal() {
 #[test]
 fn dispatch_disambiguates_element_only_overloads_on_evaluated_arg() {
     let bytes = capture_program_output(
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
-         FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
+        "EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
+         EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
          LET xs = [1 2 3]\n\
          PRINT (DESCRIBE (xs))",
     );
@@ -486,15 +486,15 @@ fn dispatch_disambiguates_element_only_overloads_on_evaluated_arg() {
 #[test]
 fn dispatch_disambiguates_element_only_overloads_on_bare_variable() {
     let numbers = capture_program_output(
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
-         FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
+        "EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
+         EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
          LET xs = [1 2 3]\n\
          PRINT (DESCRIBE xs)",
     );
     assert_eq!(numbers, b"numbers\n");
     let strings = capture_program_output(
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
-         FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
+        "EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
+         EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
          LET xs = [\"a\" \"b\"]\n\
          PRINT (DESCRIBE xs)",
     );
@@ -508,8 +508,8 @@ fn dispatch_disambiguates_element_only_overloads_on_bare_variable() {
 #[test]
 fn dispatch_disambiguates_element_only_overloads_on_bound_variable() {
     let bytes = capture_program_output(
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
-         FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
+        "EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
+         EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")\n\
          LET xs = [1 2 3]\n\
          LET y = (DESCRIBE xs)\n\
          PRINT y",
@@ -526,8 +526,8 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
-    test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
+    test_run.run("EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
+    test_run.run("EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -558,8 +558,8 @@ fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
-    test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
+    test_run.run("EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
+    test_run.run("EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -586,8 +586,8 @@ fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
 #[test]
 fn dispatch_list_any_overload_catches_heterogeneous_literal() {
     let bytes = capture_program_output(
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
-         FN (DESCRIBE xs :(LIST OF Any)) -> Str = (\"any\")\n\
+        "EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
+         EXPR (DESCRIBE xs :(LIST OF Any)) -> Str = (\"any\")\n\
          PRINT (DESCRIBE [1 \"a\"])",
     );
     assert_eq!(bytes, b"any\n");
@@ -599,7 +599,7 @@ fn dispatch_list_any_overload_catches_heterogeneous_literal() {
 #[test]
 fn fn_with_parens_wrapped_list_of_param_accepts_matching_list() {
     let bytes = capture_program_output(
-        "FN (HEAD xs :(LIST OF Number)) -> Number = (1)\n\
+        "EXPR (HEAD xs :(LIST OF Number)) -> Number = (1)\n\
          PRINT (HEAD [1 2 3])",
     );
     assert_eq!(bytes, b"1\n");
@@ -608,7 +608,7 @@ fn fn_with_parens_wrapped_list_of_param_accepts_matching_list() {
 #[test]
 fn fn_with_nested_parens_wrapped_type_param_dispatches() {
     let bytes = capture_program_output(
-        "FN (HEAD xs :(LIST OF :(LIST OF Number))) -> Number = (1)\n\
+        "EXPR (HEAD xs :(LIST OF :(LIST OF Number))) -> Number = (1)\n\
          PRINT (HEAD [[1 2] [3]])",
     );
     assert_eq!(bytes, b"1\n");
@@ -618,7 +618,7 @@ fn fn_with_nested_parens_wrapped_type_param_dispatches() {
 #[test]
 fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
     let bytes = capture_program_output(
-        "FN (SIZE d :(MAP Str -> Number)) -> Number = (1)\n\
+        "EXPR (SIZE d :(MAP Str -> Number)) -> Number = (1)\n\
          PRINT (SIZE {\"a\": 1, \"b\": 2})",
     );
     assert_eq!(bytes, b"1\n");
@@ -633,7 +633,7 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (HEAD xs :(LIST OF Number)) -> Number = (1)");
+    test_run.run("EXPR (HEAD xs :(LIST OF Number)) -> Number = (1)");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -663,7 +663,7 @@ fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)");
+    test_run.run("EXPR (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)");
     let result = test_run.run_one(test_run.parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), test_run.types().list(KType::ANY));
 }
@@ -674,7 +674,7 @@ fn fn_typed_list_param_accepts_matching_element_at_call() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
+    test_run.run("EXPR (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
     let result = test_run.run_one(test_run.parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }

@@ -68,7 +68,7 @@ fn anonymous_fn_multi_param_binds_by_name() {
 #[test]
 fn anonymous_fn_fills_function_typed_slot() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")\n\
+        "EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")\n\
          PRINT (USE (FN :{x :Number} -> Str = (\"hi\")))",
     );
     assert_eq!(bytes, b"got fn\n");
@@ -147,7 +147,7 @@ fn a_keyworded_return_naming_a_later_announced_sibling_elaborates() {
     let scope = test_run.scope;
     test_run.run(
         "MODULE pair = (\n  NEWTYPE Aa = Number\n  \
-         FN (GETB a :Aa) -> Bb = (1)\n  \
+         EXPR (GETB a :Aa) -> Bb = (1)\n  \
          NEWTYPE Bb = Number\n)",
     );
     assert!(

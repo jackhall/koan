@@ -256,7 +256,7 @@ fn a_function_slot_inside_the_nested_signature_is_wrapped() {
          SIG Applier = ((TYPE Item) (VAL apply :(FN :{x :Item} -> Item)))\n\
          SIG Host = ((TYPE Elt) (VAL subs :(LIST OF (Applier WITH {Item = Elt}))))\n\
          MODULE carrier_applier = ((LET Item = Carrier) \
-         (LET apply = FN (APPLY x :Carrier) -> Carrier = (x)))\n\
+         (LET apply = FN EXPR (APPLY x :Carrier) -> Carrier = (x)))\n\
          MODULE host = ((LET Elt = Carrier) (LET subs = [carrier_applier]))",
     );
     test_run.run("LET view = (host :| Host)");
@@ -357,7 +357,7 @@ fn a_returned_view_keeps_its_nested_member_alive() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(nested_program());
-    test_run.run("FN (MAKEVIEW er :Outer) -> Module = (er :| Outer)");
+    test_run.run("EXPR (MAKEVIEW er :Outer) -> Module = (er :| Outer)");
     test_run.run("LET made = (MAKEVIEW matching)");
     let elt = view_member(&test_run, "made", "Elt");
 

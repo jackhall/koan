@@ -18,7 +18,7 @@ fn functor_returns_a_module() {
          MODULE int_ord = (LET compare = 7)",
     );
     test_run.run("LET int_ord_a = (int_ord :! Ordered)");
-    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     test_run.run("LET set_value = (MAKESET int_ord_a)");
 
     let m = lookup_module(scope, "set_value", test_run.registries());
@@ -38,7 +38,7 @@ fn functor_body_reads_signature_typed_parameter() {
     );
     test_run.run("LET int_ord_a = (int_ord :! Ordered)");
     test_run.run(
-        "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET sample = (elem.compare)))",
+        "EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET sample = (elem.compare)))",
     );
     test_run.run("LET set_value = (MAKESET int_ord_a)");
 
@@ -61,7 +61,7 @@ fn functor_application_is_generative() {
          MODULE int_ord = (LET compare = 7)",
     );
     test_run.run("LET int_ord_a = (int_ord :! Ordered)");
-    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     test_run.run("LET set_one = (MAKESET (int_ord_a))");
     test_run.run("LET set_two = (MAKESET (int_ord_a))");
 
@@ -95,7 +95,7 @@ fn functor_application_mints_distinct_abstract_types() {
     // holding a `zero` coerced to that view's own mint — read back off the value below.
     let src = "SIG Ordered = ((TYPE Carrier) (VAL zero :Carrier) (VAL compare :Number))\n\
                MODULE int_ord = ((LET Carrier = Number) (LET zero = 0) (LET compare = 7))\n\
-               FN (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
+               EXPR (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
                LET set_one = (MAKESET int_ord)\n\
                LET set_two = (MAKESET int_ord)";
     let exprs =
@@ -167,7 +167,7 @@ fn functor_admits_unascribed_module_structurally() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     // Type-classified binder so the auto-wrap pass triggers in the
     // `Signature { .. }` slot. The LET partition guard requires module carriers
     // to ride Type-classified names (design/typing/elaboration.md § Binding-map
@@ -197,7 +197,7 @@ fn functor_rejects_structurally_unsatisfying_module() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE no_compare = (LET other = 1)",
     );
-    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     test_run.run("LET arg = no_compare");
     let root = test_run.dispatch_watched_in(
         scope,
@@ -238,8 +238,8 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
         "LET int_ord_a = (int_ord :! Ordered)\n\
          LET int_hash_a = (int_hash :! Hashed)",
     );
-    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET tag = 1))");
-    test_run.run("FN (MAKESET elem :Hashed) -> Module = (MODULE generated = (LET tag = 2))");
+    test_run.run("EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET tag = 1))");
+    test_run.run("EXPR (MAKESET elem :Hashed) -> Module = (MODULE generated = (LET tag = 2))");
     test_run.run("LET ord_set = (MAKESET (int_ord_a))");
     test_run.run("LET hash_set = (MAKESET (int_hash_a))");
 
@@ -273,7 +273,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     );
     test_run.run("LET int_view = (int_ord :! Ordered)");
     test_run.run(
-        "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET sample = (elem.compare)))",
+        "EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET sample = (elem.compare)))",
     );
     test_run.run("LET set_value = (MAKESET int_view)");
 
@@ -289,7 +289,7 @@ fn monad_program() -> &'static str {
     "NEWTYPE (Type AS Wrapper)\n\
      SIG Monad = ((TYPE (Type AS Wrap)) (VAL pure :(FN :{x :Number} -> :(Number AS Wrap))))\n\
      MODULE id_monad = ((LET Wrap = Wrapper) \
-     (LET pure = FN (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x))))"
+     (LET pure = FN EXPR (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x))))"
 }
 
 /// `id_monad :| Monad` succeeds: `substitute_sig_members` substitutes the SIG's `Wrap` slot to
@@ -358,7 +358,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
     );
     test_run.run("LET int_ord_a = (int_ord :! Ordered)");
     test_run.run(
-        "FN (MAKESET elem :Ordered) -> Module = \
+        "EXPR (MAKESET elem :Ordered) -> Module = \
          (MODULE generated = (LET sample = (elem.compare)))",
     );
     test_run.run("LET set_value = (MAKESET int_ord_a)");
@@ -456,15 +456,15 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     test_run.run(
         "SIG Ordered = ((VAL compare :Number) \
          (VAL helper :(FN :{x :Number} -> Number)) \
-         (FN (HELP x :Number) -> Number))\n\
-         MODULE int_ord = ((LET compare = 7) (LET helper = FN (HELP x :Number) -> Number = (x)))\n\
+         (EXPR (HELP x :Number) -> Number))\n\
+         MODULE int_ord = ((LET compare = 7) (LET helper = FN EXPR (HELP x :Number) -> Number = (x)))\n\
          LET held = (int_ord :| Ordered)",
     );
     let held = lookup_module(scope, "held", test_run.registries());
 
     // Churn the run-root region, then re-ascribe to allocate a second re-bind
     // scope. The original `held` must still walk through to its own pair.
-    test_run.run("FN (CHURNCALL) -> Number = (1)");
+    test_run.run("EXPR (CHURNCALL) -> Number = (1)");
     for _ in 0..20 {
         test_run.run_one(test_run.parse_one("CHURNCALL"));
     }

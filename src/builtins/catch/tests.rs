@@ -88,7 +88,7 @@ fn catch_inside_tco_position_preserves_frame_chain() {
     // resumption context.
     let bytes = run_program(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Any) -> Any = (CATCH (MATCH (b) OVER Bit -> :Str WITH (\
+         EXPR (HOP b :Any) -> Any = (CATCH (MATCH (b) OVER Bit -> :Str WITH (\
             One -> (HOP (Bit.Zero null))\
             Zero -> (PRINT \"done\")\
          )))\n\

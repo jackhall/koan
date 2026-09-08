@@ -20,8 +20,8 @@ fn strict_cross_sig_subtype_wins_dispatch() {
         "SIG Base = ((VAL x :Number))\n\
          SIG Wide = ((VAL x :Number) (VAL y :Str))",
     );
-    test_run.run("FN (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))");
-    test_run.run("FN (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))");
+    test_run.run("EXPR (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))");
+    test_run.run("EXPR (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))");
     test_run.run("MODULE implementation = ((LET x = 1) (LET y = \"s\"))");
     test_run.run("LET arg = implementation");
     test_run.run("LET picked = (PICK arg)");
@@ -47,8 +47,8 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
         "SIG Base = ((VAL x :Number))\n\
          SIG Wide = ((VAL x :Number) (VAL y :Str))",
     );
-    test_run.run("FN (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))");
-    test_run.run("FN (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))");
+    test_run.run("EXPR (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))");
+    test_run.run("EXPR (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))");
     test_run.run("MODULE implementation = ((LET x = 1) (LET y = \"s\"))");
     test_run.run("LET arg = implementation");
     test_run.run("LET picked = (PICK arg)");
@@ -78,8 +78,8 @@ fn incomparable_distinct_sigs_are_ambiguous() {
         "SIG Alpha = ((VAL x :Number))\n\
          SIG Beta = ((VAL y :Number))",
     );
-    test_run.run("FN (CHOOSE m :Alpha) -> Module = (MODULE generated = (LET tag = 1))");
-    test_run.run("FN (CHOOSE m :Beta) -> Module = (MODULE generated = (LET tag = 2))");
+    test_run.run("EXPR (CHOOSE m :Alpha) -> Module = (MODULE generated = (LET tag = 1))");
+    test_run.run("EXPR (CHOOSE m :Beta) -> Module = (MODULE generated = (LET tag = 2))");
     test_run.run("MODULE implementation = ((LET x = 1) (LET y = 2))");
     test_run.run("LET arg = implementation");
 
@@ -118,10 +118,10 @@ fn cross_sig_specificity_with_pinned_abstract_member() {
          SIG Wide = ((TYPE Elt) (VAL x :Number) (VAL y :Str))",
     );
     test_run.run(
-        "FN (PICKPIN m :(Wide WITH {Elt = Number})) -> Module = (MODULE generated = (LET tag = 1))",
+        "EXPR (PICKPIN m :(Wide WITH {Elt = Number})) -> Module = (MODULE generated = (LET tag = 1))",
     );
     test_run.run(
-        "FN (PICKPIN m :(Base WITH {Elt = Number})) -> Module = (MODULE generated = (LET tag = 2))",
+        "EXPR (PICKPIN m :(Base WITH {Elt = Number})) -> Module = (MODULE generated = (LET tag = 2))",
     );
     test_run.run("MODULE implementation = ((LET Elt = Number) (LET x = 1) (LET y = \"s\"))");
     test_run.run("LET arg = implementation");

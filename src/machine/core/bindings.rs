@@ -1125,8 +1125,8 @@ impl<'a> Bindings<'a> {
     /// key reach both the claim and the overload it becomes.
     ///
     /// **Append, never deduplicate**: sibling FN binders sharing one
-    /// inner-call bucket key — `FN (PICK xs :A) -> ...` then
-    /// `FN (PICK xs :B) -> ...` — each claim at their own
+    /// inner-call bucket key — `EXPR (PICK xs :A) -> ...` then
+    /// `EXPR (PICK xs :B) -> ...` — each claim at their own
     /// [`BindingIndex`]. [`Bindings::write_overload`] retires only the sealing binder's own claim;
     /// the other siblings stay as wake sources.
     pub fn install_pending_overload(

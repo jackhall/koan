@@ -36,7 +36,7 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
 #[test]
 fn bound_bare_record_holding_a_home_closure_pins_and_reads_back() {
     let out = run_capturing(concat!(
-        "FN (MAKE n :Number) -> :{v :Number} = ({v = n, get = (FN :{} -> Number = (n))})\n",
+        "EXPR (MAKE n :Number) -> :{v :Number} = ({v = n, get = (FN :{} -> Number = (n))})\n",
         "LET r = (MAKE 5)\n",
         "PRINT r",
     ))

@@ -406,7 +406,7 @@ fn an_eternal_name_is_not_captured() {
         "CLOSE ((LET g = (FN :{} -> Number = ((TOPLEVEL 4) + eternal + n))) (g))",
         "PRINT (esc {})\n",
     );
-    let prelude = "FN (TOPLEVEL x :Number) -> Number = (x * 2)\nLET eternal = (1)\n";
+    let prelude = "EXPR (TOPLEVEL x :Number) -> Number = (x * 2)\nLET eternal = (1)\n";
     assert_eq!(output(&format!("{prelude}{source}")), "16\n");
     #[cfg(not(feature = "seam-force-pin"))]
     assert_eq!(
@@ -550,7 +550,7 @@ fn a_nested_inferred_blocks_conflict_is_its_own() {
 /// surface that spells a `Type` token which is no scope name is one the walk skips.
 #[test]
 fn an_unresolvable_type_name_is_unbound_at_the_form() {
-    let error = error_of("", "LET x = (CLOSE (FN (MAKE n :Ghost) -> Any = (n)))");
+    let error = error_of("", "LET x = (CLOSE (EXPR (MAKE n :Ghost) -> Any = (n)))");
     assert!(
         matches!(&error.kind, KErrorKind::UnboundName(name) if name == "Ghost"),
         "expected `Ghost` unbound at the CLOSE, got {error}",
@@ -562,7 +562,7 @@ fn an_unresolvable_type_name_is_unbound_at_the_form() {
 #[test]
 fn a_builtin_type_name_is_not_reported_unbound() {
     assert_eq!(
-        output("LET x = (CLOSE (FN (MAKE n :Number) -> Any = (n)))\nPRINT (x {n = 4})\n"),
+        output("LET x = (CLOSE (EXPR (MAKE n :Number) -> Any = (n)))\nPRINT (x {n = 4})\n"),
         "4\n"
     );
 }

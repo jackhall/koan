@@ -197,7 +197,7 @@ fn pairwise_shared_middle_operand_evaluates_exactly_once() {
     let program = program_storage();
     let region = run_root_storage();
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
-    test_run.run("FN (LOUD x :Number) -> Number = ((PRINT x) (x))");
+    test_run.run("EXPR (LOUD x :Number) -> Number = ((PRINT x) (x))");
     let result = test_run.run_one(test_run.parse_one("1 < (LOUD 2) < 3"));
     assert!(matches!(result, KObject::Bool(true)));
     let bytes = captured.borrow().clone();

@@ -243,7 +243,7 @@ fn declaring_chain(depth: usize, block: &str, trailer: &str) -> String {
     };
     format!(
         "LET f0 = (FN :{{n :Number}} -> Any = (\
-             (FN (HELPER x :Number) -> Number = (x + n)) {statements}))\n\
+             (EXPR (HELPER x :Number) -> Number = (x + n)) {statements}))\n\
          LET esc = (f0 {{n = 7}})\n{trailer}"
     )
 }
@@ -300,7 +300,7 @@ fn a_captured_registration_runs_after_its_producers_die() {
 fn a_pattern_capture_names_one_bucket_key() {
     assert_eq!(
         output(
-            "FN (HELPER x :Number) -> Number = (x + 1)\n\
+            "EXPR (HELPER x :Number) -> Number = (x + 1)\n\
              LET x = (CLOSE OVER ((HELPER _)) (HELPER 1))\n\
              PRINT x\n"
         ),
@@ -315,7 +315,7 @@ fn a_pattern_capture_names_one_bucket_key() {
 fn a_pattern_capture_reaches_a_using_window_registration() {
     assert_eq!(
         output(
-            "MODULE m = (FN (HELPER q :Number) -> Number = (q + 1))\n\
+            "MODULE m = (EXPR (HELPER q :Number) -> Number = (q + 1))\n\
              LET x = (USING m SCOPE (CLOSE OVER ((HELPER _)) (HELPER 1)))\n\
              PRINT x\n"
         ),
@@ -329,8 +329,8 @@ fn a_pattern_capture_reaches_a_using_window_registration() {
 fn a_pattern_capture_takes_every_overload_under_the_key() {
     assert_eq!(
         output(
-            "FN (HELPER x :Number) -> Str = (\"number\")\n\
-             FN (HELPER x :Str) -> Str = (\"string\")\n\
+            "EXPR (HELPER x :Number) -> Str = (\"number\")\n\
+             EXPR (HELPER x :Str) -> Str = (\"string\")\n\
              LET x = (CLOSE OVER ((HELPER _)) (HELPER 1))\n\
              LET y = (CLOSE OVER ((HELPER _)) (HELPER \"a\"))\n\
              PRINT x\nPRINT y\n"
@@ -346,7 +346,7 @@ fn a_pattern_capture_takes_every_overload_under_the_key() {
 fn a_single_capture_survives_the_redundant_group_peel() {
     assert_eq!(
         output(
-            "FN (HELPER x :Number) -> Number = (x + 1)\n\
+            "EXPR (HELPER x :Number) -> Number = (x + 1)\n\
              LET a = (5)\n\
              LET x = (CLOSE OVER ((HELPER _)) (HELPER 1))\n\
              LET y = (CLOSE OVER (a) (a))\n\
@@ -381,7 +381,7 @@ fn a_pattern_capture_of_an_in_flight_registration_parks_and_completes() {
     assert_eq!(
         output(
             "LET base = (10)\n\
-             FN (HELPER x :Number) -> Number = (x + base)\n\
+             EXPR (HELPER x :Number) -> Number = (x + base)\n\
              LET x = (CLOSE OVER ((HELPER _)) (HELPER 1))\n\
              PRINT x\n"
         ),
@@ -396,7 +396,7 @@ fn implicit_close_parks_on_an_in_flight_registration() {
     assert_eq!(
         output(
             "LET mk = (FN :{n :Number} -> Any = (\
-                 (FN (HELPER x :Number) -> Number = (x + n))\
+                 (EXPR (HELPER x :Number) -> Number = (x + n))\
                  (CLOSE OVER () ((LET g = (FN :{} -> Number = (HELPER 1))) (g)))))\n\
              LET esc = (mk {n = 10})\n\
              PRINT (esc {})\n"
@@ -412,7 +412,7 @@ fn implicit_close_parks_on_an_in_flight_registration() {
 #[test]
 fn a_bare_keyword_names_no_registration() {
     let error = error_of(
-        "FN (HELPER x :Number) -> Number = (x + 1)\n",
+        "EXPR (HELPER x :Number) -> Number = (x + 1)\n",
         "CLOSE OVER (HELPER) (1)",
     );
     assert!(
@@ -427,7 +427,7 @@ fn a_bare_keyword_names_no_registration() {
 #[test]
 fn a_keyword_mixed_into_a_capture_list_is_refused() {
     let error = error_of(
-        "LET a = (1)\nFN (HELPER x :Number) -> Number = (x + 1)\n",
+        "LET a = (1)\nEXPR (HELPER x :Number) -> Number = (x + 1)\n",
         "CLOSE OVER (a HELPER) (1)",
     );
     assert!(
@@ -511,7 +511,7 @@ fn a_flattened_per_call_operator_retains_no_more_than_its_registration() {
         ));
         let plain = held_and_released(&producer_chain(
             depth,
-            "(FN (left :Number PLUS right :Number) -> Number = (left + right))\
+            "(EXPR (left :Number PLUS right :Number) -> Number = (left + right))\
              (CLOSE OVER () ((LET g = (FN :{} -> Number = (1 PLUS 2))) (g)))",
             "",
         ));
@@ -653,7 +653,7 @@ fn an_escaped_body_reaches_through_a_using_window() {
     let shapes: &[(&str, &str, &str)] = &[
         (
             "a surfaced registration",
-            "MODULE inner = (FN (HELPER q :Number) -> Number = (q + 1))",
+            "MODULE inner = (EXPR (HELPER q :Number) -> Number = (q + 1))",
             "CLOSE OVER () ((LET g = (FN :{} -> Number = (HELPER 1))) (g))",
         ),
         (
@@ -711,7 +711,7 @@ fn eval_of_an_uncaptured_producer_name_is_unbound() {
 fn the_eternal_chain_stays_visible_inside_the_block() {
     assert_eq!(
         output(
-            "FN (TOPLEVEL x :Number) -> Number = (x * 2)\n\
+            "EXPR (TOPLEVEL x :Number) -> Number = (x * 2)\n\
              LET mk = (FN :{n :Number} -> Any = (\
                  (CLOSE OVER () ((LET g = (FN :{} -> Number = ((TOPLEVEL 4) + 1))) (g)))))\n\
              LET esc = (mk {n = 1})\n\
@@ -858,7 +858,7 @@ fn recursion_carried_close_over_stays_flat_in_depth() {
         let mut test_run = TestRun::silent(&program, &region);
         let mut source = String::from(
             "UNION Nat = (Zero :Null Succ :Nat)\n\
-             FN (COUNTDOWN n :Nat) -> Str = (\
+             EXPR (COUNTDOWN n :Nat) -> Str = (\
                  (CLOSE OVER () ((LET b = (1)) (b)))\
                  (MATCH (n) OVER Nat -> :Str WITH (\
                      Zero -> (\"done\")\

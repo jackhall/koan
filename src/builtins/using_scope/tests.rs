@@ -33,7 +33,7 @@ fn using_surfaces_module_function_for_bare_dispatch() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("MODULE some_module = (LET dbl = FN (DBL x :Number) -> Number = (x))");
+    test_run.run("MODULE some_module = (LET dbl = FN EXPR (DBL x :Number) -> Number = (x))");
     let result = test_run.run_one(test_run.parse_one("USING some_module SCOPE (DBL 21)"));
     assert!(matches!(result, KObject::Number(n) if *n == 21.0));
 }
@@ -82,7 +82,7 @@ fn using_module_function_resolves_its_own_internals() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "MODULE some_module = ((LET secret = 99) \
-                       (LET getit = FN (GETIT) -> Number = (secret)))",
+                       (LET getit = FN EXPR (GETIT) -> Number = (secret)))",
     );
     let result = test_run.run_one(test_run.parse_one("USING some_module SCOPE (GETIT)"));
     assert!(matches!(result, KObject::Number(n) if *n == 99.0));
@@ -131,7 +131,7 @@ fn using_opens_a_module_declared_in_the_same_block() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (RUNIT) -> Number = ((MODULE some_module = (LET v = 3)) (USING some_module SCOPE (v)))",
+        "EXPR (RUNIT) -> Number = ((MODULE some_module = (LET v = 3)) (USING some_module SCOPE (v)))",
     );
     let result = test_run.run_one(test_run.parse_one("RUNIT"));
     assert!(
@@ -149,8 +149,8 @@ fn using_opens_a_bound_functor_module_in_the_declaring_block() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (MAKEIT) -> Module = (MODULE res = (LET v = 9))");
-    test_run.run("FN (RUNIT) -> Number = ((LET inst = (MAKEIT)) (USING inst SCOPE (v)))");
+    test_run.run("EXPR (MAKEIT) -> Module = (MODULE res = (LET v = 9))");
+    test_run.run("EXPR (RUNIT) -> Number = ((LET inst = (MAKEIT)) (USING inst SCOPE (v)))");
     let result = test_run.run_one(test_run.parse_one("RUNIT"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 9.0),
@@ -166,8 +166,8 @@ fn using_tail_value_reaches_a_later_statement_of_the_call_site_block() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (MAKEIT) -> Module = (MODULE res = (LET v = 11))");
-    test_run.run("FN (RUNIT) -> Number = ((LET k = (USING (MAKEIT) SCOPE (v))) (k))");
+    test_run.run("EXPR (MAKEIT) -> Module = (MODULE res = (LET v = 11))");
+    test_run.run("EXPR (RUNIT) -> Number = ((LET k = (USING (MAKEIT) SCOPE (v))) (k))");
     let result = test_run.run_one(test_run.parse_one("RUNIT"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 11.0),
@@ -191,7 +191,7 @@ fn using_block_bind_and_function_are_visible_to_later_statements_of_the_same_blo
         "MODULE some_module = (LET val = 1)\n\
          USING some_module SCOPE (\n  \
          LET localv = 5\n  \
-         FN (DOUBLE x :Number) -> Number = (x + x)\n  \
+         EXPR (DOUBLE x :Number) -> Number = (x + x)\n  \
          (DOUBLE localv)\n\
          )",
     );
@@ -349,13 +349,13 @@ fn using_functor_result_closure_escapes_soundly() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKE) -> Module = (MODULE res = (LET val = 7))\n\
+        "EXPR (MAKE) -> Module = (MODULE res = (LET val = 7))\n\
          LET inst = (MAKE)",
     );
     test_run.run("LET getv = (USING inst SCOPE (FN :{n :Number} -> Number = (val + n)))");
     // Churn the run-root region so a dangling reference into the dropped
     // USING/functor regions would surface under Miri.
-    test_run.run("FN (NOOP) -> Number = (1)");
+    test_run.run("EXPR (NOOP) -> Number = (1)");
     for _ in 0..10 {
         test_run.run_one(test_run.parse_one("NOOP"));
     }
@@ -381,9 +381,9 @@ fn using_temporary_functor_result_is_sound() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (MAKE) -> Module = (MODULE res = (LET val = 9))");
+    test_run.run("EXPR (MAKE) -> Module = (MODULE res = (LET val = 9))");
     test_run.run("LET getw = (USING (MAKE) SCOPE (FN :{n :Number} -> Number = (val + n)))");
-    test_run.run("FN (NOOP) -> Number = (1)");
+    test_run.run("EXPR (NOOP) -> Number = (1)");
     for _ in 0..10 {
         test_run.run_one(test_run.parse_one("NOOP"));
     }

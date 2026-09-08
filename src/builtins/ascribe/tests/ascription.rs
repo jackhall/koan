@@ -316,7 +316,7 @@ fn a_returned_transparent_view_keeps_the_region_it_was_minted_in() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    test_run.run("FN (VIEWIT) -> Module = (int_ord :! Ordered)");
+    test_run.run("EXPR (VIEWIT) -> Module = (int_ord :! Ordered)");
     test_run.run("LET view = (VIEWIT)");
 
     let m = lookup_module(scope, "view", test_run.registries());

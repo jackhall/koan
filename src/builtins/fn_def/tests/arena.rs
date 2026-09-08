@@ -13,8 +13,8 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
     let scope = test_run.scope;
 
     test_run.run(
-        "FN (BB) -> Null = (PRINT \"ok\")\n\
-         FN (AA) -> Null = (BB)",
+        "EXPR (BB) -> Null = (PRINT \"ok\")\n\
+         EXPR (AA) -> Null = (BB)",
     );
 
     // The slot count below is absolute, so release the definition statements' slots first: the
@@ -44,10 +44,10 @@ fn chained_tail_calls_reuse_frames() {
     let scope = test_run.scope;
 
     test_run.run(
-        "FN (DD) -> Null = (PRINT \"ok\")\n\
-         FN (CC) -> Null = (DD)\n\
-         FN (BB) -> Null = (CC)\n\
-         FN (AA) -> Null = (BB)",
+        "EXPR (DD) -> Null = (PRINT \"ok\")\n\
+         EXPR (CC) -> Null = (DD)\n\
+         EXPR (BB) -> Null = (CC)\n\
+         EXPR (AA) -> Null = (BB)",
     );
 
     // The slot count below is absolute, so release the definition statements' slots first: the
@@ -90,10 +90,10 @@ fn leading_statements_run_before_tail_across_chain() {
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
 
     test_run.run(
-        "FN (DD) -> Str = ((PRINT \"d\") (PRINT \"ok\"))\n\
-         FN (CC) -> Str = ((PRINT \"c\") (DD))\n\
-         FN (BB) -> Str = ((PRINT \"b\") (CC))\n\
-         FN (AA) -> Str = ((PRINT \"a\") (BB))",
+        "EXPR (DD) -> Str = ((PRINT \"d\") (PRINT \"ok\"))\n\
+         EXPR (CC) -> Str = ((PRINT \"c\") (DD))\n\
+         EXPR (BB) -> Str = ((PRINT \"b\") (CC))\n\
+         EXPR (AA) -> Str = ((PRINT \"a\") (BB))",
     );
 
     test_run.run("AA");
@@ -119,10 +119,10 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
     let scope = test_run.scope;
 
     test_run.run(
-        "FN (DD) -> Str = ((PRINT \"d\") (PRINT \"ok\"))\n\
-         FN (CC) -> Str = ((PRINT \"c\") (DD))\n\
-         FN (BB) -> Str = ((PRINT \"b\") (CC))\n\
-         FN (AA) -> Str = ((PRINT \"a\") (BB))",
+        "EXPR (DD) -> Str = ((PRINT \"d\") (PRINT \"ok\"))\n\
+         EXPR (CC) -> Str = ((PRINT \"c\") (DD))\n\
+         EXPR (BB) -> Str = ((PRINT \"b\") (CC))\n\
+         EXPR (AA) -> Str = ((PRINT \"a\") (BB))",
     );
 
     // The slot count below is absolute, so release the definition statements' slots first: the
@@ -167,7 +167,7 @@ fn match_driven_tail_recursion_completes() {
 
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
+         EXPR (HOP b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
              One -> (HOP (Bit.Zero null))\
              Zero -> (PRINT \"done\")\
          ))",
@@ -192,7 +192,7 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
 
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
+         EXPR (HOP b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
              One -> ((PRINT \"hop\") (HOP (Bit.Zero null)))\
              Zero -> (PRINT \"done\")\
          ))",
@@ -218,8 +218,8 @@ fn tail_call_enforces_first_callers_return_contract() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
-        "FN (GG) -> Str = (\"hello\")\n\
-         FN (FF) -> Number = (GG)",
+        "EXPR (GG) -> Str = (\"hello\")\n\
+         EXPR (FF) -> Number = (GG)",
     );
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), test_run.parse_one("FF")),
@@ -251,8 +251,8 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (GG) -> :(LIST OF Number) = ([1 2 3])\n\
-         FN (FF) -> :(LIST OF Any) = (GG)",
+        "EXPR (GG) -> :(LIST OF Number) = ([1 2 3])\n\
+         EXPR (FF) -> :(LIST OF Any) = (GG)",
     );
     let result = test_run.run_one(test_run.parse_one("FF"));
     match result {
@@ -281,9 +281,9 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (CC) -> Any = (\"ok\")\n\
-         FN (BB) -> Any = (CC)\n\
-         FN (AA) -> Any = (BB)\n\
+         EXPR (CC) -> Any = (\"ok\")\n\
+         EXPR (BB) -> Any = (CC)\n\
+         EXPR (AA) -> Any = (BB)\n\
          LET b = (Bit.One null)",
     );
     let types = test_run.registry_handle();
@@ -312,9 +312,9 @@ fn deep_tail_chain_violates_arm_return_contract() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (CC) -> Any = (42)\n\
-         FN (BB) -> Any = (CC)\n\
-         FN (AA) -> Any = (BB)\n\
+         EXPR (CC) -> Any = (42)\n\
+         EXPR (BB) -> Any = (CC)\n\
+         EXPR (AA) -> Any = (BB)\n\
          LET b = (Bit.One null)",
     );
     let err = test_run.run_one_err(test_run.parse_one(
@@ -334,7 +334,7 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (ECHO v :Number) -> Number = (v)");
+    test_run.run("EXPR (ECHO v :Number) -> Number = (v)");
     // `allocated_total` weighs both halves of the region: the typed sub-arena and the bump
     // the `Drop`-free families live in. A per-call leak into run-root shows up in one or the other,
     // so the growth bound has to read them together.
@@ -381,7 +381,7 @@ fn body_subexpression_slots_recycle_across_calls() {
 
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (LOOK b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
+         EXPR (LOOK b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
              One -> (PRINT \"one\")\
              Zero -> (PRINT \"zero\")\
          ))",
@@ -448,8 +448,8 @@ fn captured_per_call_value_survives_let_bind_and_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKE_HOLDER base :Number) -> :(FN :{q :Number} -> Number) = \
-         (FN (GET q :Number) -> Number = (base))\n\
+        "EXPR (MAKE_HOLDER base :Number) -> :(FN :{q :Number} -> Number) = \
+         (EXPR (GET q :Number) -> Number = (base))\n\
          LET hold = (MAKE_HOLDER 99)",
     );
     let result = test_run.run_one(test_run.parse_one("hold {q = 0}"));
@@ -471,9 +471,9 @@ fn closure_argument_stays_live_through_user_fn_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKE_HOLDER base :Number) -> :(FN :{q :Number} -> Number) = \
-         (FN (GET q :Number) -> Number = (base))\n\
-         FN (CALL_IT f :(FN :{q :Number} -> Number)) -> Number = (f {q = 0})\n\
+        "EXPR (MAKE_HOLDER base :Number) -> :(FN :{q :Number} -> Number) = \
+         (EXPR (GET q :Number) -> Number = (base))\n\
+         EXPR (CALL_IT f :(FN :{q :Number} -> Number)) -> Number = (f {q = 0})\n\
          LET answer = (CALL_IT (MAKE_HOLDER 77))",
     );
     let result = test_run.run_one(test_run.parse_one("answer"));
@@ -503,9 +503,9 @@ fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKE_HOLDER base :Number) -> :(FN :{q :Number} -> Number) = \
-         (FN (GET q :Number) -> Number = (base))\n\
-         FN (LABEL n :Number) -> Str = (PRINT n)\n\
+        "EXPR (MAKE_HOLDER base :Number) -> :(FN :{q :Number} -> Number) = \
+         (EXPR (GET q :Number) -> Number = (base))\n\
+         EXPR (LABEL n :Number) -> Str = (PRINT n)\n\
          LET mixed = [(LABEL 1) (MAKE_HOLDER 1) (LABEL 2) (MAKE_HOLDER 2)]",
     );
     let result = test_run.run_one(test_run.parse_one("mixed"));
@@ -558,7 +558,7 @@ fn let_bound_dict_with_call_produced_string_keys_survives_every_producer_free() 
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (LABEL n :Number) -> Str = (PRINT n)\n\
+        "EXPR (LABEL n :Number) -> Str = (PRINT n)\n\
          LET entries = {(LABEL 1): 10, (LABEL 2): 20}",
     );
     let result = test_run.run_one(test_run.parse_one("entries"));
@@ -591,7 +591,7 @@ fn leading_statements_ride_the_fresh_carts_region_across_a_self_tail_loop() {
 
     test_run.run(
         "UNION Nat = (Zero :Null Succ :Nat)\n\
-         FN (COUNT n :Nat) -> Str = ((PRINT \"tick\") (PRINT \"tock\") (MATCH (n) OVER Nat -> :Str WITH (\
+         EXPR (COUNT n :Nat) -> Str = ((PRINT \"tick\") (PRINT \"tock\") (MATCH (n) OVER Nat -> :Str WITH (\
              Zero -> (\"done\")\
              Succ -> (COUNT (it))\
          )))\n\
@@ -631,7 +631,7 @@ fn a_boolean_match_selects_across_a_self_tail_loop_without_outliving_the_scratch
     let mut test_run = TestRun::silent(&program, &region);
 
     test_run.run(
-        "FN (LOOP n :Number) -> Number = (MATCH (n < 1) -> :Number WITH (\
+        "EXPR (LOOP n :Number) -> Number = (MATCH (n < 1) -> :Number WITH (\
              true -> (0)\
              false -> (LOOP (n - 1))\
          ))\n\

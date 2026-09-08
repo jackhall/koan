@@ -145,14 +145,14 @@ fn function_value_call_named_args_short_circuits() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = FN (DOUBLE x :Number) -> Number = (x)");
+    test_run.run("LET f = FN EXPR (DOUBLE x :Number) -> Number = (x)");
     let expr = test_run.parse_one("f {x = 7}");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one(&mut test_run, expr);
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
-        "(f {{x = 7}}) with f = (FN (DOUBLE x :Number) ...) must fast-lane bypass \
+        "(f {{x = 7}}) with f = (EXPR (DOUBLE x :Number) ...) must fast-lane bypass \
          resolve_dispatch; counter was {}",
         resolve_dispatch_entry_count(),
     );
@@ -171,7 +171,7 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
+    test_run.run("LET f = FN EXPR (a :Number PICK b :Number) -> Number = (a)");
     let expr = test_run.parse_one("f {b = 2, a = 1}");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one(&mut test_run, expr);
@@ -198,7 +198,7 @@ fn function_value_call_named_args_missing_short_circuits() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
+    test_run.run("LET f = FN EXPR (a :Number PICK b :Number) -> Number = (a)");
     let expr = test_run.parse_one("f {a = 1}");
     reset_resolve_dispatch_entry_count();
     let types = test_run.registry_handle();
@@ -238,7 +238,7 @@ fn fn_definition_with_a_repeated_parameter_name_is_refused() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let expr = test_run.parse_one("FN (BETWEEN x :Number AND x :Number) -> Number = (x)");
+    let expr = test_run.parse_one("EXPR (BETWEEN x :Number AND x :Number) -> Number = (x)");
     let types = test_run.registry_handle();
     let id = test_run.dispatch_watched_in(scope, working(scope, expr));
     test_run
@@ -264,14 +264,14 @@ fn fn_definition_with_a_repeated_parameter_name_is_refused() {
 // case rather than falling through.
 // =====================================================================
 
-/// `f {x = 7}` against `(FN (DOUBLE x :Number) ...)` — function-value call via
+/// `f {x = 7}` against `(EXPR (DOUBLE x :Number) ...)` — function-value call via
 /// named-arg admission, fast-lane bound directly.
 #[test]
 fn fast_lane_fn_callable_via_named_args() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = FN (DOUBLE x :Number) -> Number = (x)");
+    test_run.run("LET f = FN EXPR (DOUBLE x :Number) -> Number = (x)");
     reset_resolve_dispatch_entry_count();
     let result = test_run.run_one(test_run.parse_one("f {x = 7}"));
     assert_eq!(
@@ -291,7 +291,7 @@ fn fast_lane_weaves_internal_keyword() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
+    test_run.run("LET f = FN EXPR (a :Number PICK b :Number) -> Number = (a)");
     reset_resolve_dispatch_entry_count();
     let result = test_run.run_one(test_run.parse_one("f {a = 1, b = 2}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -305,7 +305,7 @@ fn fast_lane_named_args_order_independent() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
+    test_run.run("LET f = FN EXPR (a :Number PICK b :Number) -> Number = (a)");
     reset_resolve_dispatch_entry_count();
     let result = test_run.run_one(test_run.parse_one("f {b = 2, a = 1}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -321,7 +321,7 @@ fn fast_lane_extra_named_arg_dropped() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
+    test_run.run("LET f = FN EXPR (a :Number PICK b :Number) -> Number = (a)");
     reset_resolve_dispatch_entry_count();
     let result = test_run.run_one(test_run.parse_one("f {a = 1, b = 2, c = 3}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -337,7 +337,7 @@ fn fast_lane_legacy_paren_args_rejected() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = FN (DOUBLE x :Number) -> Number = (x)");
+    test_run.run("LET f = FN EXPR (DOUBLE x :Number) -> Number = (x)");
     reset_resolve_dispatch_entry_count();
     let err = test_run.run_one_err(test_run.parse_one("f (a 1)"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -512,7 +512,7 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKE) -> :(FN :{x :Number} -> Number) = (FN (ECHO x :Number) -> Number = (x))\n\
+        "EXPR (MAKE) -> :(FN :{x :Number} -> Number) = (EXPR (ECHO x :Number) -> Number = (x))\n\
          LET f = (MAKE)",
     );
     let result = test_run.run_one(test_run.parse_one("f {x = 42}"));
@@ -530,7 +530,7 @@ fn fast_lane_list_of_closures_escapes_outer_call() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (MAKE) -> List = ([(FN :{x :Number} -> Number = (x))])");
+    test_run.run("EXPR (MAKE) -> List = ([(FN :{x :Number} -> Number = (x))])");
     let result = test_run.run_one(test_run.parse_one("(MAKE)"));
     let items = match result {
         KObject::List(items, _) => items,
@@ -774,7 +774,7 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
+    test_run.run("EXPR (FIRST xs :(LIST OF Number)) -> Number = (1)");
     let exprs = crate::parse::parse(
         test_run.program_brand(),
         &test_run.registries().labels,
@@ -805,8 +805,8 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
-    test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
+    test_run.run("EXPR (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
+    test_run.run("EXPR (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
     let exprs = crate::parse::parse(
         test_run.program_brand(),
         &test_run.registries().labels,
@@ -1003,7 +1003,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register operator group");
-    test_run.run("FN (~ xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
+    test_run.run("EXPR (~ xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
 
     let infix_id =
         test_run.dispatch_watched_in(scope, working(scope, test_run.parse_one("1 ~ 2 ~ 3 ~ 4")));
@@ -1069,8 +1069,8 @@ fn head_deferred_calls_returned_function() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (GET_F) -> :(FN :{n :Number} -> Number) = \
-         (FN (INNER n :Number) -> Number = (n))",
+        "EXPR (GET_F) -> :(FN :{n :Number} -> Number) = \
+         (EXPR (INNER n :Number) -> Number = (n))",
     );
     let out = test_run.run_one(test_run.parse_one("(GET_F) {n = 7}"));
     assert!(
@@ -1089,8 +1089,8 @@ fn head_deferred_applies_returned_functor_to_module() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (GET_FUNCTOR) -> Any = \
-         (FN (APPLYIT x :Number) -> Module = (MODULE inner = (LET inner = x)))",
+        "EXPR (GET_FUNCTOR) -> Any = \
+         (EXPR (APPLYIT x :Number) -> Module = (MODULE inner = (LET inner = x)))",
     );
     let out = test_run.run_one(test_run.parse_one("(GET_FUNCTOR) {x = 5}"));
     assert!(
@@ -1128,7 +1128,7 @@ fn head_deferred_non_callable_value_errors() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (GET_NUM) -> Number = (42)");
+    test_run.run("EXPR (GET_NUM) -> Number = (42)");
     let err = test_run.run_one_err(test_run.parse_one("(GET_NUM) {x = 1}"));
     match &err.kind {
         KErrorKind::DispatchFailed { reason, .. } => assert!(

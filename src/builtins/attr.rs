@@ -1282,7 +1282,7 @@ mod tests {
         let (mut test_run, captured) = TestRun::with_buf(&program, &region);
         test_run.run(
             "NEWTYPE Point = :{x :Number, y :Str}\n\
-             FN (TAKEY v :(Point.y)) -> Str = (v)\n\
+             EXPR (TAKEY v :(Point.y)) -> Str = (v)\n\
              PRINT (TAKEY \"s\")",
         );
         let printed = String::from_utf8(captured.borrow().clone()).expect("PRINT output is UTF-8");
@@ -1384,7 +1384,7 @@ mod tests {
         let (mut test_run, captured) = TestRun::with_buf(&program, &region);
         test_run.run(
             "MODULE m = (\n  \
-               FN (TAKEX v :(Point.x)) -> Number = (v)\n  \
+               EXPR (TAKEX v :(Point.x)) -> Number = (v)\n  \
                NEWTYPE Point = :{x :Number, y :Str}\n\
              )\n\
              USING m SCOPE (PRINT (TAKEX 3))",
@@ -1406,7 +1406,7 @@ mod tests {
                NEWTYPE Point = :{x :Number}\n\
              )\n\
              USING m SCOPE (\n  \
-               FN (TAKEX v :(m.Wrapper.inner.x)) -> Number = (v)\n  \
+               EXPR (TAKEX v :(m.Wrapper.inner.x)) -> Number = (v)\n  \
                PRINT (TAKEX 8)\n\
              )",
         );
@@ -1535,7 +1535,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        test_run.run("FN (GREET r :{name :Str}) -> Str = (r.name)");
+        test_run.run("EXPR (GREET r :{name :Str}) -> Str = (r.name)");
         assert!(
             matches!(test_run.run_one(test_run.parse_one("GREET {name = \"Ada\", age = 36}")), KObject::KString(s) if *s == "Ada"),
         );

@@ -22,7 +22,7 @@ fn deferred_type_of_param_return_yields_the_module() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    test_run.run("FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)");
+    test_run.run("EXPR (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)");
     let f = lookup_fn(scope, "USE_ORD");
     assert!(
         matches!(f.signature.return_type(), ReturnType::Deferred(_)),
@@ -52,9 +52,9 @@ fn deferred_type_of_param_return_admits_a_per_call_region_module() {
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
-         FN (MAKESET er :Ordered) -> Module = (MODULE generated = (LET compare = 3))\n\
+         EXPR (MAKESET er :Ordered) -> Module = (MODULE generated = (LET compare = 3))\n\
          LET int_set = (MAKESET int_ord)\n\
-         FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
+         EXPR (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
     match test_run.run_one(test_run.parse_one("USE_ORD int_set")) {
         KObject::Module(m) => assert_eq!(m.path, "generated"),
@@ -83,7 +83,7 @@ fn deferred_type_of_param_return_contract_is_the_self_sig() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    test_run.run("FN (BAD_ORD er :Ordered) -> :(TYPE OF er) = (1)");
+    test_run.run("EXPR (BAD_ORD er :Ordered) -> :(TYPE OF er) = (1)");
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -125,7 +125,7 @@ fn type_of_module_slot_admits_a_structurally_satisfying_module() {
         "MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
          MODULE also_ord = ((LET Carrier = Number) (LET compare = 3))",
     );
-    test_run.run("FN (TAKE_ORD x :(TYPE OF int_ord)) -> Number = (1)");
+    test_run.run("EXPR (TAKE_ORD x :(TYPE OF int_ord)) -> Number = (1)");
     assert!(
         matches!(test_run.run_one(test_run.parse_one( "TAKE_ORD int_ord")), KObject::Number(n) if *n == 1.0),
         "the module itself satisfies its own self-sig",
@@ -147,7 +147,7 @@ fn type_of_module_slot_rejects_a_non_satisfying_module() {
         "MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
          MODULE not_ord = (LET other = 1)",
     );
-    test_run.run("FN (TAKE_ORD x :(TYPE OF int_ord)) -> Number = (1)");
+    test_run.run("EXPR (TAKE_ORD x :(TYPE OF int_ord)) -> Number = (1)");
     let error = test_run.run_one_err(test_run.parse_one("TAKE_ORD not_ord"));
     assert!(
         matches!(&error.kind, KErrorKind::DispatchFailed { reason, .. }
@@ -165,7 +165,7 @@ fn module_name_in_a_slot_is_a_parse_error() {
     let error = crate::parse::parse(
         program.brand(),
         &crate::machine::model::LabelInterner::new(),
-        "FN (TAKE_ORD x :int_ord) -> Number = (1)",
+        "EXPR (TAKE_ORD x :int_ord) -> Number = (1)",
     )
     .expect_err("a value token after `:` must not parse");
     let message = error.to_string();
@@ -184,7 +184,7 @@ fn module_param_in_return_position_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("SIG Ordered = (VAL compare :Number)");
-    let error = test_run.run_one_err(test_run.parse_one("FN (USE_ORD er :Ordered) -> er = (er)"));
+    let error = test_run.run_one_err(test_run.parse_one("EXPR (USE_ORD er :Ordered) -> er = (er)"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg)
             if msg.contains("names a type, but `er` is a value")
@@ -204,7 +204,7 @@ fn type_token_param_cannot_take_a_module() {
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
-         FN (USE_ORD Er :Ordered) -> Number = (1)",
+         EXPR (USE_ORD Er :Ordered) -> Number = (1)",
     );
     let error = test_run.run_one_err(test_run.parse_one("USE_ORD int_ord"));
     assert!(

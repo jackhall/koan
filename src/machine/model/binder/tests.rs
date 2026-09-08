@@ -260,9 +260,9 @@ fn a_statements_plan_is_its_own_spine() {
     let program = program_storage();
     let brand = program.brand();
     for source in [
-        "LET make_set = (FN (MAKESET item :Number) -> Number = (item))",
+        "LET make_set = (EXPR (MAKESET item :Number) -> Number = (item))",
         "LET z = (LET a = 3)",
-        "LET f = (FN (g :Number) -> Number = (LET inner = 1))",
+        "LET f = (EXPR (g :Number) -> Number = (LET inner = 1))",
     ] {
         let stmt = parse_one(brand, source);
         let key = stmt.binder_plan().expect("a LET is a binder");
@@ -296,7 +296,7 @@ fn name_slot_agrees_with_the_extractors() {
         "UNION Ux = (Red | Green)",
         "NEWTYPE Nx = Number",
         "TYPE Tx",
-        "LET double = FN (DOUBLE n :Number) -> Number = (n * 2)",
+        "LET double = FN EXPR (DOUBLE n :Number) -> Number = (n * 2)",
         "LET plus = OP #(⊕) OVER Number = (left + right)",
     ] {
         let stmt = parse_one(brand, source);
@@ -320,7 +320,7 @@ fn name_slot_agrees_with_the_extractors() {
     };
     assert_eq!(val_name.symbol(), crate::machine::model::Symbol::of("x"));
     for source in [
-        "FN (TRIPLE n :Number) -> Number = (n * 3)",
+        "EXPR (TRIPLE n :Number) -> Number = (n * 3)",
         "OP #(⊗) OVER Number = (left * right)",
         "UNARY OP #(⊖) OVER Number -> Number = (0 - operands)",
     ] {
@@ -347,7 +347,7 @@ fn combined_forms_install_both_channels() {
     let brand = program.brand();
     for (source, buckets) in [
         (
-            "LET double = FN (DOUBLE n :Number) -> Number = (n * 2)",
+            "LET double = FN EXPR (DOUBLE n :Number) -> Number = (n * 2)",
             1usize,
         ),
         ("LET plus = OP #(⊕) OVER Number = (left + right)", 1),

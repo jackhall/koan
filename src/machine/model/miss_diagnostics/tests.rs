@@ -84,7 +84,8 @@ fn a_user_registration_under_a_reserved_key_is_refused() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let error = test_run.run_one_err(
-        test_run.parse_one("FN (UNARY OP sym :Str OVER operand :Str = body :Str) -> Number = (1)"),
+        test_run
+            .parse_one("EXPR (UNARY OP sym :Str OVER operand :Str = body :Str) -> Number = (1)"),
     );
     assert!(
         matches!(&error.kind, KErrorKind::Rebind { name } if name.contains("UNARY")),

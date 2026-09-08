@@ -37,7 +37,7 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
 #[test]
 fn bound_bare_list_holding_a_home_closure_pins_and_reads_back() {
     let out = run_capturing(concat!(
-        "FN (MAKE n :Number) -> :(LIST OF Any) = ([n (FN :{} -> Number = (n))])\n",
+        "EXPR (MAKE n :Number) -> :(LIST OF Any) = ([n (FN :{} -> Number = (n))])\n",
         "LET r = (MAKE 5)\n",
         "PRINT r",
     ))
@@ -56,7 +56,7 @@ fn bound_bare_list_holding_a_home_closure_pins_and_reads_back() {
 #[test]
 fn bound_plain_data_list_copies_and_reads_back() {
     let out = run_capturing(concat!(
-        "FN (MAKE n :Number) -> :(LIST OF Number) = ([n, n])\n",
+        "EXPR (MAKE n :Number) -> :(LIST OF Number) = ([n, n])\n",
         "LET r = (MAKE 5)\n",
         "PRINT r",
     ))

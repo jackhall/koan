@@ -51,7 +51,7 @@ fn union_param_admits_each_member() {
     let out = run_capture(
         &program,
         &region,
-        "FN (ACCEPT v :(Number | Str)) -> Str = (\"ok\")\n\
+        "EXPR (ACCEPT v :(Number | Str)) -> Str = (\"ok\")\n\
          PRINT (ACCEPT 5)\n\
          PRINT (ACCEPT \"hi\")",
     );
@@ -71,7 +71,7 @@ fn union_param_rejects_non_member() {
     let err = run_expect_err(
         &program,
         &region,
-        "FN (ACCEPT v :(Number | Str)) -> Str = (\"ok\")\n\
+        "EXPR (ACCEPT v :(Number | Str)) -> Str = (\"ok\")\n\
          ACCEPT true",
     );
     assert!(
@@ -89,7 +89,7 @@ fn union_param_order_blind() {
     let out = run_capture(
         &program,
         &region,
-        "FN (ACCEPT v :(Str | Number)) -> Str = (\"ok\")\n\
+        "EXPR (ACCEPT v :(Str | Number)) -> Str = (\"ok\")\n\
          PRINT (ACCEPT 5)\n\
          PRINT (ACCEPT \"hi\")",
     );
@@ -109,7 +109,7 @@ fn duplicate_member_behaves_as_single() {
     let out = run_capture(
         &program,
         &region,
-        "FN (ONLY_NUM v :(Number | Number)) -> Str = (\"num\")\n\
+        "EXPR (ONLY_NUM v :(Number | Number)) -> Str = (\"num\")\n\
          PRINT (ONLY_NUM 5)",
     );
     assert!(
@@ -122,7 +122,7 @@ fn duplicate_member_behaves_as_single() {
     let err = run_expect_err(
         &program,
         &region,
-        "FN (ONLY_NUM v :(Number | Number)) -> Str = (\"num\")\n\
+        "EXPR (ONLY_NUM v :(Number | Number)) -> Str = (\"num\")\n\
          ONLY_NUM \"hi\"",
     );
     assert!(
@@ -141,10 +141,10 @@ fn union_return_keeps_runtime_type_for_dispatch() {
     let out = run_capture(
         &program,
         &region,
-        "FN (WIDEN_NUM n :Number) -> :(Number | Str) = (n)\n\
-         FN (WIDEN_STR s :Str) -> :(Number | Str) = (s)\n\
-         FN (CLASSIFY x :Number) -> Str = (\"num\")\n\
-         FN (CLASSIFY x :Str) -> Str = (\"str\")\n\
+        "EXPR (WIDEN_NUM n :Number) -> :(Number | Str) = (n)\n\
+         EXPR (WIDEN_STR s :Str) -> :(Number | Str) = (s)\n\
+         EXPR (CLASSIFY x :Number) -> Str = (\"num\")\n\
+         EXPR (CLASSIFY x :Str) -> Str = (\"str\")\n\
          PRINT (CLASSIFY (WIDEN_NUM 5))\n\
          PRINT (CLASSIFY (WIDEN_STR \"hi\"))",
     );
@@ -164,9 +164,9 @@ fn match_union_return_type() {
     let out = run_capture(
         &program,
         &region,
-        "FN (CLASSIFY x :Number) -> Str = (\"num\")\n\
-         FN (CLASSIFY x :Str) -> Str = (\"str\")\n\
-         FN (PICK flag :Bool) -> :(Number | Str) = \
+        "EXPR (CLASSIFY x :Number) -> Str = (\"num\")\n\
+         EXPR (CLASSIFY x :Str) -> Str = (\"str\")\n\
+         EXPR (PICK flag :Bool) -> :(Number | Str) = \
            (MATCH (flag) -> :(Number | Str) WITH (true -> (5) false -> (\"hi\")))\n\
          PRINT (CLASSIFY (PICK true))\n\
          PRINT (CLASSIFY (PICK false))",
@@ -186,9 +186,9 @@ fn try_union_return_type() {
     let out = run_capture(
         &program,
         &region,
-        "FN (CLASSIFY x :Number) -> Str = (\"num\")\n\
-         FN (CLASSIFY x :Str) -> Str = (\"str\")\n\
-         FN (RUN n :Number) -> :(Number | Str) = \
+        "EXPR (CLASSIFY x :Number) -> Str = (\"num\")\n\
+         EXPR (CLASSIFY x :Str) -> Str = (\"str\")\n\
+         EXPR (RUN n :Number) -> :(Number | Str) = \
            (TRY (n) -> :(Number | Str) WITH (Ok -> (it)))\n\
          PRINT (CLASSIFY (RUN 7))",
     );
@@ -207,7 +207,7 @@ fn three_member_union_admits_all() {
     let out = run_capture(
         &program,
         &region,
-        "FN (ANY v :(Number | Str | Bool)) -> Str = (\"ok\")\n\
+        "EXPR (ANY v :(Number | Str | Bool)) -> Str = (\"ok\")\n\
          PRINT (ANY 5)\n\
          PRINT (ANY \"hi\")\n\
          PRINT (ANY true)",
@@ -241,7 +241,7 @@ fn parenthesized_compound_member_succeeds() {
     let out = run_capture(
         &program,
         &region,
-        "FN (TAKE v :((LIST OF Number) | Str)) -> Str = (\"ok\")\n\
+        "EXPR (TAKE v :((LIST OF Number) | Str)) -> Str = (\"ok\")\n\
          PRINT (TAKE [1 2 3])\n\
          PRINT (TAKE \"hi\")",
     );
@@ -256,7 +256,7 @@ fn parenthesized_compound_member_succeeds() {
     let err = run_expect_err(
         &program,
         &region,
-        "FN (TAKE v :((LIST OF Number) | Str)) -> Str = (\"ok\")\n\
+        "EXPR (TAKE v :((LIST OF Number) | Str)) -> Str = (\"ok\")\n\
          TAKE 5",
     );
     assert!(

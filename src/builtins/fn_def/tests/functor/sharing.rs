@@ -69,7 +69,7 @@ fn functor_with_two_pinned_slots_round_trips() {
          LET int_ord_view = (int_ord :! Ordered)",
     );
     test_run.run(
-        "FN (TWOPIN p :Ordered) -> :(OrderedSet WITH {Elt = Number, Ord = Number}) = \
+        "EXPR (TWOPIN p :Ordered) -> :(OrderedSet WITH {Elt = Number, Ord = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
     );
     let expected =
@@ -104,7 +104,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
          LET int_ord_view = (int_ord :! Ordered)",
     );
     test_run.run(
-        "FN (MAKESETN p :Ordered) -> :(Set WITH {Elt = Number}) = \
+        "EXPR (MAKESETN p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let expected = test_run.run_one_type(test_run.parse_one("Set WITH {Elt = Number}"));
@@ -152,7 +152,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
          LET int_ord_view = (int_ord :! Ordered)",
     );
     test_run.run(
-        "FN (MAKEBAD p :Ordered) -> :(Set WITH {Elt = Number}) = \
+        "EXPR (MAKEBAD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Str) (LET insert = 0)))",
     );
     let id = test_run.dispatch_in_scope(
@@ -195,7 +195,7 @@ fn functor_return_with_matching_sharing_constraint_passes() {
          LET int_ord_view = (int_ord :! Ordered)",
     );
     test_run.run(
-        "FN (MAKEGOOD p :Ordered) -> :(Set WITH {Elt = Number}) = \
+        "EXPR (MAKEGOOD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let id = test_run.dispatch_in_scope(

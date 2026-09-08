@@ -131,13 +131,13 @@ fn sig_value_slot_rejects_bare_abstract_constructor() {
 #[test]
 fn fn_parameter_rejects_bare_constructor() {
     assert_kind_error(
-        "FN (ECHO x :Wrapper) -> Number = (1.0)",
+        "EXPR (ECHO x :Wrapper) -> Number = (1.0)",
         "Wrapper",
         &["Elem"],
         "the type of FN parameter `x`",
     );
     assert_kind_error(
-        "FN (ECHO x :Pair) -> Number = (1.0)",
+        "EXPR (ECHO x :Pair) -> Number = (1.0)",
         "Pair",
         &["Key", "Val"],
         "the type of FN parameter `x`",
@@ -147,7 +147,7 @@ fn fn_parameter_rejects_bare_constructor() {
 #[test]
 fn fn_return_type_rejects_bare_constructor() {
     assert_kind_error(
-        "FN (ECHO x :Number) -> Wrapper = (1.0)",
+        "EXPR (ECHO x :Number) -> Wrapper = (1.0)",
         "Wrapper",
         &["Elem"],
         "the FN return type",
@@ -266,8 +266,8 @@ fn type_language_argument_positions_reject_bare_constructor() {
 fn saturated_application_is_accepted_in_value_positions() {
     for source in [
         "SIG Boxy = ((VAL boxed :(Wrapper {Elem = Number})))",
-        "FN (ECHO x :(Number AS Wrapper)) -> Number = (1.0)",
-        "FN (ECHO x :Number) -> :(Wrapper {Elem = Str}) = (1.0)",
+        "EXPR (ECHO x :(Number AS Wrapper)) -> Number = (1.0)",
+        "EXPR (ECHO x :Number) -> :(Wrapper {Elem = Str}) = (1.0)",
         "LET Rec = :{x :(Number AS Wrapper)}",
         "LET Xs = :(LIST OF (Number AS Wrapper))",
         "NEWTYPE Boxed = :{v :(Pair {Key = Str, Val = Number})}",
@@ -310,9 +310,9 @@ fn bare_constructor_is_accepted_in_a_type_position() {
 fn first_order_types_are_accepted_across_gated_surfaces() {
     for source in [
         "SIG Boxy = ((VAL boxed :Number))",
-        "FN (ECHO xs :(LIST OF Number)) -> Number = (1.0)",
-        "FN (ECHO f :(FN :{x :Number} -> Number)) -> Any = (1.0)",
-        "FN (ECHO r :{a :Number}) -> Str = (\"ok\")",
+        "EXPR (ECHO xs :(LIST OF Number)) -> Number = (1.0)",
+        "EXPR (ECHO f :(FN :{x :Number} -> Number)) -> Any = (1.0)",
+        "EXPR (ECHO r :{a :Number}) -> Str = (\"ok\")",
         "OP #(+) OVER Number = (1.0)",
         "UNION Shape = (Circle :Number Square :Str)",
         "NEWTYPE Boxed = :{v :Str}",

@@ -5,15 +5,15 @@ SIG Scaled = (VAL factor :Number)
 MODULE geometry = (
   LET factor = 2
   LET scale = ,
-    FN (SCALE p :Point k :Number) -> Point = (Point {x = (p.x * k), y = (p.y * k)})
+    FN EXPR (SCALE p :Point k :Number) -> Point = (Point {x = (p.x * k), y = (p.y * k)})
 )
 LET scaled = (geometry :! Scaled)
-FN (BUMP a :Number b :Number) -> Number = (a + b)
-FN (BUMP s :Str) -> Str = (s)
-FN (PICK r :{u :Number, v :Str}) -> Number = (1)
-FN (PICK r :{u :Number, w :Str}) -> Number = (0)
+EXPR (BUMP a :Number b :Number) -> Number = (a + b)
+EXPR (BUMP s :Str) -> Str = (s)
+EXPR (PICK r :{u :Number, v :Str}) -> Number = (1)
+EXPR (PICK r :{u :Number, w :Str}) -> Number = (0)
 
-FN (WIDE n :Number) -> Number = (
+EXPR (WIDE n :Number) -> Number = (
   (LET point = (Point {x = n, y = (n + 1)}))
   (LET grown = (USING geometry SCOPE (SCALE point factor)))
   (LET tag = (Maybe.Some (grown.x)))

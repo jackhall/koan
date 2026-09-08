@@ -13,7 +13,7 @@ fn combined_form_installs_name_and_bucket() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("LET double = FN (DOUBLE n :Number) -> Number = (n * 2)");
+    test_run.run("LET double = FN EXPR (DOUBLE n :Number) -> Number = (n * 2)");
 
     assert!(fn_is_registered(scope, "DOUBLE"));
     let by_keyword = test_run.run_one(test_run.parse_one("DOUBLE 5"));
@@ -32,7 +32,7 @@ fn bound_value_and_overload_are_one_function() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET base = 100\nLET offset = FN (OFFSET n :Number) -> Number = (n + base)");
+    test_run.run("LET base = 100\nLET offset = FN EXPR (OFFSET n :Number) -> Number = (n + base)");
 
     let by_keyword = test_run.run_one(test_run.parse_one("OFFSET 1"));
     assert!(matches!(by_keyword, KObject::Number(n) if *n == 101.0));
@@ -51,15 +51,15 @@ fn sibling_reference_parks_on_both_channels() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "LET triple = FN (TRIPLE n :Number) -> Number = (n * 3)\n\
-         FN (CALLER) -> Number = (TRIPLE 3)",
+        "LET triple = FN EXPR (TRIPLE n :Number) -> Number = (n * 3)\n\
+         EXPR (CALLER) -> Number = (TRIPLE 3)",
     );
     let via_bucket = test_run.run_one(test_run.parse_one("CALLER"));
     assert!(matches!(via_bucket, KObject::Number(n) if *n == 9.0));
 
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "LET quad = FN (QUAD n :Number) -> Number = (n * 4)\n\
+        "LET quad = FN EXPR (QUAD n :Number) -> Number = (n * 4)\n\
          LET alias = quad",
     );
     let via_name = test_run.run_one(test_run.parse_one("alias"));
@@ -76,7 +76,7 @@ fn combined_form_takes_a_sigiled_return_carrier() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET pack = FN (PACK n :Number) -> :(LIST OF Number) = ([n])");
+    test_run.run("LET pack = FN EXPR (PACK n :Number) -> :(LIST OF Number) = ([n])");
     let result = test_run.run_one(test_run.parse_one("PACK 3"));
     assert!(matches!(result, KObject::List(..)));
 }
@@ -89,7 +89,7 @@ fn combined_form_is_rejected_in_a_sig_body() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let err = test_run.run_one_err(
-        test_run.parse_one("SIG Shape = (LET area = FN (AREA n :Number) -> Number = (n))"),
+        test_run.parse_one("SIG Shape = (LET area = FN EXPR (AREA n :Number) -> Number = (n))"),
     );
     assert!(
         format!("{err}").contains("VAL"),
@@ -125,8 +125,9 @@ fn type_classified_binder_name_is_a_diagnostic() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run
-        .run_one_err(test_run.parse_one("LET Doubler = FN (DOUBLER n :Number) -> Number = (n)"));
+    let err = test_run.run_one_err(
+        test_run.parse_one("LET Doubler = FN EXPR (DOUBLER n :Number) -> Number = (n)"),
+    );
     let message = format!("{err}");
     assert!(
         message.contains("doubler"),
@@ -143,7 +144,7 @@ fn a_builtin_spelled_binder_name_is_diagnosed_as_written() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     for name in ["Str", "List", "Dict"] {
-        let source = format!("LET {name} = FN (MAKE n :Number) -> Number = (n)");
+        let source = format!("LET {name} = FN EXPR (MAKE n :Number) -> Number = (n)");
         let err = test_run.run_one_err(test_run.parse_one(&source));
         let message = format!("{err}");
         assert!(
@@ -164,8 +165,8 @@ fn value_named_return_is_diagnosed_in_the_combined_form() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err =
-        test_run.run_one_err(test_run.parse_one("LET f = FN (WIDEN n :Number) -> other = (n)"));
+    let err = test_run
+        .run_one_err(test_run.parse_one("LET f = FN EXPR (WIDEN n :Number) -> other = (n)"));
     assert!(
         format!("{err}").contains("TYPE OF"),
         "expected the `-> :(TYPE OF …)` suggestion, got {err}",

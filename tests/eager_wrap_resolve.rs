@@ -47,7 +47,7 @@ fn makeset_bare_type_token_resolves_eagerly() {
     let out = run_capturing(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
-         FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))\n\
+         EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))\n\
          LET my_set = (MAKESET (int_ord :! Ordered))\n\
          PRINT my_set.inner",
     )
@@ -65,7 +65,7 @@ fn makeset_bare_type_token_resolves_eagerly() {
 #[test]
 fn wrap_slot_backward_identifier_parks_and_resumes() {
     let out = run_capturing(
-        "FN (ECHO x :Number) -> Number = (x)\n\
+        "EXPR (ECHO x :Number) -> Number = (x)\n\
          LET fwd = 42\n\
          LET result = (ECHO fwd)\n\
          PRINT result",
@@ -103,7 +103,7 @@ fn wrap_slot_parens_expression_still_sub_dispatches() {
     let out = run_capturing(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
-         FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 2))\n\
+         EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 2))\n\
          LET my_set = (MAKESET (int_ord :| Ordered))\n\
          PRINT my_set.inner",
     )

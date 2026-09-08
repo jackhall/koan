@@ -14,7 +14,7 @@ fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (USE xs :Number) -> :(somefn xs) = (xs)");
+    test_run.run("EXPR (USE xs :Number) -> :(somefn xs) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type(), ReturnType::Deferred(_)),
@@ -30,7 +30,7 @@ fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (USE xs :Number) -> :([xs]) = (xs)");
+    test_run.run("EXPR (USE xs :Number) -> :([xs]) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type(), ReturnType::Deferred(_)),
@@ -46,7 +46,7 @@ fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (USE xs :Number) -> :({\"k\": xs}) = (xs)");
+    test_run.run("EXPR (USE xs :Number) -> :({\"k\": xs}) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type(), ReturnType::Deferred(_)),
@@ -66,7 +66,7 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
-         FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
+         EXPR (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
     let f = lookup_fn(scope, "USE_ORD");
     assert!(
@@ -92,7 +92,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
     let scope = test_run.scope;
     test_run.run(
         "LET MyT = Number\n\
-         FN (USE xs :MyT) -> :(LIST OF Number) = ([1])",
+         EXPR (USE xs :MyT) -> :(LIST OF Number) = ([1])",
     );
     let f = lookup_fn(scope, "USE");
     let ReturnType::Resolved(kt) = f.signature.return_type() else {
@@ -115,7 +115,7 @@ fn fn_def_bare_return_type_resolves_after_wake() {
     let scope = test_run.scope;
     test_run.run(
         "LET MyT = Number\n\
-         FN (NOP) -> MyT = (1)",
+         EXPR (NOP) -> MyT = (1)",
     );
     let f = lookup_fn(scope, "NOP");
     let ReturnType::Resolved(kt) = f.signature.return_type() else {
@@ -136,7 +136,7 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("FN (USE xs (1)) -> Null = (xs)"),
+            test_run.parse_one("EXPR (USE xs (1)) -> Null = (xs)"),
         ),
         scope,
     );
@@ -168,7 +168,7 @@ fn fn_def_sigil_return_type_non_type_value_errors() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("FN (NOP) -> :(1) = (1)"),
+            test_run.parse_one("EXPR (NOP) -> :(1) = (1)"),
         ),
         scope,
     );

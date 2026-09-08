@@ -36,7 +36,7 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
     const DEPTH: usize = 20;
     let mut source = String::from(
         "UNION Nat = (Zero :Null Succ :Nat)\n\
-         FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
+         EXPR (COUNTDOWN n :Nat) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
              Zero -> (\"done\")\
              Succ -> (COUNTDOWN it)\
          ))\n\
@@ -117,7 +117,7 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
     const DEPTH: usize = 20;
     let mut source = String::from(
         "UNION Nat = (Zero :Null Succ :Nat)\n\
-         FN (THREAD n :Nat rec :{acc :Number}) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
+         EXPR (THREAD n :Nat rec :{acc :Number}) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
              Zero -> (\"done\")\
              Succ -> (THREAD it {acc = 0})\
          ))\n\
@@ -227,10 +227,10 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (DD acc :(LIST OF Any)) -> :(LIST OF Any) = (acc)\n\
-         FN (CC acc :(LIST OF Any)) -> :(LIST OF Any) = (DD [(acc)])\n\
-         FN (BB acc :(LIST OF Any)) -> :(LIST OF Any) = (CC [(acc)])\n\
-         FN (AA acc :(LIST OF Any)) -> :(LIST OF Any) = (BB [(acc)])",
+        "EXPR (DD acc :(LIST OF Any)) -> :(LIST OF Any) = (acc)\n\
+         EXPR (CC acc :(LIST OF Any)) -> :(LIST OF Any) = (DD [(acc)])\n\
+         EXPR (BB acc :(LIST OF Any)) -> :(LIST OF Any) = (CC [(acc)])\n\
+         EXPR (AA acc :(LIST OF Any)) -> :(LIST OF Any) = (BB [(acc)])",
     );
     // Each hop rewraps the previous hop's own list (`[(acc)]`), so unwrapping the wraps back down
     // must reach the original seed `0` unharmed.

@@ -44,7 +44,7 @@ fn register_pairwise_fixture<'a>(
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register the pairwise operator group");
-    test_run.run("FN (a :Number % b :Number) -> Number = (a + b)");
+    test_run.run("EXPR (a :Number % b :Number) -> Number = (a + b)");
     test_run.run("OP #(MINUS) OVER Number = (left - right)");
 }
 
@@ -87,7 +87,7 @@ fn pairwise_combiner_evaluates_a_shared_operand_once() {
     let region = run_root_storage();
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Left);
-    test_run.run("FN (LOUD x :Number) -> Number = ((PRINT x) (x))");
+    test_run.run("EXPR (LOUD x :Number) -> Number = ((PRINT x) (x))");
     let result = test_run.run_one(test_run.parse_one("1 % (LOUD 2) % 3"));
     assert!(
         matches!(result, KObject::Number(n) if *n == -2.0),

@@ -25,7 +25,7 @@ fn let_in_user_call_argument_is_nested_binder() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (CALL n :Number) -> Number = (n)");
+    test_run.run("EXPR (CALL n :Number) -> Number = (n)");
     let err = test_run.run_one_err(test_run.parse_one("CALL (LET x = 1)"));
     assert_nested_binder(err, "a user-call argument");
 }
@@ -67,9 +67,9 @@ fn named_fn_in_user_call_argument_is_nested_binder() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")");
+    test_run.run("EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")");
     let err =
-        test_run.run_one_err(test_run.parse_one("USE (FN (SHOW x :Number) -> Str = (\"hi\"))"));
+        test_run.run_one_err(test_run.parse_one("USE (EXPR (SHOW x :Number) -> Str = (\"hi\"))"));
     assert_nested_binder(err, "a user-call argument (named FN)");
 }
 
@@ -80,7 +80,7 @@ fn named_fn_in_list_element_is_nested_binder() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let err = test_run
-        .run_one_err(test_run.parse_one("LET xs = [(FN (ECHO x :Number) -> Number = (x))]"));
+        .run_one_err(test_run.parse_one("LET xs = [(EXPR (ECHO x :Number) -> Number = (x))]"));
     assert_nested_binder(err, "a list-literal element (named FN)");
 }
 
@@ -140,8 +140,8 @@ fn definition_in_a_declaration_slot_suggests_the_flat_spelling() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err =
-        test_run.run_one_err(test_run.parse_one("LET f = (FN (DOUBLE x :Number) -> Number = (x))"));
+    let err = test_run
+        .run_one_err(test_run.parse_one("LET f = (EXPR (DOUBLE x :Number) -> Number = (x))"));
     let message = format!("{err}");
     assert!(
         matches!(&err.kind, KErrorKind::NestedBinder { .. }),
@@ -179,7 +179,7 @@ fn the_combined_forms_are_legal_at_statement_position() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET double = FN (DOUBLE x :Number) -> Number = (x * 2)");
+    test_run.run("LET double = FN EXPR (DOUBLE x :Number) -> Number = (x * 2)");
     let result = test_run.run_one(test_run.parse_one("DOUBLE 4"));
     assert!(matches!(result, KObject::Number(n) if *n == 8.0));
 }

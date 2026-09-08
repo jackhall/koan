@@ -66,8 +66,8 @@ fn variant_typed_overloads_dispatch_by_variant() {
     run(
         &program,
         "UNION Maybe = (Some :Number None :Null)\n\
-         FN (DESC x :(Maybe.Some)) -> :Str = (\"is-some\")\n\
-         FN (DESC x :(Maybe.None)) -> :Str = (\"is-none\")\n\
+         EXPR (DESC x :(Maybe.Some)) -> :Str = (\"is-some\")\n\
+         EXPR (DESC x :(Maybe.None)) -> :Str = (\"is-none\")\n\
          PRINT (DESC (Maybe.Some 1))\n\
          PRINT (DESC (Maybe.None null))",
         &region,
@@ -84,7 +84,7 @@ fn variant_typed_slot_rejects_other_variant() {
     use crate::machine::execute::interpret_with_writer;
     let result = interpret_with_writer(
         "UNION Maybe = (Some :Number None :Null)\n\
-         FN (ONLYSOME x :(Maybe.Some)) -> :Str = (\"ok\")\n\
+         EXPR (ONLYSOME x :(Maybe.Some)) -> :Str = (\"ok\")\n\
          ONLYSOME (Maybe.None null)",
         Box::new(std::io::sink()),
     );
@@ -107,7 +107,7 @@ fn union_typed_slot_admits_any_variant() {
     run(
         &program,
         "UNION Maybe = (Some :Number None :Null)\n\
-         FN (ANY x :Maybe) -> :Str = (\"any-variant\")\n\
+         EXPR (ANY x :Maybe) -> :Str = (\"any-variant\")\n\
          PRINT (ANY (Maybe.None null))",
         &region,
         captured.clone(),
@@ -275,8 +275,8 @@ fn a_variant_annotation_outranks_its_union() {
     run(
         &program,
         "UNION Maybe = (Some :Number None :Null)\n\
-         FN (DESC x :Maybe) -> :Str = (\"any\")\n\
-         FN (DESC x :(Maybe.Some)) -> :Str = (\"just-some\")\n\
+         EXPR (DESC x :Maybe) -> :Str = (\"any\")\n\
+         EXPR (DESC x :(Maybe.Some)) -> :Str = (\"just-some\")\n\
          PRINT (DESC (Maybe.Some 1))\n\
          PRINT (DESC (Maybe.None null))",
         &region,

@@ -48,7 +48,7 @@ type FinalizedFn<'a> = (
 ///   value name; the two writes describe one `KFunction` at one `BindingIndex`.
 /// - `Anonymous` — a record-schema binder (`FN :{…}`) has no keyword, so it
 ///   registers nothing; the value it evaluates to is its only handle.
-/// - `Declaration` — a SIG body's bodyless `FN (<head>) -> <Return>`, which builds no callable at
+/// - `Declaration` — a SIG body's bodyless `EXPR (<head>) -> <Return>`, which builds no callable at
 ///   all: it records the head's bucket key and `(params) -> ret` type as a keyworded member of the
 ///   signature under construction. It rides this path so a declaration and a definition derive
 ///   their key and slot types through one parse.

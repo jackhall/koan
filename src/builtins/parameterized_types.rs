@@ -435,7 +435,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(test_run.parse_one(":(FN (x :Number) -> Bool)"));
+        let err = test_run.run_one_err(test_run.parse_one(":(EXPR (x :Number) -> Bool)"));
         assert!(
             !matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("must be a record type")),
             "the parenthesized form must not reach the FN body at all, got {err}",

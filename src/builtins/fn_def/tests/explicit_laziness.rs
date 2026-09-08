@@ -21,7 +21,7 @@ fn run_program(source: &str) -> Vec<u8> {
 #[test]
 fn a_quote_satisfies_a_user_kexpression_parameter() {
     let bytes = run_program(
-        "FN (RUNLATER body :KExpression) -> Any = ($(body))\n\
+        "EXPR (RUNLATER body :KExpression) -> Any = ($(body))\n\
          PRINT (RUNLATER #(1 + 2))",
     );
     assert_eq!(bytes, b"3\n");
@@ -32,7 +32,7 @@ fn a_quote_satisfies_a_user_kexpression_parameter() {
 #[test]
 fn a_name_bound_to_a_quote_satisfies_a_kexpression_parameter() {
     let bytes = run_program(
-        "FN (RUNLATER body :KExpression) -> Any = ($(body))\n\
+        "EXPR (RUNLATER body :KExpression) -> Any = ($(body))\n\
          LET quoted = #(9 + 1)\n\
          PRINT (RUNLATER quoted)",
     );
@@ -44,8 +44,8 @@ fn a_name_bound_to_a_quote_satisfies_a_kexpression_parameter() {
 #[test]
 fn a_group_evaluating_to_code_satisfies_a_kexpression_parameter() {
     let bytes = run_program(
-        "FN (SAME q :KExpression) -> Any = (q)\n\
-         FN (RUNLATER body :KExpression) -> Any = ($(body))\n\
+        "EXPR (SAME q :KExpression) -> Any = (q)\n\
+         EXPR (RUNLATER body :KExpression) -> Any = ($(body))\n\
          PRINT (RUNLATER (SAME #(9 + 1)))",
     );
     assert_eq!(bytes, b"10\n");
@@ -59,7 +59,7 @@ fn a_bare_group_in_a_kexpression_parameter_evaluates_then_misses() {
     let program = program_storage();
     let region = run_root_storage();
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
-    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    test_run.run("EXPR (RUNLATER body :KExpression) -> Any = ($(body))");
     let error = test_run.run_one_err(test_run.parse_one("RUNLATER (PRINT \"side effect\")"));
     assert_eq!(
         captured.borrow().clone(),
@@ -80,7 +80,7 @@ fn a_bare_group_in_a_kexpression_parameter_evaluates_then_misses() {
 #[test]
 fn a_bare_group_argument_evaluates_exactly_once_before_dispatch() {
     let bytes = run_program(
-        "FN (TAKE s :Str) -> Str = (\"done\")\n\
+        "EXPR (TAKE s :Str) -> Str = (\"done\")\n\
          PRINT (TAKE (PRINT \"side\"))",
     );
     assert_eq!(bytes, b"side\ndone\n");
@@ -124,7 +124,7 @@ fn a_missed_dispatch_renders_an_evaluated_argument_by_type() {
     let program = program_storage();
     let region = run_root_storage();
     let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
-    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    test_run.run("EXPR (RUNLATER body :KExpression) -> Any = ($(body))");
     let error = test_run.run_one_err(test_run.parse_one("RUNLATER (1 + 2)"));
     let KErrorKind::DispatchFailed { expr, .. } = &error.kind else {
         panic!("expected a dispatch miss, got {error}");
@@ -139,7 +139,7 @@ fn the_rendering_tracks_the_type_not_the_value() {
     let program = program_storage();
     let region = run_root_storage();
     let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
-    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    test_run.run("EXPR (RUNLATER body :KExpression) -> Any = ($(body))");
     let mut render = |source: &str| {
         let error = test_run.run_one_err(test_run.parse_one(source));
         let KErrorKind::DispatchFailed { expr, .. } = &error.kind else {
@@ -165,7 +165,7 @@ fn an_evaluated_slot_and_an_unevaluated_one_of_a_type_read_alike() {
     let program = program_storage();
     let region = run_root_storage();
     let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
-    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    test_run.run("EXPR (RUNLATER body :KExpression) -> Any = ($(body))");
     let mut render = |source: &str| {
         let error = test_run.run_one_err(test_run.parse_one(source));
         let KErrorKind::DispatchFailed { expr, .. } = &error.kind else {
@@ -187,7 +187,7 @@ fn a_keyword_keeps_its_spelling() {
     let program = program_storage();
     let region = run_root_storage();
     let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
-    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    test_run.run("EXPR (RUNLATER body :KExpression) -> Any = ($(body))");
     let error = test_run.run_one_err(test_run.parse_one("RUNLATER (1 + 2)"));
     let KErrorKind::DispatchFailed { expr, .. } = &error.kind else {
         panic!("expected a dispatch miss, got {error}");
@@ -226,7 +226,7 @@ fn a_top_level_miss_carries_its_own_location() {
     let program = program_storage();
     let region = run_root_storage();
     let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
-    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    test_run.run("EXPR (RUNLATER body :KExpression) -> Any = ($(body))");
     let error = test_run.run_one_err(test_run.parse_one("RUNLATER (\"hi\")"));
     assert!(
         error.frames.is_empty(),

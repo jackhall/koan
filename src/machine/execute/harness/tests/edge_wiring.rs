@@ -127,7 +127,7 @@ fn a_binder_that_fails_after_its_sibling_parked_surfaces_unbound_name() {
         super::working_all(
             &program,
             &test_run.registries().labels,
-            "FN (BOOM) -> Any = (undefined_thing)\nLET z = (BOOM)\nLET y = (z)",
+            "EXPR (BOOM) -> Any = (undefined_thing)\nLET z = (BOOM)\nLET y = (z)",
         ),
         scope,
     );

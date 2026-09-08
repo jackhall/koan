@@ -40,7 +40,7 @@ fn module_argument_leaves_no_live_region() {
     assert_eq!(
         live_after(
             "MODULE int_ord = (LET compare = 7)\n\
-             FN (TAKESET elem :Module) -> Number = (1)\n\
+             EXPR (TAKESET elem :Module) -> Number = (1)\n\
              LET taken = (TAKESET int_ord)\n"
         ),
         0
@@ -56,7 +56,7 @@ fn functor_application_leaves_no_live_region() {
             "SIG Ordered = (VAL compare :Number)\n\
              MODULE int_ord = (LET compare = 7)\n\
              LET int_ord_a = (int_ord :! Ordered)\n\
-             FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))\n\
+             EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))\n\
              LET set_one = (MAKESET (int_ord_a))\n\
              LET set_two = (MAKESET (int_ord_a))\n"
         ),
@@ -74,23 +74,23 @@ fn every_call_shape_leaves_no_live_region() {
         (
             "record argument",
             "LET rec = ({a = 1})\n\
-             FN (TAKEREC elem :Any) -> Number = (1)\n\
+             EXPR (TAKEREC elem :Any) -> Number = (1)\n\
              LET taken = (TAKEREC rec)\n",
         ),
         (
             "region-pure call",
-            "FN (NOOP) -> Number = (1)\n\
+            "EXPR (NOOP) -> Number = (1)\n\
              LET taken = (NOOP)\n",
         ),
         (
             "module returned from a call",
-            "FN (MAKETREE elem :Type) -> Module = (MODULE generated = (LET inner = 1))\n\
+            "EXPR (MAKETREE elem :Type) -> Module = (MODULE generated = (LET inner = 1))\n\
              LET made = (MAKETREE Number)\n",
         ),
         (
             "module argument, module return",
             "MODULE int_ord = (LET compare = 7)\n\
-             FN (TAKESET elem :Module) -> Module = (MODULE out = (LET inner = 1))\n\
+             EXPR (TAKESET elem :Module) -> Module = (MODULE out = (LET inner = 1))\n\
              LET taken = (TAKESET int_ord)\n",
         ),
         (
@@ -107,7 +107,7 @@ fn every_call_shape_leaves_no_live_region() {
         (
             "tail loop",
             "UNION Nat = (Zero :Null Succ :Nat)\n\
-             FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
+             EXPR (COUNTDOWN n :Nat) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
                  Zero -> (\"done\")\
                  Succ -> (COUNTDOWN it)\
              ))\n\
@@ -146,8 +146,8 @@ fn peak_and_live_after(source: &str) -> (usize, usize) {
 fn splicing_countdown(depth: usize) -> String {
     let mut source = String::from(
         "UNION Nat = (Zero :Null Succ :Nat)\n\
-         FN (PASS x :Nat) -> Nat = (x)\n\
-         FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
+         EXPR (PASS x :Nat) -> Nat = (x)\n\
+         EXPR (COUNTDOWN n :Nat) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
              Zero -> (\"done\")\
              Succ -> (COUNTDOWN (PASS it))\
          ))\n\

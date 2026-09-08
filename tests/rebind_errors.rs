@@ -56,7 +56,7 @@ fn let_function_collides_with_let_value() {
     let results = run_collecting_errors(
         &mut test_run,
         "LET x = 1\n\
-         LET x = FN (DOUBLE y :Number) -> Number = (y)",
+         LET x = FN EXPR (DOUBLE y :Number) -> Number = (y)",
     );
     assert!(results[0].is_ok());
     let err = match &results[1] {
@@ -84,8 +84,8 @@ fn exact_signature_duplicate_errors() {
     let mut test_run = TestRun::silent(&program, &region);
     let results = run_collecting_errors(
         &mut test_run,
-        "FN (DOUBLE x :Number) -> Number = (x)\n\
-         FN (DOUBLE y :Number) -> Number = (y)",
+        "EXPR (DOUBLE x :Number) -> Number = (x)\n\
+         EXPR (DOUBLE y :Number) -> Number = (y)",
     );
     assert!(results[0].is_ok());
     let err = match &results[1] {
@@ -140,7 +140,7 @@ fn cross_scope_shadowing_succeeds() {
 fn user_fn_over_builtin_keyword_rejected() {
     let sink = Rc::new(RefCell::new(Vec::new()));
     let err = koan::machine::interpret_with_writer(
-        "FN (PRINT x :Number) -> Null = (x)",
+        "EXPR (PRINT x :Number) -> Null = (x)",
         Box::new(SharedBuf(sink)),
     )
     .expect_err("a user FN over the builtin PRINT bucket should error");

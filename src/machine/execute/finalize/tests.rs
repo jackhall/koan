@@ -232,7 +232,7 @@ fn user_fn_call_releases_callee_frame() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     register_probe(scope, test_run.registries());
-    test_run.run("FN (GETONE) -> Number = (PROBE)");
+    test_run.run("EXPR (GETONE) -> Number = (PROBE)");
 
     let result = test_run.run_one(test_run.parse_one("GETONE"));
     // The census reads frame *retention*, so release the drained slots that still hold their
@@ -264,7 +264,7 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     register_probe(scope, test_run.registries());
-    test_run.run("FN (GETONE) -> Number = (PROBE)");
+    test_run.run("EXPR (GETONE) -> Number = (PROBE)");
 
     let calls = vec!["(GETONE)"; 100].join(" ");
     test_run.run(&format!("LET results = [{calls}]"));
@@ -310,8 +310,8 @@ fn aggregate_of_mixed_call_results_releases_every_producer_frame() {
     let scope = test_run.scope;
     register_probe(scope, test_run.registries());
     test_run.run(
-        "FN (GETONE) -> Number = (PROBE)\n\
-         FN (GETREC) -> :{acc :Number, tag :Number} = ({acc = 1, tag = (PROBE)})",
+        "EXPR (GETONE) -> Number = (PROBE)\n\
+         EXPR (GETREC) -> :{acc :Number, tag :Number} = ({acc = 1, tag = (PROBE)})",
     );
 
     const CALLS: usize = 5;

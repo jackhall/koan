@@ -347,8 +347,8 @@ fn let_type_class_with_plain_function_rejects() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err =
-        test_run.run_one_err(test_run.parse_one("LET Plain = FN (PP x :Number) -> Number = (x)"));
+    let err = test_run
+        .run_one_err(test_run.parse_one("LET Plain = FN EXPR (PP x :Number) -> Number = (x)"));
     match &err.kind {
         KErrorKind::ShapeError(message) => assert!(
             message.contains("Plain") && message.contains("plain"),

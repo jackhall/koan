@@ -127,7 +127,7 @@ fn type_of_module_types_a_parameter_slot() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
-         FN (TAKE_ORD m :(TYPE OF int_ord)) -> Number = (m.zero)",
+         EXPR (TAKE_ORD m :(TYPE OF int_ord)) -> Number = (m.zero)",
     );
     let result = test_run.run_one(test_run.parse_one("TAKE_ORD int_ord"));
     assert!(
@@ -147,7 +147,7 @@ fn type_of_parameter_defers_a_return_type() {
     test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
-         FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
+         EXPR (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
     let result = test_run.run_one(test_run.parse_one("USE_ORD int_ord"));
     assert!(
@@ -168,12 +168,12 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
-         FN (MAKESET er :Ordered) -> Module = \
+         EXPR (MAKESET er :Ordered) -> Module = \
            (MODULE generated = ((LET Elt = Number) (LET zero = 3)))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET int_set = (MAKESET int_ord)\n\
          LET SetType = (TYPE OF int_set)\n\
-         FN (TAKE m :SetType) -> Number = (m.zero)",
+         EXPR (TAKE m :SetType) -> Number = (m.zero)",
     );
     let result = test_run.run_one(test_run.parse_one("TAKE int_set"));
     assert!(

@@ -127,7 +127,7 @@ fn module_body_backward_value_reference_resolves() {
 fn multi_name_forward_reference_is_unbound() {
     use koan::machine::KErrorKind;
     let err = run_collecting_first_err(
-        "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
+        "EXPR (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET out = (ADD aa BY bb)\n\
          LET aa = 1\n\
          LET bb = 2",
@@ -151,7 +151,7 @@ fn multi_name_backward_reference_resolves() {
     let scope = run(
         &program,
         &region,
-        "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
+        "EXPR (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 1\n\
          LET bb = 2\n\
          LET out = (ADD aa BY bb)",
@@ -171,7 +171,7 @@ fn forward_call_by_name_is_dispatch_failure() {
     use koan::machine::KErrorKind;
     let err = run_collecting_first_err(
         "LET out = (DOUBLE 5)\n\
-         FN (DOUBLE x :Number) -> Number = (x)",
+         EXPR (DOUBLE x :Number) -> Number = (x)",
     )
     .expect("forward FN call should surface a dispatch error");
     assert!(

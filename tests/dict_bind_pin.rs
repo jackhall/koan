@@ -38,7 +38,7 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
 #[test]
 fn bound_bare_dict_holding_a_home_closure_pins_and_reads_back() {
     let out = run_capturing(concat!(
-        "FN (MAKE n :Number) -> :(MAP Str -> Any) = ({\"f\": (FN :{} -> Number = (n))})\n",
+        "EXPR (MAKE n :Number) -> :(MAP Str -> Any) = ({\"f\": (FN :{} -> Number = (n))})\n",
         "LET r = (MAKE 5)\n",
         "PRINT r",
     ))
@@ -57,7 +57,7 @@ fn bound_bare_dict_holding_a_home_closure_pins_and_reads_back() {
 #[test]
 fn bound_plain_data_dict_copies_and_reads_back() {
     let out = run_capturing(concat!(
-        "FN (MAKE n :Number) -> :(MAP Str -> Number) = ({\"a\": n})\n",
+        "EXPR (MAKE n :Number) -> :(MAP Str -> Number) = ({\"a\": n})\n",
         "LET r = (MAKE 5)\n",
         "PRINT r",
     ))

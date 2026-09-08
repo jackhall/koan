@@ -85,7 +85,7 @@ fn fn_declaration_registers_a_callable_reaching_exactly_its_home_region() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (DOUBLE x :Number) -> Number = (x + x)");
+    test_run.run("EXPR (DOUBLE x :Number) -> Number = (x + x)");
 
     let foreign = run_root_storage();
     let scope = test_run.scope;

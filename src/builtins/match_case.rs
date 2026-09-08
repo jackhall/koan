@@ -289,7 +289,7 @@ mod tests {
         let bytes = run_program(
             "UNION Maybe = (Some :Number None :Null)\n\
              LET m = (Maybe.Some 7)\n\
-             FN (ID n :Number) -> :Number = (n)\n\
+             EXPR (ID n :Number) -> :Number = (n)\n\
              PRINT (ID (MATCH (m) OVER Maybe -> :Number WITH (Some -> (it) None -> (0))))",
         );
         assert_eq!(bytes, b"7\n");
@@ -354,7 +354,7 @@ mod tests {
     fn match_over_union_producer_selects_number_arm() {
         // A `:(Number | Str)`-returning FN yields a Number here; the `Number` arm selects.
         let bytes = run_program(
-            "FN (PICK n :Number) -> :(Number | Str) = (n)\n\
+            "EXPR (PICK n :Number) -> :(Number | Str) = (n)\n\
              MATCH (PICK 7) -> :Str WITH (Number -> (PRINT \"num\") Str -> (PRINT \"str\"))",
         );
         assert_eq!(bytes, b"num\n");
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn match_over_union_producer_selects_str_arm() {
         let bytes = run_program(
-            "FN (PICK s :Str) -> :(Number | Str) = (s)\n\
+            "EXPR (PICK s :Str) -> :(Number | Str) = (s)\n\
              MATCH (PICK \"hi\") -> :Str WITH (Number -> (PRINT \"num\") Str -> (PRINT \"str\"))",
         );
         assert_eq!(bytes, b"str\n");
@@ -524,7 +524,7 @@ mod tests {
     fn fn_recursion_with_multi_statement_body_via_match_terminates() {
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\
-             FN (HOP b :Any) -> Any = (\
+             EXPR (HOP b :Any) -> Any = (\
                  (PRINT \"step\")\
                  (MATCH (b) OVER Bit -> :Str WITH (\
                      One -> (HOP (Bit.Zero null))\
@@ -748,7 +748,7 @@ mod tests {
                  None -> (FN :{n :Number} -> Number = (n))\
              ))",
         );
-        test_run.run("FN (NOOP) -> Number = (1)");
+        test_run.run("EXPR (NOOP) -> Number = (1)");
         for _ in 0..10 {
             test_run.run_one(test_run.parse_one("NOOP"));
         }

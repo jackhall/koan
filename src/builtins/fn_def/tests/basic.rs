@@ -12,7 +12,7 @@ fn fn_registers_user_function_under_keyword_signature() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (GREET) -> Null = (PRINT \"hi\")");
+    test_run.run("EXPR (GREET) -> Null = (PRINT \"hi\")");
 
     let f = lookup_fn(scope, "GREET");
     match f.signature.elements() {
@@ -26,7 +26,7 @@ fn fn_call_dispatches_body_at_call_time() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET x = 42\nFN (GETX) -> Number = (x)");
+    test_run.run("LET x = 42\nEXPR (GETX) -> Number = (x)");
 
     let result = test_run.run_one(test_run.parse_one("GETX"));
     assert!(
@@ -41,7 +41,7 @@ fn fn_rejects_non_keyword_name() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (greet) -> Null = (PRINT \"hi\")");
+    test_run.run("EXPR (greet) -> Null = (PRINT \"hi\")");
     assert!(!fn_is_registered(scope, "greet"));
     assert!(!fn_is_registered(scope, "GREET"));
 }
@@ -51,7 +51,7 @@ fn fn_call_runs_body_each_time() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET x = 7\nFN (GETX) -> Number = (x)");
+    test_run.run("LET x = 7\nEXPR (GETX) -> Number = (x)");
 
     for _ in 0..2 {
         let result = test_run.run_one(test_run.parse_one("GETX"));
@@ -63,7 +63,7 @@ fn fn_call_runs_body_each_time() {
 fn fn_body_with_nested_expression_evaluates() {
     let bytes = capture_program_output(
         "LET msg = \"from outer scope\"\n\
-         FN (SAY) -> Null = (PRINT (msg))\n\
+         EXPR (SAY) -> Null = (PRINT (msg))\n\
          SAY",
     );
     assert_eq!(bytes, b"from outer scope\n");
@@ -72,8 +72,8 @@ fn fn_body_with_nested_expression_evaluates() {
 #[test]
 fn user_fn_calls_user_fn_transitively() {
     let bytes = capture_program_output(
-        "FN (BAR) -> Null = (PRINT \"ok\")\n\
-         FN (FOO) -> Null = (BAR)\n\
+        "EXPR (BAR) -> Null = (PRINT \"ok\")\n\
+         EXPR (FOO) -> Null = (BAR)\n\
          FOO",
     );
     assert_eq!(bytes, b"ok\n");
@@ -82,7 +82,7 @@ fn user_fn_calls_user_fn_transitively() {
 #[test]
 fn calling_user_fn_repeatedly_runs_body_each_time() {
     let bytes = capture_program_output(
-        "FN (GREET) -> Null = (PRINT \"hello world\")\n\
+        "EXPR (GREET) -> Null = (PRINT \"hello world\")\n\
          GREET\n\
          GREET",
     );
@@ -92,7 +92,7 @@ fn calling_user_fn_repeatedly_runs_body_each_time() {
 #[test]
 fn fn_with_single_param_binds_at_call_site() {
     let bytes = capture_program_output(
-        "FN (SAY x :Str) -> Null = (PRINT x)\n\
+        "EXPR (SAY x :Str) -> Null = (PRINT x)\n\
          SAY \"hello\"",
     );
     assert_eq!(bytes, b"hello\n");
@@ -101,7 +101,7 @@ fn fn_with_single_param_binds_at_call_site() {
 #[test]
 fn fn_with_two_params_binds_each_by_name() {
     let bytes = capture_program_output(
-        "FN (FIRST x :Str y :Str) -> Null = (PRINT x)\n\
+        "EXPR (FIRST x :Str y :Str) -> Null = (PRINT x)\n\
          FIRST \"one\" \"two\"",
     );
     assert_eq!(bytes, b"one\n");
@@ -110,7 +110,7 @@ fn fn_with_two_params_binds_each_by_name() {
 #[test]
 fn fn_with_infix_shape_dispatches_on_keyword_position() {
     let bytes = capture_program_output(
-        "FN (a :Str SAID) -> Null = (PRINT a)\n\
+        "EXPR (a :Str SAID) -> Null = (PRINT a)\n\
          \"hi\" SAID",
     );
     assert_eq!(bytes, b"hi\n");
@@ -120,7 +120,7 @@ fn fn_with_infix_shape_dispatches_on_keyword_position() {
 fn fn_param_shadows_outer_binding_at_call_site() {
     let bytes = capture_program_output(
         "LET msg = \"outer\"\n\
-         FN (SAY msg :Str) -> Null = (PRINT msg)\n\
+         EXPR (SAY msg :Str) -> Null = (PRINT msg)\n\
          SAY \"param wins\"",
     );
     assert_eq!(bytes, b"param wins\n");
@@ -129,7 +129,7 @@ fn fn_param_shadows_outer_binding_at_call_site() {
 #[test]
 fn fn_param_resolves_inside_nested_subexpression() {
     let bytes = capture_program_output(
-        "FN (WRAP x :Str) -> Null = (PRINT (x))\n\
+        "EXPR (WRAP x :Str) -> Null = (PRINT (x))\n\
          WRAP \"wrapped\"",
     );
     assert_eq!(bytes, b"wrapped\n");
@@ -140,7 +140,7 @@ fn fn_returns_param_value_directly() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (ECHO v :Number) -> Number = (v)");
+    test_run.run("EXPR (ECHO v :Number) -> Number = (v)");
 
     let result = test_run.run_one(test_run.parse_one("ECHO 7"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
@@ -152,7 +152,7 @@ fn fn_signature_with_no_keyword_is_rejected() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (x :Number) -> Null = (PRINT \"oops\")");
+    test_run.run("EXPR (x :Number) -> Null = (PRINT \"oops\")");
     assert!(!fn_is_registered(scope, "x"));
 }
 
@@ -163,7 +163,7 @@ fn fn_def_returns_the_registered_kfunction() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(test_run.parse_one("FN (DOUBLE x :Number) -> Number = (x)"));
+    let result = test_run.run_one(test_run.parse_one("EXPR (DOUBLE x :Number) -> Number = (x)"));
     assert!(
         matches!(result, KObject::KFunction(_)),
         "FN should return its registered KFunction",

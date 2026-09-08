@@ -26,7 +26,7 @@ fn ring_program() -> &'static str {
      (OP #(⊗) OVER Carrier = ((left))))\n\
      LET view = (rx :| Ring)\n\
      LET tview = (rx :! Ring)\n\
-     FN (TAKEELT x :(view.Elt)) -> Number = (3)"
+     EXPR (TAKEELT x :(view.Elt)) -> Number = (3)"
 }
 
 /// **AC 3.** A mixed run of two declared members reduces inside the window: the view holds a
@@ -208,7 +208,7 @@ fn a_module_with_the_bucket_but_no_group_misses_the_declared_record() {
         "NEWTYPE Carrier = Number\n\
          SIG Addable = ((TYPE Elt) (VAL unit :Elt) (OP #(⊕) OVER Elt))\n\
          MODULE m = ((LET Elt = Carrier) (LET unit = (Carrier 0)) \
-         (FN (left :Carrier ⊕ right :Carrier) -> Carrier = ((left))))\n\
+         (EXPR (left :Carrier ⊕ right :Carrier) -> Carrier = ((left))))\n\
          LET v = (m :| Addable)",
     );
     assert!(

@@ -38,7 +38,7 @@ pub(crate) enum SignaturePosition {
 /// Each part's class *is* its binder's channel: the lexer tags an `Identifier` only for a token
 /// classifying as neither keyword nor Type, and a `Type` part only for one classifying as a Type
 /// token, so a name position hands over the symbol its own token minted. A bare-leaf `Type` in
-/// name position (`er` in `FN (LIFT er :Ordered) -> …`) therefore declares a type binder rather
+/// name position (`er` in `EXPR (LIFT er :Ordered) -> …`) therefore declares a type binder rather
 /// than referencing a type.
 pub(crate) struct SignatureScan<'p, 'a> {
     parts: &'p [Spanned<ExpressionPart<'a>>],

@@ -12,7 +12,7 @@ fn fn_parses_declared_return_type_onto_signature() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
+    test_run.run("EXPR (DOUBLE x :Number) -> Number = (x)");
 
     let f = lookup_fn(scope, "DOUBLE");
     let ReturnType::Resolved(kt) = f.signature.return_type() else {
@@ -33,7 +33,7 @@ fn fn_without_return_type_annotation_does_not_register() {
     let exprs = parse(
         program.brand(),
         &test_run.registries().labels,
-        "FN (DOUBLE x :Number) = (PRINT \"x\")",
+        "EXPR (DOUBLE x :Number) = (PRINT \"x\")",
     )
     .expect("parse should succeed");
     for expr in exprs {
@@ -61,14 +61,14 @@ fn return_type_only_difference_is_a_duplicate_overload() {
     test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("FN (DOUBLE x :Number) -> Number = (x)"),
+            test_run.parse_one("EXPR (DOUBLE x :Number) -> Number = (x)"),
         ),
         scope,
     );
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("FN (DOUBLE x :Number) -> Str = (\"a\")"),
+            test_run.parse_one("EXPR (DOUBLE x :Number) -> Str = (\"a\")"),
         ),
         scope,
     );
@@ -96,7 +96,7 @@ fn fn_with_unknown_return_type_name_errors() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"),
+            test_run.parse_one("EXPR (DOUBLE x :Number) -> Bogus = (x)"),
         ),
         scope,
     );
@@ -121,7 +121,7 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (LIE) -> Number = (\"oops\")");
+    test_run.run("EXPR (LIE) -> Number = (\"oops\")");
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -166,7 +166,7 @@ fn fn_with_user_bound_return_type_works() {
     use super::capture_program_output;
     let bytes = capture_program_output(
         "LET MyT = Number\n\
-         FN (DOIT xs :MyT) -> MyT = (xs)\n\
+         EXPR (DOIT xs :MyT) -> MyT = (xs)\n\
          PRINT (DOIT 7)",
     );
     assert_eq!(bytes, b"7\n");
@@ -186,7 +186,7 @@ fn fn_return_type_forward_user_bound_name_is_a_resolution_error() {
     let edges: Vec<_> = parse(
         program.brand(),
         &test_run.registries().labels,
-        "FN (DOIT xs :MyT) -> MyT = (xs)\nLET MyT = Number",
+        "EXPR (DOIT xs :MyT) -> MyT = (xs)\nLET MyT = Number",
     )
     .expect("parse succeeds")
     .into_iter()
@@ -224,7 +224,7 @@ fn fn_return_type_surface_name_preserved_in_error() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("FN (DOIT) -> SomeWeirdName = (1)"),
+            test_run.parse_one("EXPR (DOIT) -> SomeWeirdName = (1)"),
         ),
         scope,
     );
@@ -248,7 +248,7 @@ fn user_fn_with_any_return_type_accepts_anything() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (PURE) -> Any = (\"a string\")");
+    test_run.run("EXPR (PURE) -> Any = (\"a string\")");
     let result = test_run.run_one(test_run.parse_one("PURE"));
     assert!(matches!(result, KObject::KString(s) if *s == "a string"));
 }
@@ -268,9 +268,9 @@ fn keep_first_across_tail_chain_errors_against_outer_contract() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (INNER) -> Any = (\"nope\")");
-    test_run.run("FN (MIDDLE) -> Any = (INNER)");
-    test_run.run("FN (OUTER) -> Number = (MIDDLE)");
+    test_run.run("EXPR (INNER) -> Any = (\"nope\")");
+    test_run.run("EXPR (MIDDLE) -> Any = (INNER)");
+    test_run.run("EXPR (OUTER) -> Number = (MIDDLE)");
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -341,7 +341,7 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let bad_edges: Vec<_> = parse(
         program.brand(),
         &test_run.registries().labels,
-        "LET x = \"nope\"\nFN (WRAP) -> Number = (x)\nLET out = (WRAP)",
+        "LET x = \"nope\"\nEXPR (WRAP) -> Number = (x)\nLET out = (WRAP)",
     )
     .expect("parse succeeds")
     .into_iter()
@@ -390,7 +390,7 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let ok_edges: Vec<_> = parse(
         program.brand(),
         &test_run.registries().labels,
-        "LET x = 7\nFN (WRAP) -> Number = (x)\nLET out = (WRAP)",
+        "LET x = 7\nEXPR (WRAP) -> Number = (x)\nLET out = (WRAP)",
     )
     .expect("parse succeeds")
     .into_iter()
@@ -429,7 +429,7 @@ fn fn_return_type_parks_on_an_in_flight_binder_and_resolves_at_wake() {
     let statements: Vec<_> = parse(
         program.brand(),
         &test_run.registries().labels,
-        "NEWTYPE Later = Number\nFN (WRAPIT x :Number) -> Later = (x)",
+        "NEWTYPE Later = Number\nEXPR (WRAPIT x :Number) -> Later = (x)",
     )
     .expect("parse succeeds")
     .into_iter()
@@ -462,8 +462,9 @@ fn fn_return_type_resolves_a_let_alias_of_a_builtin_leaf() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run
-        .run("LET MyNum = Number\nFN (DOUBLE x :Number) -> MyNum = (x * 2)\nLET out = (DOUBLE 3)");
+    test_run.run(
+        "LET MyNum = Number\nEXPR (DOUBLE x :Number) -> MyNum = (x * 2)\nLET out = (DOUBLE 3)",
+    );
 
     let f = lookup_fn(scope, "DOUBLE");
     let ReturnType::Resolved(kt) = f.signature.return_type() else {
@@ -481,7 +482,7 @@ fn fn_record_return_type_is_captured_and_enforced() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (WRAPIT x :Number) -> :{v :Number} = ({v = x})\nLET out = (WRAPIT 3)");
+    test_run.run("EXPR (WRAPIT x :Number) -> :{v :Number} = ({v = x})\nLET out = (WRAPIT 3)");
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Record(..))),
         "the record return elaborates and the call lands a record",
@@ -489,7 +490,7 @@ fn fn_record_return_type_is_captured_and_enforced() {
 
     let mut second = TestRun::silent(&program, &region);
     let scope = second.scope;
-    second.run("FN (UNWRAPIT x :Number) -> :{v :Number} = (x)");
+    second.run("EXPR (UNWRAPIT x :Number) -> :{v :Number} = (x)");
     let id = second.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
@@ -520,7 +521,7 @@ fn fn_value_named_return_stays_pointed() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("FN (DOUBLE elem :Number) -> elem = (elem)"),
+            test_run.parse_one("EXPR (DOUBLE elem :Number) -> elem = (elem)"),
         ),
         scope,
     );
@@ -550,7 +551,7 @@ fn a_bound_value_named_return_stays_pointed_too() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET elem = 3");
-    let error = test_run.run_one_err(test_run.parse_one("FN (DOUBLE n :Number) -> elem = (n)"));
+    let error = test_run.run_one_err(test_run.parse_one("EXPR (DOUBLE n :Number) -> elem = (n)"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg)
             if msg.contains("names a type, but `elem` is a value")
@@ -567,12 +568,12 @@ fn a_bound_value_named_return_stays_pointed_too() {
 fn a_bare_parenthesized_return_type_elaborates_and_runs() {
     use super::capture_program_output;
     let bare = capture_program_output(
-        "FN (WRAP s :Str) -> (LIST OF Str) = ([s])\n\
+        "EXPR (WRAP s :Str) -> (LIST OF Str) = ([s])\n\
          PRINT (WRAP \"hi\")",
     );
     assert_eq!(bare, b"[hi]\n");
     let sigiled = capture_program_output(
-        "FN (WRAP s :Str) -> :(LIST OF Str) = ([s])\n\
+        "EXPR (WRAP s :Str) -> :(LIST OF Str) = ([s])\n\
          PRINT (WRAP \"hi\")",
     );
     assert_eq!(bare, sigiled, "the bare and sigiled spellings run alike");
@@ -586,7 +587,7 @@ fn a_bare_parenthesized_return_type_takes_any_constructor() {
     use super::capture_program_output;
     assert_eq!(
         capture_program_output(
-            "FN (LOOKUP) -> (MAP Str -> Number) = ({\"a\": 1})\n\
+            "EXPR (LOOKUP) -> (MAP Str -> Number) = ({\"a\": 1})\n\
              PRINT (LOOKUP)",
         ),
         b"{\"a\": 1}\n",
@@ -600,7 +601,7 @@ fn a_bare_parenthesized_return_type_is_checked() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (BAD s :Str) -> (LIST OF Str) = (s)");
+    test_run.run("EXPR (BAD s :Str) -> (LIST OF Str) = (s)");
     let error = test_run.run_one_err(test_run.parse_one("BAD \"x\""));
     match &error.kind {
         KErrorKind::TypeMismatch { arg, expected, got } => {
@@ -619,7 +620,7 @@ fn the_combined_form_admits_the_bare_parenthesized_return_type() {
     use super::capture_program_output;
     assert_eq!(
         capture_program_output(
-            "LET w = FN (WRAP s :Str) -> (LIST OF Str) = ([s])\n\
+            "LET w = FN EXPR (WRAP s :Str) -> (LIST OF Str) = ([s])\n\
              PRINT (WRAP \"hi\")\n\
              PRINT (w {s = \"yo\"})",
         ),
@@ -635,7 +636,7 @@ fn a_closure_factory_declares_its_returned_function_type_bare() {
     use super::capture_program_output;
     assert_eq!(
         capture_program_output(
-            "FN (ADDER n :Number) -> (FN :{x :Number} -> Number) = \
+            "EXPR (ADDER n :Number) -> (FN :{x :Number} -> Number) = \
              (FN :{x :Number} -> Number = (x + n))\n\
              LET add2 = (ADDER 2)\n\
              PRINT (add2 {x = 3})",
@@ -652,7 +653,7 @@ fn a_closure_factory_checks_the_returned_function_type() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (LIAR n :Number) -> (FN :{x :Number} -> Number) = \
+        "EXPR (LIAR n :Number) -> (FN :{x :Number} -> Number) = \
          (FN :{x :Number} -> Str = (\"nope\"))",
     );
     let error = test_run.run_one_err(test_run.parse_one("LIAR 1"));

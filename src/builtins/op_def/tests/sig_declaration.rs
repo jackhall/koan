@@ -352,7 +352,7 @@ fn a_second_overload_in_a_declared_operators_bucket_renders_as_an_operator_head(
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("SIG Mixed = ((OP #(⊕) OVER Number) (FN (x :Str ⊕ y :Str) -> Str))");
+    test_run.run("SIG Mixed = ((OP #(⊕) OVER Number) (EXPR (x :Str ⊕ y :Str) -> Str))");
     let rendered = lookup_type(scope, "Mixed")
         .expect("Mixed binds")
         .name(test_run.registries());
@@ -374,7 +374,7 @@ fn an_fn_head_over_an_operator_key_stays_an_fn_head() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("SIG Addable = ((FN (left :Number ⊕ right :Number) -> Number))");
+    test_run.run("SIG Addable = ((EXPR (left :Number ⊕ right :Number) -> Number))");
     let handle = lookup_type(scope, "Addable").expect("Addable binds");
     assert_eq!(
         handle.name(test_run.registries()),

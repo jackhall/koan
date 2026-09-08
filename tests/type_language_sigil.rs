@@ -303,7 +303,7 @@ fn user_functor_application_through_dispatch() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord_base = ((LET compare = 7))\n\
          LET int_ord = (int_ord_base :! Ordered)\n\
-         FN (MAKESET er :Ordered) -> Module = \
+         EXPR (MAKESET er :Ordered) -> Module = \
             (MODULE generated = ((LET tag = 0)))\n\
          LET my_set = (MAKESET int_ord)",
     );
