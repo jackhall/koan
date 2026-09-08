@@ -287,7 +287,7 @@ fn a_cell_that_only_a_birth_row_names_waits_in_the_slab_rather_than_sealing() {
     table
         .release(parent, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(super::state_of(&table, parent), SlotState::Dead);
+    assert_eq!(super::state_of(&table, parent), SlabState::Dead);
     assert_eq!(table.sealed.len(), 0);
 
     table.release(child, ReleaseAbsorption::IntoHolder).unwrap();

@@ -90,7 +90,7 @@ fn number(view: &CrossedOperand<'_, '_, Number>) -> u32 {
 /// would mean storage flowed back out of the sealed tier, which no path may do.
 fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
     (0..cap)
-        .filter(|slot| table.slots[*slot as usize].state != SlotState::Free)
+        .filter(|slot| table.slots[*slot as usize].state != SlabState::Free)
         .filter_map(|slot| table.slots[slot as usize].region.as_ref())
         .map(Region::allocated_bytes)
         .sum()
@@ -100,7 +100,7 @@ fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
 /// continuation is a dormant carrier like any other, so this is the same lookup a redeem performs.
 fn continuation_reach_index<C: Reattachable>(
     table: &CellTable<C>,
-    handle: Handle,
+    handle: SlabHandle,
 ) -> &GraphReach<1> {
     let cell = &table.slots[handle.slot() as usize];
     let index = cell
@@ -113,14 +113,14 @@ fn continuation_reach_index<C: Reattachable>(
 
 /// What a slot currently holds, by handle — the state assertions read the slab directly, since
 /// residence is not observable through the public verbs.
-fn state_of<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> SlotState {
+fn state_of<C: Reattachable>(table: &CellTable<C>, handle: SlabHandle) -> SlabState {
     table.slots[handle.slot() as usize].state
 }
 
 #[test]
 fn the_slab_refuses_past_its_cap_and_reuses_a_freed_slot() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let cells: Vec<Handle> = (0..4).map(|_| table.create(None, None).unwrap()).collect();
+    let cells: Vec<SlabHandle> = (0..4).map(|_| table.create(None, None).unwrap()).collect();
     assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
 
     table
@@ -155,7 +155,7 @@ fn a_two_word_table_names_slots_across_the_chunk_boundary() {
     // sit in different chunks of the same row.
     let mut table: CellTable<Owned, 2> = CellTable::new(128, pin);
     let root = table.create(None, None).unwrap();
-    let cells: Vec<Handle> = (1..128)
+    let cells: Vec<SlabHandle> = (1..128)
         .map(|_| table.create(Some(root), None).unwrap())
         .collect();
     assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
@@ -219,13 +219,13 @@ fn a_birth_row_contains_the_parent_chain_and_outlives_the_middle_cell() {
 
     table.release(b, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!table.is_live(b));
-    assert_eq!(table.slots[b.slot() as usize].state, SlotState::Dead);
+    assert_eq!(table.slots[b.slot() as usize].state, SlabState::Dead);
     assert!(table.birth.test(c.slot(), a.slot()));
     assert!(table.is_live(a));
 
     table.release(c, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(table.slots[c.slot() as usize].state, SlotState::Free);
-    assert_eq!(table.slots[b.slot() as usize].state, SlotState::Free);
+    assert_eq!(table.slots[c.slot() as usize].state, SlabState::Free);
+    assert_eq!(table.slots[b.slot() as usize].state, SlabState::Free);
     assert!(table.is_live(a));
 
     table.release(a, ReleaseAbsorption::IntoHolder).unwrap();

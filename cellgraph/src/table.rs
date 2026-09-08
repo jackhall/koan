@@ -13,7 +13,7 @@ use smallvec::SmallVec;
 
 use crate::carrier::{Active, CellHome, Ready};
 use crate::dormant::{Dormant, DormantKey, ReachTable};
-use crate::handle::{CellHandle, Handle, Stale, TreeHandle};
+use crate::handle::{CellHandle, SlabHandle, Stale, TreeHandle};
 use crate::mask::GraphReach;
 use crate::matrix::{Bits, Matrix};
 use crate::reattach::{DropFree, Erased, Reattachable};
@@ -28,7 +28,7 @@ pub enum CreateError {
     /// The slab is at its cap. What to do next is admission policy, and the embedder's.
     SlabFull,
     /// The named parent is not a live cell.
-    StaleParent(Stale<Handle>),
+    StaleParent(Stale<SlabHandle>),
 }
 
 /// Refusals from [`CellTable::enter`].
@@ -44,7 +44,7 @@ pub enum EnterError {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReleaseError {
     /// The named cell is not a live cell — a second release names a death already declared.
-    Stale(Stale<Handle>),
+    Stale(Stale<SlabHandle>),
     /// The cell is executing. Death is declared from outside a step, never from within one.
     Executing,
 }
@@ -302,7 +302,7 @@ pub(crate) struct Occupancy {
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum HoldNode {
-    Cell(Handle),
+    Cell(SlabHandle),
     Sealed(SealedId),
 }
 
@@ -334,7 +334,7 @@ struct TransitivePins {
 /// What a slab slot currently holds. `Dead` is the undisposed state: the embedder declared the
 /// cell's death, but a descendant's birth row still names it, so the slot is not yet disposable.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum SlotState {
+enum SlabState {
     Free,
     Live,
     Dead,
@@ -363,12 +363,12 @@ struct Relocation {
     generation: u32,
     location: SlabForward,
     /// The next handle on the target's lineage chain, `None` at the chain's end.
-    next: Option<Handle>,
+    next: Option<SlabHandle>,
 }
 
-struct Slot<C: Reattachable, const W: usize> {
+struct SlabCell<C: Reattachable, const W: usize> {
     generation: u32,
-    state: SlotState,
+    state: SlabState,
     /// The slot this cell was created under, and `None` for a root. The birth matrix answers
     /// "is this cell an ancestor" in O(1) and the parent link answers "which cell is next up",
     /// which is the axis a disposal cascade walks: the slots one release can free are a prefix of
@@ -392,7 +392,7 @@ struct Slot<C: Reattachable, const W: usize> {
     /// The head of the chain of departed cells whose dormant carriers this one absorbed, threaded
     /// through the relocation entries themselves. Bounded by merges, never by values, and one
     /// word rather than a vector: the links live where the entries already are.
-    lineage: Option<Handle>,
+    lineage: Option<SlabHandle>,
     /// Minted at the cell's first allocation, so a cell that never allocates costs no chunk. Freed
     /// whole at reclamation, and detached unmoved at a seal — which is what makes a cell's death
     /// O(1) in its dormant values either way.
@@ -407,12 +407,12 @@ struct Slot<C: Reattachable, const W: usize> {
     tree_tombstones: Option<u32>,
 }
 
-impl<C: Reattachable, const W: usize> Slot<C, W> {
+impl<C: Reattachable, const W: usize> SlabCell<C, W> {
     /// A slot with no occupant, under the given generation.
     fn free(generation: u32) -> Self {
-        Slot {
+        SlabCell {
             generation,
-            state: SlotState::Free,
+            state: SlabState::Free,
             parent: None,
             absorption: ReleaseAbsorption::IntoHolder,
             continuation: None,
@@ -466,7 +466,7 @@ enum Crossing {
 /// `C` is the embedder's continuation family: a one-lifetime family the table stores erased, hands
 /// back re-anchored under [`enter`](CellTable::enter), and never calls.
 pub struct CellTable<C: Reattachable, const W: usize = 1> {
-    slots: Box<[Slot<C, W>]>,
+    slots: Box<[SlabCell<C, W>]>,
     free: Vec<u32>,
     birth: Matrix<W>,
     /// The pin relation's slab half: row M is the set of live cells whose region storage M's own
@@ -497,7 +497,7 @@ pub struct CellTable<C: Reattachable, const W: usize = 1> {
     /// they still name. Beside the relocation map rather than on its entries: a departed cell with
     /// tombstones under it is rare, and a slot whose occupants relocate over and over — which is
     /// every producer of a chain — would otherwise pay for the field in every entry it keeps.
-    departed_tombstones: Vec<(Handle, u32)>,
+    departed_tombstones: Vec<(SlabHandle, u32)>,
     /// The embedder's crossing verdict, taken at construction. There is no verdict-free
     /// constructor: a table that can place a value can price the placement. One indirect call per
     /// priced operand is nothing beside the walk that prices it, and keeping the closure here is
@@ -563,7 +563,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             Bits::<W>::CELLS
         );
         let slots = (0..cap)
-            .map(|_| Slot::free(0))
+            .map(|_| SlabCell::free(0))
             .collect::<Vec<_>>()
             .into_boxed_slice();
         CellTable {
@@ -595,9 +595,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// storage-only: it is enterable, but a step finds nothing to run.
     pub fn create(
         &mut self,
-        parent: Option<Handle>,
+        parent: Option<SlabHandle>,
         continuation: Option<C::At<'static>>,
-    ) -> Result<Handle, CreateError> {
+    ) -> Result<SlabHandle, CreateError> {
         let parent_slot = match parent {
             Some(parent) => Some(self.live_slot(parent).map_err(CreateError::StaleParent)?),
             None => None,
@@ -605,7 +605,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         self.take_scratch().reset();
         let slot = self.free.pop().ok_or(CreateError::SlabFull)?;
         let cell = &mut self.slots[slot as usize];
-        cell.state = SlotState::Live;
+        cell.state = SlabState::Live;
         cell.parent = parent_slot;
         // A continuation handed in from outside is at `'static`: it captures nothing any region
         // owns, so it reaches nothing and takes no reach-table entry.
@@ -615,7 +615,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             self.birth.inherit_row(slot, parent_slot);
             self.birth.set(slot, parent_slot);
         }
-        Ok(Handle::new(slot, generation))
+        Ok(SlabHandle::new(slot, generation))
     }
 
     /// Run `step` against the cell, with its executing flag set for the scope.
@@ -674,7 +674,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// whenever the slot actually disposes.
     pub fn release(
         &mut self,
-        handle: Handle,
+        handle: SlabHandle,
         absorption: ReleaseAbsorption,
     ) -> Result<(), ReleaseError> {
         let slot = self.live_slot(handle).map_err(ReleaseError::Stale)?;
@@ -683,7 +683,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
         self.birth.clear_row(slot);
         let cell = &mut self.slots[slot as usize];
-        cell.state = SlotState::Dead;
+        cell.state = SlabState::Dead;
         cell.absorption = absorption;
         // A release runs its cascade outside any step, so the scratch region is taken and reset
         // here for the same reason `enter` takes and resets it: a verb's transients start on empty
@@ -780,7 +780,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                         "a tree cell disposed under a root that counted none"
                     );
                     self.slots[root as usize].tree_children -= 1;
-                    if self.slots[root as usize].state == SlotState::Dead {
+                    if self.slots[root as usize].state == SlabState::Dead {
                         self.dispose_chain(root, scratch);
                     }
                     return;
@@ -863,10 +863,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     }
 
     /// The slot a handle names, if that slot still holds the live cell the handle was minted for.
-    fn live_slot(&self, handle: Handle) -> Result<u32, Stale<Handle>> {
+    fn live_slot(&self, handle: SlabHandle) -> Result<u32, Stale<SlabHandle>> {
         match self.slots.get(handle.slot() as usize) {
             Some(cell)
-                if cell.state == SlotState::Live && cell.generation == handle.generation() =>
+                if cell.state == SlabState::Live && cell.generation == handle.generation() =>
             {
                 Ok(handle.slot())
             }
@@ -932,7 +932,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// A dead-but-undisposed cell counts as a holder: its hold set releases when its slot goes, not
     /// when its death is declared, so its holds outlive it exactly as long as it does.
     fn occupied(&self) -> impl Iterator<Item = u32> + '_ {
-        (0..self.cap).filter(|slot| self.slots[*slot as usize].state != SlotState::Free)
+        (0..self.cap).filter(|slot| self.slots[*slot as usize].state != SlabState::Free)
     }
 
     /// Whether a dead cell's slot may leave the slab now: no occupant's birth row still names it,
@@ -961,8 +961,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     }
 
     /// The handle of whatever occupies `slot` right now, at its current generation.
-    fn occupant(&self, slot: u32) -> Handle {
-        Handle::new(slot, self.slots[slot as usize].generation)
+    fn occupant(&self, slot: u32) -> SlabHandle {
+        SlabHandle::new(slot, self.slots[slot as usize].generation)
     }
 
     /// Where the dormant carriers a key names live now, or `None` when their storage is gone.
@@ -970,9 +970,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// A handle whose slot still holds it names that slot directly, at base zero. Otherwise the
     /// cell has left the slab, and the relocation map answers — or does not, which means the cell
     /// reclaimed or left an empty table behind.
-    fn locate(&self, home: Handle) -> Option<SlabForward> {
+    fn locate(&self, home: SlabHandle) -> Option<SlabForward> {
         let cell = &self.slots[home.slot() as usize];
-        if cell.state != SlotState::Free && cell.generation == home.generation() {
+        if cell.state != SlabState::Free && cell.generation == home.generation() {
             return Some(SlabForward::Slab {
                 slot: home.slot(),
                 base: 0,
@@ -983,13 +983,13 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// The relocation entry for one departed handle, found by walking its slot's list for the
     /// matching generation.
-    fn relocation(&self, handle: Handle) -> Option<&Relocation> {
+    fn relocation(&self, handle: SlabHandle) -> Option<&Relocation> {
         self.relocated[handle.slot() as usize]
             .iter()
             .find(|entry| entry.generation == handle.generation())
     }
 
-    fn relocation_mut(&mut self, handle: Handle) -> Option<&mut Relocation> {
+    fn relocation_mut(&mut self, handle: SlabHandle) -> Option<&mut Relocation> {
         self.relocated[handle.slot() as usize]
             .iter_mut()
             .find(|entry| entry.generation == handle.generation())
@@ -998,7 +998,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// Point `handle` at `location` and push it onto a lineage chain whose current head is
     /// `chain_head`. The caller stores `Some(handle)` as the new head, so the chain is threaded
     /// through the entries rather than collected beside them.
-    fn relocate(&mut self, handle: Handle, location: SlabForward, chain_head: Option<Handle>) {
+    fn relocate(
+        &mut self,
+        handle: SlabHandle,
+        location: SlabForward,
+        chain_head: Option<SlabHandle>,
+    ) {
         match self.relocation_mut(handle) {
             Some(entry) => {
                 entry.location = location;
@@ -1014,7 +1019,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Drop every entry on a chain — the storage those keys named is gone, so a redeem under one
     /// of them refuses rather than finding a stale answer.
-    fn forget_chain(&mut self, head: Option<Handle>, scratch: &Scratch) {
+    fn forget_chain(&mut self, head: Option<SlabHandle>, scratch: &Scratch) {
         let mut next = head;
         while let Some(handle) = next {
             let list = &mut self.relocated[handle.slot() as usize];
@@ -1040,7 +1045,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// Move every handle on `head`'s chain onto `onto`'s chain, pointing each at `target`. What an
     /// absorbed sealed cell's lineage takes, and what a run of freshly departed handles takes at a
     /// seal.
-    fn relink_chain(&mut self, head: Option<Handle>, target: SealedId, onto: &mut Option<Handle>) {
+    fn relink_chain(
+        &mut self,
+        head: Option<SlabHandle>,
+        target: SealedId,
+        onto: &mut Option<SlabHandle>,
+    ) {
         let mut next = head;
         while let Some(handle) = next {
             let entry = self
@@ -1061,7 +1071,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// The occupant comes last when it comes at all, and the flag says whether it came, which is
     /// what lets a caller that has to treat it differently from the inherited entries split the run
     /// rather than re-derive it.
-    fn take_lineage<'s>(&mut self, slot: u32, scratch: &'s Scratch) -> (&'s mut [Handle], bool) {
+    fn take_lineage<'s>(
+        &mut self,
+        slot: u32,
+        scratch: &'s Scratch,
+    ) -> (&'s mut [SlabHandle], bool) {
         let cell = &self.slots[slot as usize];
         let occupant = (!cell.reaches.is_empty() || cell.tree_tombstones.is_some())
             .then(|| self.occupant(slot));
@@ -1091,7 +1105,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Move a departing cell's tree tombstones onto the relocation entry that now forwards its
     /// handle, so they resolve through wherever its bundle went and are freed when that entry is.
-    fn carry_tree_tombstones(&mut self, slot: u32, departing: Handle) {
+    fn carry_tree_tombstones(&mut self, slot: u32, departing: SlabHandle) {
         if let Some(head) = self.slots[slot as usize].tree_tombstones.take() {
             debug_assert!(
                 self.relocation(departing).is_some(),
@@ -1103,7 +1117,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Point every handle of `lineage` at `target`, and record them on the target so its own
     /// retirement can drop them again.
-    fn relocate_to_sealed(&mut self, lineage: &[Handle], target: SealedId) {
+    fn relocate_to_sealed(&mut self, lineage: &[SlabHandle], target: SealedId) {
         // The head comes out of the sealed cell for the walk and goes back after it: the walk
         // writes the relocation lists, and holding a borrow of the sealed cell across that would
         // name two fields of the table at once.
@@ -1466,7 +1480,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     fn dispose_chain(&mut self, released: u32, scratch: &Scratch) {
         let mut next = Some(released);
         while let Some(slot) = next {
-            if self.slots[slot as usize].state != SlotState::Dead || !self.disposable(slot) {
+            if self.slots[slot as usize].state != SlabState::Dead || !self.disposable(slot) {
                 return;
             }
             // Read the link first: disposal recycles the slot, which clears it.
@@ -1479,7 +1493,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// departing occupant is stale from here on.
     fn recycle(&mut self, slot: u32) {
         let cell = &mut self.slots[slot as usize];
-        *cell = Slot::free(cell.generation.wrapping_add(1));
+        *cell = SlabCell::free(cell.generation.wrapping_add(1));
         self.free.push(slot);
     }
 
@@ -1784,13 +1798,13 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Tree children of a slab cell that have not disposed.
     #[cfg(test)]
-    pub(crate) fn tree_children_of(&self, handle: Handle) -> u32 {
+    pub(crate) fn tree_children_of(&self, handle: SlabHandle) -> u32 {
         self.slots[handle.slot() as usize].tree_children
     }
 
     /// The head of the tree tombstones hanging off a slab cell's bundle.
     #[cfg(test)]
-    pub(crate) fn tree_tombstones_of(&self, handle: Handle) -> Option<u32> {
+    pub(crate) fn tree_tombstones_of(&self, handle: SlabHandle) -> Option<u32> {
         self.slots[handle.slot() as usize].tree_tombstones
     }
 
@@ -1814,14 +1828,14 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// Where one departed handle's dormant carriers live now, straight off the map rather than
     /// through [`locate`](Self::locate)'s live-cell shortcut.
     #[cfg(test)]
-    pub(crate) fn relocation_of(&self, handle: Handle) -> Option<SlabForward> {
+    pub(crate) fn relocation_of(&self, handle: SlabHandle) -> Option<SlabForward> {
         self.relocation(handle).map(|entry| entry.location)
     }
 
     /// The handles on a sealed cell's lineage chain, collected. Chain order is reverse insertion,
     /// so a caller comparing more than one handle compares sets.
     #[cfg(test)]
-    pub(crate) fn lineage_of(&self, id: SealedId) -> Vec<Handle> {
+    pub(crate) fn lineage_of(&self, id: SealedId) -> Vec<SlabHandle> {
         self.chain(
             self.sealed
                 .get(id)
@@ -1831,12 +1845,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// The handles on a slot's lineage chain, collected.
     #[cfg(test)]
-    pub(crate) fn slot_lineage(&self, slot: u32) -> Vec<Handle> {
+    pub(crate) fn slot_lineage(&self, slot: u32) -> Vec<SlabHandle> {
         self.chain(self.slots[slot as usize].lineage)
     }
 
     #[cfg(test)]
-    fn chain(&self, head: Option<Handle>) -> Vec<Handle> {
+    fn chain(&self, head: Option<SlabHandle>) -> Vec<SlabHandle> {
         let mut walk = head;
         let mut handles = Vec::new();
         while let Some(handle) = walk {
@@ -1851,13 +1865,17 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Every relocation entry, as the handle it answers for and where that handle now points.
     #[cfg(test)]
-    pub(crate) fn relocation_entries(&self) -> Vec<(Handle, SlabForward)> {
+    pub(crate) fn relocation_entries(&self) -> Vec<(SlabHandle, SlabForward)> {
         self.relocated
             .iter()
             .enumerate()
             .flat_map(|(slot, list)| {
-                list.iter()
-                    .map(move |entry| (Handle::new(slot as u32, entry.generation), entry.location))
+                list.iter().map(move |entry| {
+                    (
+                        SlabHandle::new(slot as u32, entry.generation),
+                        entry.location,
+                    )
+                })
             })
             .collect()
     }
@@ -1865,7 +1883,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// Chunk bytes a live cell's region bundle occupies, absorbed bumps included. `0` for a cell
     /// that never allocated.
     #[cfg(test)]
-    pub(crate) fn region_bytes(&self, handle: Handle) -> Result<usize, Stale<Handle>> {
+    pub(crate) fn region_bytes(&self, handle: SlabHandle) -> Result<usize, Stale<SlabHandle>> {
         let slot = self.live_slot(handle)?;
         Ok(self.cell_bytes(slot))
     }
@@ -2147,7 +2165,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     fn name(&self, node: SlotNode) -> HoldNode {
         match node {
             SlotNode::Cell(slot) => {
-                HoldNode::Cell(Handle::new(slot, self.slots[slot as usize].generation))
+                HoldNode::Cell(SlabHandle::new(slot, self.slots[slot as usize].generation))
             }
             SlotNode::Sealed(id) => HoldNode::Sealed(id),
         }
@@ -2401,7 +2419,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Whether `holder` holds `held` in the pin relation.
     #[cfg(test)]
-    fn holds(&self, holder: Handle, held: Handle) -> bool {
+    fn holds(&self, holder: SlabHandle, held: SlabHandle) -> bool {
         self.pins.test(holder.slot(), held.slot())
     }
 }
@@ -2694,7 +2712,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// Mint a bare hold on another live cell — the pull shape's first half: the executing cell
     /// takes a hold with no value crossing, so the held cell seals rather than reclaims when it
     /// dies, and this cell can read out of it later.
-    pub fn hold(&mut self, other: Handle) -> Result<(), Stale<Handle>> {
+    pub fn hold(&mut self, other: SlabHandle) -> Result<(), Stale<SlabHandle>> {
         let other_slot = self.table.live_slot(other)?;
         let reach = GraphReach::single(other_slot);
         let into = self.executing_slot();
@@ -2720,7 +2738,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
                 let cell = &mut self.table.slots[slot as usize];
                 let index = cell.reaches.intern(reach);
                 DormantKey {
-                    home: CellHandle::Slab(Handle::new(slot, cell.generation)),
+                    home: CellHandle::Slab(SlabHandle::new(slot, cell.generation)),
                     index,
                 }
             }

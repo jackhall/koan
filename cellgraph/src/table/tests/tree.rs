@@ -115,7 +115,7 @@ fn a_root_released_before_its_tree_child_waits_undisposed() {
     let tree = table.create_tree(root, None).unwrap();
 
     table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(state_of(&table, root), SlotState::Dead);
+    assert_eq!(state_of(&table, root), SlabState::Dead);
     assert!(!table.is_empty(), "the root waits on its tree child");
 
     // The last tree child's disposal runs the slab's own cascade at the root.
@@ -446,7 +446,7 @@ fn a_dormant_carrier_whose_home_reclaimed_answers_gone() {
 /// the root — the shape every tombstone-through-the-slab assertion starts from.
 fn spliced_into_root(
     table: &mut CellTable<Owned>,
-    root: Handle,
+    root: SlabHandle,
 ) -> (Dormant<Number>, TreeHandle, TreeHandle) {
     let parent = table.create_tree(root, None).unwrap();
     let home = table.create_tree(parent, None).unwrap();

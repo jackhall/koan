@@ -10,7 +10,7 @@ use super::super::*;
 use super::{Number, Owned, pin};
 
 /// Give a cell a region of its own, so it prices at more than nothing.
-fn allocate(table: &mut CellTable<Owned>, cell: Handle) {
+fn allocate(table: &mut CellTable<Owned>, cell: SlabHandle) {
     table
         .enter(cell, |context| {
             context.alloc::<Number>(|writer| writer.value(1));
@@ -19,7 +19,7 @@ fn allocate(table: &mut CellTable<Owned>, cell: Handle) {
 }
 
 /// Mint a bare pin hold from one live cell onto another.
-fn hold(table: &mut CellTable<Owned>, holder: Handle, held: Handle) {
+fn hold(table: &mut CellTable<Owned>, holder: SlabHandle, held: SlabHandle) {
     table
         .enter(holder, |context| context.hold(held))
         .unwrap()
@@ -512,8 +512,8 @@ fn pricing_mutates_no_hold() {
     hold(&mut table, keep_open, open);
     table.release(open, ReleaseAbsorption::Refused).unwrap();
 
-    let handles: Vec<Handle> = (0..10)
-        .map(|slot| Handle::new(slot, table.slots[slot as usize].generation))
+    let handles: Vec<SlabHandle> = (0..10)
+        .map(|slot| SlabHandle::new(slot, table.slots[slot as usize].generation))
         .filter(|handle| table.is_live(*handle))
         .collect();
     let ids: Vec<SealedId> = table.sealed.ids().collect();

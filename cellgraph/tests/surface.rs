@@ -10,8 +10,8 @@
 
 use cellgraph::{
     Active, CellHandle, CellTable, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
-    Erased, Handle, Operand, Prices, Ready, Reattachable, RedeemError, ReleaseAbsorption,
-    ReleaseError, ReleaseTreeError, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
+    Erased, Operand, Prices, Ready, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError,
+    ReleaseTreeError, SlabHandle, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -127,7 +127,7 @@ fn every_public_door_answers_from_outside_the_crate() {
     let mut table: CellTable<Work> = CellTable::new(4, weigh);
 
     // Creation, with and without a parent, and with or without a continuation at birth.
-    let root: Handle = table.create(None, Some(String::from("root"))).unwrap();
+    let root: SlabHandle = table.create(None, Some(String::from("root"))).unwrap();
     let child = table.create(Some(root), None).unwrap();
     let doomed = table.create(Some(root), None).unwrap();
     assert_eq!(root.slot(), 0);
@@ -269,7 +269,7 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
     let Err(CreateError::StaleParent(stale)) = full.create(Some(taken), None) else {
         panic!("a dead parent must refuse");
     };
-    let stale: Stale<Handle> = stale;
+    let stale: Stale<SlabHandle> = stale;
     assert_eq!(stale.name(), taken);
 
     let Err(error) = full.enter(taken, |_| ()) else {
@@ -286,7 +286,7 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
 #[test]
 fn the_tree_pool_answers_from_outside_the_crate() {
     let mut table: CellTable<Work> = CellTable::new(1, weigh);
-    let root: Handle = table.create(None, None).unwrap();
+    let root: SlabHandle = table.create(None, None).unwrap();
     assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
 
     // The pool takes no cap: a chain deeper than the slab is ordinary, and none of it is a slot.

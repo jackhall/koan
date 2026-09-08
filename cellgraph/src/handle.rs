@@ -8,14 +8,14 @@
 /// every other occupant of that slot. `Copy`, so a handle is passed around freely; naming a cell
 /// grants nothing, because every verb re-checks the generation against the slot.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Handle {
+pub struct SlabHandle {
     slot: u32,
     generation: u32,
 }
 
-impl Handle {
+impl SlabHandle {
     pub(crate) fn new(slot: u32, generation: u32) -> Self {
-        Handle { slot, generation }
+        SlabHandle { slot, generation }
     }
 
     /// The slab slot this handle names.
@@ -30,8 +30,8 @@ impl Handle {
 }
 
 /// A name for one tree cell: the pool index it occupies, plus the generation that distinguishes it
-/// from every other occupant of that index. `Copy`, like [`Handle`], and re-checked by every verb
-/// for the same reason.
+/// from every other occupant of that index. `Copy`, like [`SlabHandle`], and re-checked by every
+/// verb for the same reason.
 ///
 /// The pool is separate from the slab and takes no cap, so a tree handle names no slab bit and no
 /// mask ever holds one. See [design/tree-cells.md](../design/tree-cells.md).
@@ -70,12 +70,12 @@ impl TreeHandle {
 /// tree cell, and nothing about it changes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum CellHandle {
-    Slab(Handle),
+    Slab(SlabHandle),
     Tree(TreeHandle),
 }
 
-impl From<Handle> for CellHandle {
-    fn from(handle: Handle) -> Self {
+impl From<SlabHandle> for CellHandle {
+    fn from(handle: SlabHandle) -> Self {
         CellHandle::Slab(handle)
     }
 }
@@ -91,8 +91,8 @@ impl From<TreeHandle> for CellHandle {
 /// never a silent no-op, because it means a caller kept a name past a death it declared itself.
 ///
 /// `N` is the name that went stale, and a door's error is exactly as wide as the name it takes:
-/// [`Handle`] from a door that names only a slab cell, [`TreeHandle`] from one that names only a
-/// tree cell, and [`CellHandle`] from one that takes either — so no door reports a kind it cannot
+/// [`SlabHandle`] from a door that names only a slab cell, [`TreeHandle`] from one that names only
+/// a tree cell, and [`CellHandle`] from one that takes either — so no door reports a kind it cannot
 /// have met.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Stale<N>(pub(crate) N);
@@ -104,8 +104,8 @@ impl<N> Stale<N> {
     }
 }
 
-impl From<Stale<Handle>> for Stale<CellHandle> {
-    fn from(stale: Stale<Handle>) -> Self {
+impl From<Stale<SlabHandle>> for Stale<CellHandle> {
+    fn from(stale: Stale<SlabHandle>) -> Self {
         Stale(CellHandle::Slab(stale.0))
     }
 }

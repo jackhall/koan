@@ -15,7 +15,7 @@ use super::{
 };
 
 /// Bytes a cell's region bundle occupies, or zero for a cell that never allocated.
-fn region_bytes<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> usize {
+fn region_bytes<C: Reattachable>(table: &CellTable<C>, handle: SlabHandle) -> usize {
     table.slots[handle.slot() as usize]
         .region
         .as_ref()
@@ -101,7 +101,7 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
 
     // No id, no index entry, no sealed cell: the storage is the consumer's own now.
     assert_eq!(table.sealed.len(), 0);
-    assert_eq!(state_of(&table, producer), SlotState::Free);
+    assert_eq!(state_of(&table, producer), SlabState::Free);
     assert!(!table.holds(consumer, producer));
     assert_eq!(
         region_bytes(&table, consumer),
@@ -220,11 +220,11 @@ fn an_undisposed_dead_holder_absorbs_too() {
     table
         .release(holder, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(state_of(&table, holder), SlotState::Dead);
+    assert_eq!(state_of(&table, holder), SlabState::Dead);
 
     table.release(held, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
-    assert_eq!(state_of(&table, held), SlotState::Free);
+    assert_eq!(state_of(&table, held), SlabState::Free);
 
     // Absorbing into a dead-but-undisposed cell only brings forward the fold its own disposal would
     // have performed: when the child goes, the whole bundle goes with the holder.
@@ -474,7 +474,7 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     // No second sealed cell: the dying cell's storage and holds go into the aggregate that already
     // named it, and the slots its row named trade its bit for the sealed cell's name.
     assert_eq!(table.sealed.len(), 1);
-    assert_eq!(state_of(&table, dying), SlotState::Free);
+    assert_eq!(state_of(&table, dying), SlabState::Free);
     let sealed_cell = table.sealed.get(id).unwrap();
     assert_eq!(sealed_cell.holders, 1);
     assert!(!sealed_cell.aggregate.names(dying.slot()));
@@ -505,9 +505,9 @@ fn absorb_work_for(dormant: usize, reached: u32, shared: u32, alone: u32) -> u64
             .map(|_| table.create(None, None).unwrap())
             .collect()
     };
-    let reached_cells: Vec<Handle> = make(reached);
-    let shared_cells: Vec<Handle> = make(shared);
-    let alone_cells: Vec<Handle> = make(alone);
+    let reached_cells: Vec<SlabHandle> = make(reached);
+    let shared_cells: Vec<SlabHandle> = make(shared);
+    let alone_cells: Vec<SlabHandle> = make(alone);
 
     table
         .enter(producer, |context| {

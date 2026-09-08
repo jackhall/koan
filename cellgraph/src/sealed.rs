@@ -14,7 +14,7 @@ use std::cell::Cell;
 
 use smallvec::SmallVec;
 
-use crate::handle::Handle;
+use crate::handle::SlabHandle;
 use crate::mask::GraphReach;
 use crate::region::Region;
 use crate::scratch::ScratchVec;
@@ -212,7 +212,7 @@ pub(crate) struct SealedCell<const W: usize> {
     /// for, threaded through the table's relocation entries themselves. Bounded by merges, never by
     /// values — a cell contributes at most one entry, however many dormant carriers it kept — and
     /// it is what lets the sealed cell's retirement drop exactly its own entries from that map.
-    pub(crate) lineage: Option<Handle>,
+    pub(crate) lineage: Option<SlabHandle>,
 }
 
 impl<const W: usize> SealedCell<W> {

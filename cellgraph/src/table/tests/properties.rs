@@ -185,7 +185,7 @@ fn sorted_ids(table: &CellTable<Borrowed>) -> Vec<SealedId> {
 /// `Price` verb, an id outside that set carrying a memo is one a mint or a release left behind.
 fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, priced: bool) {
     let occupied: Vec<u32> = (0..CAP)
-        .filter(|slot| table.slots[*slot as usize].state != SlotState::Free)
+        .filter(|slot| table.slots[*slot as usize].state != SlabState::Free)
         .collect();
 
     for slot in 0..CAP {
@@ -193,7 +193,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         let by_pins = table.pins.held_by_any(occupied.iter().copied(), slot);
         let by_aggregate = !table.naming[slot as usize].is_empty();
         match table.slots[slot as usize].state {
-            SlotState::Free => {
+            SlabState::Free => {
                 assert!(
                     !by_birth && !by_pins && !by_aggregate,
                     "slot {slot} is free but something still names it"
@@ -205,11 +205,11 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             }
             // Two relations keep a dead cell in place: a descendant's birth row, and an
             // undisposed tree child, which is the same relation counted rather than rowed.
-            SlotState::Dead => assert!(
+            SlabState::Dead => assert!(
                 by_birth || table.tree_children_of(table.occupant(slot)) > 0,
                 "slot {slot} is undisposed but nothing names it, so it should have left the slab"
             ),
-            SlotState::Live => {}
+            SlabState::Live => {}
         }
     }
 
@@ -296,7 +296,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         for mask in table.slots[slot as usize].reaches.iter() {
             for named in mask.slab_slots() {
                 assert!(
-                    table.slots[named as usize].state != SlotState::Free,
+                    table.slots[named as usize].state != SlabState::Free,
                     "slot {slot} keeps a carrier naming the recycled slot {named}"
                 );
                 assert!(
@@ -330,7 +330,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             SlabForward::Slab { slot, base } => {
                 let cell = &table.slots[slot as usize];
                 assert!(
-                    cell.state != SlotState::Free,
+                    cell.state != SlabState::Free,
                     "{handle:?} is relocated to the recycled slot {slot}"
                 );
                 assert!(
@@ -622,7 +622,7 @@ fn check_tree_invariants(table: &CellTable<Borrowed>) {
 /// tells a generated corpus that reaches all three shapes from one that only claims to.
 fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merges {
     let mut table: CellTable<Borrowed> = CellTable::new(CAP, verdict);
-    let mut minted: Vec<Handle> = Vec::new();
+    let mut minted: Vec<SlabHandle> = Vec::new();
     // Every tree cell the run created, in creation order. A generated index may name one that has
     // since died, which is the point: the doors have to refuse it.
     let mut grown: Vec<TreeHandle> = Vec::new();
@@ -902,7 +902,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
         "a wound-down run left a tree cell or a tombstone in the pool"
     );
     for slot in 0..CAP {
-        assert_eq!(table.slots[slot as usize].state, SlotState::Free);
+        assert_eq!(table.slots[slot as usize].state, SlabState::Free);
     }
     // Every surviving sealed cell is a ring by the invariants above; this says which rings can
     // survive. A region no more than one hold set ever named is one a merge reaches — its sole

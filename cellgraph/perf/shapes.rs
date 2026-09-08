@@ -11,8 +11,8 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    CellHandle, CellTable, CrossedOperand, Dormant, DropFree, Handle, Operand, Prices, Ready,
-    Reattachable, ReleaseAbsorption, TreeHandle, Verdict, Writer, reattachable,
+    CellHandle, CellTable, CrossedOperand, Dormant, DropFree, Operand, Prices, Ready, Reattachable,
+    ReleaseAbsorption, SlabHandle, TreeHandle, Verdict, Writer, reattachable,
 };
 
 use crate::meter::{Verb, measure};
@@ -123,7 +123,7 @@ fn keep_redeem(n: u32) {
 fn keep_shapes(n: u32) {
     let mut table = table();
     let dest = measure(Verb::Create, || table.create(None, None)).unwrap();
-    let mut sources: Vec<Handle> = Vec::with_capacity(n as usize);
+    let mut sources: Vec<SlabHandle> = Vec::with_capacity(n as usize);
     let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
@@ -274,7 +274,7 @@ fn pull_chain(n: u32) {
 /// then the leaf — the single release that frees the whole chain in one walk up it.
 fn birth_chain(n: u32) {
     let mut table = table();
-    let mut handles: Vec<Handle> = Vec::with_capacity(n as usize);
+    let mut handles: Vec<SlabHandle> = Vec::with_capacity(n as usize);
 
     let root = measure(Verb::Create, || table.create(None, None)).unwrap();
     handles.push(root);
@@ -298,8 +298,8 @@ fn birth_chain(n: u32) {
 /// One round of the fan-out: `m` values built in `source` and placed as one slice into `dest`.
 fn fan_out_round(
     table: &mut CellTable<Work>,
-    source: Handle,
-    dest: Handle,
+    source: SlabHandle,
+    dest: SlabHandle,
     m: u32,
 ) -> Dormant<Numbers> {
     measure(Verb::Enter, || {
@@ -368,7 +368,7 @@ fn shared_subtier(n: u32) {
     let left = measure(Verb::Create, || table.create(None, None)).unwrap();
     let right = measure(Verb::Create, || table.create(None, None)).unwrap();
 
-    let mut bases: Vec<Handle> = Vec::with_capacity(n as usize);
+    let mut bases: Vec<SlabHandle> = Vec::with_capacity(n as usize);
     for _ in 0..n {
         bases.push(measure(Verb::Create, || table.create(None, None)).unwrap());
     }

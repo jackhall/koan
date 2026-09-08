@@ -121,7 +121,7 @@ fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
         // rather than a sealed cell the destination now retains. The slot comes back either way —
         // retention lives in the sealed tier, never in the slab.
         table.release(producer, ReleaseAbsorption::Refused).unwrap();
-        assert_eq!(super::state_of(&table, producer), SlotState::Free);
+        assert_eq!(super::state_of(&table, producer), SlabState::Free);
         assert_eq!(table.sealed.len(), usize::from(verdict == Verdict::Pin));
     }
 }
@@ -452,7 +452,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
         table
             .release(running, ReleaseAbsorption::IntoHolder)
             .unwrap();
-        assert_eq!(super::state_of(&table, running), SlotState::Free);
+        assert_eq!(super::state_of(&table, running), SlabState::Free);
         assert_eq!(table.sealed.len(), 0, "hop {hop} left a sealed cell behind");
         assert_eq!(table.merges, Merges::default(), "hop {hop} took a merge");
         assert!(!table.holds(cart, waiting));

@@ -75,7 +75,7 @@ fn a_held_cell_leaves_the_slab_at_its_death_and_its_sealed_cell_goes_with_its_ho
 
     // The slot comes straight back: retention lives in the sealed tier, never in the slab.
     table.release(held, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(state_of(&table, held), SlotState::Free);
+    assert_eq!(state_of(&table, held), SlabState::Free);
     assert_eq!(table.sealed.len(), 1);
     let id = table.sealed.ids().next().unwrap();
     assert!(table.sealed_holds[holder.slot() as usize].contains(id));
@@ -252,7 +252,7 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
     table
         .release(producer, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(state_of(&table, producer), SlotState::Free);
+    assert_eq!(state_of(&table, producer), SlabState::Free);
     assert_eq!(table.relocations(), 0);
 
     let read = table
@@ -535,7 +535,7 @@ fn a_birth_hold_entitles_a_child_to_its_parents_dormant_carrier() {
     table
         .release(parent, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(state_of(&table, parent), SlotState::Dead);
+    assert_eq!(state_of(&table, parent), SlabState::Dead);
     let read = table
         .enter(child, |context| {
             *context

@@ -13,7 +13,7 @@
 //! undisposed itself, the **pledge** naming the ancestor its bump will splice into, and the
 //! tombstone links that say where its bytes went once it did.
 
-use crate::handle::{CellHandle, Handle, Stale, TreeHandle};
+use crate::handle::{CellHandle, SlabHandle, Stale, TreeHandle};
 use crate::reattach::{Erased, Reattachable};
 use crate::region::Region;
 use crate::scratch::Scratch;
@@ -70,7 +70,7 @@ pub(crate) enum Ancestry {
 /// There is no reach table, no continuation reach and no hold set: a value homed here reaches
 /// its root and nothing else, and the root's row and sealed-hold set are where every mint from
 /// inside the subtree lands.
-struct TreeSlot<C: Reattachable> {
+struct TreeCell<C: Reattachable> {
     generation: u32,
     state: TreeState,
     /// The slab slot of the root at the top of this cell's chain. The root cannot recycle while a
@@ -105,9 +105,9 @@ struct TreeSlot<C: Reattachable> {
     next: Option<u32>,
 }
 
-impl<C: Reattachable> TreeSlot<C> {
+impl<C: Reattachable> TreeCell<C> {
     fn free(generation: u32) -> Self {
-        TreeSlot {
+        TreeCell {
             generation,
             state: TreeState::Free,
             root: 0,
@@ -132,7 +132,7 @@ impl<C: Reattachable> TreeSlot<C> {
 /// No cap. The slab's is what bounds the matrix, and a tree cell is in no matrix; what bounds the
 /// pool is the depth of the call tree the embedder is running, which is the program's business.
 pub(crate) struct TreePool<C: Reattachable> {
-    slots: Vec<TreeSlot<C>>,
+    slots: Vec<TreeCell<C>>,
     free: Vec<u32>,
 }
 
@@ -161,7 +161,7 @@ impl<C: Reattachable> TreePool<C> {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
-                self.slots.push(TreeSlot::free(0));
+                self.slots.push(TreeCell::free(0));
                 (self.slots.len() - 1) as u32
             }
         };
@@ -407,7 +407,7 @@ impl<C: Reattachable> TreePool<C> {
     /// departing occupant is stale from here on.
     pub(crate) fn recycle(&mut self, index: u32) {
         let slot = &mut self.slots[index as usize];
-        *slot = TreeSlot::free(slot.generation.wrapping_add(1));
+        *slot = TreeCell::free(slot.generation.wrapping_add(1));
         self.free.push(index);
     }
 
@@ -481,5 +481,5 @@ impl<C: Reattachable> TreePool<C> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TreeForward {
     Tree(u32),
-    Slab(Handle),
+    Slab(SlabHandle),
 }

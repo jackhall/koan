@@ -27,7 +27,7 @@ mod tree;
 
 pub use carrier::{Active, Ready};
 pub use dormant::Dormant;
-pub use handle::{CellHandle, Handle, Stale, TreeHandle};
+pub use handle::{CellHandle, SlabHandle, Stale, TreeHandle};
 pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
 pub use table::{

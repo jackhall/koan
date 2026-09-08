@@ -16,7 +16,7 @@ const WIDE: usize = 256;
 /// A placement of one value over `operands` copies of a source carrier, into another cell — the
 /// widest transient a step builds, since the crossed-operand list and the views are both sized by
 /// the operand count.
-fn place_over(table: &mut CellTable<Owned>, from: Handle, into: Handle, operands: usize) {
+fn place_over(table: &mut CellTable<Owned>, from: SlabHandle, into: SlabHandle, operands: usize) {
     table
         .enter(from, |context| {
             let source = context.alloc::<Number>(|writer| writer.value(1));
@@ -34,7 +34,7 @@ fn place_over(table: &mut CellTable<Owned>, from: Handle, into: Handle, operands
 /// with. The assertion is the placement half of the criterion: a step's crossed operands and the
 /// views its build closure received are **in the region**, so a wide enough placement is readable
 /// in the region's own occupancy after the step returns.
-fn dirtied() -> (CellTable<Owned>, Handle, Handle) {
+fn dirtied() -> (CellTable<Owned>, SlabHandle, SlabHandle) {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let producer = table.create(None, None).unwrap();
     let consumer = table.create(None, None).unwrap();
