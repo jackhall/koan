@@ -9,7 +9,7 @@
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
 use cellgraph::{
-    Active, CellHandle, CellTable, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
+    Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
     Erased, Operand, Prices, Ready, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError,
     ReleaseTreeError, SlabHandle, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
@@ -58,7 +58,7 @@ where
     context.read(carrier).into_value()
 }
 
-/// The embedder's crossing verdict, taken at the table's construction and consulted once per
+/// The embedder's crossing verdict, taken at the graph's construction and consulted once per
 /// operand of every placement over operands.
 ///
 /// Every field the substrate ships is named here — both prices, both tiers' occupancy, and the
@@ -124,23 +124,23 @@ fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
 
 #[test]
 fn every_public_door_answers_from_outside_the_crate() {
-    let mut table: CellTable<Work> = CellTable::new(4, weigh);
+    let mut graph: CellGraph<Work> = CellGraph::new(4, weigh);
 
     // Creation, with and without a parent, and with or without a continuation at birth.
-    let root: SlabHandle = table.create(None, Some(String::from("root"))).unwrap();
-    let child = table.create(Some(root), None).unwrap();
-    let doomed = table.create(Some(root), None).unwrap();
+    let root: SlabHandle = graph.create(None, Some(String::from("root"))).unwrap();
+    let child = graph.create(Some(root), None).unwrap();
+    let doomed = graph.create(Some(root), None).unwrap();
     assert_eq!(root.slot(), 0);
     assert_eq!(child.generation(), 0);
-    assert!(table.is_live(child));
-    assert!(!table.is_empty());
+    assert!(graph.is_live(child));
+    assert!(!graph.is_empty());
 
-    table
+    graph
         .release(doomed, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
     let mut kept: Option<Dormant<Number>> = None;
-    let carried = table
+    let carried = graph
         .enter(child, |context| {
             assert_eq!(context.cell(), CellHandle::Slab(child));
 
@@ -204,9 +204,9 @@ fn every_public_door_answers_from_outside_the_crate() {
     assert_eq!(carried, "done");
 
     // The value kept in the last step redeems in this one: the child holds root, whose region the
-    // value lives in, so the door hands it back with reach derived from the table.
+    // value lives in, so the door hands it back with reach derived from the reach table.
     let kept = kept.unwrap();
-    let redeemed = table
+    let redeemed = graph
         .enter(child, |context| {
             *context.read(&context.redeem(kept).unwrap()).value()
         })
@@ -214,27 +214,27 @@ fn every_public_door_answers_from_outside_the_crate() {
     assert_eq!(redeemed, 8);
 
     // A cell with no claim on the home is refused, and the refusal says which of the two it is.
-    let refused = table
+    let refused = graph
         .enter(root, |context| context.redeem(kept).map(|_| ()))
         .unwrap();
     assert!(
         refused.is_ok(),
         "the home cell redeems its own dormant carrier"
     );
-    let bystander = table.create(None, None).unwrap();
-    let error = table
+    let bystander = graph.create(None, None).unwrap();
+    let error = graph
         .enter(bystander, |context| match context.redeem(kept) {
             Err(error) => error,
             Ok(_) => panic!("a cell with no claim on the home must be refused"),
         })
         .unwrap();
     assert_eq!(name_redeem_error(error), "unheld");
-    table
+    graph
         .release(bystander, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
     // The successor comes back re-anchored at the next step's brand.
-    let echoed = table
+    let echoed = graph
         .enter(child, |context| {
             context.continuation().map(Active::into_value)
         })
@@ -242,7 +242,7 @@ fn every_public_door_answers_from_outside_the_crate() {
     assert_eq!(echoed.as_deref(), Some("8"));
 
     // The cell born with a continuation still has it.
-    let born_with = table
+    let born_with = graph
         .enter(root, |context| {
             context.continuation().map(Active::into_value)
         })
@@ -250,14 +250,14 @@ fn every_public_door_answers_from_outside_the_crate() {
     assert_eq!(born_with.as_deref(), Some("root"));
 
     // Both dispositions of a death: fold into a unique holder, or seal rather than merge.
-    table.release(child, ReleaseAbsorption::IntoHolder).unwrap();
-    table.release(root, ReleaseAbsorption::Refused).unwrap();
-    assert!(!table.is_live(root));
+    graph.release(child, ReleaseAbsorption::IntoHolder).unwrap();
+    graph.release(root, ReleaseAbsorption::Refused).unwrap();
+    assert!(!graph.is_live(root));
 }
 
 #[test]
 fn the_refusals_hand_back_the_handle_that_went_stale() {
-    let mut full: CellTable<Work> = CellTable::new(1, weigh);
+    let mut full: CellGraph<Work> = CellGraph::new(1, weigh);
     let taken = full.create(None, None).unwrap();
     assert_eq!(full.create(None, None), Err(CreateError::SlabFull));
 
@@ -285,21 +285,21 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
 
 #[test]
 fn the_tree_pool_answers_from_outside_the_crate() {
-    let mut table: CellTable<Work> = CellTable::new(1, weigh);
-    let root: SlabHandle = table.create(None, None).unwrap();
-    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+    let mut graph: CellGraph<Work> = CellGraph::new(1, weigh);
+    let root: SlabHandle = graph.create(None, None).unwrap();
+    assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
 
     // The pool takes no cap: a chain deeper than the slab is ordinary, and none of it is a slot.
-    let outer: TreeHandle = table.create_tree(root, None).unwrap();
-    let inner = table
+    let outer: TreeHandle = graph.create_tree(root, None).unwrap();
+    let inner = graph
         .create_tree(outer, Some(String::from("resume")))
         .unwrap();
     assert_eq!(outer.index(), 0);
     assert_eq!(inner.generation(), 0);
-    assert!(table.is_live(inner));
+    assert!(graph.is_live(inner));
 
     let mut kept: Option<Dormant<Number>> = None;
-    let carried = table
+    let carried = graph
         .enter(inner, |context| {
             assert_eq!(context.cell(), CellHandle::Tree(inner));
             let value = context.alloc::<Number>(build_number);
@@ -327,7 +327,7 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     assert_eq!(carried.as_deref(), Some("resume"));
 
     // The value kept in the parent redeems from anywhere under the same root.
-    let redeemed = table
+    let redeemed = graph
         .enter(root, |context| {
             *context
                 .read(&context.redeem(kept.unwrap()).unwrap())
@@ -337,10 +337,10 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     assert_eq!(redeemed, 8);
 
     // Release takes no argument: where the bytes go was settled at the placement door.
-    table.release_tree(inner).unwrap();
-    assert!(!table.is_live(inner));
+    graph.release_tree(inner).unwrap();
+    assert!(!graph.is_live(inner));
 
-    let Err(error) = table.release_tree(inner) else {
+    let Err(error) = graph.release_tree(inner) else {
         panic!("a second release names a death already declared");
     };
     assert_eq!(name_release_tree_error(error), "stale");
@@ -350,7 +350,7 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     };
     assert_eq!(stale.name(), inner);
 
-    let Err(error) = table.enter(inner, |_| ()) else {
+    let Err(error) = graph.enter(inner, |_| ()) else {
         panic!("a dead tree cell must refuse the step");
     };
     assert_eq!(name_enter_error(error), "stale");
@@ -360,13 +360,13 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     let stale: Stale<CellHandle> = stale;
     assert_eq!(stale.name(), CellHandle::Tree(inner));
 
-    let Err(stale) = table.create_tree(inner, None) else {
+    let Err(stale) = graph.create_tree(inner, None) else {
         panic!("a dead tree parent must refuse");
     };
     let stale: Stale<CellHandle> = stale;
     assert_eq!(stale.name(), CellHandle::Tree(inner));
 
-    table.release_tree(outer).unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release_tree(outer).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }

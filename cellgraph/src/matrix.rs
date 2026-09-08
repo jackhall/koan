@@ -44,7 +44,7 @@ fn ones_of(words: &[u64]) -> impl Iterator<Item = u32> + '_ {
 }
 
 impl<const W: usize> Bits<W> {
-    /// How many slots a row names — the slab width of every table built at this word count.
+    /// How many slots a row names — the slab width of every graph built at this word count.
     pub(crate) const CELLS: u32 = (W * u64::BITS as usize) as u32;
 
     /// A clear row.

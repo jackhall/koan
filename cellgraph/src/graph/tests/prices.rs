@@ -1,6 +1,7 @@
-//! The crossing: the one closure a table is built with, consulted once per operand of every
+//! The crossing: the one closure a graph is built with, consulted once per operand of every
 //! placement over operands, and the two brands its answer hands the build
-//! ([design/liveness-matrix.md § Bounding the two tiers](../../../design/liveness-matrix.md#bounding-the-two-tiers)).
+//! ([design/liveness-matrix.md § Bounding the two
+//! tiers](../../../design/liveness-matrix.md#bounding-the-two-tiers)).
 //!
 //! What these pin: the verdict sees both prices and both tiers' occupancy; a pin mints the
 //! operand's reach into the destination and a copy mints nothing; the marginal pin price discounts
@@ -46,11 +47,11 @@ fn cheaper(prices: Prices) -> Verdict {
 #[test]
 fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
-    let mut table: CellTable<Owned> = CellTable::new(4, verdict);
-    let destination = table.create(None, None).unwrap();
-    let producer = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, verdict);
+    let destination = graph.create(None, None).unwrap();
+    let producer = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(producer, |context| {
             // One operand homed in the destination and one homed elsewhere, at two stated copy
             // costs, in one placement.
@@ -70,17 +71,17 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
 
     let seen = seen.borrow();
     assert_eq!(seen.len(), 2, "one consultation per operand, in order");
-    let occupancy = table.occupancy();
+    let occupancy = graph.occupancy();
     for prices in seen.iter() {
         assert_eq!(prices.occupied, occupancy.occupied);
         assert_eq!(prices.cap, occupancy.cap);
-        // The cap the table was built at, not the width of the row its type fixes.
+        // The cap the graph was built at, not the width of the row its type fixes.
         assert_eq!(prices.cap, 4);
         assert_eq!(prices.sealed_cells, occupancy.sealed_cells);
         assert_eq!(prices.retained_bytes, occupancy.retained_bytes);
         assert_eq!(
             prices.destination_bytes,
-            table.region_bytes(destination).unwrap()
+            graph.region_bytes(destination).unwrap()
         );
     }
     // The embedder's own figures come through untouched, in the order the operands were passed.
@@ -89,17 +90,17 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
     // An operand the destination is already answerable for costs a pin nothing; one homed in
     // another cell costs that cell's storage.
     assert_eq!(seen[0].pin_bytes, 0);
-    assert_eq!(seen[1].pin_bytes, table.region_bytes(producer).unwrap());
+    assert_eq!(seen[1].pin_bytes, graph.region_bytes(producer).unwrap());
 }
 
 #[test]
 fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
     for verdict in [Verdict::Pin, Verdict::Copy] {
-        let mut table: CellTable<Owned> = CellTable::new(4, move |_| verdict);
-        let destination = table.create(None, None).unwrap();
-        let producer = table.create(None, None).unwrap();
+        let mut graph: CellGraph<Owned> = CellGraph::new(4, move |_| verdict);
+        let destination = graph.create(None, None).unwrap();
+        let producer = graph.create(None, None).unwrap();
 
-        let names_producer = table
+        let names_producer = graph
             .enter(producer, |context| {
                 let own = context.alloc::<Number>(|writer| writer.value(41));
                 let placed = context
@@ -115,25 +116,25 @@ fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
             .unwrap();
 
         assert_eq!(names_producer, verdict == Verdict::Pin);
-        assert_eq!(table.holds(destination, producer), verdict == Verdict::Pin);
+        assert_eq!(graph.holds(destination, producer), verdict == Verdict::Pin);
 
         // The whole point of the copy: the producer's column is zero, so its death is a reclamation
         // rather than a sealed cell the destination now retains. The slot comes back either way —
         // retention lives in the sealed tier, never in the slab.
-        table.release(producer, ReleaseAbsorption::Refused).unwrap();
-        assert_eq!(super::state_of(&table, producer), SlabState::Free);
-        assert_eq!(table.sealed.len(), usize::from(verdict == Verdict::Pin));
+        graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+        assert_eq!(super::state_of(&graph, producer), SlabState::Free);
+        assert_eq!(graph.sealed.len(), usize::from(verdict == Verdict::Pin));
     }
 }
 
 #[test]
 fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
     let (verdict, seen) = recording(cheaper);
-    let mut table: CellTable<Owned> = CellTable::new(4, verdict);
-    let destination = table.create(None, None).unwrap();
-    let producer = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, verdict);
+    let destination = graph.create(None, None).unwrap();
+    let producer = graph.create(None, None).unwrap();
 
-    let read = table
+    let read = graph
         .enter(producer, |context| {
             let own = context.alloc::<Number>(|writer| writer.value(41));
             // Cheap to copy, against a pin that would newly retain the producer's whole region.
@@ -164,7 +165,7 @@ fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
     // The deep copy reads what it was copied from, and the embedded borrow reads the producer's
     // own storage — which the destination now holds.
     assert_eq!(read, (41, 41));
-    assert!(table.holds(destination, producer));
+    assert!(graph.holds(destination, producer));
     let seen = seen.borrow();
     assert_eq!(seen.len(), 2);
     assert!(
@@ -181,21 +182,21 @@ fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
 #[test]
 fn pin_price_is_marginal_against_what_the_destination_already_holds() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
-    let mut table: CellTable<Owned> = CellTable::new(6, verdict);
-    let destination = table.create(None, None).unwrap();
-    let held = table.create(None, None).unwrap();
-    let head = table.create(None, None).unwrap();
-    let tail = table.create(None, None).unwrap();
-    let doomed = table.create(None, None).unwrap();
-    let driver = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(6, verdict);
+    let destination = graph.create(None, None).unwrap();
+    let held = graph.create(None, None).unwrap();
+    let head = graph.create(None, None).unwrap();
+    let tail = graph.create(None, None).unwrap();
+    let doomed = graph.create(None, None).unwrap();
+    let driver = graph.create(None, None).unwrap();
 
     // The destination already answers for `held`, so a pin over it retains nothing new.
-    table
+    graph
         .enter(destination, |context| context.hold(held))
         .unwrap()
         .unwrap();
     // A chain the destination does not hold: a cell, a cell it holds, and a sealed cell it holds.
-    table
+    graph
         .enter(driver, |context| {
             context
                 .alloc_into::<Number, Number>(tail, &[], |writer, _| writer.value(1))
@@ -205,17 +206,17 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
                 .unwrap();
         })
         .unwrap();
-    table
+    graph
         .enter(head, |context| {
             context.hold(tail).unwrap();
             context.hold(doomed)
         })
         .unwrap()
         .unwrap();
-    table.release(doomed, ReleaseAbsorption::Refused).unwrap();
-    let sealed_id = table.sealed.ids().next().unwrap();
+    graph.release(doomed, ReleaseAbsorption::Refused).unwrap();
+    let sealed_id = graph.sealed.ids().next().unwrap();
 
-    table
+    graph
         .enter(driver, |context| {
             let near = context
                 .alloc_into::<Number, Number>(held, &[], |writer, _| writer.value(3))
@@ -242,21 +243,21 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
     // Everything the walk reaches from the unheld cell, across both tiers, and nothing else.
     assert_eq!(
         seen[1].pin_bytes,
-        table.region_bytes(head).unwrap()
-            + table.region_bytes(tail).unwrap()
-            + table.sealed_retained_bytes(sealed_id).unwrap()
+        graph.region_bytes(head).unwrap()
+            + graph.region_bytes(tail).unwrap()
+            + graph.sealed_retained_bytes(sealed_id).unwrap()
     );
 }
 
 #[test]
 fn operands_from_one_source_are_priced_against_what_the_placement_has_already_pinned() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
-    let mut table: CellTable<Owned> = CellTable::new(4, verdict);
-    let destination = table.create(None, None).unwrap();
-    let source = table.create(None, None).unwrap();
-    let driver = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, verdict);
+    let destination = graph.create(None, None).unwrap();
+    let source = graph.create(None, None).unwrap();
+    let driver = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(driver, |context| {
             // Two values homed in the same cell, so both operands reach exactly `source`.
             let first = context
@@ -282,7 +283,7 @@ fn operands_from_one_source_are_priced_against_what_the_placement_has_already_pi
     assert_eq!(seen.len(), 2);
     assert_eq!(
         seen[0].pin_bytes,
-        table.region_bytes(source).unwrap(),
+        graph.region_bytes(source).unwrap(),
         "the first operand from a shared source carries the shared cost"
     );
     assert_eq!(
@@ -296,12 +297,12 @@ fn a_copied_operand_leaves_the_next_one_the_whole_price() {
     // Copy where the embedder's figure undercuts the pin: the first operand is passed at zero and
     // is copied, the second at `usize::MAX` and is pinned.
     let (verdict, seen) = recording(cheaper);
-    let mut table: CellTable<Owned> = CellTable::new(4, verdict);
-    let destination = table.create(None, None).unwrap();
-    let source = table.create(None, None).unwrap();
-    let driver = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, verdict);
+    let destination = graph.create(None, None).unwrap();
+    let source = graph.create(None, None).unwrap();
+    let driver = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(driver, |context| {
             let first = context
                 .alloc_into::<Number, Number>(source, &[], |writer, _| writer.value(1))
@@ -321,7 +322,7 @@ fn a_copied_operand_leaves_the_next_one_the_whole_price() {
 
     let seen = seen.borrow();
     assert_eq!(seen.len(), 2);
-    let source_bytes = table.region_bytes(source).unwrap();
+    let source_bytes = graph.region_bytes(source).unwrap();
     assert_eq!(seen[0].pin_bytes, source_bytes);
     // A copy mints nothing, so the second operand is still the first to bring `source` in.
     assert_eq!(
@@ -333,29 +334,29 @@ fn a_copied_operand_leaves_the_next_one_the_whole_price() {
 #[test]
 fn a_frozen_closure_prices_through_its_memo() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
-    let mut table: CellTable<Owned> = CellTable::new(4, verdict);
-    let destination = table.create(None, None).unwrap();
-    let consumer = table.create(None, None).unwrap();
-    let producer = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, verdict);
+    let destination = graph.create(None, None).unwrap();
+    let consumer = graph.create(None, None).unwrap();
+    let producer = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(consumer, |context| context.hold(producer))
         .unwrap()
         .unwrap();
-    let kept = table
+    let kept = graph
         .enter(producer, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             context.keep(value)
         })
         .unwrap();
-    table.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let sealed_id = table.sealed.ids().next().unwrap();
+    graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+    let sealed_id = graph.sealed.ids().next().unwrap();
 
     // The closure is frozen, so its price is memoized once and never recomputed.
-    let closure = table.unique_retentions(&[sealed_id]).remove(0).unwrap();
+    let closure = graph.unique_retentions(&[sealed_id]).remove(0).unwrap();
     assert!(closure.frozen);
 
-    table
+    graph
         .enter(consumer, |context| {
             let carrier = context
                 .redeem(kept)
@@ -385,7 +386,7 @@ fn a_frozen_closure_prices_through_its_memo() {
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].pin_bytes, closure.bytes);
     assert_eq!(seen[1].pin_bytes, 0);
-    assert!(table.sealed_holds[destination.slot() as usize].contains(sealed_id));
+    assert!(graph.sealed_holds[destination.slot() as usize].contains(sealed_id));
 }
 
 /// Hops the ruled loop shape runs. Miri takes the shortest run that still alternates the two hop
@@ -395,14 +396,14 @@ const HOPS: usize = if cfg!(miri) { 4 } else { 16 };
 #[test]
 fn a_loop_is_two_hop_cells_and_a_cart() {
     let (verdict, seen) = recording(cheaper);
-    let mut table: CellTable<Owned> = CellTable::new(4, verdict);
-    let cart = table.create(None, None).unwrap();
-    let mut running = table.create(None, None).unwrap();
-    let mut waiting = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, verdict);
+    let cart = graph.create(None, None).unwrap();
+    let mut running = graph.create(None, None).unwrap();
+    let mut waiting = graph.create(None, None).unwrap();
 
     // The cart seeds both dormant carriers: the first hop's argument, built into the hop's own
     // region, and the accumulator, which lives in the cart from here on.
-    let (mut argument, mut accumulated) = table
+    let (mut argument, mut accumulated) = graph
         .enter(cart, |context| {
             let first = context
                 .alloc_into::<Number, Number>(running, &[], |writer, _| writer.value(1))
@@ -413,7 +414,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
         .unwrap();
 
     for hop in 0..HOPS {
-        let (next_argument, next_accumulated) = table
+        let (next_argument, next_accumulated) = graph
             .enter(running, |context| {
                 // The hop holds the cart, which is what entitles it to the accumulator.
                 context.hold(cart).unwrap();
@@ -449,39 +450,39 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
 
         // The retiring hop's column is zero: neither the cart nor the next hop took a hold on it,
         // so its death frees the slot outright — no sealed cell, no merge.
-        table
+        graph
             .release(running, ReleaseAbsorption::IntoHolder)
             .unwrap();
-        assert_eq!(super::state_of(&table, running), SlabState::Free);
-        assert_eq!(table.sealed.len(), 0, "hop {hop} left a sealed cell behind");
-        assert_eq!(table.merges, Merges::default(), "hop {hop} took a merge");
-        assert!(!table.holds(cart, waiting));
+        assert_eq!(super::state_of(&graph, running), SlabState::Free);
+        assert_eq!(graph.sealed.len(), 0, "hop {hop} left a sealed cell behind");
+        assert_eq!(graph.merges, Merges::default(), "hop {hop} took a merge");
+        assert!(!graph.holds(cart, waiting));
 
-        let fresh = table.create(None, None).unwrap();
-        assert!(table.occupancy().occupied <= 3, "hop {hop} grew the slab");
+        let fresh = graph.create(None, None).unwrap();
+        assert!(graph.occupancy().occupied <= 3, "hop {hop} grew the slab");
         running = waiting;
         waiting = fresh;
     }
 
-    // The cart is kept into once per hop and its table did not grow: every accumulator reaches
-    // the cart and nothing else, so all of them intern to the entry the seed minted. This is what
-    // keeps the seal transition's bound — work per holder's reach-table entry — a bound on a run of
-    // any length rather than one that grows with it.
+    // The cart is kept into once per hop and its reach table did not grow: every accumulator
+    // reaches the cart and nothing else, so all of them intern to the entry the seed minted. This
+    // is what keeps the seal transition's bound — work per holder's reach-table entry — a bound
+    // on a run of any length rather than one that grows with it.
     assert_eq!(
-        table.slots[cart.slot() as usize].reaches.len(),
+        graph.slots[cart.slot() as usize].reaches.len(),
         1,
         "the cart took an entry per hop"
     );
 
     // The cart's accumulator carries the whole run, and the argument waiting in the hop that
     // never ran is the one the last hop passed on.
-    let total = table
+    let total = graph
         .enter(cart, |context| {
             let total = context.redeem(accumulated).expect("the cart is the home");
             *context.read(&total).value()
         })
         .unwrap();
-    let argument = table
+    let argument = graph
         .enter(running, |context| {
             let argument = context.redeem(argument).expect("the hop is its own home");
             *context.read(&argument).value()
@@ -505,11 +506,11 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
 #[test]
 fn captures_cross_through_the_same_verdict() {
     for verdict in [Verdict::Pin, Verdict::Copy] {
-        let mut table: CellTable<Borrowed> = CellTable::new(4, move |_| verdict);
-        let keeper = table.create(None, None).unwrap();
-        let host = table.create(None, None).unwrap();
+        let mut graph: CellGraph<Borrowed> = CellGraph::new(4, move |_| verdict);
+        let keeper = graph.create(None, None).unwrap();
+        let host = graph.create(None, None).unwrap();
 
-        table
+        graph
             .enter(keeper, |context| {
                 let value = context
                     .alloc_into::<Number, Number>(host, &[], |writer, _| writer.value(41))
@@ -522,13 +523,13 @@ fn captures_cross_through_the_same_verdict() {
 
         // A pinned capture is the host's own storage, so the cell holds the host across the gap; a
         // copied one lives in the keeper's region and the host is free to die.
-        assert_eq!(table.holds(keeper, host), verdict == Verdict::Pin);
+        assert_eq!(graph.holds(keeper, host), verdict == Verdict::Pin);
         assert_eq!(
-            super::continuation_reach_index(&table, keeper).names(host.slot()),
+            super::continuation_reach_index(&graph, keeper).names(host.slot()),
             verdict == Verdict::Pin
         );
 
-        let read = table
+        let read = graph
             .enter(keeper, |context| *context.continuation().unwrap().value())
             .unwrap();
         assert_eq!(read, 41);
@@ -538,11 +539,11 @@ fn captures_cross_through_the_same_verdict() {
 #[test]
 fn a_placement_over_no_operands_consults_nothing() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
-    let mut table: CellTable<Owned> = CellTable::new(2, verdict);
-    let cell = table.create(None, None).unwrap();
-    let other = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, verdict);
+    let cell = graph.create(None, None).unwrap();
+    let other = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(cell, |context| {
             context.alloc::<Number>(|writer| writer.value(1));
             context

@@ -3,7 +3,7 @@
 //!
 //! A tree cell lives **under a root** — a slab cell — through a chain of tree parents, and owns its
 //! region outright. It takes no slab slot, so the pool grows without a cap; it has no row, no
-//! column, no holder count and no reach table, because a parent outlives its children and every
+//! column, no holder count and no reach table, because a parent outlives its children and every
 //! hold a value inside the subtree can take points up its own chain at a cell that is still there.
 //! No mask ever names a tree cell: a placement into one mints into its root, and a carrier homed in
 //! one travels with the root's bit as its reach.
@@ -67,7 +67,7 @@ pub(crate) enum Ancestry {
 
 /// One tree cell.
 ///
-/// There is no reach table, no continuation reach and no hold set: a value homed here reaches
+/// There is no reach table, no continuation reach and no hold set: a value homed here reaches
 /// its root and nothing else, and the root's row and sealed-hold set are where every mint from
 /// inside the subtree lands.
 struct TreeCell<C: Reattachable> {
@@ -145,7 +145,7 @@ impl<C: Reattachable> TreePool<C> {
     }
 
     /// Whether the pool holds nothing at all — no live cell, no dead-but-undisposed one, and no
-    /// tombstone. Part of the table's end-of-program alarm.
+    /// tombstone. Part of the graph's end-of-program alarm.
     pub(crate) fn is_empty(&self) -> bool {
         self.free.len() == self.slots.len()
     }

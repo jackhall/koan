@@ -50,16 +50,16 @@ fn number_in<'b, C: Reattachable>(
 
 #[test]
 fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
-    let mut table: CellTable<Owned> = CellTable::new(1, pin);
-    let root = table.create(None, None).unwrap();
-    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+    let mut graph: CellGraph<Owned> = CellGraph::new(1, pin);
+    let root = graph.create(None, None).unwrap();
+    assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
 
     // The pool takes no cap, so the door has no full refusal to give.
-    let tree = table.create_tree(root, Some(String::from("next"))).unwrap();
-    assert!(table.is_live(tree));
-    assert_eq!(table.tree_children_of(root), 1);
+    let tree = graph.create_tree(root, Some(String::from("next"))).unwrap();
+    assert!(graph.is_live(tree));
+    assert_eq!(graph.tree_children_of(root), 1);
 
-    let (cell, continuation) = table
+    let (cell, continuation) = graph
         .enter(tree, |context| {
             (
                 context.cell(),
@@ -70,91 +70,91 @@ fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
     assert_eq!(cell, CellHandle::Tree(tree));
     assert_eq!(continuation.as_deref(), Some("next"));
 
-    table.release_tree(tree).unwrap();
-    assert!(!table.is_live(tree));
-    assert_eq!(table.tree_children_of(root), 0);
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release_tree(tree).unwrap();
+    assert!(!graph.is_live(tree));
+    assert_eq!(graph.tree_children_of(root), 0);
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn the_tree_doors_refuse_a_name_kept_past_a_declared_death() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let tree = table.create_tree(root, None).unwrap();
-    table.release_tree(tree).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let tree = graph.create_tree(root, None).unwrap();
+    graph.release_tree(tree).unwrap();
 
-    let Err(stale) = table.create_tree(tree, None) else {
+    let Err(stale) = graph.create_tree(tree, None) else {
         panic!("a dead tree parent must refuse");
     };
     assert_eq!(stale.name(), CellHandle::Tree(tree));
 
-    let Err(EnterError::Stale(stale)) = table.enter(tree, |_| ()) else {
+    let Err(EnterError::Stale(stale)) = graph.enter(tree, |_| ()) else {
         panic!("a dead tree cell must refuse the step");
     };
     assert_eq!(stale.name(), CellHandle::Tree(tree));
 
-    let Err(ReleaseTreeError::Stale(stale)) = table.release_tree(tree) else {
+    let Err(ReleaseTreeError::Stale(stale)) = graph.release_tree(tree) else {
         panic!("a second release names a death already declared");
     };
     assert_eq!(stale.name(), tree);
 
     // And a slab parent whose own death was declared refuses to take a new tree child.
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    let Err(stale) = table.create_tree(root, None) else {
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    let Err(stale) = graph.create_tree(root, None) else {
         panic!("a dead root must refuse");
     };
     assert_eq!(stale.name(), CellHandle::Slab(root));
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn a_root_released_before_its_tree_child_waits_undisposed() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let tree = table.create_tree(root, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let tree = graph.create_tree(root, None).unwrap();
 
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(state_of(&table, root), SlabState::Dead);
-    assert!(!table.is_empty(), "the root waits on its tree child");
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert_eq!(state_of(&graph, root), SlabState::Dead);
+    assert!(!graph.is_empty(), "the root waits on its tree child");
 
     // The last tree child's disposal runs the slab's own cascade at the root.
-    table.release_tree(tree).unwrap();
-    assert!(table.is_empty());
+    graph.release_tree(tree).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn a_tree_parent_released_first_disposes_when_its_last_child_does() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let grandparent = table.create_tree(root, None).unwrap();
-    let parent = table.create_tree(grandparent, None).unwrap();
-    let child = table.create_tree(parent, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let grandparent = graph.create_tree(root, None).unwrap();
+    let parent = graph.create_tree(grandparent, None).unwrap();
+    let child = graph.create_tree(parent, None).unwrap();
 
-    table.release_tree(grandparent).unwrap();
-    table.release_tree(parent).unwrap();
-    assert_eq!(table.trees().state(grandparent.index()), TreeState::Dead);
-    assert_eq!(table.trees().state(parent.index()), TreeState::Dead);
+    graph.release_tree(grandparent).unwrap();
+    graph.release_tree(parent).unwrap();
+    assert_eq!(graph.trees().state(grandparent.index()), TreeState::Dead);
+    assert_eq!(graph.trees().state(parent.index()), TreeState::Dead);
     assert_eq!(
-        table.trees().occupied().count(),
+        graph.trees().occupied().count(),
         3,
         "a dead-but-undisposed ancestor keeps its region until its children are gone"
     );
 
     // One release cascades through both dead-but-undisposed ancestors and into the root's own walk.
-    table.release_tree(child).unwrap();
-    assert_eq!(table.trees().occupied().count(), 0);
-    assert_eq!(table.tree_children_of(root), 0);
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release_tree(child).unwrap();
+    assert_eq!(graph.trees().occupied().count(), 0);
+    assert_eq!(graph.tree_children_of(root), 0);
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn a_tree_cell_nothing_was_kept_in_leaves_no_tombstone() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let tree = table.create_tree(root, None).unwrap();
-    table
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let tree = graph.create_tree(root, None).unwrap();
+    graph
         .enter(tree, |context| {
             let value = number_in(context, 1);
             context
@@ -167,28 +167,28 @@ fn a_tree_cell_nothing_was_kept_in_leaves_no_tombstone() {
 
     // The cell pledged its bump to the root, so its bytes moved — but no key names it, so its
     // identity recycles rather than staying behind to answer for them.
-    table.release_tree(tree).unwrap();
-    assert_eq!(table.trees().occupied().count(), 0);
-    assert_eq!(table.tree_tombstones_of(root), None);
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release_tree(tree).unwrap();
+    assert_eq!(graph.trees().occupied().count(), 0);
+    assert_eq!(graph.tree_tombstones_of(root), None);
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
-    let mut table: CellTable<Owned> = CellTable::new(4, verdict);
-    let root = table.create(None, None).unwrap();
-    let stranger = table.create(None, None).unwrap();
-    let other_root = table.create(None, None).unwrap();
-    let elsewhere = table.create_tree(other_root, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, verdict);
+    let root = graph.create(None, None).unwrap();
+    let stranger = graph.create(None, None).unwrap();
+    let other_root = graph.create(None, None).unwrap();
+    let elsewhere = graph.create_tree(other_root, None).unwrap();
 
-    let parent = table.create_tree(root, None).unwrap();
-    let home = table.create_tree(parent, None).unwrap();
-    let child = table.create_tree(home, None).unwrap();
-    let cousin = table.create_tree(parent, None).unwrap();
+    let parent = graph.create_tree(root, None).unwrap();
+    let home = graph.create_tree(parent, None).unwrap();
+    let child = graph.create_tree(home, None).unwrap();
+    let cousin = graph.create_tree(parent, None).unwrap();
 
-    let copied = table
+    let copied = graph
         .enter(home, |context| {
             let value = number_in(context, 5);
             let mut copied = Vec::new();
@@ -242,14 +242,14 @@ fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
 
 #[test]
 fn an_upward_pin_pledges_the_home_and_every_intermediate() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let parent = table.create_tree(root, None).unwrap();
-    let home = table.create_tree(parent, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let parent = graph.create_tree(root, None).unwrap();
+    let home = graph.create_tree(parent, None).unwrap();
 
     // A grandchild pinned straight into its grandparent: the parent is carried too, or the
     // grandparent's bundle would be left borrowing bytes the parent's reclaim took away.
-    let bytes = table
+    let bytes = graph
         .enter(home, |context| {
             let value = number_in(context, 9);
             context
@@ -261,28 +261,28 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
         })
         .unwrap();
     assert_eq!(bytes, CellHandle::Tree(home));
-    let home_bytes = table.trees().region_bytes(home.index());
+    let home_bytes = graph.trees().region_bytes(home.index());
     assert!(home_bytes > 0);
 
-    table.release_tree(home).unwrap();
+    graph.release_tree(home).unwrap();
     // The home's bump landed in the root, not in the parent it passed through.
-    assert_eq!(table.region_bytes(root).unwrap(), home_bytes);
-    assert_eq!(table.trees().region_bytes(parent.index()), 0);
+    assert_eq!(graph.region_bytes(root).unwrap(), home_bytes);
+    assert_eq!(graph.trees().region_bytes(parent.index()), 0);
 
-    table.release_tree(parent).unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release_tree(parent).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
-    let mut table: CellTable<Owned> = CellTable::new(2, verdict);
-    let root = table.create(None, None).unwrap();
-    let parent = table.create_tree(root, None).unwrap();
-    let home = table.create_tree(parent, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, verdict);
+    let root = graph.create(None, None).unwrap();
+    let parent = graph.create_tree(root, None).unwrap();
+    let home = graph.create_tree(parent, None).unwrap();
 
-    table
+    graph
         .enter(home, |context| {
             let first = number_in(context, 1);
             let second = number_in(context, 2);
@@ -318,23 +318,23 @@ fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
     );
     drop(seen);
 
-    let home_bytes = table.trees().region_bytes(home.index());
-    table.release_tree(home).unwrap();
-    assert_eq!(table.region_bytes(root).unwrap(), home_bytes);
-    assert_eq!(table.trees().region_bytes(parent.index()), 0);
-    table.release_tree(parent).unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    let home_bytes = graph.trees().region_bytes(home.index());
+    graph.release_tree(home).unwrap();
+    assert_eq!(graph.region_bytes(root).unwrap(), home_bytes);
+    assert_eq!(graph.trees().region_bytes(parent.index()), 0);
+    graph.release_tree(parent).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
-    let mut table: CellTable<Owned> = CellTable::new(3, pin);
-    let root = table.create(None, None).unwrap();
-    let source = table.create(None, None).unwrap();
-    let tree = table.create_tree(root, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(3, pin);
+    let root = graph.create(None, None).unwrap();
+    let source = graph.create(None, None).unwrap();
+    let tree = graph.create_tree(root, None).unwrap();
 
-    table
+    graph
         .enter(source, |context| {
             let value = number_in(context, 4);
             context
@@ -347,27 +347,27 @@ fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
 
     // No relation names the tree cell, so the hold the placement takes is the root's — and the
     // bytes went into the tree cell's own bundle, not the root's.
-    assert!(table.holds(root, source));
-    assert!(table.trees().region_bytes(tree.index()) > 0);
-    assert_eq!(table.region_bytes(root).unwrap(), 0);
+    assert!(graph.holds(root, source));
+    assert!(graph.trees().region_bytes(tree.index()) > 0);
+    assert_eq!(graph.region_bytes(root).unwrap(), 0);
 
-    table.release_tree(tree).unwrap();
-    table
+    graph.release_tree(tree).unwrap();
+    graph
         .release(source, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn a_dormant_carrier_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_root() {
-    let mut table: CellTable<Owned> = CellTable::new(3, pin);
-    let root = table.create(None, None).unwrap();
-    let outsider = table.create(None, None).unwrap();
-    let home = table.create_tree(root, None).unwrap();
-    let sibling = table.create_tree(root, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(3, pin);
+    let root = graph.create(None, None).unwrap();
+    let outsider = graph.create(None, None).unwrap();
+    let home = graph.create_tree(root, None).unwrap();
+    let sibling = graph.create_tree(root, None).unwrap();
 
-    let kept = table
+    let kept = graph
         .enter(home, |context| {
             let value = number_in(context, 12);
             context.keep(value)
@@ -379,14 +379,14 @@ fn a_dormant_carrier_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_ro
         let CellHandle::Tree(handle) = cell else {
             unreachable!("the loop names tree cells")
         };
-        let read = table
+        let read = graph
             .enter(handle, |context| {
                 *context.read(&context.redeem(kept).unwrap()).value()
             })
             .unwrap();
         assert_eq!(read, 12);
     }
-    let read = table
+    let read = graph
         .enter(root, |context| {
             *context.read(&context.redeem(kept).unwrap()).value()
         })
@@ -394,7 +394,7 @@ fn a_dormant_carrier_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_ro
     assert_eq!(read, 12);
 
     // A cell under no root of this one's is refused.
-    let error = table
+    let error = graph
         .enter(outsider, |context| match context.redeem(kept) {
             Err(error) => error,
             Ok(_) => panic!("a cell under another root has no claim on the home"),
@@ -402,55 +402,55 @@ fn a_dormant_carrier_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_ro
         .unwrap();
     assert_eq!(error, RedeemError::Unheld);
 
-    table.release_tree(home).unwrap();
-    table.release_tree(sibling).unwrap();
-    table
+    graph.release_tree(home).unwrap();
+    graph.release_tree(sibling).unwrap();
+    graph
         .release(outsider, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn a_dormant_carrier_whose_home_reclaimed_answers_gone() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let home = table.create_tree(root, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let home = graph.create_tree(root, None).unwrap();
 
     // Kept but never pinned upward, so the cell pledges nothing and its bytes go with it.
-    let kept = table
+    let kept = graph
         .enter(home, |context| {
             let value = number_in(context, 3);
             context.keep(value)
         })
         .unwrap();
-    table.release_tree(home).unwrap();
+    graph.release_tree(home).unwrap();
     assert_eq!(
-        table.trees().occupied().count(),
+        graph.trees().occupied().count(),
         0,
         "a reclaim leaves no tombstone"
     );
 
-    let error = table
+    let error = graph
         .enter(root, |context| match context.redeem(kept) {
             Err(error) => error,
             Ok(_) => panic!("the home's bytes are gone"),
         })
         .unwrap();
     assert_eq!(error, RedeemError::Gone);
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 /// Build a two-level tree under `root`, keep a value in the deeper one, and splice both bumps into
 /// the root — the shape every tombstone-through-the-slab assertion starts from.
 fn spliced_into_root(
-    table: &mut CellTable<Owned>,
+    graph: &mut CellGraph<Owned>,
     root: SlabHandle,
 ) -> (Dormant<Number>, TreeHandle, TreeHandle) {
-    let parent = table.create_tree(root, None).unwrap();
-    let home = table.create_tree(parent, None).unwrap();
-    let kept = table
+    let parent = graph.create_tree(root, None).unwrap();
+    let home = graph.create_tree(parent, None).unwrap();
+    let kept = graph
         .enter(home, |context| {
             let value = number_in(context, 21);
             let kept = context.keep(value.clone());
@@ -467,117 +467,117 @@ fn spliced_into_root(
 
 #[test]
 fn a_dormant_carrier_whose_home_was_absorbed_redeems_from_the_destination() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let (kept, parent, home) = spliced_into_root(&mut table, root);
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let (kept, parent, home) = spliced_into_root(&mut graph, root);
 
-    table.release_tree(home).unwrap();
+    graph.release_tree(home).unwrap();
     // The home is gone and something still names it, so its identity stays as a tombstone
     // pointing at the root, whose bundle now holds its bump.
-    assert_eq!(table.trees().state(home.index()), TreeState::Absorbed);
+    assert_eq!(graph.trees().state(home.index()), TreeState::Absorbed);
     assert_eq!(
-        table.trees().tombstone_target(home.index()),
+        graph.trees().tombstone_target(home.index()),
         Some(CellHandle::Slab(root))
     );
-    assert_eq!(table.tree_tombstones_of(root), Some(home.index()));
+    assert_eq!(graph.tree_tombstones_of(root), Some(home.index()));
 
-    let read = table
+    let read = graph
         .enter(root, |context| {
             *context.read(&context.redeem(kept).unwrap()).value()
         })
         .unwrap();
     assert_eq!(read, 21);
 
-    table.release_tree(parent).unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty(), "the reclaim took the tombstone with it");
+    graph.release_tree(parent).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty(), "the reclaim took the tombstone with it");
 }
 
 #[test]
 fn a_tree_value_spliced_into_a_root_survives_the_root_absorbing_into_its_holder() {
-    let mut table: CellTable<Owned> = CellTable::new(3, pin);
-    let holder = table.create(None, None).unwrap();
-    let root = table.create(None, None).unwrap();
-    let (kept, parent, home) = spliced_into_root(&mut table, root);
-    table.release_tree(home).unwrap();
-    table.release_tree(parent).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(3, pin);
+    let holder = graph.create(None, None).unwrap();
+    let root = graph.create(None, None).unwrap();
+    let (kept, parent, home) = spliced_into_root(&mut graph, root);
+    graph.release_tree(home).unwrap();
+    graph.release_tree(parent).unwrap();
 
     // The holder takes a hold on the root, so the root's death folds its whole bundle — spliced
     // tree bumps included — into the holder rather than sealing it.
-    table
+    graph
         .enter(holder, |context| context.hold(root).unwrap())
         .unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
 
-    let read = table
+    let read = graph
         .enter(holder, |context| {
             *context.read(&context.redeem(kept).unwrap()).value()
         })
         .unwrap();
     assert_eq!(read, 21);
 
-    table
+    graph
         .release(holder, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert!(table.is_empty());
-    assert_eq!(table.relocations(), 0);
+    assert!(graph.is_empty());
+    assert_eq!(graph.relocations(), 0);
 }
 
 #[test]
 fn a_tree_root_that_seals_carries_its_spliced_bumps() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let first = table.create(None, None).unwrap();
-    let second = table.create(None, None).unwrap();
-    let root = table.create(None, None).unwrap();
-    let (kept, parent, home) = spliced_into_root(&mut table, root);
-    table.release_tree(home).unwrap();
-    table.release_tree(parent).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let first = graph.create(None, None).unwrap();
+    let second = graph.create(None, None).unwrap();
+    let root = graph.create(None, None).unwrap();
+    let (kept, parent, home) = spliced_into_root(&mut graph, root);
+    graph.release_tree(home).unwrap();
+    graph.release_tree(parent).unwrap();
 
     // Two holders, so the root seals rather than folding into either.
     for holder in [first, second] {
-        table
+        graph
             .enter(holder, |context| context.hold(root).unwrap())
             .unwrap();
     }
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
 
-    let read = table
+    let read = graph
         .enter(first, |context| {
             *context.read(&context.redeem(kept).unwrap()).value()
         })
         .unwrap();
     assert_eq!(read, 21);
 
-    table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
-    table
+    graph.release(first, ReleaseAbsorption::IntoHolder).unwrap();
+    graph
         .release(second, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert!(table.is_empty());
-    assert_eq!(table.relocations(), 0);
+    assert!(graph.is_empty());
+    assert_eq!(graph.relocations(), 0);
 }
 
 #[test]
 fn a_tree_value_whose_root_reclaimed_answers_gone() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let (kept, parent, home) = spliced_into_root(&mut table, root);
-    table.release_tree(home).unwrap();
-    table.release_tree(parent).unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty(), "the root's reclaim freed the tombstone");
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let (kept, parent, home) = spliced_into_root(&mut graph, root);
+    graph.release_tree(home).unwrap();
+    graph.release_tree(parent).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty(), "the root's reclaim freed the tombstone");
 
-    let bystander = table.create(None, None).unwrap();
-    let error = table
+    let bystander = graph.create(None, None).unwrap();
+    let error = graph
         .enter(bystander, |context| match context.redeem(kept) {
             Err(error) => error,
             Ok(_) => panic!("the root's reclaim took the bytes"),
         })
         .unwrap();
     assert_eq!(error, RedeemError::Gone);
-    table
+    graph
         .release(bystander, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 #[test]
@@ -585,21 +585,21 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
     // Deep enough to dwarf any slab, and trimmed under Miri, where every level is interpreted.
     const DEPTH: usize = if cfg!(miri) { 24 } else { 200 };
 
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let filler = table.create(None, None).unwrap();
-    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let filler = graph.create(None, None).unwrap();
+    assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
 
     // The whole chain lives in the pool: not one level takes a slab slot.
     let mut chain = Vec::with_capacity(DEPTH);
     let mut parent = CellHandle::Slab(root);
     for _ in 0..DEPTH {
-        let cell = table.create_tree(parent, None).unwrap();
+        let cell = graph.create_tree(parent, None).unwrap();
         chain.push(cell);
         parent = CellHandle::Tree(cell);
     }
     assert_eq!(
-        table.create(None, None),
+        graph.create(None, None),
         Err(CreateError::SlabFull),
         "the slab never grew"
     );
@@ -616,7 +616,7 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
         };
         let taken = carried.take();
         carried = Some(
-            table
+            graph
                 .enter(cell, |context| {
                     let value = match taken {
                         None => number_in(context, 0),
@@ -637,14 +637,14 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
                 })
                 .unwrap(),
         );
-        table.release_tree(cell).unwrap();
+        graph.release_tree(cell).unwrap();
         // Every level's bump ends up further up the chain, and the root's bundle only grows.
-        let now = table.region_bytes(root).unwrap();
+        let now = graph.region_bytes(root).unwrap();
         assert!(now >= spliced);
         spliced = now;
     }
 
-    let read = table
+    let read = graph
         .enter(root, |context| {
             *context
                 .read(&context.redeem(carried.unwrap()).unwrap())
@@ -654,22 +654,22 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
     assert_eq!(read as usize, DEPTH - 1);
     assert!(spliced > 0, "the levels' storage arrived in the root");
 
-    table
+    graph
         .release(filler, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty(), "the tombstones went with the root");
-    assert_eq!(table.relocations(), 0);
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty(), "the tombstones went with the root");
+    assert_eq!(graph.relocations(), 0);
 }
 
 #[test]
 fn a_splice_keeps_a_borrow_the_destination_already_holds() {
-    let mut table: CellTable<Borrowed> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let destination = table.create_tree(root, None).unwrap();
-    let home = table.create_tree(destination, None).unwrap();
+    let mut graph: CellGraph<Borrowed> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let destination = graph.create_tree(root, None).unwrap();
+    let home = graph.create_tree(destination, None).unwrap();
 
-    let kept = table
+    let kept = graph
         .enter(home, |context| {
             let value = number_in(context, 33);
             context.keep(value)
@@ -679,7 +679,7 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
     // The destination stores a continuation capturing a value that lives in its child's bump. The
     // pin pledges the child, so the bytes the continuation reads move into this very bundle when
     // the child dies rather than going away with it.
-    table
+    graph
         .enter(destination, |context| {
             let carrier = context.redeem(kept).unwrap();
             context.store_successor_capturing(&[kept_operand(&carrier)], |writer, views| {
@@ -688,8 +688,8 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
         })
         .unwrap();
 
-    table.release_tree(home).unwrap();
-    let read = table
+    graph.release_tree(home).unwrap();
+    let read = graph
         .enter(destination, |context| {
             *context
                 .continuation()
@@ -699,21 +699,21 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
         .unwrap();
     assert_eq!(read, 33);
 
-    table.release_tree(destination).unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release_tree(destination).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]
 fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let root = table.create(None, None).unwrap();
-    let hop = table.create_tree(root, None).unwrap();
-    let next = table.create_tree(root, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None, None).unwrap();
+    let hop = graph.create_tree(root, None).unwrap();
+    let next = graph.create_tree(root, None).unwrap();
 
     // The next hop's arguments are built into a sibling, which is off this cell's chain — so the
     // ancestry rule forces the copy, and the old hop's storage is free to go.
-    let kept = table
+    let kept = graph
         .enter(hop, |context| {
             let value = number_in(context, 6);
             let placed = context
@@ -729,21 +729,21 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
         })
         .unwrap();
 
-    table.release_tree(hop).unwrap();
+    graph.release_tree(hop).unwrap();
     assert_eq!(
-        table.trees().occupied().count(),
+        graph.trees().occupied().count(),
         1,
         "the old hop pledged nothing, so its bump went with it"
     );
 
-    let read = table
+    let read = graph
         .enter(next, |context| {
             *context.read(&context.redeem(kept).unwrap()).value()
         })
         .unwrap();
     assert_eq!(read, 6);
 
-    table.release_tree(next).unwrap();
-    table.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(table.is_empty());
+    graph.release_tree(next).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }

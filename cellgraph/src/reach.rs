@@ -11,7 +11,7 @@
 use crate::matrix::Bits;
 use crate::sealed::{SealedId, SealedSet};
 
-/// The set of regions a value's borrows reach: slab slots as bits over the table's width, sealed
+/// The set of regions a value's borrows reach: slab slots as bits over the graph's width, sealed
 /// regions as ids.
 ///
 /// Both halves are inline at the width that matters: the dense one always, the sparse one up to two
@@ -33,7 +33,7 @@ pub(crate) struct GraphReach<const W: usize> {
 }
 
 impl<const W: usize> GraphReach<W> {
-    /// A mask naming nothing — the reach of a value whose borrows leave the table entirely.
+    /// A mask naming nothing — the reach of a value whose borrows leave the graph entirely.
     pub(crate) const fn empty() -> Self {
         GraphReach {
             slab: Bits::new(),

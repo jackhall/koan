@@ -88,155 +88,155 @@ fn number(view: &CrossedOperand<'_, '_, Number>) -> u32 {
 /// A release may move these bytes between live cells (a merge into a holder), out to a sealed cell
 /// (a seal), or nowhere at all (a reclaim) — so the total is non-increasing across one. An increase
 /// would mean storage flowed back out of the sealed tier, which no path may do.
-fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
+fn live_bytes<C: Reattachable>(graph: &CellGraph<C>, cap: u32) -> usize {
     (0..cap)
-        .filter(|slot| table.slots[*slot as usize].state != SlabState::Free)
-        .filter_map(|slot| table.slots[slot as usize].region.as_ref())
+        .filter(|slot| graph.slots[*slot as usize].state != SlabState::Free)
+        .filter_map(|slot| graph.slots[slot as usize].region.as_ref())
         .map(Region::allocated_bytes)
         .sum()
 }
 
-/// The reach of a cell's stored continuation, read out of the reach table entry it occupies. The
+/// The reach of a cell's stored continuation, read out of the reach table entry it occupies. The
 /// continuation is a dormant carrier like any other, so this is the same lookup a redeem performs.
 fn continuation_reach_index<C: Reattachable>(
-    table: &CellTable<C>,
+    graph: &CellGraph<C>,
     handle: SlabHandle,
 ) -> &GraphReach<1> {
-    let cell = &table.slots[handle.slot() as usize];
+    let cell = &graph.slots[handle.slot() as usize];
     let index = cell
         .continuation_reach_index
         .expect("the cell stored a continuation over captures");
     cell.reaches
         .get(index)
-        .expect("the entry the continuation names is in the table")
+        .expect("the entry the continuation names is in the reach table")
 }
 
 /// What a slot currently holds, by handle — the state assertions read the slab directly, since
 /// residence is not observable through the public verbs.
-fn state_of<C: Reattachable>(table: &CellTable<C>, handle: SlabHandle) -> SlabState {
-    table.slots[handle.slot() as usize].state
+fn state_of<C: Reattachable>(graph: &CellGraph<C>, handle: SlabHandle) -> SlabState {
+    graph.slots[handle.slot() as usize].state
 }
 
 #[test]
 fn the_slab_refuses_past_its_cap_and_reuses_a_freed_slot() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let cells: Vec<SlabHandle> = (0..4).map(|_| table.create(None, None).unwrap()).collect();
-    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let cells: Vec<SlabHandle> = (0..4).map(|_| graph.create(None, None).unwrap()).collect();
+    assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
 
-    table
+    graph
         .release(cells[1], ReleaseAbsorption::IntoHolder)
         .unwrap();
-    let reused = table.create(None, None).unwrap();
+    let reused = graph.create(None, None).unwrap();
     assert_eq!(reused.slot(), cells[1].slot());
     assert_eq!(reused.generation(), cells[1].generation() + 1);
-    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+    assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
 }
 
 #[test]
 fn a_cap_below_the_width_binds_admission_and_the_signal() {
-    // The width is fixed by the table's type and the cap by its construction. A table two cells
+    // The width is fixed by the graph's type and the cap by its construction. A graph two cells
     // deep over a 64-cell row is full at two, and the occupancy signal reports two.
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let _ = table.create(None, None).unwrap();
-    let _ = table.create(None, None).unwrap();
-    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
-    assert_eq!(table.occupancy().cap, 2);
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let _ = graph.create(None, None).unwrap();
+    let _ = graph.create(None, None).unwrap();
+    assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
+    assert_eq!(graph.occupancy().cap, 2);
 }
 
 #[test]
 #[should_panic(expected = "does not fit a 64-cell slab")]
 fn a_cap_above_the_width_is_refused_at_construction() {
-    let _: CellTable<Owned> = CellTable::new(65, pin);
+    let _: CellGraph<Owned> = CellGraph::new(65, pin);
 }
 
 #[test]
 fn a_two_word_table_names_slots_across_the_chunk_boundary() {
     // The shape that exercises the matrices' chunk arithmetic: a birth chain and a pin whose ends
     // sit in different chunks of the same row.
-    let mut table: CellTable<Owned, 2> = CellTable::new(128, pin);
-    let root = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned, 2> = CellGraph::new(128, pin);
+    let root = graph.create(None, None).unwrap();
     let cells: Vec<SlabHandle> = (1..128)
-        .map(|_| table.create(Some(root), None).unwrap())
+        .map(|_| graph.create(Some(root), None).unwrap())
         .collect();
-    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+    assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
 
     // A child born in the high chunk inherits the row of a parent in the low one.
     let high = cells[99];
     assert_eq!(high.slot(), 100);
-    assert!(table.birth.test(high.slot(), root.slot()));
+    assert!(graph.birth.test(high.slot(), root.slot()));
 
     // And a pin crosses the boundary the other way.
     let low = cells[2];
-    table
+    graph
         .enter(low, |context| context.hold(high).unwrap())
         .unwrap();
-    assert!(table.holds(low, high));
+    assert!(graph.holds(low, high));
 
     // Releasing the holder drops the whole row, both chunks of it, so the held cell reclaims.
-    table.release(low, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(!table.holds(low, high));
-    table.release(high, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(!table.is_live(high));
-    assert_eq!(table.occupancy().sealed_cells, 0);
+    graph.release(low, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(!graph.holds(low, high));
+    graph.release(high, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(!graph.is_live(high));
+    assert_eq!(graph.occupancy().sealed_cells, 0);
 }
 
 #[test]
 fn every_verb_rejects_a_stale_handle() {
-    let mut table: CellTable<Owned> = CellTable::new(1, pin);
-    let first = table.create(None, None).unwrap();
-    table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
-    let second = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(1, pin);
+    let first = graph.create(None, None).unwrap();
+    graph.release(first, ReleaseAbsorption::IntoHolder).unwrap();
+    let second = graph.create(None, None).unwrap();
 
     assert_eq!(second.slot(), first.slot());
-    assert!(!table.is_live(first));
+    assert!(!graph.is_live(first));
     assert_eq!(
-        table.enter(first, |_| ()),
+        graph.enter(first, |_| ()),
         Err(EnterError::Stale(Stale(CellHandle::Slab(first))))
     );
     assert_eq!(
-        table.release(first, ReleaseAbsorption::IntoHolder),
+        graph.release(first, ReleaseAbsorption::IntoHolder),
         Err(ReleaseError::Stale(Stale(first)))
     );
     assert_eq!(
-        table.create(Some(first), None),
+        graph.create(Some(first), None),
         Err(CreateError::StaleParent(Stale(first)))
     );
-    assert!(table.is_live(second));
+    assert!(graph.is_live(second));
 }
 
 #[test]
 fn a_birth_row_contains_the_parent_chain_and_outlives_the_middle_cell() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let a = table.create(None, None).unwrap();
-    let b = table.create(Some(a), None).unwrap();
-    let c = table.create(Some(b), None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let a = graph.create(None, None).unwrap();
+    let b = graph.create(Some(a), None).unwrap();
+    let c = graph.create(Some(b), None).unwrap();
 
-    assert!(table.birth.row_contains(b.slot(), a.slot()));
-    assert!(table.birth.test(b.slot(), a.slot()));
-    assert!(table.birth.row_contains(c.slot(), b.slot()));
-    assert!(table.birth.test(c.slot(), b.slot()));
-    assert!(table.birth.test(c.slot(), a.slot()));
+    assert!(graph.birth.row_contains(b.slot(), a.slot()));
+    assert!(graph.birth.test(b.slot(), a.slot()));
+    assert!(graph.birth.row_contains(c.slot(), b.slot()));
+    assert!(graph.birth.test(c.slot(), b.slot()));
+    assert!(graph.birth.test(c.slot(), a.slot()));
 
-    table.release(b, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(!table.is_live(b));
-    assert_eq!(table.slots[b.slot() as usize].state, SlabState::Dead);
-    assert!(table.birth.test(c.slot(), a.slot()));
-    assert!(table.is_live(a));
+    graph.release(b, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(!graph.is_live(b));
+    assert_eq!(graph.slots[b.slot() as usize].state, SlabState::Dead);
+    assert!(graph.birth.test(c.slot(), a.slot()));
+    assert!(graph.is_live(a));
 
-    table.release(c, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(table.slots[c.slot() as usize].state, SlabState::Free);
-    assert_eq!(table.slots[b.slot() as usize].state, SlabState::Free);
-    assert!(table.is_live(a));
+    graph.release(c, ReleaseAbsorption::IntoHolder).unwrap();
+    assert_eq!(graph.slots[c.slot() as usize].state, SlabState::Free);
+    assert_eq!(graph.slots[b.slot() as usize].state, SlabState::Free);
+    assert!(graph.is_live(a));
 
-    table.release(a, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(table.free.len(), 4);
+    graph.release(a, ReleaseAbsorption::IntoHolder).unwrap();
+    assert_eq!(graph.free.len(), 4);
 }
 
 #[test]
 fn a_cell_without_a_continuation_is_storage_only() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let cell = table.create(None, None).unwrap();
-    let seen = table
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let cell = graph.create(None, None).unwrap();
+    let seen = graph
         .enter(cell, |context| {
             assert!(context.continuation().is_none());
             context.cell()
@@ -247,15 +247,15 @@ fn a_cell_without_a_continuation_is_storage_only() {
 
 #[test]
 fn the_continuation_comes_back_re_anchored_at_the_step_brand() {
-    let mut table: CellTable<Borrowed> = CellTable::new(2, pin);
-    let cell = table.create(None, Some(&ANCHOR)).unwrap();
+    let mut graph: CellGraph<Borrowed> = CellGraph::new(2, pin);
+    let cell = graph.create(None, Some(&ANCHOR)).unwrap();
 
-    let read = table
+    let read = graph
         .enter(cell, |context| *context.continuation().unwrap().value())
         .unwrap();
     assert_eq!(read, 7);
 
-    let emptied = table
+    let emptied = graph
         .enter(cell, |context| context.continuation().is_none())
         .unwrap();
     assert!(emptied);
@@ -263,15 +263,15 @@ fn the_continuation_comes_back_re_anchored_at_the_step_brand() {
 
 #[test]
 fn a_step_stores_the_successor_the_next_step_receives() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let cell = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let cell = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(cell, |context| {
             context.store_successor(String::from("second"));
         })
         .unwrap();
-    let next = table
+    let next = graph
         .enter(cell, |context| {
             context.continuation().map(|opened| opened.into_value())
         })
@@ -281,47 +281,47 @@ fn a_step_stores_the_successor_the_next_step_receives() {
 
 #[test]
 fn a_cell_is_entered_by_one_step_at_a_time() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let cell = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let cell = graph.create(None, None).unwrap();
 
-    table.begin(CellHandle::Slab(cell)).unwrap();
+    graph.begin(CellHandle::Slab(cell)).unwrap();
     assert_eq!(
-        table.begin(CellHandle::Slab(cell)),
+        graph.begin(CellHandle::Slab(cell)),
         Err(EnterError::AlreadyExecuting)
     );
     assert_eq!(
-        table.release(cell, ReleaseAbsorption::IntoHolder),
+        graph.release(cell, ReleaseAbsorption::IntoHolder),
         Err(ReleaseError::Executing)
     );
 
-    table.executing.clear(cell.slot());
-    assert!(table.enter(cell, |_| ()).is_ok());
+    graph.executing.clear(cell.slot());
+    assert!(graph.enter(cell, |_| ()).is_ok());
 }
 
 #[test]
 fn the_executing_flag_falls_when_a_step_panics() {
-    let mut table: CellTable<Owned> = CellTable::new(1, pin);
-    let cell = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(1, pin);
+    let cell = graph.create(None, None).unwrap();
 
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = table.enter(cell, |_| panic!("the step gives up"));
+        let _ = graph.enter(cell, |_| panic!("the step gives up"));
     }));
     std::panic::set_hook(hook);
 
     assert!(outcome.is_err());
-    assert!(!table.executing.test(cell.slot()));
-    assert!(table.enter(cell, |_| ()).is_ok());
+    assert!(!graph.executing.test(cell.slot()));
+    assert!(graph.enter(cell, |_| ()).is_ok());
 }
 
 #[test]
 fn reclaiming_a_slot_drops_the_continuation_it_held() {
     let anchor = Rc::new(());
-    let mut table: CellTable<Counted> = CellTable::new(1, pin);
-    let cell = table.create(None, Some(Rc::clone(&anchor))).unwrap();
+    let mut graph: CellGraph<Counted> = CellGraph::new(1, pin);
+    let cell = graph.create(None, Some(Rc::clone(&anchor))).unwrap();
     assert_eq!(Rc::strong_count(&anchor), 2);
 
-    table.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
+    graph.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(Rc::strong_count(&anchor), 1);
 }

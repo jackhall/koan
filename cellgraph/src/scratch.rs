@@ -6,7 +6,7 @@
 //! glue may go in it. The doors below assert that at compile time, the way the cell-region doors
 //! assert [`DropFree`](crate::DropFree).
 //!
-//! One table has one scratch region and each cell has its own **cell region**
+//! One graph has one scratch region and each cell has its own **cell region**
 //! ([`Region`](crate::region::Region)); both are bumps, and the qualifier is what tells them
 //! apart: outside these two modules' own bodies, "the region" alone names neither.
 
@@ -29,9 +29,9 @@ use crate::sealed::{IdBuffer, IdSet, ScratchSet};
 /// a door with the final length to hand takes [`Scratch::run`] instead.
 pub(crate) type ScratchVec<'s, T> = allocator_api2::vec::Vec<T, &'s Bump>;
 
-/// One table's scratch region, sized at construction and reset at every verb's entry.
+/// One graph's scratch region, sized at construction and reset at every verb's entry.
 ///
-/// Deliberately not `Default`: a table has exactly one scratch region, minted with its first
+/// Deliberately not `Default`: a graph has exactly one scratch region, minted with its first
 /// chunk, and every path that moves it moves that one — there is no shape of this type worth
 /// conjuring.
 pub(crate) struct Scratch {
@@ -56,7 +56,7 @@ impl Scratch {
         }
     }
 
-    /// Drop every transient at once. Keeps the largest chunk, so a table is warm again from the
+    /// Drop every transient at once. Keeps the largest chunk, so a graph is warm again from the
     /// next verb.
     ///
     /// A region no door has been through since the last reset is left alone, and that is the state
@@ -117,8 +117,8 @@ impl Scratch {
         ScratchSet::copy_of(self.vec_with_capacity(other.len()), other)
     }
 
-    /// Chunk bytes the region holds, handed out or not. The figure a warm-table test reads: a
-    /// table whose chunk already fits a verb's transients grows this by nothing.
+    /// Chunk bytes the region holds, handed out or not. The figure a warm-graph test reads: a
+    /// graph whose chunk already fits a verb's transients grows this by nothing.
     #[cfg(test)]
     pub(crate) fn capacity(&self) -> usize {
         self.bump.allocated_bytes()

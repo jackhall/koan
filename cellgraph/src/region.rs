@@ -32,7 +32,7 @@ mod tests;
 ///
 /// Private to this module: it has no `Deref`, no public constructor, and no `Drop`, so the only
 /// way to reach the values is [`Region::memo`], whose `&self` bounds the slice it hands back.
-/// Holding a raw pointer is what makes a `Region` `!Send`, which costs nothing — a table is not
+/// Holding a raw pointer is what makes a `Region` `!Send`, which costs nothing — a graph is not
 /// `Send` either, since it carries the embedder's boxed verdict.
 struct BumpRun<T: Copy> {
     ptr: NonNull<T>,
@@ -154,7 +154,7 @@ impl Region {
 
 /// The write surface into a region's bytes, handed to a build closure at the closure's own brand.
 ///
-/// `Copy` with a private field, so a writer exists only where the table hands one out, and every
+/// `Copy` with a private field, so a writer exists only where the graph hands one out, and every
 /// verb returns a shared `&'r` rather than the `&mut` the bump itself yields: a written value is
 /// region state its holder names, never one it owns. `T: Copy` on the value verbs is what stands
 /// in for the missing destructor — a bump never runs one.

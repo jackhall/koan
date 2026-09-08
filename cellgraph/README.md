@@ -30,7 +30,7 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 - [src/handle.rs](src/handle.rs) — cell identity over both habitats: a slab
   slot or a tree-pool index paired with a generation, `CellHandle` naming
   either kind, and the stale refusals.
-- [src/table.rs](src/table.rs) — the slab, the `create` / `enter` / `release`
+- [src/graph.rs](src/graph.rs) — the slab, the `create` / `enter` / `release`
   verbs, the step context's doors, the seal transition, the three locality
   merges a dying cell can take instead, the cascade that retires cells and
   sealed cells, the relocation map that forwards a resident through a merge,

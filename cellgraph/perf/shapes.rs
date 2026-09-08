@@ -1,7 +1,7 @@
 //! The benchmark shapes: eight traversals of the substrate, each sized to the smallest `n` that
 //! shows its trend.
 //!
-//! Every shape builds its own table, drives public doors only, and ends with an `is_empty` assert —
+//! Every shape builds its own graph, drives public doors only, and ends with an `is_empty` assert —
 //! a shape that leaks a sealed cell is wrong, not slow. Values are read back wherever a redeem
 //! happens, so a wrong forward or a wrong reach shows up as a panic rather than as a cheap row.
 //!
@@ -11,13 +11,13 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    CellHandle, CellTable, CrossedOperand, Dormant, DropFree, Operand, Prices, Ready, Reattachable,
+    CellGraph, CellHandle, CrossedOperand, Dormant, DropFree, Operand, Prices, Ready, Reattachable,
     ReleaseAbsorption, SlabHandle, TreeHandle, Verdict, Writer, reattachable,
 };
 
 use crate::meter::{Verb, measure};
 
-/// The cap every shape builds at: the full width of a one-word table, which is the width the crate
+/// The cap every shape builds at: the full width of a one-word graph, which is the width the crate
 /// ships at. One cap for the whole set, so a row's `cap` column is a constant across the record.
 pub const CAP: u32 = 64;
 
@@ -47,8 +47,8 @@ fn always_pin(_: Prices) -> Verdict {
     Verdict::Pin
 }
 
-fn table() -> CellTable<Work> {
-    CellTable::new(CAP, always_pin)
+fn graph() -> CellGraph<Work> {
+    CellGraph::new(CAP, always_pin)
 }
 
 /// An operand priced above anything a pin can cost, so [`always_pin`] pins it whatever the slab is
@@ -77,13 +77,13 @@ fn build_slice<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Numbe
 }
 
 /// Per-step value cost in one cell: a value kept at the end of every step and redeemed at the head
-/// of the next, `n` times over, with nothing else in the table.
+/// of the next, `n` times over, with nothing else in the graph.
 fn keep_redeem(n: u32) {
-    let mut table = table();
-    let cell = measure(Verb::Create, || table.create(None, None)).unwrap();
+    let mut graph = graph();
+    let cell = measure(Verb::Create, || graph.create(None, None)).unwrap();
 
     let first = measure(Verb::Enter, || {
-        table.enter(cell, |context| {
+        graph.enter(cell, |context| {
             let value = measure(Verb::Alloc, || {
                 context.alloc::<Number>(|writer| writer.value(0))
             });
@@ -96,7 +96,7 @@ fn keep_redeem(n: u32) {
     for step in 1..=n {
         let held = resting.take().expect("the previous step put one to rest");
         let next = measure(Verb::Enter, || {
-            table.enter(cell, move |context| {
+            graph.enter(cell, move |context| {
                 let carrier = measure(Verb::Redeem, || context.redeem(held).unwrap());
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
                 assert_eq!(value, step - 1);
@@ -111,26 +111,27 @@ fn keep_redeem(n: u32) {
     }
 
     measure(Verb::Release, || {
-        table.release(cell, ReleaseAbsorption::IntoHolder)
+        graph.release(cell, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 /// Dormant interning against many shapes: `n` sources each build one value into `dest`, so every
-/// keep in `dest` carries a reach no earlier keep did and the table holds `n` entries. Each keep
+/// keep in `dest` carries a reach no earlier keep did and the reach table holds `n` entries. Each
+/// keep
 /// scans the entries before it, which is the linear term interning is priced at.
 fn keep_shapes(n: u32) {
-    let mut table = table();
-    let dest = measure(Verb::Create, || table.create(None, None)).unwrap();
+    let mut graph = graph();
+    let dest = measure(Verb::Create, || graph.create(None, None)).unwrap();
     let mut sources: Vec<SlabHandle> = Vec::with_capacity(n as usize);
     let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
-        let source = measure(Verb::Create, || table.create(None, None)).unwrap();
+        let source = measure(Verb::Create, || graph.create(None, None)).unwrap();
         sources.push(source);
         let resting = measure(Verb::Enter, || {
-            table.enter(source, |context| {
+            graph.enter(source, |context| {
                 let value = measure(Verb::Alloc, || {
                     context.alloc::<Number>(|writer| writer.value(i))
                 });
@@ -147,7 +148,7 @@ fn keep_shapes(n: u32) {
     }
 
     measure(Verb::Enter, || {
-        table.enter(dest, |context| {
+        graph.enter(dest, |context| {
             for (i, resting) in dormant.drain(..).enumerate() {
                 let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
@@ -159,28 +160,28 @@ fn keep_shapes(n: u32) {
 
     for source in &sources {
         measure(Verb::Release, || {
-            table.release(*source, ReleaseAbsorption::IntoHolder)
+            graph.release(*source, ReleaseAbsorption::IntoHolder)
         })
         .unwrap();
     }
     measure(Verb::Release, || {
-        table.release(dest, ReleaseAbsorption::IntoHolder)
+        graph.release(dest, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 /// Death-time absorption: `n` single-consumer producers, each building straight into the consumer
 /// and then dying, so every release finds a unique holder and folds into it.
 fn push_chain(n: u32) {
-    let mut table = table();
-    let consumer = measure(Verb::Create, || table.create(None, None)).unwrap();
+    let mut graph = graph();
+    let consumer = measure(Verb::Create, || graph.create(None, None)).unwrap();
     let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
-        let producer = measure(Verb::Create, || table.create(None, None)).unwrap();
+        let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
         let resting = measure(Verb::Enter, || {
-            table.enter(producer, |context| {
+            graph.enter(producer, |context| {
                 let value = measure(Verb::Alloc, || {
                     context.alloc::<Number>(|writer| writer.value(i))
                 });
@@ -195,13 +196,13 @@ fn push_chain(n: u32) {
         .unwrap();
         dormant.push(resting);
         measure(Verb::Release, || {
-            table.release(producer, ReleaseAbsorption::IntoHolder)
+            graph.release(producer, ReleaseAbsorption::IntoHolder)
         })
         .unwrap();
     }
 
     measure(Verb::Enter, || {
-        table.enter(consumer, |context| {
+        graph.enter(consumer, |context| {
             for (i, resting) in dormant.drain(..).enumerate() {
                 let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
@@ -212,24 +213,24 @@ fn push_chain(n: u32) {
     .unwrap();
 
     measure(Verb::Release, || {
-        table.release(consumer, ReleaseAbsorption::IntoHolder)
+        graph.release(consumer, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 /// The seal transition and sealed-cell retirement: `n` producers the consumer holds bare, each
 /// refusing the merge on death so it seals, then read out of their sealed cells and wound down
 /// together.
 fn pull_chain(n: u32) {
-    let mut table = table();
-    let consumer = measure(Verb::Create, || table.create(None, None)).unwrap();
+    let mut graph = graph();
+    let consumer = measure(Verb::Create, || graph.create(None, None)).unwrap();
     let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
-        let producer = measure(Verb::Create, || table.create(None, None)).unwrap();
+        let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
         let resting = measure(Verb::Enter, || {
-            table.enter(producer, |context| {
+            graph.enter(producer, |context| {
                 let value = measure(Verb::Alloc, || {
                     context.alloc::<Number>(|writer| writer.value(i))
                 });
@@ -240,19 +241,19 @@ fn pull_chain(n: u32) {
         dormant.push(resting);
 
         measure(Verb::Enter, || {
-            table.enter(consumer, |context| {
+            graph.enter(consumer, |context| {
                 measure(Verb::Hold, || context.hold(producer).unwrap());
             })
         })
         .unwrap();
         measure(Verb::Release, || {
-            table.release(producer, ReleaseAbsorption::Refused)
+            graph.release(producer, ReleaseAbsorption::Refused)
         })
         .unwrap();
     }
 
     measure(Verb::Enter, || {
-        table.enter(consumer, |context| {
+        graph.enter(consumer, |context| {
             for (i, resting) in dormant.drain(..).enumerate() {
                 let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
@@ -263,24 +264,24 @@ fn pull_chain(n: u32) {
     .unwrap();
 
     measure(Verb::Release, || {
-        table.release(consumer, ReleaseAbsorption::IntoHolder)
+        graph.release(consumer, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 /// Dead ancestors waiting on a descendant: a chain of `n` cells each born under the last, released
 /// outermost-first so every one of them stays dead-but-undisposed under the leaf's birth row, and
 /// then the leaf — the single release that frees the whole chain in one walk up it.
 fn birth_chain(n: u32) {
-    let mut table = table();
+    let mut graph = graph();
     let mut handles: Vec<SlabHandle> = Vec::with_capacity(n as usize);
 
-    let root = measure(Verb::Create, || table.create(None, None)).unwrap();
+    let root = measure(Verb::Create, || graph.create(None, None)).unwrap();
     handles.push(root);
     for depth in 1..n {
         let parent = handles[depth as usize - 1];
-        let child = measure(Verb::Create, || table.create(Some(parent), None)).unwrap();
+        let child = measure(Verb::Create, || graph.create(Some(parent), None)).unwrap();
         handles.push(child);
     }
 
@@ -288,22 +289,22 @@ fn birth_chain(n: u32) {
     // its birth row names the whole chain above it.
     for handle in &handles {
         measure(Verb::Release, || {
-            table.release(*handle, ReleaseAbsorption::IntoHolder)
+            graph.release(*handle, ReleaseAbsorption::IntoHolder)
         })
         .unwrap();
     }
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 /// One round of the fan-out: `m` values built in `source` and placed as one slice into `dest`.
 fn fan_out_round(
-    table: &mut CellTable<Work>,
+    graph: &mut CellGraph<Work>,
     source: SlabHandle,
     dest: SlabHandle,
     m: u32,
 ) -> Dormant<Numbers> {
     measure(Verb::Enter, || {
-        table.enter(source, |context| {
+        graph.enter(source, |context| {
             let mut values = measure(Verb::Harness, || Vec::with_capacity(m as usize));
             for i in 0..m {
                 let value = measure(Verb::Alloc, || {
@@ -328,15 +329,15 @@ fn fan_out_round(
 /// already naming everything the operands reach — the covered case a placement into a cell that
 /// already holds the home is, and the one an always-pin embedder pays per operand.
 fn fan_out(m: u32) {
-    let mut table = table();
-    let source = measure(Verb::Create, || table.create(None, None)).unwrap();
-    let dest = measure(Verb::Create, || table.create(None, None)).unwrap();
+    let mut graph = graph();
+    let source = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let dest = measure(Verb::Create, || graph.create(None, None)).unwrap();
 
-    let first = fan_out_round(&mut table, source, dest, m);
-    let second = fan_out_round(&mut table, source, dest, m);
+    let first = fan_out_round(&mut graph, source, dest, m);
+    let second = fan_out_round(&mut graph, source, dest, m);
 
     measure(Verb::Enter, || {
-        table.enter(dest, |context| {
+        graph.enter(dest, |context| {
             for resting in [first, second] {
                 let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
                 // The view is handed straight out of the measured window: copying it into a
@@ -350,33 +351,33 @@ fn fan_out(m: u32) {
     .unwrap();
 
     measure(Verb::Release, || {
-        table.release(source, ReleaseAbsorption::IntoHolder)
+        graph.release(source, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     measure(Verb::Release, || {
-        table.release(dest, ReleaseAbsorption::IntoHolder)
+        graph.release(dest, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 /// The sealed-tier cascade: `n` bases held from two branches, so each seals rather than merges,
 /// their sealed cells unioned into one placement, then both branches wound down so every sealed
 /// cell's holder count falls to zero at once.
 fn shared_subtier(n: u32) {
-    let mut table = table();
-    let left = measure(Verb::Create, || table.create(None, None)).unwrap();
-    let right = measure(Verb::Create, || table.create(None, None)).unwrap();
+    let mut graph = graph();
+    let left = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let right = measure(Verb::Create, || graph.create(None, None)).unwrap();
 
     let mut bases: Vec<SlabHandle> = Vec::with_capacity(n as usize);
     for _ in 0..n {
-        bases.push(measure(Verb::Create, || table.create(None, None)).unwrap());
+        bases.push(measure(Verb::Create, || graph.create(None, None)).unwrap());
     }
 
     let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
     for (i, base) in bases.iter().enumerate() {
         let resting = measure(Verb::Enter, || {
-            table.enter(*base, |context| {
+            graph.enter(*base, |context| {
                 let value = measure(Verb::Alloc, || {
                     context.alloc::<Number>(|writer| writer.value(i as u32))
                 });
@@ -389,7 +390,7 @@ fn shared_subtier(n: u32) {
 
     for branch in [left, right] {
         measure(Verb::Enter, || {
-            table.enter(branch, |context| {
+            graph.enter(branch, |context| {
                 for base in &bases {
                     measure(Verb::Hold, || context.hold(*base).unwrap());
                 }
@@ -400,13 +401,13 @@ fn shared_subtier(n: u32) {
 
     for base in &bases {
         measure(Verb::Release, || {
-            table.release(*base, ReleaseAbsorption::Refused)
+            graph.release(*base, ReleaseAbsorption::Refused)
         })
         .unwrap();
     }
 
     measure(Verb::Enter, || {
-        table.enter(right, |context| {
+        graph.enter(right, |context| {
             let mut carriers = measure(Verb::Harness, || Vec::with_capacity(n as usize));
             for (i, resting) in dormant.drain(..).enumerate() {
                 let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
@@ -427,14 +428,14 @@ fn shared_subtier(n: u32) {
     .unwrap();
 
     measure(Verb::Release, || {
-        table.release(left, ReleaseAbsorption::IntoHolder)
+        graph.release(left, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
     measure(Verb::Release, || {
-        table.release(right, ReleaseAbsorption::IntoHolder)
+        graph.release(right, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 /// One benchmark: the traversal, the name its rows carry, and the two sizes it is swept at.
@@ -449,16 +450,16 @@ pub struct Shape {
 /// parent, and dying — the call-subtree shape the slab cannot hold, since none of it takes a slot.
 ///
 /// The trend this reads is the one the habitat exists for: creation, entry and death are flat per
-/// level whatever the depth, because a tree cell takes no row, no column and no reach table, and
+/// level whatever the depth, because a tree cell takes no row, no column and no reach table, and
 /// its death is a bump splice into the ancestor it pledged.
 fn tree_chain(n: u32) {
-    let mut table = table();
-    let root = measure(Verb::Create, || table.create(None, None)).unwrap();
+    let mut graph = graph();
+    let root = measure(Verb::Create, || graph.create(None, None)).unwrap();
 
     let mut chain: Vec<TreeHandle> = Vec::with_capacity(n as usize);
     let mut parent = CellHandle::Slab(root);
     for _ in 0..n {
-        let cell = measure(Verb::CreateTree, || table.create_tree(parent, None)).unwrap();
+        let cell = measure(Verb::CreateTree, || graph.create_tree(parent, None)).unwrap();
         chain.push(cell);
         parent = CellHandle::Tree(cell);
     }
@@ -475,7 +476,7 @@ fn tree_chain(n: u32) {
         let taken = carried.take();
         carried = Some(
             measure(Verb::EnterTree, || {
-                table.enter(cell, |context| {
+                graph.enter(cell, |context| {
                     let value = match taken {
                         None => measure(Verb::Alloc, || {
                             context.alloc::<Number>(|writer| writer.value(0))
@@ -499,11 +500,11 @@ fn tree_chain(n: u32) {
             })
             .unwrap(),
         );
-        measure(Verb::ReleaseTree, || table.release_tree(cell)).unwrap();
+        measure(Verb::ReleaseTree, || graph.release_tree(cell)).unwrap();
     }
 
     let read = measure(Verb::Enter, || {
-        table.enter(root, |context| {
+        graph.enter(root, |context| {
             let carrier = measure(Verb::Redeem, || {
                 context
                     .redeem(carried.take().expect("the chain left a dormant carrier"))
@@ -516,10 +517,10 @@ fn tree_chain(n: u32) {
     assert_eq!(read, n - 1);
 
     measure(Verb::Release, || {
-        table.release(root, ReleaseAbsorption::IntoHolder)
+        graph.release(root, ReleaseAbsorption::IntoHolder)
     })
     .unwrap();
-    assert!(table.is_empty());
+    assert!(graph.is_empty());
 }
 
 /// Every shape. Each is swept at both its sizes, so the per-unit trend is the difference over the

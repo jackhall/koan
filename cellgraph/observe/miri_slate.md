@@ -34,12 +34,12 @@ family is the load-bearing one, since its erased form holds a real reference acr
 third is a leak check on the erased slot's drop glue: a slot's reclamation must run the held
 family's `Drop`, which Miri's process-exit leak detector is what verifies.
 
-- `table::tests::the_continuation_comes_back_re_anchored_at_the_step_brand`
-- `table::tests::a_step_stores_the_successor_the_next_step_receives`
-- `table::tests::reclaiming_a_slot_drops_the_continuation_it_held`
+- `graph::tests::the_continuation_comes_back_re_anchored_at_the_step_brand`
+- `graph::tests::a_step_stores_the_successor_the_next_step_receives`
+- `graph::tests::reclaiming_a_slot_drops_the_continuation_it_held`
 
 **Region storage and the operand re-anchor** ([src/region.rs](../src/region.rs),
-[src/table.rs](../src/table.rs)) — the same `retype` primitive, reached at the two doors a value
+[src/graph.rs](../src/graph.rs)) — the same `retype` primitive, reached at the two doors a value
 with reach uses. `Erased::erase` forgets a region borrow at the alloc site and `Erased::reattach`
 hands it back at a shorter one, so a bumped value's borrow survives a round trip through a
 lifetime-free slot; the placement test is the load-bearing one, since its operand view is a real
@@ -50,13 +50,13 @@ detaches at all: a reattached borrow names a cell that is still live, and that c
 allocating through `&mut` under it, so what Miri checks is that the retag a region takes at every
 allocation leaves an already-issued chunk borrow alone.
 
-- `table::tests::values::a_value_allocated_in_the_executing_cell_reaches_only_that_cell`
-- `table::tests::values::placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach`
-- `table::tests::values::a_held_cell_leaves_the_slab_at_its_death_and_its_sealed_cell_goes_with_its_holder`
-- `table::tests::values::a_reattached_borrow_survives_the_live_region_it_names_growing_under_it`
+- `graph::tests::values::a_value_allocated_in_the_executing_cell_reaches_only_that_cell`
+- `graph::tests::values::placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach`
+- `graph::tests::values::a_held_cell_leaves_the_slab_at_its_death_and_its_sealed_cell_goes_with_its_holder`
+- `graph::tests::values::a_reattached_borrow_survives_the_live_region_it_names_growing_under_it`
 
 **The sealed tier's detached storage** ([src/sealed.rs](../src/sealed.rs),
-[src/table.rs](../src/table.rs)) — the same `retype` primitive again, at the one door whose
+[src/graph.rs](../src/graph.rs)) — the same `retype` primitive again, at the one door whose
 referents may no longer live in the slab at all. A sealed region's chunks move out of their slot
 into a sealed cell, and a continuation stored before the seal keeps borrows straight into them; the
 accessor re-anchors that value at the next step's brand, so what Miri checks here is that a `Bump`
@@ -65,11 +65,11 @@ move. The first test is the load-bearing one — it reads a `&u32` out of storag
 several steps earlier. The third is the tier's teardown: the cascade drops two sealed cells at once,
 and the process-exit leak detector confirms both storages go with them.
 
-- `table::tests::sealing::a_stored_mask_trades_the_sealed_slot_for_its_id`
-- `table::tests::sealing::a_reach_that_names_two_sealed_regions_merges_their_ids_in_order`
-- `table::tests::sealing::reclaiming_a_sealed_cells_last_holder_cascades_through_its_aggregate`
+- `graph::tests::sealing::a_stored_mask_trades_the_sealed_slot_for_its_id`
+- `graph::tests::sealing::a_reach_that_names_two_sealed_regions_merges_their_ids_in_order`
+- `graph::tests::sealing::reclaiming_a_sealed_cells_last_holder_cascades_through_its_aggregate`
 
-**Absorbed storage** ([src/region.rs](../src/region.rs), [src/table.rs](../src/table.rs)) — a region
+**Absorbed storage** ([src/region.rs](../src/region.rs), [src/graph.rs](../src/graph.rs)) — a region
 is a bundle of bumps, and a locality merge moves a whole `Bump` into another region's bundle while
 borrows minted before the merge stay live. The same pointer stability the seal transition relies on
 has to hold across a move in the other direction, and in both roles: the first test moves the
@@ -77,8 +77,8 @@ has to hold across a move in the other direction, and in both roles: the first t
 reading cell's own region — and the second grows the *target*, splicing a bump into a sealed cell a
 live continuation already borrows into.
 
-- `table::tests::absorption::a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing`
-- `table::tests::absorption::a_cell_with_a_single_sealed_namer_seals_into_it`
+- `graph::tests::absorption::a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing`
+- `graph::tests::absorption::a_cell_with_a_single_sealed_namer_seals_into_it`
 
 **Region bookkeeping — `Kept`** ([src/region.rs](../src/region.rs)) — a sealed cell's frozen-closure
 memo is a run of ids written into the sealed cell's own bump and held as a raw pointer, read back
@@ -93,7 +93,7 @@ pins the empty run, whose pointer is dangling-but-aligned by construction.
 - `region::tests::an_empty_memo_reads_back_empty`
 
 **The at-rest carrier and the crossing's two brands** ([src/dormant.rs](../src/dormant.rs),
-[src/table.rs](../src/table.rs)) — the same `retype` primitive at the doors a value crosses steps
+[src/graph.rs](../src/graph.rs)) — the same `retype` primitive at the doors a value crosses steps
 through. A value put to rest keeps its borrows while its home cell's storage moves under it — into a
 holder's region bundle, out to a sealed cell, or both in turn — and the redeem door re-anchors it at
 a later step's brand, with the reach it hands back derived from wherever that storage ended up. The
@@ -106,15 +106,15 @@ crossing's severing: a copied view is re-anchored at a brand unrelated to the de
 and deep-copied through the writer, while a pinned one is embedded, so both re-anchors run in one
 build.
 
-- `table::tests::values::push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step`
-- `table::tests::values::pull_completes_after_the_producer_seals`
-- `table::tests::values::pull_completes_after_the_producer_is_absorbed_into_the_consumer`
-- `table::tests::values::a_dormant_carrier_forwarded_through_two_merges_is_still_found`
-- `table::tests::values::redeem_refuses_once_the_storage_is_gone`
-- `table::tests::crossing::a_copied_view_is_readable_and_a_pinned_one_embeddable`
+- `graph::tests::values::push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step`
+- `graph::tests::values::pull_completes_after_the_producer_seals`
+- `graph::tests::values::pull_completes_after_the_producer_is_absorbed_into_the_consumer`
+- `graph::tests::values::a_dormant_carrier_forwarded_through_two_merges_is_still_found`
+- `graph::tests::values::redeem_refuses_once_the_storage_is_gone`
+- `graph::tests::crossing::a_copied_view_is_readable_and_a_pinned_one_embeddable`
 
 **The tree habitat's splice, copy and tombstone** ([src/tree.rs](../src/tree.rs),
-[src/table.rs](../src/table.rs)) — the same `retype` primitive where the storage under a borrow
+[src/graph.rs](../src/graph.rs)) — the same `retype` primitive where the storage under a borrow
 moves by a **splice** rather than by a merge: a dying tree cell's whole bump is taken into an
 ancestor's bundle, and a dormant carrier keyed to it resolves through a tombstone chain to wherever
 those bytes ended up. The first is the load-bearing one for the pledge: a destination stores a
@@ -125,10 +125,10 @@ forced copy's other half: a value crossing to a sibling is severed and deep-copi
 cell's bump reclaims outright while the copy stays readable. The fourth carries spliced bumps out of
 the slab entirely — the root seals, and a holder reads a tree-homed value out of the sealed cell.
 
-- `table::tests::tree::a_splice_keeps_a_borrow_the_destination_already_holds`
-- `table::tests::tree::a_dormant_carrier_whose_home_was_absorbed_redeems_from_the_destination`
-- `table::tests::tree::a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one`
-- `table::tests::tree::a_tree_root_that_seals_carries_its_spliced_bumps`
+- `graph::tests::tree::a_splice_keeps_a_borrow_the_destination_already_holds`
+- `graph::tests::tree::a_dormant_carrier_whose_home_was_absorbed_redeems_from_the_destination`
+- `graph::tests::tree::a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one`
+- `graph::tests::tree::a_tree_root_that_seals_carries_its_spliced_bumps`
 
 ## Adding tests to the slate
 

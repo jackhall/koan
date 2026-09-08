@@ -22,9 +22,9 @@ use crate::scratch::ScratchVec;
 #[cfg(test)]
 mod tests;
 
-/// The name of one sealed region: a table-wide monotone `serial` in the high half, the tier's own
+/// The name of one sealed region: a graph-wide monotone `serial` in the high half, the tier's own
 /// slab `index` in the low half. Drawn in creation order and never reused, so an id names the same
-/// region for the whole life of the table — and because the serial leads, the derived ordering is
+/// region for the whole life of the graph — and because the serial leads, the derived ordering is
 /// creation order.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct SealedId(u64);
@@ -53,7 +53,7 @@ impl SealedId {
     }
 }
 
-/// Where a sorted id set keeps its ids: inline, spilling to the heap, for the sets the table
+/// Where a sorted id set keeps its ids: inline, spilling to the heap, for the sets the graph
 /// stores durably; the scratch region for the seen set a walk builds and throws away.
 ///
 /// The two buffers differ in nothing the sorted-insert logic reads, so the set is generic over
@@ -99,7 +99,7 @@ pub(crate) struct IdSet<V> {
 /// allocation and no indirection to read.
 pub(crate) type SealedSet = IdSet<SmallVec<[SealedId; 2]>>;
 
-/// A transient id set, living in the table's scratch region for the length of one verb.
+/// A transient id set, living in the graph's scratch region for the length of one verb.
 pub(crate) type ScratchSet<'s> = IdSet<ScratchVec<'s, SealedId>>;
 
 impl SealedSet {
@@ -209,7 +209,7 @@ pub(crate) struct SealedCell<const W: usize> {
     #[cfg(test)]
     pub(crate) peak_holders: u32,
     /// The head of the chain of departed cells whose dormant carriers this sealed cell now answers
-    /// for, threaded through the table's relocation entries themselves. Bounded by merges, never by
+    /// for, threaded through the graph's relocation entries themselves. Bounded by merges, never by
     /// values — a cell contributes at most one entry, however many dormant carriers it kept — and
     /// it is what lets the sealed cell's retirement drop exactly its own entries from that map.
     pub(crate) lineage: Option<SlabHandle>,
@@ -253,7 +253,7 @@ impl<const W: usize> SealedCell<W> {
     }
 }
 
-/// Every sealed region in the table: a dense slab of sealed-cell slots, the indices retirement
+/// Every sealed region in the graph: a dense slab of sealed-cell slots, the indices retirement
 /// handed back, and the monotone serial their ids come from.
 ///
 /// No hashing anywhere. An id carries its own index, so every lookup is a bounds-checked load and a
@@ -274,7 +274,7 @@ pub(crate) struct SealedTier<const W: usize> {
 }
 
 impl<const W: usize> SealedTier<W> {
-    /// A tier pre-sized to the slab's `cap`: a table cannot have more sealed cells than it has had
+    /// A tier pre-sized to the slab's `cap`: a graph cannot have more sealed cells than it has had
     /// cells, up to what retention keeps beyond that. Construction is unmetered, like the slab
     /// itself, so the reserve costs no verb an allocation.
     pub(crate) fn new(cap: u32) -> Self {
@@ -359,7 +359,7 @@ impl<const W: usize> SealedTier<W> {
     }
 
     /// Write `ids` into `id`'s own region as its frozen closure, once, and count the bytes that
-    /// cost. Under `&self` because a price query is a read of the table everywhere else.
+    /// cost. Under `&self` because a price query is a read of the graph everywhere else.
     pub(crate) fn prime(&self, id: SealedId, ids: &[SealedId]) {
         let Some(sealed_cell) = self.get(id) else {
             return;

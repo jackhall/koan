@@ -15,6 +15,7 @@
 
 mod carrier;
 mod dormant;
+mod graph;
 mod handle;
 mod matrix;
 mod reach;
@@ -22,15 +23,14 @@ mod reattach;
 mod region;
 mod scratch;
 mod sealed;
-mod table;
 mod tree;
 
 pub use carrier::{Active, Ready};
 pub use dormant::Dormant;
+pub use graph::{
+    CellGraph, CreateError, CrossedOperand, EnterError, Operand, Prices, RedeemError,
+    ReleaseAbsorption, ReleaseError, ReleaseTreeError, StepContext, Verdict,
+};
 pub use handle::{CellHandle, SlabHandle, Stale, TreeHandle};
 pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
-pub use table::{
-    CellTable, CreateError, CrossedOperand, EnterError, Operand, Prices, RedeemError,
-    ReleaseAbsorption, ReleaseError, ReleaseTreeError, StepContext, Verdict,
-};

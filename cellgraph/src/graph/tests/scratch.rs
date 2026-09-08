@@ -1,4 +1,4 @@
-//! The table's scratch region, as the verbs use it: reset at every verb's entry and never inside
+//! The graph's scratch region, as the verbs use it: reset at every verb's entry and never inside
 //! one, and warm enough from construction that a verb's transients ask the allocator for nothing.
 //!
 //! These are the lib-test mirror of the harness's allocation criteria. The harness meters the
@@ -16,8 +16,8 @@ const WIDE: usize = 256;
 /// A placement of one value over `operands` copies of a source carrier, into another cell — the
 /// widest transient a step builds, since the crossed-operand list and the views are both sized by
 /// the operand count.
-fn place_over(table: &mut CellTable<Owned>, from: SlabHandle, into: SlabHandle, operands: usize) {
-    table
+fn place_over(graph: &mut CellGraph<Owned>, from: SlabHandle, into: SlabHandle, operands: usize) {
+    graph
         .enter(from, |context| {
             let source = context.alloc::<Number>(|writer| writer.value(1));
             let carriers: Vec<_> = (0..operands).map(|_| operand(&source)).collect();
@@ -30,20 +30,20 @@ fn place_over(table: &mut CellTable<Owned>, from: SlabHandle, into: SlabHandle, 
         .unwrap();
 }
 
-/// A table whose region still holds the last verb's transients, and the two cells it was built
+/// A graph whose region still holds the last verb's transients, and the two cells it was built
 /// with. The assertion is the placement half of the criterion: a step's crossed operands and the
 /// views its build closure received are **in the region**, so a wide enough placement is readable
 /// in the region's own occupancy after the step returns.
-fn dirtied() -> (CellTable<Owned>, SlabHandle, SlabHandle) {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let producer = table.create(None, None).unwrap();
-    let consumer = table.create(None, None).unwrap();
-    place_over(&mut table, producer, consumer, WIDE);
+fn dirtied() -> (CellGraph<Owned>, SlabHandle, SlabHandle) {
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let producer = graph.create(None, None).unwrap();
+    let consumer = graph.create(None, None).unwrap();
+    place_over(&mut graph, producer, consumer, WIDE);
     assert!(
-        table.scratch_at_rest().in_use() > 0,
+        graph.scratch_at_rest().in_use() > 0,
         "a placement over {WIDE} operands left nothing in the region"
     );
-    (table, producer, consumer)
+    (graph, producer, consumer)
 }
 
 /// Run `verb` against a region the verb before it left occupied, and check that the verb reset it.
@@ -53,11 +53,11 @@ fn dirtied() -> (CellTable<Owned>, SlabHandle, SlabHandle) {
 /// below its occupancy at its entry. Lower than what the verb inherited therefore means the entry
 /// cleared it — and a verb that builds transients of its own is held to the same statement as one
 /// that builds none, since its own bytes are counted on the low side.
-fn resets_at_its_entry(table: &mut CellTable<Owned>, verb: impl FnOnce(&mut CellTable<Owned>)) {
-    let inherited = table.scratch_at_rest().in_use();
-    verb(table);
+fn resets_at_its_entry(graph: &mut CellGraph<Owned>, verb: impl FnOnce(&mut CellGraph<Owned>)) {
+    let inherited = graph.scratch_at_rest().in_use();
+    verb(graph);
     assert!(
-        table.scratch_at_rest().in_use() < inherited,
+        graph.scratch_at_rest().in_use() < inherited,
         "a verb carried its predecessor's {inherited} occupied bytes past its entry"
     );
 }
@@ -66,37 +66,37 @@ fn resets_at_its_entry(table: &mut CellTable<Owned>, verb: impl FnOnce(&mut Cell
 /// against a region the verb before it left occupied.
 #[test]
 fn a_create_clears_the_region_at_its_entry() {
-    let (mut table, _, _) = dirtied();
-    resets_at_its_entry(&mut table, |table| {
-        table.create(None, None).unwrap();
+    let (mut graph, _, _) = dirtied();
+    resets_at_its_entry(&mut graph, |graph| {
+        graph.create(None, None).unwrap();
     });
 }
 
 #[test]
 fn an_enter_clears_the_region_at_its_entry() {
-    let (mut table, producer, _) = dirtied();
-    resets_at_its_entry(&mut table, |table| {
-        table.enter(producer, |_| ()).unwrap();
+    let (mut graph, producer, _) = dirtied();
+    resets_at_its_entry(&mut graph, |graph| {
+        graph.enter(producer, |_| ()).unwrap();
     });
 }
 
 #[test]
 fn a_release_clears_the_region_at_its_entry() {
-    let (mut table, producer, consumer) = dirtied();
+    let (mut graph, producer, consumer) = dirtied();
     // The consumer holds the producer's storage, so the release seals rather than reclaims and the
     // whole cascade runs — its own transients included.
-    table
+    graph
         .enter(consumer, |context| context.hold(producer).unwrap())
         .unwrap();
     // That step reset the region on the way in, so the release would inherit an empty one. Dirty it
     // again, which is also the state a release meets in a run that is doing anything.
-    place_over(&mut table, producer, consumer, WIDE);
-    resets_at_its_entry(&mut table, |table| {
-        table.release(producer, ReleaseAbsorption::Refused).unwrap();
+    place_over(&mut graph, producer, consumer, WIDE);
+    resets_at_its_entry(&mut graph, |graph| {
+        graph.release(producer, ReleaseAbsorption::Refused).unwrap();
     });
 }
 
-/// A table warm from construction grows no chunk: the first round's transients fit the chunk the
+/// A graph warm from construction grows no chunk: the first round's transients fit the chunk the
 /// constructor sized, and every round after it reuses the same bytes. This is the lib-test mirror
 /// of the harness's "no verb's allocation count grows with the operand count" criterion — the
 /// bytes a round asks for come out of a chunk that was paid at construction.
@@ -106,23 +106,23 @@ fn a_release_clears_the_region_at_its_entry() {
 /// disposal's nested worklists alike.
 #[test]
 fn a_warm_scratch_grows_no_chunk_across_repeated_verbs() {
-    let mut table: CellTable<Owned> = CellTable::new(8, pin);
-    let consumer = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(8, pin);
+    let consumer = graph.create(None, None).unwrap();
 
-    let round = |table: &mut CellTable<Owned>| {
-        let producer = table.create(None, None).unwrap();
-        place_over(table, producer, consumer, 8);
-        table
+    let round = |graph: &mut CellGraph<Owned>| {
+        let producer = graph.create(None, None).unwrap();
+        place_over(graph, producer, consumer, 8);
+        graph
             .enter(consumer, |context| context.hold(producer).unwrap())
             .unwrap();
-        table.release(producer, ReleaseAbsorption::Refused).unwrap();
+        graph.release(producer, ReleaseAbsorption::Refused).unwrap();
     };
 
-    round(&mut table);
-    let warm = table.scratch_at_rest().capacity();
-    round(&mut table);
+    round(&mut graph);
+    let warm = graph.scratch_at_rest().capacity();
+    round(&mut graph);
     assert_eq!(
-        table.scratch_at_rest().capacity(),
+        graph.scratch_at_rest().capacity(),
         warm,
         "a second round of the same verbs grew the region"
     );
@@ -133,7 +133,7 @@ fn a_warm_scratch_grows_no_chunk_across_repeated_verbs() {
     );
 }
 
-/// A step that panics still hands the region back, so the table it unwinds out of is usable and
+/// A step that panics still hands the region back, so the graph it unwinds out of is usable and
 /// the next verb finds a region rather than the `None` the take left behind.
 ///
 /// This is where the hand-back is observable. A `release` parks the region under the same kind of
@@ -141,15 +141,15 @@ fn a_warm_scratch_grows_no_chunk_across_repeated_verbs() {
 /// internal invariants — which a test cannot stage without pretending one is broken.
 #[test]
 fn a_panicking_step_hands_the_region_back() {
-    let (mut table, producer, _) = dirtied();
+    let (mut graph, producer, _) = dirtied();
     let gave_up = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        table.enter(producer, |_| panic!("the step gives up")).ok();
+        graph.enter(producer, |_| panic!("the step gives up")).ok();
     }));
     assert!(
         gave_up.is_err(),
         "the step's panic did not reach the caller"
     );
-    // Back on the table, and cleared by the entry of the step that then failed.
-    assert_eq!(table.scratch_at_rest().in_use(), 0);
-    table.create(None, None).unwrap();
+    // Back on the graph, and cleared by the entry of the step that then failed.
+    assert_eq!(graph.scratch_at_rest().in_use(), 0);
+    graph.create(None, None).unwrap();
 }

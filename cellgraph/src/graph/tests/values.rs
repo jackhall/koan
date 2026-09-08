@@ -8,10 +8,10 @@ use super::{
 
 #[test]
 fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let cell = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let cell = graph.create(None, None).unwrap();
 
-    let read = table
+    let read = graph
         .enter(cell, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             assert!(value.reach().names(cell.slot()));
@@ -21,25 +21,25 @@ fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
 
     assert_eq!(read, 41);
     // The self rule: a cell that held itself alive could never reach a zero hold count.
-    assert!(!table.holds(cell, cell));
-    assert!(table.slots[cell.slot() as usize].region.is_some());
+    assert!(!graph.holds(cell, cell));
+    assert!(graph.slots[cell.slot() as usize].region.is_some());
 }
 
 #[test]
 fn a_cell_that_never_allocates_mints_no_region() {
-    let mut table: CellTable<Owned> = CellTable::new(2, pin);
-    let cell = table.create(None, None).unwrap();
-    table.enter(cell, |context| context.cell()).unwrap();
-    assert!(table.slots[cell.slot() as usize].region.is_none());
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let cell = graph.create(None, None).unwrap();
+    graph.enter(cell, |context| context.cell()).unwrap();
+    assert!(graph.slots[cell.slot() as usize].region.is_none());
 }
 
 #[test]
 fn placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let producer = table.create(None, None).unwrap();
-    let consumer = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let producer = graph.create(None, None).unwrap();
+    let consumer = graph.create(None, None).unwrap();
 
-    let read = table
+    let read = graph
         .enter(producer, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             // The placed value *is* the operand's borrow, so it genuinely reads the producer's
@@ -56,36 +56,36 @@ fn placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach() {
         .unwrap();
 
     assert_eq!(read, 41);
-    assert!(table.holds(consumer, producer));
-    assert!(!table.holds(consumer, consumer));
-    assert!(!table.holds(producer, consumer));
+    assert!(graph.holds(consumer, producer));
+    assert!(!graph.holds(consumer, consumer));
+    assert!(!graph.holds(producer, consumer));
 }
 
 #[test]
 fn a_held_cell_leaves_the_slab_at_its_death_and_its_sealed_cell_goes_with_its_holder() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let holder = table.create(None, None).unwrap();
-    let held = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let holder = graph.create(None, None).unwrap();
+    let held = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(holder, |context| context.hold(held))
         .unwrap()
         .unwrap();
-    assert!(table.holds(holder, held));
+    assert!(graph.holds(holder, held));
 
     // The slot comes straight back: retention lives in the sealed tier, never in the slab.
-    table.release(held, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(state_of(&table, held), SlabState::Free);
-    assert_eq!(table.sealed.len(), 1);
-    let id = table.sealed.ids().next().unwrap();
-    assert!(table.sealed_holds[holder.slot() as usize].contains(id));
-    assert!(!table.holds(holder, held));
+    graph.release(held, ReleaseAbsorption::Refused).unwrap();
+    assert_eq!(state_of(&graph, held), SlabState::Free);
+    assert_eq!(graph.sealed.len(), 1);
+    let id = graph.sealed.ids().next().unwrap();
+    assert!(graph.sealed_holds[holder.slot() as usize].contains(id));
+    assert!(!graph.holds(holder, held));
 
-    table
+    graph
         .release(holder, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(table.sealed.len(), 0);
-    assert_eq!(table.free.len(), 4);
+    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.free.len(), 4);
 }
 
 /// Chunks enough to spill a fresh `Bump` past the one it starts with, so the growth the borrow
@@ -94,13 +94,13 @@ const GROWTH: usize = if cfg!(miri) { 256 } else { 4096 };
 
 #[test]
 fn a_reattached_borrow_survives_the_live_region_it_names_growing_under_it() {
-    let mut table: CellTable<Borrowed> = CellTable::new(4, pin);
-    let keeper = table.create(None, None).unwrap();
-    let host = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let keeper = graph.create(None, None).unwrap();
+    let host = graph.create(None, None).unwrap();
 
     // The continuation borrows into a cell that stays live, so nothing detaches: the referent is
     // chunks the host still owns, and the host keeps allocating into them.
-    table
+    graph
         .enter(keeper, |context| {
             let value = context
                 .alloc_into::<Number, Number>(host, &[], |writer, _| writer.value(41))
@@ -110,7 +110,7 @@ fn a_reattached_borrow_survives_the_live_region_it_names_growing_under_it() {
         })
         .unwrap();
 
-    let read = table
+    let read = graph
         .enter(keeper, |context| {
             let opened = context.continuation().unwrap();
             let borrow = opened.value();
@@ -131,35 +131,35 @@ fn a_reattached_borrow_survives_the_live_region_it_names_growing_under_it() {
 
 #[test]
 fn a_bare_hold_on_a_dead_cell_refuses() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let holder = table.create(None, None).unwrap();
-    let other = table.create(None, None).unwrap();
-    table.release(other, ReleaseAbsorption::IntoHolder).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let holder = graph.create(None, None).unwrap();
+    let other = graph.create(None, None).unwrap();
+    graph.release(other, ReleaseAbsorption::IntoHolder).unwrap();
 
-    let refusal = table.enter(holder, |context| context.hold(other)).unwrap();
+    let refusal = graph.enter(holder, |context| context.hold(other)).unwrap();
     assert_eq!(refusal, Err(Stale(other)));
-    assert!(!table.holds(holder, other));
+    assert!(!graph.holds(holder, other));
 }
 
 #[test]
 fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let first = table.create(None, None).unwrap();
-    let second = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let first = graph.create(None, None).unwrap();
+    let second = graph.create(None, None).unwrap();
     // A bystander holding both sides keeps each count above the one a merge needs, so this ring
     // survives to the tier. A ring with no outside holder dissolves instead — see
     // `absorption::a_two_cell_ring_dissolves_when_one_side_dies`.
-    let bystander = table.create(None, None).unwrap();
+    let bystander = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(first, |context| context.hold(second))
         .unwrap()
         .unwrap();
-    table
+    graph
         .enter(second, |context| context.hold(first))
         .unwrap()
         .unwrap();
-    table
+    graph
         .enter(bystander, |context| {
             context.hold(first).unwrap();
             context.hold(second)
@@ -167,7 +167,7 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
         .unwrap()
         .unwrap();
 
-    let ring = table
+    let ring = graph
         .debug_ring_from(HoldNode::Slab(first))
         .expect("the hold graph has a cycle");
     assert_eq!(ring.len(), 2);
@@ -175,18 +175,18 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
 
     // Every death is declared, and the ring moves into the sealed tier intact: each sealed cell
     // holds the other, so neither count ever reaches zero. A ring is a leak, never a dangle.
-    table.release(first, ReleaseAbsorption::IntoHolder).unwrap();
-    table
+    graph.release(first, ReleaseAbsorption::IntoHolder).unwrap();
+    graph
         .release(second, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    table
+    graph
         .release(bystander, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(table.free.len(), 4);
-    assert_eq!(table.sealed.len(), 2);
+    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.sealed.len(), 2);
 
-    let sealed_ring = table
-        .debug_ring_from(HoldNode::Sealed(table.sealed.ids().next().unwrap()))
+    let sealed_ring = graph
+        .debug_ring_from(HoldNode::Sealed(graph.sealed.ids().next().unwrap()))
         .expect("the ring survives the seal");
     assert_eq!(sealed_ring.len(), 2);
     assert!(
@@ -198,44 +198,44 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
 
 #[test]
 fn an_acyclic_hold_graph_reports_no_ring() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let first = table.create(None, None).unwrap();
-    let second = table.create(None, None).unwrap();
-    let third = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let first = graph.create(None, None).unwrap();
+    let second = graph.create(None, None).unwrap();
+    let third = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(first, |context| context.hold(second))
         .unwrap()
         .unwrap();
-    table
+    graph
         .enter(second, |context| context.hold(third))
         .unwrap()
         .unwrap();
 
-    assert!(table.debug_ring_from(HoldNode::Slab(first)).is_none());
+    assert!(graph.debug_ring_from(HoldNode::Slab(first)).is_none());
 }
 
 // The doors a value crosses steps through: `keep` puts a carrier down in its home cell's reach
-// table, and `redeem` takes it back up in a later step of a cell entitled to that storage. See
+// graph, and `redeem` takes it back up in a later step of a cell entitled to that storage. See
 // [design/cellgraph.md § Passing values between cells](../../../design/cellgraph.md).
 
-/// The one entry a cell's reach table holds, by the index a key names.
-fn dormant_reach<C: Reattachable>(table: &CellTable<C>, slot: u32, index: u32) -> &GraphReach<1> {
-    table.slots[slot as usize]
+/// The one entry a cell's reach table holds, by the index a key names.
+fn dormant_reach<C: Reattachable>(graph: &CellGraph<C>, slot: u32, index: u32) -> &GraphReach<1> {
+    graph.slots[slot as usize]
         .reaches
         .get(index)
-        .expect("the entry the key names is in the table")
+        .expect("the entry the key names is in the reach table")
 }
 
 #[test]
 fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let consumer = table.create(None, None).unwrap();
-    let producer = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let consumer = graph.create(None, None).unwrap();
+    let producer = graph.create(None, None).unwrap();
 
     // The push shape: the producer builds straight into the consumer's region, so the value's home
     // is the consumer and the producer's own column stays empty.
-    let kept = table
+    let kept = graph
         .enter(producer, |context| {
             let placed = context
                 .alloc_into::<Number, Number>(consumer, &[], |writer, _| writer.value(41))
@@ -243,19 +243,19 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
             context.keep(placed)
         })
         .unwrap();
-    assert_eq!(table.slots[consumer.slot() as usize].reaches.len(), 1);
-    assert!(dormant_reach(&table, consumer.slot(), 0).names(consumer.slot()));
-    assert_eq!(table.relocations(), 0);
+    assert_eq!(graph.slots[consumer.slot() as usize].reaches.len(), 1);
+    assert!(dormant_reach(&graph, consumer.slot(), 0).names(consumer.slot()));
+    assert_eq!(graph.relocations(), 0);
 
     // Nothing reaches the producer, so its death is a reclamation: the slot comes straight back
     // and the map it never entered stays empty.
-    table
+    graph
         .release(producer, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(state_of(&table, producer), SlabState::Free);
-    assert_eq!(table.relocations(), 0);
+    assert_eq!(state_of(&graph, producer), SlabState::Free);
+    assert_eq!(graph.relocations(), 0);
 
-    let read = table
+    let read = graph
         .enter(consumer, |context| {
             let carrier = context
                 .redeem(kept)
@@ -268,15 +268,15 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
 
 #[test]
 fn pull_completes_after_the_producer_seals() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let consumer = table.create(None, None).unwrap();
-    let producer = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let consumer = graph.create(None, None).unwrap();
+    let producer = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(consumer, |context| context.hold(producer))
         .unwrap()
         .unwrap();
-    let kept = table
+    let kept = graph
         .enter(producer, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             context.keep(value)
@@ -285,12 +285,12 @@ fn pull_completes_after_the_producer_seals() {
 
     // The pull shape: the producer dies still held, so its storage seals and the key it minted
     // forwards to the sealed cell rather than stopping resolving.
-    table.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let id = table.sealed.ids().next().unwrap();
-    assert_eq!(table.relocation_of(producer), Some(SlabForward::Sealed(id)));
-    assert_eq!(table.lineage_of(id), vec![producer]);
+    graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+    let id = graph.sealed.ids().next().unwrap();
+    assert_eq!(graph.relocation_of(producer), Some(SlabForward::Sealed(id)));
+    assert_eq!(graph.lineage_of(id), vec![producer]);
 
-    let read = table
+    let read = graph
         .enter(consumer, |context| {
             let carrier = context
                 .redeem(kept)
@@ -306,24 +306,24 @@ fn pull_completes_after_the_producer_seals() {
     assert_eq!(read, 41);
 
     // The sealed cell's last holder goes, so the sealed cell retires and takes its lineage with it.
-    table
+    graph
         .release(consumer, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(table.sealed.len(), 0);
-    assert_eq!(table.relocations(), 0);
+    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.relocations(), 0);
 }
 
 #[test]
 fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let consumer = table.create(None, None).unwrap();
-    let producer = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let consumer = graph.create(None, None).unwrap();
+    let producer = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(consumer, |context| context.hold(producer))
         .unwrap()
         .unwrap();
-    let kept = table
+    let kept = graph
         .enter(producer, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             context.keep(value)
@@ -332,30 +332,30 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
 
     // The uniquely held producer folds into its holder rather than minting a sealed cell, and its
     // dormant carriers' masks move with the storage, re-homed at the consumer's bit.
-    table
+    graph
         .release(producer, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(table.sealed.len(), 0);
+    assert_eq!(graph.sealed.len(), 0);
     assert_eq!(
-        table.relocation_of(producer),
+        graph.relocation_of(producer),
         Some(SlabForward::Slab {
             slot: consumer.slot(),
             first_index: 0,
         })
     );
-    let migrated = dormant_reach(&table, consumer.slot(), 0);
+    let migrated = dormant_reach(&graph, consumer.slot(), 0);
     assert!(migrated.names(consumer.slot()));
     assert!(!migrated.names(producer.slot()));
 
     // A second dormant carrier kept by the consumer itself lands past the migrated one, so the two
     // keys name different entries and both redeem.
-    let own = table
+    let own = graph
         .enter(consumer, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(9));
             context.keep(value)
         })
         .unwrap();
-    let read = table
+    let read = graph
         .enter(consumer, |context| {
             let pulled = context.redeem(kept).expect("the absorbing cell answers");
             let mine = context
@@ -369,20 +369,20 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
 
 #[test]
 fn a_dormant_carrier_forwarded_through_two_merges_is_still_found() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let end = table.create(None, None).unwrap();
-    let middle = table.create(None, None).unwrap();
-    let head = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let end = graph.create(None, None).unwrap();
+    let middle = graph.create(None, None).unwrap();
+    let head = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(middle, |context| context.hold(head))
         .unwrap()
         .unwrap();
-    table
+    graph
         .enter(end, |context| context.hold(middle))
         .unwrap()
         .unwrap();
-    let kept = table
+    let kept = graph
         .enter(head, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             context.keep(value)
@@ -391,12 +391,12 @@ fn a_dormant_carrier_forwarded_through_two_merges_is_still_found() {
 
     // Merge one: into the slab. Merge two: into the tier. The key is rewritten by each, so the
     // chain of single-consumer producers costs the map one entry per merge and none per value.
-    table.release(head, ReleaseAbsorption::IntoHolder).unwrap();
-    table.release(middle, ReleaseAbsorption::Refused).unwrap();
-    let id = table.sealed.ids().next().unwrap();
-    assert_eq!(table.relocation_of(head), Some(SlabForward::Sealed(id)));
+    graph.release(head, ReleaseAbsorption::IntoHolder).unwrap();
+    graph.release(middle, ReleaseAbsorption::Refused).unwrap();
+    let id = graph.sealed.ids().next().unwrap();
+    assert_eq!(graph.relocation_of(head), Some(SlabForward::Sealed(id)));
 
-    let read = table
+    let read = graph
         .enter(end, |context| {
             let carrier = context.redeem(kept).expect("the end holds the sealed cell");
             assert!(carrier.reach().names_sealed(id));
@@ -405,34 +405,34 @@ fn a_dormant_carrier_forwarded_through_two_merges_is_still_found() {
         .unwrap();
     assert_eq!(read, 41);
 
-    table.release(end, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(table.sealed.len(), 0);
-    assert_eq!(table.relocations(), 0);
-    assert_eq!(table.free.len(), 4);
+    graph.release(end, ReleaseAbsorption::IntoHolder).unwrap();
+    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.relocations(), 0);
+    assert_eq!(graph.free.len(), 4);
 }
 
 #[test]
 fn redeem_refuses_a_cell_that_does_not_hold_the_home() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let home = table.create(None, None).unwrap();
-    let bystander = table.create(None, None).unwrap();
-    let middle = table.create(None, None).unwrap();
-    let far = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let home = graph.create(None, None).unwrap();
+    let bystander = graph.create(None, None).unwrap();
+    let middle = graph.create(None, None).unwrap();
+    let far = graph.create(None, None).unwrap();
 
-    let kept = table
+    let kept = graph
         .enter(home, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             context.keep(value)
         })
         .unwrap();
 
-    let refused = table
+    let refused = graph
         .enter(bystander, |context| context.redeem(kept).err())
         .unwrap();
     assert_eq!(refused, Some(RedeemError::Unheld));
 
     // A hold is what entitles: with one, the same key answers.
-    let read = table
+    let read = graph
         .enter(bystander, |context| {
             context.hold(home).unwrap();
             let carrier = context.redeem(kept).expect("the holder is entitled");
@@ -443,15 +443,15 @@ fn redeem_refuses_a_cell_that_does_not_hold_the_home() {
 
     // Entitlement is the direct relation, not its closure: reaching the home only through a cell
     // in between is not a claim on the home's storage.
-    table
+    graph
         .enter(middle, |context| context.hold(home))
         .unwrap()
         .unwrap();
-    table
+    graph
         .enter(far, |context| context.hold(middle))
         .unwrap()
         .unwrap();
-    let transitive = table
+    let transitive = graph
         .enter(far, |context| context.redeem(kept).err())
         .unwrap();
     assert_eq!(transitive, Some(RedeemError::Unheld));
@@ -459,47 +459,47 @@ fn redeem_refuses_a_cell_that_does_not_hold_the_home() {
 
 #[test]
 fn redeem_refuses_once_the_storage_is_gone() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let reclaimed = table.create(None, None).unwrap();
-    let onlooker = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let reclaimed = graph.create(None, None).unwrap();
+    let onlooker = graph.create(None, None).unwrap();
 
-    let orphan = table
+    let orphan = graph
         .enter(reclaimed, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             context.keep(value)
         })
         .unwrap();
     // Nothing reached the home, so its death frees the chunks the dormant carrier named.
-    table
+    graph
         .release(reclaimed, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    let gone = table
+    let gone = graph
         .enter(onlooker, |context| context.redeem(orphan).err())
         .unwrap();
     assert_eq!(gone, Some(RedeemError::Gone));
 
     // The other way storage goes: sealed, then retired when its last holder leaves.
-    let sealed_home = table.create(None, None).unwrap();
-    let holder = table.create(None, None).unwrap();
-    table
+    let sealed_home = graph.create(None, None).unwrap();
+    let holder = graph.create(None, None).unwrap();
+    graph
         .enter(holder, |context| context.hold(sealed_home))
         .unwrap()
         .unwrap();
-    let retired = table
+    let retired = graph
         .enter(sealed_home, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             context.keep(value)
         })
         .unwrap();
-    table
+    graph
         .release(sealed_home, ReleaseAbsorption::Refused)
         .unwrap();
-    table
+    graph
         .release(holder, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(table.sealed.len(), 0);
+    assert_eq!(graph.sealed.len(), 0);
 
-    let gone = table
+    let gone = graph
         .enter(onlooker, |context| context.redeem(retired).err())
         .unwrap();
     assert_eq!(gone, Some(RedeemError::Gone));
@@ -507,11 +507,11 @@ fn redeem_refuses_once_the_storage_is_gone() {
 
 #[test]
 fn a_birth_hold_entitles_a_child_to_its_parents_dormant_carrier() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let parent = table.create(None, None).unwrap();
-    let child = table.create(Some(parent), None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let parent = graph.create(None, None).unwrap();
+    let child = graph.create(Some(parent), None).unwrap();
 
-    let kept = table
+    let kept = graph
         .enter(parent, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             context.keep(value)
@@ -520,8 +520,8 @@ fn a_birth_hold_entitles_a_child_to_its_parents_dormant_carrier() {
 
     // The birth row is a claim on the parent's storage in its own right: the child took no pin
     // hold, and the parent's row names nothing of the child's.
-    assert!(!table.holds(child, parent));
-    let read = table
+    assert!(!graph.holds(child, parent));
+    let read = graph
         .enter(child, |context| {
             *context
                 .read(&context.redeem(kept).expect("a child is entitled"))
@@ -532,11 +532,11 @@ fn a_birth_hold_entitles_a_child_to_its_parents_dormant_carrier() {
 
     // A birth row has no sealed half, so a declared death leaves the parent undisposed in the slab
     // with its storage intact — and the child's claim outlives the death.
-    table
+    graph
         .release(parent, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(state_of(&table, parent), SlabState::Dead);
-    let read = table
+    assert_eq!(state_of(&graph, parent), SlabState::Dead);
+    let read = graph
         .enter(child, |context| {
             *context
                 .read(&context.redeem(kept).expect("the storage is still there"))
@@ -548,31 +548,31 @@ fn a_birth_hold_entitles_a_child_to_its_parents_dormant_carrier() {
 
 #[test]
 fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let producer = table.create(None, None).unwrap();
-    let middle = table.create(None, None).unwrap();
-    let end = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let producer = graph.create(None, None).unwrap();
+    let middle = graph.create(None, None).unwrap();
+    let end = graph.create(None, None).unwrap();
 
-    table
+    graph
         .enter(middle, |context| context.hold(producer))
         .unwrap()
         .unwrap();
-    table
+    graph
         .enter(end, |context| context.hold(middle))
         .unwrap()
         .unwrap();
-    let first = table
+    let first = graph
         .enter(producer, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(41));
             context.keep(value)
         })
         .unwrap();
-    table.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let sealed_id = table.sealed.ids().next().unwrap();
+    graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+    let sealed_id = graph.sealed.ids().next().unwrap();
 
     // A carrier redeemed out of a sealed cell is a carrier like any other: keeping it registers its
-    // sealed-cell-only reach in the redeeming cell's own table.
-    let again = table
+    // sealed-cell-only reach in the redeeming cell's own reach table.
+    let again = graph
         .enter(middle, |context| {
             let carrier = context
                 .redeem(first)
@@ -580,8 +580,8 @@ fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
             context.keep(carrier)
         })
         .unwrap();
-    assert!(dormant_reach(&table, middle.slot(), 0).names_sealed(sealed_id));
-    let read = table
+    assert!(dormant_reach(&graph, middle.slot(), 0).names_sealed(sealed_id));
+    let read = graph
         .enter(middle, |context| {
             *context
                 .read(&context.redeem(again).expect("its own dormant carrier"))
@@ -591,12 +591,12 @@ fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
     assert_eq!(read, 41);
 
     // The re-keeping cell now seals in turn, and the key forwards to its sealed cell.
-    table.release(middle, ReleaseAbsorption::Refused).unwrap();
-    let outer = table.sealed_holds[end.slot() as usize]
+    graph.release(middle, ReleaseAbsorption::Refused).unwrap();
+    let outer = graph.sealed_holds[end.slot() as usize]
         .iter()
         .next()
         .expect("the end holds the sealed cell the middle sealed into");
-    let read = table
+    let read = graph
         .enter(end, |context| {
             let carrier = context
                 .redeem(again)
@@ -610,12 +610,12 @@ fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
 
 #[test]
 fn the_continuation_interns_its_reach_like_any_other_keep() {
-    let mut table: CellTable<Borrowed> = CellTable::new(4, pin);
-    let cell = table.create(None, None).unwrap();
-    let over = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let cell = graph.create(None, None).unwrap();
+    let over = graph.create(None, None).unwrap();
 
-    let capturing = |table: &mut CellTable<Borrowed>, value: u32| {
-        table
+    let capturing = |graph: &mut CellGraph<Borrowed>, value: u32| {
+        graph
             .enter(cell, |context| {
                 context.continuation();
                 let carrier = context
@@ -628,39 +628,39 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
             .unwrap();
     };
 
-    capturing(&mut table, 41);
+    capturing(&mut graph, 41);
     assert_eq!(
-        table.slots[cell.slot() as usize].continuation_reach_index,
+        graph.slots[cell.slot() as usize].continuation_reach_index,
         Some(0)
     );
-    assert_eq!(table.slots[cell.slot() as usize].reaches.len(), 1);
-    let stored = continuation_reach_index(&table, cell);
+    assert_eq!(graph.slots[cell.slot() as usize].reaches.len(), 1);
+    let stored = continuation_reach_index(&graph, cell);
     assert!(stored.names(over.slot()));
     assert!(stored.names(cell.slot()));
 
     // A continuation that captures nothing reaches nothing, and reaching nothing takes no entry:
     // the cell stops naming one rather than emptying the entry it named, which is what makes an
     // entry immutable content.
-    table
+    graph
         .enter(cell, |context| {
             context.continuation();
             context.store_successor(&ANCHOR);
         })
         .unwrap();
     assert_eq!(
-        table.slots[cell.slot() as usize].continuation_reach_index,
+        graph.slots[cell.slot() as usize].continuation_reach_index,
         None
     );
 
     // And the capturing store comes back to the entry it minted the first time, because its reach
     // is the same reach. Alternating for a whole run costs that one entry and nothing more.
     for value in 0..8 {
-        capturing(&mut table, value);
+        capturing(&mut graph, value);
         assert_eq!(
-            table.slots[cell.slot() as usize].continuation_reach_index,
+            graph.slots[cell.slot() as usize].continuation_reach_index,
             Some(0)
         );
-        table
+        graph
             .enter(cell, |context| {
                 context.continuation();
                 context.store_successor(&ANCHOR);
@@ -668,13 +668,13 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
             .unwrap();
     }
     assert_eq!(
-        table.slots[cell.slot() as usize].reaches.len(),
+        graph.slots[cell.slot() as usize].reaches.len(),
         1,
-        "a table holds one entry per distinct reach, not one per store"
+        "a reach table holds one entry per distinct reach, not one per store"
     );
 
-    capturing(&mut table, 7);
-    let read = table
+    capturing(&mut graph, 7);
+    let read = graph
         .enter(cell, |context| *context.continuation().unwrap().value())
         .unwrap();
     assert_eq!(read, 7);
@@ -682,10 +682,10 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
 
 #[test]
 fn keeping_the_same_reach_twice_takes_one_entry_and_both_keys_redeem() {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
-    let cell = table.create(None, None).unwrap();
+    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let cell = graph.create(None, None).unwrap();
 
-    let kept = table
+    let kept = graph
         .enter(cell, |context| {
             let mut kept = Vec::new();
             for value in 0..16 {
@@ -699,13 +699,13 @@ fn keeping_the_same_reach_twice_takes_one_entry_and_both_keys_redeem() {
     // Sixteen values, one reach: each is homed in the executing cell and reaches nothing else, so
     // every keep interns to the entry the first one minted.
     assert_eq!(
-        table.slots[cell.slot() as usize].reaches.len(),
+        graph.slots[cell.slot() as usize].reaches.len(),
         1,
         "keeps of one shape share one entry"
     );
 
     // Sharing an entry is invisible at the door: every key still redeems, and to its own value.
-    let read = table
+    let read = graph
         .enter(cell, |context| {
             kept.into_iter()
                 .map(|dormant| {

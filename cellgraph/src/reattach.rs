@@ -1,6 +1,6 @@
 //! The reattachable contract: a family generic over exactly one lifetime, its erased `'static`
 //! storage form, and the single lifetime-retype that moves a value between the two. The cell
-//! table stores a continuation erased in a lifetime-free slot and hands it back re-anchored at
+//! graph stores a continuation erased in a lifetime-free slot and hands it back re-anchored at
 //! the step's brand, which is the only reason this seam exists — see
 //! [design/cellgraph.md](../design/cellgraph.md) § The contract: two embedder types.
 
@@ -116,7 +116,7 @@ impl<T: Reattachable> Erased<T> {
     /// `'r` must be a lifetime the value's referents outlive. A value that arrived through
     /// [`store`] is at `'static`, so any `'r` satisfies that; a value that arrived through
     /// [`erase`] came from some `'x`, and the caller must know `'x: 'r` — this crate's callers know
-    /// it because the referents are region storage the table keeps alive for the whole step the
+    /// it because the referents are region storage the graph keeps alive for the whole step the
     /// `'r` brand belongs to. A family that is **invariant** in its lifetime (`Cell<&'r u32>`, say)
     /// additionally requires that nothing borrowed for `'r` is written into the re-anchored value
     /// and then read back at a longer lifetime; the step brand this crate reattaches at is
