@@ -20,7 +20,7 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 use crate::region::{Region, Writer};
 use crate::scratch::{Scratch, ScratchVec};
 use crate::sealed::{ScratchSet, SealedCell, SealedId, SealedSet, SealedTier};
-use crate::tree::{Ancestry, Pledge, TreeForward, TreePool, TreeState};
+use crate::tree::{Ancestor, Ancestry, TreeForward, TreePool, TreeState};
 
 /// Refusals from [`CellGraph::create`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -454,7 +454,7 @@ enum Crossing {
     Ordinary,
     /// The destination is an ancestor of the operand's home on its chain. The price is the splice
     /// price, and a `Pin` pledges the home and every intermediate to splice into it at death.
-    Upward(Pledge),
+    Upward(Ancestor),
     /// The destination is neither on the home's chain nor under it, so nothing there may outlive
     /// the home while borrowing it. The verdict is **not consulted**: the crossing is a copy.
     Forced,
@@ -706,12 +706,12 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         continuation: Option<C::At<'static>>,
     ) -> Result<TreeHandle, Stale<CellHandle>> {
         let (root, tree_parent, depth) = match parent.into() {
-            CellHandle::Slab(handle) => (self.live_slot(handle)?, None, 1),
+            CellHandle::Slab(handle) => (self.live_slot(handle)?, Ancestor::Root, 1),
             CellHandle::Tree(handle) => {
                 let index = self.trees.live_index(handle)?;
                 (
                     self.trees.root(index),
-                    Some(index),
+                    Ancestor::Tree(index),
                     self.trees.depth(index) + 1,
                 )
             }
@@ -722,8 +722,8 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         let continuation = continuation.map(Erased::store);
         let handle = self.trees.create(root, tree_parent, depth, continuation);
         match tree_parent {
-            Some(index) => self.trees.add_child(index),
-            None => self.slots[root as usize].tree_children += 1,
+            Ancestor::Tree(index) => self.trees.add_child(index),
+            Ancestor::Root => self.slots[root as usize].tree_children += 1,
         }
         Ok(handle)
     }
@@ -770,11 +770,11 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
             let root = self.trees.root(index);
             self.dispose_tree(index, scratch);
             match parent {
-                Some(parent) => {
+                Ancestor::Tree(parent) => {
                     self.trees.drop_child(parent);
                     next = Some(parent);
                 }
-                None => {
+                Ancestor::Root => {
                     debug_assert!(
                         self.slots[root as usize].tree_children > 0,
                         "a tree cell disposed under a root that counted none"
@@ -798,12 +798,12 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         let region = self.trees.take_region(index);
         let into = match self.trees.pledge(index) {
             None => None,
-            Some(Pledge::Root) => {
+            Some(Ancestor::Root) => {
                 let root = self.trees.root(index);
                 Region::splice_optional(&mut self.slots[root as usize].region, region);
                 Some(CellHandle::Slab(self.occupant(root)))
             }
-            Some(Pledge::Tree(dest)) => {
+            Some(Ancestor::Tree(dest)) => {
                 self.trees.splice_into(dest, region);
                 Some(CellHandle::Tree(self.trees.occupant(dest)))
             }
@@ -2252,7 +2252,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         };
         match dest.home {
             CellHome::Slab(slot) => match slot == self.trees.root(home) {
-                true => Crossing::Upward(Pledge::Root),
+                true => Crossing::Upward(Ancestor::Root),
                 false => Crossing::Forced,
             },
             CellHome::Tree(dest) if self.trees.root(dest) != self.trees.root(home) => {
@@ -2260,7 +2260,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
             }
             CellHome::Tree(dest) => match self.trees.ancestry(home, dest) {
                 Ancestry::Under => Crossing::Ordinary,
-                Ancestry::Above => Crossing::Upward(Pledge::Tree(dest)),
+                Ancestry::Above => Crossing::Upward(Ancestor::Tree(dest)),
                 Ancestry::Apart => Crossing::Forced,
             },
         }
@@ -2272,7 +2272,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
     /// Marginal across the operands of one placement for free — the pledge is applied the moment a
     /// verdict comes back `Pin`, before the next operand is priced — so a second operand from the
     /// same home, or from a cell the first one's walk already pledged, is shown nothing.
-    fn splice_price(&self, home: u32, dest: Pledge) -> usize {
+    fn splice_price(&self, home: u32, dest: Ancestor) -> usize {
         self.trees
             .unpledged_up(home, dest)
             .map(|index| self.trees.region_bytes(index))

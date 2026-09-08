@@ -33,7 +33,7 @@ use proptest::prelude::*;
 
 use super::super::*;
 use super::{Borrowed, Number, live_bytes, operand_at, pin, take};
-use crate::tree::TreeState;
+use crate::tree::{Ancestor, TreeState};
 
 const CAP: u32 = 6;
 
@@ -556,7 +556,7 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
         let children = occupied
             .iter()
             .copied()
-            .filter(|other| alive(*other) && pool.parent(*other) == Some(index))
+            .filter(|other| alive(*other) && pool.parent(*other) == Ancestor::Tree(index))
             .count();
         assert_eq!(
             pool.children(index) as usize,
@@ -569,12 +569,12 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
         let Some(pledge) = pool.pledge(index) else {
             continue;
         };
-        let floor = pool.pledge_depth(pledge);
+        let floor = pool.ancestor_depth(pledge);
         assert!(
             floor < pool.depth(index),
             "pool slot {index} pledged into itself or below"
         );
-        if let crate::tree::Pledge::Tree(target) = pledge {
+        if let Ancestor::Tree(target) = pledge {
             assert!(
                 alive(target),
                 "pool slot {index} pledged into a cell that is gone"
@@ -586,7 +586,7 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
             );
         }
         let mut at = pool.parent(index);
-        while let Some(intermediate) = at {
+        while let Ancestor::Tree(intermediate) = at {
             if pool.depth(intermediate) <= floor {
                 break;
             }
@@ -594,7 +594,7 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
                 .pledge(intermediate)
                 .expect("an intermediate below a pledge is pledged too");
             assert!(
-                pool.pledge_depth(held) <= floor,
+                pool.ancestor_depth(held) <= floor,
                 "pool slot {intermediate} lies below a pledge it does not carry"
             );
             at = pool.parent(intermediate);
@@ -607,7 +607,7 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
             .iter()
             .copied()
             .filter(|index| {
-                alive(*index) && pool.parent(*index).is_none() && pool.root(*index) == slot
+                alive(*index) && pool.parent(*index) == Ancestor::Root && pool.root(*index) == slot
             })
             .count();
         assert_eq!(
