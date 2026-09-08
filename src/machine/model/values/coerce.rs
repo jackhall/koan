@@ -225,6 +225,7 @@ pub(crate) fn coerce_function_cell<'b>(
         underlying.captured_scope(),
         ReturnType::Resolved(tables.substitute_to(declared_return, types)),
         &elements,
+        &[],
         Body::CoercedDelegate {
             underlying,
             declared,

@@ -54,7 +54,7 @@ pub use signature::most_specific_ktype;
 pub use signature::{
     Argument, DeferredReturn, DeferredReturnSurface, DispatchToken, DispatchTokenElement,
     ExpressionSignature, KeyElement, ReturnType, SignatureDraft, SignatureElement, UntypedKey,
-    fn_type_specificity, is_keyword_token,
+    fn_type_specificity, is_keyword_token, shape_specificity,
 };
 pub(crate) use signature::{render_untyped_key, summarize_dispatch, untyped_key_of};
 pub(crate) use type_digest::{TypeDigest, empty_schema_digest};

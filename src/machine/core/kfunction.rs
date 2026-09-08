@@ -15,7 +15,7 @@ use crate::machine::model::NamedPairs;
 #[cfg(test)]
 use crate::machine::model::SignatureDraft;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
-use crate::machine::model::{ExpressionSignature, Record, SignatureElement};
+use crate::machine::model::{DispatchTokenElement, ExpressionSignature, Record, SignatureElement};
 use crate::witnessed::BumpVec;
 use crate::witnessed::RegionHandleFamily;
 
@@ -54,7 +54,15 @@ pub struct KFunction<'a> {
     /// The function *value*'s own type: the `(params) -> ret` handle interned once, here at
     /// definition, from the normalized signature. `KObject::KFunction(f).ktype()` copies it, so
     /// the value layer never rebuilds a parameter record per dispatch check (ruling 4).
+    ///
+    /// A lambda type carries no binder, so every quantified position is erased to `Any` here: a
+    /// `VAL` slot over a quantified callable keeps working, and a call by name solves the
+    /// quantifiers at argument validation exactly as a dispatched call does.
     value_ktype: KType,
+    /// The callable's **shape** type: the interleaved keyword / argument-position run its bucket
+    /// key is read off, the quantifier group, and the return. Interned once beside `value_ktype`,
+    /// from the same signature — the two are the callable's two identities, one per lane.
+    shape_ktype: KType,
 }
 
 /// [`Reattachable`](crate::witnessed::Reattachable) family for [`KFunction`] — the carrier family a
@@ -131,12 +139,18 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         return_type: ReturnType<'a>,
         elements: &[SignatureElement],
+        quantifiers: &[crate::machine::model::TypeSymbol],
         body: Body<'a>,
         registries: &RunRegistries,
     ) -> DeliveredFunction {
-        let signature = ExpressionSignature::mint(captured.brand(), return_type, elements);
-        let value_ktype = function_value_ktype(&signature, registries);
-        Self::birth(captured, signature, body, value_ktype)
+        let signature =
+            ExpressionSignature::mint(captured.brand(), return_type, elements, quantifiers);
+        let shape_ktype = function_shape_ktype(&signature, registries);
+        let value_ktype = registries.types.erase_quantified(
+            function_value_ktype(&signature, registries),
+            quantifiers.len(),
+        );
+        Self::birth(captured, signature, body, value_ktype, shape_ktype)
     }
 
     /// **Assemble a copy of `source` captured at `captured`, at a relocation fold's own brand** —
@@ -156,10 +170,12 @@ impl<'a> KFunction<'a> {
                 captured.brand(),
                 source.signature.return_type(),
                 source.signature.elements(),
+                source.signature.quantifiers(),
             ),
             body: source.body,
             captured,
             value_ktype: source.value_ktype,
+            shape_ktype: source.shape_ktype,
         }
     }
 
@@ -172,6 +188,7 @@ impl<'a> KFunction<'a> {
         signature: ExpressionSignature<'a>,
         body: Body<'a>,
         value_ktype: KType,
+        shape_ktype: KType,
     ) -> DeliveredFunction {
         let seed = FunctionBirth {
             captured,
@@ -189,6 +206,7 @@ impl<'a> KFunction<'a> {
                         body: birth.body,
                         captured: birth.captured,
                         value_ktype,
+                        shape_ktype,
                     })
                 },
             )
@@ -208,6 +226,7 @@ impl<'a> KFunction<'a> {
             captured,
             draft.return_type,
             &draft.elements,
+            &[],
             body,
             registries,
         )
@@ -233,6 +252,12 @@ impl<'a> KFunction<'a> {
     /// This function value's type handle — a copy of the memo [`Self::alloc_captured`] interned.
     pub fn value_ktype(&self) -> KType {
         self.value_ktype
+    }
+
+    /// This callable's shape type — its dispatch-lane identity, the peer of
+    /// [`value_ktype`](Self::value_ktype).
+    pub fn shape_ktype(&self) -> KType {
+        self.shape_ktype
     }
 
     /// The captured definition scope. Bare field read — the stored reference is already at `'a`.
@@ -419,17 +444,50 @@ fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>], registries: &RunRegistrie
 /// hashable surface shadow of the deferred form, so equality and specificity read the deferred
 /// shape directly instead of seeing it coarsened to `Any`. See
 /// [ktype/records-and-limits.md § Record fields](../../../design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
+/// Intern the **shape** type a `KFunction` registers under: its signature's element run —
+/// keywords and argument-position types in order, argument names dropped — under its quantifier
+/// group, paired with the same return projection [`function_value_ktype`] takes.
+///
+/// A keyword-free signature (the anonymous `FN :{…}` lambda) yields a keyword-free shape, which
+/// no declared member can equal: a declared shape always spells at least one keyword, and shape
+/// subtyping pairs keywords positionally. So an anonymous lambda fills no shape slot without this
+/// door needing a second answer for it.
+fn function_shape_ktype(signature: &ExpressionSignature<'_>, registries: &RunRegistries) -> KType {
+    // Staged inline: a shape's element run is short, and the registry interns probe-first, so a
+    // re-run definition builds no heap buffer at all.
+    let elements: smallvec::SmallVec<[DispatchTokenElement; 12]> = signature
+        .elements()
+        .iter()
+        .map(|element| match element {
+            SignatureElement::Keyword(symbol) => DispatchTokenElement::Keyword(*symbol),
+            SignatureElement::Argument(argument) => DispatchTokenElement::Slot(argument.ktype),
+        })
+        .collect();
+    registries.types.shape_type(
+        signature.quantifiers(),
+        &elements,
+        projected_return(signature, registries),
+    )
+}
+
+/// The return type both of a callable's two type identities carry: a resolved return verbatim, a
+/// per-call-deferred one as the confined `DeferredReturn` node holding its surface shadow, so
+/// equality and specificity read the deferred shape rather than seeing it coarsened to `Any`.
+fn projected_return(signature: &ExpressionSignature<'_>, registries: &RunRegistries) -> KType {
+    match signature.return_type() {
+        ReturnType::Resolved(kt) => kt,
+        ReturnType::Deferred(d) => registries.types.intern(TypeNode::DeferredReturn(
+            DeferredReturnSurface::from_deferred(&d, &registries.labels),
+        )),
+    }
+}
+
 fn function_value_ktype(signature: &ExpressionSignature<'_>, registries: &RunRegistries) -> KType {
     let types = &registries.types;
     // The signature already owns its parameter schema; the function type shares it rather than
     // re-deriving one — one intern-boundary copy per definition, never per call.
     let params = Record::from_pairs(signature.params().iter().copied());
-    let ret = match signature.return_type() {
-        ReturnType::Resolved(kt) => kt,
-        ReturnType::Deferred(d) => types.intern(TypeNode::DeferredReturn(
-            DeferredReturnSurface::from_deferred(&d, &registries.labels),
-        )),
-    };
+    let ret = projected_return(signature, registries);
     types.function_type(params, ret)
 }
 

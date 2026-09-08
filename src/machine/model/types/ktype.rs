@@ -131,6 +131,20 @@ impl KType {
         f: &mut std::fmt::Formatter<'_>,
         registries: &RunRegistries,
     ) -> std::fmt::Result {
+        self.write_name_in(f, registries, &[])
+    }
+
+    /// [`write_name`](Self::write_name) under a quantifier binder — the enclosing
+    /// [`TypeNode::ExpressionShape`]'s parameter names, which its element and return positions
+    /// dereference through [`TypeNode::Quantified`]. Threaded rather than looked up, because a
+    /// quantified leaf carries an index and nothing else; a nested shape rebinds it with its own
+    /// list, exactly as it shadows one in the type relations.
+    fn write_name_in(
+        self,
+        f: &mut std::fmt::Formatter<'_>,
+        registries: &RunRegistries,
+        binder: &[TypeSymbol],
+    ) -> std::fmt::Result {
         registries.types.with_node(self, |node| match node {
             TypeNode::Number => f.write_str(NUMBER_NAME.text()),
             TypeNode::Str => f.write_str(STR_NAME.text()),
@@ -147,30 +161,52 @@ impl KType {
             TypeNode::OfKind(kind) => f.write_str(kind.surface_keyword()),
             TypeNode::List { element } => {
                 f.write_str(":(LIST OF ")?;
-                element.write_name(f, registries)?;
+                element.write_name_in(f, registries, binder)?;
                 f.write_str(")")
             }
             TypeNode::Dict { key, value } => {
                 f.write_str(":(MAP ")?;
-                key.write_name(f, registries)?;
+                key.write_name_in(f, registries, binder)?;
                 f.write_str(" -> ")?;
-                value.write_name(f, registries)?;
+                value.write_name_in(f, registries, binder)?;
                 f.write_str(")")
             }
             // `:{x :Number y :Str}` — the braced type-sigil surface. Fields render
             // space-separated like FN params (the field-list parser accepts that).
             TypeNode::Record { fields } => {
                 f.write_str(":{")?;
-                write_param_record(f, fields, registries)?;
+                write_param_record(f, fields, registries, binder)?;
                 f.write_str("}")
             }
             TypeNode::KFunction { params, ret } => {
                 f.write_str(":(FN :{")?;
-                write_param_record(f, params, registries)?;
+                write_param_record(f, params, registries, binder)?;
                 f.write_str("} -> ")?;
-                ret.write_name(f, registries)?;
+                ret.write_name_in(f, registries, binder)?;
                 f.write_str(")")
             }
+            // `:(EXPR (PURE _ :Number) -> Number)`, and with a quantifier group
+            // `:(EXPR FOR ALL (Elt) (PURE _ :Elt) -> …)`. Argument names are absent from the type,
+            // so every slot renders as the wildcard the head spells it with; the group rebinds
+            // `binder` for the elements and the return, which read it back through `Quantified`.
+            TypeNode::ExpressionShape {
+                quantifiers,
+                elements,
+                ret,
+            } => {
+                f.write_str(":(EXPR ")?;
+                write_quantifier_group(f, quantifiers, registries)?;
+                write_shape_head(f, elements, registries, quantifiers)?;
+                f.write_str(" -> ")?;
+                ret.write_name_in(f, registries, quantifiers)
+            }
+            // A quantified position renders as the name its enclosing shape bound it to. The
+            // placeholder is diagnostic-only: a bare leaf outside a shape is unreachable from any
+            // spelling, since the only door that mints one is the shape builder.
+            TypeNode::Quantified(index) => match binder.get(*index) {
+                Some(name) => write!(f, "{}", display_label(name.symbol(), registries)),
+                None => write!(f, "<quantified {index}>"),
+            },
             TypeNode::DeferredReturn(surface) => surface.write_surface(f, registries),
             // `:(A | B)` — members separated by ` | ` and wrapped in the type sigil. A compound
             // member already opens its own sigil (`:(LIST OF Number)`), which nests fine.
@@ -180,7 +216,7 @@ impl KType {
                     if index > 0 {
                         f.write_str(" | ")?;
                     }
-                    member.write_name(f, registries)?;
+                    member.write_name_in(f, registries, binder)?;
                 }
                 f.write_str(")")
             }
@@ -189,14 +225,14 @@ impl KType {
                 arguments,
             } => {
                 f.write_str(":(")?;
-                constructor.write_name(f, registries)?;
+                constructor.write_name_in(f, registries, binder)?;
                 f.write_str(" {")?;
                 for (index, (name, kt)) in arguments.iter().enumerate() {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
                     write!(f, "{} = ", display_label(name.symbol(), registries))?;
-                    kt.write_name(f, registries)?;
+                    kt.write_name_in(f, registries, binder)?;
                 }
                 f.write_str("})")
             }
@@ -248,6 +284,7 @@ impl KType {
             | TypeNode::Dict { .. }
             | TypeNode::Record { .. }
             | TypeNode::KFunction { .. }
+            | TypeNode::ExpressionShape { .. }
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. } => true,
             TypeNode::DeferredReturn(surface) => surface.opens_sigil(),
@@ -300,6 +337,8 @@ impl KType {
             | TypeNode::Dict { .. }
             | TypeNode::Record { .. }
             | TypeNode::KFunction { .. }
+            | TypeNode::ExpressionShape { .. }
+            | TypeNode::Quantified(_)
             | TypeNode::DeferredReturn(_)
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. }
@@ -341,6 +380,7 @@ fn write_param_record(
     f: &mut std::fmt::Formatter<'_>,
     params: &Record<KType>,
     registries: &RunRegistries,
+    binder: &[TypeSymbol],
 ) -> std::fmt::Result {
     for (index, (key, kt)) in params.iter().enumerate() {
         if index > 0 {
@@ -350,9 +390,61 @@ fn write_param_record(
         if !kt.surface_opens_sigil(registries) {
             f.write_str(":")?;
         }
-        kt.write_name(f, registries)?;
+        kt.write_name_in(f, registries, binder)?;
     }
     Ok(())
+}
+
+/// `FOR ALL (<names>) ` — the quantifier group a shape's surface opens with, or nothing at all
+/// when the shape quantifies over nothing (the ordinary case). The trailing space is the group's,
+/// so the head that follows spells the same either way.
+pub(super) fn write_quantifier_group(
+    f: &mut std::fmt::Formatter<'_>,
+    quantifiers: &[TypeSymbol],
+    registries: &RunRegistries,
+) -> std::fmt::Result {
+    if quantifiers.is_empty() {
+        return Ok(());
+    }
+    f.write_str("FOR ALL (")?;
+    for (index, name) in quantifiers.iter().enumerate() {
+        if index > 0 {
+            f.write_str(" ")?;
+        }
+        write!(f, "{}", display_label(name.symbol(), registries))?;
+    }
+    f.write_str(") ")
+}
+
+/// `(<keyword> _ :<Type> …)` — an expression shape's head, the one spelling both the type surface
+/// and a signature's rendered member read it from. Every argument position is the wildcard `_`: the
+/// type carries no argument names, so there is none to print.
+pub(super) fn write_shape_head(
+    f: &mut std::fmt::Formatter<'_>,
+    elements: &[crate::machine::model::DispatchTokenElement],
+    registries: &RunRegistries,
+    binder: &[TypeSymbol],
+) -> std::fmt::Result {
+    use crate::machine::model::DispatchTokenElement;
+    f.write_str("(")?;
+    for (index, element) in elements.iter().enumerate() {
+        if index > 0 {
+            f.write_str(" ")?;
+        }
+        match element {
+            DispatchTokenElement::Keyword(symbol) => {
+                write!(f, "{}", display_label(symbol.symbol(), registries))?;
+            }
+            DispatchTokenElement::Slot(kt) => {
+                f.write_str("_ ")?;
+                if !kt.surface_opens_sigil(registries) {
+                    f.write_str(":")?;
+                }
+                kt.write_name_in(f, registries, binder)?;
+            }
+        }
+    }
+    f.write_str(")")
 }
 
 /// A label's text, resolved through the run's interner. Every syntactic label is interned where it

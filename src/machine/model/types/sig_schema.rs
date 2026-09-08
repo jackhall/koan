@@ -22,7 +22,9 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::registry::{IdentityBuildHasher, TypeRegistry};
-use super::signature::{KeyElement, Specificity, UntypedKey, fn_type_specificity};
+use super::signature::{
+    DispatchTokenElement, KeyElement, Specificity, UntypedKey, fn_type_specificity,
+};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::values::ModuleDraft;
@@ -687,6 +689,13 @@ pub fn substitute_sig_members(
             let ret = substitute_sig_members(*ret, sig_id, members, types);
             types.function_type(params, ret)
         }
+        TypeNode::ExpressionShape {
+            quantifiers,
+            elements,
+            ret,
+        } => types.rebuild_shape(quantifiers, elements, *ret, |v| {
+            substitute_sig_members(v, sig_id, members, types)
+        }),
         TypeNode::Union { members: us } => {
             let substituted: Vec<KType> = us
                 .iter()
@@ -1102,6 +1111,29 @@ fn sig_slot_join(
                 let ret = sig_slot_join(*rx, *ry, generalizations, types);
                 types.function_type(params, ret)
             }
+            // A shape's argument positions are contravariant like a function's parameters, so
+            // they take the dual; the return joins. Two shapes under different keys have no
+            // common shape and fall to the coarsening below.
+            (
+                TypeNode::ExpressionShape {
+                    quantifiers: qx,
+                    elements: ex,
+                    ret: rx,
+                },
+                TypeNode::ExpressionShape {
+                    quantifiers: qy,
+                    elements: ey,
+                    ret: ry,
+                },
+            ) if qx.len() == qy.len() => {
+                match zip_shape_slots(ex, ey, |a, b| sig_slot_meet(a, b, generalizations, types)) {
+                    Some(elements) => {
+                        let ret = sig_slot_join(*rx, *ry, generalizations, types);
+                        types.shape_type(qx, &elements, ret)
+                    }
+                    None => types.join(x, y),
+                }
+            }
             _ => types.join(x, y),
         })
     })
@@ -1154,9 +1186,55 @@ fn sig_slot_meet(
                 let ret = sig_slot_meet(*rx, *ry, generalizations, types);
                 types.function_type(params, ret)
             }
+            // Dual of the [`sig_slot_join`] arm: argument positions join, the return meets.
+            (
+                TypeNode::ExpressionShape {
+                    quantifiers: qx,
+                    elements: ex,
+                    ret: rx,
+                },
+                TypeNode::ExpressionShape {
+                    quantifiers: qy,
+                    elements: ey,
+                    ret: ry,
+                },
+            ) if qx.len() == qy.len() => {
+                match zip_shape_slots(ex, ey, |a, b| sig_slot_join(a, b, generalizations, types)) {
+                    Some(elements) => {
+                        let ret = sig_slot_meet(*rx, *ry, generalizations, types);
+                        types.shape_type(qx, &elements, ret)
+                    }
+                    None => types.meet(x, y),
+                }
+            }
             _ => types.meet(x, y),
         })
     })
+}
+
+/// Pair two shape element runs positionally, combining each argument position through `combine`.
+/// `Some` iff the two runs key one bucket — equal length, and the same keyword in every keyword
+/// position; `None` otherwise, which the caller coarsens through the plain lattice.
+fn zip_shape_slots(
+    a: &[DispatchTokenElement],
+    b: &[DispatchTokenElement],
+    mut combine: impl FnMut(KType, KType) -> KType,
+) -> Option<smallvec::SmallVec<[DispatchTokenElement; 12]>> {
+    if a.len() != b.len() {
+        return None;
+    }
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| match (x, y) {
+            (DispatchTokenElement::Keyword(s), DispatchTokenElement::Keyword(t)) if s == t => {
+                Some(*x)
+            }
+            (DispatchTokenElement::Slot(sx), DispatchTokenElement::Slot(sy)) => {
+                Some(DispatchTokenElement::Slot(combine(*sx, *sy)))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Rewrite every reference to `declared`'s own abstract members so it is sourced at
@@ -1198,6 +1276,13 @@ fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KT
             let ret = canonicalize_binder(*ret, declared, types);
             types.function_type(params, ret)
         }
+        TypeNode::ExpressionShape {
+            quantifiers,
+            elements,
+            ret,
+        } => types.rebuild_shape(quantifiers, elements, *ret, |v| {
+            canonicalize_binder(v, declared, types)
+        }),
         TypeNode::Union { members } => {
             let canonical: Vec<KType> = members
                 .iter()
@@ -1639,6 +1724,12 @@ fn references_sig_member(
                 .any(|v| references_sig_member(*v, sig_id, members, types))
                 || references_sig_member(*ret, sig_id, members, types)
         }
+        TypeNode::ExpressionShape { elements, ret, .. } => {
+            elements.iter().any(|element| match element {
+                DispatchTokenElement::Slot(v) => references_sig_member(*v, sig_id, members, types),
+                DispatchTokenElement::Keyword(_) => false,
+            }) || references_sig_member(*ret, sig_id, members, types)
+        }
         TypeNode::Union { members: us } => us
             .iter()
             .any(|m| references_sig_member(*m, sig_id, members, types)),
@@ -1691,9 +1782,10 @@ fn substitution_binding(
 /// `satisfied_by`; otherwise it descends the shared container structure with the same covariance
 /// [`KType::satisfied_by`] applies (`Dict`/`Record`/`KFunction` component rules included).
 ///
-/// A nested `Signature` is the one position that does materialize: the relation between two
-/// signatures is `sig_subtype`, itself schema-recursive, so the walk substitutes once and hands the
-/// interned result to `satisfied_by` rather than re-deriving that recursion.
+/// A nested `Signature` and an `ExpressionShape` are the positions that do materialize: each has
+/// a relation of its own — schema-recursive `sig_subtype`, positional shape subtyping — so the
+/// walk substitutes once and hands the interned result to `satisfied_by` rather than re-deriving
+/// that recursion.
 fn slot_satisfied_by(
     declared: KType,
     sub_type: KType,
@@ -1710,11 +1802,13 @@ fn slot_satisfied_by(
     }
     types.with_node(declared, |dn| {
         types.with_node(sub_type, |sn| match (dn, sn) {
-            // A nested signature is the one position the no-materialize walks materialize at: the
-            // relation between two signatures is `sig_subtype`, which is already schema-recursive, so
-            // substituting once and handing the interned result to it beats re-deriving that recursion
-            // here. Nesting is rare, and one intern is cheaper than a fourth structural walk.
-            (TypeNode::Signature { .. }, _) => {
+            // The two positions the no-materialize walks materialize at. The relation between two
+            // signatures is `sig_subtype`, which is already schema-recursive, so substituting once
+            // and handing the interned result to it beats re-deriving that recursion here; a shape
+            // materializes for the same economy — its own relation pairs positionally over an
+            // element run, and rebuilding that walk substituting-as-it-goes would buy nothing.
+            // Both are rare, and one intern is cheaper than a fourth structural walk.
+            (TypeNode::Signature { .. } | TypeNode::ExpressionShape { .. }, _) => {
                 substitute_sig_members(declared, sig_id, members, types)
                     .satisfied_by(sub_type, registries)
             }
@@ -1790,7 +1884,8 @@ fn slot_satisfied_by(
 /// Verdict of `substitute_sig_members(declared, ...) == target
 /// || substitute_sig_members(declared, ...).is_more_specific_than(target)` — the contravariant
 /// direction [`slot_satisfied_by`] needs for a function parameter, computed without building the
-/// substituted type except at a nested `Signature`, which materializes for the same reason.
+/// substituted type except at a nested `Signature` or an `ExpressionShape`, which materialize for
+/// the same reason.
 fn slot_more_specific_or_equal(
     declared: KType,
     target: KType,
@@ -1823,10 +1918,10 @@ fn slot_more_specific_or_equal(
         }
         types.with_node(declared, |declared_node| {
             match (declared_node, target_node) {
-                // Materialize at a nested signature, as [`slot_satisfied_by`] does — the
-                // `Signature`-vs-`Signature` relation rides `is_more_specific_than`'s own strict
-                // `sig_subtype` arm.
-                (TypeNode::Signature { .. }, _) => {
+                // Materialize at a nested signature or a shape, as [`slot_satisfied_by`] does —
+                // the `Signature`-vs-`Signature` relation rides `is_more_specific_than`'s own
+                // strict `sig_subtype` arm, and a shape's rides its positional arm.
+                (TypeNode::Signature { .. } | TypeNode::ExpressionShape { .. }, _) => {
                     let substituted = substitute_sig_members(declared, sig_id, members, types);
                     substituted == target || substituted.is_more_specific_than(target, registries)
                 }
@@ -1909,9 +2004,9 @@ fn slot_types_equal(
     }
     types.with_node(declared, |dn| {
         types.with_node(other, |on| match (dn, on) {
-            // Materialize at a nested signature: a `Signature` handle is content-addressed, so handle
-            // equality against the substituted type *is* the structural comparison.
-            (TypeNode::Signature { .. }, _) => {
+            // Materialize at a nested signature or a shape: every handle is content-addressed, so
+            // handle equality against the substituted type *is* the structural comparison.
+            (TypeNode::Signature { .. } | TypeNode::ExpressionShape { .. }, _) => {
                 substitute_sig_members(declared, sig_id, members, types) == other
             }
             (TypeNode::List { element: ed }, TypeNode::List { element: eo }) => {

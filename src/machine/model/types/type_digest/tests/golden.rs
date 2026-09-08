@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use super::super::{TypeDigest, empty_schema_digest, schema_content_digest};
 use crate::machine::core::ScopeId;
+use crate::machine::model::DispatchTokenElement;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeSymbol;
@@ -473,5 +474,46 @@ fn schema_abstract_member_digests_are_pinned() {
         "schema with first-order Wrap",
         schema_content_digest(&mixed_schema(types, Vec::new()), types),
         0x5befaef4_c4b619ba_56df0322_477e7955,
+    );
+}
+
+/// The expression-shape recipe, both halves: an unquantified shape over one keyword and one slot,
+/// and the quantified twin whose slot and return are the same bound parameter. The quantifier
+/// *arity* feeds the digest and the names do not, so the second pin holds alpha-equivalence fixed
+/// as well as the recipe.
+#[test]
+fn expression_shape_digests_are_pinned() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let pure = crate::machine::model::KeywordSymbol::declared("PURE", &registries.labels)
+        .expect("a fixture keyword classifies keyword-class");
+    assert_handle_pinned(
+        "(PURE _ :Number) -> Bool",
+        types.shape_type(
+            &[],
+            &[
+                DispatchTokenElement::Keyword(pure),
+                DispatchTokenElement::Slot(KType::NUMBER),
+            ],
+            KType::BOOL,
+        ),
+        0x5ba397cb_c804cca6_32ade368_0c2094c1,
+    );
+    assert_handle_pinned(
+        "quantified position 0",
+        types.quantified(0),
+        0xdc4cf804_40d608bf_aac38e8f_ea5e2178,
+    );
+    assert_handle_pinned(
+        "FOR ALL (Elt) (PURE _ :Elt) -> Elt",
+        types.shape_type(
+            &[type_symbol("Elt")],
+            &[
+                DispatchTokenElement::Keyword(pure),
+                DispatchTokenElement::Slot(types.quantified(0)),
+            ],
+            types.quantified(0),
+        ),
+        0xca98bb07_3a8618ca_f4a1b1cc_3b76df51,
     );
 }

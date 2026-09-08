@@ -19,6 +19,7 @@ fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
             crate::machine::model::BinderSymbol::classify("v").expect("value token"),
             kt,
         ))],
+        &[],
     )
 }
 
@@ -111,6 +112,7 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
         brand,
         ReturnType::Resolved(KType::ANY),
         &[SignatureElement::Keyword(probe_symbol("FOO"))],
+        &[],
     );
     let empty: KExpression<'_> = KExpression::new(brand, &[]);
     assert!(!sig.matches(&empty, types));
@@ -177,6 +179,7 @@ fn sig_with<'a>(
             crate::machine::model::BinderSymbol::classify("v").expect("value token"),
             slot,
         ))],
+        &[],
     )
 }
 
@@ -218,9 +221,10 @@ fn indistinguishable_splits_on_argument_type_and_keywords() {
             brand,
             ReturnType::Resolved(KType::ANY),
             &[SignatureElement::keyword(token, &labels)],
+            &[],
         )
     };
-    let empty = ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &[]);
+    let empty = ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &[], &[]);
     assert!(kw("FOO").indistinguishable_from(&kw("FOO")));
     assert!(!kw("FOO").indistinguishable_from(&kw("BAR")));
     assert!(!kw("FOO").indistinguishable_from(&num));
@@ -261,7 +265,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                 *kt,
             ))
         }));
-        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements)
+        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements, &[])
     }
 
     let program = program_storage();
@@ -278,12 +282,13 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                 crate::machine::model::BinderSymbol::classify("other").expect("value token"),
                 KType::NUMBER,
             ))],
+            &[],
         ),
         keyworded(brand, "TAKE", &[KType::NUMBER]),
         keyworded(brand, "TAKE", &[KType::ANY]),
         keyworded(brand, "DROP", &[KType::NUMBER]),
         keyworded(brand, "TAKE", &[KType::NUMBER, KType::NUMBER]),
-        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &[]),
+        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &[], &[]),
     ];
     for (i, a) in signatures.iter().enumerate() {
         for (j, b) in signatures.iter().enumerate() {
@@ -343,7 +348,7 @@ fn a_bumped_dispatch_token_matches_what_its_owned_form_does() {
                 *kt,
             ))
         }));
-        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements)
+        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements, &[])
     }
 
     let tokens: Vec<DispatchToken> = [
@@ -387,7 +392,7 @@ fn a_dispatch_token_renders_its_keywords_and_slot_types() {
                 *kt,
             ))
         }));
-        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements)
+        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements, &[])
     }
 
     let registries = RunRegistries::new();
@@ -438,6 +443,7 @@ fn fn_type_specificity_agrees_with_the_live_signature_verdict() {
                     y,
                 )),
             ],
+            &[],
         )
     };
     let as_type = |signature: &ExpressionSignature<'_>| {
@@ -457,6 +463,67 @@ fn fn_type_specificity_agrees_with_the_live_signature_verdict() {
         let b = shape(bx, by);
         assert_eq!(
             fn_type_specificity(as_type(&a), as_type(&b), &registries),
+            a.specificity_vs(&b, &registries),
+        );
+    }
+}
+
+/// The shape door agrees with the live one: ranking two co-bucket overloads by their call shapes
+/// and ranking them by their **shape types** reach the same verdict, which is what lets the
+/// signature-satisfaction check select an overload the way dispatch would. Unlike
+/// `fn_type_specificity`, the pairing is positional on both sides, so the two orderings agree
+/// even where the same slot types sit at different positions.
+#[test]
+fn shape_specificity_agrees_with_the_live_signature_verdict() {
+    let registries = RunRegistries::new();
+    let program = program_storage();
+    let brand = program.brand().region();
+    let labels = &registries.labels;
+    let shape = |x: KType, y: KType| {
+        ExpressionSignature::mint(
+            brand,
+            ReturnType::Resolved(KType::ANY),
+            &[
+                SignatureElement::keyword("PURE", labels),
+                SignatureElement::Argument(Argument::new(
+                    crate::machine::model::BinderSymbol::classify("x").expect("value token"),
+                    x,
+                )),
+                SignatureElement::Argument(Argument::new(
+                    crate::machine::model::BinderSymbol::classify("y").expect("value token"),
+                    y,
+                )),
+            ],
+            &[],
+        )
+    };
+    let as_shape_type = |signature: &ExpressionSignature<'_>| {
+        let elements: Vec<crate::machine::model::DispatchTokenElement> = signature
+            .elements()
+            .iter()
+            .map(|element| match element {
+                SignatureElement::Keyword(symbol) => {
+                    crate::machine::model::DispatchTokenElement::Keyword(*symbol)
+                }
+                SignatureElement::Argument(argument) => {
+                    crate::machine::model::DispatchTokenElement::Slot(argument.ktype)
+                }
+            })
+            .collect();
+        registries.types.shape_type(&[], &elements, KType::ANY)
+    };
+    let cases = [
+        (KType::NUMBER, KType::NUMBER, KType::ANY, KType::ANY),
+        (KType::ANY, KType::ANY, KType::NUMBER, KType::NUMBER),
+        (KType::NUMBER, KType::NUMBER, KType::NUMBER, KType::NUMBER),
+        (KType::NUMBER, KType::ANY, KType::ANY, KType::NUMBER),
+        (KType::NUMBER, KType::STR, KType::STR, KType::NUMBER),
+    ];
+    for (ax, ay, bx, by) in cases {
+        let a = shape(ax, ay);
+        let b = shape(bx, by);
+        assert_eq!(
+            shape_specificity(as_shape_type(&a), as_shape_type(&b), &registries),
             a.specificity_vs(&b, &registries),
         );
     }

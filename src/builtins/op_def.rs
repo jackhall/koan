@@ -656,7 +656,7 @@ fn register_body<'a>(
     bind_index: BindingIndex,
     registries: &RunRegistries,
 ) -> Result<(SealedValue<'a>, WriteOp<'a>), KError> {
-    let cell = KFunction::alloc_captured(scope, return_type, elements, body, registries);
+    let cell = KFunction::alloc_captured(scope, return_type, elements, &[], body, registries);
     let write = WriteOp::Overload {
         index: bind_index,
         seal: OverloadSeal::of_delivered(scope, &cell),

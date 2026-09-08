@@ -28,13 +28,14 @@ use std::hash::{BuildHasherDefault, Hasher};
 use imbl::shared_ptr::RcK;
 use smallvec::SmallVec;
 
-use crate::machine::model::labels::Symbol;
+use crate::machine::model::labels::{Symbol, TypeSymbol};
 
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::TypeNode;
 use super::record::Record;
 use super::sig_schema::{SigSchema, join_schemas};
+use super::signature::DispatchTokenElement;
 use super::type_digest::{self, TypeDigest, schema_content_digest};
 
 /// A union's members under construction. Inline up to four — the width that covers a hand-written
@@ -292,6 +293,157 @@ impl TypeRegistry {
         self.intern(TypeNode::KFunction { params, ret })
     }
 
+    /// An expression shape: the interleaved keyword / argument-position run a call spells, the
+    /// type parameters it binds ahead of that run, and the return type.
+    ///
+    /// The one door that mints a shape. Argument names never reach it — they are binder-side —
+    /// and the quantifier names are render-only, so two shapes alpha-equivalent under a renaming
+    /// intern to the node whichever spelling built first.
+    pub fn shape_type(
+        &self,
+        quantifiers: &[TypeSymbol],
+        elements: &[DispatchTokenElement],
+        ret: KType,
+    ) -> KType {
+        debug_assert!(
+            elements.iter().all(|element| match element {
+                DispatchTokenElement::Slot(kt) =>
+                    self.quantifier_indices_in_range(*kt, quantifiers.len()),
+                DispatchTokenElement::Keyword(_) => true,
+            }) && self.quantifier_indices_in_range(ret, quantifiers.len()),
+            "every quantified position names an index of the shape's own group",
+        );
+        // Probe-first: every definition mints its callable's shape, and re-running one definition
+        // — a lambda inside a loop body — mints a shape already interned. Taking the digest off
+        // the borrowed run means the boxed run and the quantifier vector are built only on a
+        // genuine miss, so the steady state allocates nothing.
+        let digest = type_digest::shape_digest(quantifiers.len(), elements, ret.digest());
+        self.intern_digested(digest, || TypeNode::ExpressionShape {
+            quantifiers: quantifiers.to_vec(),
+            elements: elements.iter().copied().collect(),
+            ret,
+        })
+    }
+
+    /// Rebuild a shape with every argument position's type and the return mapped through `map` —
+    /// the one shape arm every structural rewrite over `TypeNode` shares (member substitution,
+    /// binder canonicalization, sibling resolution). Keywords pass through untouched, and the
+    /// quantifier group is carried over: a rewrite substitutes *inside* a binder, never across it.
+    pub fn rebuild_shape(
+        &self,
+        quantifiers: &[TypeSymbol],
+        elements: &[DispatchTokenElement],
+        ret: KType,
+        mut map: impl FnMut(KType) -> KType,
+    ) -> KType {
+        let mapped: SmallVec<[DispatchTokenElement; 12]> = elements
+            .iter()
+            .map(|element| match element {
+                DispatchTokenElement::Slot(kt) => DispatchTokenElement::Slot(map(*kt)),
+                keyword => *keyword,
+            })
+            .collect();
+        let ret = map(ret);
+        self.shape_type(quantifiers, &mapped, ret)
+    }
+
+    /// The `index`-th quantifier of the enclosing shape.
+    pub fn quantified(&self, index: usize) -> KType {
+        self.intern(TypeNode::Quantified(index))
+    }
+
+    /// Rewrite every `Quantified(i)` inside `kt` to `bindings[i]` — the per-call substitution a
+    /// solved call applies to a shape's return, and the erasure `erase_quantified` runs with
+    /// `Any` in every cell. A unary rebuild: only the shapes that can *hold* a quantified position
+    /// recurse, and everything else is returned unchanged.
+    ///
+    /// A **nested** shape rebinds the indices with its own group, exactly as it shadows them in
+    /// the relations, so the walk stops at one.
+    pub fn substitute_quantified(&self, kt: KType, bindings: &[KType]) -> KType {
+        self.with_node(kt, |node| match node {
+            TypeNode::Quantified(index) => bindings.get(*index).copied().unwrap_or(kt),
+            TypeNode::List { element } => {
+                let element = self.substitute_quantified(*element, bindings);
+                self.list(element)
+            }
+            TypeNode::Dict { key, value } => {
+                let key = self.substitute_quantified(*key, bindings);
+                let value = self.substitute_quantified(*value, bindings);
+                self.dict(key, value)
+            }
+            TypeNode::Record { fields } => {
+                let fields = fields.map(|v| self.substitute_quantified(*v, bindings));
+                self.record(fields)
+            }
+            TypeNode::KFunction { params, ret } => {
+                let params = params.map(|v| self.substitute_quantified(*v, bindings));
+                let ret = self.substitute_quantified(*ret, bindings);
+                self.function_type(params, ret)
+            }
+            TypeNode::Union { members } => {
+                let substituted: Vec<KType> = members
+                    .iter()
+                    .map(|m| self.substitute_quantified(*m, bindings))
+                    .collect();
+                self.union_of(&substituted)
+            }
+            TypeNode::ConstructorApply {
+                constructor,
+                arguments,
+            } => {
+                let constructor = self.substitute_quantified(*constructor, bindings);
+                let arguments = arguments.map(|a| self.substitute_quantified(*a, bindings));
+                self.constructor_apply(constructor, arguments)
+            }
+            _ => kt,
+        })
+    }
+
+    /// `kt` with every quantified position erased to `Any` — what a quantified callable reports on
+    /// the value lane, where a lambda type has no binder to carry the parameter.
+    pub fn erase_quantified(&self, kt: KType, arity: usize) -> KType {
+        if arity == 0 {
+            return kt;
+        }
+        let bindings = vec![KType::ANY; arity];
+        self.substitute_quantified(kt, &bindings)
+    }
+
+    /// Whether every `Quantified` position reachable from `kt` without crossing a nested shape's
+    /// own binder names an index below `arity` — the [`Self::shape_type`] well-formedness probe.
+    fn quantifier_indices_in_range(&self, kt: KType, arity: usize) -> bool {
+        self.with_node(kt, |node| match node {
+            TypeNode::Quantified(index) => *index < arity,
+            TypeNode::List { element } => self.quantifier_indices_in_range(*element, arity),
+            TypeNode::Dict { key, value } => {
+                self.quantifier_indices_in_range(*key, arity)
+                    && self.quantifier_indices_in_range(*value, arity)
+            }
+            TypeNode::Record { fields } => fields
+                .values()
+                .all(|v| self.quantifier_indices_in_range(*v, arity)),
+            TypeNode::KFunction { params, ret } => {
+                params
+                    .values()
+                    .all(|v| self.quantifier_indices_in_range(*v, arity))
+                    && self.quantifier_indices_in_range(*ret, arity)
+            }
+            TypeNode::Union { members } => members
+                .iter()
+                .all(|m| self.quantifier_indices_in_range(*m, arity)),
+            TypeNode::ConstructorApply {
+                constructor,
+                arguments,
+            } => {
+                self.quantifier_indices_in_range(*constructor, arity)
+                    && arguments
+                        .values()
+                        .all(|a| self.quantifier_indices_in_range(*a, arity))
+            }
+            _ => true,
+        })
+    }
+
     /// Application of a higher-kinded type constructor to the parameter-name-keyed `arguments`,
     /// which the caller builds in the constructor's declared parameter order.
     pub fn constructor_apply(&self, constructor: KType, arguments: Record<KType>) -> KType {
@@ -444,6 +596,29 @@ impl TypeRegistry {
                     }
                     None => self.intern(TypeNode::Any),
                 },
+                // Two shapes under one key bound positionally: slots meet (contravariant), the
+                // return joins. Anything else about them — a different key, a different quantifier
+                // arity — has no common shape, so the pair coarsens to `Any` with everything else.
+                (
+                    TypeNode::ExpressionShape {
+                        quantifiers: xq,
+                        elements: xe,
+                        ret: xr,
+                    },
+                    TypeNode::ExpressionShape {
+                        quantifiers: yq,
+                        elements: ye,
+                        ret: yr,
+                    },
+                ) if xq.len() == yq.len() => {
+                    match self.shape_elements_pointwise(xe, ye, |s, x, y| s.meet(x, y)) {
+                        Some(elements) => {
+                            let ret = self.join(*xr, *yr);
+                            self.shape_type(xq, &elements, ret)
+                        }
+                        None => self.intern(TypeNode::Any),
+                    }
+                }
                 // Two interfaces bound at their least common interface, not at `Any`: width
                 // intersection with a per-member depth reconciliation ([`join_schemas`]). Disjoint
                 // operands land on the empty schema — the module-lattice top `:Module` — by digest.
@@ -532,6 +707,27 @@ impl TypeRegistry {
                     }
                     None => KType::NEVER,
                 },
+                // Dual of the join arm: slots join, the return meets.
+                (
+                    TypeNode::ExpressionShape {
+                        quantifiers: xq,
+                        elements: xe,
+                        ret: xr,
+                    },
+                    TypeNode::ExpressionShape {
+                        quantifiers: yq,
+                        elements: ye,
+                        ret: yr,
+                    },
+                ) if xq.len() == yq.len() => {
+                    match self.shape_elements_pointwise(xe, ye, |s, x, y| s.join(x, y)) {
+                        Some(elements) => {
+                            let ret = self.meet(*xr, *yr);
+                            self.shape_type(xq, &elements, ret)
+                        }
+                        None => KType::NEVER,
+                    }
+                }
                 // No structural rule relates the two shapes, so nothing inhabits both.
                 _ => KType::NEVER,
             })
@@ -545,6 +741,33 @@ impl TypeRegistry {
         iter.into_iter()
             .reduce(|a, b| self.join(a, b))
             .unwrap_or(KType::NEVER)
+    }
+
+    /// Positional pointwise combination of two shape element runs under `combine`. `Some(built)`
+    /// when the runs agree keyword-for-keyword in every position, `None` when they key different
+    /// buckets — which the caller coarsens to its own bound. [`join`](Self::join) passes `meet`
+    /// here and [`meet`](Self::meet) passes `join`, the contravariance of an argument position.
+    fn shape_elements_pointwise(
+        &self,
+        a: &[DispatchTokenElement],
+        b: &[DispatchTokenElement],
+        combine: impl Fn(&Self, KType, KType) -> KType,
+    ) -> Option<SmallVec<[DispatchTokenElement; 12]>> {
+        if a.len() != b.len() {
+            return None;
+        }
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| match (x, y) {
+                (DispatchTokenElement::Keyword(s), DispatchTokenElement::Keyword(t)) if s == t => {
+                    Some(*x)
+                }
+                (DispatchTokenElement::Slot(sx), DispatchTokenElement::Slot(sy)) => {
+                    Some(DispatchTokenElement::Slot(combine(self, *sx, *sy)))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Name-keyed pointwise combination of two parameter records under `combine`. `Some(built)`

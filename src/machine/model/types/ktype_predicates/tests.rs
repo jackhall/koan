@@ -937,6 +937,7 @@ fn deferred_return_admission_via_function_compat() {
         program.brand().region(),
         ReturnType::Deferred(DeferredReturn::Type(type_token("Er"))),
         &[],
+        &[],
     );
     let no_params = Record::new();
 
@@ -1881,4 +1882,147 @@ fn carrier_union_validation_rejects_code_and_overlapping_members() {
             rejected.name(&registries),
         );
     }
+}
+
+/// A quantified position is the unconstrained top: every other type refines it, and it refines
+/// nothing but `Any` (the top guard, which fires first). That one pair of rules is what makes
+/// shape satisfaction positional — a declared quantified slot is filled by a candidate slot that
+/// is quantified or `Any`, and refused by a concrete one — with no solver in the relation.
+#[test]
+fn a_quantified_position_is_the_top_in_both_directions() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let q = types.quantified(0);
+    assert!(KType::NUMBER.is_more_specific_than(q, &registries));
+    assert!(KType::ANY.is_more_specific_than(q, &registries));
+    assert!(!q.is_more_specific_than(KType::NUMBER, &registries));
+    assert!(q.is_more_specific_than(KType::ANY, &registries));
+    assert!(!q.is_more_specific_than(q, &registries));
+    // The bottom stays below it, and nothing refines the bottom.
+    assert!(KType::NEVER.is_more_specific_than(q, &registries));
+    assert!(!q.is_more_specific_than(KType::NEVER, &registries));
+}
+
+/// Two shapes that spell the same keywords in different positions, or the same slot types in
+/// different positions, are different types: a shape's element *order* is its identity, which is
+/// exactly what a `KFunction`'s canonically ordered parameter record erases.
+#[test]
+fn keyword_placement_and_slot_order_distinguish_two_shapes() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let pure = shape_keyword("PURE", &registries);
+    let bind = shape_keyword("BIND", &registries);
+    let slot = DispatchTokenElement::Slot;
+    let leading = types.shape_type(
+        &[],
+        &[DispatchTokenElement::Keyword(pure), slot(KType::NUMBER)],
+        KType::BOOL,
+    );
+    let trailing = types.shape_type(
+        &[],
+        &[slot(KType::NUMBER), DispatchTokenElement::Keyword(pure)],
+        KType::BOOL,
+    );
+    let renamed_keyword = types.shape_type(
+        &[],
+        &[DispatchTokenElement::Keyword(bind), slot(KType::NUMBER)],
+        KType::BOOL,
+    );
+    let swapped_slots = types.shape_type(
+        &[],
+        &[
+            DispatchTokenElement::Keyword(pure),
+            slot(KType::NUMBER),
+            slot(KType::STR),
+        ],
+        KType::BOOL,
+    );
+    let other_order = types.shape_type(
+        &[],
+        &[
+            DispatchTokenElement::Keyword(pure),
+            slot(KType::STR),
+            slot(KType::NUMBER),
+        ],
+        KType::BOOL,
+    );
+    assert_ne!(leading, trailing);
+    assert_ne!(leading, renamed_keyword);
+    assert_ne!(swapped_slots, other_order);
+    // Nor does either out-specify the other: they key different buckets.
+    assert!(!swapped_slots.is_more_specific_than(other_order, &registries));
+    assert!(!other_order.is_more_specific_than(swapped_slots, &registries));
+}
+
+/// A shape and a lambda are never one type and never satisfy each other in either direction, at
+/// any spelling: a lambda carries no keyword and no argument order, so there is nothing for the
+/// two to agree on.
+#[test]
+fn a_shape_is_never_a_lambda_type() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let pure = shape_keyword("PURE", &registries);
+    let shape = types.shape_type(
+        &[],
+        &[
+            DispatchTokenElement::Keyword(pure),
+            DispatchTokenElement::Slot(KType::NUMBER),
+        ],
+        KType::BOOL,
+    );
+    let lambda = types.function_type(
+        Record::from_pairs([(
+            BinderSymbol::classify("x").expect("value token"),
+            KType::NUMBER,
+        )]),
+        KType::BOOL,
+    );
+    assert_ne!(shape, lambda);
+    assert!(!shape.satisfied_by(lambda, &registries));
+    assert!(!lambda.satisfied_by(shape, &registries));
+    assert!(!shape.is_more_specific_than(lambda, &registries));
+    assert!(!lambda.is_more_specific_than(shape, &registries));
+}
+
+/// Alpha-equivalence: two shapes differing only in what their quantifier group *names* its
+/// parameters are one interned type, and the stored names are whichever spelling interned first.
+/// Two shapes differing in quantifier **arity** are not.
+#[test]
+fn quantifier_names_are_render_only_but_arity_is_identity() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let pure = shape_keyword("PURE", &registries);
+    let build = |names: Vec<&str>| {
+        let names: Vec<crate::machine::model::TypeSymbol> = names
+            .into_iter()
+            .map(|n| crate::machine::model::TypeSymbol::classify(n).expect("a Type token"))
+            .collect();
+        types.shape_type(
+            &names,
+            &[
+                DispatchTokenElement::Keyword(pure),
+                DispatchTokenElement::Slot(types.quantified(0)),
+            ],
+            types.quantified(0),
+        )
+    };
+    assert_eq!(build(vec!["Elt"]), build(vec!["Item"]));
+    let two = types.shape_type(
+        &[
+            crate::machine::model::TypeSymbol::classify("Elt").expect("a Type token"),
+            crate::machine::model::TypeSymbol::classify("Res").expect("a Type token"),
+        ],
+        &[
+            DispatchTokenElement::Keyword(pure),
+            DispatchTokenElement::Slot(types.quantified(0)),
+        ],
+        types.quantified(1),
+    );
+    assert_ne!(build(vec!["Elt"]), two);
+}
+
+/// A keyword symbol for the shape fixtures above, minted the way a registration mints one.
+fn shape_keyword(text: &str, registries: &RunRegistries) -> crate::machine::model::KeywordSymbol {
+    crate::machine::model::KeywordSymbol::declared(text, &registries.labels)
+        .expect("a fixture keyword classifies keyword-class")
 }

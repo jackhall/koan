@@ -17,7 +17,7 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::record::Record;
 use super::sig_schema::{SigSchema, TypeMemberMap};
-use super::signature::DeferredReturnSurface;
+use super::signature::{DeferredReturnSurface, DispatchTokenElement};
 use super::type_digest::TypeDigest;
 
 /// The content of one interned type. Every child position is a [`KType`] handle, so a node is
@@ -98,6 +98,36 @@ pub enum TypeNode {
         params: Record<KType>,
         ret: KType,
     },
+    /// An **expression shape** — the type of a keyworded, positional definition reached by
+    /// dispatch: the interleaved element sequence a call must spell (fixed keywords and typed
+    /// argument positions, in order), the type parameters the shape binds ahead of it, and the
+    /// return type.
+    ///
+    /// Distinct from [`Self::KFunction`] as a matter of representation, not of encoding: a lambda
+    /// takes a record of named arguments and is reached by name, a shape is reached by its
+    /// keyword/argument sequence and its argument *positions* are load-bearing, which a
+    /// canonically ordered params record erases. So no shape is ever equal to, satisfies, or is
+    /// satisfied by a lambda type.
+    ///
+    /// Argument **names** are binder-side only and are absent here: two definitions differing
+    /// only in parameter names project one shape. Quantifier names are the exception — the later
+    /// elements and the return dereference them through [`Self::Quantified`] — but they are a
+    /// *binding*, not identity: the digest feeds the count alone, so alpha-variants intern once
+    /// and `quantifiers` holds whichever spelling was interned first.
+    ExpressionShape {
+        /// The type parameters this shape binds, in `Quantified(index)` order. Render-only:
+        /// the arity is identity, the names are not.
+        quantifiers: Vec<TypeSymbol>,
+        /// The call shape: at least one [`DispatchTokenElement::Keyword`], interleaved with the
+        /// argument positions' declared types.
+        elements: Box<[DispatchTokenElement]>,
+        ret: KType,
+    },
+    /// The `index`-th quantifier of the enclosing [`Self::ExpressionShape`] — the unconstrained
+    /// top in every type relation, and solved per call by the argument-validation unifier. A leaf
+    /// rather than a name, so two shapes alpha-equivalent under a renaming of their quantified
+    /// parameters intern to one node.
+    Quantified(usize),
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
     /// deduplicated, no nested `Union`, always two or more. Identity is order-blind.
     /// Build through [`TypeRegistry::union_of`](super::registry::TypeRegistry::union_of), the

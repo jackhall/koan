@@ -310,6 +310,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         scope,
         return_type,
         elements,
+        &[],
         Body::UserDefined(body_expr),
         registries,
     );

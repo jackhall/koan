@@ -632,6 +632,13 @@ fn rewrite_siblings(types: &TypeRegistry, kt: KType, resolve: &impl Fn(usize) ->
             let ret = rewrite_siblings(types, *ret, resolve);
             types.function_type(params, ret)
         }
+        TypeNode::ExpressionShape {
+            quantifiers,
+            elements,
+            ret,
+        } => types.rebuild_shape(quantifiers, elements, *ret, |t| {
+            rewrite_siblings(types, t, resolve)
+        }),
         TypeNode::ConstructorApply {
             constructor,
             arguments,
@@ -673,6 +680,14 @@ fn collect_siblings(types: &TypeRegistry, kt: KType, out: &mut Vec<usize>) {
         TypeNode::KFunction { params, ret } => {
             for t in params.values() {
                 collect_siblings(types, *t, out);
+            }
+            collect_siblings(types, *ret, out);
+        }
+        TypeNode::ExpressionShape { elements, ret, .. } => {
+            for element in elements {
+                if let crate::machine::model::DispatchTokenElement::Slot(t) = element {
+                    collect_siblings(types, *t, out);
+                }
             }
             collect_siblings(types, *ret, out);
         }

@@ -13,7 +13,7 @@ use super::node::TypeNode;
 use super::record::Record;
 use super::registry::{Relation, TypeRegistry};
 use super::sig_schema::{SigSchema, sig_subtype};
-use super::signature::{ExpressionSignature, SignatureElement};
+use super::signature::{DispatchTokenElement, ExpressionSignature, SignatureElement};
 use super::type_digest::{TypeDigest, empty_schema_digest};
 use crate::machine::SplicedCell;
 use crate::machine::core::read_resting;
@@ -193,6 +193,25 @@ pub fn carrier_union_error(kt: KType, registries: &RunRegistries) -> Option<Stri
     None
 }
 
+/// Whether a node is a quantified position — the shape-binder leaf the type relations read as the
+/// unconstrained top. Free rather than a `KType` method, because every caller already holds the
+/// node.
+fn is_quantified(node: &TypeNode) -> bool {
+    matches!(node, TypeNode::Quantified(_))
+}
+
+/// Whether a callable fills a slot declared by an **expression shape**: its own registered shape
+/// satisfies the declared one. A lambda-typed slot reads the callable's `value_ktype` by name
+/// instead ([`function_compat`]), so the two channels never cross — a shape slot refuses a value
+/// whose shape is under another bucket key, and a lambda slot cannot be filled by a shape.
+fn shape_compat(
+    shape: KType,
+    f: &crate::machine::KFunction<'_>,
+    registries: &RunRegistries,
+) -> bool {
+    shape.satisfied_by(f.shape_ktype(), registries)
+}
+
 /// The slot types that constrain nothing beyond "a name": a concrete type out-specifies any of
 /// them.
 fn is_unconstrained_name(kt: KType) -> bool {
@@ -323,6 +342,17 @@ impl KType {
         if other == KType::NEVER {
             return false;
         }
+        // A quantified position is the unconstrained top: every other type refines it, and it
+        // refines nothing but `Any` (the guard above). So under one bucket key a declared
+        // quantified slot is filled by a candidate slot that is quantified or `Any` and refused by
+        // a concrete one, and a declared concrete slot is filled by a quantified candidate —
+        // positional satisfaction with no solver. The call is where a quantifier is *solved*.
+        if self != other && types.with_node(other, is_quantified) {
+            return true;
+        }
+        if types.with_node(self, is_quantified) {
+            return false;
+        }
         // An `Identifier` slot claims the token itself; a `Str` slot claims the token's resolved
         // value. When one bucket offers both readings of the same bare token, the token reading
         // wins: a name binds bare wherever an `Identifier` slot admits it, and a string binding
@@ -387,6 +417,38 @@ impl KType {
                             ret: rb,
                         },
                     ) => param_record_more_specific(pa, *ra, pb, *rb, registries),
+                    // Shape subtyping: the same rule as a function's, paired **positionally**
+                    // rather than by name — an argument name is not part of a shape type, and
+                    // dispatch never sees one. Two shapes compare only under one key (equal
+                    // keywords in equal positions and equal arity), so width never varies;
+                    // slots are contravariant, the return covariant, and one strict edge is
+                    // required. A quantifier-arity disagreement is a type disagreement.
+                    (
+                        TypeNode::ExpressionShape {
+                            quantifiers: qa,
+                            elements: ea,
+                            ret: ra,
+                        },
+                        TypeNode::ExpressionShape {
+                            quantifiers: qb,
+                            elements: eb,
+                            ret: rb,
+                        },
+                    ) => {
+                        qa.len() == qb.len()
+                            && shape_slots_more_specific(ea, eb, registries).is_some_and(
+                                |slots_more| {
+                                    // Covariant return, and at least one strict edge. Width never
+                                    // varies — two shapes compare only under one key — so the
+                                    // strict edge is a more general slot or a narrower return.
+                                    if ra == rb {
+                                        slots_more
+                                    } else {
+                                        ra.is_more_specific_than(*rb, registries)
+                                    }
+                                },
+                            )
+                    }
                     // Value role: a concrete signature type is more specific than the
                     // `:Signature` wildcard.
                     (TypeNode::Signature { .. }, TypeNode::OfKind(KKind::Signature)) => true,
@@ -536,6 +598,15 @@ impl KType {
                 KObject::KFunction(f) => function_compat(&f.signature, params, *ret, registries),
                 _ => false,
             },
+            // A shape slot is filled by a *registered* callable whose own shape satisfies it —
+            // never by a lambda, which carries no shape at all.
+            TypeNode::ExpressionShape { .. } => match obj {
+                KObject::KFunction(f) => shape_compat(self, f, registries),
+                _ => false,
+            },
+            // A quantified position admits every value: it is the top, and the call is what
+            // binds it.
+            TypeNode::Quantified(_) => true,
             // Constraint role: a signature slot is satisfied by a module value on the Object
             // channel, via [`Module::satisfies_sig_schema`]. `WITH` pins are folded into the
             // schema as manifest members, so pinned-slot agreement is the manifest-equality leg
@@ -671,6 +742,11 @@ impl KType {
                 }
                 _ => false,
             },
+            TypeNode::ExpressionShape { .. } => match c {
+                Carried::Object(KObject::KFunction(f)) => shape_compat(self, f, registries),
+                _ => false,
+            },
+            TypeNode::Quantified(_) => true,
             // A `:KExpression` parameter of a user signature is an ordinary eager value slot: a
             // `#(…)` literal arrives as a part shape, and every other expression producing code
             // arrives here as the value it evaluated to. A builtin's lazy slot never reaches this
@@ -887,7 +963,10 @@ impl KType {
             TypeNode::SetMember { .. }
             | TypeNode::AbstractType { .. }
             | TypeNode::Signature { .. }
+            | TypeNode::ExpressionShape { .. }
             | TypeNode::ConstructorApply { .. } => false,
+            // The top admits every part shape, as `Any` does.
+            TypeNode::Quantified(_) => true,
             // A sibling reference is meaningful only inside its pre-seal window and never
             // reaches a real argument slot.
             TypeNode::Sibling(_) => false,
@@ -965,6 +1044,37 @@ fn param_record_more_specific(
     let ret_ok = ra == rb || ret_more;
     let width_strict = pa.len() < pb.len();
     params_ok && ret_ok && (width_strict || params_more || ret_more)
+}
+
+/// The slot half of the [`TypeNode::ExpressionShape`] arm of
+/// [`KType::is_more_specific_than`] — [`param_record_more_specific`]'s positional twin.
+/// `Some(any_strictly_more_general)` when `a` is a candidate for being more specific than `b`:
+/// the two element runs agree keyword-for-keyword in every position, and at every argument
+/// position `b`'s slot is equal to or more specific than `a`'s (parameters are contravariant).
+/// `None` when some position disqualifies the pair outright.
+fn shape_slots_more_specific(
+    a: &[DispatchTokenElement],
+    b: &[DispatchTokenElement],
+    registries: &RunRegistries,
+) -> Option<bool> {
+    if a.len() != b.len() {
+        return None;
+    }
+    let mut any_more_general = false;
+    for (x, y) in a.iter().zip(b.iter()) {
+        match (x, y) {
+            (DispatchTokenElement::Keyword(s), DispatchTokenElement::Keyword(t)) if s == t => {}
+            (DispatchTokenElement::Slot(sx), DispatchTokenElement::Slot(sy)) => {
+                if sy.is_more_specific_than(*sx, registries) {
+                    any_more_general = true;
+                } else if sx != sy {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(any_more_general)
 }
 
 /// Width/depth specificity for *record values* — the **dual** of

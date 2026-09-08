@@ -132,6 +132,14 @@ fn for_each_user_type_ref(kt: KType, types: &TypeRegistry, found: &mut impl FnMu
             }
             for_each_user_type_ref(*ret, types, found);
         }
+        TypeNode::ExpressionShape { elements, ret, .. } => {
+            for element in elements {
+                if let crate::machine::model::DispatchTokenElement::Slot(t) = element {
+                    for_each_user_type_ref(*t, types, found);
+                }
+            }
+            for_each_user_type_ref(*ret, types, found);
+        }
         TypeNode::ConstructorApply {
             constructor,
             arguments,

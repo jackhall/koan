@@ -200,6 +200,7 @@ fn relaxed_admission_leans_on_a_parked_name_at_a_union_slot() {
         brand,
         crate::machine::model::ReturnType::Resolved(KType::ANY),
         &[slot_of(slot)],
+        &[],
     );
     let producer = crate::machine::ProducerId::for_test(7);
     let leans = relaxed_admits(
@@ -219,6 +220,7 @@ fn relaxed_admission_leans_on_a_parked_name_at_a_union_slot() {
         brand,
         crate::machine::model::ReturnType::Resolved(KType::ANY),
         &[slot_of(owning)],
+        &[],
     );
     let leans = relaxed_admits(
         &sig,

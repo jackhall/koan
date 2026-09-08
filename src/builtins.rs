@@ -123,6 +123,7 @@ pub(crate) fn register_builtin<'a>(
         scope,
         signature.return_type,
         &signature.elements,
+        &[],
         Body::Builtin(body),
         registries,
     );
@@ -146,6 +147,7 @@ pub(crate) fn register_overload_at<'a>(
         scope,
         signature.return_type,
         &signature.elements,
+        &[],
         Body::Builtin(body),
         registries,
     );

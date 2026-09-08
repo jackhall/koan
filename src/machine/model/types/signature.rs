@@ -279,6 +279,51 @@ pub fn fn_type_specificity(left: KType, right: KType, registries: &RunRegistries
     }
 }
 
+/// [`ExpressionSignature::specificity_vs`] over two **expression shape** types — the verdict the
+/// signature-satisfaction check ranks a keyworded member's candidate overloads by, computed from
+/// the declared types alone with no live callable in hand.
+///
+/// Argument positions pair **positionally**, mirroring dispatch: a shape type carries no argument
+/// names, and a keyword position contributes nothing, exactly as it contributes none to
+/// `specificity_vs`. Return types are excluded, because dispatch never selects on them.
+///
+/// Anything that is not a pair of shapes under one key is `Incomparable` — no position compares,
+/// so neither dominates.
+pub fn shape_specificity(left: KType, right: KType, registries: &RunRegistries) -> Specificity {
+    let types = &registries.types;
+    // Owns: the pairs are folded after both node reads close, so they cannot borrow either node.
+    let pairs: Option<Vec<(KType, KType)>> = types.with_node(left, |left_node| {
+        types.with_node(right, |right_node| match (left_node, right_node) {
+            (
+                TypeNode::ExpressionShape { elements: le, .. },
+                TypeNode::ExpressionShape { elements: re, .. },
+            ) if le.len() == re.len() => le
+                .iter()
+                .zip(re.iter())
+                .map(|(a, b)| match (a, b) {
+                    (DispatchTokenElement::Slot(x), DispatchTokenElement::Slot(y)) => {
+                        Some(Some((*x, *y)))
+                    }
+                    (DispatchTokenElement::Keyword(x), DispatchTokenElement::Keyword(y))
+                        if x == y =>
+                    {
+                        Some(None)
+                    }
+                    _ => None,
+                })
+                .collect::<Option<Vec<Option<(KType, KType)>>>>()
+                .map(|positions| positions.into_iter().flatten().collect()),
+            _ => None,
+        })
+    });
+    match pairs {
+        // A shape with no argument slot compares `Equal` — the same verdict `specificity_vs`
+        // reaches for two all-keyword call shapes, which is what an empty fold means.
+        Some(pairs) => specificity_over(pairs.into_iter(), registries),
+        None => Specificity::Incomparable,
+    }
+}
+
 /// A callable's call shape at rest: a bumped run of elements plus a `return_type`. Every field is
 /// `Copy` and `Drop`-free — the keyword and parameter-name text is `&'a str` bumped into the
 /// signature's own region — which is what lets a `KFunction` live in the region bump rather than a
@@ -305,6 +350,10 @@ pub struct ExpressionSignature<'a> {
     /// call's `parts`, which `validate_call_args` pins 1:1 with the elements. What lets a call fill
     /// the values slice positionally.
     part_slots: &'a [u16],
+    /// The type parameters this shape binds, in `Quantified(index)` order — the names the element
+    /// types and the return read, and the cells the per-call unifier solves. Empty for the
+    /// ordinary unquantified callable and for every builtin.
+    quantifiers: &'a [TypeSymbol],
 }
 
 /// A return type bundled with the elements run that will be minted beside it, for the callers that
@@ -454,6 +503,7 @@ impl<'a> ExpressionSignature<'a> {
         brand: RegionBrand<'a>,
         return_type: ReturnType<'a>,
         elements: &[SignatureElement],
+        quantifiers: &[TypeSymbol],
     ) -> Self {
         let settled: &'a [SignatureElement] = brand.allocator().slice(elements);
         // Both slices ride the signature's own region, so they live exactly as long as it.
@@ -481,7 +531,13 @@ impl<'a> ExpressionSignature<'a> {
             elements: settled,
             params,
             part_slots,
+            quantifiers: brand.allocator().slice(quantifiers),
         }
+    }
+
+    /// The type parameters this signature quantifies over, in `Quantified(index)` order.
+    pub fn quantifiers(&self) -> &'a [TypeSymbol] {
+        self.quantifiers
     }
 
     /// The parameter schema — `(symbol, declared type)` in declaration order. The key half of the

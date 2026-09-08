@@ -30,6 +30,7 @@ pub use types::{
     KeyElement, NodeSchema, Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema,
     ReturnType, SealedAnnounced, SealedGroup, SignatureDraft, SignatureElement, TypeNode,
     UntypedKey, WindowView, fn_type_specificity, is_keyword_token, render_keyworded_head,
+    shape_specificity,
 };
 pub use types::{
     CaptureShape, CaptureShapes, capture_footprint, capture_shape_of, carrier_union_error,

@@ -35,7 +35,7 @@ use super::node::{NodeSchema, TypeNode};
 use super::record::Record;
 use super::registry::TypeRegistry;
 use super::sig_schema::{SigSchema, sorted_keyworded};
-use super::signature::{DeferredReturnSurface, KeyElement};
+use super::signature::{DeferredReturnSurface, DispatchTokenElement, KeyElement};
 use smallvec::SmallVec;
 
 /// A `KType`'s content identity: the low 128 bits of a BLAKE3 hash of its content.
@@ -79,6 +79,8 @@ const TAG_SIG_SELF_REF: u8 = 0x1D;
 const TAG_NAME_TOKEN: u8 = 0x1E;
 const TAG_TYPE_NAME_TOKEN: u8 = 0x1F;
 const TAG_NEVER: u8 = 0x20;
+const TAG_EXPRESSION_SHAPE: u8 = 0x21;
+const TAG_QUANTIFIED: u8 = 0x22;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -182,6 +184,12 @@ pub(crate) fn node_digest(node: &TypeNode) -> TypeDigest {
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
         TypeNode::Record { fields } => record_digest(fields),
         TypeNode::KFunction { params, ret } => function_digest(params, ret.digest()),
+        TypeNode::ExpressionShape {
+            quantifiers,
+            elements,
+            ret,
+        } => shape_digest(quantifiers.len(), elements, ret.digest()),
+        TypeNode::Quantified(index) => quantified_digest(*index),
         TypeNode::Union { members } => union_digest(members),
         TypeNode::ConstructorApply {
             constructor,
@@ -282,6 +290,36 @@ fn function_digest(params: &Record<KType>, ret: TypeDigest) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_KFUNCTION);
     feed_record(&mut h, params);
     h.digest(ret).finish()
+}
+
+/// An expression shape: its quantifier **arity** (never the names — alpha-variants are one type),
+/// then its element run in order, each element a keyword's symbol bits behind a `1` byte or a slot
+/// type's digest behind a `0`, then the return. Order is identity here where a `KFunction`'s
+/// parameter record is order-blind: a shape's argument positions are what dispatch reads.
+///
+/// Reachable from the registry so a shape can be interned probe-first: the `ExpressionShape` arm
+/// of [`node_digest`] is this call over the node's own fields, so a digest taken here off a
+/// borrowed element run equals the digest of the node that run would build. What lets a definition
+/// pay for the boxed run only when its shape is genuinely new.
+pub(super) fn shape_digest(
+    arity: usize,
+    elements: &[DispatchTokenElement],
+    ret: TypeDigest,
+) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_EXPRESSION_SHAPE);
+    h.count(arity).count(elements.len());
+    for element in elements {
+        match element {
+            DispatchTokenElement::Keyword(symbol) => h.byte(1).symbol(symbol.symbol()),
+            DispatchTokenElement::Slot(kt) => h.byte(0).digest(kt.digest()),
+        };
+    }
+    h.digest(ret).finish()
+}
+
+/// A quantified position: its bare index in the enclosing shape's quantifier group.
+fn quantified_digest(index: usize) -> TypeDigest {
+    DigestHasher::new(TAG_QUANTIFIED).count(index).finish()
 }
 
 /// A union — order-blind, matching its set-based identity: sort the member digests.
@@ -499,6 +537,24 @@ fn canonical_type_digest(kt: KType, schema: &SigSchema, types: &TypeRegistry) ->
             TypeNode::KFunction { params, ret } => {
                 let mut h = DigestHasher::new(TAG_KFUNCTION);
                 feed_record_canonical(&mut h, params, schema, types);
+                h.digest(canonical_type_digest(*ret, schema, types))
+                    .finish()
+            }
+            TypeNode::ExpressionShape {
+                quantifiers,
+                elements,
+                ret,
+            } => {
+                let mut h = DigestHasher::new(TAG_EXPRESSION_SHAPE);
+                h.count(quantifiers.len()).count(elements.len());
+                for element in elements {
+                    match element {
+                        DispatchTokenElement::Keyword(symbol) => h.byte(1).symbol(symbol.symbol()),
+                        DispatchTokenElement::Slot(kt) => {
+                            h.byte(0).digest(canonical_type_digest(*kt, schema, types))
+                        }
+                    };
+                }
                 h.digest(canonical_type_digest(*ret, schema, types))
                     .finish()
             }
