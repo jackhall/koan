@@ -17,10 +17,10 @@ system rather than implicit in builtin internals.
 ```
 SIG Monad = (
   (TYPE (Type AS Wrap))          -- type constructor: applied as :(Number AS Wrap)
-  (EXPR (PURE Elt :Type x :Elt) -> :(Elt AS Wrap))
-  (EXPR (BIND Elt :Type Res :Type
-          m :(Elt AS Wrap)
-          f :(FN :{x :Elt} -> :(Res AS Wrap))) -> :(Res AS Wrap))
+  (EXPR FOR ALL (Elt) (PURE x :Elt) -> :(Elt AS Wrap))
+  (EXPR FOR ALL (Elt Res)
+        (BIND m :(Elt AS Wrap)
+              f :(FN :{x :Elt} -> :(Res AS Wrap))) -> :(Res AS Wrap))
 )
 ```
 
@@ -38,17 +38,17 @@ Opaque ascription mints a per-call `SetMember` handle for a
 **Quantified members.** An ordinary member names concrete types:
 `(EXPR (PURE x :Number) -> :(Number AS Wrap))` declares one operation at one
 element type. A **quantified** member binds its own type parameters and
-declares the operation at *every* choice of them — `Elt :Type` above is the
-**quantifier**, and its scope is the rest of the member's element sequence
-and the return, both of which read the name it binds. `bind` quantifies twice
+declares the operation at *every* choice of them — `FOR ALL (Elt)` above is the
+**quantifier**, and its scope is the member's whole element sequence and the
+return, both of which read the names it binds. `bind` quantifies twice
 because it changes the element type: an `Elt` in, a `Res` out, one `Wrap`
 throughout. A module satisfies a quantified member by supplying a single
 implementation that holds at every instantiation — not one per element type —
 so a module ascribes `Monad` once and is a monad at every element type. The
 quantifier list is part of the shape's type; argument names are not.
-Quantification is not a functor's `:Type` parameter, which is bound and
-solved per call: a quantified member's parameters are solved once, at
-satisfaction, against the candidate module's own overloads.
+Quantification is not a functor's `:Type` parameter, which the caller passes
+as an argument: a quantifier is never an argument, and a definition solves it
+per call from the types its arguments carry — `PURE 5` binds `Elt = Number`.
 
 **Keyworded members, not `VAL` slots.** `PURE` and `BIND` are dispatch keys a
 satisfying module answers to, checked by the same most-specific selection

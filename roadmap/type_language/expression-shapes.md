@@ -56,8 +56,9 @@ Three consequences of the conflation, all live:
   `EXPR (PURE x :Carrier) -> Carrier = (x)`, and the dual-binding statement — one callable
   reaching both the value name and the dispatch bucket — is written
   `LET pure = FN EXPR (PURE x :Carrier) -> Carrier = (x)`, naming both kinds it binds. The
-  record-schema lambda forms keep `FN`. The retired keyworded `FN` spellings are refused with
-  diagnostics naming the respelling.
+  record-schema lambda forms keep `FN`. The retired keyworded `FN` overloads, the bodyless
+  declarator and its lazy-slot row are deleted outright — no diagnostic names the old spelling,
+  and no overload exists only to raise one.
 - An expression shape's type is the interleaved element sequence — keywords and positional
   argument types, in order — plus the return type. Argument names are binder-side only: they
   appear where a body needs them and are absent from the type, so two definitions differing only
@@ -79,16 +80,28 @@ Three consequences of the conflation, all live:
 - A shape type is spellable in a type position — `:(EXPR (PURE _ :Number) -> Number)` — so the
   same type can be written down outside a SIG body, and a slot that expects one refuses a lambda
   while admitting a callable whose registered shape satisfies it.
-- A shape **quantifies** over type parameters it binds: `EXPR (PURE Elt :Type x :Elt) -> :(Elt AS Wrap)`
-  declares one operation holding at every `Elt`, and the quantified names are readable by every
-  later element type and by the return. The quantifier list is part of the shape type — two
+- A shape **quantifies** over type parameters it binds in its own group ahead of the head:
+  `EXPR FOR ALL (Elt) (PURE x :Elt) -> :(Elt AS Wrap)` declares one operation holding at every
+  `Elt`, and the listed names are readable by every element type and by the return. A listed
+  name no element references is refused at the definition, and a `Name :Type` pair inside a head
+  stays a call-time type argument. The quantifier list is part of the shape type — two
   shapes quantifying over different arities are different types, and it renders and digests with
   the rest of the shape — as against argument names, which are binder-side only. A shape
   quantifying over nothing is the ordinary case and carries an empty list.
-- Satisfaction of a quantified shape solves its parameters **once, against the candidate's own
-  overloads**, and admits only a module supplying an implementation that holds at every
-  instantiation — never one implementation per instantiation. A candidate satisfying the shape
-  at some element types and not others is a failure naming the parameter that failed to solve.
+- A definition quantifies too — `EXPR FOR ALL (Elt) (PURE x :Elt) -> :(Elt AS Wrap) = (Wrap x)` —
+  and its parameters are solved **per call** from the arguments' carried types by one
+  unification walk: `PURE 5` binds `Elt = Number`, the return elaborates at that binding and is
+  checked at the lift, and an argument disagreeing with an earlier binding is a call-time error
+  naming the parameter. A quantifier no argument position can bind is refused at the call.
+- In the shape type a quantified position is the unconstrained top, so satisfaction pairs a
+  quantified declared shape positionally with each candidate overload and needs no solver: a
+  candidate position that is quantified or `Any` satisfies it, a concrete one is a failure naming
+  the parameter. A module is therefore admitted only with **one** implementation holding at every
+  instantiation, never one implementation per instantiation, and a continuation handed to `bind`
+  keeps its own parameter types at the call.
+- The lambda type a quantified callable reports on the value lane erases each quantified position
+  to `Any` — a lambda type carries no binder — so a `VAL` slot over it keeps working and a call by
+  name solves the quantifiers exactly as a dispatched call does.
 - `SIG Monad = ((TYPE (Type AS Wrap)) (EXPR (PURE …)) (EXPR (BIND …)))` — the signature of
   [design/effects.md](../../design/effects.md) — declares, and a module ascribes it once for
   every element type.
@@ -121,14 +134,29 @@ Three consequences of the conflation, all live:
   positionally in specificity and the join. Two shapes alpha-equivalent under a renaming of their
   quantified parameters are one type — the names are a binding, not identity — which keeps
   "argument names are absent from the type" and "quantified names are present" from colliding.
-- *Solving a quantified parameter — decided.* Reuse the shipped deferred-return shadow
-  ([`TypeNode::DeferredReturn`](../../src/machine/model/types/ktype.rs)), which already stands for
-  "a type this position names but has not resolved," moved from a definition's per-call
-  elaboration to a declaration's satisfaction-time one. Satisfaction walks the shape and the
-  candidate overload in step, binding each quantified name to what the candidate has at that
-  position and requiring every later occurrence to agree. This is the parameter-side mirror
-  [stage 5](../predicate_typing/modular-implicits.md) wants for implicit-functor resolution, but
-  it needs nothing from that stage: the shadow node and the structural walk are this item's.
+- *Solving a quantified parameter — decided.* A quantified position is its own leaf node,
+  `Quantified(index)`, so alpha-variants intern once. The type
+  relations read it as the top; the **call** solves it: dispatch admits it as `Any` when picking,
+  and argument validation walks every slot in order with one unifier, binding a quantifier at its
+  first occurrence to the type the argument carries at that structural position and requiring a
+  later occurrence to agree (equal covariantly, equal-or-more-general at a contravariant position
+  such as a continuation's parameter). Each binding is registered into the per-call scope through
+  the `:Type`-parameter door, so the body and the return read it. A return naming only quantifiers
+  elaborates structurally at the definition and is substituted per call; one naming a value
+  parameter stays deferred. The walk is the parameter-side projection
+  [stage 5](../predicate_typing/modular-implicits.md) names for type-parameterized implicit
+  functors, so that stage inherits it rather than building its own; nothing here searches.
+- *Quantifier syntax — decided.* A `FOR ALL (<names>)` group between `EXPR` and the head, on the
+  type form and both definition forms, keyed in its own bucket beside the unquantified twin. The
+  head then *is* the call shape, the bucket key is read off it by inspection with no reference
+  scan, and `Name :Type` inside a head keeps its one meaning, a call-time type argument
+  (`FN (MAKETREE Elt :Type) -> Module` is unchanged). Quantifier indices are the group's order.
+- *Retired spellings — decided.* No historical diagnostic and no always-erroring overload: the
+  old forms are deleted and report whatever the generic path reports.
+- *Join of keyworded overloads — decided.* Under a shared key every pair joins positionally
+  (slots meet, return joins), a pair whose slot meets to `Never` is dropped, and the canonical set
+  is kept: each pair is an upper bound of both operands, so the result is the strongest interface
+  both satisfy.
 - *Where the selection is carried — decided.* Nowhere: the verdict stays boolean and the view
   re-runs the one shared selection function on the same immutable inputs, then resolves the
   callable by shape-type equality. Deterministic, so provably the same pick, with no payload
@@ -150,6 +178,11 @@ The keyworded surface this re-spells and re-types is shipped —
 [design/typing/modules.md](../../design/typing/modules.md) covers the declaration form, an
 overload's identity, satisfaction as a dispatch-mirrored most-specific pick, and the ascription
 barrier's treatment of it.
+
+The per-call unifier is also the structural walk
+[stage 5](../predicate_typing/modular-implicits.md) names for solving a type-parameterized
+implicit functor's `:Type` arguments, and closes its open "deferred-parameter type precision"
+direction; that stage inherits it rather than depending on this item.
 
 **Requires:** none — the keyworded and operator surfaces it re-spells are shipped.
 
