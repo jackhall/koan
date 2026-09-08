@@ -270,7 +270,7 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     assert_eq!(closure(&table, s_id).unwrap(), priced);
 
     // And a walk that consults no memo at all agrees with what was recorded.
-    let fresh = table.transitive_pins(SlotNode::Sealed(s_id), false);
+    let fresh = table.transitive_pins(GraphNode::Sealed(s_id), false);
     assert!(fresh.cells.is_empty());
     assert_eq!(table.bytes_of(&fresh), priced.bytes);
 }

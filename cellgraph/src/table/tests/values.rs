@@ -168,10 +168,10 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
         .unwrap();
 
     let ring = table
-        .debug_ring_from(HoldNode::Cell(first))
+        .debug_ring_from(HoldNode::Slab(first))
         .expect("the hold graph has a cycle");
     assert_eq!(ring.len(), 2);
-    assert!(ring.contains(&HoldNode::Cell(first)) && ring.contains(&HoldNode::Cell(second)));
+    assert!(ring.contains(&HoldNode::Slab(first)) && ring.contains(&HoldNode::Slab(second)));
 
     // Every death is declared, and the ring moves into the sealed tier intact: each sealed cell
     // holds the other, so neither count ever reaches zero. A ring is a leak, never a dangle.
@@ -212,7 +212,7 @@ fn an_acyclic_hold_graph_reports_no_ring() {
         .unwrap()
         .unwrap();
 
-    assert!(table.debug_ring_from(HoldNode::Cell(first)).is_none());
+    assert!(table.debug_ring_from(HoldNode::Slab(first)).is_none());
 }
 
 // The doors a value crosses steps through: `keep` puts a carrier down in its home cell's reach

@@ -302,15 +302,15 @@ pub(crate) struct Occupancy {
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum HoldNode {
-    Cell(SlabHandle),
+    Slab(SlabHandle),
     Sealed(SealedId),
 }
 
 /// The same node keyed by slab slot rather than handle, so a walk can visit it before deciding
 /// which generation to report.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum SlotNode {
-    Cell(u32),
+enum GraphNode {
+    Slab(u32),
     Sealed(SealedId),
 }
 
@@ -1944,7 +1944,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 sealed: memo.to_vec(),
             });
         }
-        let pins = self.transitive_pins(SlotNode::Sealed(id), true);
+        let pins = self.transitive_pins(GraphNode::Sealed(id), true);
         if pins.cells.is_empty() {
             self.sealed.prime(id, &pins.sealed);
         }
@@ -1975,8 +1975,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             scratch.ids(),
             true,
             |node| match node {
-                SlotNode::Cell(_) => frozen = false,
-                SlotNode::Sealed(inner) => sealed_ids.push(inner),
+                GraphNode::Slab(_) => frozen = false,
+                GraphNode::Sealed(inner) => sealed_ids.push(inner),
             },
         );
         // The memo is durable and lands in the sealed cell's own region, so the bytes it costs are
@@ -1995,16 +1995,16 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// would bill the shared part twice. `use_memos` is false only where a test recomputes a memo
     /// from scratch to check it against what was recorded.
     #[cfg(test)]
-    fn transitive_pins(&self, start: SlotNode, use_memos: bool) -> TransitivePins {
+    fn transitive_pins(&self, start: GraphNode, use_memos: bool) -> TransitivePins {
         let mut frontier = Bits::new();
         // The walkers run outside every verb, so they take the scratch region off the field
         // directly and leave it to the next verb's reset.
         let mut worklist = self.scratch_at_rest().vec();
         match start {
-            SlotNode::Cell(slot) => {
+            GraphNode::Slab(slot) => {
                 frontier.set(slot);
             }
-            SlotNode::Sealed(id) => worklist.push(id),
+            GraphNode::Sealed(id) => worklist.push(id),
         }
         let mut pins = TransitivePins {
             cells: Vec::new(),
@@ -2017,8 +2017,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             self.scratch_at_rest().ids(),
             use_memos,
             |node| match node {
-                SlotNode::Cell(slot) => pins.cells.push(slot),
-                SlotNode::Sealed(id) => pins.sealed.push(id),
+                GraphNode::Slab(slot) => pins.cells.push(slot),
+                GraphNode::Sealed(id) => pins.sealed.push(id),
             },
         );
         pins
@@ -2042,14 +2042,14 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         mut seen_cells: Bits<W>,
         mut seen_sealed: ScratchSet<'s>,
         use_memos: bool,
-        mut visit: impl FnMut(SlotNode),
+        mut visit: impl FnMut(GraphNode),
     ) {
         loop {
             if let Some(slot) = frontier.take_one() {
                 if !seen_cells.set(slot) {
                     continue;
                 }
-                visit(SlotNode::Cell(slot));
+                visit(GraphNode::Slab(slot));
                 frontier.union_not_with(self.pins.row(slot), &seen_cells);
                 worklist.extend(self.sealed_holds[slot as usize].iter());
                 continue;
@@ -2058,7 +2058,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             if !seen_sealed.insert(id) {
                 continue;
             }
-            visit(SlotNode::Sealed(id));
+            visit(GraphNode::Sealed(id));
             let memo = use_memos
                 .then(|| self.sealed.get(id).and_then(SealedCell::memo))
                 .flatten();
@@ -2066,7 +2066,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 Some(memo) => {
                     for inner in memo {
                         if seen_sealed.insert(*inner) {
-                            visit(SlotNode::Sealed(*inner));
+                            visit(GraphNode::Sealed(*inner));
                         }
                     }
                 }
@@ -2134,8 +2134,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let mut bytes = 0;
         self.walk(frontier, worklist, seen_cells, seen_sealed, true, |node| {
             bytes += match node {
-                SlotNode::Cell(slot) => self.cell_bytes(slot),
-                SlotNode::Sealed(id) => self.sealed_bytes(id),
+                GraphNode::Slab(slot) => self.cell_bytes(slot),
+                GraphNode::Sealed(id) => self.sealed_bytes(id),
             };
         });
         bytes
@@ -2152,8 +2152,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     #[cfg(test)]
     pub(crate) fn debug_ring_from(&self, start: HoldNode) -> Option<Vec<HoldNode>> {
         let start = match start {
-            HoldNode::Cell(handle) => SlotNode::Cell(handle.slot()),
-            HoldNode::Sealed(id) => SlotNode::Sealed(id),
+            HoldNode::Slab(handle) => GraphNode::Slab(handle.slot()),
+            HoldNode::Sealed(id) => GraphNode::Sealed(id),
         };
         let mut path = Vec::new();
         let mut settled = std::collections::HashSet::new();
@@ -2162,12 +2162,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     }
 
     #[cfg(test)]
-    fn name(&self, node: SlotNode) -> HoldNode {
+    fn name(&self, node: GraphNode) -> HoldNode {
         match node {
-            SlotNode::Cell(slot) => {
-                HoldNode::Cell(SlabHandle::new(slot, self.slots[slot as usize].generation))
+            GraphNode::Slab(slot) => {
+                HoldNode::Slab(SlabHandle::new(slot, self.slots[slot as usize].generation))
             }
-            SlotNode::Sealed(id) => HoldNode::Sealed(id),
+            GraphNode::Sealed(id) => HoldNode::Sealed(id),
         }
     }
 
@@ -2178,24 +2178,24 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// the path it took. The pricing walk descends the slab half a whole row at a time and never
     /// builds this.
     #[cfg(test)]
-    fn holds_of(&self, node: SlotNode) -> Vec<SlotNode> {
+    fn holds_of(&self, node: GraphNode) -> Vec<GraphNode> {
         match node {
-            SlotNode::Cell(slot) => self
+            GraphNode::Slab(slot) => self
                 .pins
                 .held_by(slot)
-                .map(SlotNode::Cell)
+                .map(GraphNode::Slab)
                 .chain(
                     self.sealed_holds[slot as usize]
                         .iter()
-                        .map(SlotNode::Sealed),
+                        .map(GraphNode::Sealed),
                 )
                 .collect(),
-            SlotNode::Sealed(id) => match self.sealed.get(id) {
+            GraphNode::Sealed(id) => match self.sealed.get(id) {
                 Some(sealed_cell) => sealed_cell
                     .aggregate
                     .slab_slots()
-                    .map(SlotNode::Cell)
-                    .chain(sealed_cell.aggregate.sealed().iter().map(SlotNode::Sealed))
+                    .map(GraphNode::Slab)
+                    .chain(sealed_cell.aggregate.sealed().iter().map(GraphNode::Sealed))
                     .collect(),
                 None => Vec::new(),
             },
@@ -2205,10 +2205,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     #[cfg(test)]
     fn walk_for_ring(
         &self,
-        node: SlotNode,
-        path: &mut Vec<SlotNode>,
-        settled: &mut std::collections::HashSet<SlotNode>,
-    ) -> Option<Vec<SlotNode>> {
+        node: GraphNode,
+        path: &mut Vec<GraphNode>,
+        settled: &mut std::collections::HashSet<GraphNode>,
+    ) -> Option<Vec<GraphNode>> {
         if let Some(entry) = path.iter().position(|step| *step == node) {
             return Some(path[entry..].to_vec());
         }

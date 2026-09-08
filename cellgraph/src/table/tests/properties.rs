@@ -405,7 +405,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         // names no live cell, spans the same sealed cells, and prices at the same bytes. Nothing
         // inside a frozen closure changes, and this is the check that says so for every
         // interleaving.
-        let fresh = table.transitive_pins(SlotNode::Sealed(*id), false);
+        let fresh = table.transitive_pins(GraphNode::Sealed(*id), false);
         assert!(
             fresh.cells.is_empty(),
             "the memoized closure of {id:?} has since named a live cell"
