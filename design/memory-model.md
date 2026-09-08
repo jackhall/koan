@@ -769,6 +769,10 @@ party's death schedule reaches into another's subtree.
 
 ## Open work
 
+- [Slot-shaped per-call scopes](../roadmap/reduce_allocs/slot-shaped-per-call-scopes.md)
+  — a per-call frame's value bindings as a slot array over a per-body layout
+  in place of the per-activation `data` map and the value half of the claim
+  store.
 - [Tightness-audit coverage](../roadmap/compile_safety/tightness-audit-coverage.md)
   — the two blind spots named under [§ Debug region audits](#debug-region-audits):
   the uninstrumented relocation verbs, and the address walk's stop at a captured

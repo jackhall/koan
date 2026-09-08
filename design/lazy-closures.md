@@ -308,6 +308,10 @@ overloads.
 
 ## Open work
 
+- [Source the free-identifier walk's last two rules](../roadmap/refactor/free-identifier-walk-sourcing.md)
+  — the walk's positional visibility rule and the label positions of `ATTR` /
+  `FROM` are restated rather than read off the resolver and the registration
+  table, and are held to them by tests alone.
 - [Callable copy tuning](../roadmap/foundation/callable-copy-tuning.md) — the
   pricing levers the first seam leaves unpulled: foreign-crossing pricing (so a
   pin can be re-consolidated at a later crossing) and a measured justification

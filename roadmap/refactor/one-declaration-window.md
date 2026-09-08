@@ -61,4 +61,7 @@ require two types.
 
 **Requires:** none — a leaf refactor over shipped machinery.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Seal as a value-bearing producer](seal-as-producer.md) — the seal terminal carries the one
+  window type.
