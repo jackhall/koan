@@ -233,7 +233,7 @@ fn two_heads_over_one_symbol_are_two_overloads_and_one_record() {
 }
 
 /// A signature names itself by its content, and an operator member renders as the head declaring
-/// it rather than as the FN head its bucket key would otherwise spell.
+/// it rather than as the `EXPR` head its bucket key would otherwise spell.
 #[test]
 fn an_operator_member_renders_as_its_own_head() {
     let program = program_storage();
@@ -366,7 +366,7 @@ fn a_second_overload_in_a_declared_operators_bucket_renders_as_an_operator_head(
     );
 }
 
-/// An FN head over an operator key claims the bucket and no chaining, so it keeps the FN-head
+/// An `EXPR` head over an operator key claims the bucket and no chaining, so it keeps the head
 /// rendering — the schema's operator channel is what makes a member an operator member.
 #[test]
 fn an_fn_head_over_an_operator_key_stays_an_fn_head() {

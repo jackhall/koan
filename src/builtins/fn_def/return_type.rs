@@ -26,7 +26,7 @@ use crate::machine::model::{StaticName, ValueSymbol};
 /// captured raw: a bare `Type` token (`-> Number`, `OVER Elt`), a sigiled form (`-> :(LIST OF Str)`,
 /// `OVER :Number`) and a record (`-> :{v :Number}`) all reach the body verbatim, so it resolves or
 /// sub-dispatches them against its own scope rather than a name the surrounding one may not bind.
-/// One constructor for both surfaces — `FN`'s return slot and `OP`'s operand / result slots — since
+/// One constructor for both surfaces — a definition's return slot and `OP`'s operand / result slots — since
 /// [`TypeSlotThunk::from_slot`] is the single read behind them and its arms *are* these members.
 pub(crate) fn type_carrier_union(registries: &RunRegistries) -> KType {
     registries.types.union_of(&[
@@ -79,12 +79,7 @@ pub(crate) fn extract_return_type_raw<'a>(
     args: BoundArgs<'a, '_>,
     brand: RegionBrand<'a>,
 ) -> Result<TypeSlotThunk<'a>, KError> {
-    TypeSlotThunk::from_slot(
-        args,
-        brand,
-        &super::SLOTS.return_type,
-        "FN return-type slot",
-    )
+    TypeSlotThunk::from_slot(args, brand, &super::SLOTS.return_type, "return-type slot")
 }
 
 impl<'a> TypeSlotThunk<'a> {
@@ -92,7 +87,8 @@ impl<'a> TypeSlotThunk<'a> {
     /// claimed the part and the read is a match over the arms that union lists — never a probe for
     /// a resolved cell, since every member is part-kind-exact and captures raw.
     ///
-    /// `slot` names the args field; `label` names the surface in the shape errors. Shared by `FN`'s
+    /// `slot` names the args field; `label` names the surface in the shape errors. Shared by a
+    /// definition's
     /// return slot and `OP`'s operand / result slots, which take the same
     /// [`type_carrier_union`] — so the arms here are exactly that union's members. A value-named
     /// slot (`-> er`) is no member of it: the shape never binds, and its targeted message comes
@@ -185,7 +181,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(te) => resolve_at_wake(
             scope,
-            "FN return-type slot",
+            "return-type slot",
             None,
             registries,
             |s, registries| s.resolve_type_identifier(te, None, registries),
@@ -198,7 +194,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
             // `user_sig`).
             let dep_index = return_type_dep
                 .expect("a ReturnTypeExpr capture is built beside the request that carries it");
-            let kt = expect_type_terminal(results, dep_index, "FN return-type slot", registries)?;
+            let kt = expect_type_terminal(results, dep_index, "return-type slot", registries)?;
             Ok(ReturnType::Resolved(kt))
         }
     }

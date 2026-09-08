@@ -97,10 +97,11 @@ fn combined_form_is_rejected_in_a_sig_body() {
     );
 }
 
-/// `FN :{…}` is anonymous — it registers no bucket, so there is no combined form for it: the
-/// combined key's signature slot captures only code, so the `:{…}` there evaluates to a record type
-/// no overload admits and the flat spelling fails dispatch. The parenthesized value-bind spelling
-/// stays the working one.
+/// A combined statement installs a dispatch bucket alongside the value name, and no `FN` signature
+/// has a head to key one on, so `LET <name> = FN <signature> -> <Return> = (<body>)` reaches no
+/// overload. A `:{…}` schema earns the message naming the parenthesized value bind that does work;
+/// a `(<head>)` — the keyworded callable's own spelling is `FN EXPR` — gets the generic miss, as
+/// every retired spelling does.
 #[test]
 fn anonymous_signature_has_no_combined_form() {
     let program = program_storage();
@@ -108,8 +109,16 @@ fn anonymous_signature_has_no_combined_form() {
     let mut test_run = TestRun::silent(&program, &region);
     let err = test_run.run_one_err(test_run.parse_one("LET f = FN :{n :Number} -> Number = (n)"));
     assert!(
+        format!("{err}").contains("LET f = (FN :{…} -> <Return> = (<body>))"),
+        "expected the parenthesized spelling, got {err}",
+    );
+
+    let mut test_run = TestRun::silent(&program, &region);
+    let err =
+        test_run.run_one_err(test_run.parse_one("LET g = FN (PICK n :Number) -> Number = (n)"));
+    assert!(
         matches!(err.kind, crate::machine::KErrorKind::DispatchFailed { .. }),
-        "expected the flat spelling to match no combined overload, got {err}",
+        "expected the retired keyworded spelling to report the generic miss, got {err}",
     );
 
     let mut test_run = TestRun::silent(&program, &region);

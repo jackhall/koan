@@ -21,7 +21,7 @@ fn sig_schema(
     }
 }
 
-/// A definition dispatches on its head exactly as the keyworded `FN` spelling does.
+/// A definition registers under its head's bucket key and is reached by dispatch.
 #[test]
 fn a_definition_registers_its_head_as_a_dispatch_bucket() {
     let program = program_storage();
@@ -290,6 +290,81 @@ fn a_malformed_quantifier_group_is_refused() {
             matches!(&error.kind, KErrorKind::ShapeError(message)
                 if message.contains(fragment)),
             "`FOR ALL {group}` must be refused with `{fragment}`, got {error}",
+        );
+    }
+}
+
+// ---------- the shape as a slot type ----------
+
+/// A slot typed by a shape is filled by a callable, not by a type: it admits one whose registered
+/// shape satisfies the declared one, and refuses a lambda and a callable registered under another
+/// key. The two channels never cross — a lambda slot reads a callable's parameter record by name,
+/// a shape slot reads its element run positionally.
+#[test]
+fn a_shape_typed_slot_admits_only_a_callable_of_that_shape() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "LET doubler = FN EXPR (DOUBLE n :Number) -> Number = (n * 2)\n\
+         LET tripler = FN EXPR (TRIPLE n :Number) -> Number = (n * 3)\n\
+         LET plain = (FN :{n :Number} -> Number = (n))\n\
+         EXPR (APPLY g :(EXPR (DOUBLE _ :Number) -> Number)) -> Number = (7)",
+    );
+
+    let matched = test_run.run_one(test_run.parse_one("APPLY doubler"));
+    assert!(matches!(matched, KObject::Number(n) if *n == 7.0));
+
+    for refused in ["APPLY plain", "APPLY tripler"] {
+        let error = test_run.run_one_err(test_run.parse_one(refused));
+        assert!(
+            matches!(&error.kind, KErrorKind::DispatchFailed { .. }),
+            "`{refused}` must reach no overload, got {error}",
+        );
+    }
+}
+
+/// Two definitions differing only in what they name their slots satisfy one declaration: the names
+/// are binder-side, so both project the shape the SIG declared.
+#[test]
+fn definitions_differing_only_in_slot_names_satisfy_one_declaration() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "SIG Doubler = ((EXPR (DOUBLE _ :Number) -> Number))\n\
+         MODULE one = ((EXPR (DOUBLE n :Number) -> Number = (n * 2)))\n\
+         MODULE two = ((EXPR (DOUBLE value :Number) -> Number = (value * 2)))\n\
+         LET first = (one :| Doubler)\n\
+         LET second = (two :| Doubler)",
+    );
+
+    for view in [
+        "USING first SCOPE (DOUBLE 4)",
+        "USING second SCOPE (DOUBLE 4)",
+    ] {
+        let result = test_run.run_one(test_run.parse_one(view));
+        assert!(matches!(result, KObject::Number(n) if *n == 8.0), "{view}");
+    }
+}
+
+/// The retired `FN` spellings are gone outright rather than diagnosed: nothing registers under a
+/// `FN` key with a `(<head>)` operand, so the head evaluates where it stands and the statement
+/// reports whatever the generic path reports. No message names the respelling.
+#[test]
+fn the_retired_fn_spellings_no_longer_resolve() {
+    for source in [
+        "LET Bad = :(FN (x :Number) -> Bool)",
+        "SIG Pure = ((FN (PURE x :Number) -> Number))",
+        "FN (PICK n :Number) -> Number = (n)",
+    ] {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let error = test_run.run_one_err(test_run.parse_one(source));
+        assert!(
+            !format!("{error}").contains("EXPR"),
+            "a retired spelling earns no migration diagnostic, got {error}",
         );
     }
 }

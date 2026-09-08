@@ -211,8 +211,8 @@ field-subset schemas at once, with neither more specific, so a call is
 ambiguous:
 
 ```koan
-FN (PICK r :{x :Number, y :Str}) -> Str = ("got xy")
-FN (PICK r :{x :Number, z :Str}) -> Str = ("got xz")
+EXPR (PICK r :{x :Number, y :Str}) -> Str = ("got xy")
+EXPR (PICK r :{x :Number, z :Str}) -> Str = ("got xz")
 LET both = {x = 1, y = "a", z = "b"}
 PICK both
 ```
@@ -226,8 +226,8 @@ named fields, narrowing the type the dispatcher sees so just one overload
 matches:
 
 ```koan
-FN (PICK r :{x :Number, y :Str}) -> Str = ("got xy")
-FN (PICK r :{x :Number, z :Str}) -> Str = ("got xz")
+EXPR (PICK r :{x :Number, y :Str}) -> Str = ("got xy")
+EXPR (PICK r :{x :Number, z :Str}) -> Str = ("got xz")
 LET both = {x = 1, y = "a", z = "b"}
 PRINT (PICK ((x y) FROM both))
 ```

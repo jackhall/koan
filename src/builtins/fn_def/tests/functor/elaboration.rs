@@ -86,7 +86,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
 }
 
 /// End-to-end park-on-LET-placeholder: a `LET` followed in the same batch by a
-/// `FN` whose signature references it works because FN-def parks on the LET's
+/// definition whose head references it works because the definition parks on the LET's
 /// placeholder and re-runs elaboration against the finalized scope.
 #[test]
 fn let_then_fn_in_same_batch_works() {

@@ -1,7 +1,7 @@
 //! `GROUP` surface tests: what a group registers, how a mixed-member run reduces (inside the body
 //! and through a `USING` window), the pairwise combiner fold, and the errors the surface rejects.
 //!
-//! - [`functor`] — a `GROUP` in the body of a module-returning `FN`, instantiated explicitly.
+//! - [`functor`] — a `GROUP` in the body of a module-returning function, instantiated explicitly.
 //! - [`sig_declaration`] — the bodyless form, which declares a SIG operator group.
 
 mod functor;
@@ -280,8 +280,8 @@ fn type_token_group_name_errors_with_the_snake_case_respelling() {
     );
 }
 
-/// The member scan reads a *declaration*, not any statement naming the token `OP`. A user `FN`
-/// whose signature spells `OP` as a keyword makes `1 OP 2` an ordinary call, and a group body may
+/// The member scan reads a *declaration*, not any statement naming the token `OP`. A user `EXPR`
+/// definition whose head spells `OP` as a keyword makes `1 OP 2` an ordinary call, and a group body may
 /// hold one as a top-level statement: the scan skips it and the group's real members stand. The
 /// call is bare rather than bound, so its `OP` keyword sits in the statement's *own* parts run —
 /// which is the only place the scan looks.

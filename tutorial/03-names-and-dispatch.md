@@ -136,8 +136,8 @@ Because matching is by shape, two functions can share keywords as long as their
 slots differ by type. Koan routes each call to the most specific match:
 
 ```koan
-FN (DESCRIBE x :Number) -> Str = ("a number")
-FN (DESCRIBE x :Str) -> Str = ("a string")
+EXPR (DESCRIBE x :Number) -> Str = ("a number")
+EXPR (DESCRIBE x :Str) -> Str = ("a string")
 PRINT (DESCRIBE 7)
 PRINT (DESCRIBE "hi")
 ```

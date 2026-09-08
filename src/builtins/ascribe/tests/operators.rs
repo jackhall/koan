@@ -201,7 +201,7 @@ fn ascription_error(source: &str) -> String {
 }
 
 /// **AC 4.** A module supplying the bucket and no group supplies no chaining record: an `FN` head
-/// over an operator key declares the bucket only, which is exactly what the FN-head spelling means.
+/// over an operator key declares the bucket only, which is exactly what the `EXPR`-head spelling means.
 #[test]
 fn a_module_with_the_bucket_but_no_group_misses_the_declared_record() {
     let message = ascription_error(

@@ -218,8 +218,8 @@ fn module_with_multiple_statements_in_parens() {
 
 #[test]
 fn module_member_function_via_let_fn() {
-    // `LET <name> = (FN ...)` binds under a clean identifier; bare FN lands under
-    // its signature key and isn't reachable as `foo.<name>` via ATTR.
+    // The combined statement binds under a clean identifier; a bare `EXPR` definition lands
+    // under its head's key alone and isn't reachable as `foo.<name>` via ATTR.
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);

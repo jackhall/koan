@@ -83,10 +83,10 @@ fn spec_table_matches_live_registration() {
 /// carries the bind kind the placeholder is tagged with. Pins that the table's two channels are
 /// the only routes into an install.
 ///
-/// The silent entries are exactly the SIG **declaration** forms — `VAL` and the three bodyless
-/// operator heads. Each records into the decl scope's own collectors rather than into a binding
-/// map, so neither channel applies; anything else appearing here means a binder builtin lost its
-/// extractor.
+/// The silent entries are the SIG **declaration** forms — `VAL` and the three bodyless operator
+/// heads, each recording into the decl scope's own collectors rather than into a binding map — plus
+/// the lambda, which has neither a name nor a head to key a bucket on and is listed only for its
+/// type slot. Anything else appearing here means a binder builtin lost its extractor.
 #[test]
 fn spec_channels_cover_every_installing_entry() {
     let silent: Vec<Vec<String>> = BINDER_SPECS
@@ -97,6 +97,7 @@ fn spec_channels_cover_every_installing_entry() {
     assert_eq!(
         silent,
         vec![
+            vec!["FN", "_", "->", "_", "=", "_"],
             vec!["OP", "_", "OVER", "_"],
             vec!["OP", "_", "OVER", "_", "->", "_"],
             vec!["UNARY", "OP", "_", "OVER", "_", "->", "_"],

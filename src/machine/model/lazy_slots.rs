@@ -238,7 +238,9 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
         ],
         slots: &[(4, CODE), (7, CODE)],
     },
-    // FN <signature> -> <return type> = <body>
+    // FN <record schema> -> <return type> = <body> — the lambda. Its signature slot resolves: a
+    // `:{…}` record is a type the lane can evaluate where it stands, unlike a head, whose tokens
+    // name nothing until the definition binds them.
     LazySlotSpec {
         key: &[
             Kw(&KEYWORDS.fn_),
@@ -248,19 +250,12 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(1, CODE), (3, TYPE_EXPR.with(RECORD_TYPE)), (5, CODE)],
+        slots: &[(3, TYPE_EXPR.with(RECORD_TYPE)), (5, CODE)],
     },
-    // FN <signature> -> <return type> — the key the SIG-body keyworded declarator shares with the
-    // function-*type* expression `FN :{…} -> <Ret>`. Only the head captures raw: a `(<head>)` run is
-    // the declarator's own operand and must reach it unevaluated, while a `:{…}` parameter record is
-    // untouched by `CODE` and resolves for the type form as it always has. The return slot stages on
-    // both surfaces — the type form needs a resolved type, and a declared member's return is a
-    // proper type by the same rule.
-    LazySlotSpec {
-        key: &[Kw(&KEYWORDS.fn_), Slot, Kw(&KEYWORDS.arrow), Slot],
-        slots: &[(1, CODE)],
-    },
-    // LET <name> = FN <signature> -> <return type> = <body>
+    // LET <name> = FN <signature> -> <return type> = <body> — a reserved key: nothing registers
+    // under it. The stamp is what keeps its miss a miss, holding the body raw so the statement
+    // reports the shape it got rather than an error from evaluating a body whose parameters no
+    // binder ever bound.
     LazySlotSpec {
         key: &[
             Kw(&KEYWORDS.let_),

@@ -425,17 +425,16 @@ mod tests {
         assert_eq!(aliased, literal, "the alias interns the same function type");
     }
 
-    /// The parenthesized parameter list is gone: `(x :Number)` is a parenthesized group, not a
-    /// type expression, so the function-type overload's `ProperType` slot never sees it. The group
-    /// is captured raw by the bucket's lazy-slot entry and reaches the co-bucket SIG-member
-    /// declarator instead ([`crate::builtins::fn_def`]), which refuses it outside a SIG body —
-    /// either way the form does not elaborate to a function type.
+    /// The parenthesized parameter list is no spelling of a function type: `(x :Number)` is a
+    /// parenthesized group, not a type expression, so this overload's `ProperType` slot never sees
+    /// it. Nothing else claims the key either — a head belongs to the expression-shape family, which
+    /// spells `EXPR` — so the group evaluates where it stands and the form does not elaborate.
     #[test]
     fn fn_with_parenthesized_parameter_list_no_longer_elaborates() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(test_run.parse_one(":(EXPR (x :Number) -> Bool)"));
+        let err = test_run.run_one_err(test_run.parse_one(":(FN (x :Number) -> Bool)"));
         assert!(
             !matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("must be a record type")),
             "the parenthesized form must not reach the FN body at all, got {err}",

@@ -21,7 +21,7 @@
 //! leaves arithmetic alone.
 //!
 //! An operator body captures its declaring scope, so it sees its sibling module bindings exactly as
-//! a bare `FN` body does, and an `OP` statement evaluates to the function it declares.
+//! a bare `EXPR` body does, and an `OP` statement evaluates to the function it declares.
 //!
 //! Surface design: [design/operators.md](../../design/operators.md).
 
@@ -138,7 +138,7 @@ fn capture_type_slot<'a>(
         }),
         // An operator's operands are named by the surface, not declared as parameters, so an `OP`
         // type slot can reference nothing that is unbound in the declaring scope: the per-call
-        // deferral `FN` needs for `-> er` never arises here.
+        // deferral a definition needs for `-> er` never arises here.
         ReturnTypeState::Deferred(_) => Err(KError::new(KErrorKind::ShapeError(
             "OP type slot cannot reference a parameter".to_string(),
         ))),
@@ -642,11 +642,11 @@ pub(super) fn register_unary_operator<'a>(
 /// module may declare an operator the root already declares (`OP #(+) OVER :(LIST OF Number)`).
 /// Shadowing an operator is **type-gated**, not free: dispatch consults the immutable root bucket
 /// first, so the builtin `+` still wins for the operand types it declares and only other operand
-/// types reach the module's body. Ordinary user `FN`s keep the guard.
+/// types reach the module's body. Ordinary user definitions keep the guard.
 ///
 /// The callable is born into `scope`'s own region, and its birth's composition is what names that
 /// region as a member of the description both doors below carry — the bucket seal and the value
-/// wrapper compose from the one envelope, so the two never state the reach independently. Bare-`FN`
+/// wrapper compose from the one envelope, so the two never state the reach independently. Bare-`EXPR`
 /// style: the overload lands in `functions` only, never in `data`.
 fn register_body<'a>(
     scope: &'a Scope<'a>,
@@ -733,7 +733,7 @@ fn head_spelling(kind: OpKind, sym: impl std::fmt::Display) -> String {
 /// union, so a name resolves once where it is written and a still-finalizing sibling `TYPE Carrier`
 /// parks the statement exactly as a `VAL zero :Carrier` slot parks. No deferral of its own is
 /// needed, and the step's carrier is the declared primary function type — uniform with what a
-/// bodyless `FN` head hands back.
+/// bodyless `EXPR` head hands back.
 fn declare<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, has_result: bool) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(
         ctx.args,

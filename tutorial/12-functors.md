@@ -8,7 +8,7 @@ required signature can be plugged in.
 
 ## Defining and applying
 
-`FN (<keyword> <param> :<Signature>) -> <ReturnType> = (<body>)` — the ordinary
+`EXPR (<keyword> <param> :<Signature>) -> <ReturnType> = (<body>)` — the ordinary
 function binder from [chapter 4](04-functions.md). The parameter is a module
 constrained by a signature, and the body builds and returns a new module. You
 apply it by calling its keyword with a module that satisfies the parameter's
@@ -18,7 +18,7 @@ signature, exactly as you would call any other function:
 SIG Ordered = (VAL compare :Number)
 MODULE int_order = (LET compare = 7)
 LET int_order_view = (int_order :! Ordered)
-FN (MAKESET elem :Ordered) -> Module =
+EXPR (MAKESET elem :Ordered) -> Module =
   MODULE built =
     LET sample = (elem.compare)
 LET number_set = (MAKESET int_order_view)
@@ -51,7 +51,7 @@ keyworded one:
 ```koan
 SIG Ordered = (VAL compare :Number)
 MODULE int_order = (LET compare = 7)
-LET make_set = FN (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = (elem.compare)))
+LET make_set = FN EXPR (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = (elem.compare)))
 LET a = (MAKESET int_order)
 LET b = (make_set {elem = int_order})
 PRINT a.sample
@@ -69,7 +69,7 @@ Type-class (capitalized) name is an error — a function is a value, not a type:
 
 ```koan
 SIG Ordered = (VAL compare :Number)
-LET MakeSet = FN (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = 1))
+LET MakeSet = FN EXPR (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = 1))
 ```
 
 ```text
@@ -89,11 +89,11 @@ say "returns a module with this argument's interface", resolved per call:
 ```koan
 SIG Ordered = (VAL compare :Number)
 MODULE int_order = (LET compare = 7)
-FN (MAKESET elem :Ordered) -> Module =
+EXPR (MAKESET elem :Ordered) -> Module =
   MODULE built =
     LET compare = 3
 LET number_set = (MAKESET int_order)
-FN (ECHO elem :Ordered) -> :(TYPE OF elem) = (elem)
+EXPR (ECHO elem :Ordered) -> :(TYPE OF elem) = (elem)
 LET same = (ECHO number_set)
 PRINT same.compare
 PRINT (ECHO int_order)
@@ -117,11 +117,11 @@ points at the spelling above:
 
 ```koan
 SIG Ordered = (VAL compare :Number)
-FN (ECHO elem :Ordered) -> elem = (elem)
+EXPR (ECHO elem :Ordered) -> elem = (elem)
 ```
 
 ```text
-error: shape error: FN return-type slot names a type, but `elem` is a value. For the type of a value — a module-valued parameter, say — write `-> :(TYPE OF elem)`
+error: shape error: a return-type slot names a type, but `elem` is a value. For the type of a value — a module-valued parameter, say — write `-> :(TYPE OF elem)`
 ```
 
 ## Specializing signatures with `WITH`
@@ -169,8 +169,8 @@ the box:
 
 ```koan
 NEWTYPE (Type AS Boxed)
-FN (OPEN b :(Number AS Boxed)) -> Str = ("a boxed number")
-FN (OPEN b :(Str AS Boxed)) -> Str = ("a boxed string")
+EXPR (OPEN b :(Number AS Boxed)) -> Str = ("a boxed number")
+EXPR (OPEN b :(Str AS Boxed)) -> Str = ("a boxed string")
 PRINT (OPEN (Boxed (7)))
 PRINT (OPEN (Boxed ("hi")))
 ```

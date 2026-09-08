@@ -54,7 +54,7 @@ fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
     );
 }
 
-/// An FN whose return type references a parameter name and whose parameter type
+/// A definition whose return type references a parameter name and whose parameter type
 /// elaboration parks on a same-batch SIG routes through `defer` carrying
 /// `ReturnTypeCapture::Deferred(_)`; the dep-finish lifts that carrier verbatim
 /// into `ReturnType::Deferred(_)` once the SIG terminalizes.

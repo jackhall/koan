@@ -1,4 +1,4 @@
-//! A functor — a module-returning `FN` — whose body is a `GROUP`. Instantiating it explicitly, at a
+//! A functor — a module-returning function — whose body is a `GROUP`. Instantiating it explicitly, at a
 //! concrete type or at a witness module, yields a group module whose operators run over that
 //! instantiation; opening it with `USING` puts `+ - …` in scope.
 //!

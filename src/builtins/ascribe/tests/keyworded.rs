@@ -1,5 +1,5 @@
 //! The keyworded surface across the ascription barrier: a signature declares dispatch-bucket
-//! members with bodyless `FN` heads, and a view publishes exactly those, resolved the way dispatch
+//! members with bodyless `EXPR` heads, and a view publishes exactly those, resolved the way dispatch
 //! resolves them.
 //!
 //! A keyworded member is reached by dispatch rather than by name, so every call here runs inside a

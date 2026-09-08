@@ -148,7 +148,7 @@ inside the block:
 ```koan
 MODULE doubling =
   LET dbl = ,
-    FN (DOUBLE x :Number) -> Number = (x)
+    FN EXPR (DOUBLE x :Number) -> Number = (x)
 PRINT
   USING doubling SCOPE (DOUBLE 21)
 ```
@@ -166,7 +166,7 @@ MODULE palette =
   UNION Color = (Red :Null Blue :Null)
 PRINT
   USING palette SCOPE (
-    (FN (DESCRIBE c :Color) -> Str = ("a color"))
+    (EXPR (DESCRIBE c :Color) -> Str = ("a color"))
     (DESCRIBE (Color.Red null)))
 ```
 

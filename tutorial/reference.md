@@ -15,7 +15,7 @@ the link in each section to the relevant chapter.
 
 | Form                                       | Meaning                                  |
 |--------------------------------------------|------------------------------------------|
-| `FN (<signature>) -> <Type> = (<body>)`    | Define a function — a keyword/slot shape with an enforced return type. |
+| `EXPR (<signature>) -> <Type> = (<body>)`    | Define a function — a keyword/slot shape with an enforced return type. |
 | `FN :{<fields>} -> <Type> = (<body>)`      | Anonymous function: a keyword-less record-schema shape. |
 | `<keyword> <args>`                         | Call a function by writing its shape (e.g. `ECHO 21`). |
 | `<fn> {name = value, ...}`                 | Call a captured function by named arguments. |
@@ -65,7 +65,7 @@ the link in each section to the relevant chapter.
 | `<module> :! <Sig>`                              | Transparent ascription.            |
 | `<module> :\| <Sig>`                             | Opaque ascription.                 |
 | `USING <module> SCOPE (<body>)`                  | Run a body with a module's members in scope. |
-| `FN (<KW> <p> :<Sig>) -> Module = (<body>)`      | A functor: an FN returning a module (a module parameterized by a module). |
+| `EXPR (<KW> <p> :<Sig>) -> Module = (<body>)`      | A functor: an FN returning a module (a module parameterized by a module). |
 | `<Sig> WITH {<Slot> = <Type>}`                   | Specialize a signature by pinning a type slot. |
 | `TYPE OF <value>`                                | The type a value reports for itself; a module's is its signature. |
 

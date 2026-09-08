@@ -72,8 +72,8 @@ a keyword dispatch on which variant they're handed:
 
 ```koan
 UNION Maybe = (Some :Number None :Null)
-FN (DESCRIBE x :(Maybe.Some)) -> Str = ("has a value")
-FN (DESCRIBE x :(Maybe.None)) -> Str = ("empty")
+EXPR (DESCRIBE x :(Maybe.Some)) -> Str = ("has a value")
+EXPR (DESCRIBE x :(Maybe.None)) -> Str = ("empty")
 PRINT (DESCRIBE (Maybe.Some 1))
 PRINT (DESCRIBE (Maybe.None null))
 ```

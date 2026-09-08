@@ -43,15 +43,11 @@ type FinalizedFn<'a> = (
 
 /// How a finalized FN-def is wired into the scope:
 ///
-/// - `Function` — a keyworded FN registers under its lead keyword. `bound_name` is `Some` for the
-///   combined `LET <name> = FN …` statement, which additionally binds the callable under that
-///   value name; the two writes describe one `KFunction` at one `BindingIndex`.
+/// - `Function` — an `EXPR` definition registers under its head's bucket key. `bound_name` is
+///   `Some` for the combined `LET <name> = FN EXPR …` statement, which additionally binds the
+///   callable under that value name; the two writes describe one `KFunction` at one `BindingIndex`.
 /// - `Anonymous` — a record-schema binder (`FN :{…}`) has no keyword, so it
 ///   registers nothing; the value it evaluates to is its only handle.
-/// - `Declaration` — a SIG body's bodyless `EXPR (<head>) -> <Return>`, which builds no callable at
-///   all: it records the head's bucket key and `(params) -> ret` type as a keyworded member of the
-///   signature under construction. It rides this path so a declaration and a definition derive
-///   their key and slot types through one parse.
 /// - `Shape` — the bodyless `EXPR (<head>) -> <Return>`, whose carrier is the head's expression
 ///   shape as a type value. `declare` is set where that value is also a declaration: bare inside a
 ///   SIG body, where the shape is recorded as a keyworded member of the signature under
@@ -65,7 +61,6 @@ pub(crate) enum FnKind {
         bound_name: Option<crate::machine::model::ValueSymbol>,
     },
     Anonymous,
-    Declaration,
     Shape {
         declare: bool,
     },
@@ -76,7 +71,7 @@ impl FnKind {
     /// head does: its type drops the slot names, so there is nothing for `_` to lose.
     pub(crate) fn wildcards(self) -> Wildcards {
         match self {
-            FnKind::Declaration | FnKind::Shape { .. } => Wildcards::Slots,
+            FnKind::Shape { .. } => Wildcards::Slots,
             FnKind::Function { .. } | FnKind::Anonymous => Wildcards::Refused,
         }
     }
@@ -359,7 +354,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         // A bodyless head's slots are positional and its type drops their names, so two slots
         // sharing a name collide over nothing. Every other surface binds its arguments by name in
         // a body, where a repeat has no reading that works.
-        FnKind::Declaration | FnKind::Shape { .. } => {
+        FnKind::Shape { .. } => {
             return finalize_bodyless_head(
                 scope,
                 elements,
@@ -404,7 +399,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     let mut overload_write: Option<WriteOp<'a>> = None;
     let bound_name = match kind {
         // A bodyless head never reaches here: it returns above, before any callable is built.
-        FnKind::Anonymous | FnKind::Declaration | FnKind::Shape { .. } => None,
+        FnKind::Anonymous | FnKind::Shape { .. } => None,
         FnKind::Function { bound_name } => {
             if !has_dispatch_keyword {
                 return Err(KError::new(KErrorKind::ShapeError(
@@ -440,9 +435,9 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 
 /// The bodyless-head leg of [`finalize_fn_with_kind`]: derive the head's expression shape. No
 /// callable is built — a bodyless head has no body — so the step's own carrier is that shape as a
-/// type value, uniform with what a `VAL` slot hands back. Where the head also declares — every
-/// `FnKind::Declaration`, and a `FnKind::Shape` standing bare in a SIG body — it additionally
-/// records that shape as a keyworded member of the SIG under construction.
+/// type value, uniform with what a `VAL` slot hands back. Where the head also declares — a
+/// `FnKind::Shape` standing bare in a SIG body — it additionally records that shape as a keyworded
+/// member of the SIG under construction.
 ///
 /// Two shapes are rejected here rather than at the ascription that would meet them. A head with no
 /// fixed token has no bucket to declare (the same rule a definition's registration applies), and a
@@ -458,23 +453,20 @@ fn finalize_bodyless_head<'a>(
     registries: &RunRegistries,
 ) -> Result<FinalizedFn<'a>, KError> {
     let declare = match kind {
-        FnKind::Declaration => true,
         FnKind::Shape { declare } => declare,
-        // The caller routes only the two bodyless kinds here.
+        // The caller routes only the bodyless kind here.
         FnKind::Function { .. } | FnKind::Anonymous => false,
     };
     if !elements
         .iter()
         .any(|e| matches!(e, SignatureElement::Keyword(_)))
     {
-        return Err(KError::new(KErrorKind::ShapeError(match kind {
-            FnKind::Shape { .. } => "a shape has at least one keyword — a keyword-free callable \
-                 is a lambda, written `:(FN :{…} -> <Return>)`"
+        return Err(KError::new(KErrorKind::ShapeError(
+            "a shape has at least one keyword — a keyword-free callable is a lambda, written \
+             `:(FN :{…} -> <Return>)`. To declare a function *value* member of a signature, write \
+             `(VAL <name> :<FnType>)`."
                 .to_string(),
-            _ => "a SIG keyworded member must contain at least one Keyword (a fixed token to \
-                 dispatch on) — write `(VAL <name>: <FnType>)` to declare a function value member"
-                .to_string(),
-        })));
+        )));
     }
     let ReturnType::Resolved(ret) = return_type else {
         return Err(KError::new(KErrorKind::ShapeError(format!(

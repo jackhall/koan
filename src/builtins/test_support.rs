@@ -566,7 +566,7 @@ pub(crate) fn binds_module(scope: &Scope<'_>, name: &str) -> bool {
     matches!(scope.lookup(name), Some(KObject::Module(_)))
 }
 
-/// Fetch the single bare-`FN` overload whose signature's first keyword is `keyword`.
+/// Fetch the single bare-`EXPR` overload whose signature's first keyword is `keyword`.
 /// Panics if zero or more than one match.
 #[cfg(test)]
 pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {

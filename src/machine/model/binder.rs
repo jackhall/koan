@@ -200,22 +200,18 @@ fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> boo
     })
 }
 
-/// The signature slot of a callable's declaration: the part right after the keyword that opens the
-/// head — `ALL` on a quantified form, whose group sits between `EXPR` and the head; `EXPR` where
-/// the form spells one (`LET <name> = FN EXPR …` spells both); `FN` otherwise.
-/// Read by position relative to that keyword rather than at a fixed index, so the bare form and the
-/// combined `LET <name> = …` statement share one extractor. A `RecordType` there is the anonymous
-/// lambda form, which registers no bucket — `None`, and the statement installs nothing on this
-/// channel.
+/// The head slot of an expression-shape definition: the part right after the keyword that opens
+/// the head — `ALL` on a quantified form, whose group sits between `EXPR` and the head, and `EXPR`
+/// otherwise. Read by position relative to that keyword rather than at a fixed index, so the bare
+/// form and the combined `LET <name> = FN EXPR …` statement share one extractor. Anything but a
+/// parenthesized group there is no head, so it keys no bucket.
 fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
     let head_keyword = |name: &StaticName<KeywordSymbol>| {
         expr.parts.iter().position(
             |part| matches!(part.value, ExpressionPart::Keyword(symbol) if symbol == name.symbol()),
         )
     };
-    let head_index = head_keyword(&KEYWORDS.all)
-        .or_else(|| head_keyword(&KEYWORDS.expr))
-        .or_else(|| head_keyword(&KEYWORDS.fn_))?;
+    let head_index = head_keyword(&KEYWORDS.all).or_else(|| head_keyword(&KEYWORDS.expr))?;
     match expr.parts.get(head_index + 1)?.value {
         ExpressionPart::Expression(inner) => Some(inner.reference()),
         _ => None,
@@ -602,8 +598,9 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         name_slot: Some(1),
         type_slots: &[],
     },
-    // FN <signature> -> <return_type> = <body> (every FN overload shares this key; the anonymous
-    // record-schema form claims no bucket because the extractor rejects its signature operand).
+    // FN <record schema> -> <return_type> = <body> — the lambda. It binds nothing: it has no name
+    // and no head to key a bucket on. The row is here for its type slot alone, so a bare `(…)`
+    // return spelling rewrites to a sigiled type expression as it does on every other form.
     BinderSpec {
         key: &[
             Kw(&KEYWORDS.fn_),
@@ -614,7 +611,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Slot,
         ],
         names: &[],
-        bucket: Some(fn_def_binder_bucket),
+        bucket: None,
         surface: BinderSurface::Other,
         name_slot: None,
         type_slots: &[3],
@@ -711,25 +708,6 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // bucket key(s) the declaration's body registers under. `LET <name> = UNARY OP …` is the
     // two-bucket maximum.
     //
-    // LET <name> = FN <signature> -> <return_type> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: Some(fn_def_binder_bucket),
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[6],
-    },
     // LET <name> = FN EXPR <head> -> <return_type> = <body>.
     BinderSpec {
         key: &[

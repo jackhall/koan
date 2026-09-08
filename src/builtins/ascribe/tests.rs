@@ -13,7 +13,7 @@
 //! - [`nested`] — a signature nested inside a slot type: substitution, satisfaction and
 //!   canonicalization through it, and the nested module born as a coerced view of itself.
 //! - [`keyworded`] — the dispatch-bucket surface across the barrier: selection, coercion, pruning
-//!   and signature identity for members a SIG declares with a bodyless `FN` head.
+//!   and signature identity for members a SIG declares with a bodyless `EXPR` head.
 
 mod ascription;
 mod cross_sig;

@@ -438,7 +438,7 @@ fn a_pairwise_group_reaches_the_self_sig_with_its_combiner() {
     );
 }
 
-/// A keyworded `FN` over an operator symbol supplies the bucket and nothing else: the module
+/// A keyworded `EXPR` over an operator symbol supplies the bucket and nothing else: the module
 /// declares no group, so its channel is empty.
 #[test]
 fn an_fn_head_over_an_operator_symbol_declares_no_record() {

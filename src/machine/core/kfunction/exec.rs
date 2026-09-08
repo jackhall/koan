@@ -231,7 +231,7 @@ pub fn run_user_fn<'ast>(
                                         child,
                                         name,
                                         None,
-                                        Some("FN return-type slot"),
+                                        Some("return-type slot"),
                                         registries,
                                     ))
                                 }

@@ -173,11 +173,33 @@ fn module_type_named(expr: &WorkingExpression<'_>, registries: &RunRegistries) -
     ))
 }
 
+/// `LET <name> = FN :{…} -> <Return> = (<body>)` — a lambda in a combined statement. A combined
+/// statement exists to install a dispatch bucket alongside the value name, and a lambda has no head
+/// to key one on, so the flat spelling reaches no overload; the parenthesized value bind is the one
+/// that works. Only the record-schema reading speaks: the key's other reading is a `(<head>)` group
+/// the lazy-slot stamp held back raw, which is no lambda and falls through to the generic miss.
+fn combined_lambda_has_no_binder(
+    expr: &WorkingExpression<'_>,
+    registries: &RunRegistries,
+) -> Option<String> {
+    if matches!(
+        expr.parts.get(4).and_then(|part| part.value.as_ast()),
+        Some(ExpressionPart::Expression(_))
+    ) {
+        return None;
+    }
+    let name = identifier_at(expr, 1, registries).unwrap_or_else(|| "f".to_string());
+    Some(format!(
+        "`FN :{{…}}` is a lambda: it registers nothing, so there is no combined statement for it — \
+         bind it as an ordinary value, `LET {name} = (FN :{{…}} -> <Return> = (<body>))`",
+    ))
+}
+
 /// A return slot naming a *value*. The mistake is a common one: a module-valued parameter is a
 /// value token, so the type it denotes is spelled `:(TYPE OF er)`.
 fn value_named_return(name: String) -> String {
     format!(
-        "FN return-type slot names a type, but `{name}` is a value. For the type of a value — a \
+        "a return-type slot names a type, but `{name}` is a value. For the type of a value — a \
          module-valued parameter, say — write `-> :(TYPE OF {name})`"
     )
 }
@@ -187,13 +209,6 @@ fn fn_value_named_return(
     registries: &RunRegistries,
 ) -> Option<String> {
     identifier_at(expr, 3, registries).map(value_named_return)
-}
-
-fn combined_fn_value_named_return(
-    expr: &WorkingExpression<'_>,
-    registries: &RunRegistries,
-) -> Option<String> {
-    identifier_at(expr, 6, registries).map(value_named_return)
 }
 
 fn quantified_value_named_return(
@@ -219,9 +234,10 @@ fn combined_expr_value_named_return(
 
 // ---------- the table ----------
 
-/// The single source of truth for the diagnosable dispatch misses. The two reserved keys are the
-/// missing-result `UNARY OP` forms; every other key keeps success-path siblings, and its entry
-/// speaks only when its own render confirms the mistake.
+/// The single source of truth for the diagnosable dispatch misses. The reserved keys are the
+/// missing-result `UNARY OP` forms and the combined `LET … = FN <signature> …` statement; every
+/// other key keeps success-path siblings, and its entry speaks only when its own render confirms
+/// the mistake.
 pub static MISS_DIAGNOSTICS: &[MissDiagnostic] = &[
     // UNARY OP <symbol> OVER <operand> = <body> — the shape whose only reading is the mistake.
     MissDiagnostic {
@@ -328,21 +344,9 @@ pub static MISS_DIAGNOSTICS: &[MissDiagnostic] = &[
         render: module_type_named,
         reserved: false,
     },
-    // FN <signature> -> <return type> = <body>: a value-named return slot.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.fn_),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: fn_value_named_return,
-        reserved: false,
-    },
-    // LET <name> = FN <signature> -> <return type> = <body>: a Type-classified binder, or a
-    // value-named return slot. Two mistakes under one key, each confirmed by its own render.
+    // LET <name> = FN <signature> -> <return type> = <body> — reserved: a combined statement
+    // installs a dispatch bucket, and no `FN` signature has a head to key one on, so nothing
+    // registers here.
     MissDiagnostic {
         key: &[
             Kw(&KEYWORDS.let_),
@@ -355,25 +359,10 @@ pub static MISS_DIAGNOSTICS: &[MissDiagnostic] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        render: function_bound_type_named,
-        reserved: false,
+        render: combined_lambda_has_no_binder,
+        reserved: true,
     },
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: combined_fn_value_named_return,
-        reserved: false,
-    },
-    // EXPR <head> -> <return type> = <body>: a value-named return slot, as on the lambda form.
+    // EXPR <head> -> <return type> = <body>: a value-named return slot.
     MissDiagnostic {
         key: &[
             Kw(&KEYWORDS.expr),

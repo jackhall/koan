@@ -6,7 +6,7 @@ An uncaught error stops the program and prints to standard error, listing the
 frames beneath the message:
 
 ```koan
-FN (BOOM x :Number) -> Str = (mystery)
+EXPR (BOOM x :Number) -> Str = (mystery)
 BOOM 1
 ```
 

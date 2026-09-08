@@ -172,7 +172,7 @@ struct FormSpec {
 /// purpose: [`announced_type_declaration`] already recognizes them off `BINDER_SPECS`, so the walk
 /// asks that rather than restating their keys.
 static FORM_SPECS: &[FormSpec] = &[
-    // FN <signature> -> <return type> — the type-language declarator, no body.
+    // FN <record schema> -> <return type> — the lambda type expression, no body.
     FormSpec {
         key: &[Kw(&KEYWORDS.fn_), Slot, Kw(&KEYWORDS.arrow), Slot],
         rule: FormRule::Signature {
@@ -180,7 +180,7 @@ static FORM_SPECS: &[FormSpec] = &[
             body: None,
         },
     },
-    // FN <signature> -> <return type> = <body>
+    // FN <record schema> -> <return type> = <body> — the lambda.
     FormSpec {
         key: &[
             Kw(&KEYWORDS.fn_),
@@ -193,24 +193,6 @@ static FORM_SPECS: &[FormSpec] = &[
         rule: FormRule::Signature {
             signature: 1,
             body: Some(5),
-        },
-    },
-    // LET <name> = FN <signature> -> <return type> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Signature {
-            signature: 4,
-            body: Some(8),
         },
     },
     // EXPR <head> -> <return type> — the bodyless head, no body.

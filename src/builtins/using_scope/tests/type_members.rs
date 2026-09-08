@@ -25,7 +25,7 @@ fn plain_module_type_member_types_a_dispatch_slot() {
     assert!(matches!(result, KObject::KString(s) if *s == "a color"));
 }
 
-/// The same member in the other type position — a `FN`'s declared return type — so both halves of
+/// The same member in the other type position — a definition's declared return type — so both halves of
 /// the sigil type language are covered, not just the slot.
 #[test]
 fn plain_module_type_member_types_a_return_slot() {
@@ -160,7 +160,7 @@ fn block_type_declaration_shadows_a_surfaced_member() {
 
 /// The type channel under block submission (`enter_source`, so the statements share one
 /// submission and resolve in whatever order the scheduler pops them): a block-local type alias
-/// types a block-local `FN`'s slot, and a later statement of the same block dispatches through it. The `types` entry lives in the block's own scope at its plain
+/// types a block-local definition's slot, and a later statement of the same block dispatches through it. The `types` entry lives in the block's own scope at its plain
 /// statement index, so the in-block reader gates by block ordering exactly as the value channel
 /// does.
 #[test]
@@ -197,7 +197,7 @@ fn block_type_alias_types_a_later_statement_of_the_same_block() {
 }
 
 /// The type channel's locality half: a block-local type declaration dies with the block exactly as
-/// a value bind does, so a `FN` declared after the block cannot name it.
+/// a value bind does, so a definition after the block cannot name it.
 #[test]
 fn block_type_declaration_dies_with_the_block() {
     let program = program_storage();

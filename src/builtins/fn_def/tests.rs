@@ -1,4 +1,5 @@
-//! Tests for the `FN` builtin, split by theme:
+//! Tests for the callable builtins — the `EXPR` expression shape and the `FN` lambda — split by
+//! theme:
 //!
 //! - [`anonymous`] — keyword-less `FN :{…}` record-schema binder.
 //! - [`basic`] — registration, dispatch routing, param binding, infix shapes.

@@ -138,7 +138,7 @@ where each `Succ` wraps a smaller value and `Zero` is the base:
 
 ```koan
 UNION Nat = (Zero :Null Succ :Nat)
-FN (COUNTDOWN n :Nat) -> Str =
+EXPR (COUNTDOWN n :Nat) -> Str =
   MATCH (n) OVER Nat -> :Str WITH
     Zero -> (PRINT "liftoff"),
     Succ -> ((PRINT "tick") (COUNTDOWN it))

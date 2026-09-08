@@ -30,7 +30,7 @@ crate::slots! { SLOTS { body, name, quantifiers, return_type, signature } }
 /// `BodyCtx::args`, collect param names, classify the return type, parse the param
 /// list, and route to [`finalize_fn_with_kind`] (synchronous, via `Action::Done`) or
 /// [`finalize::defer`] (dep-finish). `kind` selects how the finalized function is
-/// wired into the scope; `builtin` (`"FN"`) names the surface in slot errors.
+/// wired into the scope; `builtin` (`"EXPR"` or `"FN"`) names the surface in slot errors.
 pub(crate) fn build_fn_like<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     builtin: &str,
@@ -40,11 +40,10 @@ pub(crate) fn build_fn_like<'a>(
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
-    // Which FN surfaces a SIG body admits. A SIG declares members rather than defining them, so a
-    // definition of either spelling is refused there and pointed at its declarator: the combined
-    // form at `VAL`, the bare form at the bodyless head. The declaration is the mirror — it records
-    // into a signature under construction, so outside one it has nothing to record into. Guarded
-    // here, ahead of any deferral, so the synchronous and dep-finish paths are covered once.
+    // Which definition surfaces a SIG body admits. A SIG declares members rather than defining
+    // them, so a definition of either spelling is refused there and pointed at its declarator: the
+    // combined form at `VAL`, the bare form at the bodyless head. Guarded here, ahead of any
+    // deferral, so the synchronous and dep-finish paths are covered once.
     let FnSurface {
         kind,
         quantification,
@@ -67,13 +66,6 @@ pub(crate) fn build_fn_like<'a>(
                     .to_string(),
             ))));
         }
-        FnKind::Declaration if !in_sig_body => {
-            return Action::done(Err(KError::new(KErrorKind::ShapeError(
-                "a bodyless FN head declares a SIG member and is only valid inside a SIG body — \
-                 write `EXPR (<head>) -> <Return> = (<body>)` to define a function"
-                    .to_string(),
-            ))));
-        }
         _ => {}
     }
     let signature_expr =
@@ -81,9 +73,7 @@ pub(crate) fn build_fn_like<'a>(
     // A bodyless head has no body slot to read; the empty expression stands in for one, and the
     // bodyless leg of the finalize never looks at it.
     let body_expr = match kind {
-        FnKind::Declaration | FnKind::Shape { .. } => {
-            crate::machine::model::KExpression::new(ctx.scope.brand(), &[])
-        }
+        FnKind::Shape { .. } => crate::machine::model::KExpression::new(ctx.scope.brand(), &[]),
         _ => crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body)),
     };
     let mut elaborator = Elaborator::new(quantification.scope).with_chain(ctx.chain.clone());
@@ -91,8 +81,7 @@ pub(crate) fn build_fn_like<'a>(
     // verbatim to the per-call boundary. A bodyless head's cannot: there is no call to elaborate it
     // at, so its slot is an ordinary kind expectation the lane resolves against the SIG body's own
     // scope — which is what lets `-> Carrier` read the signature's abstract member.
-    let eager_return = matches!(kind, FnKind::Declaration | FnKind::Shape { .. })
-        && quantification.names.is_empty();
+    let eager_return = matches!(kind, FnKind::Shape { .. }) && quantification.names.is_empty();
     let return_type_state = match eager_return {
         true => match ctx.args.ktype(&SLOTS.return_type) {
             Some(ret) => return_type::ReturnTypeState::Done(ret),
@@ -112,7 +101,7 @@ pub(crate) fn build_fn_like<'a>(
                 &param_names,
                 quantification.scope,
                 ctx.chain.clone(),
-                "FN return-type slot",
+                "return-type slot",
                 ctx.registries,
             ))
         }
@@ -163,36 +152,18 @@ pub(crate) fn build_fn_like<'a>(
     }
 }
 
-/// Keyworded FN body: the parenthesized `(<signature>)` form, which registers
-/// under its lead keyword. At least one `Keyword` is required — an all-Argument
-/// signature has no fast-lane shape to key on (every keyword-free expression
-/// routes through `BareIdentifier` / `BareTypeLeaf` / `LiteralPassThrough` /
-/// `TypeCall` / `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs
-/// a fixed token. The keyword-less `FN :{…}` record-schema form is
+/// `EXPR (<head>) -> <Return> = (<body>)` — the definition, which registers under its head's
+/// bucket key. At least one `Keyword` is required — an all-Argument head has no fast-lane shape to
+/// key on (every keyword-free expression routes through `BareIdentifier` / `BareTypeLeaf` /
+/// `LiteralPassThrough` / `TypeCall` / `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher
+/// needs a fixed token. The keyword-free callable is the lambda `FN :{…}`, whose body is
 /// [`body_record_schema`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     build_fn_like(
         ctx,
-        "FN",
+        "EXPR",
         FnSurface {
             kind: FnKind::Function { bound_name: None },
-            quantification: Quantification::none(ctx.scope),
-        },
-    )
-}
-
-/// `EXPR (<head>) -> <Return>` — the bodyless head, SIG-body-only, which declares a keyworded
-/// (dispatch-bucket) member of the signature under construction rather than defining a function.
-/// Same head shape and same parse path as the definition form, so the bucket key and the slot types
-/// derive identically for a declaration and the definition that satisfies it.
-pub fn body_sig_declaration<'a>(
-    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
-) -> crate::machine::Action<'a> {
-    build_fn_like(
-        ctx,
-        "FN",
-        FnSurface {
-            kind: FnKind::Declaration,
             quantification: Quantification::none(ctx.scope),
         },
     )
@@ -292,16 +263,16 @@ pub(super) fn combined_bound_name(args: BoundArgs<'_, '_>) -> Result<ValueSymbol
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("name".to_string())))
 }
 
-/// `LET <name> = FN <signature> -> <return> = (<body>)` — one statement whose single binder
-/// installs both channels: the value name and the signature's dispatch bucket. The bound value and
-/// the registered overload are the same `KFunction` (see [`finalize_fn_with_kind`]).
+/// `LET <name> = FN EXPR (<head>) -> <Return> = (<body>)` — one statement whose single binder
+/// installs both channels: the value name, lambda-typed, and the head's dispatch bucket. The bound
+/// value and the registered overload are the same `KFunction` (see [`finalize_fn_with_kind`]).
 pub fn body_let_combined<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     let name = crate::try_action!(combined_bound_name(ctx.args));
     build_fn_like(
         ctx,
-        "FN",
+        "EXPR",
         FnSurface {
             kind: FnKind::Function {
                 bound_name: Some(name),
@@ -369,7 +340,7 @@ pub fn body_record_schema<'a>(
         &param_names,
         ctx.scope,
         ctx.chain.clone(),
-        "FN return-type slot",
+        "return-type slot",
         ctx.registries,
     ));
     let bind_index = ctx.bind_index();
@@ -411,51 +382,38 @@ pub fn body_record_schema<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
-    // Declared return is `KType::ANY`: a function's structural type only exists
-    // once its signature is known. The constructed `KObject::KFunction` projects
-    // its full signature through `ktype()` at the call site.
+    // Declared return is `KType::ANY`: a function's structural type only exists once its
+    // signature is known. The constructed `KObject::KFunction` projects its full signature through
+    // `ktype()` at the call site.
     //
-    // One keyworded overload covers the whole return-type carrier dimension: the slot is a union
-    // of the raw-capture members the return position admits — a bare `Type` token (`-> Number`,
-    // `-> MyAlias`), a `:(…)` / dotted form (`-> er.Carrier`, `-> :(Set WITH {…})`), and a `:{…}`
-    // record (`-> :{v :Number}`). Every member captures raw, because a return type may name an FN
-    // parameter unbound in the defining scope and must survive verbatim to the dispatch boundary. A
-    // second overload (below) carries the anonymous `:{…}` record-schema signature.
+    // Two families register here. `FN :{…} -> <Ret> = (<body>)` is the lambda: anonymous, reached
+    // by name, its arguments a record of named fields. `EXPR` is the expression shape: keyworded,
+    // reached by dispatch, its arguments positional. Every `EXPR` key carries that keyword, so the
+    // two families are disjoint by construction and never compete for a pick.
     //
-    // The keyworded overloads share a bucket key the spec table lists, so a named `FN` installs a
-    // pending-overload *bucket* entry and a forward sibling reference parks on it. FN's spec-table
-    // extractor is `Bucket`, not `Name` — sibling FN overloads share one bucket and each installs
-    // its own per-bucket entry, and consumers park on the earliest-index visible entry. A
-    // single-name install (LET / UNION / SIG / MODULE, via `Name` extractors) would Rebind on the
-    // second sibling sharing a head keyword (two `PICK` overloads both claiming the name `PICK`),
+    // The `EXPR` keys share a bucket key the spec table lists, so a definition installs a
+    // pending-overload *bucket* entry and a forward sibling reference parks on it. The spec-table
+    // extractor is `Bucket`, not `Name` — sibling overloads share one bucket and each installs its
+    // own per-bucket entry, and consumers park on the earliest-index visible entry. A single-name
+    // install (LET / UNION / SIG / MODULE, via `Name` extractors) would Rebind on the second
+    // sibling sharing a head keyword (two `PICK` overloads both claiming the name `PICK`),
     // collapsing the overload set — right for a one-name-to-one-value binder, wrong for an overload
-    // family.
+    // family. The lambda claims no bucket at all: `fn_def_binder_bucket` reads the signature
+    // operand as a parenthesized expression, and a `:{…}` record part is not one, so the extractor
+    // returns `None` and an anonymous `FN :{…}` stays legal in a value position.
     //
-    // The record-schema overload shares that key but installs nothing: `fn_def_binder_bucket` reads
-    // the signature operand as a parenthesized expression, and a `:{…}` record part is not one, so
-    // the extractor returns `None`. An anonymous `FN :{…}` therefore claims no bucket and stays
-    // legal in a value position.
-    // The return-carrier union, shared by every FN surface below and with `OP`'s operand / result
-    // slots. A value-named return (`-> er`) is no member of it: the shape is a mistake, and its
-    // targeted message comes from the dispatch-miss diagnosis table rather than from an
-    // always-erroring overload sitting in this bucket.
+    // The return-carrier union is shared by every definition surface below and with `OP`'s operand
+    // / result slots: the slot is a union of the raw-capture members the return position admits — a
+    // bare `Type` token (`-> Number`, `-> MyAlias`), a `:(…)` / dotted form (`-> er.Carrier`,
+    // `-> :(Set WITH {…})`), and a `:{…}` record (`-> :{v :Number}`). Every member captures raw,
+    // because a return type may name a parameter unbound in the defining scope and must survive
+    // verbatim to the dispatch boundary. A value-named return (`-> er`) is no member of it: the
+    // shape is a mistake, and its targeted message comes from the dispatch-miss diagnosis table
+    // rather than from an always-erroring overload sitting in this bucket.
     let return_union = return_type::type_carrier_union(registries);
-    let keyworded_sig = || {
-        sig(
-            KType::ANY,
-            vec![
-                kw(registries, "FN"),
-                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
-                kw(registries, "->"),
-                arg(registries, &SLOTS.return_type, return_union),
-                kw(registries, "="),
-                arg(registries, &SLOTS.body, KType::KEXPRESSION),
-            ],
-        )
-    };
-    // Anonymous overload: a `:{…}` record-schema operand is a `RecordType` part, which the
-    // `KExpression`-signature overload above rejects and only this `ProperType`-signature overload
-    // admits. The signature slot stays a pure kind expectation — a `:{…}` sub-dispatches to a
+    // The lambda: a `:{…}` record-schema operand is a `RecordType` part, which every
+    // `KExpression`-signature overload rejects and only this `ProperType`-signature one admits.
+    // The signature slot stays a pure kind expectation — a `:{…}` sub-dispatches to a
     // resolved record-type `KType`, and a bare `Type` token naming a record alias auto-wraps to
     // one — so an alias and a literal reach the same body read. Selection is unambiguous by operand
     // part-kind, so it needs no bucket park-guard.
@@ -476,70 +434,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
-    // The combined statement form: `LET <name> = FN <signature> -> <Return> = (<body>)`. One
-    // statement, one binder, both install channels — the value name and the signature's dispatch
-    // bucket. Full-bucket-key matching keeps `[LET, Slot, =, FN, Slot, ->, Slot, =, Slot]` disjoint
-    // from plain `LET` and bare `FN`, so no overload of either is shadowed. The return slot takes
-    // the same carrier union as the bare form, so both spellings admit the same return shapes.
-    //
-    // There is deliberately no combined overload for the anonymous `FN :{…}` signature. Its
-    // `ProperType` signature slot would make the bucket's pick undecidable until that operand
-    // sub-dispatched, and the re-resolve after an eager-subs round re-reads the statement's own
-    // `name` token — which by then names this very node's placeholder, a self-cycle. The anonymous
-    // form is not a binder anyway, so its flat spelling reports a plain dispatch miss and the
-    // parenthesized value bind `LET f = (FN :{…} -> <Return> = (…))` stays the spelling.
-    let combined_sig = || {
-        sig(
-            KType::ANY,
-            vec![
-                kw(registries, "LET"),
-                arg(registries, &SLOTS.name, KType::IDENTIFIER),
-                kw(registries, "="),
-                kw(registries, "FN"),
-                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
-                kw(registries, "->"),
-                arg(registries, &SLOTS.return_type, return_union),
-                kw(registries, "="),
-                arg(registries, &SLOTS.body, KType::KEXPRESSION),
-            ],
-        )
-    };
-    // The SIG-body declaration form: `EXPR (<head>) -> <Return>`, with no `=` / body slots. Full
-    // bucket-key matching keeps `[FN, Slot, ->, Slot]` disjoint from every definition spelling, so
-    // the two never compete — the shorter key simply is not the longer one. The body guards the
-    // rest: outside a SIG body this form errors and points at the definition spelling, and inside
-    // one the definition spellings error and point back here.
-    //
-    // The bucket *is* shared with the function-**type** expression `FN :{…} -> <Ret>`
-    // ([`crate::builtins::parameterized_types`]), which registers under the same key. The two are
-    // told apart by the signature slot alone: the bucket's lazy-slot entry
-    // ([`crate::machine::model::lazy_slots`]) captures only a `(…)` group raw, so a head reaches
-    // this `KEXPRESSION` slot unevaluated while a `:{…}` record type resolves and reaches the
-    // type form's `ProperType` slot.
-    let declaration_sig = || {
-        sig(
-            KType::ANY,
-            vec![
-                kw(registries, "FN"),
-                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
-                kw(registries, "->"),
-                // An ordinary kind expectation, not the definition form's raw-carrier union: a
-                // declared member's return resolves once, where it is written. `AnyType` admits
-                // every type value, a signature return included.
-                arg_labeled(
-                    registries,
-                    &SLOTS.return_type,
-                    KType::of_kind(KKind::AnyType),
-                    "SIG keyworded member return type",
-                ),
-            ],
-        )
-    };
     // The expression-shape surfaces. `EXPR` marks the callable whose arguments are positional and
-    // reached by dispatch, against the lambda `FN :{…}` reached by name — so the definition and the
-    // bodyless head both spell it, and the combined statement spells `FN EXPR` because the value
-    // channel it also binds is a lambda-typed name. Each key is disjoint from every `FN` key by its
-    // own keyword, so the two families never compete for a pick.
+    // reached by dispatch — so the definition and the bodyless head both spell it, and the combined
+    // statement spells `FN EXPR` because the value channel it also binds is a lambda-typed name.
     let shape_definition_sig = || {
         sig(
             KType::ANY,
@@ -634,16 +531,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         )
     };
     use crate::builtins::register_builtin;
-    register_builtin(scope, keyworded_sig(), body, registries, gate);
-    register_builtin(
-        scope,
-        declaration_sig(),
-        body_sig_declaration,
-        registries,
-        gate,
-    );
     register_builtin(scope, record_sig(), body_record_schema, registries, gate);
-    register_builtin(scope, combined_sig(), body_let_combined, registries, gate);
     register_builtin(scope, shape_definition_sig(), body, registries, gate);
     register_builtin(scope, shape_sig(), body_shape, registries, gate);
     register_builtin(

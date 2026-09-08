@@ -59,7 +59,7 @@ a function that wants *code* rather than a result declares a parameter typed
 `:KExpression` and is called with a quote:
 
 ```koan
-FN (TWICE body :KExpression) -> Any = (
+EXPR (TWICE body :KExpression) -> Any = (
   $(body)
   $(body)
 )
@@ -89,7 +89,7 @@ code. Nothing is undone by the failure; the side effect had already happened.
 The error names the missing quote:
 
 ```koan
-FN (TWICE body :KExpression) -> Any = (
+EXPR (TWICE body :KExpression) -> Any = (
   $(body)
   $(body)
 )

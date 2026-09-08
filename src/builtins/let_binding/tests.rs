@@ -335,7 +335,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     }
 }
 
-/// An FN bound to a Type-class name errors at the LET site: a function is a value,
+/// A function bound to a Type-class name errors at the LET site: a function is a value,
 /// and a Type-class binder admits only a type carrier, so `bindings.types` never
 /// holds a callable.
 #[test]
