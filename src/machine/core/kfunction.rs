@@ -16,6 +16,7 @@ use crate::machine::model::NamedPairs;
 use crate::machine::model::SignatureDraft;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
 use crate::machine::model::{ExpressionSignature, Record, SignatureElement, shape_type_of};
+use crate::machine::model::{Unifier, UnifyFailure, Variance, admits_with};
 use crate::witnessed::BumpVec;
 use crate::witnessed::RegionHandleFamily;
 
@@ -32,7 +33,7 @@ use crate::machine::model::{Symbol, render_label};
 pub use action::ActionFn;
 pub use body::Body;
 pub use pick::WrapIndices;
-use pick::slot_admits;
+use pick::{carried_slot_ktype, slot_admits};
 
 /// The captured scope is allocated in the same `KoanRegion` this `KFunction` lives in —
 /// [`Self::alloc_captured`] derives the destination brand from the scope, so the two cannot come
@@ -272,11 +273,19 @@ impl<'a> KFunction<'a> {
     /// non-satisfying typed argument becomes a hard `TypeMismatch` rather than slipping through.
     /// It is also what makes that selection a 1:1 slot walk: parts and signature elements have
     /// equal length and matching shapes.
+    ///
+    /// This is also where a quantified signature is **solved**. One [`Unifier`] runs the whole
+    /// argument walk in order, so the first position reaching a quantifier binds it from the type
+    /// that argument carries and every later one must agree; the returned solution is what the
+    /// call registers into its own scope and substitutes into its return. A signature quantifying
+    /// over nothing walks the ordinary boolean path and returns an empty solution.
     pub(crate) fn validate_call_args(
         &'a self,
         parts: &[Spanned<WorkingPart<'a>>],
         registries: &RunRegistries,
-    ) -> Result<(), KError> {
+    ) -> Result<Unifier, KError> {
+        let quantifiers = self.signature.quantifiers();
+        let mut unifier = Unifier::new(quantifiers.len());
         if self.signature.elements().len() != parts.len() {
             return Err(KError::new(KErrorKind::ArityMismatch {
                 expected: self.signature.elements().len(),
@@ -310,17 +319,57 @@ impl<'a> KFunction<'a> {
                     }
                 },
                 SignatureElement::Argument(arg) => {
-                    if !slot_admits(arg, &part.value, registries) {
-                        return Err(KError::new(KErrorKind::TypeMismatch {
+                    let mismatch = || {
+                        KError::new(KErrorKind::TypeMismatch {
                             arg: render_label(arg.name.symbol(), registries),
-                            expected: arg.ktype.name(registries),
+                            expected: arg.ktype.name_under(quantifiers, registries),
                             got: part.value.summarize(registries),
-                        }));
+                        })
+                    };
+                    // A slot with nothing to solve answers by the ordinary admission. Only a slot
+                    // whose declared type reads a quantifier needs the argument's carried type,
+                    // and only then does the walk cost a unification.
+                    if quantifiers.is_empty() || !registries.types.contains_quantified(arg.ktype) {
+                        if !slot_admits(arg, &part.value, registries) {
+                            return Err(mismatch());
+                        }
+                        continue;
+                    }
+                    let Some(carried) = carried_slot_ktype(&part.value, arg.ktype, registries)
+                    else {
+                        return Err(mismatch());
+                    };
+                    match admits_with(arg.ktype, carried, Variance::Co, &mut unifier, registries) {
+                        Ok(()) => {}
+                        Err(UnifyFailure::Mismatch) => return Err(mismatch()),
+                        Err(UnifyFailure::Disagree { index, bound, got }) => {
+                            return Err(KError::new(KErrorKind::TypeMismatch {
+                                arg: render_label(arg.name.symbol(), registries),
+                                expected: format!(
+                                    "{}, already solved as `{}` by an earlier argument",
+                                    render_label(quantifiers[index].symbol(), registries),
+                                    bound.name(registries),
+                                ),
+                                got: got.name(registries),
+                            }));
+                        }
                     }
                 }
             }
         }
-        Ok(())
+        // Every quantifier the definition lists is read by some slot — the definition refuses one
+        // that is not — so an unsolved cell means the argument that would have solved it carries
+        // no type the call can read yet.
+        for (index, name) in quantifiers.iter().enumerate() {
+            if unifier.get(index).is_none() {
+                return Err(KError::new(KErrorKind::TypeMismatch {
+                    arg: render_label(name.symbol(), registries),
+                    expected: "a type solved from the arguments".to_string(),
+                    got: "nothing — no argument position at this call determines it".to_string(),
+                }));
+            }
+        }
+        Ok(unifier)
     }
 
     /// Bind a builtin call's positional argument `parts` into `slots`, one entry per declared
@@ -347,6 +396,8 @@ impl<'a> KFunction<'a> {
         carriers: &'c [Option<DeliveredCarried>],
         slots: &mut BumpVec<'_, BoundArg<'a, 'c>>,
     ) -> Result<(), KError> {
+        // A builtin quantifies over nothing, so the solution the walk returns is empty and there
+        // is nothing to register: the validation is all this door wants from it.
         self.validate_call_args(parts, registries)?;
         for slot in self.signature.part_slots() {
             let at = *slot as usize;

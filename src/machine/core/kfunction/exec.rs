@@ -17,7 +17,8 @@ use std::rc::Rc;
 use crate::machine::core::{BindingIndex, CallFrame, DeclarationSite, KError};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
-use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution};
+use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution, Unifier};
+use smallvec::SmallVec;
 
 use super::KFunction;
 use super::body::{Body, LeadingStatements, split_leading_tail};
@@ -87,6 +88,7 @@ pub fn run_user_fn<'ast>(
     args: &[&DeliveredCarried],
     ctx: &ExecFrame,
     in_contract_chain: bool,
+    solved: &Unifier,
     registries: &RunRegistries,
 ) -> ExecOutcome<'ast> {
     // Bind each parameter into the frame's own scope through the value/type doors, off the one
@@ -100,6 +102,26 @@ pub fn run_user_fn<'ast>(
         // The frame's own scope: minted for this call and not yet published, so the parameter binds
         // take the construction door rather than riding a step outcome.
         let gate = &mut crate::machine::core::bindings::WriteGate::for_unpublished_scope();
+        // The call's solved quantifiers register first, through the same type door a `:Type`
+        // parameter takes: the body reads `Elt` as an ordinary type name, and a deferred return
+        // elaborating below sees it already bound. A cell the walk left unsolved is unreachable —
+        // `validate_call_args` refuses the call before it gets here — so nothing registers `Any`
+        // in a quantifier's place.
+        for (name, bound) in func
+            .signature
+            .quantifiers()
+            .iter()
+            .zip(solved.bindings())
+            .filter_map(|(name, bound)| bound.map(|bound| (name, bound)))
+        {
+            child.register_type_direct(
+                *name,
+                bound,
+                DeclarationSite::AT_CONSTRUCTION,
+                registries,
+                gate,
+            )?;
+        }
         // The signature's own parameter schema names each slot; the slice supplies its value.
         // Nothing was re-keyed for this call — the pair is zipped in declaration order.
         // The schema's names are classified where the signature was built, and the binding tables
@@ -187,13 +209,17 @@ pub fn run_user_fn<'ast>(
         }
     };
     match func.signature.return_type() {
-        ReturnType::Resolved(_) => {
+        // A quantified return is the declaration's shape, not this call's type: the solution the
+        // argument walk built substitutes into it here, so the lift checks the return the call
+        // actually promised. Every other resolved return is the signature's own.
+        ReturnType::Resolved(declared) => {
             let (leading, tail) = split_leading_tail(body_expr);
-            ExecOutcome::Tail {
-                leading,
-                tail,
-                ret: PerCallReturn::FromSignature,
-            }
+            let solved_return = solved_type(declared, solved, &registries.types);
+            let ret = match solved_return == declared {
+                true => PerCallReturn::FromSignature,
+                false => PerCallReturn::Resolved(solved_return),
+            };
+            ExecOutcome::Tail { leading, tail, ret }
         }
         ReturnType::Deferred(deferred) => {
             // Subsequent tail call inside a contract chain: keep-first discards this call's contract,
@@ -262,6 +288,27 @@ pub fn run_user_fn<'ast>(
             }
         }
     }
+}
+
+/// `declared` at this call's solution: every quantified position becomes the type the argument
+/// walk bound it to. A declaration quantifying over nothing is already its own per-call type, so
+/// the ordinary call pays one probe and rebuilds nothing.
+pub(crate) fn solved_type(
+    declared: KType,
+    solved: &Unifier,
+    types: &crate::machine::model::TypeRegistry,
+) -> KType {
+    // Only a quantified signature has cells to substitute; every other call short-circuits here
+    // and rebuilds nothing.
+    if solved.bindings().is_empty() {
+        return declared;
+    }
+    let bindings: SmallVec<[KType; 4]> = solved
+        .bindings()
+        .iter()
+        .map(|bound| bound.unwrap_or(KType::ANY))
+        .collect();
+    types.instantiate_quantified(declared, &bindings)
 }
 
 /// Which door an argument's envelope binds through, read once under the envelope's own pin. Every

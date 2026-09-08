@@ -1,9 +1,9 @@
 # the four scoring columns are total cost / fixed denominator D=1000;
 # root-loc is the absolute subtree LOC, tracked for context only
 # managed by `tools/modgraph score|regen --baseline`; newest first, capped to 5 entries
-# date       short-sha   score coupling nesting    size root-loc
-  2026-09-08 e12f2a0c+ 9809.82  3895.74 2271.36 3642.71    32726
-  2026-09-08 9cc9287f+ 9848.78  3907.98 2281.14 3659.66    32869
-  2026-09-08 d741e2f2+ 9848.78  3907.98 2281.14 3659.66    32869
-  2026-09-08 c7331aea+ 9726.75  3863.33 2249.32 3614.10    32387
-  2026-09-08 f7ec91cd+ 9652.21  3836.09 2229.82 3586.30    32113
+# date       short-sha    score coupling nesting    size root-loc
+  2026-09-08 42be4437+ 10031.45  4008.47 2309.26 3713.72    33206
+  2026-09-08 e12f2a0c+  9809.82  3895.74 2271.36 3642.71    32726
+  2026-09-08 9cc9287f+  9848.78  3907.98 2281.14 3659.66    32869
+  2026-09-08 d741e2f2+  9848.78  3907.98 2281.14 3659.66    32869
+  2026-09-08 c7331aea+  9726.75  3863.33 2249.32 3614.10    32387

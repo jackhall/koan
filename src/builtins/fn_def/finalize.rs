@@ -96,14 +96,17 @@ impl<'a> Quantification<'a> {
         Quantification { names: &[], scope }
     }
 
-    /// Where a slot's sub-dispatch runs. A quantified head's slots must see the group, so they
-    /// enter its scope; an unquantified head's take the slot's own node scope, as every other
-    /// binder's type sub-dispatch does.
+    /// Where a slot's sub-dispatch runs. A quantified head's slots must see the group, so each
+    /// enters a fresh empty child of its scope — the names reach them down the chain, and a block
+    /// fans a scope out exactly once, so two slots never claim one statement run. An unquantified
+    /// head's slots take the slot's own node scope, as every other binder's type sub-dispatch does.
+    ///
+    /// Called once per sub-dispatch, which is what makes the child per-slot.
     fn placement(self) -> crate::machine::DepPlacement<'a> {
         if self.names.is_empty() {
             crate::machine::DepPlacement::OwnScope
         } else {
-            crate::machine::DepPlacement::InScope(self.scope)
+            crate::machine::DepPlacement::InScope(self.scope.alloc_child_under())
         }
     }
 }
@@ -331,6 +334,34 @@ fn check_distinct_parameter_names(
     Ok(())
 }
 
+/// Every name a `FOR ALL` group lists must be read by some slot type: a quantifier is solved from
+/// the arguments, so one no argument position mentions could never be solved and every call would
+/// fail on it. The return does not count — it is what the solution is substituted *into*.
+fn check_quantifiers_referenced(
+    elements: &[SignatureElement],
+    quantifiers: &[TypeSymbol],
+    registries: &RunRegistries,
+) -> Result<(), KError> {
+    let types = &registries.types;
+    for (index, name) in quantifiers.iter().enumerate() {
+        let read = elements.iter().any(|element| match element {
+            SignatureElement::Argument(argument) => {
+                types.references_quantifier(argument.ktype, index)
+            }
+            SignatureElement::Keyword(_) => false,
+        });
+        if !read {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{}` cannot be solved from the arguments — a `FOR ALL` quantifier is solved per \
+                 call from the types the arguments carry, so every listed name must be read by \
+                 some argument position",
+                render_label(name.symbol(), registries),
+            ))));
+        }
+    }
+    Ok(())
+}
+
 /// Build the `KFunction` and, for a keyworded `Function`, register it under its lead
 /// keyword — plus, for the combined form, bind it under the statement's value name.
 /// `Anonymous` skips registration entirely — the value it returns is the
@@ -349,6 +380,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         quantification,
     } = surface;
     check_value_type_kinds(elements, &return_type, registries)?;
+    check_quantifiers_referenced(elements, quantification.names, registries)?;
 
     match kind {
         // A bodyless head's slots are positional and its type drops their names, so two slots

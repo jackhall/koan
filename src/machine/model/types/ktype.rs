@@ -294,6 +294,27 @@ impl KType {
         self.display_name(registries).to_string()
     }
 
+    /// [`name`](Self::name) under a quantifier binder — the enclosing shape's parameter names, so
+    /// a diagnostic about a quantified position prints the name its group gave it.
+    pub fn name_under(self, binder: &[TypeSymbol], registries: &RunRegistries) -> String {
+        struct Under<'r> {
+            kt: KType,
+            binder: &'r [TypeSymbol],
+            registries: &'r RunRegistries,
+        }
+        impl std::fmt::Display for Under<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.kt.write_name_in(f, self.registries, self.binder)
+            }
+        }
+        Under {
+            kt: self,
+            binder,
+            registries,
+        }
+        .to_string()
+    }
+
     /// Stable entry point for diagnostic rendering. Reserved seam for cycle-aware printing.
     pub fn render(self, registries: &RunRegistries) -> String {
         self.name(registries)

@@ -13,6 +13,7 @@
 //! - [`explicit_laziness`] — a user `:KExpression` parameter is an ordinary eager value slot.
 //! - [`functor`] — FN as a functor over module-typed parameters.
 //! - [`shape_surface`] — the `EXPR` spellings: definition, combined statement, bodyless head.
+//! - [`quantified`] — solving a `FOR ALL` group at the call: one unifier, one solution per call.
 //! - [`tail_region_turnover`] — library-owned tail-call region-turnover acceptance criteria.
 
 mod anonymous;
@@ -25,6 +26,7 @@ mod container_types;
 mod explicit_laziness;
 mod functor;
 mod param_type;
+mod quantified;
 mod record_types;
 mod region_liveness;
 mod return_type;

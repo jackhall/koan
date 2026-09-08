@@ -399,6 +399,23 @@ impl TypeRegistry {
         })
     }
 
+    /// `kt` at a solved call. A **shape** is its own binder, so instantiating one empties its
+    /// group and substitutes through its slots and return: the result is the shape this call has,
+    /// as against the shape the declaration wrote. Every other type carries no binder of its own
+    /// and substitutes in place.
+    pub fn instantiate_quantified(&self, kt: KType, bindings: &[KType]) -> KType {
+        self.with_node(kt, |node| match node {
+            TypeNode::ExpressionShape {
+                quantifiers,
+                elements,
+                ret,
+            } if !quantifiers.is_empty() => self.rebuild_shape(&[], elements, *ret, |child| {
+                self.substitute_quantified(child, bindings)
+            }),
+            _ => self.substitute_quantified(kt, bindings),
+        })
+    }
+
     /// `kt` with every quantified position erased to `Any` — what a quantified callable reports on
     /// the value lane, where a lambda type has no binder to carry the parameter.
     pub fn erase_quantified(&self, kt: KType, arity: usize) -> KType {
@@ -407,6 +424,45 @@ impl TypeRegistry {
         }
         let bindings = vec![KType::ANY; arity];
         self.substitute_quantified(kt, &bindings)
+    }
+
+    /// Whether any `Quantified` position is reachable from `kt` without crossing a nested shape's
+    /// own binder — the probe that lets a slot type with nothing to solve answer the relations in
+    /// one step instead of walking under a unifier.
+    pub fn contains_quantified(&self, kt: KType) -> bool {
+        self.any_quantified(kt, &|_| true)
+    }
+
+    /// Whether `kt` reads the `index`-th quantifier of the enclosing shape — what a definition
+    /// asks of each name its `FOR ALL` group lists.
+    pub fn references_quantifier(&self, kt: KType, index: usize) -> bool {
+        self.any_quantified(kt, &|i| i == index)
+    }
+
+    /// The shared walk behind both probes: some quantified position `wanted` accepts, reachable
+    /// without crossing a nested shape's binder (whose indices are its own, not this shape's).
+    fn any_quantified(&self, kt: KType, wanted: &impl Fn(usize) -> bool) -> bool {
+        self.with_node(kt, |node| match node {
+            TypeNode::Quantified(index) => wanted(*index),
+            TypeNode::List { element } => self.any_quantified(*element, wanted),
+            TypeNode::Dict { key, value } => {
+                self.any_quantified(*key, wanted) || self.any_quantified(*value, wanted)
+            }
+            TypeNode::Record { fields } => fields.values().any(|v| self.any_quantified(*v, wanted)),
+            TypeNode::KFunction { params, ret } => {
+                params.values().any(|v| self.any_quantified(*v, wanted))
+                    || self.any_quantified(*ret, wanted)
+            }
+            TypeNode::Union { members } => members.iter().any(|m| self.any_quantified(*m, wanted)),
+            TypeNode::ConstructorApply {
+                constructor,
+                arguments,
+            } => {
+                self.any_quantified(*constructor, wanted)
+                    || arguments.values().any(|a| self.any_quantified(*a, wanted))
+            }
+            _ => false,
+        })
     }
 
     /// Whether every `Quantified` position reachable from `kt` without crossing a nested shape's

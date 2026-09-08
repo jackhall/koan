@@ -4,7 +4,8 @@
 //! The "bare-name" predicate ([`is_bare_name`]) is the load-bearing shape concept the auto-wrap
 //! rail turns on.
 
-use crate::machine::model::{Argument, SignatureElement, TypeRegistry};
+use crate::machine::model::types::carried_channel_ktype;
+use crate::machine::model::{Argument, KType, SignatureElement, TypeRegistry};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 
 use super::KFunction;
@@ -83,6 +84,26 @@ pub fn slot_admits(arg: &Argument, part: &WorkingPart<'_>, registries: &RunRegis
         WorkingPart::Ast(ast) => arg.matches(ast, types),
         WorkingPart::Spliced { cell, .. } => arg.ktype.accepts_cell(cell, registries),
         WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => false,
+    }
+}
+
+/// The type an argument part carries at a **quantified** slot: what the unifier reads the
+/// declared position against. A callable answers on the channel the slot declares — a shape slot
+/// reads its registered shape, every other slot the lambda type it reports as a value — so the
+/// two channels stay apart here exactly as they do in
+/// [`accepts_carried`](crate::machine::model::KType::accepts_carried). A part the scheduler has
+/// not resolved to a value denotes no type yet, so it solves nothing.
+pub fn carried_slot_ktype(
+    part: &WorkingPart<'_>,
+    declared: KType,
+    registries: &RunRegistries,
+) -> Option<KType> {
+    match part {
+        WorkingPart::Ast(ast) => KType::slot_ktype(ast, &registries.types),
+        WorkingPart::Spliced { cell, .. } => Some(crate::machine::core::read_resting(cell, |c| {
+            carried_channel_ktype(c, declared, registries)
+        })),
+        WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => None,
     }
 }
 

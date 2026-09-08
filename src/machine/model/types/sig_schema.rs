@@ -1330,6 +1330,15 @@ pub enum SigSubtypeFailure {
         head: String,
         got: Vec<String>,
     },
+    /// Every overload under the key failed, and the first one failed at a position the declared
+    /// member **quantifies** over: a quantified position is satisfied only by one at least as
+    /// general (quantified, or `Any`), so a concrete position there says the module implements one
+    /// instantiation where the signature declares an operation holding at every one.
+    QuantifiedMismatch {
+        head: String,
+        parameter: String,
+        got: String,
+    },
     /// Two or more overloads satisfy the declared member and none is strictly the most specific —
     /// the keyworded reading of a dispatch ambiguity, raised where dispatch would raise it.
     AmbiguousKeyworded {
@@ -1402,6 +1411,14 @@ impl SigSubtypeFailure {
                     .map(|one| format!("`{one}`"))
                     .collect::<Vec<_>>()
                     .join(", ")
+            ),
+            SigSubtypeFailure::QuantifiedMismatch {
+                head,
+                parameter,
+                got,
+            } => format!(
+                "keyworded member `{head}` quantifies over `{parameter}`, but the overload fixes \
+                 that position to `{got}` — one implementation must hold at every `{parameter}`"
             ),
             SigSubtypeFailure::AmbiguousKeyworded { head, candidates } => format!(
                 "keyworded member `{head}` is satisfied by {} with no most specific one",
@@ -1567,6 +1584,15 @@ pub fn sig_subtype(
                 }));
             }
             Err(satisfiers) if satisfiers.is_empty() => {
+                if let Some((parameter, got)) =
+                    quantified_position_failure(*declared, candidates[0], registries)
+                {
+                    return Err(Box::new(SigSubtypeFailure::QuantifiedMismatch {
+                        head: head(),
+                        parameter,
+                        got,
+                    }));
+                }
                 return Err(Box::new(SigSubtypeFailure::KeywordedMismatch {
                     head: head(),
                     got: render_all(&(0..candidates.len()).collect::<Vec<_>>()),
@@ -1607,6 +1633,43 @@ pub fn sig_subtype(
         }
     }
     Ok(())
+}
+
+/// Why `candidate` failed the declared member, when the reason is a **quantified** position: the
+/// first slot whose declared type reads a quantifier and whose candidate slot is not at least as
+/// general, as the parameter's name and the type the candidate fixes it to. `None` when the
+/// failure is an ordinary type disagreement, which the plain mismatch already renders.
+fn quantified_position_failure(
+    declared: KType,
+    candidate: KType,
+    registries: &RunRegistries,
+) -> Option<(String, String)> {
+    let types = &registries.types;
+    let quantifiers = types.with_node(declared, |node| match node {
+        TypeNode::ExpressionShape { quantifiers, .. } => quantifiers.clone(),
+        _ => Vec::new(),
+    });
+    if quantifiers.is_empty() {
+        return None;
+    }
+    let candidate_slots = shape_slots(candidate, types);
+    for (position, declared_slot) in shape_slots(declared, types).iter().enumerate() {
+        let candidate_slot = candidate_slots.get(position)?;
+        // Contravariance: a candidate position fills a declared one by being equal or *more
+        // general*. A position that pairs is not the failure, whatever it holds.
+        if *declared_slot == *candidate_slot
+            || declared_slot.is_more_specific_than(*candidate_slot, registries)
+        {
+            continue;
+        }
+        let named =
+            (0..quantifiers.len()).find(|i| types.references_quantifier(*declared_slot, *i))?;
+        return Some((
+            render_label(quantifiers[named].symbol(), registries),
+            candidate_slot.name(registries),
+        ));
+    }
+    None
 }
 
 /// The overload a declared keyworded member selects out of `candidates` — the one resolution both

@@ -20,6 +20,7 @@ use crate::machine::core::read_resting;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, WorkingPart};
 use crate::machine::model::values::{Carried, Held, KObject};
+use smallvec::SmallVec;
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
 /// slot: the two constructors are the same type, the two argument records name the same
@@ -193,6 +194,309 @@ pub fn carrier_union_error(kt: KType, registries: &RunRegistries) -> Option<Stri
     None
 }
 
+/// Which way a position is being filled while the unifier walks a declared type against a carried
+/// one. A slot of a callable flips it: the value in a parameter position must be *more general*
+/// than the position promises, its return *more specific*.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Variance {
+    Co,
+    Contra,
+}
+
+impl Variance {
+    /// The variance under a parameter position — the one place the direction turns over.
+    fn flipped(self) -> Self {
+        match self {
+            Variance::Co => Variance::Contra,
+            Variance::Contra => Variance::Co,
+        }
+    }
+}
+
+/// The solution a call is building for one shape's quantifier group: one cell per quantifier, in
+/// `Quantified(index)` order, filled by the first argument position that reaches it.
+///
+/// A cell grows on demand, so a *pick-time* walk — which asks whether a candidate could fill a
+/// quantified position at all, without knowing the enclosing group's arity — takes a
+/// [`fresh`](Self::fresh) unifier and reads no cell back. A call takes [`new`](Self::new) at the
+/// signature's own arity, so a cell no argument bound is visible as unsolved.
+#[derive(Clone, Debug, Default)]
+pub struct Unifier(SmallVec<[Option<KType>; 4]>);
+
+impl Unifier {
+    /// One unsolved cell per quantifier — what a call walks its arguments with.
+    pub fn new(arity: usize) -> Self {
+        Unifier(smallvec::smallvec![None; arity])
+    }
+
+    /// A unifier that binds whatever it meets and is never read back: the per-slot admission a
+    /// pick runs, where a quantified position is admitted by anything it can bind.
+    pub fn fresh() -> Self {
+        Unifier(SmallVec::new())
+    }
+
+    /// The type bound to the `index`-th quantifier, or `None` while no argument has reached it.
+    pub fn get(&self, index: usize) -> Option<KType> {
+        self.0.get(index).copied().flatten()
+    }
+
+    /// The solution, in `Quantified(index)` order — the substitution a solved call applies to its
+    /// return and registers into its own scope.
+    pub fn bindings(&self) -> &[Option<KType>] {
+        &self.0
+    }
+
+    /// Bind the `index`-th quantifier, growing the run if the group's arity was not known up front.
+    fn bind(&mut self, index: usize, kt: KType) {
+        if self.0.len() <= index {
+            self.0.resize(index + 1, None);
+        }
+        self.0[index] = Some(kt);
+    }
+}
+
+/// Why a carried type does not fill a declared position.
+#[derive(Clone, Copy, Debug)]
+pub enum UnifyFailure {
+    /// The two types disagree structurally, or a leaf position is not satisfied — the ordinary
+    /// type mismatch, with no quantifier involved.
+    Mismatch,
+    /// A quantifier already solved as `bound` by an earlier position meets `got` here.
+    Disagree {
+        index: usize,
+        bound: KType,
+        got: KType,
+    },
+}
+
+/// Does `carried` fill the position `declared` under `unifier`?
+///
+/// The one walk that both admits and solves. It binds on the first `Quantified` position it
+/// reaches, checks agreement on a later one, descends the compounds a quantifier can hide inside,
+/// and falls to the ordinary relation at every leaf — so a declared type holding no quantifier
+/// answers exactly as [`KType::satisfied_by`] does, in one step.
+pub fn admits_with(
+    declared: KType,
+    carried: KType,
+    variance: Variance,
+    unifier: &mut Unifier,
+    registries: &RunRegistries,
+) -> Result<(), UnifyFailure> {
+    let types = &registries.types;
+    if !types.contains_quantified(declared) {
+        return leaf_admits(declared, carried, variance, registries);
+    }
+    types.with_node(declared, |declared_node| match declared_node {
+        TypeNode::Quantified(index) => match unifier.get(*index) {
+            None => {
+                unifier.bind(*index, carried);
+                Ok(())
+            }
+            Some(bound) if bound == carried => Ok(()),
+            // A later occurrence agrees when it is no *less* determined than the binding: at a
+            // covariant position the argument may refine what was bound, at a contravariant one
+            // the binding may refine the argument. Anything else is two arguments claiming
+            // different solutions for one name.
+            Some(bound) => {
+                let agrees = match variance {
+                    Variance::Co => carried.is_more_specific_than(bound, registries),
+                    Variance::Contra => bound.is_more_specific_than(carried, registries),
+                };
+                match agrees {
+                    true => Ok(()),
+                    false => Err(UnifyFailure::Disagree {
+                        index: *index,
+                        bound,
+                        got: carried,
+                    }),
+                }
+            }
+        },
+        // The compounds a quantifier hides inside: each descends at the position's own variance,
+        // and a carried type of another shape is a plain mismatch — there is nothing to solve
+        // against.
+        TypeNode::List { element } => types.with_node(carried, |carried_node| match carried_node {
+            TypeNode::List { element: got } => {
+                admits_with(*element, *got, variance, unifier, registries)
+            }
+            _ => Err(UnifyFailure::Mismatch),
+        }),
+        TypeNode::Dict { key, value } => {
+            types.with_node(carried, |carried_node| match carried_node {
+                TypeNode::Dict {
+                    key: got_key,
+                    value: got_value,
+                } => {
+                    admits_with(*key, *got_key, variance, unifier, registries)?;
+                    admits_with(*value, *got_value, variance, unifier, registries)
+                }
+                _ => Err(UnifyFailure::Mismatch),
+            })
+        }
+        TypeNode::Record { fields } => {
+            types.with_node(carried, |carried_node| match carried_node {
+                TypeNode::Record { fields: got } => {
+                    fields
+                        .iter()
+                        .try_for_each(|(name, declared)| match got.get(name.symbol()) {
+                            Some(got) => {
+                                admits_with(*declared, *got, variance, unifier, registries)
+                            }
+                            None => Err(UnifyFailure::Mismatch),
+                        })
+                }
+                _ => Err(UnifyFailure::Mismatch),
+            })
+        }
+        // A wrapped position (`:(Elt AS Wrap)`): the constructor is fixed and the arguments carry
+        // the quantifiers, so the two must name one constructor over one parameter set.
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => types.with_node(carried, |carried_node| match carried_node {
+            TypeNode::ConstructorApply {
+                constructor: got_constructor,
+                arguments: got_arguments,
+            } if constructor == got_constructor && arguments.len() == got_arguments.len() => {
+                arguments.iter().try_for_each(|(name, declared)| {
+                    match got_arguments.get(name.symbol()) {
+                        Some(got) => admits_with(*declared, *got, variance, unifier, registries),
+                        None => Err(UnifyFailure::Mismatch),
+                    }
+                })
+            }
+            _ => Err(UnifyFailure::Mismatch),
+        }),
+        // A declared union admits through any member. Each member is tried on a copy, so a member
+        // that fails halfway leaves no binding behind.
+        TypeNode::Union { members } => {
+            for member in members.iter() {
+                let mut attempt = unifier.clone();
+                if admits_with(*member, carried, variance, &mut attempt, registries).is_ok() {
+                    *unifier = attempt;
+                    return Ok(());
+                }
+            }
+            Err(UnifyFailure::Mismatch)
+        }
+        // A lambda-typed position (`f :(FN :{x :Elt} -> :(Res AS Wrap))`): parameters by name at
+        // the flipped variance with the width-drop `function_compat` reads, the return at the
+        // current one. A carried *deferred* return determines nothing — it is opaque until its own
+        // call elaborates it — so it binds no quantifier and leaves the cell for another position
+        // to fill or for the call to refuse.
+        TypeNode::KFunction { params, ret } => {
+            types.with_node(carried, |carried_node| match carried_node {
+                TypeNode::KFunction {
+                    params: got_params,
+                    ret: got_ret,
+                } => {
+                    for (name, got) in got_params.iter() {
+                        match params.get(name.symbol()) {
+                            Some(declared) => admits_with(
+                                *declared,
+                                *got,
+                                variance.flipped(),
+                                unifier,
+                                registries,
+                            )?,
+                            None => return Err(UnifyFailure::Mismatch),
+                        }
+                    }
+                    match types
+                        .with_node(*got_ret, |node| matches!(node, TypeNode::DeferredReturn(_)))
+                    {
+                        true => Ok(()),
+                        false => admits_with(*ret, *got_ret, variance, unifier, registries),
+                    }
+                }
+                _ => Err(UnifyFailure::Mismatch),
+            })
+        }
+        // A shape-typed position. Two shapes meet only under one key; slots pair positionally at
+        // the flipped variance and the return at the current one, as a lambda's do. A declared
+        // shape carrying a group of its own rebinds these indices, so the walk stops there and the
+        // ordinary relation answers.
+        TypeNode::ExpressionShape {
+            quantifiers,
+            elements,
+            ret,
+        } if quantifiers.is_empty() => {
+            types.with_node(carried, |carried_node| match carried_node {
+                TypeNode::ExpressionShape {
+                    quantifiers: got_quantifiers,
+                    elements: got_elements,
+                    ret: got_ret,
+                } if got_quantifiers.is_empty() && elements.len() == got_elements.len() => {
+                    for (declared, got) in elements.iter().zip(got_elements.iter()) {
+                        match (declared, got) {
+                            (
+                                DispatchTokenElement::Keyword(declared),
+                                DispatchTokenElement::Keyword(got),
+                            ) if declared == got => {}
+                            (
+                                DispatchTokenElement::Slot(declared),
+                                DispatchTokenElement::Slot(got),
+                            ) => {
+                                admits_with(
+                                    *declared,
+                                    *got,
+                                    variance.flipped(),
+                                    unifier,
+                                    registries,
+                                )?;
+                            }
+                            _ => return Err(UnifyFailure::Mismatch),
+                        }
+                    }
+                    admits_with(*ret, *got_ret, variance, unifier, registries)
+                }
+                _ => Err(UnifyFailure::Mismatch),
+            })
+        }
+        _ => leaf_admits(declared, carried, variance, registries),
+    })
+}
+
+/// The type a resolved value answers with at the position `declared`: a callable answers on the
+/// channel the slot declares — its registered shape at a shape slot, the lambda type it reports as
+/// a value everywhere else — and every other value its own memoized tag. The two callable channels
+/// stay apart here exactly as they do in the arms of [`KType::accepts_carried`].
+pub(crate) fn carried_channel_ktype(
+    c: Carried<'_>,
+    declared: KType,
+    registries: &RunRegistries,
+) -> KType {
+    let types = &registries.types;
+    match c {
+        Carried::Object(KObject::KFunction(f))
+            if types.with_node(declared, |node| {
+                matches!(node, TypeNode::ExpressionShape { .. })
+            }) =>
+        {
+            f.shape_ktype()
+        }
+        other => other.ktype(types),
+    }
+}
+
+/// The relation at a position with nothing left to solve: covariantly the declared type must be
+/// satisfied by the carried one, contravariantly the other way round.
+fn leaf_admits(
+    declared: KType,
+    carried: KType,
+    variance: Variance,
+    registries: &RunRegistries,
+) -> Result<(), UnifyFailure> {
+    let admits = match variance {
+        Variance::Co => declared.satisfied_by(carried, registries),
+        Variance::Contra => carried.satisfied_by(declared, registries),
+    };
+    match admits {
+        true => Ok(()),
+        false => Err(UnifyFailure::Mismatch),
+    }
+}
+
 /// Whether a node is a quantified position — the shape-binder leaf the type relations read as the
 /// unconstrained top. Free rather than a `KType` method, because every caller already holds the
 /// node.
@@ -209,7 +513,14 @@ fn shape_compat(
     f: &crate::machine::KFunction<'_>,
     registries: &RunRegistries,
 ) -> bool {
-    shape.satisfied_by(f.shape_ktype(), registries)
+    admits_with(
+        shape,
+        f.shape_ktype(),
+        Variance::Co,
+        &mut Unifier::fresh(),
+        registries,
+    )
+    .is_ok()
 }
 
 /// The slot types that constrain nothing beyond "a name": a concrete type out-specifies any of
@@ -420,35 +731,35 @@ impl KType {
                     // Shape subtyping: the same rule as a function's, paired **positionally**
                     // rather than by name — an argument name is not part of a shape type, and
                     // dispatch never sees one. Two shapes compare only under one key (equal
-                    // keywords in equal positions and equal arity), so width never varies;
-                    // slots are contravariant, the return covariant, and one strict edge is
-                    // required. A quantifier-arity disagreement is a type disagreement.
+                    // keywords in equal positions), so width never varies; slots are
+                    // contravariant, the return covariant, and one strict edge is required.
+                    //
+                    // The quantifier groups are not read. Arity is part of a shape's *identity* —
+                    // two shapes over different arities are different types — but satisfaction is
+                    // positional and needs no solver, so an overload quantifying over nothing
+                    // whose positions are `Any` fills a quantified declaration exactly as a
+                    // quantified one does.
                     (
                         TypeNode::ExpressionShape {
-                            quantifiers: qa,
                             elements: ea,
                             ret: ra,
+                            ..
                         },
                         TypeNode::ExpressionShape {
-                            quantifiers: qb,
                             elements: eb,
                             ret: rb,
+                            ..
                         },
-                    ) => {
-                        qa.len() == qb.len()
-                            && shape_slots_more_specific(ea, eb, registries).is_some_and(
-                                |slots_more| {
-                                    // Covariant return, and at least one strict edge. Width never
-                                    // varies — two shapes compare only under one key — so the
-                                    // strict edge is a more general slot or a narrower return.
-                                    if ra == rb {
-                                        slots_more
-                                    } else {
-                                        ra.is_more_specific_than(*rb, registries)
-                                    }
-                                },
-                            )
-                    }
+                    ) => shape_slots_more_specific(ea, eb, registries).is_some_and(|slots_more| {
+                        // Covariant return, and at least one strict edge. Width never varies —
+                        // two shapes compare only under one key — so the strict edge is a more
+                        // general slot or a narrower return.
+                        if ra == rb {
+                            slots_more
+                        } else {
+                            ra.is_more_specific_than(*rb, registries)
+                        }
+                    }),
                     // Value role: a concrete signature type is more specific than the
                     // `:Signature` wildcard.
                     (TypeNode::Signature { .. }, TypeNode::OfKind(KKind::Signature)) => true,
@@ -707,6 +1018,20 @@ impl KType {
     /// via `satisfied_by`, never by walking its contents.
     pub fn accepts_carried<'v>(self, c: Carried<'v>, registries: &RunRegistries) -> bool {
         let types = &registries.types;
+        // A slot reading a quantifier admits by unification against the type the value carries: at
+        // a pick a quantified position is the unconstrained top, one fresh binding per slot. What
+        // makes the *call* consistent is `validate_call_args`, which walks every slot under one
+        // unifier and so refuses two arguments claiming different solutions for one name.
+        if types.contains_quantified(self) {
+            return admits_with(
+                self,
+                carried_channel_ktype(c, self, registries),
+                Variance::Co,
+                &mut Unifier::fresh(),
+                registries,
+            )
+            .is_ok();
+        }
         types.with_node(self, |node| match node {
             TypeNode::Any => true,
             // Uninhabited: a `:Never` slot admits nothing at all.
@@ -1129,6 +1454,12 @@ fn record_value_more_specific(
 ///   specific than the value's (`slot_pt == a.ktype || slot_pt ≺ a.ktype`). Extra
 ///   slot params the value doesn't declare are fine — under call-by-name they arrive
 ///   unbound (width drop), so there is no exhaustiveness check.
+///
+/// Both comparisons run through [`admits_with`], so a slot reading a **quantifier** binds it from
+/// the value's own type rather than failing on it — the pick's per-slot reading of a position the
+/// call itself solves across every slot at once. The unifier is fresh and never read back: a slot
+/// with no quantifier in it takes `admits_with`'s one-step leaf rule, which is these same two
+/// relations.
 pub(super) fn function_compat<'v>(
     sig: &ExpressionSignature<'v>,
     params: &Record<KType>,
@@ -1137,8 +1468,11 @@ pub(super) fn function_compat<'v>(
 ) -> bool {
     let types = &registries.types;
     use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
+    let unifier = &mut Unifier::fresh();
     let ret_ok = match &sig.return_type() {
-        ReturnType::Resolved(kt) => *kt == ret || kt.is_more_specific_than(ret, registries),
+        ReturnType::Resolved(kt) => {
+            admits_with(ret, *kt, Variance::Co, unifier, registries).is_ok()
+        }
         ReturnType::Deferred(d) => types.with_node(ret, |node| match node {
             TypeNode::Any => true,
             TypeNode::DeferredReturn(slot) => {
@@ -1155,7 +1489,8 @@ pub(super) fn function_compat<'v>(
             match params.get(a.name.symbol()) {
                 None => return false,
                 Some(slot_pt) => {
-                    if !(*slot_pt == a.ktype || slot_pt.is_more_specific_than(a.ktype, registries))
+                    if admits_with(*slot_pt, a.ktype, Variance::Contra, unifier, registries)
+                        .is_err()
                     {
                         return false;
                     }

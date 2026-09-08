@@ -534,6 +534,7 @@ digraph {
     "koan::machine::core::kfunction::pick" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::pick" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::pick" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::pick" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::lexical_frame" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::ref_carriers" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::ref_carriers" -> "koan::machine::core::bindings" [label="uses", style="dashed"];

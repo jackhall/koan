@@ -2020,6 +2020,126 @@ fn quantifier_names_are_render_only_but_arity_is_identity() {
     assert_ne!(build(vec!["Elt"]), two);
 }
 
+/// A shape quantifying over nothing satisfies a quantified declaration whose positions it is at
+/// least as general at: arity is part of a shape's identity, not of the relation, so satisfaction
+/// stays positional and solver-free.
+#[test]
+fn a_monomorphic_shape_satisfies_a_quantified_declaration_at_any() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let pure = shape_keyword("PURE", &registries);
+    let elt = crate::machine::model::TypeSymbol::classify("Elt").expect("a Type token");
+    let declared = types.shape_type(
+        &[elt],
+        &[
+            DispatchTokenElement::Keyword(pure),
+            DispatchTokenElement::Slot(types.quantified(0)),
+        ],
+        types.quantified(0),
+    );
+    let general = types.shape_type(
+        &[],
+        &[
+            DispatchTokenElement::Keyword(pure),
+            DispatchTokenElement::Slot(KType::ANY),
+        ],
+        KType::ANY,
+    );
+    let concrete = types.shape_type(
+        &[],
+        &[
+            DispatchTokenElement::Keyword(pure),
+            DispatchTokenElement::Slot(KType::NUMBER),
+        ],
+        KType::NUMBER,
+    );
+    assert!(declared.satisfied_by(general, &registries));
+    assert!(!declared.satisfied_by(concrete, &registries));
+}
+
+/// The unifier binds on the first quantified position it reaches, holds every later one to that
+/// binding, and reads a callable's parameters at the **flipped** variance — so a continuation may
+/// be more general at a parameter it shares and must not be more specific.
+#[test]
+fn the_unifier_binds_agrees_and_flips_variance() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let q = types.quantified(0);
+    let x = BinderSymbol::classify("x").expect("value token");
+
+    // A bare quantified position binds whatever reaches it, once.
+    let mut unifier = Unifier::new(1);
+    assert!(admits_with(q, KType::NUMBER, Variance::Co, &mut unifier, &registries).is_ok());
+    assert_eq!(unifier.get(0), Some(KType::NUMBER));
+    assert!(admits_with(q, KType::NUMBER, Variance::Co, &mut unifier, &registries).is_ok());
+    assert!(matches!(
+        admits_with(q, KType::STR, Variance::Co, &mut unifier, &registries),
+        Err(UnifyFailure::Disagree { index: 0, .. }),
+    ));
+
+    // Through a lambda type the parameter flips: `:{x :Q}` binds from the value's own parameter,
+    // and a later, more general one agrees while a more specific one does not.
+    let declared = types.function_type(Record::from_pairs([(x, q)]), KType::BOOL);
+    let carrying =
+        |param: KType| types.function_type(Record::from_pairs([(x, param)]), KType::BOOL);
+    let mut unifier = Unifier::new(1);
+    assert!(
+        admits_with(
+            declared,
+            carrying(KType::NUMBER),
+            Variance::Co,
+            &mut unifier,
+            &registries,
+        )
+        .is_ok()
+    );
+    assert_eq!(unifier.get(0), Some(KType::NUMBER));
+    assert!(
+        admits_with(
+            declared,
+            carrying(KType::ANY),
+            Variance::Co,
+            &mut unifier,
+            &registries,
+        )
+        .is_ok(),
+        "an `Any` parameter is more general than the binding, which is what a contravariant \
+         position asks for",
+    );
+    assert!(matches!(
+        admits_with(
+            declared,
+            carrying(KType::STR),
+            Variance::Co,
+            &mut unifier,
+            &registries,
+        ),
+        Err(UnifyFailure::Disagree { index: 0, .. }),
+    ));
+}
+
+/// A declared type holding no quantifier answers exactly as the ordinary relation does, in one
+/// step: the unifier is not a second type system beside `satisfied_by`.
+#[test]
+fn a_declared_type_with_no_quantifier_is_the_ordinary_relation() {
+    let registries = RunRegistries::new();
+    let mut unifier = Unifier::fresh();
+    for (declared, carried) in [
+        (KType::ANY, KType::NUMBER),
+        (KType::NUMBER, KType::NUMBER),
+        (KType::NUMBER, KType::STR),
+        (KType::STR, KType::ANY),
+    ] {
+        assert_eq!(
+            admits_with(declared, carried, Variance::Co, &mut unifier, &registries).is_ok(),
+            declared.satisfied_by(carried, &registries),
+            "{} against {}",
+            declared.name(&registries),
+            carried.name(&registries),
+        );
+    }
+}
+
 /// A keyword symbol for the shape fixtures above, minted the way a registration mints one.
 fn shape_keyword(text: &str, registries: &RunRegistries) -> crate::machine::model::KeywordSymbol {
     crate::machine::model::KeywordSymbol::declared(text, &registries.labels)

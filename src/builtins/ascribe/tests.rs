@@ -14,6 +14,8 @@
 //!   canonicalization through it, and the nested module born as a coerced view of itself.
 //! - [`keyworded`] — the dispatch-bucket surface across the barrier: selection, coercion, pruning
 //!   and signature identity for members a SIG declares with a bodyless `EXPR` head.
+//! - [`quantified`] — a keyworded member quantified over a `FOR ALL` group: solver-free
+//!   satisfaction, and the per-call solve through the installed view.
 
 mod ascription;
 mod cross_sig;
@@ -21,5 +23,6 @@ mod functor;
 mod keyworded;
 mod nested;
 mod operators;
+mod quantified;
 mod self_sig;
 mod views;

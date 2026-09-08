@@ -19,7 +19,9 @@ use crate::machine::core::BoundArgs;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, CallFrame, KFunction, OpenedFunction};
-use crate::machine::core::{ExecFrame, ExecOutcome, LeadingStatements, PerCallReturn, run_user_fn};
+use crate::machine::core::{
+    ExecFrame, ExecOutcome, LeadingStatements, PerCallReturn, run_user_fn, solved_type,
+};
 use crate::machine::model::{CoercionTables, DeclaredSlots, KType, declared_return};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, NodeId};
@@ -132,9 +134,12 @@ fn enter_user_fn<'step>(
     // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here. For a
     // view's coercion wrapper this is the *inward* half of the barrier: the signature it validates
     // against carries the view's types, so a source-typed argument is a mismatch here.
-    if let Err(e) = wrapper.validate_call_args(working_expr.parts, view.registries()) {
-        return Outcome::Done(Err(e));
-    }
+    // The walk also solves the signature's quantifiers, if it has any: the solution rides into
+    // the frame bind, which registers each one as a type name the body reads.
+    let solved = match wrapper.validate_call_args(working_expr.parts, view.registries()) {
+        Ok(solved) => solved,
+        Err(e) => return Outcome::Done(Err(e)),
+    };
     let mut arg_carriers = carriers_from_expr(view, &working_expr);
     if let Err(e) = deliver_value_args(view, &working_expr, &mut arg_carriers) {
         return Outcome::Done(Err(e));
@@ -155,6 +160,10 @@ fn enter_user_fn<'step>(
             coercion,
         } => {
             let types = view.types();
+            // The declared position is the *declaration's* shape; what crosses the barrier at this
+            // call is that shape at the solution the argument walk built — so the return is
+            // checked, and each argument rewritten, against the types this call actually has.
+            let declared = solved_type(declared, &solved, types);
             let declared_return = declared_return(declared, types);
             let outward = coercion.tables(types);
             // A return position naming no abstract member crosses no barrier: the wrapper's own
@@ -209,6 +218,7 @@ fn enter_user_fn<'step>(
         call_carriers,
         &exec_frame,
         in_chain,
+        &solved,
         view.registries(),
     ) {
         ExecOutcome::Tail { leading, tail, ret } => {

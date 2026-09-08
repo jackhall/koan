@@ -51,7 +51,7 @@ pub(crate) use kfunction::block_tail::{
     BlockBody, BlockScope, NoSeed, block_tail, freeze_body, fresh_cart_tail, seed,
 };
 pub(crate) use kfunction::body::{LeadingStatements, ReturnContract, body_statement_refs};
-pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
+pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn, solved_type};
 pub(crate) use kfunction::{ActionFn, Body, KFunction, WrapIndices};
 pub use lexical_frame::{LexicalFrame, assemble_body_chain};
 pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};

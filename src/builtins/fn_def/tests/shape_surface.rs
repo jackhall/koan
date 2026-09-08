@@ -242,6 +242,24 @@ fn quantified_shapes_are_equal_up_to_the_names() {
     assert_eq!(one, two);
 }
 
+/// Alpha-equivalence is by *position*, not by spelling order: swapping the group's names and the
+/// uses together leaves one interned shape, because a name lowers to the index it stands at.
+#[test]
+fn a_swapped_group_with_swapped_uses_interns_once() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "LET One = :(EXPR FOR ALL (Elt Res) (STEP _ :Elt _ :Res) -> Res)\n\
+         LET Two = :(EXPR FOR ALL (Res Elt) (STEP _ :Res _ :Elt) -> Elt)",
+    );
+
+    let one = lookup_type(scope, "One").expect("One binds a type");
+    let two = lookup_type(scope, "Two").expect("Two binds a type");
+    assert_eq!(one, two);
+}
+
 /// A quantified definition registers and runs; its group rides the callable, and the type it
 /// reports on the value lane erases the quantified positions, which no lambda type can name.
 #[test]
