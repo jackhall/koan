@@ -340,7 +340,7 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
         table.relocation_of(producer),
         Some(SlabForward::Slab {
             slot: consumer.slot(),
-            base: 0,
+            first_index: 0,
         })
     );
     let migrated = dormant_reach(&table, consumer.slot(), 0);

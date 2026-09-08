@@ -343,12 +343,13 @@ enum SlabState {
 /// Where a departed cell's dormant carriers ended up, so a key minted under its handle still finds
 /// the mask that names its reach.
 ///
-/// `Slab` is a merge into a live cell: the masks moved into that cell's table at `base`, re-homed.
+/// `Slab` is a merge into a live cell: the masks moved into that cell's table starting at
+/// `first_index`, re-homed.
 /// `Sealed` is a seal or a fold: the masks are gone, and a redeemed value's reach is derived from
 /// the sealed cell instead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SlabForward {
-    Slab { slot: u32, base: u32 },
+    Slab { slot: u32, first_index: u32 },
     Sealed(SealedId),
 }
 
@@ -967,15 +968,15 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Where the dormant carriers a key names live now, or `None` when their storage is gone.
     ///
-    /// A handle whose slot still holds it names that slot directly, at base zero. Otherwise the
-    /// cell has left the slab, and the relocation map answers — or does not, which means the cell
-    /// reclaimed or left an empty table behind.
+    /// A handle whose slot still holds it names that slot directly, at first index zero. Otherwise
+    /// the cell has left the slab, and the relocation map answers — or does not, which means the
+    /// cell reclaimed or left an empty table behind.
     fn locate(&self, home: SlabHandle) -> Option<SlabForward> {
         let cell = &self.slots[home.slot() as usize];
         if cell.state != SlabState::Free && cell.generation == home.generation() {
             return Some(SlabForward::Slab {
                 slot: home.slot(),
-                base: 0,
+                first_index: 0,
             });
         }
         self.relocation(home).map(|entry| entry.location)
@@ -1230,16 +1231,16 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// becomes bit `into` throughout, since that storage is the target's own bundle from here on.
     ///
     /// Every key minted under a handle the dead cell answered for is forwarded to the target's
-    /// table at its new base, so a dormant carrier survives any number of merges. A dead cell with
-    /// an empty table forwards nothing and leaves no entry behind. The moved block is appended
-    /// without interning: its position at `base` is what forwards the keys minted under it.
+    /// table at its new first index, so a dormant carrier survives any number of merges. A dead
+    /// cell with an empty table forwards nothing and leaves no entry behind. The moved block is
+    /// appended without interning: its position is what forwards the keys minted under it.
     fn migrate_reaches(&mut self, dead: u32, into: u32, scratch: &Scratch) {
         // The target's own dormant carriers lose the dead cell's bit: those chunks are its
         // storage now.
         for mask in self.slots[into as usize].reaches.iter_mut() {
             mask.remove_slot(dead);
         }
-        let base = self.slots[into as usize].reaches.len();
+        let first_index = self.slots[into as usize].reaches.len();
         // Taken before the reach table is, so the run carries the departing occupant exactly when
         // something — a kept dormant carrier or a tree tombstone — still has to find its way to it.
         let (lineage, has_occupant) = self.take_lineage(dead, scratch);
@@ -1251,8 +1252,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
 
         // The departing occupant is the run's last entry and the only one landing at the moved
-        // block's own base; every other entry was minted under an earlier merge and moves by the
-        // block's offset.
+        // block's own first index; every other entry was minted under an earlier merge and moves by
+        // the block's offset.
         let (departing, inherited) = match has_occupant {
             true => {
                 let (occupant, rest) = lineage
@@ -1264,7 +1265,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         };
         let mut head = self.slots[into as usize].lineage;
         for handle in inherited {
-            let SlabForward::Slab { base: old, .. } = self
+            let SlabForward::Slab {
+                first_index: old, ..
+            } = self
                 .relocation(*handle)
                 .expect("a slot's lineage entry points at that slot")
                 .location
@@ -1275,14 +1278,21 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 *handle,
                 SlabForward::Slab {
                     slot: into,
-                    base: base + old,
+                    first_index: first_index + old,
                 },
                 head,
             );
             head = Some(*handle);
         }
         if let Some(departing) = departing {
-            self.relocate(departing, SlabForward::Slab { slot: into, base }, head);
+            self.relocate(
+                departing,
+                SlabForward::Slab {
+                    slot: into,
+                    first_index,
+                },
+                head,
+            );
             // The tombstones that spliced into the dead cell's bundle keep naming its handle; the
             // entry just written is what forwards them into the target's bundle from here on.
             self.carry_tree_tombstones(dead, departing);
@@ -2802,7 +2812,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         };
         let (reach, home) = match table.locate(slab_home) {
             None => return Err(RedeemError::Gone),
-            Some(SlabForward::Slab { slot, base }) => {
+            Some(SlabForward::Slab { slot, first_index }) => {
                 let entitled = slot == executing
                     || table.pins.test(executing, slot)
                     || table.birth.test(executing, slot);
@@ -2815,7 +2825,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
                     CellHandle::Tree(_) => GraphReach::single(slot),
                     CellHandle::Slab(_) => table.slots[slot as usize]
                         .reaches
-                        .get(base + key.index)
+                        .get(first_index + key.index)
                         .expect("a relocated key names an entry of the table it was forwarded to")
                         .clone(),
                 };

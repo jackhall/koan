@@ -327,7 +327,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             "a live cell answers for its own dormant carriers, so it needs no relocation entry"
         );
         match location {
-            SlabForward::Slab { slot, base } => {
+            SlabForward::Slab { slot, first_index } => {
                 let cell = &table.slots[slot as usize];
                 assert!(
                     cell.state != SlabState::Free,
@@ -338,7 +338,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
                     "slot {slot} answers for {handle:?} without carrying it on its chain"
                 );
                 assert!(
-                    base < cell.reaches.len(),
+                    first_index < cell.reaches.len(),
                     "{handle:?} is relocated past the end of slot {slot}'s reach table"
                 );
             }
