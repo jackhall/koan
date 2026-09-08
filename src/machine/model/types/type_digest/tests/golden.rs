@@ -10,7 +10,6 @@
 //! component under the per-SCC member-identity recipe, so its presentation is byte-identical
 //! there. The one exception is called out at its own fixture.
 
-use crate::machine::model::types::sig_schema::KeywordedMembers;
 use std::collections::HashMap;
 
 use super::super::{TypeDigest, empty_schema_digest, schema_content_digest};
@@ -190,7 +189,7 @@ fn mixed_schema(types: &TypeRegistry, wrap_params: Vec<&str>) -> SigSchema {
         .collect(),
         manifest_members: TypeMemberMap::default(),
         value_slots: HashMap::default(),
-        keyworded: KeywordedMembers::default(),
+        keyworded: Vec::new(),
         operators: Vec::new(),
     }
 }

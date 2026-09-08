@@ -4,11 +4,10 @@
 //! and the chaining record in the signature's stored schema — plus the guards that keep
 //! declaration and definition in their own bodies.
 
-use crate::builtins::test_support::{TestRun, binder_token, key_keyword, lookup_type};
+use crate::builtins::test_support::{TestRun, key_keyword, lookup_type};
 use crate::machine::KErrorKind;
 use crate::machine::model::{
-    DeclaredGroup, KType, KeyElement, KeywordSymbol, Record, ReductionMode, SigSchema, TypeNode,
-    UntypedKey,
+    DeclaredGroup, KType, KeyElement, KeywordSymbol, ReductionMode, SigSchema, TypeNode, UntypedKey,
 };
 use crate::machine::{program_storage, run_root_storage};
 
@@ -36,14 +35,52 @@ fn key(spelling: &[&str]) -> UntypedKey {
         .collect()
 }
 
-/// The sole overload declared under `spelling`.
-fn overload(schema: &SigSchema, spelling: &[&str]) -> KType {
-    let overloads = schema
+/// The schema members keying `spelling`, read back off each member's own shape.
+fn members_keyed(
+    schema: &SigSchema,
+    types: &crate::machine::model::TypeRegistry,
+    spelling: &[&str],
+) -> Vec<KType> {
+    let wanted = key(spelling);
+    schema
         .keyworded
-        .get(&key(spelling))
-        .unwrap_or_else(|| panic!("the signature declares the key {spelling:?}"));
-    assert_eq!(overloads.len(), 1, "one head, one overload");
-    overloads[0]
+        .iter()
+        .filter(|member| crate::machine::model::shape_key(**member, types) == wanted)
+        .copied()
+        .collect()
+}
+
+/// The sole member declared under `spelling`.
+fn overload(
+    schema: &SigSchema,
+    types: &crate::machine::model::TypeRegistry,
+    spelling: &[&str],
+) -> KType {
+    let members = members_keyed(schema, types, spelling);
+    assert_eq!(members.len(), 1, "one head, one member");
+    members[0]
+}
+
+/// An operator member's shape: the binary form's two operand positions around the glyph, or the
+/// list form's single run position after it.
+fn operator_shape(
+    types: &crate::machine::model::TypeRegistry,
+    spelling: &[&str],
+    slots: &[KType],
+    ret: KType,
+) -> KType {
+    use crate::machine::model::DispatchTokenElement;
+    let mut next = slots.iter();
+    let elements: Vec<DispatchTokenElement> = spelling
+        .iter()
+        .map(|part| match *part {
+            "_" => DispatchTokenElement::Slot(*next.next().expect("one type per slot position")),
+            token => DispatchTokenElement::Keyword(
+                crate::builtins::test_support::key_keyword_symbol(token),
+            ),
+        })
+        .collect();
+    types.shape_type(&[], &elements, ret)
 }
 
 /// A record over the named glyphs at `mode`, spelled as the schema stores one.
@@ -67,14 +104,16 @@ fn a_bare_head_records_its_bucket_and_a_singleton_fold_left_record() {
     let scope = test_run.scope;
     test_run.run("SIG Addable = ((LET Carrier = Number) (OP #(⊕) OVER Carrier))");
     let schema = sig_schema(scope, test_run.types(), "Addable");
-    let expected = test_run.types().function_type(
-        Record::from_pairs([
-            (binder_token("left"), KType::NUMBER),
-            (binder_token("right"), KType::NUMBER),
-        ]),
+    let expected = operator_shape(
+        test_run.types(),
+        &["_", "⊕", "_"],
+        &[KType::NUMBER, KType::NUMBER],
         KType::NUMBER,
     );
-    assert_eq!(overload(&schema, &["_", "⊕", "_"]), expected);
+    assert_eq!(
+        overload(&schema, test_run.types(), &["_", "⊕", "_"]),
+        expected
+    );
     assert_eq!(
         schema.operators,
         vec![record(&["⊕"], ReductionMode::FoldLeft)]
@@ -93,19 +132,15 @@ fn a_unary_head_records_the_whole_triple() {
     let schema = sig_schema(scope, test_run.types(), "Coll");
     let types = test_run.types();
     assert_eq!(
-        overload(&schema, &["~", "_"]),
-        types.function_type(
-            Record::from_pairs([(binder_token("operands"), types.list(KType::NUMBER))]),
-            KType::STR,
-        ),
+        overload(&schema, types, &["~", "_"]),
+        operator_shape(types, &["~", "_"], &[types.list(KType::NUMBER)], KType::STR),
     );
     assert_eq!(
-        overload(&schema, &["_", "~", "_"]),
-        types.function_type(
-            Record::from_pairs([
-                (binder_token("left"), KType::NUMBER),
-                (binder_token("right"), KType::NUMBER),
-            ]),
+        overload(&schema, types, &["_", "~", "_"]),
+        operator_shape(
+            types,
+            &["_", "~", "_"],
+            &[KType::NUMBER, KType::NUMBER],
             KType::STR,
         ),
     );
@@ -124,15 +159,14 @@ fn a_head_resolves_a_sibling_type_member() {
     let schema = sig_schema(scope, test_run.types(), "Addable");
     let carrier = schema.value_slots
         [&crate::builtins::test_support::value_name("zero", test_run.registries())];
-    let expected = test_run.types().function_type(
-        Record::from_pairs([
-            (binder_token("left"), carrier),
-            (binder_token("right"), carrier),
-        ]),
+    let expected = operator_shape(
+        test_run.types(),
+        &["_", "⊕", "_"],
+        &[carrier, carrier],
         carrier,
     );
     assert_eq!(
-        overload(&schema, &["_", "⊕", "_"]),
+        overload(&schema, test_run.types(), &["_", "⊕", "_"]),
         expected,
         "the head's operand is the signature's own abstract member, as a VAL slot's type is",
     );
@@ -173,8 +207,8 @@ fn both_container_operand_spellings_declare_one_type() {
     let bare = sig_schema(scope, types, "Bare");
     let sigiled = sig_schema(scope, types, "Sigiled");
     assert_eq!(
-        overload(&bare, &["_", "⊕", "_"]),
-        overload(&sigiled, &["_", "⊕", "_"]),
+        overload(&bare, types, &["_", "⊕", "_"]),
+        overload(&sigiled, types, &["_", "⊕", "_"]),
     );
 }
 
@@ -188,7 +222,10 @@ fn two_heads_over_one_symbol_are_two_overloads_and_one_record() {
     let scope = test_run.scope;
     test_run.run("SIG Addable = ((OP #(⊕) OVER Number) (OP #(⊕) OVER Str))");
     let schema = sig_schema(scope, test_run.types(), "Addable");
-    assert_eq!(schema.keyworded[&key(&["_", "⊕", "_"])].len(), 2);
+    assert_eq!(
+        members_keyed(&schema, test_run.types(), &["_", "⊕", "_"]).len(),
+        2
+    );
     assert_eq!(
         schema.operators,
         vec![record(&["⊕"], ReductionMode::FoldLeft)]
@@ -305,11 +342,12 @@ fn a_singleton_pairwise_record_renders_its_group_head() {
     );
 }
 
-/// Operator-head rendering classifies per **overload**, not per symbol. A second overload in a
-/// declared operator's own bucket, declared by an `FN` head under other parameter names, keeps the
-/// FN-head rendering — the head declares one shape, not the whole key.
+/// A second overload in a declared operator's own bucket renders as an operator head over its
+/// own operand type. A shape carries no argument names, so nothing tells a member declared by an
+/// `FN` head apart from one declared by an `OP` head: both spell the same key at the same slots,
+/// and the symbol's chaining record covers the whole bucket.
 #[test]
-fn an_fn_overload_in_a_declared_operators_bucket_keeps_its_own_names() {
+fn a_second_overload_in_a_declared_operators_bucket_renders_as_an_operator_head() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -323,8 +361,8 @@ fn an_fn_overload_in_a_declared_operators_bucket_keeps_its_own_names() {
         "the operator member renders as its head, got {rendered}",
     );
     assert!(
-        rendered.contains("(x :Str ⊕ y :Str) -> Str"),
-        "the FN overload keeps the names it was declared with, got {rendered}",
+        rendered.contains("OP #(⊕) OVER Str"),
+        "the second overload renders over its own operand type, got {rendered}",
     );
 }
 
@@ -340,7 +378,7 @@ fn an_fn_head_over_an_operator_key_stays_an_fn_head() {
     let handle = lookup_type(scope, "Addable").expect("Addable binds");
     assert_eq!(
         handle.name(test_run.registries()),
-        "SIG ((left :Number ⊕ right :Number) -> Number)",
+        "SIG ((_ :Number ⊕ _ :Number) -> Number)",
     );
     assert!(
         sig_schema(scope, test_run.types(), "Addable")

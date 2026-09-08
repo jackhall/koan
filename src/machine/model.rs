@@ -29,8 +29,8 @@ pub use types::{
     DeferredReturnSurface, DispatchToken, DispatchTokenElement, ExpressionSignature, KKind, KType,
     KeyElement, NodeSchema, Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema,
     ReturnType, SealedAnnounced, SealedGroup, SignatureDraft, SignatureElement, TypeNode,
-    UntypedKey, WindowView, fn_type_specificity, is_keyword_token, render_keyworded_head,
-    shape_specificity,
+    UntypedKey, WindowView, is_keyword_token, render_keyworded_head, shape_specificity,
+    shape_type_of,
 };
 pub use types::{
     CaptureShape, CaptureShapes, capture_footprint, capture_shape_of, carrier_union_error,
@@ -58,8 +58,9 @@ pub(crate) use close_inference::infer_close_captures;
 pub(crate) use miss_diagnostics::{diagnose_miss, key_is_reserved};
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
 pub(crate) use types::{
-    CoercionTables, DeclaredGroup, KeywordedMembers, MemberCoercion, OperatorMembers, TypeDigest,
-    canonical_overloads, select_keyworded_satisfier, sig_subtype, substitute_sig_members,
+    CoercionTables, DeclaredGroup, MemberCoercion, OperatorMembers, TypeDigest,
+    canonical_overloads, select_keyworded_satisfier, shape_key, sig_subtype,
+    substitute_sig_members,
 };
 pub(crate) use types::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
@@ -69,7 +70,7 @@ pub(crate) use types::{
     unsaturated_constructor_message,
 };
 pub(crate) use values::{
-    CarriedFamily, Module, ModuleDraft, NamedPairs, RegionEscape, coerce_function_cell,
-    coerce_object_into, copy_or_pin, copy_or_pin_callable, object_copy_cost, relocate_object_into,
-    retains_home,
+    CarriedFamily, DeclaredSlots, Module, ModuleDraft, NamedPairs, RegionEscape,
+    coerce_function_cell, coerce_object_into, copy_or_pin, copy_or_pin_callable, declared_return,
+    object_copy_cost, relocate_object_into, retains_home,
 };

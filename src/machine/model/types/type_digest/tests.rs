@@ -9,7 +9,6 @@
 //! [`recursive_group_window`](super::super::recursive_group_window)'s tests — a component digest
 //! is only meaningful alongside the Tarjan condensation that decides which members share one.
 
-use crate::machine::model::types::sig_schema::KeywordedMembers;
 mod golden;
 
 use std::collections::HashMap;
@@ -201,7 +200,7 @@ fn schema_digest_binds_abstract_member_param_names() {
         .collect(),
         manifest_members: crate::machine::model::TypeMemberMap::default(),
         value_slots: HashMap::default(),
-        keyworded: KeywordedMembers::default(),
+        keyworded: Vec::new(),
         operators: Vec::new(),
     };
     assert_ne!(

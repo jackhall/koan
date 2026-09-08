@@ -82,8 +82,8 @@ use crate::machine::model::MACHINE_BINDERS;
 use crate::machine::model::ReturnType;
 pub(super) use crate::machine::model::symbol_from_parts;
 use crate::machine::model::symbol_from_quote_body;
-use crate::machine::model::untyped_key_of;
 use crate::machine::model::{StaticName, ValueSymbol};
+use crate::machine::model::{shape_type_of, untyped_key_of};
 use crate::machine::{GroupSeal, OverloadSeal};
 
 // This builtin's slot spellings, minted once and read back by symbol. The names an `OP` body
@@ -772,21 +772,13 @@ fn declare<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, has_result: bool) -> Act
     // The keyworded writes: the binary form always, plus a unary head's list form. The step's own
     // carrier is the *primary* function type — the list body for a unary operator, the binary body
     // otherwise — the same choice the definition makes about which function it evaluates to.
-    let binary_type =
-        super::fn_def::finalize::fn_type_of(&shape.binary_elements, shape.result, ctx.registries);
-    let mut writes: Vec<WriteOp<'a>> = vec![WriteOp::SigKeyworded {
-        key: untyped_key_of(&shape.binary_elements),
-        fn_type: binary_type,
-    }];
+    let binary_type = shape_type_of(&shape.binary_elements, &[], shape.result, ctx.registries);
+    let mut writes: Vec<WriteOp<'a>> = vec![WriteOp::SigKeyworded { shape: binary_type }];
     let primary = match &shape.list_elements {
         None => binary_type,
         Some(list_elements) => {
-            let list_type =
-                super::fn_def::finalize::fn_type_of(list_elements, shape.result, ctx.registries);
-            writes.push(WriteOp::SigKeyworded {
-                key: untyped_key_of(list_elements),
-                fn_type: list_type,
-            });
+            let list_type = shape_type_of(list_elements, &[], shape.result, ctx.registries);
+            writes.push(WriteOp::SigKeyworded { shape: list_type });
             list_type
         }
     };

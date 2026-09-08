@@ -310,15 +310,13 @@ fn view_self_sig(
             substitute_sig_members(*declared, sig_id, &member_map, types),
         );
     }
-    for (key, declared_overloads) in &signature.keyworded {
-        let substituted = declared_overloads
+    view_sig.keyworded = canonical_overloads(
+        signature
+            .keyworded
             .iter()
             .map(|declared| substitute_sig_members(*declared, sig_id, &member_map, types))
-            .collect();
-        view_sig
-            .keyworded
-            .insert(key.clone(), canonical_overloads(substituted));
-    }
+            .collect(),
+    );
     types.signature(view_sig)
 }
 

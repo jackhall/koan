@@ -15,7 +15,7 @@ use crate::machine::model::NamedPairs;
 #[cfg(test)]
 use crate::machine::model::SignatureDraft;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
-use crate::machine::model::{DispatchTokenElement, ExpressionSignature, Record, SignatureElement};
+use crate::machine::model::{ExpressionSignature, Record, SignatureElement, shape_type_of};
 use crate::witnessed::BumpVec;
 use crate::witnessed::RegionHandleFamily;
 
@@ -444,29 +444,20 @@ fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>], registries: &RunRegistrie
 /// hashable surface shadow of the deferred form, so equality and specificity read the deferred
 /// shape directly instead of seeing it coarsened to `Any`. See
 /// [ktype/records-and-limits.md § Record fields](../../../design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
-/// Intern the **shape** type a `KFunction` registers under: its signature's element run —
-/// keywords and argument-position types in order, argument names dropped — under its quantifier
-/// group, paired with the same return projection [`function_value_ktype`] takes.
+/// Intern the **shape** type a `KFunction` registers under: its signature read through the one
+/// shape derivation [`shape_type_of`] owns, with the same return projection
+/// [`function_value_ktype`] takes.
 ///
 /// A keyword-free signature (the anonymous `FN :{…}` lambda) yields a keyword-free shape, which
 /// no declared member can equal: a declared shape always spells at least one keyword, and shape
 /// subtyping pairs keywords positionally. So an anonymous lambda fills no shape slot without this
 /// door needing a second answer for it.
 fn function_shape_ktype(signature: &ExpressionSignature<'_>, registries: &RunRegistries) -> KType {
-    // Staged inline: a shape's element run is short, and the registry interns probe-first, so a
-    // re-run definition builds no heap buffer at all.
-    let elements: smallvec::SmallVec<[DispatchTokenElement; 12]> = signature
-        .elements()
-        .iter()
-        .map(|element| match element {
-            SignatureElement::Keyword(symbol) => DispatchTokenElement::Keyword(*symbol),
-            SignatureElement::Argument(argument) => DispatchTokenElement::Slot(argument.ktype),
-        })
-        .collect();
-    registries.types.shape_type(
+    shape_type_of(
+        signature.elements(),
         signature.quantifiers(),
-        &elements,
         projected_return(signature, registries),
+        registries,
     )
 }
 

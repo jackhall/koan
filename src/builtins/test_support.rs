@@ -667,10 +667,15 @@ pub(crate) fn operator_run(
 /// A keyword bucket-key element from its spelling, for a key a test spells out by hand.
 #[cfg(test)]
 pub(crate) fn key_keyword(text: &str) -> crate::machine::model::KeyElement {
-    crate::machine::model::KeyElement::Keyword(
-        crate::machine::model::labels::KeywordSymbol::of(text)
-            .expect("a test fixture keyword is keyword-class"),
-    )
+    crate::machine::model::KeyElement::Keyword(key_keyword_symbol(text))
+}
+
+/// The classified symbol behind [`key_keyword`], for a test that spells out a shape's element run
+/// rather than its untyped key.
+#[cfg(test)]
+pub(crate) fn key_keyword_symbol(text: &str) -> crate::machine::model::KeywordSymbol {
+    crate::machine::model::labels::KeywordSymbol::of(text)
+        .expect("a test fixture keyword is keyword-class")
 }
 
 /// Allocate a labeled marker object on `scope`'s region. Dispatch tests register builtins

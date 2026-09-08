@@ -34,8 +34,8 @@ use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::record::Record;
 use super::registry::TypeRegistry;
-use super::sig_schema::{SigSchema, sorted_keyworded};
-use super::signature::{DeferredReturnSurface, DispatchTokenElement, KeyElement};
+use super::sig_schema::SigSchema;
+use super::signature::{DeferredReturnSurface, DispatchTokenElement};
 use smallvec::SmallVec;
 
 /// A `KType`'s content identity: the low 128 bits of a BLAKE3 hash of its content.
@@ -421,23 +421,12 @@ pub(crate) fn schema_content_digest(schema: &SigSchema, types: &TypeRegistry) ->
         types,
     );
 
-    // Keyworded members: each key's element sequence, then its overload set. Keys feed in the
-    // schema's canonical order and overloads in theirs, so the map's hash order never reaches the
-    // digest. A key element is a keyword's symbol or the slot marker.
-    let keyworded = sorted_keyworded(schema);
-    h.count(keyworded.len());
-    for (key, overloads) in keyworded {
-        h.count(key.len());
-        for element in key {
-            match element {
-                KeyElement::Keyword(symbol) => h.byte(1).symbol(symbol.symbol()),
-                KeyElement::Slot => h.byte(0),
-            };
-        }
-        h.count(overloads.len());
-        for overload in overloads {
-            h.digest(canonical_type_digest(*overload, schema, types));
-        }
+    // Keyworded members: each declared shape's canonical digest, in the schema's canonical member
+    // order. The bucket key rides inside the shape's own recipe, so it is fed once rather than
+    // beside each member.
+    h.count(schema.keyworded.len());
+    for member in &schema.keyworded {
+        h.digest(canonical_type_digest(*member, schema, types));
     }
 
     // Operator members: each declared chaining record as its member run then its mode. The channel

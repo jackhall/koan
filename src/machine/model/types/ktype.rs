@@ -22,9 +22,7 @@ use super::kkind::KKind;
 use super::node::TypeNode;
 use super::record::Record;
 use super::registry::TypeRegistry;
-use super::sig_schema::{
-    SigSchema, render_declared_group, render_keyworded_head, sorted_keyworded,
-};
+use super::sig_schema::{SigSchema, render_declared_group, render_keyworded_head};
 use super::type_digest::{TypeDigest, empty_schema_digest};
 use smallvec::SmallVec;
 
@@ -195,10 +193,8 @@ impl KType {
                 ret,
             } => {
                 f.write_str(":(EXPR ")?;
-                write_quantifier_group(f, quantifiers, registries)?;
-                write_shape_head(f, elements, registries, quantifiers)?;
-                f.write_str(" -> ")?;
-                ret.write_name_in(f, registries, quantifiers)
+                write_shape_surface(f, quantifiers, elements, *ret, registries)?;
+                f.write_str(")")
             }
             // A quantified position renders as the name its enclosing shape bound it to. The
             // placeholder is diagnostic-only: a bare leaf outside a shape is unreachable from any
@@ -395,10 +391,46 @@ fn write_param_record(
     Ok(())
 }
 
+/// `FOR ALL (Elt) (PURE _ :Elt) -> :(Elt AS Wrap)` — an expression shape's surface below the
+/// `:(EXPR …)` wrapper. The one spelling of a shape, shared by the type surface and by the head a
+/// signature's rendered member is named with, so a declaration and the error naming it read alike.
+pub(super) fn write_shape_surface(
+    f: &mut std::fmt::Formatter<'_>,
+    quantifiers: &[TypeSymbol],
+    elements: &[crate::machine::model::DispatchTokenElement],
+    ret: KType,
+    registries: &RunRegistries,
+) -> std::fmt::Result {
+    write_quantifier_group(f, quantifiers, registries)?;
+    write_shape_head(f, elements, registries, quantifiers)?;
+    f.write_str(" -> ")?;
+    ret.write_name_in(f, registries, quantifiers)
+}
+
+/// [`write_shape_surface`] as a `Display` view, for the diagnostics that keep the text.
+pub(super) struct ShapeSurface<'r> {
+    pub(super) quantifiers: &'r [TypeSymbol],
+    pub(super) elements: &'r [crate::machine::model::DispatchTokenElement],
+    pub(super) ret: KType,
+    pub(super) registries: &'r RunRegistries,
+}
+
+impl std::fmt::Display for ShapeSurface<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write_shape_surface(
+            f,
+            self.quantifiers,
+            self.elements,
+            self.ret,
+            self.registries,
+        )
+    }
+}
+
 /// `FOR ALL (<names>) ` — the quantifier group a shape's surface opens with, or nothing at all
 /// when the shape quantifies over nothing (the ordinary case). The trailing space is the group's,
 /// so the head that follows spells the same either way.
-pub(super) fn write_quantifier_group(
+fn write_quantifier_group(
     f: &mut std::fmt::Formatter<'_>,
     quantifiers: &[TypeSymbol],
     registries: &RunRegistries,
@@ -419,7 +451,7 @@ pub(super) fn write_quantifier_group(
 /// `(<keyword> _ :<Type> …)` — an expression shape's head, the one spelling both the type surface
 /// and a signature's rendered member read it from. Every argument position is the wildcard `_`: the
 /// type carries no argument names, so there is none to print.
-pub(super) fn write_shape_head(
+fn write_shape_head(
     f: &mut std::fmt::Formatter<'_>,
     elements: &[crate::machine::model::DispatchTokenElement],
     registries: &RunRegistries,
@@ -497,20 +529,18 @@ fn write_sig_schema(
         write!(f, "{}: ", display_label(*name, registries))?;
         kt.write_name(f, registries)?;
     }
-    // Keyworded members follow the named ones, each as the head shape declaring it. They are keyed
-    // by a call shape rather than a name, so they sort by the schema's canonical key order rather
-    // than by member text.
+    // Keyworded members follow the named ones, each as the head declaring it. They are named by a
+    // call shape rather than by a name, so they follow the schema's canonical member order rather
+    // than member text.
     let mut written = members.len();
     // A unary triple's bridge entry names the same head as its list entry, so one of the two is
     // dropped here: the head declares the triple, and printing it twice would spell an interface
     // no signature can be written to declare.
     let mut heads: Vec<String> = Vec::new();
-    for (key, overloads) in sorted_keyworded(schema) {
-        for overload in overloads {
-            let head = render_keyworded_head(key, *overload, &schema.operators, registries);
-            if !heads.contains(&head) {
-                heads.push(head);
-            }
+    for member in &schema.keyworded {
+        let head = render_keyworded_head(*member, &schema.operators, registries);
+        if !heads.contains(&head) {
+            heads.push(head);
         }
     }
     for head in heads {

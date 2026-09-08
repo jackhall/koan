@@ -20,7 +20,7 @@ use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, CallFrame, KFunction, OpenedFunction};
 use crate::machine::core::{ExecFrame, ExecOutcome, LeadingStatements, PerCallReturn, run_user_fn};
-use crate::machine::model::{CoercionTables, KType, TypeNode, TypeRegistry};
+use crate::machine::model::{CoercionTables, DeclaredSlots, KType, declared_return};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::witnessed::BumpVec;
@@ -155,7 +155,7 @@ fn enter_user_fn<'step>(
             coercion,
         } => {
             let types = view.types();
-            let declared_return = declared_fn_return(declared, types);
+            let declared_return = declared_return(declared, types);
             let outward = coercion.tables(types);
             // A return position naming no abstract member crosses no barrier: the wrapper's own
             // declared return already *is* the underlying's, so the ordinary `Function` contract
@@ -356,16 +356,6 @@ fn carriers_from_expr<'step>(
     carriers
 }
 
-/// The return type of a SIG-declared FN slot, in the signature's own vocabulary — the root the
-/// outward coercion walk recurses on. A [`Body::CoercedDelegate`]'s `declared` is always a
-/// `KFunction` node: the wrapper is built only at a declared function position.
-fn declared_fn_return(declared: KType, types: &TypeRegistry) -> KType {
-    types.with_node(declared, |node| match node {
-        TypeNode::KFunction { ret, .. } => *ret,
-        _ => unreachable!("a coercion wrapper's declared slot type is a function type"),
-    })
-}
-
 /// The **inward** half of a coercion wrapper's boundary: rewrite each delivered argument from the
 /// view's types to the ones the underlying callable expects, in declaration order.
 ///
@@ -381,10 +371,7 @@ fn coerce_arguments_inward<'step>(
     named_carriers: &[&DeliveredCarried],
 ) -> BumpVec<'step, DeliveredCarried> {
     let types = view.types();
-    let declared_params = types.with_node(declared, |node| match node {
-        TypeNode::KFunction { params, .. } => params.clone(),
-        _ => unreachable!("a coercion wrapper's declared slot type is a function type"),
-    });
+    let declared_slots = DeclaredSlots::read(declared, types);
     let mut coerced = BumpVec::with_capacity_in(named_carriers.len(), view.scratch());
     coerced.extend(
         wrapper
@@ -392,17 +379,18 @@ fn coerce_arguments_inward<'step>(
             .params()
             .iter()
             .zip(named_carriers.iter())
-            .map(|((name, _), carrier)| {
+            .enumerate()
+            .map(|(position, ((name, _), carrier))| {
                 // The value channel only: a type-denoting parameter delivers an owned `KType`
                 // handle, which has no value identity to rewrite.
                 let on_value_channel =
                     carrier.open(|live| matches!(live, crate::machine::model::Carried::Object(_)));
-                match declared_params.get(name.symbol()).filter(|declared_param| {
-                    on_value_channel && inward.coerces(**declared_param, types)
+                match declared_slots.at(position, *name).filter(|declared_param| {
+                    on_value_channel && inward.coerces(*declared_param, types)
                 }) {
                     Some(declared_param) => view.current_scope().coerce_delivered(
                         carrier,
-                        *declared_param,
+                        declared_param,
                         inward,
                         view.registries(),
                     ),

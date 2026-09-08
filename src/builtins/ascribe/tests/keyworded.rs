@@ -194,7 +194,7 @@ fn incomparable_satisfiers_fail_the_ascription() {
     let rendered = error.to_string();
     assert!(
         rendered.contains("with no most specific one")
-            && rendered.contains("(COMBINE a :Number AND b :Number) -> Number"),
+            && rendered.contains("(COMBINE _ :Number AND _ :Number) -> Number"),
         "expected an ambiguity naming the declared head, got {error}",
     );
 }
@@ -216,14 +216,14 @@ fn an_unsatisfied_keyworded_member_names_the_head_it_wanted() {
     assert!(
         mismatch
             .to_string()
-            .contains("no overload satisfies keyworded member `(PURE x :Number) -> Number`"),
+            .contains("no overload satisfies keyworded member `(PURE _ :Number) -> Number`"),
         "expected the rejected overloads to be reported, got {mismatch}",
     );
     let missing = test_run.run_one_err(test_run.parse_one("(absent :| Need)"));
     assert!(
         missing
             .to_string()
-            .contains("missing keyworded member `(PURE x :Number) -> Number`"),
+            .contains("missing keyworded member `(PURE _ :Number) -> Number`"),
         "expected a missing-member diagnostic, got {missing}",
     );
 }
@@ -278,7 +278,7 @@ fn a_views_self_sig_carries_its_keyworded_surface() {
     );
     let rendered = view.ktype().name(test_run.registries());
     assert!(
-        rendered.contains("(PURE x :"),
+        rendered.contains("(PURE _ :"),
         "the rendered signature must show the keyworded member, got {rendered}",
     );
 

@@ -34,9 +34,8 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::{
     BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol,
     coerce_function_cell, render_keyworded_head, render_label, select_keyworded_satisfier,
+    shape_key,
 };
-use allocator_api2::vec::Vec as AllocVec;
-use std::mem::ManuallyDrop;
 
 /// What an ascription decides about a view's members once the newborn view scope's id — the
 /// generativity nonce every per-call mint folds in — is known. Handed to
@@ -58,10 +57,11 @@ pub(crate) struct ViewMembers {
     /// `declared_values`.
     pub(crate) coerced_slots:
         std::collections::HashMap<ValueSymbol, KType, crate::machine::model::IdentityBuildHasher>,
-    /// The signature's declared keyworded members, by bucket key — the replay's dispatch-surface
-    /// plan. A key absent here is absent from the view; a key present publishes one entry per
-    /// declared overload, at the overload the source's bucket satisfies it with.
-    pub(crate) keyworded: crate::machine::model::KeywordedMembers,
+    /// The signature's declared keyworded members — the replay's dispatch-surface plan, each an
+    /// expression shape whose own key names the bucket it draws from. A bucket no member keys is
+    /// absent from the view; a bucket some member keys publishes one entry per declared member, at
+    /// the overload the source's bucket satisfies it with.
+    pub(crate) keyworded: Vec<crate::machine::model::KType>,
     /// The signature's declared chaining records — the replay's **registry** plan. The view births
     /// one fresh record per entry over exactly the declared members, so a run of them inside a
     /// `USING <view> SCOPE` window reduces by the declared mode, and a run naming an operator the
@@ -384,20 +384,16 @@ impl<'a> Scope<'a> {
         Ok(())
     }
 
-    /// Record a SIG keyworded member: append `fn_type` to `key`'s overload set in the nearest
-    /// enclosing SIG decl scope's keyworded collector — [`Self::write_sig_slot`]'s twin for
-    /// the dispatch-bucket half of the interface. A second declaration of the *same* key at the
-    /// *same* type is a `Rebind`, the keyworded reading of the duplicate-slot rule; a same-key
-    /// declaration at a different type is an overload and joins the set. Like a value slot, a
-    /// keyworded member is a schema entry rather than a binding: it takes no [`BindingIndex`],
-    /// claims no dispatch bucket, and touches no binding map.
-    ///
-    /// The key run is bumped into the SIG scope's own region on first use, so the collector's own
-    /// storage stays region-hosted and a probe against a caller's owned key needs no copy.
+    /// Record a SIG keyworded member: append `shape` to the nearest enclosing SIG decl scope's
+    /// keyworded collector — [`Self::write_sig_slot`]'s twin for the dispatch-bucket half of the
+    /// interface. A second declaration of the *same* shape is a `Rebind`, the keyworded reading of
+    /// the duplicate-slot rule; a same-key declaration at different slot types is an overload and
+    /// joins the run. Like a value slot, a keyworded member is a schema entry rather than a
+    /// binding: it takes no [`BindingIndex`], claims no dispatch bucket, and touches no binding
+    /// map.
     pub(crate) fn write_sig_keyworded(
         &self,
-        key: &[KeyElement],
-        fn_type: crate::machine::model::KType,
+        shape: crate::machine::model::KType,
         registries: &RunRegistries,
     ) -> Result<(), KError> {
         let outside_sig = || {
@@ -409,28 +405,17 @@ impl<'a> Scope<'a> {
         let ScopeKind::Sig { keyworded, .. } = &target.kind else {
             return Err(outside_sig());
         };
-        target.assert_open(key);
-        if let Some(overloads) = keyworded.borrow().get(key)
-            && overloads.contains(&fn_type)
-        {
+        target.assert_open(shape);
+        if keyworded.borrow().contains(&shape) {
             return Err(KError::new(KErrorKind::Rebind {
                 // The SIG's own operator channel is still being collected here, so this reads the
-                // FN-head spelling even for a member an `OP` head declared. The rebind diagnostic
-                // names a duplicate declaration, which the head's own text identifies well enough.
-                name: render_keyworded_head(key, fn_type, &Vec::new(), registries),
+                // plain head spelling even for a member an `OP` head declared. The rebind
+                // diagnostic names a duplicate declaration, which the head's own text identifies
+                // well enough.
+                name: render_keyworded_head(shape, &Vec::new(), registries),
             }));
         }
-        let mut table = keyworded.borrow_mut();
-        if let Some(overloads) = table.get_mut(key) {
-            overloads.push(fn_type);
-            return Ok(());
-        }
-        // First declaration under this key: the run is bumped once, here, and every later overload
-        // under it probes against the stored run without materializing a key of its own.
-        let stored = target.brand().allocator().slice(key);
-        let mut overloads = ManuallyDrop::new(AllocVec::new_in(target.brand().allocator()));
-        overloads.push(fn_type);
-        table.insert(stored, overloads);
+        keyworded.borrow_mut().push(shape);
         Ok(())
     }
 
@@ -658,50 +643,72 @@ impl<'a> Scope<'a> {
     ) -> Result<(), KError> {
         let types = &registries.types;
         for (key, entries) in source.bindings().iter_function_entries() {
-            let Some(declared_overloads) = members.keyworded.get(&key) else {
+            // The declared members drawing from this bucket, by their own keys — the shape is the
+            // whole plan, so nothing here consults a table keyed beside it.
+            let declared_here: Vec<KType> = members
+                .keyworded
+                .iter()
+                .filter(|declared| shape_key(**declared, types) == key)
+                .copied()
+                .collect();
+            if declared_here.is_empty() {
                 continue;
-            };
-            // The probe form: each candidate's `(params) -> ret` type read under a confined
-            // re-anchor, with only the `Copy` handle leaving the open.
+            }
+            // The probe form: each candidate's shape type read under a confined re-anchor, with
+            // only the `Copy` handle leaving the open.
             let candidates: Vec<KType> = entries
                 .iter()
-                .map(|(_, sealed)| source.read_function(sealed, |function| function.value_ktype()))
+                .map(|(_, sealed)| source.read_function(sealed, |function| function.shape_ktype()))
                 .collect();
-            let mut published: Vec<(usize, Option<KType>)> = Vec::new();
-            for declared in declared_overloads {
-                let source_side = tables.substitute_from(*declared, types);
-                let Ok(pick) =
-                    select_keyworded_satisfier(source_side, &candidates, None, registries)
-                else {
-                    // Satisfaction decided this before the view was allocated, over the same
-                    // candidates and the same relation, so a gap here is a construction bug rather
-                    // than a program error — and a silent one, since the member would simply be
-                    // missing from the view.
-                    debug_assert!(
-                        false,
-                        "a satisfied signature selects an overload per member"
-                    );
-                    continue;
-                };
+            let mut published: Vec<(KType, Option<KType>)> = Vec::new();
+            for declared in declared_here {
+                // The same entrance the satisfaction check took: one selection function over the
+                // source's own overloads, under the same substitution. It genuinely re-runs here
+                // rather than riding along from the check, because satisfaction is memoized per
+                // (module, signature) content pair and the verdict that admitted this module may
+                // have been reached for another value entirely.
+                let pick = select_keyworded_satisfier(
+                    declared,
+                    &candidates,
+                    Some((tables.source_table(), tables.sig_id())),
+                    registries,
+                )
+                .map_err(|_| {
+                    KError::new(KErrorKind::ShapeError(format!(
+                        "the view supplies no overload for keyworded member `{}`",
+                        render_keyworded_head(declared, &members.operators, registries),
+                    )))
+                })?;
+                let winner = candidates[pick];
                 let wrapped = tables
-                    .coerces(*declared, types)
-                    .then(|| tables.substitute_to(*declared, types));
-                if published.contains(&(pick, wrapped)) {
+                    .coerces(declared, types)
+                    .then(|| tables.substitute_to(declared, types));
+                // Two declared members may legitimately select one source overload; the pair they
+                // install under is what dedupes them, so the bucket takes each distinct published
+                // shape once. Keying the dedupe on the winner's *shape* rather than on its index
+                // is total: a bucket's overloads are distinguished by exactly what a shape type
+                // carries.
+                if published.contains(&(winner, wrapped)) {
                     continue;
                 }
-                published.push((pick, wrapped));
-                let (index, sealed) = &entries[pick];
+                published.push((winner, wrapped));
+                let (index, sealed) = entries
+                    .iter()
+                    .zip(candidates.iter())
+                    .find(|(_, shape)| **shape == winner)
+                    .map(|(entry, _)| entry)
+                    .expect("the winner is one of the candidates read off these entries");
                 let cell = match wrapped {
                     Some(_) => {
                         let underlying = source.open_function(sealed).value();
-                        coerce_function_cell(underlying, *declared, tables, registries)
+                        coerce_function_cell(underlying, declared, tables, registries)
                     }
                     None => source.lift_resident(sealed.duplicate()),
                 };
-                // Without the builtin-shadow guard: the guard exists so a user `FN` cannot join a
-                // builtin's bucket, and the source's own overload already passed that door where
-                // it was declared. Replaying it into a view is not a second declaration, and a
-                // signature with a `+` member would otherwise fail to ascribe at all.
+                // Without the builtin-shadow guard: the guard exists so a user definition cannot
+                // join a builtin's bucket, and the source's own overload already passed that door
+                // where it was declared. Replaying it into a view is not a second declaration, and
+                // a signature with a `+` member would otherwise fail to ascribe at all.
                 WriteOp::Overload {
                     index: *index,
                     seal: OverloadSeal::of_delivered(self, &cell),

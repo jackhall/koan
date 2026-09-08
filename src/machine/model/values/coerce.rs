@@ -18,10 +18,12 @@
 use std::collections::HashMap;
 
 use crate::machine::core::{Body, KFunction, Scope, SubstrateDoor, ViewMembers};
+use crate::machine::model::BinderSymbol;
 use crate::machine::model::labels::Symbol;
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::{
-    Argument, CoercionTables, KType, ReturnType, SigSchema, SignatureElement, TypeNode,
+    Argument, CoercionTables, DispatchTokenElement, KType, Record, ReturnType, SigSchema,
+    SignatureElement, TypeNode, TypeRegistry,
 };
 
 use super::{Held, KKey, KObject, Module, ModuleDraft};
@@ -194,22 +196,27 @@ pub(crate) fn coerce_function_cell<'b>(
     registries: &RunRegistries,
 ) -> crate::machine::core::DeliveredFunction {
     let types = &registries.types;
-    let declared_params = types.with_node(declared, |node| match node {
-        TypeNode::KFunction { params, .. } => params.clone(),
-        _ => unreachable!("the FN arm is entered only for a declared `KFunction` position"),
-    });
     // The call shape is the underlying's — same keywords, same parameter names in the same order —
-    // with each slot the declared FN type names re-typed to its `to` substitution. A parameter the
-    // slot type leaves unnamed keeps the underlying's own declared type: nothing crosses the
-    // barrier at that position.
+    // with each slot the declared type names re-typed to its `to` substitution. The two declared
+    // shapes pair their positions the way their own relations do: a lambda type by parameter name,
+    // an expression shape positionally, since a shape carries no names. A position the declared
+    // type leaves unnamed keeps the underlying's own type: nothing crosses the barrier there.
+    let declared_slots = DeclaredSlots::read(declared, types);
+    let quantifiers = types.with_node(declared, |node| match node {
+        TypeNode::ExpressionShape { quantifiers, .. } => quantifiers.clone(),
+        _ => Vec::new(),
+    });
+    let mut position = 0usize;
     let elements: Vec<SignatureElement> = underlying
         .signature
         .elements()
         .iter()
         .map(|element| match element {
             SignatureElement::Argument(argument) => {
-                let ktype = match declared_params.get(argument.name.symbol()) {
-                    Some(declared_param) => tables.substitute_to(*declared_param, types),
+                let declared_slot = declared_slots.at(position, argument.name);
+                position += 1;
+                let ktype = match declared_slot {
+                    Some(slot) => tables.substitute_to(slot, types),
                     None => argument.ktype,
                 };
                 SignatureElement::Argument(Argument { ktype, ..*argument })
@@ -217,15 +224,11 @@ pub(crate) fn coerce_function_cell<'b>(
             keyword => *keyword,
         })
         .collect();
-    let declared_return = types.with_node(declared, |node| match node {
-        TypeNode::KFunction { ret, .. } => *ret,
-        _ => unreachable!("the FN arm is entered only for a declared `KFunction` position"),
-    });
     KFunction::alloc_captured(
         underlying.captured_scope(),
-        ReturnType::Resolved(tables.substitute_to(declared_return, types)),
+        ReturnType::Resolved(tables.substitute_to(declared_return(declared, types), types)),
         &elements,
-        &[],
+        &quantifiers,
         Body::CoercedDelegate {
             underlying,
             declared,
@@ -233,6 +236,57 @@ pub(crate) fn coerce_function_cell<'b>(
         },
         registries,
     )
+}
+
+/// How a declared position pairs with the underlying callable's own arguments: a lambda type keys
+/// its parameters by name, an expression shape by position, since a shape carries no names. Both
+/// the wrapper builder here and the wrapper's own inward door
+/// ([`coerce_arguments_inward`](crate::machine::execute)) walk the underlying's arguments against
+/// the declared slots, so the pairing rule is stated once here rather than once per walk.
+pub(crate) enum DeclaredSlots {
+    ByName(Record<KType>),
+    Positional(Vec<KType>),
+}
+
+impl DeclaredSlots {
+    /// Read the pairing off a declared callable position — a lambda type or an expression shape,
+    /// the only two a coercion wrapper is ever built at.
+    pub(crate) fn read(declared: KType, types: &TypeRegistry) -> Self {
+        types.with_node(declared, |node| match node {
+            TypeNode::KFunction { params, .. } => DeclaredSlots::ByName(params.clone()),
+            TypeNode::ExpressionShape { elements, .. } => DeclaredSlots::Positional(
+                elements
+                    .iter()
+                    .filter_map(|element| match element {
+                        DispatchTokenElement::Slot(kt) => Some(*kt),
+                        DispatchTokenElement::Keyword(_) => None,
+                    })
+                    .collect(),
+            ),
+            _ => unreachable!(
+                "a coerced callable's declared position is a lambda type or an expression shape"
+            ),
+        })
+    }
+
+    /// The type declared for the underlying's argument at `position`, named `name`, or `None`
+    /// where the declared type names no such position: nothing crosses the barrier there.
+    pub(crate) fn at(&self, position: usize, name: BinderSymbol) -> Option<KType> {
+        match self {
+            DeclaredSlots::ByName(params) => params.get(name.symbol()).copied(),
+            DeclaredSlots::Positional(slots) => slots.get(position).copied(),
+        }
+    }
+}
+
+/// The return a declared callable position promises — a lambda type's or an expression shape's.
+pub(crate) fn declared_return(declared: KType, types: &TypeRegistry) -> KType {
+    types.with_node(declared, |node| match node {
+        TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. } => *ret,
+        _ => unreachable!(
+            "a coerced callable's declared position is a lambda type or an expression shape"
+        ),
+    })
 }
 
 /// The **module boundary**: a member filling a slot whose declared type is a nested `Signature` is

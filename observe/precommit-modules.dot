@@ -941,6 +941,7 @@ digraph {
     "koan::machine::model::values::carried" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::coerce" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::values::coerce" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::values::coerce" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::values::coerce" -> "koan::machine::model::registries" [label="uses", style="dashed"];
     "koan::machine::model::values::coerce" -> "koan::machine::model::types" [label="uses", style="dashed"];

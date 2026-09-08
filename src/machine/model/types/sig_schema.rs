@@ -23,12 +23,12 @@ use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::registry::{IdentityBuildHasher, TypeRegistry};
 use super::signature::{
-    DispatchTokenElement, KeyElement, Specificity, UntypedKey, fn_type_specificity,
+    DispatchTokenElement, KeyElement, Specificity, UntypedKey, shape_specificity,
 };
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, TypeSymbol, ValueSymbol};
+use crate::machine::model::labels::{KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::values::ModuleDraft;
-use crate::machine::model::{FoldDirection, MACHINE_BINDERS, ReductionMode};
+use crate::machine::model::{FoldDirection, ReductionMode};
 use crate::machine::model::{display_label, render_label};
 
 /// A schema's type-member table: Type-class name → the member's type, identity-hashed on the
@@ -61,11 +61,12 @@ pub struct SigSchema {
     pub manifest_members: TypeMemberMap,
     /// Value slots: name → declared (SIG) or derived (self-sig) type.
     pub value_slots: HashMap<ValueSymbol, KType, IdentityBuildHasher>,
-    /// Keyworded (dispatch-bucket) members: untyped bucket key → the overloads declared under it,
-    /// each an interned `KFunction` node pairing the named-argument record with the return type.
-    /// One key holds a *set* of overloads, kept in [`canonical_overloads`] order so equality,
-    /// digesting and iteration are deterministic; an exact duplicate is illegal at declaration.
-    pub keyworded: KeywordedMembers,
+    /// Keyworded (dispatch-bucket) members: the expression shapes the interface declares, in
+    /// [`canonical_overloads`] order so equality, digesting and iteration are deterministic. The
+    /// bucket key is [`shape_key`] of each member — read off the member's own type, never stored
+    /// beside it — so two overloads under one key are two entries here and an exact duplicate is
+    /// illegal at declaration.
+    pub keyworded: Vec<KType>,
     /// Operator members: the chaining records the interface declares, in [`canonical_groups`]
     /// order. A record says which operators chain together and how a run of them reduces —
     /// the half of an operator declaration that lives in the scope's operator registry rather than
@@ -172,29 +173,6 @@ pub fn render_declared_group(group: &DeclaredGroup, registries: &RunRegistries) 
     Some(out)
 }
 
-/// Whether `params` are the operand binders an operator body binds — `operands` for a unary
-/// operator's list form, `left` / `right` for either binary form. The names come from
-/// [`MACHINE_BINDERS`], the same static the declaration reads them from, so this and the
-/// registration cannot drift.
-fn binds_machine_operands(
-    params: &[(BinderSymbol, KType)],
-    is_list_form: bool,
-    registries: &RunRegistries,
-) -> bool {
-    let named = |index: usize, name: &crate::machine::model::StaticName<ValueSymbol>| {
-        params.get(index).is_some_and(|(binder, _)| {
-            *binder == BinderSymbol::Value(registries.labels.record(name))
-        })
-    };
-    if is_list_form {
-        params.len() == 1 && named(0, &MACHINE_BINDERS.operands)
-    } else {
-        params.len() == 2
-            && named(0, &MACHINE_BINDERS.operand_left)
-            && named(1, &MACHINE_BINDERS.operand_right)
-    }
-}
-
 /// The member run of every declared record, joined for a diagnostic that names a record by its
 /// members alone.
 fn render_members(members: &[KeywordSymbol], registries: &RunRegistries) -> String {
@@ -229,102 +207,114 @@ fn render_mode(mode: ReductionMode, registries: &RunRegistries) -> String {
     }
 }
 
-/// A schema's keyworded-member table: untyped bucket key → the declared overload set.
-pub type KeywordedMembers = HashMap<UntypedKey, Vec<KType>>;
-
-/// A keyworded member's overload set in canonical order — sorted by content digest, exact
-/// duplicates collapsed. Every table entry is stored through this, so two schemas declaring the
-/// same overloads under one key hold the same vector and digest alike.
+/// A keyworded member set in canonical order — sorted by content digest, exact duplicates
+/// collapsed. Every schema's channel is stored through this, so two schemas declaring the same
+/// members hold the same vector and digest alike.
 pub fn canonical_overloads(mut overloads: Vec<KType>) -> Vec<KType> {
     overloads.sort_unstable();
     overloads.dedup();
     overloads
 }
 
-/// A schema's keyworded members in canonical iteration order: keys sorted by their element
-/// sequence, each overload set already canonical. What the digest feeds and the renderer walks, so
-/// neither reads the map's hash order.
-pub fn sorted_keyworded(schema: &SigSchema) -> Vec<(&UntypedKey, &Vec<KType>)> {
-    let mut entries: Vec<(&UntypedKey, &Vec<KType>)> = schema.keyworded.iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    entries
+/// The dispatch bucket key a shape type keys — its element sequence with the slot types erased.
+/// The key is a *reading* of the member's type, not a second copy of it: a schema stores the
+/// shape and derives this wherever a bucket has to be named.
+///
+/// Empty for anything that is not a shape, which no schema member ever is.
+pub fn shape_key(kt: KType, types: &TypeRegistry) -> UntypedKey {
+    // Owns: the key is the function's return value, so it outlives the read.
+    types.with_node(kt, |node| match node {
+        TypeNode::ExpressionShape { elements, .. } => elements
+            .iter()
+            .map(|element| match element {
+                DispatchTokenElement::Keyword(symbol) => KeyElement::Keyword(*symbol),
+                DispatchTokenElement::Slot(_) => KeyElement::Slot,
+            })
+            .collect(),
+        _ => Vec::new(),
+    })
 }
 
-/// Render a keyworded member as the head shape declaring it — `(PURE x :Number) -> Number`, the
-/// bodyless FN head minus the `FN` token. Argument names come from the overload's parameter
-/// record, filled into the key's slots in the record's own order; a slot with no name left to take
-/// renders as the wildcard `_`.
+/// A shape's argument-position types, in order — [`shape_key`]'s typed half, for the readers that
+/// compare or render one position at a time.
+pub(super) fn shape_slots(kt: KType, types: &TypeRegistry) -> Vec<KType> {
+    // Owns: the slot list is the function's return value, so it outlives the read.
+    types.with_node(kt, |node| match node {
+        TypeNode::ExpressionShape { elements, .. } => elements
+            .iter()
+            .filter_map(|element| match element {
+                DispatchTokenElement::Slot(kt) => Some(*kt),
+                DispatchTokenElement::Keyword(_) => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+/// A shape's return type, or `None` for anything that is not a shape.
+fn shape_return(kt: KType, types: &TypeRegistry) -> Option<KType> {
+    types.with_node(kt, |node| match node {
+        TypeNode::ExpressionShape { ret, .. } => Some(*ret),
+        _ => None,
+    })
+}
+
+/// Render a keyworded member as the head declaring it — `(PURE _ :Number) -> Number`, the
+/// `EXPR` head minus its keyword and its type sigil. Every argument position is the wildcard `_`:
+/// a shape type carries no argument names, so there is none to print.
 ///
 /// The one diagnostic currency for a keyworded member: the subtyping failures name a head with it,
 /// and [`KType::write_name`](super::ktype::KType::write_name) renders a schema's keyworded members
-/// through it too, so a declaration and the error naming it read alike.
+/// through the same spelling, so a declaration and the error naming it read alike.
 pub fn render_keyworded_head(
-    key: &[KeyElement],
-    fn_type: KType,
+    shape: KType,
     operators: &OperatorMembers,
     registries: &RunRegistries,
 ) -> String {
-    use std::fmt::Write;
-    if let Some(head) = render_operator_head(key, fn_type, operators, registries) {
+    let types = &registries.types;
+    if let Some(head) = render_operator_head(shape, operators, registries) {
         return head;
     }
-    let types = &registries.types;
-    // Owns: the parameter pairs feed the write below, past the node read that yields them.
-    let params: Vec<(BinderSymbol, KType)> = types.with_node(fn_type, |node| match node {
-        TypeNode::KFunction { params, .. } => params.as_slice().to_vec(),
-        _ => Vec::new(),
-    });
-    let ret = types.with_node(fn_type, |node| match node {
-        TypeNode::KFunction { ret, .. } => Some(*ret),
-        _ => None,
-    });
-    let mut out = String::from("(");
-    let mut next_param = params.iter();
-    for (index, element) in key.iter().enumerate() {
-        if index > 0 {
-            out.push(' ');
+    // Owns: the surface is written after the read closes, so it cannot borrow the node.
+    let read: Option<(Vec<TypeSymbol>, Vec<DispatchTokenElement>, KType)> =
+        types.with_node(shape, |node| match node {
+            TypeNode::ExpressionShape {
+                quantifiers,
+                elements,
+                ret,
+            } => Some((quantifiers.clone(), elements.to_vec(), *ret)),
+            _ => None,
+        });
+    match read {
+        Some((quantifiers, elements, ret)) => super::ktype::ShapeSurface {
+            quantifiers: &quantifiers,
+            elements: &elements,
+            ret,
+            registries,
         }
-        match element {
-            KeyElement::Keyword(symbol) => {
-                let _ = write!(out, "{}", display_label(symbol.symbol(), registries));
-            }
-            KeyElement::Slot => match next_param.next() {
-                Some((name, kt)) => {
-                    let _ = write!(out, "{} ", display_label(name.symbol(), registries));
-                    if !kt.surface_opens_sigil(registries) {
-                        out.push(':');
-                    }
-                    let _ = write!(out, "{}", kt.display_name(registries));
-                }
-                None => out.push('_'),
-            },
-        }
+        .to_string(),
+        None => shape.name(registries),
     }
-    out.push(')');
-    if let Some(ret) = ret {
-        let _ = write!(out, " -> {}", ret.display_name(registries));
-    }
-    out
 }
 
 /// The operator-surface reading of a keyworded member, or `None` when the member is not one.
 ///
 /// A member is an operator member iff its key is one of the two an operator declaration writes —
 /// `[Slot, Keyword(s), Slot]` or `[Keyword(s), Slot]` — **and** `s` is a member of one of the
-/// schema's declared chaining records. That second half is what keeps the FN-head spelling of an
-/// operator key reading as an FN head: it declares the bucket and claims no chaining, so it is not
-/// an operator member and does not render as one.
+/// schema's declared chaining records. That second half is what keeps the plain `EXPR`-head
+/// spelling of an operator key reading as an `EXPR` head: it declares the bucket and claims no
+/// chaining, so it is not an operator member and does not render as one.
 ///
 /// Both keys of a unary triple render as the one `UNARY OP` head — the head declares the triple,
 /// so naming either half separately would spell a surface no one can write.
 fn render_operator_head(
-    key: &[KeyElement],
-    fn_type: KType,
+    shape: KType,
     operators: &OperatorMembers,
     registries: &RunRegistries,
 ) -> Option<String> {
     let types = &registries.types;
-    let (symbol, is_list_form) = match key {
+    let key = shape_key(shape, types);
+    let (symbol, is_list_form) = match key.as_slice() {
         [
             KeyElement::Slot,
             KeyElement::Keyword(symbol),
@@ -337,29 +327,17 @@ fn render_operator_head(
         .iter()
         .find(|record| record.members.contains(&symbol))?
         .mode;
-    // Owns: the parameter pair feeds the checks and the write below, past the node read.
-    let (params, ret) = types.with_node(fn_type, |node| match node {
-        TypeNode::KFunction { params, ret } => (Some(params.as_slice().to_vec()), Some(*ret)),
-        _ => (None, None),
-    });
-    let (params, ret) = (params?, ret?);
-    // An operator head names its operands by the machine-fixed binders its body binds, so an
-    // overload under an operator key that spells them differently was declared by an `FN` head and
-    // keeps the FN-head rendering. Classifying on the overload rather than on the symbol is what
-    // keeps a bucket holding both kinds reading correctly: the head declares one shape, not the
-    // key.
-    if !binds_machine_operands(&params, is_list_form, registries) {
-        return None;
-    }
-    let first_param = params.first()?.1;
+    let slots = shape_slots(shape, types);
+    let ret = shape_return(shape, types)?;
+    let first_slot = *slots.first()?;
     // The list form's sole parameter is the whole run, so the declared operand is its element.
     let operand = if is_list_form {
-        types.with_node(first_param, |node| match node {
+        types.with_node(first_slot, |node| match node {
             TypeNode::List { element } => Some(*element),
             _ => None,
         })?
     } else {
-        first_param
+        first_slot
     };
     let symbol = display_label(symbol.symbol(), registries);
     let operand = operand.display_name(registries);
@@ -368,7 +346,7 @@ fn render_operator_head(
             "UNARY OP #({symbol}) OVER {operand} -> {}",
             ret.display_name(registries)
         )
-    } else if ret == first_param {
+    } else if ret == first_slot {
         // A fold member's result is its operand type, which the bare head already says.
         format!("OP #({symbol}) OVER {operand}")
     } else {
@@ -389,7 +367,7 @@ impl SigSchema {
             abstract_members: TypeMemberMap::default(),
             manifest_members: TypeMemberMap::default(),
             value_slots: HashMap::default(),
-            keyworded: KeywordedMembers::default(),
+            keyworded: Vec::new(),
             operators: OperatorMembers::default(),
         }
     }
@@ -419,18 +397,13 @@ impl SigSchema {
         for (name, kt) in decl_scope.sig_value_slots() {
             value_slots.insert(name, canonicalize_binder(kt, declared, types));
         }
-        let mut keyworded = KeywordedMembers::default();
-        for (key, overloads) in decl_scope.sig_keyworded_members() {
-            keyworded.insert(
-                key,
-                canonical_overloads(
-                    overloads
-                        .into_iter()
-                        .map(|kt| canonicalize_binder(kt, declared, types))
-                        .collect(),
-                ),
-            );
-        }
+        let keyworded = canonical_overloads(
+            decl_scope
+                .sig_keyworded_members()
+                .into_iter()
+                .map(|shape| canonicalize_binder(shape, declared, types))
+                .collect(),
+        );
         SigSchema {
             sig_id: Some(ScopeId::SENTINEL),
             abstract_members,
@@ -472,14 +445,13 @@ impl SigSchema {
             }
             // Two declared overloads that became identical under a pin are one overload: the
             // canonical order dedupes them, so the folded schema names each surviving shape once.
-            for overloads in schema.keyworded.values_mut() {
-                *overloads = canonical_overloads(
-                    overloads
-                        .iter()
-                        .map(|kt| substitute_sig_members(*kt, sig_id, &substitutions, types))
-                        .collect(),
-                );
-            }
+            schema.keyworded = canonical_overloads(
+                schema
+                    .keyworded
+                    .iter()
+                    .map(|shape| substitute_sig_members(*shape, sig_id, &substitutions, types))
+                    .collect(),
+            );
         }
         schema
     }
@@ -513,16 +485,18 @@ impl SigSchema {
             value_slots.insert(name, sealed.open_at().value().object().ktype());
         }
         // The keyworded surface: every dispatch bucket the body registered, each overload named by
-        // the `(params) -> ret` type its callable reports. The read is the probe form — nothing is
-        // minted and only the `Copy` `KType` leaves the confined open.
-        let mut keyworded = KeywordedMembers::default();
-        for (key, overloads) in child.bindings().iter_functions() {
-            let declared: Vec<KType> = overloads
-                .iter()
-                .map(|sealed| child.read_function(sealed, |function| function.value_ktype()))
-                .collect();
-            keyworded.insert(key, canonical_overloads(declared));
+        // the shape type its callable reports — one flat canonical list, since a member's key is
+        // read back off its own type. The read is the probe form — nothing is minted and only the
+        // `Copy` `KType` leaves the confined open.
+        let mut keyworded: Vec<KType> = Vec::new();
+        for (_, overloads) in child.bindings().iter_functions() {
+            keyworded.extend(
+                overloads
+                    .iter()
+                    .map(|sealed| child.read_function(sealed, |function| function.shape_ktype())),
+            );
         }
+        let keyworded = canonical_overloads(keyworded);
         // The operator channel: every distinct group record the body registered. The registry
         // holds one entry per nonempty member subset, all sealing the one record, so the read
         // dedupes by record address before describing each — the same per-record fold the
@@ -730,14 +704,13 @@ pub fn substitute_sig_members(
             {
                 *member = substitute_sig_members(*member, sig_id, &effective, types);
             }
-            for overloads in schema.keyworded.values_mut() {
-                *overloads = canonical_overloads(
-                    overloads
-                        .iter()
-                        .map(|kt| substitute_sig_members(*kt, sig_id, &effective, types))
-                        .collect(),
-                );
-            }
+            schema.keyworded = canonical_overloads(
+                schema
+                    .keyworded
+                    .iter()
+                    .map(|shape| substitute_sig_members(*shape, sig_id, &effective, types))
+                    .collect(),
+            );
             types.signature(schema)
         }
         _ => kt,
@@ -866,6 +839,22 @@ impl CoercionTables {
         .tables(types)
     }
 
+    /// The `from`-side member table itself — what the shared selection function needs to read a
+    /// declared type in the *source's* vocabulary without materializing the substituted type. The
+    /// satisfaction check hands the same pair to the same door, which is what makes the view's
+    /// pick and the check's pick one decision rather than two.
+    pub fn source_table(&self) -> &TypeMemberMap {
+        &self.from
+    }
+
+    /// The binder the declared types' abstract-member references are sourced at — [`source_table`]'s
+    /// other half.
+    ///
+    /// [`source_table`]: Self::source_table
+    pub fn sig_id(&self) -> ScopeId {
+        self.plan.sig_id
+    }
+
     /// The `from`-side substitution — the type the value being coerced currently inhabits, which a
     /// union arm tests a value against to pick its declared member.
     pub fn substitute_from(&self, declared: KType, types: &TypeRegistry) -> KType {
@@ -883,7 +872,7 @@ fn member_table_handle(members: &TypeMemberMap, types: &TypeRegistry) -> KType {
         manifest_members: members.clone(),
         value_slots: HashMap::default(),
         // A substitution table names no keyworded member and no chaining record.
-        keyworded: KeywordedMembers::default(),
+        keyworded: Vec::new(),
         operators: OperatorMembers::default(),
     })
 }
@@ -978,35 +967,26 @@ pub fn join_schemas(a: &SigSchema, b: &SigSchema, types: &TypeRegistry) -> SigSc
         }
     }
 
-    // Keyworded members intersect by key, then pair by parameter-name set — parameter names are
-    // interface, so an overload on each side over the same names is the same declaration at two
-    // bindings, and joining the pair through the demoted members is the keyworded twin of the value
-    // slot join. An overload with no unique partner drops: keeping only matched pairs promises less
-    // than either operand, which is what a bound may do.
-    let mut keyworded = KeywordedMembers::default();
-    for (key, left_overloads) in &a.keyworded {
-        let Some(right_overloads) = b.keyworded.get(key) else {
-            continue;
-        };
-        let joined: Vec<KType> = left_overloads
-            .iter()
-            .filter_map(|left| {
-                let names = parameter_names(*left, types)?;
-                let unique = |set: &[KType]| {
-                    let mut matches = set
-                        .iter()
-                        .filter(|kt| parameter_names(**kt, types).as_deref() == Some(&names));
-                    matches.next().filter(|_| matches.next().is_none()).copied()
-                };
-                let right = unique(right_overloads)?;
-                unique(left_overloads)?;
-                Some(sig_slot_join(*left, right, &generalizations, types))
-            })
-            .collect();
-        if !joined.is_empty() {
-            keyworded.insert(key.clone(), canonical_overloads(joined));
+    // Keyworded members join **pairwise under a shared key**: every left member is joined against
+    // every right member keying the same bucket, positionally — slots meet, the return joins
+    // ([`sig_slot_join`]'s shape arm) — and a pair whose slots met to `Never` is dropped as
+    // vacuous, since nothing fills it. Each kept pair is an upper bound of both operands, so the
+    // canonical set of them is the strongest interface both still satisfy.
+    let mut keyworded: Vec<KType> = Vec::new();
+    for left in &a.keyworded {
+        let key = shape_key(*left, types);
+        for right in &b.keyworded {
+            if shape_key(*right, types) != key {
+                continue;
+            }
+            let joined = sig_slot_join(*left, *right, &generalizations, types);
+            if shape_slots(joined, types).contains(&KType::NEVER) {
+                continue;
+            }
+            keyworded.push(joined);
         }
     }
+    let keyworded = canonical_overloads(keyworded);
 
     // Operator members intersect pairwise under an **equal** mode: a record either side declares
     // is a claim about how a run of its members reduces, and two modes make incompatible claims,
@@ -1043,21 +1023,6 @@ pub fn join_schemas(a: &SigSchema, b: &SigSchema, types: &TypeRegistry) -> SigSc
         keyworded,
         operators: canonical_groups(operators),
     }
-}
-
-/// A function type's parameter names in canonical (sorted) order, or `None` when `kt` is not a
-/// `KFunction`. The identity two keyworded overloads pair on: names are interface, order is
-/// presentation, so the sorted set is what decides whether two declarations name the same shape.
-fn parameter_names(kt: KType, types: &TypeRegistry) -> Option<Vec<BinderSymbol>> {
-    // Owns: the name list is the return value, so it outlives the read.
-    types.with_node(kt, |node| match node {
-        TypeNode::KFunction { params, .. } => {
-            let mut names: Vec<BinderSymbol> = params.keys().collect();
-            names.sort_unstable();
-            Some(names)
-        }
-        _ => None,
-    })
 }
 
 /// Anti-unify two slot types against `generalizations`, then join what does not generalize — the
@@ -1313,14 +1278,13 @@ fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KT
             {
                 *member = canonicalize_binder(*member, declared, types);
             }
-            for overloads in schema.keyworded.values_mut() {
-                *overloads = canonical_overloads(
-                    overloads
-                        .iter()
-                        .map(|kt| canonicalize_binder(*kt, declared, types))
-                        .collect(),
-                );
-            }
+            schema.keyworded = canonical_overloads(
+                schema
+                    .keyworded
+                    .iter()
+                    .map(|shape| canonicalize_binder(*shape, declared, types))
+                    .collect(),
+            );
             types.signature(schema)
         }
         _ => kt,
@@ -1575,40 +1539,44 @@ pub fn sig_subtype(
     // `KFunction` rule a value slot's function type is checked by — and among the satisfiers the
     // most specific is the one it selects. An incomparable tie is the keyworded reading of a
     // dispatch ambiguity, and rejects here rather than at the call.
-    for (key, declared_overloads) in &sup.keyworded {
-        let candidates = sub.keyworded.get(key).map(Vec::as_slice).unwrap_or(&[]);
-        for declared in declared_overloads {
-            let head = || render_keyworded_head(key, *declared, &sup.operators, registries);
-            let render_all = |indices: &[usize]| -> Vec<String> {
-                indices
-                    .iter()
-                    .map(|i| render_keyworded_head(key, candidates[*i], &sub.operators, registries))
-                    .collect()
-            };
-            match select_keyworded_satisfier(
-                *declared,
-                candidates,
-                sup.sig_id.map(|id| (&sub_member_map, id)),
-                registries,
-            ) {
-                Ok(_) => {}
-                Err(satisfiers) if satisfiers.is_empty() && candidates.is_empty() => {
-                    return Err(Box::new(SigSubtypeFailure::MissingKeyworded {
-                        head: head(),
-                    }));
-                }
-                Err(satisfiers) if satisfiers.is_empty() => {
-                    return Err(Box::new(SigSubtypeFailure::KeywordedMismatch {
-                        head: head(),
-                        got: render_all(&(0..candidates.len()).collect::<Vec<_>>()),
-                    }));
-                }
-                Err(satisfiers) => {
-                    return Err(Box::new(SigSubtypeFailure::AmbiguousKeyworded {
-                        head: head(),
-                        candidates: render_all(&satisfiers),
-                    }));
-                }
+    for declared in &sup.keyworded {
+        let key = shape_key(*declared, types);
+        let candidates: Vec<KType> = sub
+            .keyworded
+            .iter()
+            .filter(|candidate| shape_key(**candidate, types) == key)
+            .copied()
+            .collect();
+        let head = || render_keyworded_head(*declared, &sup.operators, registries);
+        let render_all = |indices: &[usize]| -> Vec<String> {
+            indices
+                .iter()
+                .map(|i| render_keyworded_head(candidates[*i], &sub.operators, registries))
+                .collect()
+        };
+        match select_keyworded_satisfier(
+            *declared,
+            &candidates,
+            sup.sig_id.map(|id| (&sub_member_map, id)),
+            registries,
+        ) {
+            Ok(_) => {}
+            Err(satisfiers) if satisfiers.is_empty() && candidates.is_empty() => {
+                return Err(Box::new(SigSubtypeFailure::MissingKeyworded {
+                    head: head(),
+                }));
+            }
+            Err(satisfiers) if satisfiers.is_empty() => {
+                return Err(Box::new(SigSubtypeFailure::KeywordedMismatch {
+                    head: head(),
+                    got: render_all(&(0..candidates.len()).collect::<Vec<_>>()),
+                }));
+            }
+            Err(satisfiers) => {
+                return Err(Box::new(SigSubtypeFailure::AmbiguousKeyworded {
+                    head: head(),
+                    candidates: render_all(&satisfiers),
+                }));
             }
         }
     }
@@ -1646,8 +1614,9 @@ pub fn sig_subtype(
 /// is the member the view installs.
 ///
 /// Two steps, mirroring dispatch: keep the candidates that **satisfy** the declared overload (the
-/// covariant `KFunction` rule value slots use), then rank the survivors by [`fn_type_specificity`]
-/// and take the one strictly more specific than every peer. A lone satisfier wins with no ranking.
+/// covariant rule value slots use), then rank the survivors by [`shape_specificity`] — the
+/// positional pairing dispatch itself ranks by — and take the one strictly more specific than
+/// every peer. A lone satisfier wins with no ranking.
 ///
 /// `substitution` is how a declared type that references a binder's abstract members is read: the
 /// subtyping check passes the binder and `sub`'s bindings for its members, so the comparison runs
@@ -1683,7 +1652,7 @@ pub fn select_keyworded_satisfier(
             satisfiers.iter().all(|j| {
                 *i == j
                     || matches!(
-                        fn_type_specificity(candidates[**i], candidates[*j], registries),
+                        shape_specificity(candidates[**i], candidates[*j], registries),
                         Specificity::StrictlyMore
                     )
             })
@@ -1749,7 +1718,7 @@ fn references_sig_member(
                     .manifest_members
                     .values()
                     .chain(schema.value_slots.values())
-                    .chain(schema.keyworded.values().flatten())
+                    .chain(schema.keyworded.iter())
                     .any(|kt| references_sig_member(*kt, sig_id, &effective, types))
         }
         _ => false,

@@ -1,9 +1,10 @@
 //! The bodyless `FN (<head>) -> <Return>` declarator: a SIG body's keyworded (dispatch-bucket)
 //! member. The head parses through the definition form's own path, so these tests pin what the
-//! declaration *records* — the bucket key and the `(params) -> ret` type in the signature's stored
-//! schema — plus the two guards that keep declaration and definition in their own bodies.
+//! declaration *records* — the expression shape in the signature's stored schema, whose own
+//! element run is the bucket key — plus the two guards that keep declaration and definition in
+//! their own bodies.
 
-use crate::builtins::test_support::{TestRun, key_keyword, type_name};
+use crate::builtins::test_support::{TestRun, key_keyword, key_keyword_symbol, type_name};
 use crate::machine::model::{KType, KeyElement, SigSchema, TypeNode, UntypedKey};
 use crate::machine::{program_storage, run_root_storage};
 
@@ -22,6 +23,22 @@ fn sig_schema(
 }
 
 /// A bucket key spelled out: `_` is an argument slot, anything else a fixed token.
+/// The schema members keying `spelling`, read back off each member's own shape — the schema
+/// stores no key beside them.
+fn members_keyed(
+    schema: &crate::machine::model::SigSchema,
+    types: &crate::machine::model::TypeRegistry,
+    spelling: &[&str],
+) -> Vec<KType> {
+    let wanted = key(spelling);
+    schema
+        .keyworded
+        .iter()
+        .filter(|member| crate::machine::model::shape_key(**member, types) == wanted)
+        .copied()
+        .collect()
+}
+
 fn key(spelling: &[&str]) -> UntypedKey {
     spelling
         .iter()
@@ -40,19 +57,17 @@ fn a_bodyless_head_records_its_key_and_function_type() {
     let scope = test_run.scope;
     test_run.run("SIG Pure = ((FN (PURE x :Number) -> Number))");
     let schema = sig_schema(scope, test_run.types(), "Pure");
-    let overloads = schema
-        .keyworded
-        .get(&key(&["PURE", "_"]))
-        .expect("the declared head keys `(PURE _)`");
-    assert_eq!(overloads.len(), 1);
-    let expected = test_run.types().function_type(
-        crate::machine::model::Record::from_pairs([(
-            crate::builtins::test_support::binder_token("x"),
-            KType::NUMBER,
-        )]),
+    let members = members_keyed(&schema, test_run.types(), &["PURE", "_"]);
+    assert_eq!(members.len(), 1);
+    let expected = test_run.types().shape_type(
+        &[],
+        &[
+            crate::machine::model::DispatchTokenElement::Keyword(key_keyword_symbol("PURE")),
+            crate::machine::model::DispatchTokenElement::Slot(KType::NUMBER),
+        ],
         KType::NUMBER,
     );
-    assert_eq!(overloads[0], expected);
+    assert_eq!(members[0], expected);
 }
 
 #[test]
@@ -79,8 +94,8 @@ fn same_key_declarations_at_different_types_accumulate_as_overloads() {
     test_run.run("SIG Pure = ((FN (PURE x :Number) -> Number) (FN (PURE x :Str) -> Str))");
     let schema = sig_schema(scope, test_run.types(), "Pure");
     assert_eq!(
-        schema.keyworded.get(&key(&["PURE", "_"])).map(Vec::len),
-        Some(2),
+        members_keyed(&schema, test_run.types(), &["PURE", "_"]).len(),
+        2
     );
 }
 
@@ -111,19 +126,17 @@ fn a_declared_head_may_name_an_abstract_member() {
         .abstract_members
         .get(&type_name("Carrier", test_run.registries()))
         .expect("Carrier is an abstract member");
-    let overloads = schema
-        .keyworded
-        .get(&key(&["PURE", "_"]))
-        .expect("the declared head keys `(PURE _)`");
-    let expected = test_run.types().function_type(
-        crate::machine::model::Record::from_pairs([(
-            crate::builtins::test_support::binder_token("x"),
-            carrier,
-        )]),
+    let members = members_keyed(&schema, test_run.types(), &["PURE", "_"]);
+    let expected = test_run.types().shape_type(
+        &[],
+        &[
+            crate::machine::model::DispatchTokenElement::Keyword(key_keyword_symbol("PURE")),
+            crate::machine::model::DispatchTokenElement::Slot(carrier),
+        ],
         carrier,
     );
     assert_eq!(
-        overloads[0], expected,
+        members[0], expected,
         "the head's types name the SIG's own abstract member, canonicalized with the binder",
     );
 }

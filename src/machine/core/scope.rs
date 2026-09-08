@@ -5,9 +5,7 @@ use std::rc::{Rc, Weak};
 use crate::machine::DeliveredOperatorGroup;
 use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
-use crate::machine::model::{
-    IdentityBuildHasher, KType, KeyElement, TypeSymbol, UntypedKey, ValueSymbol,
-};
+use crate::machine::model::{IdentityBuildHasher, KType, TypeSymbol, ValueSymbol};
 use crate::machine::model::{OperatorGroup, ReductionMode};
 use crate::witnessed::{And, BumpAllocator, RegionHandle, SealedExtern};
 
@@ -119,16 +117,15 @@ impl<'a> ScopeBindings<'a> {
 ///
 /// Neither `Clone` nor `Debug`: `Sig`'s slot collector is a live `RefCell` that must not be
 /// silently duplicated, and nothing prints a kind.
-/// A SIG decl scope's keyworded-member collector: bumped bucket key run → the overloads declared
-/// under it. The [`ScopeKind::Sig`] twin of the VAL slot collector.
-pub(crate) type SigKeywordedTable<'a> = BumpBackedMap<'a, &'a [KeyElement], SigOverloads<'a>>;
-
-/// One key's declared overload types, in a vec whose buffer is bump-backed like every other
-/// scope-hosted allocation. `ManuallyDrop` for the reason a dispatch bucket carries it: a `KType` is
-/// a `Copy` handle with no glue, and the buffer is bump memory the region releases whole, so running
-/// the vec's destructor would be pure waste — and suppressing it is what keeps the collector storable
-/// in a bump-backed table.
-pub(crate) type SigOverloads<'a> = ManuallyDrop<allocator_api2::vec::Vec<KType, BumpAllocator<'a>>>;
+/// A SIG decl scope's keyworded-member collector: the expression shapes declared in the body, in
+/// declaration order. The [`ScopeKind::Sig`] twin of the VAL slot collector. Flat rather than
+/// keyed, because a member's bucket key is a reading of its own shape type
+/// ([`shape_key`](crate::machine::model::shape_key)) and nothing stores it twice.
+///
+/// The buffer is bump-backed like every other scope-hosted allocation, and `ManuallyDrop` for the
+/// reason a dispatch bucket carries it: a `KType` is a `Copy` handle with no glue, and the buffer
+/// is bump memory the region releases whole, so running the vec's destructor would be pure waste.
+pub(crate) type SigKeyworded<'a> = ManuallyDrop<allocator_api2::vec::Vec<KType, BumpAllocator<'a>>>;
 
 /// A SIG decl scope's operator-member collector: the declared record's member run keyed by its own
 /// run digest ([`KeywordSymbol::of_run`]) → the members and the mode they chain by. The key is
@@ -158,16 +155,14 @@ pub enum ScopeKind<'a> {
         name: TypeSymbol,
         slots: RefCell<ManuallyDrop<BumpBackedMap<'a, ValueSymbol, KType, IdentityBuildHasher>>>,
         /// The keyworded-member collector, the slot collector's twin for the dispatch-bucket half
-        /// of the interface: a bodyless `FN (<head>) -> <Return>` records its bucket key → the
-        /// declared overload's `(params) -> ret` type here. One key holds several overloads, so the
-        /// value is a run rather than a single type. Keyed on a bumped `&'a [KeyElement]` for the
-        /// same reason [`Bindings`](crate::machine::core::bindings::Bindings)' `functions` table is
-        /// — a `KeyElement` is `Copy` and lifetime-free, so a probe needs no owned key.
+        /// of the interface: a bodyless `EXPR (<head>) -> <Return>` records the shape it declares
+        /// here. Several members may key one bucket, so this is a flat run rather than a map — the
+        /// key is read back off each shape.
         ///
-        /// Bump-backed and `ManuallyDrop`-wrapped like `slots`, and for the same reason: neither the
-        /// key run nor the overload run owns anything the region does not release whole, so the
-        /// suppressed destructors had nothing to do and this variant still contributes no drop glue.
-        keyworded: RefCell<ManuallyDrop<SigKeywordedTable<'a>>>,
+        /// Bump-backed and `ManuallyDrop`-wrapped like `slots`, and for the same reason: the run
+        /// owns nothing the region does not release whole, so the suppressed destructor had
+        /// nothing to do and this variant still contributes no drop glue.
+        keyworded: RefCell<SigKeyworded<'a>>,
         /// The operator-member collector, the third of the three: a bodyless `OP` head or a
         /// bodyless `GROUP` records the chaining record it declares here. Bump-backed and
         /// `ManuallyDrop`-wrapped like its two siblings, and for the same reason — a member run is
@@ -350,7 +345,9 @@ impl<'a> Scope<'a> {
             ScopeKind::Sig {
                 name,
                 slots: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
-                keyworded: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
+                keyworded: RefCell::new(ManuallyDrop::new(allocator_api2::vec::Vec::new_in(
+                    outer.brand.allocator(),
+                ))),
                 operators: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
             },
         )
@@ -802,17 +799,11 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Snapshot of every `(bucket key, declared overload types)` pair — the keyworded half of the
-    /// schema projection's read, and [`Self::sig_value_slots`]' twin. The bumped key run is copied
-    /// into an owned [`UntypedKey`] here, at the one boundary where the collector's content leaves
-    /// the region. Empty for any scope that is not a SIG decl_scope.
-    pub(crate) fn sig_keyworded_members(&self) -> Vec<(UntypedKey, Vec<KType>)> {
+    /// Snapshot of every declared expression shape — the keyworded half of the schema projection's
+    /// read, and [`Self::sig_value_slots`]' twin. Empty for any scope that is not a SIG decl_scope.
+    pub(crate) fn sig_keyworded_members(&self) -> Vec<KType> {
         match &self.kind {
-            ScopeKind::Sig { keyworded, .. } => keyworded
-                .borrow()
-                .iter()
-                .map(|(key, overloads)| (key.to_vec(), overloads.to_vec()))
-                .collect(),
+            ScopeKind::Sig { keyworded, .. } => keyworded.borrow().to_vec(),
             ScopeKind::Root
             | ScopeKind::Anonymous
             | ScopeKind::SigGroup { .. }

@@ -219,10 +219,10 @@ pub enum Specificity {
 /// `Incomparable`, and neither is `Equal`.
 ///
 /// The one implementation of the rule. [`ExpressionSignature::specificity_vs`] feeds it the
-/// argument slots of two co-bucket call shapes, positionally; [`fn_type_specificity`] feeds it two
-/// declared function types' parameters, by name. Pairing differs because the two carriers key their
-/// positions differently; the ranking must not, which is why it lives here rather than in either
-/// caller.
+/// argument slots of two co-bucket call shapes, read off a live callable; [`shape_specificity`]
+/// feeds it the same slots read off two declared shape types. Both pair positionally — dispatch
+/// never sees an argument name — and the ranking lives here rather than in either caller so the
+/// two doors cannot drift.
 pub fn specificity_over(
     pairs: impl Iterator<Item = (KType, KType)>,
     registries: &RunRegistries,
@@ -244,39 +244,28 @@ pub fn specificity_over(
     }
 }
 
-/// [`ExpressionSignature::specificity_vs`] over two `KFunction` **types** — the verdict the
-/// signature-satisfaction check ranks a keyworded member's candidate overloads by, computed from
-/// the declared types alone with no live callable in hand.
+/// The **expression shape** a head names: its element run — keywords and argument-position types
+/// in order, argument names dropped — under the type parameters it quantifies over, paired with
+/// its return.
 ///
-/// Parameters pair **by name**, over the names both types carry: names are a function type's own
-/// keys, and a candidate's names are a subset of the declared member's by the time satisfaction
-/// asks. A name only one side declares constrains nothing and contributes no position, exactly as a
-/// fixed-token position contributes none to `specificity_vs`. Return types are excluded, because
-/// dispatch never selects on them.
-///
-/// Anything that is not a pair of function types is `Incomparable` — no position compares, so
-/// neither dominates.
-pub fn fn_type_specificity(left: KType, right: KType, registries: &RunRegistries) -> Specificity {
-    let types = &registries.types;
-    // Owns: the pairs are folded after both node reads close, so they cannot borrow either node.
-    let pairs: Option<Vec<(KType, KType)>> = types.with_node(left, |left_node| {
-        types.with_node(right, |right_node| match (left_node, right_node) {
-            (TypeNode::KFunction { params: lp, .. }, TypeNode::KFunction { params: rp, .. }) => {
-                Some(
-                    lp.iter()
-                        .filter_map(|(name, lt)| rp.get(name.symbol()).map(|rt| (*lt, *rt)))
-                        .collect(),
-                )
-            }
-            _ => None,
+/// The one derivation of a shape from a parsed head, so a declaration, the definition that
+/// satisfies it, and the callable's own [`shape_ktype`](crate::machine::KFunction::shape_ktype)
+/// all record the same type for the same surface. The element run stages inline and the registry
+/// interns probe-first, so a re-run definition allocates nothing.
+pub fn shape_type_of(
+    elements: &[SignatureElement],
+    quantifiers: &[TypeSymbol],
+    ret: KType,
+    registries: &RunRegistries,
+) -> KType {
+    let elements: smallvec::SmallVec<[DispatchTokenElement; 12]> = elements
+        .iter()
+        .map(|element| match element {
+            SignatureElement::Keyword(symbol) => DispatchTokenElement::Keyword(*symbol),
+            SignatureElement::Argument(argument) => DispatchTokenElement::Slot(argument.ktype),
         })
-    });
-    match pairs {
-        // A shape with no argument slot compares `Equal` — the same verdict `specificity_vs`
-        // reaches for two all-keyword call shapes, which is what an empty fold means.
-        Some(pairs) => specificity_over(pairs.into_iter(), registries),
-        None => Specificity::Incomparable,
-    }
+        .collect();
+    registries.types.shape_type(quantifiers, &elements, ret)
 }
 
 /// [`ExpressionSignature::specificity_vs`] over two **expression shape** types — the verdict the
