@@ -7,7 +7,7 @@
 //! questions are asked of it.
 
 use crate::machine::model::ExpressionPart;
-use crate::machine::model::labels::{BinderSymbol, KeywordSymbol};
+use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, WILDCARD};
 use crate::source::Spanned;
 
 /// One position in a signature parts run, as [`SignatureScan`] reads it.
@@ -25,6 +25,10 @@ pub(crate) enum SignaturePosition {
     /// A name part with no annotation following it — a binder position the signature left
     /// unannotated.
     Bare(BinderSymbol),
+    /// A `_ :<Type>` pair: an unnamed slot, plus the index of the annotation part it owns. `_`
+    /// lexes keyword-class, so this is the one keyword the scan reads as a position rather than as
+    /// fixed syntax.
+    Wildcard { annotation: usize },
     /// A part that is neither a keyword nor a name: the index it sits at.
     Foreign(usize),
 }
@@ -67,6 +71,14 @@ impl Iterator for SignatureScan<'_, '_> {
         let part = self.parts.get(self.index)?.value;
         let at = self.index;
         let name = match part {
+            ExpressionPart::Keyword(keyword) if keyword == WILDCARD.symbol() => {
+                if is_annotation(self.parts, at + 1) {
+                    self.index += 2;
+                    return Some(SignaturePosition::Wildcard { annotation: at + 1 });
+                }
+                self.index += 1;
+                return Some(SignaturePosition::Keyword(keyword));
+            }
             ExpressionPart::Keyword(keyword) => {
                 self.index += 1;
                 return Some(SignaturePosition::Keyword(keyword));

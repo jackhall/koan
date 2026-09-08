@@ -213,6 +213,48 @@ static FORM_SPECS: &[FormSpec] = &[
             body: Some(8),
         },
     },
+    // EXPR <head> -> <return type> — the bodyless head, no body.
+    FormSpec {
+        key: &[Kw(&KEYWORDS.expr), Slot, Kw(&KEYWORDS.arrow), Slot],
+        rule: FormRule::Signature {
+            signature: 1,
+            body: None,
+        },
+    },
+    // EXPR <head> -> <return type> = <body>
+    FormSpec {
+        key: &[
+            Kw(&KEYWORDS.expr),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        rule: FormRule::Signature {
+            signature: 1,
+            body: Some(5),
+        },
+    },
+    // LET <name> = FN EXPR <head> -> <return type> = <body>
+    FormSpec {
+        key: &[
+            Kw(&KEYWORDS.let_),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.expr),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        rule: FormRule::Signature {
+            signature: 5,
+            body: Some(9),
+        },
+    },
     // OP <symbol> OVER <operand> = <body>
     FormSpec {
         key: &[
@@ -698,6 +740,9 @@ impl<'s> Walk<'s, '_> {
                     self.walk_part(run, annotation);
                 }
                 SignaturePosition::Bare(name) => declared.push(name),
+                // An unnamed slot declares nothing; its annotation is still a use of whatever type
+                // name it spells.
+                SignaturePosition::Wildcard { annotation } => self.walk_part(run, annotation),
                 SignaturePosition::Foreign(index) => self.walk_part(run, index),
             }
         }

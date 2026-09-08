@@ -196,6 +196,13 @@ fn combined_fn_value_named_return(
     identifier_at(expr, 6, registries).map(value_named_return)
 }
 
+fn combined_expr_value_named_return(
+    expr: &WorkingExpression<'_>,
+    registries: &RunRegistries,
+) -> Option<String> {
+    identifier_at(expr, 7, registries).map(value_named_return)
+}
+
 // ---------- the table ----------
 
 /// The single source of truth for the diagnosable dispatch misses. The two reserved keys are the
@@ -350,6 +357,53 @@ pub static MISS_DIAGNOSTICS: &[MissDiagnostic] = &[
             Slot,
         ],
         render: combined_fn_value_named_return,
+        reserved: false,
+    },
+    // EXPR <head> -> <return type> = <body>: a value-named return slot, as on the lambda form.
+    MissDiagnostic {
+        key: &[
+            Kw(&KEYWORDS.expr),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        render: fn_value_named_return,
+        reserved: false,
+    },
+    // LET <name> = FN EXPR <head> -> <return type> = <body>: a Type-classified binder, or a
+    // value-named return slot. Two mistakes under one key, each confirmed by its own render.
+    MissDiagnostic {
+        key: &[
+            Kw(&KEYWORDS.let_),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.expr),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        render: function_bound_type_named,
+        reserved: false,
+    },
+    MissDiagnostic {
+        key: &[
+            Kw(&KEYWORDS.let_),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.expr),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        render: combined_expr_value_named_return,
         reserved: false,
     },
 ];

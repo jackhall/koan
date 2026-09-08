@@ -70,19 +70,21 @@ pub(crate) fn build_fn_like<'a>(
     }
     let signature_expr =
         crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.signature));
-    // A declaration has no body slot to read; the empty expression stands in for one, and the
-    // declaration leg of the finalize never looks at it.
+    // A bodyless head has no body slot to read; the empty expression stands in for one, and the
+    // bodyless leg of the finalize never looks at it.
     let body_expr = match kind {
-        FnKind::Declaration => crate::machine::model::KExpression::new(ctx.scope.brand(), &[]),
+        FnKind::Declaration | FnKind::Shape { .. } => {
+            crate::machine::model::KExpression::new(ctx.scope.brand(), &[])
+        }
         _ => crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body)),
     };
     let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
     // A definition's return slot captures raw, because it may name a parameter and has to survive
-    // verbatim to the per-call boundary. A declaration's cannot: there is no call to elaborate it
+    // verbatim to the per-call boundary. A bodyless head's cannot: there is no call to elaborate it
     // at, so its slot is an ordinary kind expectation the lane resolves against the SIG body's own
     // scope — which is what lets `-> Carrier` read the signature's abstract member.
     let return_type_state = match kind {
-        FnKind::Declaration => match ctx.args.ktype(&SLOTS.return_type) {
+        FnKind::Declaration | FnKind::Shape { .. } => match ctx.args.ktype(&SLOTS.return_type) {
             Some(ret) => return_type::ReturnTypeState::Done(ret),
             None => {
                 return Action::done(Err(KError::new(KErrorKind::MissingArg(
@@ -110,6 +112,7 @@ pub(crate) fn build_fn_like<'a>(
         &mut elaborator,
         ctx.registries,
         None,
+        kind.wildcards(),
         ctx.scratch,
     ) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
@@ -169,6 +172,17 @@ pub fn body_sig_declaration<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     build_fn_like(ctx, "FN", FnKind::Declaration)
+}
+
+/// `EXPR (<head>) -> <Return>` — the bodyless head, whose carrier is the head's expression shape as
+/// a type value. Bare inside a SIG body it is also the declaration of a keyworded (dispatch-bucket)
+/// member of the signature under construction; under `:(…)` — the type sigil the enclosing
+/// expression stamps — it is the type value and nothing else, and outside a SIG body there is no
+/// signature to record into either way. Same head shape and same parse path as the definition form,
+/// so a declaration and the definition that satisfies it derive one shape.
+pub fn body_shape<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
+    let declare = ctx.scope.is_in_sig_body() && !ctx.under_type_sigil;
+    build_fn_like(ctx, "EXPR", FnKind::Shape { declare })
 }
 
 /// The `name` slot of a combined `LET <name> = …` statement, as the symbol the parse minted —
@@ -413,6 +427,59 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
+    // The expression-shape surfaces. `EXPR` marks the callable whose arguments are positional and
+    // reached by dispatch, against the lambda `FN :{…}` reached by name — so the definition and the
+    // bodyless head both spell it, and the combined statement spells `FN EXPR` because the value
+    // channel it also binds is a lambda-typed name. Each key is disjoint from every `FN` key by its
+    // own keyword, so the two families never compete for a pick.
+    let shape_definition_sig = || {
+        sig(
+            KType::ANY,
+            vec![
+                kw(registries, "EXPR"),
+                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
+                kw(registries, "->"),
+                arg(registries, &SLOTS.return_type, return_union),
+                kw(registries, "="),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
+            ],
+        )
+    };
+    // The bodyless head. Its return slot is an ordinary kind expectation rather than the
+    // definition's raw-carrier union: a bodyless head's return resolves once, where it is written.
+    let shape_sig = || {
+        sig(
+            KType::ANY,
+            vec![
+                kw(registries, "EXPR"),
+                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
+                kw(registries, "->"),
+                arg_labeled(
+                    registries,
+                    &SLOTS.return_type,
+                    KType::of_kind(KKind::AnyType),
+                    "expression-shape return type",
+                ),
+            ],
+        )
+    };
+    let shape_combined_sig = || {
+        sig(
+            KType::ANY,
+            vec![
+                kw(registries, "LET"),
+                arg(registries, &SLOTS.name, KType::IDENTIFIER),
+                kw(registries, "="),
+                kw(registries, "FN"),
+                kw(registries, "EXPR"),
+                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
+                kw(registries, "->"),
+                arg(registries, &SLOTS.return_type, return_union),
+                kw(registries, "="),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
+            ],
+        )
+    };
     use crate::builtins::register_builtin;
     register_builtin(scope, keyworded_sig(), body, registries, gate);
     register_builtin(
@@ -424,6 +491,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     register_builtin(scope, record_sig(), body_record_schema, registries, gate);
     register_builtin(scope, combined_sig(), body_let_combined, registries, gate);
+    register_builtin(scope, shape_definition_sig(), body, registries, gate);
+    register_builtin(scope, shape_sig(), body_shape, registries, gate);
+    register_builtin(
+        scope,
+        shape_combined_sig(),
+        body_let_combined,
+        registries,
+        gate,
+    );
 }
 
 #[cfg(test)]

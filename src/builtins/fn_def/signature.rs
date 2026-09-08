@@ -6,7 +6,7 @@ use crate::machine::model::{Argument, SignatureElement};
 use crate::machine::model::{BinderSymbol, RunRegistries, Symbol};
 use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{SignaturePosition, SignatureScan};
+use crate::machine::model::{MACHINE_BINDERS, SignaturePosition, SignatureScan};
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 use crate::witnessed::{BumpAllocator, BumpVec};
@@ -32,6 +32,24 @@ pub(crate) fn collect_param_names_from_signature<'s>(
         }
     }
     names
+}
+
+/// Whether a `_ :<Type>` position is a slot or a mistake. A shape's slots are positional and its
+/// type drops their names, so a bodyless head may leave them unnamed; a definition binds its
+/// arguments by name in the body, so there `_` names nothing the body could read.
+#[derive(Clone, Copy)]
+pub(crate) enum Wildcards {
+    Slots,
+    Refused,
+}
+
+/// The diagnostic a `_` slot in a definition reports.
+fn wildcard_refused() -> KError {
+    KError::new(KErrorKind::ShapeError(
+        "`_` names no parameter, so a definition's body could not read it — name the slot \
+         (`<name> :<Type>`). A bodyless head may write `_` because its slots are positional."
+            .to_string(),
+    ))
 }
 
 /// The diagnostic a binder position with no `:<Type>` annotation reports.
@@ -77,6 +95,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     elaborator: &mut Elaborator<'_, 'a>,
     registries: &RunRegistries,
     resolved: Option<&[(usize, KType)]>,
+    wildcards: Wildcards,
     scratch: BumpAllocator<'a>,
 ) -> ParamListOutcome<'a> {
     let parts = signature.parts;
@@ -96,87 +115,22 @@ pub(crate) fn parse_fn_param_list<'a>(
         BumpVec::with_capacity_in(parts.len(), scratch);
     let mut first_err: Option<KError> = None;
     for position in SignatureScan::new(parts) {
-        match position {
+        let (symbol, annotation) = match position {
             SignaturePosition::Keyword(keyword) => {
                 elements.push(SignatureElement::Keyword(keyword));
+                continue;
             }
             SignaturePosition::Annotated {
                 name: symbol,
                 annotation,
-            } => {
-                let feed = resolved.and_then(|r| {
-                    r.iter()
-                        .find_map(|(idx, ktype)| (*idx == annotation).then_some(*ktype))
-                });
-                match (parts[annotation].value, feed) {
-                    (ExpressionPart::Type(t), _) => {
-                        match elaborate_type_identifier(elaborator, t, registries) {
-                            TypeResolution::Done(kt) => {
-                                elements
-                                    .push(SignatureElement::Argument(Argument::new(symbol, kt)));
-                            }
-                            TypeResolution::Park(producers) => {
-                                awaited.extend(producers);
-                            }
-                            TypeResolution::Unbound(missing) if first_err.is_none() => {
-                                first_err = Some(crate::machine::model::type_name_miss(
-                                    elaborator.scope,
-                                    missing,
-                                    elaborator.chain.as_deref(),
-                                    Some(&format!(
-                                        "FN signature for parameter `{}`",
-                                        crate::machine::model::display_label(
-                                            symbol.symbol(),
-                                            registries
-                                        ),
-                                    )),
-                                    registries,
-                                ));
-                            }
-                            TypeResolution::Unbound(_) => {}
-                        }
-                    }
-                    (
-                        ExpressionPart::Expression(_)
-                        | ExpressionPart::SigiledTypeExpr(_)
-                        | ExpressionPart::RecordType(_),
-                        Some(ktype),
-                    ) => {
-                        // The dep-finish re-walk: this slot's sub-Dispatch already resolved, and the
-                        // finish rejected a non-type terminal before feeding it here. The type is an
-                        // interned handle, fed back positionally rather than spliced into the
-                        // expression.
-                        elements.push(SignatureElement::Argument(Argument::new(symbol, ktype)));
-                    }
-                    (ExpressionPart::Expression(inner), None) => {
-                        sub_dispatches.push((annotation, *inner));
-                    }
-                    (ExpressionPart::SigiledTypeExpr(inner), None) => {
-                        // Wrap and sub-Dispatch so the dispatcher routes the inner expression
-                        // through its standard classifier.
-                        let brand = elaborator.scope.brand();
-                        let wrapped = KExpression::new(
-                            brand,
-                            &[Spanned::bare(ExpressionPart::SigiledTypeExpr(inner))],
-                        );
-                        sub_dispatches.push((annotation, wrapped));
-                    }
-                    (ExpressionPart::RecordType(inner), None) => {
-                        // A `:{…}` record param type sub-Dispatches to a record `KType` carrier.
-                        let brand = elaborator.scope.brand();
-                        let wrapped = KExpression::new(
-                            brand,
-                            &[Spanned::bare(ExpressionPart::RecordType(inner))],
-                        );
-                        sub_dispatches.push((annotation, wrapped));
-                    }
-                    // `SignatureScan` only pairs a name with one of the four shapes above, so this
-                    // arm is the exhaustiveness tail rather than a reachable input.
-                    _ => {
-                        return ParamListOutcome::Err(missing_annotation(symbol, registries));
-                    }
-                }
-            }
+            } => (symbol, annotation),
+            SignaturePosition::Wildcard { annotation } => match wildcards {
+                Wildcards::Slots => (
+                    BinderSymbol::Value(MACHINE_BINDERS.slot.symbol()),
+                    annotation,
+                ),
+                Wildcards::Refused => return ParamListOutcome::Err(wildcard_refused()),
+            },
             SignaturePosition::Bare(symbol) => {
                 return ParamListOutcome::Err(missing_annotation(symbol, registries));
             }
@@ -185,6 +139,72 @@ pub(crate) fn parse_fn_param_list<'a>(
                     "FN signature part `{}` is not a Keyword, Identifier, or `<name> :<Type>` pair",
                     parts[at].value.summary(&registries.labels),
                 ))));
+            }
+        };
+        let feed = resolved.and_then(|r| {
+            r.iter()
+                .find_map(|(idx, ktype)| (*idx == annotation).then_some(*ktype))
+        });
+        match (parts[annotation].value, feed) {
+            (ExpressionPart::Type(t), _) => {
+                match elaborate_type_identifier(elaborator, t, registries) {
+                    TypeResolution::Done(kt) => {
+                        elements.push(SignatureElement::Argument(Argument::new(symbol, kt)));
+                    }
+                    TypeResolution::Park(producers) => {
+                        awaited.extend(producers);
+                    }
+                    TypeResolution::Unbound(missing) if first_err.is_none() => {
+                        first_err = Some(crate::machine::model::type_name_miss(
+                            elaborator.scope,
+                            missing,
+                            elaborator.chain.as_deref(),
+                            Some(&format!(
+                                "FN signature for parameter `{}`",
+                                crate::machine::model::display_label(symbol.symbol(), registries),
+                            )),
+                            registries,
+                        ));
+                    }
+                    TypeResolution::Unbound(_) => {}
+                }
+            }
+            (
+                ExpressionPart::Expression(_)
+                | ExpressionPart::SigiledTypeExpr(_)
+                | ExpressionPart::RecordType(_),
+                Some(ktype),
+            ) => {
+                // The dep-finish re-walk: this slot's sub-Dispatch already resolved, and the
+                // finish rejected a non-type terminal before feeding it here. The type is an
+                // interned handle, fed back positionally rather than spliced into the
+                // expression.
+                elements.push(SignatureElement::Argument(Argument::new(symbol, ktype)));
+            }
+            (ExpressionPart::Expression(inner), None) => {
+                sub_dispatches.push((annotation, *inner));
+            }
+            (ExpressionPart::SigiledTypeExpr(inner), None) => {
+                // Wrap and sub-Dispatch so the dispatcher routes the inner expression
+                // through its standard classifier.
+                let brand = elaborator.scope.brand();
+                let wrapped = KExpression::new(
+                    brand,
+                    &[Spanned::bare(ExpressionPart::SigiledTypeExpr(inner))],
+                );
+                sub_dispatches.push((annotation, wrapped));
+            }
+            (ExpressionPart::RecordType(inner), None) => {
+                // A `:{…}` record param type sub-Dispatches to a record `KType` carrier.
+                let brand = elaborator.scope.brand();
+                let wrapped =
+                    KExpression::new(brand, &[Spanned::bare(ExpressionPart::RecordType(inner))]);
+                sub_dispatches.push((annotation, wrapped));
+            }
+            // `SignatureScan` only pairs a name with one of the four shapes above, so this
+            // arm is the exhaustiveness tail rather than a reachable input.
+            _ => {
+                return ParamListOutcome::Err(missing_annotation(symbol, registries));
             }
         }
     }

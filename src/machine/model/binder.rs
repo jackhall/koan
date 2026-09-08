@@ -20,7 +20,7 @@ use crate::machine::model::ast::Part;
 use crate::machine::model::key_spec::key_matches_untyped;
 use crate::machine::model::key_spec::{KEYWORDS, KeyElementSpec, key_matches_parts};
 use crate::machine::model::labels::{
-    BinderSymbol, KeywordSymbol, LabelInterner, StaticName, ValueSymbol,
+    BinderSymbol, KeywordSymbol, LabelInterner, StaticName, ValueSymbol, WILDCARD,
 };
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::{AnnouncedData, display_label, pair_list_names};
@@ -159,6 +159,15 @@ pub(crate) fn fn_def_binder_bucket<'a>(
     let mut i = 0;
     while i < parts.len() {
         match parts[i].value {
+            // `_` lexes keyword-class, but a `_ :<Type>` pair is an unnamed slot — the one keyword
+            // this walk reads as a slot rather than as a fixed token, so a wildcard head keys the
+            // same bucket the call spelling it will compute.
+            ExpressionPart::Keyword(symbol)
+                if symbol == WILDCARD.symbol() && next_is_type_slot(parts, i + 1) =>
+            {
+                key.push(KeyElement::Slot);
+                i += 2;
+            }
             ExpressionPart::Keyword(symbol) => {
                 key.push(KeyElement::Keyword(symbol));
                 i += 1;
@@ -191,19 +200,20 @@ fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> boo
     })
 }
 
-/// The signature slot of an `FN` declaration: the part right after the `FN` keyword. Read by
-/// position relative to that keyword rather than at a fixed index, so the bare form and the
-/// combined `LET <name> = FN …` statement share one extractor. A `RecordType` there is the
-/// anonymous form, which registers no bucket — `None`, and the statement installs nothing on this
+/// The signature slot of a callable's declaration: the part right after the keyword that opens the
+/// head — `EXPR` where the form spells one (`LET <name> = FN EXPR …` spells both), `FN` otherwise.
+/// Read by position relative to that keyword rather than at a fixed index, so the bare form and the
+/// combined `LET <name> = …` statement share one extractor. A `RecordType` there is the anonymous
+/// lambda form, which registers no bucket — `None`, and the statement installs nothing on this
 /// channel.
 fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
-    let fn_index = expr
-        .parts
-        .iter()
-        .position(|part| {
-            matches!(part.value, ExpressionPart::Keyword(symbol) if symbol == KEYWORDS.fn_.symbol())
-        })?;
-    match expr.parts.get(fn_index + 1)?.value {
+    let head_keyword = |name: &StaticName<KeywordSymbol>| {
+        expr.parts.iter().position(
+            |part| matches!(part.value, ExpressionPart::Keyword(symbol) if symbol == name.symbol()),
+        )
+    };
+    let head_index = head_keyword(&KEYWORDS.expr).or_else(|| head_keyword(&KEYWORDS.fn_))?;
+    match expr.parts.get(head_index + 1)?.value {
         ExpressionPart::Expression(inner) => Some(inner.reference()),
         _ => None,
     }
@@ -226,6 +236,10 @@ pub(crate) struct MachineBinders {
     pub(crate) operand_right: StaticName<ValueSymbol>,
     /// The unary `OP` body's single parameter: the whole operand run as one list.
     pub(crate) operands: StaticName<ValueSymbol>,
+    /// What a `_` slot in an expression-shape head binds under. A shape's slots are positional and
+    /// its type drops their names, so the head needs a binder only to ride the shared signature
+    /// parse; nothing reads this one back.
+    pub(crate) slot: StaticName<ValueSymbol>,
 }
 
 pub(crate) static MACHINE_BINDERS: MachineBinders = MachineBinders {
@@ -233,6 +247,7 @@ pub(crate) static MACHINE_BINDERS: MachineBinders = MachineBinders {
     operand_left: crate::static_name!(ValueSymbol, "left"),
     operand_right: crate::static_name!(ValueSymbol, "right"),
     operands: crate::static_name!(ValueSymbol, "operands"),
+    slot: crate::static_name!(ValueSymbol, "slot"),
 };
 
 /// Symbols the `OP` / `GROUP` surface spells with, plus the two ascription sigils. Declaring an
@@ -601,6 +616,22 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         name_slot: None,
         type_slots: &[3],
     },
+    // EXPR <head> -> <return_type> = <body> (every EXPR definition overload shares this key).
+    BinderSpec {
+        key: &[
+            Kw(&KEYWORDS.expr),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        names: &[],
+        bucket: Some(fn_def_binder_bucket),
+        surface: BinderSurface::Other,
+        name_slot: None,
+        type_slots: &[3],
+    },
     // OP <symbol> OVER <operand> = <body>.
     BinderSpec {
         key: &[
@@ -676,6 +707,26 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         surface: BinderSurface::Other,
         name_slot: Some(1),
         type_slots: &[6],
+    },
+    // LET <name> = FN EXPR <head> -> <return_type> = <body>.
+    BinderSpec {
+        key: &[
+            Kw(&KEYWORDS.let_),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.expr),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        names: &[identifier_part_binder_name],
+        bucket: Some(fn_def_binder_bucket),
+        surface: BinderSurface::Other,
+        name_slot: Some(1),
+        type_slots: &[7],
     },
     // LET <name> = OP <symbol> OVER <operand> = <body>.
     BinderSpec {

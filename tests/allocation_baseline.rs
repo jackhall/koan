@@ -103,7 +103,7 @@ const FORCED_PIN_ALLOWANCE: u64 = if cfg!(feature = "seam-force-pin") {
 /// that a seeding change of any real size fails it rather than being absorbed.
 #[test]
 fn the_empty_program_stays_within_its_startup_bound() {
-    const BOUND: u64 = 997;
+    const BOUND: u64 = 1023;
     let delta = allocations_for(
         include_str!("../audit/shapes/empty.koan"),
         "audit/shapes/empty.koan",

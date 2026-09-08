@@ -11,6 +11,7 @@
 //! - [`container_types`] — `List<T>`, `Dict<K,V>`, `Function<…>`, specificity.
 //! - [`explicit_laziness`] — a user `:KExpression` parameter is an ordinary eager value slot.
 //! - [`functor`] — FN as a functor over module-typed parameters.
+//! - [`shape_surface`] — the `EXPR` spellings: definition, combined statement, bodyless head.
 //! - [`tail_region_turnover`] — library-owned tail-call region-turnover acceptance criteria.
 
 mod anonymous;
@@ -26,6 +27,7 @@ mod param_type;
 mod record_types;
 mod region_liveness;
 mod return_type;
+mod shape_surface;
 mod sig_declaration;
 mod tail_region_turnover;
 

@@ -275,6 +275,41 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
         ],
         slots: &[(4, CODE), (6, TYPE_EXPR.with(RECORD_TYPE)), (8, CODE)],
     },
+    // EXPR <head> -> <return type> = <body>
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.expr),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        slots: &[(1, CODE), (3, TYPE_EXPR.with(RECORD_TYPE)), (5, CODE)],
+    },
+    // EXPR <head> -> <return type> — the bodyless head, whose carrier is the head's expression
+    // shape. Only the head captures raw: it is the declarator's own operand and must reach it
+    // unevaluated, while the return slot is an ordinary kind expectation, as on every bodyless head.
+    LazySlotSpec {
+        key: &[Kw(&KEYWORDS.expr), Slot, Kw(&KEYWORDS.arrow), Slot],
+        slots: &[(1, CODE)],
+    },
+    // LET <name> = FN EXPR <head> -> <return type> = <body>
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.let_),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.expr),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        slots: &[(5, CODE), (7, TYPE_EXPR.with(RECORD_TYPE)), (9, CODE)],
+    },
     // The SIG-body operator heads. Only the quoted symbol captures raw: the operand and result are
     // ordinary kind expectations, so a `:(…)` there sub-dispatches to a type eagerly, exactly as
     // the bodyless `FN` head's return slot does.

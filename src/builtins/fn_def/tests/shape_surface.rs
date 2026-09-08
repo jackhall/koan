@@ -1,0 +1,188 @@
+//! The `EXPR` surface: the keyworded callable whose arguments are positional and reached by
+//! dispatch, against the lambda `FN :{…}` reached by name. Three spellings share one head parse —
+//! the definition, the combined statement, and the bodyless head whose carrier is the head's
+//! expression shape as a type value — so these tests pin what each one installs and where the
+//! bodyless head additionally declares.
+
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_type};
+use crate::machine::model::{KObject, KType, SigSchema, TypeNode};
+use crate::machine::{KErrorKind, program_storage, run_root_storage};
+
+/// The stored schema of the signature `name` binds in `scope`.
+fn sig_schema(
+    scope: &crate::machine::Scope<'_>,
+    types: &crate::machine::model::TypeRegistry,
+    name: &str,
+) -> SigSchema {
+    let handle = lookup_type(scope, name).unwrap_or_else(|| panic!("{name} must bind a type"));
+    match types.node(handle) {
+        TypeNode::Signature { schema, .. } => schema,
+        _ => panic!("{name} must bind a Signature KType"),
+    }
+}
+
+/// A definition dispatches on its head exactly as the keyworded `FN` spelling does.
+#[test]
+fn a_definition_registers_its_head_as_a_dispatch_bucket() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("EXPR (DOUBLE n :Number) -> Number = (n * 2)");
+
+    assert!(fn_is_registered(scope, "DOUBLE"));
+    let result = test_run.run_one(test_run.parse_one("DOUBLE 21"));
+    assert!(matches!(result, KObject::Number(n) if *n == 42.0));
+}
+
+/// The combined statement spells `FN EXPR`: the value channel it binds is a lambda-typed name and
+/// the bucket it registers is the shape, so one statement installs both.
+#[test]
+fn the_combined_statement_installs_name_and_bucket() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("LET tripler = FN EXPR (TRIPLE n :Number) -> Number = (n * 3)");
+
+    assert!(fn_is_registered(scope, "TRIPLE"));
+    let by_keyword = test_run.run_one(test_run.parse_one("TRIPLE 5"));
+    assert!(matches!(by_keyword, KObject::Number(n) if *n == 15.0));
+    let by_name = test_run.run_one(test_run.parse_one("tripler {n = 5}"));
+    assert!(
+        matches!(by_name, KObject::Number(n) if *n == 15.0),
+        "the bound name reaches the same function through the call-by-name lane"
+    );
+}
+
+/// Outside a SIG body the bodyless head is a type value and nothing else: it binds an alias and
+/// declares into no signature. Its slots may be written `_`, since a shape's slots are positional.
+#[test]
+fn a_bodyless_head_outside_a_sig_body_binds_a_shape_alias() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("LET Doubling = :(EXPR (DOUBLE _ :Number) -> Number)");
+
+    let alias = lookup_type(scope, "Doubling").expect("the alias binds a type");
+    assert!(
+        matches!(
+            test_run.types().node(alias),
+            TypeNode::ExpressionShape { .. }
+        ),
+        "the head's carrier is its expression shape, got {}",
+        alias.display_name(test_run.registries()),
+    );
+    assert_eq!(
+        alias.display_name(test_run.registries()).to_string(),
+        ":(EXPR (DOUBLE _ :Number) -> Number)",
+    );
+}
+
+/// Bare inside a SIG body the same head declares a keyworded member — and the shape it records is
+/// the one an alias spells outside, so a declaration and the type value are one derivation.
+#[test]
+fn a_bodyless_head_in_a_sig_body_declares_a_member() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Doubler = ((EXPR (DOUBLE _ :Number) -> Number))\n\
+         LET Doubling = :(EXPR (DOUBLE other :Number) -> Number)",
+    );
+
+    let schema = sig_schema(scope, test_run.types(), "Doubler");
+    let alias = lookup_type(scope, "Doubling").expect("the alias binds a type");
+    assert_eq!(
+        schema.keyworded.as_slice(),
+        [alias],
+        "the declared member is the head's shape, which drops the slot names",
+    );
+}
+
+/// Under the type sigil the head is a type value even inside a SIG body: `(VAL f :(EXPR …))`
+/// declares a *value* slot typed by the shape, not a keyworded member.
+#[test]
+fn a_shape_under_the_type_sigil_declares_no_keyworded_member() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("SIG Holder = ((VAL f :(EXPR (DOUBLE _ :Number) -> Number)))");
+
+    let schema = sig_schema(scope, test_run.types(), "Holder");
+    assert!(
+        schema.keyworded.is_empty(),
+        "the shape typed a value slot rather than declaring a bucket member",
+    );
+    assert_eq!(schema.value_slots.len(), 1);
+}
+
+/// A module's definition satisfies a signature's declaration through the shape they share, and the
+/// member stays callable through the opaque view the ascription mints.
+#[test]
+fn a_definition_satisfies_a_declaration_of_the_same_shape() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "SIG Doubler = ((EXPR (DOUBLE _ :Number) -> Number))\n\
+         MODULE m = ((EXPR (DOUBLE n :Number) -> Number = (n * 2)))\n\
+         LET view = (m :| Doubler)",
+    );
+
+    let result = test_run.run_one(test_run.parse_one("USING view SCOPE (DOUBLE 4)"));
+    assert!(matches!(result, KObject::Number(n) if *n == 8.0));
+}
+
+/// Two heads differing only in what they name their slots project one shape: the type is the
+/// keywords, the slot types and the return, and nothing else.
+#[test]
+fn heads_differing_only_in_slot_names_are_one_shape() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "LET Named = :(EXPR (PICK first :Number OF second :Str) -> Number)\n\
+         LET Unnamed = :(EXPR (PICK _ :Number OF _ :Str) -> Number)",
+    );
+
+    let named: KType = lookup_type(scope, "Named").expect("Named binds a type");
+    let unnamed: KType = lookup_type(scope, "Unnamed").expect("Unnamed binds a type");
+    assert_eq!(named, unnamed);
+}
+
+/// `_` is a slot only where the slots are positional. A definition binds its arguments by name in
+/// the body, so a wildcard there names nothing the body could read.
+#[test]
+fn a_wildcard_slot_is_refused_in_a_definition() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+
+    let error = test_run.run_one_err(test_run.parse_one("EXPR (DOUBLE _ :Number) -> Number = (2)"));
+    assert!(
+        matches!(&error.kind, KErrorKind::ShapeError(message)
+            if message.contains("`_` names no parameter")),
+        "got {error}",
+    );
+}
+
+/// A keyword-free head has no fixed token to dispatch on, so it is no shape at all — the callable
+/// it describes is a lambda, and the diagnostic says so.
+#[test]
+fn a_keyword_free_head_is_refused() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+
+    let error = test_run.run_one_err(test_run.parse_one("LET Bad = :(EXPR (x :Number) -> Number)"));
+    assert!(
+        matches!(&error.kind, KErrorKind::ShapeError(message)
+            if message.contains("a shape has at least one keyword")),
+        "got {error}",
+    );
+}
