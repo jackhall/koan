@@ -4,7 +4,7 @@
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// A program's `PRINT` output. Each line is one evaluation, so a body that prints counts its own
 /// runs.

@@ -20,9 +20,9 @@ use crate::machine::core::kfunction::Body;
 use crate::machine::core::seals::GroupSeal;
 use crate::machine::core::tests::{body_no_op, unit_signature};
 use crate::machine::model::{KeywordSymbol, OperatorGroup, ReductionMode, RunRegistries};
-use crate::machine::{program_storage, run_root_storage};
 use crate::memory::CallFrame;
-use crate::witnessed::FoldedPlacement;
+use crate::memory::FoldedPlacement;
+use crate::memory::{program_storage, run_root_storage};
 
 /// Bind `name` in `scope` to a fresh closure capturing `scope` itself, and hand the callable back.
 /// The shape every case here is built from: a binding whose value's captured scope is the very

@@ -42,16 +42,3 @@ pub use scope::{RegionScopeFamily, ScopeRefFamily};
 pub use scope_id::ScopeId;
 pub(crate) use seals::{GroupSeal, OverloadSeal};
 pub use statement_id::StatementId;
-
-// TEMPORARY (phase 1 of the memory-module move): the region substrate now lives in
-// `crate::memory`; these keep the old `machine::core::…` paths resolving until the import sweep
-// lands, and are deleted with it.
-pub use crate::memory::{
-    CallFrame, CarrierWitness, DeliveredCarried, DeliveredFunction, DeliveredOperatorGroup,
-    FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, OpenedFunction,
-    ProgramBrand, ProgramStorage, RegionBrand, RegionTypeFamily, RunWriter, SealedFunction,
-    SealedOperatorGroup, SplicedCell, SubstrateDoor, program_storage, run_root_storage,
-};
-pub(crate) use crate::memory::{
-    FrameStorageExt, KoanRegionExt, KoanStorageProfile, product_reaches_region, read_resting,
-};

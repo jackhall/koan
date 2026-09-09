@@ -7,8 +7,9 @@
 
 use crate::builtins::test_support::{TestRun, extract_terminal};
 use crate::machine::KErrorKind;
-use crate::machine::model::{Carried, KObject};
-use crate::machine::{program_storage, run_root_storage};
+use crate::machine::model::KObject;
+use crate::memory::Carried;
+use crate::memory::{program_storage, run_root_storage};
 
 /// A plain module's `UNION` member types a dispatch slot inside the block: the window borrows the
 /// module child scope's `types` table whole, so `:Color` resolves there.

@@ -6,7 +6,7 @@ use std::rc::Rc;
 use super::*;
 
 use super::run;
-use crate::machine::program_storage;
+use crate::memory::program_storage;
 
 #[test]
 fn tagged_union_full_program_via_type_token() {

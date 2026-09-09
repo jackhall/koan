@@ -16,10 +16,11 @@
 use std::rc::Rc;
 
 use koan::builtins::test_support::{TestRun, lookup_binding, lookup_type};
+use koan::machine::Scope;
 use koan::machine::model::{
     KKind, KObject, KType, NodeSchema, Symbol, TypeNode, TypeRegistry, ValueSymbol,
 };
-use koan::machine::{FrameStorage, ProgramStorage, Scope, program_storage, run_root_storage};
+use koan::memory::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 
 /// Run `src` to completion and hand back the whole run — the seeded scope tests assert
 /// bindings on, plus the run frame's registry that type names render against.

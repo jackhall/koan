@@ -6,7 +6,7 @@
 use super::working_all;
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
-use crate::machine::core::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// Self-reference `LET Ty = Ty`: index gating is a strict `idx <` predicate, so
 /// the in-progress binding is invisible to its own RHS at the same idx. The

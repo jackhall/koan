@@ -1,15 +1,15 @@
 use super::*;
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{spliced_part, type_name, type_token, value_name};
-use crate::machine::core::SubstrateDoor;
 use crate::machine::model::BinderSymbol;
-use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeMemberMap;
 use crate::machine::model::ast::{ExpressionPart, WorkingPart};
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
+use crate::memory::Carried;
+use crate::memory::SubstrateDoor;
 
 /// Mint the zero-dep fold door a `Tagged`/`Wrapped` test value needs, over a fresh root region, as
 /// two `let` bindings in the caller's own scope (mirrors the `kobject` test macro). `forge_for_test`
@@ -17,10 +17,10 @@ use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 /// borrow of `storage` in the same frame.
 macro_rules! container_door {
     ($storage:ident, $door:ident) => {
-        use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
-        use crate::witnessed::FoldedPlacement;
+        use crate::memory::FoldedPlacement;
+        use crate::memory::{FoldingBrand, FrameStorageExt, run_root_storage};
         let $storage = run_root_storage();
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
+        let owned_cells = crate::memory::FrameCoverage::empty();
         let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             $storage.brand().handle(),
         ))
@@ -322,7 +322,7 @@ fn record_disjoint_fields_incomparable() {
 #[test]
 fn accepts_carried_matches_spliced_delegation() {
     let registries = RunRegistries::new();
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::memory::{FrameStorageExt, run_root_storage};
     let storage = run_root_storage();
     let region = storage.brand();
     let n: &KObject<'_> = region.alloc_scalar(Scalar::Number(7.0));
@@ -361,9 +361,9 @@ fn accepts_carried_matches_spliced_delegation() {
 fn spliced_cell_classifies_by_opening() {
     let registries = RunRegistries::new();
     use crate::builtins::test_support::run_root_bare;
-    use crate::machine::core::run_root_storage;
     use crate::machine::model::values::KObject;
     use crate::memory::Carried;
+    use crate::memory::run_root_storage;
 
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
@@ -399,11 +399,11 @@ fn spliced_cell_classifies_by_opening() {
 fn record_value_admission_and_matches() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
-    use crate::witnessed::FoldedPlacement;
+    use crate::memory::FoldedPlacement;
+    use crate::memory::{FoldingBrand, FrameStorageExt, run_root_storage};
     let storage = run_root_storage();
     let region = storage.brand();
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()))
         .with_holder(&owned_cells);
     let value: &KObject<'_> = door.alloc_object_folded(KObject::record(
@@ -452,8 +452,8 @@ fn record_value_admission_and_matches() {
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
     use crate::machine::model::values::Module;
+    use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
@@ -550,11 +550,11 @@ fn of_kind_signature_more_specific_than_any_type() {
 fn of_kind_nominal_is_type_channel_only() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
-    use crate::witnessed::FoldedPlacement;
+    use crate::memory::FoldedPlacement;
+    use crate::memory::{FoldingBrand, FrameStorageExt, run_root_storage};
     let storage = run_root_storage();
     let region = storage.brand();
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()))
         .with_holder(&owned_cells);
     let newtype_ty = KType::of_kind(KKind::NewType);
@@ -931,7 +931,7 @@ fn two_functions_differ_only_in_deferred_return_are_distinct() {
 fn deferred_return_admission_via_function_compat() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let program = crate::machine::core::program_storage();
+    let program = crate::memory::program_storage();
     let candidate = ExpressionSignature::mint(
         program.brand().region(),
         ReturnType::Deferred(DeferredReturn::Type(type_token("Er"))),
@@ -1006,7 +1006,7 @@ fn deferred_return_surface_eq_and_hash() {
 fn union_admits_member_typed_value() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::memory::{FrameStorageExt, run_root_storage};
     let storage = run_root_storage();
     let region = storage.brand();
     let n: &KObject<'_> = region.alloc_scalar(Scalar::Number(7.0));
@@ -1027,10 +1027,10 @@ fn union_admits_member_typed_value() {
 fn union_honors_memoized_list_element_type() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
-    use crate::witnessed::FoldedPlacement;
+    use crate::memory::FoldedPlacement;
+    use crate::memory::{FoldingBrand, FrameStorageExt, run_root_storage};
     let storage = run_root_storage();
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage.brand().handle()))
             .with_holder(&owned_cells);
@@ -1191,9 +1191,9 @@ fn union_specificity_ordering() {
 #[test]
 fn module_object_ktype_reports_self_sig() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage};
     use crate::machine::model::KObject;
     use crate::machine::model::values::Module;
+    use crate::memory::{program_storage, run_root_storage};
 
     let program = program_storage();
     let region = run_root_storage();
@@ -1239,9 +1239,9 @@ fn module_object_ktype_reports_self_sig() {
 #[test]
 fn matches_value_admits_module_object_via_signature_slot() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage};
     use crate::machine::model::KObject;
     use crate::machine::model::values::Module;
+    use crate::memory::{program_storage, run_root_storage};
 
     let program = program_storage();
     let region = run_root_storage();
@@ -1288,7 +1288,7 @@ fn matches_value_admits_module_object_via_signature_slot() {
 fn specificity_self_sig_refines_declared_and_empty() {
     use crate::builtins::test_support::{TestRun, lookup_module};
     use crate::machine::model::KObject;
-    use crate::machine::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -1324,7 +1324,7 @@ fn specificity_self_sig_refines_declared_and_empty() {
 fn self_sig_type_equals_member_free_declared_sig() {
     use crate::builtins::test_support::{TestRun, lookup_module};
     use crate::machine::model::KObject;
-    use crate::machine::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -1353,7 +1353,7 @@ fn self_sig_type_equals_member_free_declared_sig() {
 fn self_sig_type_equals_fully_manifest_declared_sig() {
     use crate::builtins::test_support::{TestRun, lookup_module};
     use crate::machine::model::KObject;
-    use crate::machine::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -1382,7 +1382,7 @@ fn self_sig_type_equals_fully_manifest_declared_sig() {
 fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
     use crate::builtins::test_support::{TestRun, lookup_module};
     use crate::machine::model::KObject;
-    use crate::machine::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -1513,7 +1513,7 @@ fn is_more_specific_identifier_ranking_otherwise_intact() {
 #[test]
 fn slot_ktype_round_trips_through_accepts_part() {
     let registries = RunRegistries::new();
-    let program = crate::machine::program_storage();
+    let program = crate::memory::program_storage();
     let brand = program.brand();
     let node = brand.nested_node(&[]);
     let parts = [
@@ -1734,7 +1734,7 @@ fn exact_carrier_membership_is_the_five_raw_capture_constants() {
 /// no member claims answers `None` so the slot falls through to eager handling.
 #[test]
 fn raw_capture_member_picks_the_claiming_member() {
-    let program = crate::machine::core::program_storage();
+    let program = crate::memory::program_storage();
     let brand = program.brand();
     let registries = RunRegistries::new();
     let types = &registries.types;
@@ -1790,7 +1790,7 @@ fn a_kind_member_carries_no_raw_capture() {
 /// the two type-expression shapes a kind member shape-admits arrive already sub-dispatched.
 #[test]
 fn capture_member_for_widens_only_for_a_type_token() {
-    let program = crate::machine::core::program_storage();
+    let program = crate::memory::program_storage();
     let brand = program.brand();
     let registries = RunRegistries::new();
     let types = &registries.types;

@@ -19,9 +19,10 @@ use crate::machine::ProducerId;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::machine::model::{ExpressionPart, KType, RunRegistries};
-use crate::machine::{DeliveredCarried, LexicalFrame, NameLookup, Scope};
+use crate::machine::{LexicalFrame, NameLookup, Scope};
+use crate::memory::DeliveredCarried;
 
-use crate::machine::model::Carried;
+use crate::memory::Carried;
 
 /// Type-channel resolution with the park-source list already folded to a single edge, so no
 /// consumer has to choose among sources. `Unbound` carries the name that missed; the spelling is

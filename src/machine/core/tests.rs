@@ -22,6 +22,6 @@ pub(super) fn body_no_op<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     crate::machine::core::kfunction::action::Action::done_resident(
         ctx.scope,
-        crate::machine::model::Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
+        crate::memory::Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
     )
 }

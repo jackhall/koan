@@ -1,9 +1,9 @@
 use std::hash::{Hash, Hasher};
 
 use super::kobject::KObject;
-use crate::machine::core::SubstrateDoor;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::types::{KType, Parseable};
+use crate::memory::SubstrateDoor;
 
 /// Concrete dict-key value for the `KObject::Dict` map. Restricted to the hashable scalars;
 /// non-scalar keys are rejected at construction via [`Self::try_from_kobject`].

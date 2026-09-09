@@ -4,7 +4,7 @@
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::model::{KObject, TypeNode};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 const SETUP: &str = "SIG Ordered = (VAL compare :Number)\n\
                      MODULE int_ord = (LET compare = 7)\n\

@@ -13,12 +13,13 @@ use std::rc::Rc;
 
 use crate::machine::LexicalFrame;
 use crate::machine::execute::deps_on;
+use crate::machine::model::KType;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::type_name_miss;
-use crate::machine::model::{Carried, KType};
 use crate::machine::{Action, AwaitContinue, DepPlacement, DepTerminal, FinishCtx, SubDispatch};
 use crate::machine::{KError, KErrorKind, NameLookup, Scope};
+use crate::memory::Carried;
 use crate::scheduler::Deps;
 
 /// Every parked producer is terminal by the dep-finish invariant, so a second park after wake is

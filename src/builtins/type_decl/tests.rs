@@ -9,7 +9,7 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::{
     KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeNode, constructor_param_names,
 };
-use crate::machine::{ProgramStorage, program_storage, run_root_storage};
+use crate::memory::{ProgramStorage, program_storage, run_root_storage};
 
 /// Resolve a SIG-declared type member's stored `KType` out of the signature's schema —
 /// abstract members (`TYPE`) and manifest members (`LET`) both live there, classified by

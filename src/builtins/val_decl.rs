@@ -19,8 +19,8 @@ use crate::machine::model::{KKind, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, arg_labeled, kw, sig};
-use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
+use crate::memory::Carried;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, ty } }

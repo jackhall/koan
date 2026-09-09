@@ -37,8 +37,8 @@ use crate::machine::model::{
     ExpressionPart, KExpression, MACHINE_BINDERS, RunRegistries, SignaturePosition, SignatureScan,
     announce_type_members,
 };
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::source::{FileId, Span};
-use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// What the block's free identifiers came to. Every buffer is the caller's arena — the step scratch
 /// on the runtime path — so the whole analysis dies with the drain pop that produced it.

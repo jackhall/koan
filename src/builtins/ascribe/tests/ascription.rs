@@ -3,7 +3,7 @@
 use crate::builtins::test_support::{TestRun, binds_module, lookup_module, type_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, TypeNode, render_label};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 use crate::parse::parse;
 
 #[test]

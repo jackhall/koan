@@ -13,16 +13,16 @@
 
 use crate::machine::WriteGate;
 
-use crate::machine::model::Carried;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::Record;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::memory::Carried;
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
-use crate::witnessed::BumpVec;
+use crate::memory::BumpVec;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { fields, record } }
@@ -126,7 +126,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // shape-split pure door and enveloped there — coverage-equivalent to an empty-reach seal. No region-pure
     // shape is a `Record`, so that arm's diagnostic is what a construction bug would surface here.
     let resident;
-    let lhs: &crate::machine::DeliveredCarried = match ctx.args.carrier(&SLOTS.record) {
+    let lhs: &crate::memory::DeliveredCarried = match ctx.args.carrier(&SLOTS.record) {
         Some(c) => c,
         None => {
             resident = match ctx.scope.deliver_pure_value(record_obj) {
@@ -177,8 +177,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 mod tests {
     use crate::builtins::test_support::TestRun;
     use crate::machine::model::{KObject, KType, TypeNode};
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
 
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {

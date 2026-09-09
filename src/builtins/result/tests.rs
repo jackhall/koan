@@ -3,8 +3,8 @@ use crate::builtins::test_support::{TestRun, type_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KKind, NodeSchema, TypeNode};
 use crate::machine::model::{KObject, KType};
-use crate::machine::program_storage;
-use crate::machine::run_root_storage;
+use crate::memory::program_storage;
+use crate::memory::run_root_storage;
 
 /// Assert `identity` names a `SetMember` whose name is `expected`.
 fn assert_member_named(

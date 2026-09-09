@@ -372,10 +372,10 @@ super::substrate::reattachable!(AggBuildFamily => (RegionHandle<'r>, &'r [Held<'
 /// the 1:1 relocation sites (`relocate_seam`, the `catch` and tag arms) rest on. The
 /// accumulator is `yoke`d empty over the dest frame's region; each foreign dep's
 /// `Delivered` envelope is folded in with
-/// [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into), which re-anchors it at
+/// [`Delivered::transfer_into`](crate::memory::Delivered::transfer_into), which re-anchors it at
 /// the shared brand, binds it into the cells, and re-seals under the union of
 /// every reached region (a `FrameReach` set witness — the multi-foreign case a single-region witness
-/// cannot represent); a final [`project`](crate::witnessed::Delivered::project) allocates the list
+/// cannot represent); a final [`project`](crate::memory::Delivered::project) allocates the list
 /// node into the carried region under the envelope's own pins.
 /// After every producer handle drops, the folded witness is the sole owner of all three regions the
 /// list reaches, so reading the cells back is sound — the proof the construction site names its reach
@@ -433,7 +433,7 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     // envelope's coverage correct for the same reason selection does: the product is built into the
     // envelope's home region, which its pins already name.
     let list = acc2.project::<CarriedFamily>(|(region, cells), _token| {
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
+        let owned_cells = crate::memory::FrameCoverage::empty();
         let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
             .with_holder(&owned_cells);
         Carried::Object(region.alloc_object_folded(KObject::list_of_held(region, cells, types)))
@@ -541,7 +541,7 @@ fn region_union_foreign_pins_release_at_region_death() {
     );
 }
 
-/// The **single escape seam** re-stamp: [`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place)
+/// The **single escape seam** re-stamp: [`Delivered::restamp_in_place`](crate::memory::Delivered::restamp_in_place)
 /// re-tags a declared substrate return's top node to its declared type and re-anchors it into the
 /// *producer's own region*, sharing the substrate borrow verbatim — the exact `finalize_terminal`
 /// `Disposition::Restamp` motion. The pointer-identity assertion is what pins "shares, never
@@ -559,7 +559,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // Producer: a plain-data record resident in its own frame's region, born through the fold door —
     // the shape a declared substrate return arrives as at the Done boundary.
     let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
         producer_frame.brand().handle(),
     ))
@@ -590,7 +590,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // Re-stamp in place: re-tag the top node to `declared`, re-anchored into the producer's own
     // region through the folded placement — the substrate rides shared (`deep_clone` pointer-copies
     // it, `stamp_type` swaps only the handle).
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let restamped: DeliveredCarried = envelope
         .restamp_in_place::<CarriedFamily, KoanStorageProfile>(
             &producer_frame.storage_rc(),
@@ -882,7 +882,7 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
     // closure gets a bare `FoldToken` and so can only select), which is why the store lands in the
     // envelope's home region — exactly what the assertion below reads back.
     let stored = acc0.project::<CarriedFamily>(|(region, _cells), _token| {
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
+        let owned_cells = crate::memory::FrameCoverage::empty();
         let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
             .with_holder(&owned_cells);
         let fields = Vec::from([(

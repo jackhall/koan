@@ -87,7 +87,7 @@ fn main() -> ExitCode {
 /// tightness surface on here.
 fn report_region_audits() {
     #[cfg(debug_assertions)]
-    for ring in koan::witnessed::pin_cycle_reports() {
+    for ring in koan::memory::pin_cycle_reports() {
         eprintln!(
             "region audit: pin ring retained by {:#x} along {:x?}",
             ring.retainer, ring.path

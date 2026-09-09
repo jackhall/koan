@@ -35,7 +35,7 @@ mod sig_declaration;
 mod tail_region_turnover;
 
 use crate::builtins::test_support::TestRun;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 pub(super) fn capture_program_output(source: &str) -> Vec<u8> {
     let program = program_storage();

@@ -7,10 +7,11 @@ use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::machine::model::{IdentityBuildHasher, KType, TypeSymbol, ValueSymbol};
 use crate::machine::model::{OperatorGroup, ReductionMode};
-use crate::machine::{DeliveredOperatorGroup, KError, WriteGate};
+use crate::machine::{KError, WriteGate};
+use crate::memory::DeliveredOperatorGroup;
 use crate::memory::{
-    And, BumpAllocator, BumpBackedMap, FrameStorage, KoanRegion, RegionBrand, RegionHandle,
-    SealedExtern, bump_table, reattachable,
+    And, BumpBackedMap, BumpVec, FrameStorage, KoanRegion, RegionBrand, RegionHandle, SealedExtern,
+    bump_table, reattachable,
 };
 
 use super::bindings::{Bindings, BindingsReferenceFamily};
@@ -155,7 +156,7 @@ impl<'a> ScopeBindings<'a> {
 /// The buffer is bump-backed like every other scope-hosted allocation, and `ManuallyDrop` for the
 /// reason a dispatch bucket carries it: a `KType` is a `Copy` handle with no glue, and the buffer
 /// is bump memory the region releases whole, so running the vec's destructor would be pure waste.
-pub(crate) type SigKeyworded<'a> = ManuallyDrop<allocator_api2::vec::Vec<KType, BumpAllocator<'a>>>;
+pub(crate) type SigKeyworded<'a> = ManuallyDrop<BumpVec<'a, KType>>;
 
 /// A SIG decl scope's operator-member collector: the declared record's member run keyed by its own
 /// run digest ([`KeywordSymbol::of_run`]) → the members and the mode they chain by. The key is
@@ -391,7 +392,7 @@ impl<'a> Scope<'a> {
             ScopeKind::Sig {
                 name,
                 slots: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
-                keyworded: RefCell::new(ManuallyDrop::new(allocator_api2::vec::Vec::new_in(
+                keyworded: RefCell::new(ManuallyDrop::new(BumpVec::new_in(
                     outer.brand.allocator(),
                 ))),
                 operators: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),

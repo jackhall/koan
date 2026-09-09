@@ -6,8 +6,8 @@
 
 use super::*;
 use crate::builtins::test_support::identifier_part;
-use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::model::WorkingPart;
+use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
 use crate::source::{SourceFile, Spanned};
 
 /// A one-part run naming `name`, carrying `span` when given.

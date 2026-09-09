@@ -11,7 +11,7 @@
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// A first-order abstract slot plus an applied one, a function-typed slot, and the source
 /// constructors both are declared over — the same shape `ascribe/tests/views.rs` reads through

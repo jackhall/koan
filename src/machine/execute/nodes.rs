@@ -3,13 +3,14 @@ use std::rc::Rc;
 
 use smallvec::SmallVec;
 
+use crate::machine::LexicalFrame;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{ScopeId, ScopeRefFamily, StatementId, assemble_body_chain};
 use crate::machine::model::ast::{DispatchShape, KExpression, WorkingExpression};
-use crate::machine::{CallFrame, LexicalFrame};
+use crate::memory::CallFrame;
+use crate::memory::SealedExtern;
 use crate::scheduler::EdgeId;
 use crate::source::{FileId, Span};
-use crate::witnessed::SealedExtern;
 
 /// The generic per-node work lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
 /// execute tree has a single `nodes` surface combining it with the Koan-side [`NodePayload`] /
@@ -118,8 +119,8 @@ pub(super) struct SlotFrame {
 }
 
 impl crate::scheduler::Anchor for SlotFrame {
-    type Owner = crate::machine::FrameStorage;
-    fn owner(&self) -> &Rc<crate::machine::FrameStorage> {
+    type Owner = crate::memory::FrameStorage;
+    fn owner(&self) -> &Rc<crate::memory::FrameStorage> {
         self.cart.storage()
     }
 }

@@ -10,8 +10,8 @@
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::model::KObject;
-use crate::machine::{program_storage, run_root_storage};
-use crate::witnessed::{region_metrics, reset_region_metrics};
+use crate::memory::{program_storage, run_root_storage};
+use crate::memory::{region_metrics, reset_region_metrics};
 
 /// Run `source` to completion in a fresh run, drop the whole run, and report how many of its
 /// regions are still live.

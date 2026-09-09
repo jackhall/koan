@@ -3,11 +3,11 @@
 
 use super::{DynamicNameForm, FORM_SPECS, FormRule, infer_close_captures};
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{ProgramStorage, program_storage, run_root_storage};
 use crate::machine::model::key_spec::{
     KeyElementSpec, key_matches_untyped, key_specs_agree, render_key,
 };
 use crate::machine::model::{UntypedKey, render_label};
+use crate::memory::{ProgramStorage, program_storage, run_root_storage};
 
 // ---------- spec ⟺ registration ----------
 

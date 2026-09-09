@@ -7,8 +7,9 @@
 use crate::builtins::test_support::{TestRun, lookup_binding, marker};
 use crate::builtins::{arg, kw, register_builtin, sig};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::machine::model::{BinderSymbol, Carried, KObject, KType, RunRegistries};
-use crate::machine::{program_storage, run_root_storage};
+use crate::machine::model::{BinderSymbol, KObject, KType, RunRegistries};
+use crate::memory::Carried;
+use crate::memory::{program_storage, run_root_storage};
 use crate::static_name;
 
 static SLOT: crate::machine::model::StaticName<crate::machine::model::ValueSymbol> =

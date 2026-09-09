@@ -178,7 +178,7 @@ mod tests {
     /// parser change ever lets a real body surface as a lone `[Expression(_)]`, this fails.
     #[test]
     fn parser_never_yields_lone_expression_body() {
-        use crate::machine::core::program_storage;
+        use crate::memory::program_storage;
         use crate::parse::parse;
 
         // The parse products borrow this storage, so it is declared before anything reading them.

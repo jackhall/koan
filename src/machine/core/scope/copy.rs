@@ -13,7 +13,7 @@
 //! **A captured callable is rebuilt in a fold of its own.** A binding's value reaches the engine as
 //! a delivery envelope, whose sealed content re-anchors only at the borrow that opens it — never at
 //! `'b`. So a bound callable is not read out and rebuilt; it is **relocated**, through a nested
-//! [`transfer_into`](crate::witnessed::Delivered::transfer_into) whose destination operand carries
+//! [`transfer_into`](crate::memory::Delivered::transfer_into) whose destination operand carries
 //! the copied scope it attaches under ([`RegionScopeFamily`]). Inside that fold the source callable
 //! and the copied scope meet at one brand, and the retention claim is derived from the product: the
 //! rebuilt callable borrows its new captured scope and nothing else, so every source region the
@@ -31,18 +31,19 @@
 //! binds the copy itself, and two closures over one defining scope copy to two closures over one
 //! copied scope.
 
-use allocator_api2::alloc::Global;
+use crate::memory::Global;
 
 use super::{Scope, ScopeKind};
-use crate::machine::DeliveredCarried;
 use crate::machine::core::RegionScopeFamily;
 use crate::machine::core::bindings::BindingIndex;
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::seals::{GroupSeal, OverloadSeal};
-use crate::machine::core::{FoldingBrand, KoanRegion, KoanStorageProfile, RegionBrand};
-use crate::machine::model::{Carried, KObject};
+use crate::machine::model::KObject;
+use crate::memory::Carried;
+use crate::memory::DeliveredCarried;
 use crate::memory::DeliveredFunction;
-use crate::witnessed::{FoldedPlacement, RegionHandle};
+use crate::memory::{FoldedPlacement, RegionHandle};
+use crate::memory::{FoldingBrand, KoanRegion, KoanStorageProfile, RegionBrand};
 
 /// One relocation's memo: the address of a source scope beside the copy built for it. Address *is*
 /// identity here — a source scope is region-resident and lives for the whole relocation, so nothing
@@ -414,10 +415,10 @@ fn rebuild_registration<'b>(cell: &DeliveredFunction, anchor: Anchor<'b>) -> Del
 /// the destination region's union bundle, which the binding doors mint into as they fill it.
 fn rebuild_in_fold<'c>(
     source: &'c KFunction<'c>,
-    handle: RegionHandle<'c, KoanStorageProfile>,
+    handle: RegionHandle<'c>,
     scope: &'c Scope<'c>,
     anchored: Option<usize>,
-    placement: FoldedPlacement<'c, KoanStorageProfile>,
+    placement: FoldedPlacement<'c>,
 ) -> &'c KFunction<'c> {
     let mut memo = CopiedScopes::new();
     let anchor = anchored.map(|address| {
@@ -439,13 +440,7 @@ fn rebuild_in_fold<'c>(
 /// The destination operand a callable rebuild folds into: `attach`'s own region handle beside
 /// `attach` itself. The pair is what carries both facts one fold needs — the region to build in and
 /// the scope to capture — through a combinator that takes exactly one destination.
-fn destination_operand<'b>(
-    attach: &'b Scope<'b>,
-) -> crate::witnessed::Delivered<
-    RegionScopeFamily,
-    crate::machine::CarrierWitness,
-    crate::machine::core::FrameStorage,
-> {
+fn destination_operand<'b>(attach: &'b Scope<'b>) -> crate::memory::Delivered<RegionScopeFamily> {
     attach.deliver_resident::<RegionScopeFamily>((attach.brand().handle(), attach))
 }
 

@@ -8,8 +8,8 @@ use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifie
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{MACHINE_BINDERS, SignaturePosition, SignatureScan};
 use crate::machine::{KError, KErrorKind};
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::source::Spanned;
-use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
 /// `Unbound` against a parameter name.

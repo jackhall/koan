@@ -1,9 +1,9 @@
 //! Basic dispatch ordering and inter-expression lookup.
 
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::model::{ExpressionPart, KExpression};
+use crate::memory::{program_storage, run_root_storage};
 use crate::source::Spanned;
 
 use super::{let_expr, working};

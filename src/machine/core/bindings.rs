@@ -54,23 +54,18 @@
 //! `chain_cutoff` computed via [`crate::machine::core::LexicalFrame::index_for`].
 //! Raw map accessors are `#[cfg(test)]`.
 
-use allocator_api2::alloc::{Allocator, Global};
-use allocator_api2::vec::Vec as AllocVec;
+use crate::memory::AllocVec;
+use crate::memory::{Allocator, Global};
 #[cfg(test)]
 use std::cell::Ref;
 use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
 
-use crate::machine::CarrierWitness;
-use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
-use crate::machine::core::RegionBrand;
 use crate::machine::core::StatementId;
 use crate::machine::core::seals::{GroupSeal, OverloadSeal};
 #[cfg(test)]
 use crate::machine::model::BindKind;
-use crate::machine::model::CarriedFamily;
-use crate::machine::model::object_copy_cost;
 use crate::machine::model::{
     BinderSymbol, IdentityBuildHasher, KeywordSymbol, RunRegistries, TypeSymbol, ValueSymbol,
     render_label,
@@ -79,12 +74,16 @@ use crate::machine::model::{
     DispatchTokenElement, KeyElement, render_untyped_key, summarize_dispatch,
 };
 use crate::machine::model::{KType, UntypedKey};
+use crate::memory::BumpBackedMap;
+use crate::memory::CarriedFamily;
+use crate::memory::DeliveredCarried;
+use crate::memory::RegionBrand;
+use crate::memory::Sealed;
+use crate::memory::object_copy_cost;
 use crate::memory::{
     BumpVec, DeliveredFunction, DeliveredOperatorGroup, SealedFunction, SealedOperatorGroup,
     bump_table, reattachable,
 };
-use crate::witnessed::BumpBackedMap;
-use crate::witnessed::Sealed;
 
 use super::kerror::{KError, KErrorKind};
 
@@ -101,8 +100,8 @@ pub(crate) use ops::{TypeWritePolicy, WriteOp, powerset_probes};
 /// for it at bind time. The entry owns no pins — the binding scope's **region** owns the one deduped
 /// union bundle that keeps every reached region alive for the region's life, so a read hands out a
 /// bit-copy of this seal with no refcount traffic and the value can only be re-anchored under a pin
-/// ([`Sealed::open_at`], the [`Delivered`](crate::machine::DeliveredCarried) lift).
-pub type SealedValue<'home> = Sealed<'home, CarriedFamily, CarrierWitness>;
+/// ([`Sealed::open_at`], the [`Delivered`](crate::memory::DeliveredCarried) lift).
+pub type SealedValue<'home> = Sealed<'home, CarriedFamily>;
 
 /// Outcome of a single-scope name lookup: the name is `Bound` to a `T`, or `Parked` on the
 /// [`ProducerId`] of an earlier still-finalizing binder for the name — the producer a consumer
@@ -241,10 +240,10 @@ pub enum MemberResolution<'a> {
 /// dies with the pop; the default stands for a caller that has no arena in reach.
 pub struct FunctionLookup<'a, A: Allocator = Global> {
     /// The visible finalized overloads, each a bit-copy of the bucket's dormant carrier — value and
-    /// proven reach as one unit, re-anchored only by an [`open`](crate::witnessed::Sealed::open_at)
+    /// proven reach as one unit, re-anchored only by an [`open`](crate::memory::Sealed::open_at)
     /// under a named pin. Copied out so no caller holds the `functions` borrow across a candidate
     /// walk.
-    pub overloads: allocator_api2::vec::Vec<SealedFunction<'a>, A>,
+    pub overloads: AllocVec<SealedFunction<'a>, A>,
     pub pending: Option<ProducerId>,
 }
 
@@ -666,11 +665,11 @@ impl<'a> Bindings<'a> {
         let pending = tables.claims.bucket_claim(key, cutoff);
         let Some(bucket) = tables.functions.get(key) else {
             return FunctionLookup {
-                overloads: allocator_api2::vec::Vec::new_in(alloc),
+                overloads: AllocVec::new_in(alloc),
                 pending,
             };
         };
-        let mut overloads = allocator_api2::vec::Vec::with_capacity_in(bucket.len(), alloc);
+        let mut overloads = AllocVec::with_capacity_in(bucket.len(), alloc);
         for entry in bucket
             .iter()
             .filter(|entry| Self::visible(entry.index, cutoff))

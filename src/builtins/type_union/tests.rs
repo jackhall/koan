@@ -1,7 +1,7 @@
 use crate::builtins::test_support::{TestRun, operator_run};
 use crate::machine::model::ReductionMode;
 use crate::machine::model::{KType, TypeNode};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// AC7: `|` is registered as a single-member `Unary`-mode operator group, so a `|` run reduces
 /// through the unary reducer (`[Keyword("|"), ListLiteral(members)]`) into the constructor.

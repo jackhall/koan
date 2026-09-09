@@ -25,9 +25,6 @@ pub mod step_fixture;
 /// beside it reaches Koan through [`memory`], never from here.
 pub use workgraph::scheduler;
 
-/// Temporary re-export while the import sweep lands — deleted at the end of phase 2.
-pub use workgraph::witnessed;
-
 /// Crate-wide test scaffolding: installs the counting global allocator from
 /// [`audit/counting_alloc.rs`](../audit/counting_alloc.rs) for the lib-test binary and exposes
 /// the thread-local tally the relocation path's fixed-cost measurements read. Its only consumer

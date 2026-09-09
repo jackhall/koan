@@ -14,10 +14,12 @@
 //! context for free — so the body reads `(name, Held::Type)` entries directly: no lazy
 //! binding slot, no `AwaitDeps`.
 
-use crate::machine::model::{Held, KObject, KType, TypeNode, TypeSymbol};
+use crate::machine::model::{KObject, KType, TypeNode, TypeSymbol};
+
 use crate::machine::model::{display_label, render_label};
 use crate::machine::{KError, KErrorKind};
-use crate::witnessed::BumpVec;
+use crate::memory::BumpVec;
+use crate::memory::Held;
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
@@ -141,7 +143,7 @@ mod tests {
     use crate::builtins::test_support::lookup_type;
     use crate::builtins::test_support::{TestRun, type_name, value_name};
     use crate::machine::model::{KType, TypeNode};
-    use crate::machine::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
 
     /// `WITH` folds the pin into the schema: the abstract member becomes a manifest one fixed to
     /// the pinned type, so the specialized interface is a fully concrete schema, distinct from

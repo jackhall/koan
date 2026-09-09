@@ -1,9 +1,11 @@
 use std::rc::Rc;
 
-use crate::machine::core::{FoldingBrand, FrameStorage, KoanStorageProfile};
-use crate::machine::model::CarriedFamily;
-use crate::machine::model::{Carried, KType};
-use crate::machine::{DeliveredCarried, KError, KErrorKind};
+use crate::machine::model::KType;
+use crate::machine::{KError, KErrorKind};
+use crate::memory::Carried;
+use crate::memory::CarriedFamily;
+use crate::memory::DeliveredCarried;
+use crate::memory::{FoldingBrand, FrameStorage, KoanStorageProfile};
 
 use super::harness::Host;
 use super::obligation::ReturnObligation;
@@ -18,7 +20,7 @@ enum Disposition {
     PassThrough,
     /// The value is rebuilt in its own region: re-stamped to the declared type when `restamp`,
     /// then rewritten across the ascription barrier when the obligation carries a coercion. Both
-    /// legs ride one [`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place),
+    /// legs ride one [`Delivered::restamp_in_place`](crate::memory::Delivered::restamp_in_place),
     /// so a coerced return costs the same single re-anchor an ordinary re-stamp does.
     Rebuild {
         restamp: bool,
@@ -34,7 +36,7 @@ enum Disposition {
 /// Peer of [`copy_carried`](super::lift::copy_carried): both are Done-boundary workload hooks.
 pub(in crate::machine::execute) trait NodeFinalize {
     /// A satisfying non-union object re-stamps to the declared type **in place, in the producer's
-    /// own region** ([`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place)):
+    /// own region** ([`Delivered::restamp_in_place`](crate::memory::Delivered::restamp_in_place)):
     /// no bytes move and residence is unchanged, because the delivery walk that consumes the
     /// envelope is what moves the value. A union return and a type value pass through un-restamped;
     /// a mismatch raises.

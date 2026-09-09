@@ -13,7 +13,7 @@
 
 use crate::builtins::test_support::{TestRun, lookup_module, type_name};
 use crate::machine::model::{KObject, KType, TypeNode};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The shared fixture: an identity-wrapper family `Wrapper`, a first-order newtype `Carrier`, and
 /// a signature naming both through abstract members — so one module exercises an applied

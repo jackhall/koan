@@ -3,7 +3,7 @@
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, probe_symbol};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// `LET MyList = :(LIST OF Number)` writes the elaborated `KType::list(Number)`
 /// to `bindings.types` (reachable via `Scope::resolve_type`); the `Held::Type`

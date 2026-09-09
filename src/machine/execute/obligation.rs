@@ -10,9 +10,9 @@
 
 use std::rc::Rc;
 
-use crate::machine::CallFrame;
 use crate::machine::core::{KFunction, ReturnContract};
 use crate::machine::model::{KType, MemberCoercion, ReturnType};
+use crate::memory::CallFrame;
 
 use super::outcome::DeferredTraceFrame;
 

@@ -8,8 +8,8 @@
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
+use crate::memory::{program_storage, run_root_storage};
 
 /// Assert `err` is `NestedBinder`, with a readable failure otherwise.
 fn assert_nested_binder(err: crate::machine::KError, position: &str) {

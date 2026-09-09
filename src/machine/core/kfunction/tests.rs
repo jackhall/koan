@@ -4,17 +4,18 @@ use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, marker, run_root_bare};
 use crate::builtins::test_support::{identifier_part, kw_part};
-use crate::machine::core::{FrameStorageExt, Scope, program_storage, run_root_storage};
+use crate::machine::core::Scope;
 use crate::machine::model::KLiteral;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureDraft};
 use crate::machine::model::{KKind, KObject};
+use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
 
 fn body_any<'a>(ctx: &super::action::BodyCtx<'_, 'a, '_>) -> super::action::Action<'a> {
     super::action::Action::done_resident(
         ctx.scope,
-        crate::machine::model::Carried::Object(marker(ctx.scope, "any")),
+        crate::memory::Carried::Object(marker(ctx.scope, "any")),
     )
 }
 

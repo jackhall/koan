@@ -68,7 +68,7 @@ pub struct PayloadLayout;
 /// construction — no interior cell writes exist anywhere in the runtime, which is also what keeps a
 /// run's description from ever drifting out of exactness with the cells it covers. Born only through
 /// the branded door
-/// ([`FoldingBrand::alloc_substrate_folded`](crate::machine::core::FoldingBrand::alloc_substrate_folded)),
+/// ([`FoldingBrand::alloc_substrate_folded`](crate::memory::FoldingBrand::alloc_substrate_folded)),
 /// which stores the substrate and hands back a co-located borrow — the cells, their runs and the
 /// memos ride together.
 ///
@@ -148,7 +148,7 @@ impl<'a, C> ContainerSubstrate<'a, C> {
     /// keep. The seam's cost decision asks it to tell a home crossing from a foreign one; a pin-bind
     /// can separate that home from the residence of a wrapper value sharing the substrate, which is
     /// why the question is asked of the substrate and not of the value around it.
-    pub fn homed_in(&self, region: &crate::machine::core::KoanRegion) -> bool {
+    pub fn homed_in(&self, region: &crate::memory::KoanRegion) -> bool {
         self.reach
             .with_home_region(|home| std::ptr::eq(home, region))
     }

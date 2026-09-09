@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 
 use super::{LAZY_SLOT_SPECS, LazyKinds, LazySlotSpec};
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::key_spec::{key_matches_untyped, key_specs_agree, render_key};
 use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry, UntypedKey};
+use crate::memory::{program_storage, run_root_storage};
 use crate::parse::parse;
 
 /// The kind an exact raw-capture slot type stands for; `None` for a slot type that captures

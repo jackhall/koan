@@ -1,7 +1,7 @@
 use super::{WorkingExpression, WorkingPart};
 use crate::builtins::test_support::{parse_one, probe_symbol};
-use crate::machine::core::program_storage;
 use crate::machine::model::ast::ExpressionPart;
+use crate::memory::program_storage;
 use crate::source::Spanned;
 
 /// The splice door inherits the structural cache instead of rebuilding it: the bucket key comes

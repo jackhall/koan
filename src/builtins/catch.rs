@@ -74,13 +74,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 /// Watches the captured `expr` and recovers into a `Result` carrier
 /// (`Result.Ok v` / `Result.Error <lowered KError>`) via a `Catch` finish.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::FoldingBrand;
-    use crate::machine::RegionTypeFamily;
     use crate::machine::build_type_operand;
-    use crate::machine::core::SubstrateDoor;
-    use crate::machine::model::Carried;
-    use crate::machine::model::CarriedFamily;
     use crate::machine::{Action, DepPlacement, DepRequest, require_kexpression};
+    use crate::memory::Carried;
+    use crate::memory::CarriedFamily;
+    use crate::memory::FoldingBrand;
+    use crate::memory::RegionTypeFamily;
+    use crate::memory::SubstrateDoor;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", &SLOTS.expr));
     // Capture the prelude `Result` members at body time so the CATCH value carries the same
     // nominal identity a `Result.Ok` / `Result.Error` projection constructs under.
@@ -89,7 +89,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // CATCH costs no heap allocation for its recovery.
     let finish =
         move |fctx: &crate::machine::FinishCtx<'a, '_>,
-              result: Result<crate::machine::DeliveredCarried, crate::machine::KError>| {
+              result: Result<crate::memory::DeliveredCarried, crate::machine::KError>| {
             // Wrap `payload` under the selected `Result` member at the build brand `'x`,
             // allocating the payload substrate through the fold `door`. `wrapped_hold`, never
             // `wrapped_peel`: an `Error`'s payload is itself a `Wrapped` (the kind member over its

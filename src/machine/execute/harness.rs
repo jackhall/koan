@@ -13,30 +13,29 @@
 //! See [execution](../../../design/execution/README.md) and
 //! [memory-model](../../../design/memory-model.md).
 
-use allocator_api2::alloc::{Allocator, Global};
-use allocator_api2::vec::Vec as AllocVec;
+use crate::memory::AllocVec;
+use crate::memory::{Allocator, Global};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::KoanStorageProfile;
+use crate::machine::core::ScopeRefFamily;
 use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::{BlockEntry, BlockRequest, DepPlacement, FramePlacement, ScopeId};
-use crate::machine::core::{ProgramBrand, RegionBrand, ScopeRefFamily};
-use crate::machine::model::CarriedFamily;
 use crate::machine::model::{
     ExpressionPart, KExpression, LabelInterner, Part, PartClass, WorkingExpression, WorkingPart,
 };
-use crate::machine::{
-    BindingIndex, CallFrame, DeliveredCarried, FrameCoverage, Installer, KError, KErrorKind,
-    LexicalFrame, NodeId, Scope,
-};
+use crate::machine::{BindingIndex, Installer, KError, KErrorKind, LexicalFrame, NodeId, Scope};
+use crate::memory::CarriedFamily;
+use crate::memory::KoanStorageProfile;
+use crate::memory::{BumpAllocator, BumpVec, SealedExtern, Within, erase_to_static};
+use crate::memory::{CallFrame, DeliveredCarried, FrameCoverage};
+use crate::memory::{ProgramBrand, RegionBrand};
 use crate::scheduler::{
     Anchor, Dep, Deps, DrainDeadlock, EdgeId, InstalledEdge, Scheduler, Step, StepVerdict, Workload,
 };
 use crate::scheduler::{DeliveryDestination, SealedTerminal};
-use crate::witnessed::{BumpAllocator, BumpVec, SealedExtern, Within, erase_to_static};
 
 use super::ambient::AmbientContext;
 use super::decide::{
@@ -266,7 +265,7 @@ impl<'run> KoanRuntime<'run> {
     pub(crate) fn read_edge_result_with<R>(
         &self,
         edge: EdgeId,
-        f: impl for<'b> FnOnce(crate::machine::model::Carried<'b>) -> R,
+        f: impl for<'b> FnOnce(crate::memory::Carried<'b>) -> R,
     ) -> Result<R, &KError> {
         self.sched.read_edge_result_with(edge, f)
     }
@@ -698,7 +697,7 @@ impl<'run> Host<'run> {
 
 /// Erase a step-branded replacement's continuation into the `Replace` verdict: the continuation is
 /// **stored**, never used, until the drain seals it against the slot's effective anchor
-/// ([`SealedPinned::erase`](crate::witnessed::SealedPinned)) and the next step re-anchors it at a
+/// ([`SealedPinned::erase`](crate::memory::SealedPinned)) and the next step re-anchors it at a
 /// fresh brand.
 fn replace_verdict(
     work: NodeWork<'_, KoanWorkload>,
@@ -847,7 +846,7 @@ impl<'run> Host<'run> {
     fn mint_source_at(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
-        destination: &Rc<crate::machine::FrameStorage>,
+        destination: &Rc<crate::memory::FrameStorage>,
         producer: NodeId,
         minted: &mut AllocVec<EdgeId, impl Allocator>,
     ) -> EdgeId {

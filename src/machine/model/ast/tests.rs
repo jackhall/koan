@@ -1,5 +1,4 @@
 use crate::builtins::test_support::{kw_part, probe_symbol, type_name, type_token};
-use crate::machine::core::{ProgramBrand, program_storage};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, classify_dispatch_shape,
@@ -8,6 +7,7 @@ use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::memory::Held;
+use crate::memory::{ProgramBrand, program_storage};
 use crate::source::Spanned;
 
 fn kw(s: &str) -> ExpressionPart<'_> {
@@ -78,7 +78,7 @@ fn build<'a>(brand: ProgramBrand<'a>, items: Vec<ExpressionPart<'a>>) -> KExpres
 
 #[test]
 fn resolve_for_lowers_builtin_leaf_to_type_arm() {
-    let storage = crate::machine::core::run_root_storage();
+    let storage = crate::memory::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let registries = RunRegistries::new();
     let part = ExpressionPart::Type(type_token("Number"));
@@ -95,7 +95,7 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
 /// minted for an unresolved name.
 #[test]
 fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
-    let storage = crate::machine::core::run_root_storage();
+    let storage = crate::memory::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let registries = RunRegistries::new();
     let part = ExpressionPart::Type(type_name("MyType", &registries));
@@ -115,7 +115,7 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
 /// name keeps riding the type channel exactly where the lowered arm did.
 #[test]
 fn unresolved_carrier_classifies_as_a_proper_type() {
-    let storage = crate::machine::core::run_root_storage();
+    let storage = crate::memory::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let registries = RunRegistries::new();
     let types = &registries.types;
@@ -651,7 +651,7 @@ fn debug_for_expression_part_and_kexpression() {
 /// and the two name members ride `Held::Name` carrying the class the parser assigned the token.
 #[test]
 fn resolve_for_captures_through_a_union_carrier_member() {
-    let storage = crate::machine::core::run_root_storage();
+    let storage = crate::memory::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let program = program_storage();
     let brand = program.brand();
@@ -690,7 +690,7 @@ fn resolve_for_captures_through_a_union_carrier_member() {
 /// lowered exactly as it is at the bare kind slot — never captured raw as a name.
 #[test]
 fn resolve_for_lowers_a_type_token_through_a_kind_member() {
-    let storage = crate::machine::core::run_root_storage();
+    let storage = crate::memory::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let registries = RunRegistries::new();
     let types = &registries.types;

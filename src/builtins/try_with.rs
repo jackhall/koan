@@ -18,7 +18,8 @@ use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 
 use crate::machine::model::KType;
-use crate::machine::{DeliveredCarried, KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
+use crate::memory::DeliveredCarried;
 
 use super::branch_walk::find_branch_body_for_member;
 use super::{arg, arg_labeled, kw, sig};
@@ -92,7 +93,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 Err(e) => {
                     let envelope = e.to_wrapped_delivered(fctx.scope, fctx.registries);
                     let member = envelope.open(|carried| match carried {
-                        crate::machine::model::Carried::Object(object) => object.ktype(),
+                        crate::memory::Carried::Object(object) => object.ktype(),
                         _ => unreachable!("KError::to_wrapped always returns an object"),
                     });
                     (member, payload_envelope(&envelope), Some(e))

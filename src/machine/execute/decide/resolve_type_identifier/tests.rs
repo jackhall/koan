@@ -1,6 +1,6 @@
 use super::*;
 use crate::builtins::test_support::{TestRun, type_name, type_token};
-use crate::machine::core::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 #[test]
 fn resolve_type_expr_builtin_leaf_resolves_stably() {
@@ -132,11 +132,11 @@ mod bare_leaf_resolution {
     use crate::builtins::test_support::{
         binder_name, mock_declaration_site, run_root_bare, type_name, type_token,
     };
-    use crate::machine::core::run_root_storage;
     use crate::machine::core::{BindingIndex, DeclarationSite};
     use crate::machine::model::KType;
     use crate::machine::model::RunRegistries;
     use crate::machine::model::TypeResolution;
+    use crate::memory::run_root_storage;
 
     #[test]
     fn builtin_synthesizes_type_carrier() {

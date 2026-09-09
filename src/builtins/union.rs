@@ -324,11 +324,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 mod tests {
     use crate::builtins::test_support::{TestRun, mock_declaration_site, parse_one, type_name};
     use crate::builtins::test_support::{lookup_type, type_token};
-    use crate::machine::model::Carried;
     use crate::machine::model::KType;
     use crate::machine::model::{KKind, NodeSchema, RecursiveGroupWindow, TypeNode, TypeRegistry};
     use crate::machine::{KErrorKind, Scope};
-    use crate::machine::{program_storage, run_root_storage};
+    use crate::memory::Carried;
+    use crate::memory::{program_storage, run_root_storage};
 
     /// The newtype repr of union `name`'s `variant` member — each variant is a per-tag newtype
     /// `SetMember`, and its schema's `NewType` repr is the field type.

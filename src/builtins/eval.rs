@@ -1,8 +1,9 @@
 use crate::machine::WriteGate;
 use std::rc::Rc;
 
+use crate::machine::Scope;
 use crate::machine::model::KType;
-use crate::machine::{CallFrame, Scope};
+use crate::memory::CallFrame;
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
@@ -64,8 +65,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 mod tests {
     use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
 
     fn run_program(source: &str) -> Vec<u8> {
         let program = program_storage();

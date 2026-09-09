@@ -12,7 +12,7 @@ use crate::builtins::test_support::{
 };
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, SigSchema, TypeNode};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The running example: an inner interface over one abstract member, an outer interface whose
 /// only slot is a list of inners pinned to the outer's own `Elt`, and two modules — one supplying

@@ -8,7 +8,8 @@ use std::rc::Rc;
 
 use koan::builtins::test_support::{SharedBuf, TestRun, lookup_binding};
 use koan::machine::model::KObject;
-use koan::machine::{KError, KErrorKind, program_storage, run_root_storage};
+use koan::machine::{KError, KErrorKind};
+use koan::memory::{program_storage, run_root_storage};
 
 fn run_collecting_errors(test_run: &mut TestRun<'_>, source: &str) -> Vec<Result<(), KError>> {
     let scope = test_run.scope;

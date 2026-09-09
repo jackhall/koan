@@ -31,16 +31,16 @@
 
 use std::mem::ManuallyDrop;
 
-use allocator_api2::alloc::Allocator;
-use allocator_api2::vec::Vec as AllocVec;
+use crate::memory::AllocVec;
+use crate::memory::Allocator;
 
 use crate::machine::ProducerId;
-use crate::machine::core::RegionBrand;
 use crate::machine::model::KeyElement;
 #[cfg(test)]
 use crate::machine::model::UntypedKey;
 use crate::machine::model::{IdentityBuildHasher, Symbol};
-use crate::witnessed::{BumpBackedMap, BumpVec};
+use crate::memory::RegionBrand;
+use crate::memory::{BumpBackedMap, BumpVec};
 
 use super::{BindingIndex, Bindings};
 use crate::memory::bump_table;

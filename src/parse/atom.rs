@@ -20,10 +20,10 @@ use std::str::CharIndices;
 use smallvec::SmallVec;
 
 use crate::machine::KError;
-use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 use crate::machine::model::{is_keyword_token, is_type_name};
+use crate::memory::ProgramBrand;
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
 
@@ -353,9 +353,9 @@ fn read_atom<'a>(
 #[cfg(test)]
 mod tests {
     use super::classify_token;
-    use crate::machine::core::program_storage;
     use crate::machine::model::ast::{ExpressionPart, KLiteral};
     use crate::machine::model::labels::LabelInterner;
+    use crate::memory::program_storage;
 
     fn describe(p: &ExpressionPart<'_>, labels: &LabelInterner) -> String {
         match p {

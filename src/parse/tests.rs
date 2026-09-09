@@ -16,9 +16,9 @@ mod value_sigil;
 
 use super::lower::lower_run_for_tests;
 use super::parse;
-use crate::machine::core::program_storage;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::labels::LabelInterner;
+use crate::memory::program_storage;
 
 pub(super) fn describe(e: &KExpression<'_>, labels: &LabelInterner) -> String {
     fn describe_part(p: &ExpressionPart<'_>, labels: &LabelInterner) -> String {

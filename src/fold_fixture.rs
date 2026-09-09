@@ -16,14 +16,15 @@
 //! `#[doc(hidden)]` and `pub` only because trybuild fixtures import it; it is not part of
 //! koan's real surface.
 
-use crate::machine::core::FrameStorageExt;
 use crate::machine::execute::drive_step_allocator;
 use crate::machine::model::Scalar;
-use crate::machine::run_root_storage;
+use crate::memory::FrameStorageExt;
+use crate::memory::run_root_storage;
 
-pub use crate::machine::DeliveredCarried;
-pub use crate::machine::core::{FoldingBrand, FrameStorage};
-pub use crate::machine::model::{Carried, KObject};
+pub use crate::machine::model::KObject;
+pub use crate::memory::Carried;
+pub use crate::memory::DeliveredCarried;
+pub use crate::memory::{FoldingBrand, FrameStorage};
 
 /// Run `f` with a [`KObject`] borrowed at an **ambient** (non-`'static`) lifetime — an object
 /// resident in a fixture-owned region, the exact shape a fold closure must not smuggle into the

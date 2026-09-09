@@ -6,9 +6,9 @@
 //! `single_or_wrapped`.
 
 use crate::machine::KError;
-use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::labels::{BinderSymbol, LabelInterner};
+use crate::memory::ProgramBrand;
 use crate::source::Spanned;
 
 pub(super) struct DictFrame<'a> {

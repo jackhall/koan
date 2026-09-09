@@ -5,7 +5,7 @@
 use crate::builtins::test_support::{TestRun, lookup_module};
 use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// `SIG Wide` requires everything `SIG Base` does, plus more (`Wide` strictly `sig_subtype`s
 /// `Base`), so `Wide` is strictly more specific: a module satisfying both dispatches to the

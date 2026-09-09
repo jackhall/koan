@@ -5,8 +5,9 @@
 //! bodyless head additionally declares.
 
 use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_type};
+use crate::machine::KErrorKind;
 use crate::machine::model::{DispatchTokenElement, KObject, KType, SigSchema, TypeNode};
-use crate::machine::{KErrorKind, program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The stored schema of the signature `name` binds in `scope`.
 fn sig_schema(

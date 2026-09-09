@@ -6,9 +6,9 @@
 //! it is minted.
 
 use super::super::parse;
-use crate::machine::core::program_storage;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{KeywordSymbol, LabelInterner};
+use crate::memory::program_storage;
 
 /// Both keyword spellings — alphabetic tokens and pure-symbol operator glyphs — resolve back out
 /// of the interner the parse was handed.

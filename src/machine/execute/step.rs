@@ -340,7 +340,7 @@ mod tests {
         // brand (not a transient `with_scope` sub-brand), so the reference escapes at the frame's own
         // lifetime.
         let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
+        let owned_cells = crate::memory::FrameCoverage::empty();
         let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             producer_frame.brand().handle(),
         ))

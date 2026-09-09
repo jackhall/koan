@@ -70,6 +70,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::Scope;
 use crate::machine::execute::deps_on;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeResolution;
@@ -78,12 +79,13 @@ use crate::machine::model::{
     ExpressionPart, KExpression, KObject, KType, KeyElement, KeywordSymbol, TypeSymbol,
     ValueSymbol, WILDCARD, render_label, render_untyped_key,
 };
-use crate::machine::{Action, AwaitContinue, CallFrame, DeliveredCarried, WriteGate};
+use crate::machine::{Action, AwaitContinue, WriteGate};
 use crate::machine::{BindingIndex, DeclarationSite};
-use crate::machine::{DeliveredFunction, DeliveredOperatorGroup, Scope};
 use crate::machine::{HitTier, KError, KErrorKind, LexicalFrame, NameLookup, ProducerId};
 use crate::machine::{fresh_cart_tail, seed};
-use crate::witnessed::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{CallFrame, DeliveredCarried};
+use crate::memory::{DeliveredFunction, DeliveredOperatorGroup};
 
 use super::{arg, kw, sig};
 

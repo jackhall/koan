@@ -8,7 +8,7 @@
 //! names an edge that walk released.
 
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// Unconditional reclamation, end to end: run a program with nested blocks and spawned sub-slots, then
 /// confirm the slot store's free list holds every index it ever minted. Finalize ends a slot and

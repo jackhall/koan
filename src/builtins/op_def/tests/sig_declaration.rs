@@ -9,7 +9,7 @@ use crate::machine::KErrorKind;
 use crate::machine::model::{
     DeclaredGroup, KType, KeyElement, KeywordSymbol, ReductionMode, SigSchema, TypeNode, UntypedKey,
 };
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The stored schema of the signature `name` binds in `scope`.
 fn sig_schema(

@@ -3,7 +3,7 @@ use crate::builtins::test_support::{TestRun, binds_module, type_name, value_name
 use crate::machine::model::Symbol;
 use crate::machine::model::{KType, SigSchema, TypeNode, TypeRegistry};
 use crate::machine::{KErrorKind, ScopeId};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The stored schema of the signature `name` binds in `scope`.
 fn sig_schema(scope: &crate::machine::Scope<'_>, types: &TypeRegistry, name: &str) -> SigSchema {

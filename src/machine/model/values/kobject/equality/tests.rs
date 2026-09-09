@@ -4,7 +4,6 @@ use std::rc::Rc;
 use crate::builtins::test_support::type_name;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{identifier_part, kw_part};
-use crate::machine::core::program_storage;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeMemberMap;
 use crate::machine::model::TypeRegistry;
@@ -12,6 +11,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KKind, KType, Record, RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::{KKey, KObject, ValueEqualityError};
 use crate::memory::Held;
+use crate::memory::program_storage;
 use crate::source::Spanned;
 
 fn num<'a>(n: f64) -> KObject<'a> {
@@ -38,10 +38,10 @@ fn newtype_singleton(name: &str, repr: KType, types: &TypeRegistry) -> KType {
 /// a return.
 macro_rules! container_door {
     ($storage:ident, $door:ident) => {
-        use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
-        use crate::witnessed::FoldedPlacement;
+        use crate::memory::FoldedPlacement;
+        use crate::memory::{FoldingBrand, FrameStorageExt, run_root_storage};
         let $storage = run_root_storage();
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
+        let owned_cells = crate::memory::FrameCoverage::empty();
         let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             $storage.brand().handle(),
         ))
@@ -160,7 +160,7 @@ fn list_of_types_compares_by_digest() {
 // --- dicts ------------------------------------------------------------------------
 
 fn dict<'a>(
-    door: crate::machine::core::SubstrateDoor<'a, '_>,
+    door: crate::memory::SubstrateDoor<'a, '_>,
     pairs: Vec<(KKey, KObject<'a>)>,
     types: &TypeRegistry,
 ) -> KObject<'a> {
@@ -220,7 +220,7 @@ fn dict_length_mismatch_is_false() {
 // --- records ----------------------------------------------------------------------
 
 fn record<'a>(
-    door: crate::machine::core::SubstrateDoor<'a, '_>,
+    door: crate::memory::SubstrateDoor<'a, '_>,
     pairs: Vec<(&str, KObject<'a>)>,
     types: &TypeRegistry,
 ) -> KObject<'a> {
@@ -411,13 +411,14 @@ fn kexpression_length_and_variant_mismatch() {
 /// A function value allocated in `storage`, closing over `scope` — the run root's own scope, so
 /// the value is the one a real run would build.
 fn a_function<'a>(
-    storage: &'a Rc<crate::machine::core::FrameStorage>,
+    storage: &'a Rc<crate::memory::FrameStorage>,
     scope: &'a crate::machine::Scope<'a>,
     registries: &RunRegistries,
 ) -> KObject<'a> {
     use crate::machine::KFunction;
-    use crate::machine::core::{Body, FrameStorageExt};
+    use crate::machine::core::Body;
     use crate::machine::model::types::{ReturnType, SignatureDraft};
+    use crate::memory::FrameStorageExt;
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: Vec::new(),
@@ -434,7 +435,7 @@ fn a_function<'a>(
 #[test]
 fn function_operand_is_error_at_any_position() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::run_root_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let storage = run_root_storage();
     let test_run = TestRun::silent(&program, &storage);
@@ -452,10 +453,10 @@ fn function_operand_is_error_at_any_position() {
     let program2 = program_storage();
     let storage2 = run_root_storage();
     let second_run = TestRun::silent(&program2, &storage2);
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let door = {
-        use crate::machine::core::{FoldingBrand, FrameStorageExt};
-        use crate::witnessed::FoldedPlacement;
+        use crate::memory::FoldedPlacement;
+        use crate::memory::{FoldingBrand, FrameStorageExt};
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage2.brand().handle()))
             .with_holder(&owned_cells)
     };
@@ -484,15 +485,15 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     // The asymmetry the design accepts: a shape short-circuit that never reaches the banned
     // cell returns `Ok(false)` before any `Err`.
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::run_root_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let storage = run_root_storage();
     let test_run = TestRun::silent(&program, &storage);
     let types = test_run.registry_handle();
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let door = {
-        use crate::machine::core::{FoldingBrand, FrameStorageExt};
-        use crate::witnessed::FoldedPlacement;
+        use crate::memory::FoldedPlacement;
+        use crate::memory::{FoldingBrand, FrameStorageExt};
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage.brand().handle()))
             .with_holder(&owned_cells)
     };
@@ -510,9 +511,9 @@ fn length_mismatch_short_circuits_before_banned_cell() {
 #[test]
 fn module_operand_is_error() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::run_root_storage;
     use crate::machine::model::SigSchema;
     use crate::machine::model::values::{Module, ModuleDraft};
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let storage = run_root_storage();
     let test_run = TestRun::silent(&program, &storage);

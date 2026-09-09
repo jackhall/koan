@@ -5,8 +5,8 @@
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
-use crate::machine::program_storage;
-use crate::machine::run_root_storage;
+use crate::memory::program_storage;
+use crate::memory::run_root_storage;
 
 fn eval_bool(source_setup: &str, probe: &str) -> bool {
     let program = program_storage();

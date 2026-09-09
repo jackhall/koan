@@ -5,10 +5,10 @@ use std::collections::HashSet;
 
 use super::{BINDER_SPECS, BinderSpec, StoredBinderKey};
 use crate::builtins::test_support::{identifier_part, kw_part};
-use crate::machine::core::{ProgramBrand, RegionBrand, program_storage};
 use crate::machine::model::UntypedKey;
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
 use crate::machine::model::key_spec::key_matches_untyped;
+use crate::memory::{ProgramBrand, RegionBrand, program_storage};
 use crate::parse::parse;
 use crate::source::Spanned;
 
@@ -16,8 +16,8 @@ use crate::source::Spanned;
 
 /// Every bucket key the seeded root registers a callable under.
 fn live_buckets() -> HashSet<UntypedKey> {
-    let program = crate::machine::core::program_storage();
-    let storage = crate::machine::core::run_root_storage();
+    let program = crate::memory::program_storage();
+    let storage = crate::memory::run_root_storage();
     let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
     run.scope
         .ancestors()
@@ -159,8 +159,8 @@ fn every_masked_index_names_a_slot_position() {
 #[test]
 fn every_masked_index_is_a_raw_type_expression_slot() {
     use crate::machine::model::{KType, SignatureElement};
-    let program = crate::machine::core::program_storage();
-    let storage = crate::machine::core::run_root_storage();
+    let program = crate::memory::program_storage();
+    let storage = crate::memory::run_root_storage();
     let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
     let types = run.registry_handle();
     for spec in BINDER_SPECS {

@@ -162,7 +162,7 @@ pub(crate) fn register_overload_at<'a>(
 /// the root binding-free. Builtins resolve from any scope by walking `outer` to the root
 /// (the [`Scope::shadows_builtin_value`] no-shadow consult does the same).
 pub fn unseeded_scopes<'a>(
-    run_storage: &'a std::rc::Rc<crate::machine::FrameStorage>,
+    run_storage: &'a std::rc::Rc<crate::memory::FrameStorage>,
 ) -> (&'a Scope<'a>, &'a Scope<'a>) {
     let root = Scope::alloc_run_root(run_storage);
     let child = root.alloc_run_child();

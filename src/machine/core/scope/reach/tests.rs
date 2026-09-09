@@ -12,11 +12,13 @@ use crate::builtins::test_support::TestRun;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::Symbol;
-use crate::machine::model::{Held, ReturnType, SignatureDraft, SignatureElement, TypeRegistry};
-use crate::machine::{Body, CallFrame, KFunction};
-use crate::machine::{program_storage, run_root_storage};
+use crate::machine::model::{ReturnType, SignatureDraft, SignatureElement, TypeRegistry};
+use crate::machine::{Body, KFunction};
+use crate::memory::CallFrame;
+use crate::memory::Held;
 use crate::memory::RecordSubstrate;
-use crate::witnessed::{Delivered, FoldedPlacement, Sealed};
+use crate::memory::{Delivered, FoldedPlacement, Sealed};
+use crate::memory::{program_storage, run_root_storage};
 
 /// A `KFunction` whose captured scope lives in `home`'s region, allocated into `home`'s region — a
 /// borrow leaf pointing at `home`, the shape a closure capturing its own defining frame takes.
@@ -47,7 +49,7 @@ fn alloc_home_borrowing_record<'run>(
     types: &TypeRegistry,
 ) -> &'run KObject<'run> {
     let closure = alloc_home_closure(home);
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
@@ -111,7 +113,7 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
     // there with home as an ordinary member — what the producer's own birth mint would have stamped.
     let sealed = producer.seal_born_here(Carried::Object(record), true);
     let dep: DeliveredCarried = Delivered::lift(
-        crate::witnessed::Retained::from_sealed(Sealed::seal(sealed, producer.brand().handle())),
+        crate::memory::Retained::from_sealed(Sealed::seal(sealed, producer.brand().handle())),
         producer.storage_rc(),
     );
 
@@ -158,7 +160,7 @@ fn alloc_split_reach_record<'run>(
 ) -> &'run KObject<'run> {
     let here = alloc_home_closure(home);
     let there = alloc_home_closure(foreign);
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);

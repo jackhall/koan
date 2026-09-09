@@ -14,9 +14,10 @@ mod type_members;
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
+use crate::machine::model::KObject;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{Carried, KObject};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::Carried;
+use crate::memory::{program_storage, run_root_storage};
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
@@ -441,10 +442,12 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
     use std::rc::Rc;
 
     use crate::builtins::test_support::{per_call_storage, run_root_bare};
-    use crate::machine::core::{FoldingBrand, FrameStorageExt};
-    use crate::machine::model::{Held, RegionEscape, copy_or_pin};
-    use crate::machine::{BindingIndex, FrameCoverage};
-    use crate::witnessed::FoldedPlacement;
+    use crate::machine::BindingIndex;
+    use crate::machine::model::{RegionEscape, copy_or_pin};
+    use crate::memory::FoldedPlacement;
+    use crate::memory::FrameCoverage;
+    use crate::memory::Held;
+    use crate::memory::{FoldingBrand, FrameStorageExt};
 
     let module_storage = per_call_storage();
     let module_scope = run_root_bare(&module_storage);
@@ -453,7 +456,7 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
 
     // A plain-data record built in the module's own region: no leaf borrows home, so the chooser
     // has a real decision to make once the crossing is recognized as a home crossing at all.
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let owned_cells = crate::memory::FrameCoverage::empty();
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
         module_storage.brand().handle(),
     ))

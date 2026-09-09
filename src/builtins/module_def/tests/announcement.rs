@@ -7,7 +7,8 @@ use crate::builtins::test_support::{TestRun, lookup_module, type_name, type_toke
 use crate::machine::model::render_label;
 use crate::machine::model::{AnnouncedData, NodeSchema, TypeDigest, TypeNode, TypeRegistry};
 use crate::machine::model::{KExpression, KObject, KType};
-use crate::machine::{KErrorKind, Scope, program_storage, run_root_storage};
+use crate::machine::{KErrorKind, Scope};
+use crate::memory::{program_storage, run_root_storage};
 
 /// `(scc-digest, scc-size, field-types)` of a sealed record-repr newtype member, read off its
 /// `SetMember` identity. The SCC digest and component size witness which members sealed together;

@@ -17,8 +17,8 @@ use super::super::super::outcome::{
 };
 use crate::builtins::test_support::TestRun;
 use crate::machine::ProducerId;
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::{KError, KErrorKind};
+use crate::memory::{program_storage, run_root_storage};
 
 /// A park whose source edge is already filled with an **error** surfaces that producer's error,
 /// labelled with the park's own trace frame, and never runs the resume. The install door hands back

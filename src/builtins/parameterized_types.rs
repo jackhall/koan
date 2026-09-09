@@ -208,8 +208,8 @@ mod tests {
     use crate::builtins::test_support::{TestRun, type_name};
     use crate::machine::KErrorKind;
     use crate::machine::model::{KKind, KType, Record, TypeNode};
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
 
     #[test]
     fn list_of_number_lowers_to_list_number() {

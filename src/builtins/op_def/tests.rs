@@ -7,11 +7,11 @@ mod sig_declaration;
 
 use crate::builtins::test_support::{TestRun, binds_module};
 use crate::machine::KErrorKind;
-use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::RunRegistries;
-use crate::machine::program_storage;
-use crate::machine::run_root_storage;
+use crate::memory::Held;
+use crate::memory::program_storage;
+use crate::memory::run_root_storage;
 
 /// The numbers of a `KObject::List`, for the unary tests that collect a run into one list.
 fn list_numbers(object: &KObject<'_>, registries: &RunRegistries) -> Vec<f64> {

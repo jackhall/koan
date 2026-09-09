@@ -3,7 +3,7 @@
 //! with it the run frame they name as their destination — tears down.
 
 use super::*;
-use crate::machine::program_storage;
+use crate::memory::program_storage;
 use crate::parse::parse;
 
 /// After `run_program` returns, no slab edge is still outstanding: the root edges it minted are

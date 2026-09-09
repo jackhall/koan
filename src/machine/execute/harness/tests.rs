@@ -16,9 +16,9 @@ mod splice_walk;
 mod statement_binder_install;
 
 use crate::builtins::test_support::kw_part;
-use crate::machine::core::ProgramStorage;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::{WorkingExpression, WorkingPart};
+use crate::memory::ProgramStorage;
 use crate::parse::parse;
 use crate::source::Spanned;
 

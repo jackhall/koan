@@ -3,9 +3,10 @@
 use super::super::super::outcome::Outcome;
 use crate::builtins::test_support::TestRun;
 use crate::builtins::test_support::probe_symbol;
-use crate::machine::core::{program_storage, run_root_storage};
+use crate::machine::model::KObject;
 use crate::machine::model::ReturnType;
-use crate::machine::model::{Carried, KObject};
+use crate::memory::Carried;
+use crate::memory::{program_storage, run_root_storage};
 
 use super::{let_expr, working_one};
 
@@ -124,8 +125,8 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     // slot as a dep-finish and leaves it with the dep-finish's terminal.
     use crate::builtins::register_builtin;
     use crate::machine::core::{Action, AwaitContinue, BodyCtx};
-    use crate::machine::model::Carried;
     use crate::machine::model::{KType, SignatureDraft, SignatureElement};
+    use crate::memory::Carried;
 
     fn body<'run>(_ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
         let finish: AwaitContinue<'run> = Box::new(|fctx, _results| {

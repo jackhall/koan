@@ -1,16 +1,18 @@
 use std::fmt;
 
+use crate::machine::model::KObject;
 use crate::machine::model::WorkingExpression;
-use crate::machine::model::{Carried, CarriedFamily, KObject};
 use crate::machine::model::{StaticName, TypeSymbol};
+use crate::memory::RegionHandleFamily;
+use crate::memory::{Carried, CarriedFamily};
 use crate::source::{self, FileId, SourceLoc, SourceRef, Span};
-use crate::witnessed::RegionHandleFamily;
 
-use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
-use super::{KoanStorageProfile, Scope};
+use super::Scope;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::close_inference::DynamicNameForm;
 use crate::machine::model::labels::{BinderSymbol, ValueSymbol};
+use crate::memory::KoanStorageProfile;
+use crate::memory::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -273,7 +275,7 @@ impl KError {
     /// delivered carrier — the shape a caller with no fold already in hand needs: the payload's
     /// `Record` substrate can only be born through a fold door, so this drives a zero-dep one over
     /// `scope`'s frame. The seed operand is a bare handle into that same region,
-    /// so [`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place) builds the
+    /// so [`Delivered::restamp_in_place`](crate::memory::Delivered::restamp_in_place) builds the
     /// value where it already belongs and mints its description there: the region is the value's
     /// host *and* one of its members, since the freshly born substrate borrows into it. A consumer
     /// adopting this envelope under a copying seam therefore correctly retains `scope`'s frame.
@@ -285,12 +287,11 @@ impl KError {
         let frame = scope.frame();
         // The seed is a bare region handle living in this scope's own region — it borrows nothing,
         // so it seals resident under an empty foreign bundle.
-        let seed = scope
-            .deliver_resident::<RegionHandleFamily<KoanStorageProfile>>(scope.brand().handle());
+        let seed = scope.deliver_resident::<RegionHandleFamily>(scope.brand().handle());
         seed.restamp_in_place::<CarriedFamily, KoanStorageProfile>(
             &frame,
             |_handle, _dest, placement| {
-                let owned_cells = crate::machine::core::FrameCoverage::empty();
+                let owned_cells = crate::memory::FrameCoverage::empty();
                 let brand = FoldingBrand::in_fold_closure(placement);
                 Carried::Object(brand.alloc_object_folded(self.to_wrapped(
                     brand.with_holder(&owned_cells),

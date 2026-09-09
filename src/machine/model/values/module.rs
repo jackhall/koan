@@ -10,7 +10,7 @@
 //! [`crate::machine::model::types::signature`]. The two are distinct concepts; do not conflate.
 //!
 //! The captured scope is held as a plain `&'a Scope<'a>`. A `Module` is bumped at the destination's
-//! own `'a` ([`BumpAllocator::value`](crate::witnessed::BumpAllocator)), so the field is already at
+//! own `'a` ([`BumpAllocator::value`](crate::memory::BumpAllocator)), so the field is already at
 //! the region's lifetime with no retype involved; where the whole value rides a lifetime-free
 //! carrier, the embedded reference re-anchors with it in that carrier's single audited reattach —
 //! exactly as
@@ -21,15 +21,17 @@
 //! **Built once, then frozen.** A module is assembled complete: construction gathers its members
 //! into an owned [`ModuleDraft`] and derives the self-sig from that draft *before* the value
 //! exists, so the value itself carries a bumped `path`, one build-once frozen bump-backed table
-//! ([`BumpAllocator::frozen_table`](crate::witnessed::BumpAllocator::frozen_table)) and a plain interned self-sig handle.
+//! ([`BumpAllocator::frozen_table`](crate::memory::BumpAllocator::frozen_table)) and a plain interned self-sig handle.
 //! `Module` is
 //! therefore `Copy` and `Drop`-free: it rides the region bump and region death frees it as a chunk
 //! ([value-substrates.md § Untyped arenas](../../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
 
 use std::collections::HashMap;
 
-use crate::machine::core::{RegionBrand, Scope, ScopeId};
-use crate::witnessed::BumpBackedMap;
+use crate::machine::core::{Scope, ScopeId};
+
+use crate::memory::BumpBackedMap;
+use crate::memory::RegionBrand;
 
 use super::super::types::{
     IdentityBuildHasher, KType, Relation, SigSchema, TypeDigest, TypeNode, TypeRegistry,
@@ -89,7 +91,7 @@ impl<'a> Module<'a> {
     /// pairing a module with a foreign region is unrepresentable. `path` may borrow from anywhere —
     /// [`Self::assemble`] re-homes it at that same brand before the value is assembled — and the
     /// store is the plain bump verb a `Copy` value takes,
-    /// [`BumpAllocator::value`](crate::witnessed::BumpAllocator::value). Nothing is erased and re-anchored on the way in, so no residence audit
+    /// [`BumpAllocator::value`](crate::memory::BumpAllocator::value). Nothing is erased and re-anchored on the way in, so no residence audit
     /// stands behind this door: every reference the value holds is a plain `&'a` the borrow checker
     /// already checked against the lifetime the destination brand borrows its region for.
     ///
@@ -110,7 +112,7 @@ impl<'a> Module<'a> {
 
     /// Assemble a module value over `child_scope`, re-homing `path` into `brand`'s region and
     /// freezing both member tables there
-    /// ([`BumpAllocator::frozen_table_with_hasher`](crate::witnessed::BumpAllocator::frozen_table_with_hasher)).
+    /// ([`BumpAllocator::frozen_table_with_hasher`](crate::memory::BumpAllocator::frozen_table_with_hasher)).
     /// Crate-internal, and never a store: the caller places the assembled value.
     ///
     /// The single `brand` parameter is the residence discipline: path bytes and the bucket array

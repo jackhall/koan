@@ -22,10 +22,10 @@ fn newtype_singleton(name: &str, repr: KType, registries: &RunRegistries) -> KTy
 /// `door`'s borrow of `storage` lives in the same frame it was minted in, never crossing a return.
 macro_rules! container_door {
     ($storage:ident, $door:ident) => {
-        use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
-        use crate::witnessed::FoldedPlacement;
+        use crate::memory::FoldedPlacement;
+        use crate::memory::{FoldingBrand, FrameStorageExt, run_root_storage};
         let $storage = run_root_storage();
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
+        let owned_cells = crate::memory::FrameCoverage::empty();
         let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             $storage.brand().handle(),
         ))

@@ -376,7 +376,7 @@ pub fn finalize_nominal_member<'a>(
     name: TypeSymbol,
     build_repr: impl FnOnce(WindowView<'_, 'a>) -> KType,
     site: DeclarationSite,
-    brand: crate::machine::core::RegionBrand<'a>,
+    brand: crate::memory::RegionBrand<'a>,
     registries: &RunRegistries,
 ) -> SealOutcome<'a> {
     let types = &registries.types;

@@ -1,6 +1,7 @@
 use crate::builtins::test_support::{TestRun, type_name};
-use crate::machine::core::{KErrorKind, program_storage, run_root_storage};
+use crate::machine::core::KErrorKind;
 use crate::machine::model::KObject;
+use crate::memory::{program_storage, run_root_storage};
 
 /// The variant value-type check fires when the value-cell resolves to a
 /// `KObject` that doesn't match the member's declared repr.

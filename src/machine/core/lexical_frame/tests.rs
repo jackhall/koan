@@ -5,8 +5,9 @@ use std::rc::Rc;
 
 use super::{LexicalFrame, assemble_body_chain};
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::core::{Scope, ScopeId, run_root_storage};
+use crate::machine::core::{Scope, ScopeId};
 use crate::memory::FrameStorage;
+use crate::memory::run_root_storage;
 
 #[test]
 fn root_has_no_parent() {

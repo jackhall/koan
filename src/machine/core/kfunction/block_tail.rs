@@ -11,14 +11,14 @@
 
 use std::rc::Rc;
 
-use crate::machine::CallFrame;
 use crate::machine::ReturnContract;
 use crate::machine::Scope;
-use crate::machine::core::RegionBrand;
 use crate::machine::core::bindings::WriteGate;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression};
 use crate::machine::{Action, BlockEntry, FramePlacement, TailContract};
+use crate::memory::CallFrame;
+use crate::memory::RegionBrand;
 
 /// How the body maps onto the tail.
 pub(crate) enum BlockBody<'a> {
@@ -124,7 +124,7 @@ where
 /// the block's first statement dispatches, and the frame was minted by this call's own builtin, so
 /// nothing has reached its child scope and the construction gate applies structurally rather than
 /// as a claim the caller makes. It is reached under
-/// [`CallFrame::with_scope`](crate::machine::CallFrame::with_scope), whose `for<'b>` brand is what
+/// [`CallFrame::with_scope`](crate::memory::CallFrame::with_scope), whose `for<'b>` brand is what
 /// confines the seeded values to the block's own region.
 pub(crate) fn fresh_cart_tail<'a, S>(
     frame: Rc<CallFrame>,

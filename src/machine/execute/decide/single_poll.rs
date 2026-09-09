@@ -6,14 +6,16 @@
 //! [`park_resume`] closure rather than a dep-finish: the wake has to re-run the resolution,
 //! because the binder's terminal is not the value the lane wants.
 
-use crate::machine::core::{KoanRegion, KoanRegionExt, Scope};
-use crate::machine::model::Carried;
+use crate::machine::core::Scope;
+
 use crate::machine::model::FieldParts;
 use crate::machine::model::key_spec::KEYWORDS;
 use crate::machine::model::labels::{TypeSymbol, ValueSymbol};
 use crate::machine::model::type_name_miss;
 use crate::machine::model::{ExpressionPart, ProgramNode, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
+use crate::memory::Carried;
+use crate::memory::{KoanRegion, KoanRegionExt};
 use crate::source::Spanned;
 
 use super::super::StepCarried;
@@ -25,8 +27,8 @@ use super::{
     Await, DepRequest, Outcome, TypeChannel, become_dispatch, forward_to_producer, park_resume,
     type_channel,
 };
+use crate::memory::Delivered;
 use crate::scheduler::Deps;
-use crate::witnessed::Delivered;
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.

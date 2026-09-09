@@ -24,13 +24,14 @@ use crate::machine::model::{BinderSymbol, ExpressionPart, KExpression, KLiteral}
 use crate::machine::model::{KeywordSymbol, Symbol, TypeSymbol, WILDCARD};
 use crate::machine::model::{TypeNode, TypeResolution, most_specific_ktype};
 
-use crate::machine::DeliveredCarried;
 use crate::machine::LexicalFrame;
 use crate::machine::ReturnContract;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
+use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
-use crate::witnessed::{BumpAllocator, BumpVec};
+use crate::memory::DeliveredCarried;
+use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{Carried, CarriedFamily};
 use std::rc::Rc;
 
 // This builtin's slot spellings, minted once and read back by symbol.
@@ -69,7 +70,7 @@ pub(crate) fn read_type_slot(
 /// Narrow `carrier` onto the payload of a `Wrapped` value (ruling F3's variant arm),
 /// by **parting** the payload cell from its container: the cell comes out bundled with exactly its
 /// own run's stored reach — read off the run, never a subset walk over the container — and
-/// [`Opened::lift_out`](crate::witnessed::Opened::lift_out), the relocation seam, turns that run
+/// [`Opened::lift_out`](crate::memory::Opened::lift_out), the relocation seam, turns that run
 /// into owned coverage: its members plus the region the payload lives in, and nothing else. The
 /// arm's `it` binding therefore names what the payload reaches instead of everything the scrutinee
 /// did. A value with no payload keeps its own envelope.
@@ -110,7 +111,7 @@ pub(crate) fn payload_envelope(carrier: &DeliveredCarried) -> DeliveredCarried {
 /// here, so there is one `it` tier rather than two.
 pub(crate) fn arm_tail<'a>(
     root: &'a Scope<'a>,
-    it_carrier: crate::machine::DeliveredCarried,
+    it_carrier: crate::memory::DeliveredCarried,
     body_expr: KExpression<'a>,
     contract: ReturnContract<'a>,
     registries: &RunRegistries,

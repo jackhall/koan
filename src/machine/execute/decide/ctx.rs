@@ -13,13 +13,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::core::bindings::WriteOp;
-use crate::machine::core::{FrameStorage, ProgramBrand, RunWriter};
 use crate::machine::execute::StepAllocator;
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, RunRegistries, WorkingPart};
-use crate::machine::{CallFrame, Installer, LexicalFrame, Scope};
+use crate::machine::{Installer, LexicalFrame, Scope};
+use crate::memory::CallFrame;
+use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{FrameStorage, ProgramBrand, RunWriter};
 use crate::source::Spanned;
-use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
@@ -28,7 +29,7 @@ use super::resolve::{Resolution, resolve_name};
 
 /// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot
 /// re-projects from the active cart through [`CallFrame::with_scope`]; a `YokedChild` slot opens its
-/// erased cart-ancestor [`SealedExtern<ScopeRefFamily>`](crate::witnessed::SealedExtern) carrier at
+/// erased cart-ancestor [`SealedExtern<ScopeRefFamily>`](crate::memory::SealedExtern) carrier at
 /// the same brand, pinned by `frame`. Either way the `&Scope<'b>` is confined to `f`, so no borrow
 /// rides up a `&mut` path.
 pub(in crate::machine::execute) fn with_node_scope<R>(
@@ -105,7 +106,7 @@ pub(in crate::machine::execute) struct DecideCtx<'program: 'step, 'step, 'view> 
     /// reclaim.
     ///
     /// Carried at `'step` and not one lifetime longer, which is the whole confinement: a
-    /// [`BumpVec`](crate::witnessed::BumpVec) built through this handle names `'step` in its type.
+    /// [`BumpVec`](crate::memory::BumpVec) built through this handle names `'step` in its type.
     /// An `Outcome` is `'step` too, so a park's dep list ([`StepDeps`](super::StepDeps)) rides the
     /// arena by design; what the type rules out is a buffer reaching past the pop — the `'static`
     /// continuation the harness seals, or the `StepVerdict` it returns — as a borrow-check error

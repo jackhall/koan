@@ -131,9 +131,9 @@ pub fn parse_type_tag_names<'a, P: Part<'a>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::{RegionBrand, program_storage};
     use crate::machine::model::ast::{ExpressionPart, KExpression};
     use crate::machine::model::labels::{LabelInterner, ValueSymbol};
+    use crate::memory::{RegionBrand, program_storage};
     use crate::source::Spanned;
 
     /// `[name, slot]` parts where the name rides as a `Type` token (e.g. a capitalized

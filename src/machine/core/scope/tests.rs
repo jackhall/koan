@@ -7,12 +7,14 @@ use std::rc::Rc;
 
 use super::*;
 use crate::builtins::test_support::{TestRun, value_name};
+use crate::machine::ProducerId;
 use crate::machine::core::bindings::{BindingIndex, WriteGate};
 use crate::machine::model::AnnouncedData;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::{KObject, RegionEscape, copy_or_pin_callable};
-use crate::machine::model::{RunRegistries, object_copy_cost};
-use crate::machine::{ProducerId, program_storage, run_root_storage};
 use crate::memory::CallFrame;
+use crate::memory::object_copy_cost;
+use crate::memory::{program_storage, run_root_storage};
 
 /// Bind `name` to the number `value` in `scope`, through the construction-time value door.
 fn bind_number<'a>(scope: &'a Scope<'a>, name: &str, value: f64, registries: &RunRegistries) {

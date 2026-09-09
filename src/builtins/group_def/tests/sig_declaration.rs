@@ -8,7 +8,7 @@ use crate::machine::KErrorKind;
 use crate::machine::model::{
     DeclaredGroup, FoldDirection, KeywordSymbol, ReductionMode, SigSchema, TypeNode,
 };
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 fn sig_schema(
     scope: &crate::machine::Scope<'_>,

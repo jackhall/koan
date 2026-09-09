@@ -2,8 +2,8 @@
 //! into the original source.
 
 use crate::builtins::test_support::probe_symbol;
-use crate::machine::core::{ProgramBrand, program_storage};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::memory::{ProgramBrand, program_storage};
 use crate::parse::{parse, parse_with_path};
 use crate::source::{self, SourceFile, Span, Spanned};
 

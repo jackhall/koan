@@ -26,7 +26,7 @@
 //! keys [`binary_key`] / [`unary_key`] an operator's overloads live under; the registry's own probe
 //! key is [`KeywordSymbol::of_run`].
 
-use crate::machine::core::RegionBrand;
+use crate::memory::RegionBrand;
 
 use super::labels::KeywordSymbol;
 use super::types::{KeyElement, UntypedKey};
@@ -80,7 +80,7 @@ pub struct OperatorGroup<'a> {
     mode: ReductionMode,
 }
 
-/// [`Reattachable`](crate::witnessed::Reattachable) family for [`OperatorGroup`] — the carrier
+/// [`Reattachable`](crate::memory::Reattachable) family for [`OperatorGroup`] — the carrier
 /// family a group record travels under in the `operators` registry, the operator-table twin of
 /// [`KFunctionFamily`](crate::machine::core::kfunction::KFunctionFamily).
 ///
@@ -90,7 +90,7 @@ pub struct OperatorGroup<'a> {
 /// `reattachable!` macro discharges the layout-invariance obligation once.
 pub struct OperatorGroupFamily;
 
-crate::witnessed::reattachable! {
+crate::memory::reattachable! {
     OperatorGroupFamily => &'r OperatorGroup<'r>,
 }
 

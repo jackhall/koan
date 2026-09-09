@@ -4,11 +4,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::*;
-use crate::machine::model::Held;
 use crate::machine::model::KObject;
+use crate::memory::Held;
 
 use super::run;
-use crate::machine::program_storage;
+use crate::memory::program_storage;
 
 #[test]
 fn interprets_let_and_print() {

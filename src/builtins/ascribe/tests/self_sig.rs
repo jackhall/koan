@@ -12,7 +12,7 @@ use crate::machine::model::Symbol;
 use crate::machine::model::TypeNode;
 use crate::machine::model::{ReductionMode, render_label};
 use crate::machine::{KErrorKind, Scope};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 fn module_named<'a>(
     scope: &'a Scope<'a>,

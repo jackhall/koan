@@ -5,9 +5,9 @@
 
 use super::KoanRuntime;
 use crate::builtins::{seed_builtins, unseeded_scopes};
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::{LabelInterner, RunRegistries};
 use crate::machine::{KError, Scope, WriteGate};
+use crate::memory::{program_storage, run_root_storage};
 use crate::parse::{parse, parse_with_path};
 
 /// The run-root seeding door. The run-global root is unreachable by any node until the program

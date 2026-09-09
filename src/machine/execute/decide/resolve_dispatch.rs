@@ -14,14 +14,15 @@
 //! could strict-pick the bare name as an `:Identifier` slot.
 
 use crate::machine::ProducerId;
+use crate::machine::core::WrapIndices;
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
-use crate::machine::core::{OpenedFunction, WrapIndices};
 use crate::machine::model::KeyElement;
 use crate::machine::model::labels::BinderSymbol;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
+use crate::memory::OpenedFunction;
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::source::Spanned;
-use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::resolve::Resolution;
 use crate::machine::model::RunRegistries;
@@ -52,7 +53,7 @@ pub fn reset_resolve_dispatch_entry_count() {
 /// `function` is the pick **in use**: adopted into its own binding region, so the mint that
 /// re-anchored it named its reach there and the region retains the pins — which is what lets the
 /// callable ride the `'step` lifetime across argument evaluation and into the invoke. The escape
-/// into the call chain [`reseal`](crate::witnessed::Opened::reseal)s it back to rest.
+/// into the call chain [`reseal`](crate::memory::Opened::reseal)s it back to rest.
 pub struct Resolved<'step> {
     pub function: OpenedFunction<'step>,
     pub wrap_indices: WrapIndices<'step>,

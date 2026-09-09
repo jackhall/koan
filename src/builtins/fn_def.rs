@@ -10,7 +10,7 @@ use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
 use crate::machine::model::{Argument, BinderSymbol, KType, SignatureElement, Symbol, ValueSymbol};
 use crate::machine::{KError, KErrorKind, Scope};
-use crate::witnessed::BumpVec;
+use crate::memory::BumpVec;
 
 use super::{arg, arg_labeled, kw, sig};
 

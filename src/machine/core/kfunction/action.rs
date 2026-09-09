@@ -9,13 +9,10 @@ use std::rc::Rc;
 
 use super::body::ReturnContract;
 use crate::machine::core::bindings::WriteOp;
-use crate::machine::core::{CallFrame, LexicalFrame, ProgramBrand, RegionBrand, RunWriter, Scope};
+use crate::machine::core::{LexicalFrame, Scope};
 use crate::machine::execute::StepAllocator;
 use crate::machine::execute::StepCarried;
 use crate::machine::model::BinderSymbol;
-#[cfg(test)]
-use crate::machine::model::Carried;
-use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::RunRegistries;
@@ -25,13 +22,16 @@ use crate::machine::model::WorkingExpression;
 use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{StaticName, ValueSymbol};
-use crate::machine::{
-    BindingIndex, DeclarationSite, DeliveredCarried, Installer, KError, KErrorKind,
-};
+use crate::machine::{BindingIndex, DeclarationSite, Installer, KError, KErrorKind};
+#[cfg(test)]
+use crate::memory::Carried;
+use crate::memory::DeliveredCarried;
+use crate::memory::Held;
+use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{CallFrame, ProgramBrand, RegionBrand, RunWriter};
 use crate::memory::{SealedFunction, SplicedCell};
 use crate::scheduler::Deps;
 use crate::source::SourceRef;
-use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -479,7 +479,7 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
 /// slot anchor's owner chain.
 ///
 /// So a value-reading finish (`resolve_or_await`, `fn_def`/`return_type`, dispatch constructors /
-/// literal) opens the cell at its own borrow ([`Sealed::open_at`](crate::witnessed::Sealed::open_at))
+/// literal) opens the cell at its own borrow ([`Sealed::open_at`](crate::memory::Sealed::open_at))
 /// with no pin to thread; a **construction finish** that folds the dep into a longer-lived result
 /// lifts it back to an envelope first ([`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced)),
 /// which owns the reach the fold composes; and a finish that parks the carrier on the working
@@ -607,7 +607,7 @@ impl<'a> Action<'a> {
     /// frame the park installs under — so the recovery allocates nothing on the heap. `host` is a
     /// [`RegionBrand`] rather than a bare allocator so a step-scratch host, dangling at the next
     /// drain pop, is unrepresentable; the `T: Copy` guard on
-    /// [`BumpAllocator::value`](crate::witnessed::BumpAllocator::value) is the region's Drop-free
+    /// [`BumpAllocator::value`](crate::memory::BumpAllocator::value) is the region's Drop-free
     /// proof. See [`ActionKind::Catch`].
     pub fn catch<F>(watched: DepRequest<'a>, host: RegionBrand<'a>, finish: F) -> Self
     where
@@ -658,7 +658,7 @@ impl<'a> Action<'a> {
 pub enum ActionKind<'a> {
     /// Produce this slot's terminal (after any direct scope mutation the builtin did): a witnessed
     /// value or an error. The `Ok` carrier is built **inside the witness closure** — already bundled
-    /// with the set of regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at
+    /// with the set of regions it reaches ([`yoke`](crate::memory::Witnessed::yoke) / `merge` at
     /// the alloc site, or a step-context `alloc_carried`/`alloc_carried_with` (and their typed
     /// wrappers) / `Scope::resident` sealing a constructed or read value) — so it is co-located
     /// by construction rather than paired with an asserted witness at finalize. The construction

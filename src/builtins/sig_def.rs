@@ -119,8 +119,8 @@ mod tests {
     use crate::builtins::test_support::{TestRun, parse_one, type_name, value_name};
     use crate::builtins::test_support::{lookup_type, type_token};
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
 
     #[test]
     fn binder_name_extracts_sig_name() {

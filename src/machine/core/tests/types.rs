@@ -8,12 +8,12 @@ use crate::builtins::test_support::{
     mock_declaration_site, per_call_storage, run_root_bare, type_name, value_name,
 };
 use crate::machine::AdoptSeam;
-use crate::machine::core::{FrameCoverage, run_root_storage};
-use crate::machine::model::Carried;
 use crate::machine::model::KType;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::{BindingIndex, DeclarationSite};
+use crate::memory::Carried;
+use crate::memory::{FrameCoverage, run_root_storage};
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {
@@ -94,14 +94,14 @@ fn resolve_type_inner_scope_shadows_outer() {
 /// consumer's fold pins the reached region for the value's new lifetime.
 #[test]
 fn retaining_adopt_reanchors_the_same_value_copy_free() {
-    use crate::machine::model::{Carried, KObject};
+    use crate::machine::model::KObject;
+    use crate::memory::Carried;
     let storage = run_root_storage();
     let producer = run_root_bare(&storage);
     // A value resident in the producer scope's region, sealed as its own delivery envelope pinned
     // by the frame that owns that region.
     let obj: &KObject = producer.brand().alloc_scalar(Scalar::Number(42.0));
-    let cell =
-        producer.deliver_resident::<crate::machine::model::CarriedFamily>(Carried::Object(obj));
+    let cell = producer.deliver_resident::<crate::memory::CarriedFamily>(Carried::Object(obj));
 
     // A separate (open) consumer scope adopts the carrier.
     let consumer = producer.alloc_child_under();

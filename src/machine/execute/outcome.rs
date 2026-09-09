@@ -13,26 +13,27 @@
 //!   outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of the producer an edge names.
 
-use crate::machine::DeliveredCarried;
 use crate::machine::core::resolve_location;
 use crate::machine::core::{
-    Action, BlockBody, BlockEntry, CallFrame, FramePlacement, FrameStorageExt, RegionBrand,
-    ReturnContract, ScopeId, TailContract, freeze_body,
+    Action, BlockBody, BlockEntry, FramePlacement, ReturnContract, ScopeId, TailContract,
+    freeze_body,
 };
-#[cfg(test)]
-use crate::machine::model::Carried;
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::model::{KType, RunRegistries};
+#[cfg(test)]
+use crate::memory::Carried;
+use crate::memory::DeliveredCarried;
+use crate::memory::{CallFrame, FrameStorageExt, RegionBrand};
 use crate::source::SourceRef;
 
 #[cfg(test)]
 use crate::machine::Scope;
 use crate::machine::{KError, NodeId, TraceFrame};
+use crate::memory::erase_to_static;
+use crate::memory::reattachable;
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::scheduler::Deps;
 use crate::scheduler::EdgeId;
-use crate::witnessed::erase_to_static;
-use crate::witnessed::reattachable;
-use crate::witnessed::{BumpAllocator, BumpVec};
 use std::rc::Rc;
 
 use super::StepCarried;
@@ -311,7 +312,7 @@ pub(in crate::machine::execute) enum Continuation<'step> {
     /// Runs as soon as the wired deps resolve — a dep-finish behind its [`gated`] short-circuit, or
     /// a dep-free decide the park re-runs on wake. A finish whose value must outlive the resolving
     /// step folds the dep's carrier via
-    /// [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into).
+    /// [`Delivered::transfer_into`](crate::memory::Delivered::transfer_into).
     Ready(ContinuationCall<'step>),
     /// Watches one dep, realized at apply time, *without* short-circuiting on its error, so the
     /// finish can recover.

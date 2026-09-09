@@ -11,7 +11,7 @@
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::model::KObject;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The mixed-run fixture: a module group chaining three operators, against a signature naming two
 /// of them. Non-builtin glyphs throughout, so the root's own groups cannot mask a gap in the

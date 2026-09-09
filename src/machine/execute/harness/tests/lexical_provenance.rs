@@ -5,8 +5,8 @@
 use std::rc::Rc;
 
 use crate::builtins::test_support::{TestRun, lookup_module};
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
+use crate::memory::{program_storage, run_root_storage};
 use crate::source::Spanned;
 
 use super::{keyword_expr as lit, let_expr, working_one};

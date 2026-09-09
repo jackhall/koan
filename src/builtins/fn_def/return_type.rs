@@ -5,7 +5,6 @@ use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use crate::machine::DepTerminal;
 use crate::machine::LexicalFrame;
 use crate::machine::ProducerId;
-use crate::machine::core::RegionBrand;
 use crate::machine::model::KExpression;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::labels::TypeSymbol;
@@ -13,6 +12,7 @@ use crate::machine::model::{BinderSymbol, ExpressionPart};
 use crate::machine::model::{DeferredReturn, ReturnType};
 use crate::machine::model::{KObject, KType, Symbol};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::memory::RegionBrand;
 use crate::source::Spanned;
 use std::rc::Rc;
 

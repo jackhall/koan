@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use koan::builtins::test_support::{TestRun, lookup_binding, lookup_type};
 use koan::machine::model::KObject;
-use koan::machine::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
+use koan::memory::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 
 /// Scaffolding: spin up a fresh run inside `region`, run `source` end-to-end through the
 /// scheduler, and hand back the whole run so tests can assert on the root scope's bindings

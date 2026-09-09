@@ -6,8 +6,9 @@
 //! happens one layer in, at each call through the installed view.
 
 use crate::builtins::test_support::TestRun;
+use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
-use crate::machine::{KErrorKind, program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// `SIG Monad` of [design/effects.md](../../../../design/effects.md): a wrapper member and the two
 /// operations quantified over the element types they hold at.

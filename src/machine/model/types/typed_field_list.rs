@@ -431,7 +431,7 @@ fn rewrite_threaded_self_refs<'a>(
                         // foreign, so it rests with no coverage to lodge anywhere.
                         match resolve_threaded(window, *t, types) {
                             Some(handle) => WorkingPart::Spliced {
-                                cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
+                                cell: scope.seal_resident::<crate::memory::CarriedFamily>(
                                     Carried::Type(handle),
                                 ),
                                 from_name: Some(BinderSymbol::Type(*t)),

@@ -7,14 +7,16 @@
 //! does the resolution; this tail does the body-shape branching and launches
 //! construction or a function call.
 
+use crate::machine::core::DepPlacement;
 use crate::machine::core::location_from_expr;
-use crate::machine::core::{DepPlacement, OpenedFunction};
 use crate::machine::model::labels::{BinderSymbol, Symbol, TypeSymbol};
 use crate::machine::model::render_label;
-use crate::machine::model::{Carried, Record, TypeMemberMap, constructor_param_names};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
+use crate::machine::model::{Record, TypeMemberMap, constructor_param_names};
 use crate::machine::{KError, KErrorKind};
+use crate::memory::Carried;
+use crate::memory::OpenedFunction;
 use crate::scheduler::Deps;
 use crate::source::Spanned;
 

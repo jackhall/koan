@@ -10,21 +10,16 @@ pub(crate) use core::kfunction::Body;
 pub use core::kfunction::KFunction;
 pub(crate) use core::{
     Action, ActionFn, AwaitContinue, BlockBody, BlockEntry, BlockRequest, BlockScope, BodyCtx,
-    BoundArgs, DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand, FramePlacement,
-    GroupSeal, NoSeed, OverloadSeal, ReturnContract, SubDispatch, TailContract, block_tail,
-    body_statement_refs, fresh_cart_tail, require_bare_type_name, require_identifier_name,
-    require_kexpression, require_ktype, seed,
+    BoundArgs, DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement, GroupSeal, NoSeed,
+    OverloadSeal, ReturnContract, SubDispatch, TailContract, block_tail, body_statement_refs,
+    fresh_cart_tail, require_bare_type_name, require_identifier_name, require_kexpression,
+    require_ktype, seed,
 };
 pub(crate) use core::{
-    AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, HitTier,
-    Installer, KoanRegion, LexicalFrame, MemberResolution, NameLookup, RegionTypeFamily, RunWriter,
-    TraceFrame,
+    AdoptSeam, BindingIndex, DeclarationSite, HitTier, Installer, LexicalFrame, MemberResolution,
+    NameLookup, TraceFrame,
 };
-pub use core::{
-    Bindings, DeliveredCarried, DeliveredFunction, DeliveredOperatorGroup, FrameStorage, KError,
-    KErrorKind, OpenedFunction, ProgramBrand, ProgramStorage, Scope, ScopeId, SealedFunction,
-    SealedOperatorGroup, SplicedCell, WriteGate, program_storage, run_root_storage,
-};
+pub use core::{Bindings, KError, KErrorKind, Scope, ScopeId, WriteGate};
 pub use execute::ProducerId;
 /// The reach-tightness report's reader surface — present only under the `region-audit` gate, which
 /// is also what compiles the audit itself in.

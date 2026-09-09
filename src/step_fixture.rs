@@ -14,9 +14,9 @@
 //! `#[doc(hidden)]` and `pub` only because trybuild fixtures import it; it is not part of koan's
 //! real surface.
 
-use crate::machine::core::FrameStorageExt;
 use crate::machine::model::Scalar;
-use crate::machine::run_root_storage;
+use crate::memory::FrameStorageExt;
+use crate::memory::run_root_storage;
 
 pub use crate::machine::execute::StepAllocator;
 pub use crate::machine::execute::{StepCarried, drive_step_allocator};

@@ -5,12 +5,13 @@ use std::rc::Rc;
 
 use super::*;
 use crate::machine::KErrorKind;
+use crate::machine::model::KKey;
 use crate::machine::model::KObject;
-use crate::machine::model::{Held, KKey};
 use crate::memory::DictSubstrate;
+use crate::memory::Held;
 
 use super::run;
-use crate::machine::program_storage;
+use crate::memory::program_storage;
 
 /// Dict value cells are `Held`; these helpers narrow to the `Object` arm so the
 /// scalar-value assertions read unchanged.

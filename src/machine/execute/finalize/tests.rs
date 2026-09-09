@@ -11,16 +11,15 @@ use std::rc::{Rc, Weak};
 use super::NodeFinalize;
 use crate::builtins::test_support::{TestRun, run_root_bare};
 use crate::machine::AdoptSeam;
-use crate::machine::CallFrame;
 use crate::machine::core::{Action, BodyCtx};
-use crate::machine::core::{
-    CarrierWitness, FrameCoverage, FrameStorage, program_storage, run_root_storage,
-};
 use crate::machine::model::Scalar;
 use crate::machine::model::Symbol;
-use crate::machine::model::{Carried, KObject, RunRegistries};
+use crate::machine::model::{KObject, RunRegistries};
 use crate::machine::model::{KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::witnessed::{Delivered, Sealed};
+use crate::memory::CallFrame;
+use crate::memory::Carried;
+use crate::memory::{Delivered, Sealed};
+use crate::memory::{FrameCoverage, FrameStorage, program_storage, run_root_storage};
 
 /// Build a scalar carrier residing in `producer`'s region whose borrows reach that region exactly
 /// when `borrows_into_home` — the exact carrier a resident-value read hands to finalize. The
@@ -31,7 +30,7 @@ fn resident_scalar(
     producer: &Rc<CallFrame>,
     borrows_into_home: bool,
 ) -> (
-    crate::witnessed::Witnessed<crate::machine::model::CarriedFamily, CarrierWitness>,
+    crate::memory::Witnessed<crate::memory::CarriedFamily>,
     Weak<FrameStorage>,
 ) {
     let carrier = producer.with_scope(|child| {
@@ -61,7 +60,7 @@ fn region_pure_scalar_rides_the_envelope_and_releases_at_envelope_drop() {
 
     let (carrier, weak) = resident_scalar(&producer, false);
     let delivered = Delivered::lift(
-        crate::witnessed::Retained::from_sealed(Sealed::seal(carrier, producer.brand().handle())),
+        crate::memory::Retained::from_sealed(Sealed::seal(carrier, producer.brand().handle())),
         producer.storage_rc(),
     );
     assert!(
@@ -145,7 +144,7 @@ fn home_borrowing_value_keeps_its_home_membership_and_rides_the_envelope() {
 
     let (carrier, weak) = resident_scalar(&producer, true);
     let delivered = Delivered::lift(
-        crate::witnessed::Retained::from_sealed(Sealed::seal(carrier, producer.brand().handle())),
+        crate::memory::Retained::from_sealed(Sealed::seal(carrier, producer.brand().handle())),
         producer.storage_rc(),
     );
     assert!(
@@ -378,7 +377,7 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
         .host
         .finalize_terminal(
             Delivered::lift(
-                crate::witnessed::Retained::from_sealed(Sealed::seal(
+                crate::memory::Retained::from_sealed(Sealed::seal(
                     carrier,
                     producer.brand().handle(),
                 )),
@@ -438,7 +437,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let count_before = Rc::strong_count(&storage);
 
     let delivered = Delivered::lift(
-        crate::witnessed::Retained::from_sealed(Sealed::seal(carrier, producer.brand().handle())),
+        crate::memory::Retained::from_sealed(Sealed::seal(carrier, producer.brand().handle())),
         producer.storage_rc(),
     );
     assert_eq!(

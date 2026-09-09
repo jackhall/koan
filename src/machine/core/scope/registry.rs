@@ -18,7 +18,6 @@
 //! Split out of the parent `scope` module.
 
 use super::{Scope, ScopeKind};
-use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
 use crate::machine::core::bindings::powerset_probes;
 use crate::machine::core::bindings::{
@@ -30,10 +29,11 @@ use crate::machine::model::KeyElement;
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{
-    BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol,
-    coerce_function_cell, render_keyworded_head, render_label, select_keyworded_satisfier,
-    shape_key_is,
+    BinderSymbol, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol, coerce_function_cell,
+    render_keyworded_head, render_label, select_keyworded_satisfier, shape_key_is,
 };
+use crate::memory::Carried;
+use crate::memory::DeliveredCarried;
 use crate::memory::{DeliveredFunction, DeliveredOperatorGroup};
 
 /// What an ascription decides about a view's members once the newborn view scope's id — the

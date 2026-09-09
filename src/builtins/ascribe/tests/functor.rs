@@ -4,7 +4,7 @@
 use crate::builtins::test_support::{TestRun, lookup_module, type_name, value_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, TypeNode};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 use crate::parse::parse;
 
 #[test]

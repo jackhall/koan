@@ -1,6 +1,7 @@
 use crate::machine::WriteGate;
-use crate::machine::model::{Carried, KObject, KType};
+use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::memory::Carried;
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;

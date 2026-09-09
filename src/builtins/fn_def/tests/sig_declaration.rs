@@ -6,7 +6,7 @@
 
 use crate::builtins::test_support::{TestRun, key_keyword, key_keyword_symbol, type_name};
 use crate::machine::model::{KType, KeyElement, SigSchema, TypeNode, UntypedKey};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The stored schema of the signature `name` binds in `scope`.
 fn sig_schema(

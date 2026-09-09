@@ -8,9 +8,9 @@ use std::rc::Rc;
 
 use super::working_all;
 use crate::builtins::test_support::{TestRun, lookup_module};
-use crate::machine::core::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind};
+use crate::memory::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 
 /// Run `source` as one top-level block and hand back the whole bundle, so callers read
 /// both the post-run scope and the run's registry.

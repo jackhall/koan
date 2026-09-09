@@ -2,19 +2,19 @@
 //! exclusion that makes the `data`/`types` partition structural (no name in both), and the claim
 //! store a still-finalizing binder stamps beside the binding maps.
 
-use allocator_api2::alloc::Global;
+use crate::memory::Global;
 use std::rc::Rc;
 
 use super::*;
 use crate::machine::ProducerId;
-use crate::machine::core::{FrameCoverage, FrameReach, FrameStorage};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Scalar;
 use crate::memory::Carried;
 use crate::memory::RegionBrand;
+use crate::memory::Sealed;
+use crate::memory::{FrameCoverage, FrameReach, FrameStorage};
 use crate::memory::{FrameStorageExt, run_root_storage};
-use workgraph::witnessed::Sealed;
 
 use crate::builtins::test_support::{
     binder_name, mock_declaration_site, operator_run, probe_symbol, run_root_bare, type_name,

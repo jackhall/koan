@@ -5,8 +5,9 @@
 //! elaborates at it.
 
 use crate::builtins::test_support::TestRun;
+use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
-use crate::machine::{KErrorKind, program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// A `NEWTYPE (Type AS Wrap)` and the two quantified members of
 /// [design/effects.md](../../../../design/effects.md)'s `Monad`, defined at the top level so a

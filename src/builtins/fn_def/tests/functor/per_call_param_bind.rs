@@ -4,7 +4,7 @@
 
 use crate::builtins::test_support::{TestRun, lookup_module};
 use crate::machine::model::{KObject, TypeNode};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// A held `KModule` from a functor body keeps its child-scope region alive across
 /// subsequent run-root churn. End-to-end mirror of

@@ -4,7 +4,7 @@
 use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KType, ReturnType};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// Parens-form return type carrying a bare lowercase identifier matching a parameter
 /// name must defer.

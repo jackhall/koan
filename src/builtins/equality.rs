@@ -14,9 +14,10 @@
 //! unchanged (an error is never negated into a `false`).
 
 use crate::machine::WriteGate;
-use crate::machine::model::{Held, KType, ValueEqualityError};
+use crate::machine::model::{KType, ValueEqualityError};
 use crate::machine::{Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::memory::Held;
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;

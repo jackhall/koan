@@ -4,9 +4,9 @@
 
 use super::*;
 use crate::builtins::test_support::{type_token, value_name};
-use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::model::labels::BinderSymbol;
 use crate::machine::model::{Argument, KLiteral, RunRegistries};
+use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
 
 /// The workhorse union: every carrier spelling of a type slot plus the value-name token.
 fn carrier_union(registries: &RunRegistries) -> KType {

@@ -9,14 +9,15 @@
 
 use crate::source::{FileId, Span, Spanned};
 
-use crate::machine::core::{ProgramBrand, RegionBrand};
 use crate::machine::model::labels::{
     BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol,
 };
 use crate::machine::model::lazy_slots::{LazyKinds, LazySlotSpec};
-use crate::machine::model::{Held, KObject, Parseable, RunRegistries, StoredBinderKey};
+use crate::machine::model::{KObject, Parseable, RunRegistries, StoredBinderKey};
 use crate::machine::model::{KeyElement, UntypedKey};
-use crate::witnessed::reattachable;
+use crate::memory::Held;
+use crate::memory::reattachable;
+use crate::memory::{ProgramBrand, RegionBrand};
 
 pub mod program;
 mod shape;

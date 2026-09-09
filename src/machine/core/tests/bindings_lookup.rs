@@ -9,10 +9,11 @@ use crate::builtins::test_support::{
 };
 use crate::machine::ProducerId;
 use crate::machine::core::kfunction::{Body, KFunction};
-use crate::machine::core::{BindingIndex, FrameStorageExt, NameLookup, run_root_storage};
+use crate::machine::core::{BindingIndex, NameLookup};
 use crate::machine::model::KObject;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-use allocator_api2::alloc::Global;
+use crate::memory::Global;
+use crate::memory::{FrameStorageExt, run_root_storage};
 
 use super::{body_no_op, unit_signature};
 use crate::machine::model::RunRegistries;

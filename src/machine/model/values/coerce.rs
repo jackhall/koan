@@ -17,7 +17,8 @@
 
 use std::collections::HashMap;
 
-use crate::machine::core::{Body, KFunction, Scope, SubstrateDoor, ViewMembers};
+use crate::machine::core::{Body, KFunction, Scope, ViewMembers};
+
 use crate::machine::model::BinderSymbol;
 use crate::machine::model::labels::Symbol;
 use crate::machine::model::registries::RunRegistries;
@@ -25,6 +26,7 @@ use crate::machine::model::types::{
     Argument, CoercionTables, DispatchTokenElement, KType, Record, ReturnType, SigSchema,
     SignatureElement, TypeNode, TypeRegistry,
 };
+use crate::memory::SubstrateDoor;
 
 use super::{KKey, KObject, Module, ModuleDraft};
 use crate::memory::Held;
@@ -195,7 +197,7 @@ pub(crate) fn coerce_function_cell<'b>(
     declared: KType,
     tables: &CoercionTables,
     registries: &RunRegistries,
-) -> crate::machine::core::DeliveredFunction {
+) -> crate::memory::DeliveredFunction {
     let types = &registries.types;
     // The call shape is the underlying's — same keywords, same parameter names in the same order —
     // with each slot the declared type names re-typed to its `to` substitution. The two declared

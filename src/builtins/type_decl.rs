@@ -27,8 +27,8 @@ use crate::machine::model::{KeywordSymbol, StaticName};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
-use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
+use crate::memory::Carried;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { decl, name } }

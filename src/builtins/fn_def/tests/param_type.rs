@@ -3,7 +3,7 @@
 use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, probe_symbol};
 use crate::machine::KErrorKind;
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 use super::capture_program_output;
 use crate::machine::model::Symbol;

@@ -5,8 +5,8 @@ use crate::builtins::test_support::TestRun;
 use crate::builtins::test_support::binds_module;
 use crate::builtins::test_support::lookup_type;
 use crate::machine::KErrorKind;
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::{KObject, KType};
+use crate::memory::{program_storage, run_root_storage};
 
 use super::tests::{working_all as parse_all, working_one as parse_one};
 

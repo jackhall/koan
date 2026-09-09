@@ -1,9 +1,9 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::KoanRegionExt;
-use crate::machine::{program_storage, run_root_storage};
-use crate::witnessed::region_metrics;
+use crate::memory::KoanRegionExt;
+use crate::memory::region_metrics;
+use crate::memory::{program_storage, run_root_storage};
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {
@@ -498,7 +498,8 @@ fn closure_argument_stays_live_through_user_fn_call() {
 /// no-use-after-free checks in one scheduler run.)
 #[test]
 fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_free() {
-    use crate::machine::model::{Held, KObject};
+    use crate::machine::model::KObject;
+    use crate::memory::Held;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -553,7 +554,8 @@ fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_
 /// the stored key bytes (the `str` compare) and proves they are still there.
 #[test]
 fn let_bound_dict_with_call_produced_string_keys_survives_every_producer_free() {
-    use crate::machine::model::{Held, KKey, KObject};
+    use crate::machine::model::{KKey, KObject};
+    use crate::memory::Held;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);

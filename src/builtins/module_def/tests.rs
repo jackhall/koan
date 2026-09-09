@@ -8,9 +8,9 @@ use crate::builtins::test_support::{TestRun, lookup_module, parse_one, value_nam
 use crate::machine::model::KObject;
 use crate::machine::model::SigSchema;
 use crate::machine::model::{Module, ModuleDraft};
-use crate::machine::program_storage;
-use crate::machine::run_root_storage;
 use crate::machine::{BindingIndex, KErrorKind};
+use crate::memory::program_storage;
+use crate::memory::run_root_storage;
 
 /// The binder name comes off the `Identifier` name part — a module binds value-side, so the
 /// submit-time placeholder is tagged `Value`.
@@ -128,7 +128,7 @@ fn bare_module_name_surfaces_as_object_value() {
 /// — the same result the parenthesized `[(m)]` form produces.
 #[test]
 fn bare_module_names_in_list_resolve_and_memoize_self_sig() {
-    use crate::machine::model::Held;
+    use crate::memory::Held;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -160,7 +160,7 @@ fn bare_module_names_in_list_resolve_and_memoize_self_sig() {
 
 #[test]
 fn module_in_list_surfaces_as_object_element_memoized_to_self_sig() {
-    use crate::machine::model::Held;
+    use crate::memory::Held;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);

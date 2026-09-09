@@ -1,18 +1,20 @@
 //! `dispatch` arm of `machine::core` tests.
 
-use super::super::{FrameStorageExt, Scope, program_storage, run_root_storage};
+use super::super::Scope;
+
 use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
-use crate::machine::core::RegionBrand;
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, DispatchOutcome, LexicalFrame};
+use crate::memory::Carried;
+use crate::memory::RegionBrand;
+use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
 use crate::source::Spanned;
 
 /// Freeze a run of raw AST parts as the working node a dispatch entry receives — the shape

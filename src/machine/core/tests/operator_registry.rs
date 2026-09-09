@@ -13,11 +13,10 @@
 use std::rc::Rc;
 
 use crate::builtins::test_support::{TestRun, operator_run, probe_symbol, run_root_bare};
-use crate::machine::DeliveredOperatorGroup;
-use crate::machine::core::{
-    BindingIndex, CallFrame, GroupSeal, Scope, program_storage, run_root_storage,
-};
+use crate::machine::core::{BindingIndex, GroupSeal, Scope};
 use crate::machine::model::{OperatorGroup, ReductionMode, RunRegistries};
+use crate::memory::DeliveredOperatorGroup;
+use crate::memory::{CallFrame, program_storage, run_root_storage};
 
 /// The declaration door a fixture takes: birth the record in `scope`'s own region and rest that
 /// envelope, which is what every registry entry for this declaration then holds a bit-copy of.

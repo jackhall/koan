@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::model::RunRegistries;
-use crate::machine::{CallFrame, RunWriter};
+use crate::memory::{CallFrame, RunWriter};
 
 use super::harness::Host;
 use super::nodes::NodePayload;

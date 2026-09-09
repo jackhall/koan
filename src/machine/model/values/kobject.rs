@@ -2,16 +2,16 @@ use std::collections::HashMap;
 use std::rc::Weak;
 
 use crate::machine::core::KFunction;
-use crate::machine::core::{
-    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, Scope, SubstrateDoor,
-    consolidate_object,
-};
+use crate::machine::core::{Scope, consolidate_object};
 use crate::machine::model::ast::{KExpression, ProgramExpression};
 use crate::machine::model::labels::{BinderSymbol, Symbol};
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::display_label;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
-use crate::witnessed::{BumpVec, CellInput, CellReach, Sectioned};
+use crate::memory::{BumpVec, CellInput, CellReach, Sectioned};
+use crate::memory::{
+    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
+};
 use smallvec::SmallVec;
 
 use super::{KKey, Module};
@@ -67,19 +67,19 @@ pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
 ///
 /// A `KFunction` is a bare borrow into its defining region; the regions an escaping
 /// closure reaches are named by its carrier's reach description
-/// ([`FrameReach`](crate::machine::core::FrameReach)) and pinned by the holder's owned
-/// [`FrameCoverage`](crate::machine::core::FrameCoverage) coverage, not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
+/// ([`FrameReach`](crate::memory::FrameReach)) and pinned by the holder's owned
+/// [`FrameCoverage`](crate::memory::FrameCoverage) coverage, not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
 ///
 /// `Copy` because every arm is a scalar or a region borrow — the value owns no allocation, so it
 /// runs no `Drop` at region death. That is what lets a cell ride the `T: Copy` bump doors
-/// ([`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator)), where the bound
+/// ([`RegionBrand::allocator`](crate::memory::RegionBrand::allocator)), where the bound
 /// is the `Drop`-freedom proof. The derived `Clone` is that same shallow copy; **duplicating** a
 /// value — rebuilding its substrates in a destination region — is [`Self::deep_clone`].
 #[derive(Clone, Copy)]
 pub enum KObject<'a> {
     Number(f64),
     /// String value: a region-hosted `&'a str`, bumped into the region the value lives in
-    /// ([`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator)). The slot owns
+    /// ([`RegionBrand::allocator`](crate::memory::RegionBrand::allocator)). The slot owns
     /// no allocation, so it runs no `Drop` at region death and [`Self::deep_clone`] is a pointer
     /// copy; the bytes are freed as bump chunks with the rest of the region. Every door that claims
     /// a region's *release* re-bumps the bytes at its destination, so a stored string cell is always
@@ -590,13 +590,13 @@ impl<'a> KObject<'a> {
 ///   signature obligation instead of an ordering comment.
 /// - A **substrate carrier** hands in its own nested substrate's stored union, which is exact by
 ///   construction. The run-level self rule at the door
-///   ([`Sectioned::build`](crate::witnessed::Sectioned::build)) drops that substrate's home when it
+///   ([`Sectioned::build`](crate::memory::Sectioned::build)) drops that substrate's home when it
 ///   *is* the destination, so a co-resident sub-container contributes nothing of its own residence
 ///   while a foreign one contributes the region it lives in — which is what keeps the borrows-home
 ///   memo answering the question it exists for: does a borrow *leaf* point home.
 /// - A `KFunction` / `Module` is a **born-borrowing seed** naming the scope it captures: the `FN`
 ///   door naming a closure's captured scope, the module door naming its child scope.
-fn cell_reach<'a>(cell: &Rehomed<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<'a, FrameStorage> {
+fn cell_reach<'a>(cell: &Rehomed<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<'a> {
     match cell.cell() {
         Held::Type(_) | Held::UnresolvedType(_) => CellReach::Owned,
         // A name carrier lives in a bound-argument slot, never in a container substrate.
@@ -608,10 +608,7 @@ fn cell_reach<'a>(cell: &Rehomed<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<
 }
 
 /// The [`Held::Object`] arm of [`cell_reach`] — see its doc for the per-shape rules.
-fn object_cell_reach<'a>(
-    o: &KObject<'a>,
-    door: SubstrateDoor<'a, '_>,
-) -> CellReach<'a, FrameStorage> {
+fn object_cell_reach<'a>(o: &KObject<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<'a> {
     match o {
         // A string cell is `Owned` because [`section_cells`] re-bumped its bytes into this door's
         // own region first, so it borrows nothing outside the container it is landing in.
@@ -647,10 +644,7 @@ fn object_cell_reach<'a>(
 /// The [`CellReach::Pinned`] verdict for a substrate-carrier cell: its nested substrate's stored
 /// union, under the door's holder-rule proof. The door folds in the nested substrate's own home
 /// region unless that is the destination itself.
-fn pinned_cell<'a>(
-    reach: &'a FrameReach,
-    door: SubstrateDoor<'a, '_>,
-) -> CellReach<'a, FrameStorage> {
+fn pinned_cell<'a>(reach: &'a FrameReach, door: SubstrateDoor<'a, '_>) -> CellReach<'a> {
     CellReach::Pinned {
         reach,
         coverage: door.holder(),
@@ -943,7 +937,7 @@ pub(crate) enum RegionEscape {
     /// derives it from the **product** the rebuild built ([`product_reaches_region`]), so the
     /// verdict and the act cannot disagree.
     ///
-    /// [`product_reaches_region`]: crate::machine::core::product_reaches_region
+    /// [`product_reaches_region`]: crate::memory::product_reaches_region
     Copy,
     /// Total rebuild of a **callable's captured environment** at the destination region: the
     /// per-call portion of the scope chain a `KFunction` captured is rebuilt there — data bindings

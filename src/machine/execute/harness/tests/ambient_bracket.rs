@@ -5,11 +5,12 @@ use std::rc::Rc;
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::LexicalFrame;
-use crate::machine::core::run_root_storage;
-use crate::machine::core::{ReturnContract, program_storage};
+use crate::machine::core::ReturnContract;
 use crate::machine::execute::nodes::{NodePayload, NodeScope};
 use crate::machine::execute::obligation::{ParkState, ReturnObligation};
 use crate::machine::model::KType;
+use crate::memory::program_storage;
+use crate::memory::run_root_storage;
 
 /// A trivial declared-return obligation the bracket tests deposit: any deposited obligation makes
 /// `current_obligation()` answer `Some` inside the step.
@@ -22,7 +23,7 @@ fn sample_obligation() -> ReturnObligation {
 
 /// A park state carrying both fields, so each test covers the whole ambient slot: the obligation
 /// and the block frame a leading-carrying tail parks with.
-fn sample_park(block_frame: Rc<crate::machine::CallFrame>) -> ParkState {
+fn sample_park(block_frame: Rc<crate::memory::CallFrame>) -> ParkState {
     ParkState {
         obligation: Some(sample_obligation()),
         block_frame: Some(block_frame),

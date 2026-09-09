@@ -9,8 +9,8 @@
 //! reference a per-call parameter (`-> er`, `-> er.Carrier`) survive FN-definition without
 //! sub-dispatching against the outer scope.
 
-use crate::machine::core::RegionBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression, WorkingPart};
+use crate::memory::RegionBrand;
 
 use super::ktype::{KType, display_label};
 use super::node::TypeNode;

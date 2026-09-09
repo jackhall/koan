@@ -2,18 +2,17 @@ use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
-use crate::machine::core::{
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{KKey, KObject, TypeRegistry};
+use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
+use crate::memory::CarriedFamily;
+use crate::memory::{BumpAllocator, BumpVec, Delivered, RegionHandle, reattachable};
+use crate::memory::{Carried, Held};
+use crate::memory::{DeliveredCarried, KoanRegion};
+use crate::memory::{
     FoldingBrand, KoanRegionExt, KoanStorageProfile, RegionBrand, SplicedCell, SubstrateDoor,
 };
-use crate::machine::model::CarriedFamily;
-use crate::machine::model::{Carried, Held, KKey, KObject, TypeRegistry};
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
-use crate::machine::{
-    CarrierWitness, DeliveredCarried, FrameStorage, KError, KErrorKind, KoanRegion, NodeId,
-    TraceFrame,
-};
 use crate::source::Spanned;
-use crate::witnessed::{BumpAllocator, BumpVec, Delivered, RegionHandle, reattachable};
 
 use super::super::StepCarried;
 use super::super::harness::{Host, KoanWorkload};
@@ -26,8 +25,8 @@ use super::stage_eager_part;
 use crate::machine::Scope;
 use crate::machine::model::BinderSymbol;
 use crate::machine::model::RunRegistries;
+use crate::memory::RegionHandleFamily;
 use crate::scheduler::{Deps, Scheduler};
-use crate::witnessed::RegionHandleFamily;
 
 /// Build-time product family for an aggregate relocation. Layout-invariant in `'r`: a thin region
 /// pointer and a slice of layout-invariant cells.
@@ -37,7 +36,7 @@ use crate::witnessed::RegionHandleFamily;
 /// dropped by nobody. The run is bumped once, inside the relocation's single brand, so its bytes
 /// are proportional to the aggregate rather than to the walk that built it.
 struct AggBuildFamily;
-reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
+reattachable!(AggBuildFamily => (RegionHandle<'r>, &'r [Held<'r>]));
 
 /// One cell of a list / dict / record literal. A `Static` cell is wrapped into a delivery envelope
 /// **at its source** and then rested into the realizing frame's region, so it rides the row plan as
@@ -104,9 +103,9 @@ fn cell_carrier(
 fn fold_cells(
     view: &DecideCtx<'_, '_, '_>,
     cells: &[DeliveredCarried],
-) -> Delivered<AggBuildFamily, CarrierWitness, FrameStorage> {
+) -> Delivered<AggBuildFamily> {
     DeliveredCarried::transfer_all_into::<
-        RegionHandleFamily<KoanStorageProfile>,
+        RegionHandleFamily,
         AggBuildFamily,
         HeldFamily,
         KoanStorageProfile,
@@ -282,8 +281,7 @@ impl<'step> Host<'step> {
             // stored description of its own (a spliced expression). The per-cell rule applies one
             // level down, at each cell's own rebuild inside `fold_cells`.
             let holder = acc.coverage().clone();
-            let built = acc
-                .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+            let built = acc.merge_into::<RegionHandleFamily, CarriedFamily, KoanStorageProfile>(
                 Delivered::destination(dest_frame),
                 move |(_region, value_helds), _dest_handle, placement| {
                     let region = FoldingBrand::in_fold_closure(placement);

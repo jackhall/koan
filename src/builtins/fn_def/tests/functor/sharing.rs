@@ -2,8 +2,8 @@
 
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{TestRun, lookup_fn, lookup_module, spliced_part, type_token};
-use crate::machine::model::Carried;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::Carried;
+use crate::memory::{program_storage, run_root_storage};
 
 /// Pinned-slot admissibility: a `Signature` slot with `{Elem = Number}` folded in admits a
 /// module iff its self-sig satisfies the folded schema — the pin is a manifest member, so

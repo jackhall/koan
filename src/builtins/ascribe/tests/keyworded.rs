@@ -12,7 +12,7 @@
 use crate::builtins::test_support::{TestRun, lookup_module};
 use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The running fixture: one abstract member, the *same* function offered on both lanes — a `VAL
 /// pure` slot and a `(PURE _)` bucket member — and a `(HIDE _)` bucket the signature never names.

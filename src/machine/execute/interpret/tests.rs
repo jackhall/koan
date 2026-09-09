@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use super::*;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{FrameStorage, ProgramStorage, run_root_storage};
+use crate::memory::{FrameStorage, ProgramStorage, run_root_storage};
 
 pub(super) struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 

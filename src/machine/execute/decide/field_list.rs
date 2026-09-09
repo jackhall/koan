@@ -25,7 +25,6 @@ use crate::machine::ProducerId;
 use crate::machine::core::LexicalFrame;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{DepPlacement, FinishCtx};
-use crate::machine::model::Carried;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{
     DeclWindow, Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
@@ -33,8 +32,9 @@ use crate::machine::model::{
 };
 use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, Scope, TraceFrame};
+use crate::memory::BumpVec;
+use crate::memory::Carried;
 use crate::scheduler::{Dep, Deps};
-use crate::witnessed::BumpVec;
 
 use super::super::StepCarried;
 use super::super::outcome::DepTerminal;

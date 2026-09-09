@@ -5,20 +5,19 @@
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::source::{SourceRef, Spanned};
 
-use crate::machine::core::DeliveredCarried;
 use crate::machine::core::kfunction::action::BoundArg;
-use crate::machine::core::{
-    FoldingBrand, KError, KErrorKind, KoanStorageProfile, RegionBrand, Scope,
-};
+use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::NamedPairs;
 #[cfg(test)]
 use crate::machine::model::SignatureDraft;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
 use crate::machine::model::{ExpressionSignature, Record, SignatureElement, shape_type_of};
 use crate::machine::model::{Unifier, UnifyFailure, Variance, admits_with};
+use crate::memory::BumpVec;
+use crate::memory::DeliveredCarried;
 use crate::memory::DeliveredFunction;
-use crate::witnessed::BumpVec;
-use crate::witnessed::RegionHandleFamily;
+use crate::memory::RegionHandleFamily;
+use crate::memory::{FoldingBrand, KoanStorageProfile, RegionBrand};
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
 /// `machine::execute`'s `run_action`.
@@ -66,10 +65,10 @@ pub struct KFunction<'a> {
     shape_ktype: KType,
 }
 
-/// [`Reattachable`](crate::witnessed::Reattachable) family for [`KFunction`] — the carrier family a
+/// [`Reattachable`](crate::memory::Reattachable) family for [`KFunction`] — the carrier family a
 /// function value travels under when it flows through the three witnessed-carrier states as
 /// `Sealed<KFunctionFamily, _>` / `Opened<'step, KFunctionFamily, _>`, the function-table twin of
-/// [`CarriedFamily`](crate::machine::model::CarriedFamily). Registered here rather than adding a
+/// [`CarriedFamily`](crate::memory::CarriedFamily). Registered here rather than adding a
 /// `Carried::Function` variant because the witnessed library is generic over `Reattachable`
 /// families.
 ///
@@ -80,7 +79,7 @@ pub struct KFunction<'a> {
 /// macro discharges the layout-invariance obligation once.
 pub struct KFunctionFamily;
 
-crate::witnessed::reattachable! {
+crate::memory::reattachable! {
     KFunctionFamily => &'r KFunction<'r>,
 }
 
@@ -95,12 +94,12 @@ struct FunctionBirth<'r> {
     body: Body<'r>,
 }
 
-/// [`Reattachable`](crate::witnessed::Reattachable) family for [`FunctionBirth`] — the seed operand
+/// [`Reattachable`](crate::memory::Reattachable) family for [`FunctionBirth`] — the seed operand
 /// [`KFunction::alloc_captured`]'s merge folds, delivered resident at the captured scope so the
 /// composition's source pins name exactly that region.
 struct FunctionBirthFamily;
 
-crate::witnessed::reattachable! {
+crate::memory::reattachable! {
     FunctionBirthFamily => FunctionBirth<'r>,
 }
 
@@ -119,7 +118,7 @@ impl<'a> KFunction<'a> {
     /// **A witnessed birth.** The three ingredients ride in as one resident seed
     /// ([`FunctionBirth`], delivered at the captured scope, so the source operand's pins are exactly
     /// that region) and the callable is assembled *inside* a
-    /// [`merge_into`](crate::witnessed::Delivered::merge_into) whose destination is that same
+    /// [`merge_into`](crate::memory::Delivered::merge_into) whose destination is that same
     /// region's own handle. The fold's rank-2 brand is the residence proof — an ambient region
     /// borrow cannot inhabit `KFunction<'b>`, so the finished callable can borrow nothing but the
     /// fold's declared operands — and the merge *composes* the product's description from the seed's
@@ -198,7 +197,7 @@ impl<'a> KFunction<'a> {
         };
         captured
             .deliver_resident::<FunctionBirthFamily>(seed)
-            .merge_into::<RegionHandleFamily<KoanStorageProfile>, KFunctionFamily, KoanStorageProfile>(
+            .merge_into::<RegionHandleFamily, KFunctionFamily, KoanStorageProfile>(
                 captured.dest_operand(),
                 |birth, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);

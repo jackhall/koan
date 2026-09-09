@@ -26,17 +26,15 @@
 //! Surface design: [design/operators.md](../../design/operators.md).
 
 use crate::machine::WriteGate;
-use crate::machine::core::RegionBrand;
 use crate::machine::execute::extend_deps_on;
+use crate::memory::RegionBrand;
 use crate::scheduler::Deps;
 
 use crate::machine::BindingIndex;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
-use crate::machine::core::ProgramBrand;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{WriteOp, powerset_probes};
-use crate::machine::model::CarriedFamily;
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KKind, KType};
@@ -46,9 +44,11 @@ use crate::machine::{
     Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal, FinishCtx, SubDispatch,
     require_kexpression,
 };
-use crate::machine::{Body, CarrierWitness, KError, KErrorKind, Scope};
+use crate::machine::{Body, KError, KErrorKind, Scope};
+use crate::memory::CarriedFamily;
+use crate::memory::ProgramBrand;
+use crate::memory::Witnessed;
 use crate::source::Spanned;
-use crate::witnessed::Witnessed;
 
 use super::fn_def::return_type::{
     ReturnTypeState, TypeSlotThunk, classify_return_type, type_carrier_union,
@@ -392,10 +392,7 @@ struct OpPlan<'program: 'a, 'a> {
 /// at-most-four binding writes its [`OpKind`] calls for — a unary operator's list overload, binary
 /// bridge and single-member group, or a binary operator's overload and its own group, plus the
 /// combined form's value binding either way.
-type FinalizedOp<'a> = (
-    Witnessed<CarriedFamily, CarrierWitness>,
-    [Option<WriteOp<'a>>; 4],
-);
+type FinalizedOp<'a> = (Witnessed<CarriedFamily>, [Option<WriteOp<'a>>; 4]);
 
 impl<'program: 'a, 'a> OpPlan<'program, 'a> {
     /// Synthesize the operator's `KFunction`(s) and describe the writes they imply — the function
@@ -704,7 +701,7 @@ fn bridge_body<'a>(
 /// Seal a finalize result as the slot's terminal — the operator function value, built witnessed in
 /// its declaring scope's region.
 fn op_action<'a>(
-    scratch: crate::witnessed::BumpAllocator<'a>,
+    scratch: crate::memory::BumpAllocator<'a>,
     result: Result<FinalizedOp<'a>, KError>,
 ) -> Action<'a> {
     match result {
@@ -791,8 +788,7 @@ fn declare<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, has_result: bool) -> Act
         });
     }
     Action::done(Ok(StepCarried::born(
-        ctx.scope
-            .resident(crate::machine::model::Carried::Type(primary)),
+        ctx.scope.resident(crate::memory::Carried::Type(primary)),
     )))
     .with_effects(ctx.scratch, writes)
 }

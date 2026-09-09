@@ -1,7 +1,9 @@
 //! [`KoanRuntime::scheduler`] is scoped `pub(in crate::machine::execute)`, so a test that needs a
 //! delivered edge terminal cannot read one from its own call site — it reaches through here.
 
-use crate::machine::{DeliveredCarried, FrameCoverage, KError, Scope};
+use crate::machine::{KError, Scope};
+
+use crate::memory::{DeliveredCarried, FrameCoverage};
 use crate::scheduler::EdgeId;
 
 use super::KoanRuntime;

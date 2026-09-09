@@ -4,7 +4,7 @@
 
 use crate::builtins::test_support::{TestRun, fn_is_registered};
 use crate::machine::model::KObject;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// Both channels install: the keyworded call dispatches, and the bound name holds the callable.
 #[test]

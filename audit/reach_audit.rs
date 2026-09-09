@@ -30,9 +30,10 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::DeliveredCarried;
-use crate::machine::model::{Carried, Held, KObject};
-use crate::witnessed::PinsRegion;
+use crate::machine::model::KObject;
+use crate::memory::DeliveredCarried;
+use crate::memory::PinsRegion;
+use crate::memory::{Carried, Held};
 
 use crate::memory::FrameStorage;
 
@@ -117,7 +118,7 @@ fn collect_object_addresses(object: &KObject<'_>, out: &mut AddressSet) {
 /// The substrate's own address plus every cell it stores — the shared arm of the four composite
 /// carriers, which differ only in their index block.
 fn collect_substrate_addresses<C>(
-    substrate: &crate::machine::model::ContainerSubstrate<'_, C>,
+    substrate: &crate::memory::ContainerSubstrate<'_, C>,
     out: &mut AddressSet,
 ) {
     out.insert(substrate as *const _ as usize);

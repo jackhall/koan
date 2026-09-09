@@ -52,7 +52,7 @@ use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ValueSymbol;
 use crate::machine::model::display_label;
-use crate::witnessed::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { body, combiner, name } }

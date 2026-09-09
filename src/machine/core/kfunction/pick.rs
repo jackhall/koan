@@ -10,7 +10,7 @@ use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 
 use super::KFunction;
 use crate::machine::model::RunRegistries;
-use crate::witnessed::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec};
 
 /// The auto-wrap classification produced by [`KFunction::classify_for_pick`]: the bare-Identifier /
 /// bare-Type parts in non-literal-name slots, to resolve as sub-Dispatches. A literal-name slot
@@ -100,7 +100,7 @@ pub fn carried_slot_ktype(
 ) -> Option<KType> {
     match part {
         WorkingPart::Ast(ast) => KType::slot_ktype(ast, &registries.types),
-        WorkingPart::Spliced { cell, .. } => Some(crate::machine::core::read_resting(cell, |c| {
+        WorkingPart::Spliced { cell, .. } => Some(crate::memory::read_resting(cell, |c| {
             carried_channel_ktype(c, declared, registries)
         })),
         WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => None,

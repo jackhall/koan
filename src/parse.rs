@@ -13,9 +13,9 @@ mod operators;
 use std::rc::Rc;
 
 use crate::machine::KError;
-use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::labels::LabelInterner;
+use crate::memory::ProgramBrand;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile};
 
 #[cfg(test)]

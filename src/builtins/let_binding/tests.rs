@@ -5,7 +5,7 @@ use crate::machine::model::{KObject, KType};
 #[test]
 fn binder_name_extracts_let_name() {
     use crate::builtins::test_support::parse_one;
-    use crate::machine::program_storage;
+    use crate::memory::program_storage;
     let program = program_storage();
     let labels = crate::machine::model::LabelInterner::new();
     let expr = parse_one(&program, &labels, "LET hello = 1");
@@ -20,7 +20,7 @@ fn binder_name_extracts_let_name() {
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
     use crate::parse::parse;
     let program = program_storage();
     let region = run_root_storage();
@@ -55,8 +55,8 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
 fn let_t_cycle_errors() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     use crate::parse::parse;
     let program = program_storage();
     let region = run_root_storage();
@@ -99,8 +99,8 @@ fn let_t_cycle_errors() {
 #[test]
 fn let_type_class_with_non_type_value_errors() {
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     use crate::parse::parse;
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
         let program = program_storage();
@@ -140,8 +140,8 @@ fn let_type_class_with_non_type_value_errors() {
 #[test]
 fn let_type_class_with_type_value_still_binds() {
     use crate::machine::model::KType;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     use crate::parse::parse;
     let program = program_storage();
     let region = run_root_storage();
@@ -178,8 +178,8 @@ fn let_type_class_with_type_value_still_binds() {
 /// `Held::Type` arm and so isn't subject to the type-class allowlist.
 #[test]
 fn let_identifier_lhs_with_non_type_still_binds() {
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     use crate::parse::parse;
     let program = program_storage();
     let region = run_root_storage();
@@ -222,8 +222,8 @@ fn let_identifier_lhs_with_non_type_still_binds() {
 #[test]
 fn let_parameterized_type_lhs_matches_no_overload() {
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     use crate::parse::parse;
     let program = program_storage();
     let region = run_root_storage();
@@ -276,8 +276,8 @@ fn let_parameterized_type_lhs_matches_no_overload() {
 fn let_aliases_struct_preserves_type_identity() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::model::KType;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -305,8 +305,8 @@ fn let_aliases_struct_preserves_type_identity() {
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -342,8 +342,8 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
 fn let_type_class_with_plain_function_rejects() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -367,8 +367,8 @@ fn let_type_class_with_plain_function_rejects() {
 #[test]
 fn let_type_class_in_sig_body_binds_manifest() {
     use crate::builtins::test_support::{TestRun, type_name};
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -403,8 +403,8 @@ fn let_type_class_in_sig_body_binds_manifest() {
 #[test]
 fn let_type_class_signature_alias_preserves_identity() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -432,8 +432,8 @@ fn let_type_class_signature_alias_preserves_identity() {
 fn let_type_class_lhs_with_module_rhs_rejects() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -464,8 +464,8 @@ fn let_type_class_lhs_with_module_rhs_rejects() {
 fn let_value_class_lhs_with_signature_rhs_rejects() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -487,8 +487,8 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
 #[test]
 fn let_value_class_with_module_rhs_binds_value_side() {
     use crate::builtins::test_support::{TestRun, binds_module};
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -516,8 +516,8 @@ fn let_value_class_with_module_rhs_binds_value_side() {
 fn let_builtin_type_names_are_uniformly_already_bound() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -551,8 +551,8 @@ fn let_builtin_type_names_are_uniformly_already_bound() {
 fn sibling_declarators_report_the_same_uniform_refusal() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -589,8 +589,8 @@ fn sibling_declarators_report_the_same_uniform_refusal() {
 fn the_type_class_respelling_is_offered_only_when_it_classifies() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);

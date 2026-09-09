@@ -5,9 +5,9 @@
 //! names no type on its own (see
 //! [design/typing/modules.md](../../../design/typing/modules.md)).
 
-use crate::machine::model::Held;
 use crate::machine::{Action, BodyCtx};
 use crate::machine::{KError, KErrorKind};
+use crate::memory::Held;
 
 pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let value = match ctx.args.held(&super::SLOTS.value) {

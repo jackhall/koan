@@ -7,20 +7,19 @@ use std::rc::Rc;
 use smallvec::SmallVec;
 
 use crate::machine::core::DepPlacement;
-use crate::machine::core::{
-    FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand, Scope,
-};
-use crate::machine::model::CarriedFamily;
-use crate::machine::model::{Carried, KObject, Record};
+use crate::machine::core::Scope;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{KObject, Record};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
-use crate::machine::{
-    CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, RegionTypeFamily,
-};
-use crate::source::Spanned;
-use crate::witnessed::{
+use crate::machine::{KError, KErrorKind};
+use crate::memory::Carried;
+use crate::memory::CarriedFamily;
+use crate::memory::{
     BumpAllocator, BumpVec, Delivered, RegionHandle, RegionHandleFamily, reattachable,
 };
+use crate::memory::{DeliveredCarried, KoanRegion, RegionTypeFamily};
+use crate::memory::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand};
+use crate::source::Spanned;
 
 use super::super::StepCarried;
 use super::super::outcome::DepTerminal;
@@ -54,14 +53,14 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
 
 /// Relocation product for a record-repr newtype: the destination region plus the field values
 /// gathered from the value deps, relocated as one run so the product's witness composes by minting
-/// into that region (the [`HasRegionHandle`](crate::witnessed::HasRegionHandle) seam).
+/// into that region (the [`HasRegionHandle`](crate::memory::HasRegionHandle) seam).
 /// Layout-invariant, and bumped exactly once: the run rides the Copy tier, whose dormant slot runs
 /// no drop glue, so an owned buffer could not live there.
 ///
 /// Only the *values* ride the carrier. The field **names** are owned data with no region lifetime,
 /// so they stay beside the relocation and pair back with the relocated values at the final merge.
 struct RecordFieldsFamily;
-reattachable!(RecordFieldsFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [KObject<'r>]));
+reattachable!(RecordFieldsFamily => (RegionHandle<'r>, &'r [KObject<'r>]));
 
 /// The per-source cell family the field relocation hands back: one rebuilt field value per term,
 /// each paired with its own source envelope to derive that field's retention claim.
@@ -322,7 +321,7 @@ fn launch<'step>(
 pub(crate) fn build_type_operand(
     dest_frame: Rc<FrameStorage>,
     identity: KType,
-) -> Delivered<RegionTypeFamily, CarrierWitness, FrameStorage> {
+) -> Delivered<RegionTypeFamily> {
     KoanRegion::yoke_branded::<RegionTypeFamily, _>(dest_frame, |b| (b.handle(), identity))
 }
 
@@ -406,7 +405,7 @@ fn finish_witnessed<'step>(
                 .map(|term| view.current_scope().lift_spliced(&term.cell))
                 .collect();
             let fields = DeliveredCarried::transfer_all_into::<
-                RegionHandleFamily<KoanStorageProfile>,
+                RegionHandleFamily,
                 RecordFieldsFamily,
                 KObjectFamily,
                 KoanStorageProfile,

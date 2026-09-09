@@ -5,8 +5,9 @@
 //! returns a module satisfying `er`'s interface.
 
 use crate::builtins::test_support::{TestRun, lookup_fn};
+use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
-use crate::machine::{KErrorKind, program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// `-> :(TYPE OF er)` with a module-valued parameter is a legal return: the return type defers as an
 /// expression carrier and resolves per-call to `Signature { SelfOf(er) }`, and the body returns the

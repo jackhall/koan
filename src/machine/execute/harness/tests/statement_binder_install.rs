@@ -15,8 +15,8 @@ use std::rc::Rc;
 
 use super::working_all;
 use crate::builtins::test_support::{TestRun, binds_module};
-use crate::machine::core::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 use crate::machine::model::{KObject, KType};
+use crate::memory::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 
 /// Run `source` as one top-level block (source-order index gating) and hand back
 /// the whole bundle, so callers read the post-run scope and the run's registry.

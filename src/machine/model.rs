@@ -45,7 +45,6 @@ pub use values::{KKey, KObject, Scalar, ValueEqualityError};
 // substrates now live in `crate::memory`; these keep the old paths resolving until the import
 // sweep lands, and are deleted with it.
 pub use crate::memory::{Carried, ContainerSubstrate, Held, PartedCell};
-pub(crate) use crate::memory::{CarriedFamily, object_copy_cost};
 
 pub(crate) use ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass, ProgramExpression,

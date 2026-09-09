@@ -2,7 +2,7 @@
 //! `(name, type)` fields and the FN parameter list. Generic over the value, though the registry's
 //! nodes are the only residents, so `Record<KType>` is what it is instantiated at; a record
 //! *value* lays its cells out in a region-hosted substrate instead
-//! ([`ContainerSubstrate`](crate::machine::model::ContainerSubstrate)).
+//! ([`ContainerSubstrate`](crate::memory::ContainerSubstrate)).
 //!
 //! Keys are [`BinderSymbol`]s, never text: a field name is a fixed-width content digest carried
 //! alongside the binding class its own parse established, so a lookup is a `u128` compare and no

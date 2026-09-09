@@ -11,11 +11,13 @@
 //! so no expression entering a sectioned container has a reach to describe. A working node cannot
 //! reach the value channel at all — not by audit, but because no constructor takes one.
 
-use crate::machine::core::{RegionBrand, read_resting};
+use crate::machine::AdoptSeam;
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner};
-use crate::machine::model::{Carried, Held, KObject, RunRegistries};
+use crate::machine::model::{KObject, RunRegistries};
 use crate::machine::model::{KeyElement, UntypedKey};
-use crate::machine::{AdoptSeam, SplicedCell};
+use crate::memory::SplicedCell;
+use crate::memory::{Carried, Held};
+use crate::memory::{RegionBrand, read_resting};
 use crate::source::{FileId, SourceRef, Span, Spanned};
 
 use super::shape::{

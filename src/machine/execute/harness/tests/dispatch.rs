@@ -8,15 +8,15 @@ use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::BindingIndex;
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
+use crate::memory::Carried;
 
 use super::working;
 use crate::builtins::test_support::{TestRun, kw_part, value_name};
 use crate::machine::model::RunRegistries;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 use crate::source::Spanned;
 
 fn body_identifier<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {

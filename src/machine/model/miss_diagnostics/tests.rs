@@ -6,10 +6,10 @@ use std::collections::HashSet;
 
 use super::MISS_DIAGNOSTICS;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::UntypedKey;
 use crate::machine::model::key_spec::{key_matches_untyped, render_key};
 use crate::machine::{KErrorKind, model::key_spec::key_specs_agree};
+use crate::memory::{program_storage, run_root_storage};
 
 /// Every bucket key the seeded root registers a callable under.
 fn live_buckets() -> HashSet<UntypedKey> {

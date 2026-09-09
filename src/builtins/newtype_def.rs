@@ -34,8 +34,8 @@ use crate::source::Spanned;
 
 use super::{arg, arg_labeled, kw, sig};
 use crate::machine::model::BinderSymbol;
-use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
+use crate::memory::Carried;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { decl, name, repr } }
@@ -378,9 +378,9 @@ mod tests {
     use crate::builtins::test_support::{TestRun, binds_module, parse_one, type_name};
     use crate::machine::model::{KKind, NodeSchema, TypeNode, TypeRegistry};
     use crate::machine::model::{KObject, KType, Record};
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
     use crate::machine::{KErrorKind, Scope};
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
 
     /// `(scc-size, member-handle, record-fields)` of a sealed record-repr newtype, read off its
     /// `SetMember` identity so assertions see the absolute member handles the sealed schema's

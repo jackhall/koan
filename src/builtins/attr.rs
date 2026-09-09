@@ -30,15 +30,17 @@ use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KKind;
-use crate::machine::model::{BinderSymbol, Carried, Module, NodeSchema, TypeSymbol};
-use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, TypeNode};
+use crate::machine::model::{BinderSymbol, Module, NodeSchema, TypeSymbol};
+use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
+use crate::memory::Carried;
+use crate::memory::{CarriedFamily, Held, PartedCell};
 
 use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
-use crate::machine::DeliveredCarried;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
+use crate::memory::DeliveredCarried;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { field, s } }
@@ -649,7 +651,7 @@ fn wrapped_field_cell<'w>(
 ///
 /// The member is **parted** from its container ([`wrapped_field_cell`]) under the envelope's own
 /// pins, so it arrives paired with exactly its own run's stored reach rather than the whole
-/// container's. [`Opened::lift_out`](crate::witnessed::Opened::lift_out) is the relocation seam that
+/// container's. [`Opened::lift_out`](crate::memory::Opened::lift_out) is the relocation seam that
 /// turns that run into owned coverage — the run's members plus the region the cell lives in, and
 /// nothing else — and the field carrier is then folded from *that* envelope, so the product names
 /// exactly what the member reaches instead of everything the container did.
@@ -876,8 +878,8 @@ mod tests {
     use crate::machine::KErrorKind;
     use crate::machine::model::KObject;
     use crate::machine::model::KType;
-    use crate::machine::program_storage;
-    use crate::machine::run_root_storage;
+    use crate::memory::program_storage;
+    use crate::memory::run_root_storage;
 
     /// A field position captures its token, so a name that happens to spell a primitive is read
     /// exactly like any other Type-classed field: it names no member of `Ordered`, and the miss

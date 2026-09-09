@@ -10,9 +10,9 @@
 use crate::builtins::test_support::{TestRun, operator_run, probe_symbol};
 use crate::machine::BindingIndex;
 use crate::machine::GroupSeal;
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::model::{FoldDirection, ReductionMode};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The combiner is declared with `OP`, the surface that gives it the infix keyword shape the
 /// reducer synthesizes. The `%` body is a plain `FN` rather than an `OP`: `OP` would write its own

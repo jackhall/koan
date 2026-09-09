@@ -9,26 +9,25 @@
 use std::rc::Rc;
 
 use super::Scope;
+use crate::machine::KError;
 use crate::machine::core::BindingsReferenceFamily;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
-use crate::machine::core::{
-    FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt,
-    KoanStorageProfile, RegionBrand, product_reaches_region,
-};
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::ModuleRefFamily;
 use crate::machine::model::{
-    Carried, CarriedFamily, KObject, KType, Module, OperatorGroup, OperatorGroupFamily,
-    ReductionMode, RegionEscape, coerce_object_into, copy_or_pin, relocate_object_into,
+    KObject, KType, Module, OperatorGroup, OperatorGroupFamily, ReductionMode, RegionEscape,
+    coerce_object_into, copy_or_pin, relocate_object_into,
 };
-use crate::machine::{
-    CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, KError, SealedOperatorGroup,
-    SplicedCell,
-};
-use crate::memory::{DeliveredFunction, OpenedFunction, SealedFunction};
-use crate::witnessed::{
+use crate::memory::{Carried, CarriedFamily};
+use crate::memory::{
     Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, SealedExtern, Witnessed,
+};
+use crate::memory::{DeliveredCarried, DeliveredOperatorGroup, SealedOperatorGroup, SplicedCell};
+use crate::memory::{DeliveredFunction, OpenedFunction, SealedFunction};
+use crate::memory::{
+    FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt,
+    KoanStorageProfile, RegionBrand, product_reaches_region,
 };
 
 // The tests here pin the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy` build
@@ -53,7 +52,7 @@ impl<'a> Scope<'a> {
     /// Mint `sources` into this scope's own arena, which is the same act that folds the composed
     /// bundle into the **region's** union bundle — the scope-side reach-derivation door, a veneer
     /// over the library's fused
-    /// [`RegionHandle::mint_retained`](crate::witnessed::RegionHandle::mint_retained). Each source is
+    /// [`RegionHandle::mint_retained`](crate::memory::RegionHandle::mint_retained). Each source is
     /// a caller's owned claim (a delivery envelope's whole coverage, or a release-exact subset of
     /// it), which already names the value's home region as an ordinary member: there is no residence
     /// mode to choose.
@@ -125,7 +124,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn resident<'v: 'a, T: Reattachable + DropFree>(
         &self,
         value: T::At<'v>,
-    ) -> Witnessed<T, CarrierWitness> {
+    ) -> Witnessed<T> {
         self.brand().seal_resident(value)
     }
 
@@ -134,7 +133,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn seal_resident<'v: 'a, T: Reattachable + DropFree>(
         &self,
         value: T::At<'v>,
-    ) -> Sealed<'a, T, CarrierWitness> {
+    ) -> Sealed<'a, T> {
         Sealed::seal(self.resident(value), self.brand().handle())
     }
 
@@ -158,7 +157,7 @@ impl<'a> Scope<'a> {
         &self,
         value: T::At<'v>,
         reach: &'a FrameReach,
-    ) -> Sealed<'a, T, CarrierWitness> {
+    ) -> Sealed<'a, T> {
         Sealed::seal(
             self.brand().seal_reaching(value, reach),
             self.brand().handle(),
@@ -272,7 +271,7 @@ impl<'a> Scope<'a> {
     /// nothing here upgrades the cell's members: the pin names one region, so it must be the one
     /// the description lives in.
     ///
-    /// The pin-less twin ([`read_resting`](crate::machine::core::read_resting)) stays for probes
+    /// The pin-less twin ([`read_resting`](crate::memory::read_resting)) stays for probes
     /// reached from signatures that carry no scope at all.
     pub(crate) fn read_spliced<R>(
         &self,
@@ -284,13 +283,13 @@ impl<'a> Scope<'a> {
 
     /// **Lift** a binding's dormant carrier into a delivery envelope pinned by this scope's own
     /// region owner (`Sealed → Delivered`) — the scope-side spelling of
-    /// [`RegionBrand::lift_resident`](crate::machine::core::RegionBrand), which owns the mechanism.
+    /// [`RegionBrand::lift_resident`](crate::memory::RegionBrand), which owns the mechanism.
     /// `self` must be the **binding** scope — the region the value lives in, whose arena hosts the
     /// description the upgrade reads.
     pub(crate) fn lift_resident<T: Reattachable + DropFree>(
         &self,
-        sealed: Sealed<T, CarrierWitness>,
-    ) -> Delivered<T, CarrierWitness, FrameStorage> {
+        sealed: Sealed<T>,
+    ) -> Delivered<T> {
         self.brand().lift_resident(sealed)
     }
 
@@ -302,7 +301,7 @@ impl<'a> Scope<'a> {
     ///
     /// Takes the value alone. The description's residence, the seal and the home pin all come off
     /// the library door on this scope's own region handle
-    /// ([`RegionHandle::deliver_resident`](crate::witnessed::RegionHandle::deliver_resident)), so
+    /// ([`RegionHandle::deliver_resident`](crate::memory::RegionHandle::deliver_resident)), so
     /// there is no home to pass and no coverage to assemble: a value reaching nothing beyond the
     /// region it lives in is covered by that region alone.
     ///
@@ -312,14 +311,14 @@ impl<'a> Scope<'a> {
     pub(crate) fn deliver_resident<'v: 'a, T: Reattachable + DropFree>(
         &self,
         value: T::At<'v>,
-    ) -> Delivered<T, CarrierWitness, FrameStorage> {
+    ) -> Delivered<T> {
         self.brand().deliver_resident(value)
     }
 
     /// Build an object into this scope's own region through a **zero-dep fold** and hand back the
     /// resident borrow. The door for a value that is region-pure in the sense that matters — every
     /// borrow it carries points into this region — but not `'static`, because a string literal's
-    /// bytes are bumped here ([`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator)).
+    /// bytes are bumped here ([`RegionBrand::allocator`](crate::memory::RegionBrand::allocator)).
     ///
     /// The fold brand discharges the residence obligation at compile time — an ambient borrow cannot
     /// inhabit `KObject<'b>` — and the product is re-anchored at `'a` through the library's own fused
@@ -340,7 +339,7 @@ impl<'a> Scope<'a> {
     /// delivery form of [`Self::resident`] over the value channel, pinned by this scope's own home
     /// frame under an empty foreign bundle. The door a producer hands a freshly placed value out
     /// through when its consumer binds at a `for<'b>` brand
-    /// ([`CallFrame::with_scope`](crate::machine::CallFrame::with_scope)): a bare `&'a KObject<'a>`
+    /// ([`CallFrame::with_scope`](crate::memory::CallFrame::with_scope)): a bare `&'a KObject<'a>`
     /// cannot cross that signature, while an envelope crosses as the witnessed shortening every
     /// other delivered value takes.
     pub(crate) fn deliver_resident_object(&self, object: &'a KObject<'a>) -> DeliveredCarried {
@@ -357,7 +356,7 @@ impl<'a> Scope<'a> {
     /// - A **`KString`**'s bytes are re-bumped into this region by the same fold, never shared with
     ///   whatever bump the source lives in.
     /// - A **`KExpression`** is raw AST, which names no producer region, so it takes the expression
-    ///   door ([`RegionBrand::alloc_expression`](crate::machine::core::RegionBrand::alloc_expression))
+    ///   door ([`RegionBrand::alloc_expression`](crate::memory::RegionBrand::alloc_expression))
     ///   whose signature admits nothing else.
     ///
     /// Every other shape borrows a region this door cannot name — a callable's captured scope, a
@@ -582,25 +581,24 @@ impl<'a> Scope<'a> {
         // the composition mints exactly what the verb's retention claim keeps — release-exact for a
         // Copy, everything the envelope named for a Pin. The composition also retains its bundle in
         // this scope's region, which is what covers the relocated value read in place.
-        let copied = cell
-            .transfer_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
-                dest,
-                |product, region| {
-                    !verb.rebuilds() || product_reaches_region(cell, product.as_object(), region)
-                },
-                |value, _handle, placement| {
-                    let door = FoldingBrand::in_fold_closure(placement).with_holder(&holder);
-                    match project(&value) {
-                        Ok(record) => Carried::Object(
-                            door.alloc_object_folded(relocate_object_into(record, verb, door)),
-                        ),
-                        Err(error) => {
-                            projection_error = Some(error);
-                            Carried::Object(door.alloc_object_folded(KObject::Null))
-                        }
+        let copied = cell.transfer_into::<RegionHandleFamily, CarriedFamily, KoanStorageProfile>(
+            dest,
+            |product, region| {
+                !verb.rebuilds() || product_reaches_region(cell, product.as_object(), region)
+            },
+            |value, _handle, placement| {
+                let door = FoldingBrand::in_fold_closure(placement).with_holder(&holder);
+                match project(&value) {
+                    Ok(record) => Carried::Object(
+                        door.alloc_object_folded(relocate_object_into(record, verb, door)),
+                    ),
+                    Err(error) => {
+                        projection_error = Some(error);
+                        Carried::Object(door.alloc_object_folded(KObject::Null))
                     }
-                },
-            );
+                }
+            },
+        );
         if let Some(error) = projection_error {
             return Err(error);
         }
@@ -632,7 +630,7 @@ impl<'a> Scope<'a> {
         registries: &crate::machine::model::RunRegistries,
     ) -> DeliveredCarried {
         let holder = cell.coverage().clone();
-        cell.transfer_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+        cell.transfer_into::<RegionHandleFamily, CarriedFamily, KoanStorageProfile>(
             self.dest_operand(),
             |_product, _region| true,
             |value, _handle, placement| {
@@ -670,10 +668,8 @@ impl<'a> Scope<'a> {
     /// merges into. A bare handle borrows nothing, so its coverage is empty and the composition
     /// mints exactly the source operands' reach into this region, stamping the product with this
     /// scope's own residence.
-    pub(crate) fn dest_operand(
-        &self,
-    ) -> Delivered<RegionHandleFamily<KoanStorageProfile>, CarrierWitness, FrameStorage> {
-        self.deliver_resident::<RegionHandleFamily<KoanStorageProfile>>(self.brand().handle())
+    pub(crate) fn dest_operand(&self) -> Delivered<RegionHandleFamily> {
+        self.deliver_resident::<RegionHandleFamily>(self.brand().handle())
     }
 
     /// Wrap a freshly born `KFunction` in its `KObject` carrier — the store every `FN` / `OP`
@@ -694,7 +690,7 @@ impl<'a> Scope<'a> {
     /// closure's signature.
     pub(crate) fn store_function_cell(&self, cell: &DeliveredFunction) -> SealedValue<'a> {
         cell.duplicate()
-            .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+            .merge_into::<RegionHandleFamily, CarriedFamily, KoanStorageProfile>(
                 self.dest_operand(),
                 |function_view, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);
@@ -780,7 +776,7 @@ impl<'a> Scope<'a> {
         let child = module.child_scope();
         let source = child.deliver_resident::<ModuleRefFamily>(module);
         source
-            .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+            .merge_into::<RegionHandleFamily, CarriedFamily, KoanStorageProfile>(
                 self.dest_operand(),
                 |module_view, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);

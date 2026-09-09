@@ -7,7 +7,7 @@
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 fn run_program(source: &str) -> Vec<u8> {
     let program = program_storage();

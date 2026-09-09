@@ -13,7 +13,7 @@ use crate::machine::core::bindings::NameLookup;
 #[cfg(test)]
 use crate::machine::model::KObject;
 use crate::machine::model::{KType, KeywordSymbol, TypeSymbol, ValueSymbol};
-use crate::machine::{DeliveredCarried, DeliveredOperatorGroup};
+use crate::memory::{DeliveredCarried, DeliveredOperatorGroup};
 
 /// Which tier of the chain a resolution landed in — the one distinction inferred capture turns on.
 ///

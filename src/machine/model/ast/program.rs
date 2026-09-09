@@ -15,7 +15,7 @@
 
 use std::ops::Deref;
 
-use crate::machine::core::{ProgramBrand, RegionBrand};
+use crate::memory::{ProgramBrand, RegionBrand};
 use crate::source::{FileId, Span, Spanned};
 
 use super::{ExpressionPart, KExpression, RunIter};
@@ -30,7 +30,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// per-call brand cannot enter the value channel:
 ///
 /// ```compile_fail
-/// let storage = koan::machine::program_storage();
+/// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
 /// // A bare `KExpression`, whatever brand built it, is not a `ProgramExpression`.
 /// let node = koan::machine::model::ast::KExpression::new(program.region(), &[]);
@@ -40,7 +40,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// Nor can one be wrapped after the fact — the field is private:
 ///
 /// ```compile_fail
-/// let storage = koan::machine::program_storage();
+/// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
 /// let node = koan::machine::model::ast::KExpression::new(program.region(), &[]);
 /// let _marked = koan::machine::model::ast::program::ProgramExpression(node);
@@ -49,7 +49,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// The door path is the only one that compiles:
 ///
 /// ```
-/// let storage = koan::machine::program_storage();
+/// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
 /// let marked = program.new_expression(&[]);
 /// let _cell = koan::machine::model::KObject::KExpression(marked);
@@ -124,7 +124,7 @@ impl<'a> Deref for ProgramExpression<'a> {
 /// [`BodyCtx`](crate::machine::BodyCtx) supplies `'program: 'step`, never the reverse:
 ///
 /// ```compile_fail
-/// use koan::machine::ProgramBrand;
+/// use koan::memory::ProgramBrand;
 /// use koan::machine::model::ast::{ExpressionPart, ProgramExpression};
 /// use koan::source::Spanned;
 /// fn mint_step_part<'program: 'step, 'step>(

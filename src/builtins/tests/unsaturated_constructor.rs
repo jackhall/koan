@@ -11,8 +11,8 @@
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
-use crate::machine::program_storage;
-use crate::machine::run_root_storage;
+use crate::memory::program_storage;
+use crate::memory::run_root_storage;
 
 /// Two families the whole file declares against: `Wrapper` over one parameter and `Pair` over
 /// two, both concrete (`NEWTYPE`-declared) constructors.

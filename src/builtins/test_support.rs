@@ -15,13 +15,7 @@ use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
 use crate::machine::ScopeId;
 #[cfg(test)]
-use crate::machine::SealedFunction;
-use crate::machine::core::CallFrame;
-#[cfg(test)]
 use crate::machine::core::StatementId;
-use crate::machine::core::{ProgramBrand, ProgramStorage, RegionBrand};
-#[cfg(test)]
-use crate::machine::model::Carried;
 #[cfg(test)]
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KExpression;
@@ -32,13 +26,20 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
+use crate::machine::{AdoptSeam, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, Installer};
+use crate::memory::CallFrame;
+#[cfg(test)]
+use crate::memory::Carried;
+use crate::memory::FrameStorage;
+#[cfg(test)]
+use crate::memory::SealedFunction;
+use crate::memory::{ProgramBrand, ProgramStorage, RegionBrand};
+#[cfg(test)]
+use crate::memory::{RegionHandle, Sealed};
 use crate::parse::parse;
 use crate::scheduler::{EdgeId, NodeId};
-#[cfg(test)]
-use crate::witnessed::{RegionHandle, Sealed};
 
 use super::unseeded_scopes;
 
@@ -259,7 +260,7 @@ impl Write for SharedBuf {
 /// owning pin on it.
 #[cfg(test)]
 pub(crate) fn per_call_storage() -> Rc<FrameStorage> {
-    crate::witnessed::RegionHost::fresh(None)
+    crate::memory::RegionHost::fresh(None)
 }
 
 #[cfg(test)]
@@ -704,7 +705,7 @@ pub(crate) fn spliced_part<'a>(
     crate::machine::model::WorkingPart::Spliced {
         from_name: None,
         cell: Sealed::seal(
-            brand.seal_resident::<crate::machine::model::CarriedFamily>(c),
+            brand.seal_resident::<crate::memory::CarriedFamily>(c),
             brand.handle(),
         ),
     }

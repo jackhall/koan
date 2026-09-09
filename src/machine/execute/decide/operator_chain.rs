@@ -16,7 +16,6 @@
 //! a cross-group operator mix, or an operator no visible module declared — and surfaces directly
 //! as a structured [`KErrorKind::DispatchFailed`].
 
-use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::core::location_from_expr;
 use crate::machine::model::Part;
@@ -24,9 +23,10 @@ use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionMode};
 use crate::machine::{KError, KErrorKind, ProducerId};
+use crate::memory::RegionBrand;
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
-use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::super::outcome::DepTerminal;
 use super::ctx::DecideCtx;

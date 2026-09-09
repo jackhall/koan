@@ -18,14 +18,16 @@ use std::rc::Rc;
 use crate::machine::core::BoundArgs;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
-use crate::machine::core::{Body, CallFrame, KFunction, OpenedFunction};
+use crate::machine::core::{Body, KFunction};
 use crate::machine::core::{
     ExecFrame, ExecOutcome, LeadingStatements, PerCallReturn, run_user_fn, solved_type,
 };
 use crate::machine::model::{CoercionTables, DeclaredSlots, KType, declared_return};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
-use crate::machine::{DeliveredCarried, KError, KErrorKind, NodeId};
-use crate::witnessed::BumpVec;
+use crate::machine::{KError, KErrorKind, NodeId};
+use crate::memory::BumpVec;
+use crate::memory::DeliveredCarried;
+use crate::memory::{CallFrame, OpenedFunction};
 
 /// Fold a resolved call into a [`Outcome::Continue`] — the dispatcher's one invoke entry, routing on
 /// the picked body:
@@ -394,7 +396,7 @@ fn coerce_arguments_inward<'step>(
                 // The value channel only: a type-denoting parameter delivers an owned `KType`
                 // handle, which has no value identity to rewrite.
                 let on_value_channel =
-                    carrier.open(|live| matches!(live, crate::machine::model::Carried::Object(_)));
+                    carrier.open(|live| matches!(live, crate::memory::Carried::Object(_)));
                 match declared_slots.at(position, *name).filter(|declared_param| {
                     on_value_channel && inward.coerces(*declared_param, types)
                 }) {
@@ -420,7 +422,7 @@ fn coerce_arguments_inward<'step>(
 fn parameter_carriers<'e, 'step>(
     picked: &KFunction<'step>,
     arg_carriers: &'e [Option<DeliveredCarried>],
-    scratch: crate::witnessed::BumpAllocator<'step>,
+    scratch: crate::memory::BumpAllocator<'step>,
 ) -> BumpVec<'step, &'e DeliveredCarried> {
     let slots = picked.signature.part_slots();
     let mut carriers = BumpVec::with_capacity_in(slots.len(), scratch);
@@ -476,7 +478,7 @@ fn run_action_builtin<'step>(
 /// coverage is empty, so a literal argument still pins nothing.
 ///
 /// The envelope is what the bind's `for<'b>` brand admits
-/// ([`CallFrame::with_scope`](crate::machine::CallFrame::with_scope)) — a bare `&'step
+/// ([`CallFrame::with_scope`](crate::memory::CallFrame::with_scope)) — a bare `&'step
 /// KObject<'step>` names a lifetime the opened frame scope has no relation to. Keyword parts
 /// contribute nothing. Any other value part is unreachable (the bind sites resolve value parts to
 /// `Spliced`/literal first) and surfaces as a diagnostic rather than a silent mis-bind.

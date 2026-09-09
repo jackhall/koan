@@ -7,17 +7,18 @@
 //! Every per-shape handler decides against a read-only [`DecideCtx`] and returns an [`Outcome`]
 //! that the harness ([`super::harness`]) applies, so no shape module mutates the scheduler.
 
-use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
-use crate::machine::core::RegionBrand;
 use crate::machine::core::location_from_expr;
 use crate::machine::core::{
     Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, CatchFn, FinishCtx,
     FramePlacement, ReturnContract, TailContract,
 };
 use crate::machine::model::lazy_slots::LazyKinds;
-use crate::machine::model::{Carried, ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
+use crate::memory::Carried;
+use crate::memory::DeliveredCarried;
+use crate::memory::RegionBrand;
 use crate::source::Spanned;
 use std::rc::Rc;
 
@@ -30,8 +31,8 @@ use super::outcome::{
     dep_error_frame, erase_boxed, erase_bumped, tail_continue, tail_raw_continue,
 };
 use crate::machine::model::RunRegistries;
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::scheduler::{Dep, Deps};
-use crate::witnessed::{BumpAllocator, BumpVec};
 
 pub(in crate::machine::execute) use crate::machine::core::{
     BodyPlacement, DepPlacement, DepRequest, SubDispatch,

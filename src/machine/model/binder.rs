@@ -11,7 +11,8 @@ use smallvec::SmallVec;
 
 pub(crate) mod signature;
 
-use crate::machine::core::{KError, KErrorKind, RegionBrand, body_statement_refs};
+use crate::machine::core::{KError, KErrorKind, body_statement_refs};
+
 use crate::machine::model::KeyElement;
 #[cfg(test)]
 use crate::machine::model::UntypedKey;
@@ -25,6 +26,7 @@ use crate::machine::model::labels::{
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::{AnnouncedData, display_label, pair_list_names};
 use crate::machine::model::{ExpressionPart, KExpression};
+use crate::memory::RegionBrand;
 use crate::source::Spanned;
 
 /// Whether a binding — committed or an in-flight placeholder — lives in the value

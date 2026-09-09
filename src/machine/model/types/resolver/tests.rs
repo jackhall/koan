@@ -1,10 +1,10 @@
 use super::*;
 use crate::builtins::test_support::{TestRun, mock_declaration_site, type_name, type_token};
 use crate::machine::DeclarationSite;
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{AnnouncedData, RelativeSchema};
+use crate::memory::{program_storage, run_root_storage};
 
 /// A module-body child announcing `members` as standalone type declarations — the ambient window a
 /// body statement elaborates against.

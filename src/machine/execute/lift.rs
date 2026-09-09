@@ -5,17 +5,17 @@
 //! release read live in [`crate::machine::model`], shared with the core binding seams. See
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
-use crate::machine::core::{FoldingBrand, SubstrateDoor};
-use crate::machine::core::{KoanRegion, KoanStorageProfile, product_reaches_region};
 use crate::machine::model::{
-    Carried, CarriedFamily, Held, KObject, RegionEscape, copy_or_pin, copy_or_pin_callable,
-    relocate_object_into,
+    KObject, RegionEscape, copy_or_pin, copy_or_pin_callable, relocate_object_into,
 };
-use crate::machine::{CarrierWitness, DeliveredCarried, FrameStorage};
-use crate::witnessed::{Delivered, RegionHandleFamily, reattachable};
+use crate::memory::DeliveredCarried;
+use crate::memory::{Carried, CarriedFamily, Held};
+use crate::memory::{Delivered, RegionHandleFamily, reattachable};
+use crate::memory::{FoldingBrand, SubstrateDoor};
+use crate::memory::{KoanRegion, KoanStorageProfile, product_reaches_region};
 
 /// The structural-copy callback a witnessed transfer's fold runs
-/// ([`Delivered::transfer_into`](crate::witnessed::Delivered)): copy a [`Carried`] into `dest`'s
+/// ([`Delivered::transfer_into`](crate::memory::Delivered)): copy a [`Carried`] into `dest`'s
 /// region at the fold brand, per value under [`relocate_object_into`]. The copy is all this hook
 /// owns — never a region anchor: what a preserved bare borrow points at is kept alive by the reach
 /// the transfer mints into the destination.
@@ -102,24 +102,23 @@ fn seam_still_borrows<'e>(
 /// frame.
 pub(in crate::machine::execute) fn relocate_seam(
     delivered: &DeliveredCarried,
-    dest: Delivered<RegionHandleFamily<KoanStorageProfile>, CarrierWitness, FrameStorage>,
+    dest: Delivered<RegionHandleFamily>,
 ) -> DeliveredCarried {
     let verb = seam_verb(delivered);
     // Captured before the fold, which cannot reach its operand's pins: the source envelope's
     // coverage is the holder-rule proof the relocation's cells read their stored reach under.
     let holder = delivered.coverage().clone();
-    delivered
-        .transfer_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
-            dest,
-            seam_still_borrows(delivered, verb),
-            |value, _region, placement| {
-                copy_carried(
-                    value,
-                    verb,
-                    FoldingBrand::in_fold_closure(placement).with_holder(&holder),
-                )
-            },
-        )
+    delivered.transfer_into::<RegionHandleFamily, CarriedFamily, KoanStorageProfile>(
+        dest,
+        seam_still_borrows(delivered, verb),
+        |value, _region, placement| {
+            copy_carried(
+                value,
+                verb,
+                FoldingBrand::in_fold_closure(placement).with_holder(&holder),
+            )
+        },
+    )
 }
 
 /// The cell family an aggregate relocation's product run is made of. Layout-invariant in `'r`:

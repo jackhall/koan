@@ -11,13 +11,17 @@
 //! long-lived AST. A deferred-`Type` return's resolved type is a `Copy` `KType` handle, lifetime-free,
 //! so it rides the outcome by value with no second lifetime to thread.
 
-use crate::machine::{DeliveredCarried, KErrorKind};
+use crate::machine::KErrorKind;
+
+use crate::memory::DeliveredCarried;
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallFrame, DeclarationSite, KError};
-use crate::machine::model::Carried;
+use crate::machine::core::{BindingIndex, DeclarationSite, KError};
+
 use crate::machine::model::KExpression;
 use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution, Unifier};
+use crate::memory::CallFrame;
+use crate::memory::Carried;
 use smallvec::SmallVec;
 
 use super::KFunction;

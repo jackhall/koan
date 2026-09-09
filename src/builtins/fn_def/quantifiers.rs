@@ -7,10 +7,10 @@
 
 use smallvec::SmallVec;
 
-use crate::machine::core::RegionBrand;
 use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{ExpressionPart, KExpression, RunRegistries, render_label};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::memory::RegionBrand;
 
 use super::finalize::Quantification;
 

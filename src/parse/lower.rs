@@ -16,10 +16,10 @@
 use sexlex::{Item, Kind, Node};
 
 use crate::machine::KError;
-use crate::machine::core::ProgramBrand;
 use crate::machine::model::admit_bare_type_slots;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
+use crate::memory::ProgramBrand;
 use crate::source::{FileId, Span, Spanned};
 
 use super::atom;

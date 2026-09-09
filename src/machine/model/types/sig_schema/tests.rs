@@ -515,7 +515,7 @@ fn value_slot_list_of_abstract_ref_substitutes_nested() {
 #[test]
 fn pin_converts_abstract_to_manifest_via_parsed_sig() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
 
     let program = program_storage();
     let region = run_root_storage();
@@ -559,7 +559,7 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
 #[test]
 fn sig_to_sig_entailment_over_shared_abstract() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
 
     let program = program_storage();
     let region = run_root_storage();
@@ -833,7 +833,7 @@ fn references_reports_a_nested_reference_under_shadowing() {
 #[test]
 fn identical_declarations_carrying_a_nested_signature_intern_once() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
 
     let program = program_storage();
     let region = run_root_storage();
@@ -852,7 +852,7 @@ fn identical_declarations_carrying_a_nested_signature_intern_once() {
 #[test]
 fn pinning_the_outer_member_folds_through_the_nesting() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
 
     let program = program_storage();
     let region = run_root_storage();
@@ -877,7 +877,7 @@ fn pinning_the_outer_member_folds_through_the_nesting() {
 #[test]
 fn nested_signature_slot_is_satisfied_by_a_matching_module() {
     use crate::builtins::test_support::{TestRun, lookup_module};
-    use crate::machine::core::{program_storage, run_root_storage};
+    use crate::memory::{program_storage, run_root_storage};
 
     let program = program_storage();
     let region = run_root_storage();

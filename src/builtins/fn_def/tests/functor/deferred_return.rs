@@ -2,8 +2,8 @@
 
 use crate::builtins::test_support::{TestRun, binds_module, lookup_fn};
 use crate::machine::model::{KObject, KType, TypeNode};
-use crate::machine::{program_storage, run_root_storage};
-use crate::witnessed::region_metrics;
+use crate::memory::region_metrics;
+use crate::memory::{program_storage, run_root_storage};
 
 /// Bare parameter-name return type: `-> er` resolves per-call to the carried type. The parameter is
 /// `:Signature`-kind, so `Er` resolves to a *signature*. The body returns a module ascribed to that

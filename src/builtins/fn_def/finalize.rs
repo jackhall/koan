@@ -15,15 +15,15 @@ use crate::machine::ProducerId;
 use crate::machine::StepCarried;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::execute::deps_on;
-use crate::machine::model::Carried;
-use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{Elaborator, ReturnType};
 use crate::machine::model::{SignatureElement, shape_type_of};
-use crate::machine::{BindingIndex, Body, CarrierWitness, KError, KErrorKind, Scope};
-use crate::witnessed::{BumpAllocator, BumpVec, Witnessed};
+use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
+use crate::memory::Carried;
+use crate::memory::CarriedFamily;
+use crate::memory::{BumpAllocator, BumpVec, Witnessed};
 
 use super::return_type::{
     ReturnTypeCapture, ReturnTypeState, make_capture, resolve_capture_at_finish,
@@ -36,10 +36,7 @@ use crate::machine::model::{display_label, render_label};
 /// What a finalize hands back: the callable's own witnessed carrier, and the at-most-two binding
 /// writes its [`FnKind`] calls for — a keyworded FN's overload registration, and the combined
 /// form's value binding.
-type FinalizedFn<'a> = (
-    Witnessed<CarriedFamily, CarrierWitness>,
-    [Option<WriteOp<'a>>; 2],
-);
+type FinalizedFn<'a> = (Witnessed<CarriedFamily>, [Option<WriteOp<'a>>; 2]);
 
 /// How a finalized FN-def is wired into the scope:
 ///
@@ -517,7 +514,7 @@ fn finalize_bodyless_head<'a>(
 /// (it names its captured scope's frame), so success seals as `Done(Ok)` carrying the overload
 /// registration as the step's effect.
 pub(crate) fn fn_action<'a>(
-    scratch: crate::witnessed::BumpAllocator<'a>,
+    scratch: crate::memory::BumpAllocator<'a>,
     result: Result<FinalizedFn<'a>, KError>,
 ) -> Action<'a> {
     match result {
