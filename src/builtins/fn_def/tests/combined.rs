@@ -1,4 +1,4 @@
-//! The combined statement form `LET <name> = FN <signature> -> <Return> = (<body>)`: one
+//! The combined statement form `LET <name> = FN EXPR (<head>) -> <Return> = (<body>)`: one
 //! statement whose single binder installs the value name and the signature's dispatch bucket, both
 //! naming the one function it builds.
 

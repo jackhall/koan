@@ -2,7 +2,7 @@
 
 This doc covers the parser pipeline, the `KExpression` shape it produces, the
 language's eager-by-default evaluation rule (and how lazy slots opt out), and
-how users extend the surface syntax through `FN` definitions rather than a macro
+how users extend the surface syntax through `EXPR` definitions rather than a macro
 system.
 
 ## Parser pipeline
@@ -322,16 +322,16 @@ bare `(…)` in that position evaluates. Index `i` of bucket `k` carries kind
 with `K`'s raw-capture slot type, and a spec⟺registration consistency test
 pins the table to the live signatures in both directions.
 
-User signatures have no lazy slots: a `:KExpression` parameter on an `FN` is
+User signatures have no lazy slots: a `:KExpression` parameter on a user definition is
 an ordinary eager value parameter, satisfied by a `#(…)` literal or any
 expression that evaluates to a `KExpression` value — the next two sections.
 
 ## Extending the surface
 
-Users add what look like new keyword forms by writing `FN` definitions.
+Users add what look like new keyword forms by writing `EXPR` definitions.
 
 ```
-FN (LOOP body :KExpression) -> Any = (...)
+EXPR (LOOP body :KExpression) -> Any = (...)
 ```
 
 defines a new dispatchable signature: keyword `LOOP`, slot `body`. The parser

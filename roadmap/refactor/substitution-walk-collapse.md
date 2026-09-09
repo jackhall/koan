@@ -44,9 +44,9 @@ plan.
 - The unconstrained-name and `Never` guard set is stated in exactly one place; no file outside
   `ktype_predicates.rs` enumerates the members of `is_unconstrained_name`.
 - `sig_subtype`'s and the ascription view's substituting comparisons reach the relation through the
-  same entrance, as
-  [expression shapes](../type_language/expression-shapes.md) requires, and that entrance is the
-  composition.
+  same entrance — `slot_satisfied_by`, as
+  [modules.md § Keyworded members](../../design/typing/modules.md#keyworded-members) states — and
+  that entrance is the composition.
 - A benchmark over a signature-heavy program shows no regression attributable to the materialized
   substitution.
 

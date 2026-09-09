@@ -423,3 +423,58 @@ fn meet_of_functions_joins_their_parameters() {
         KType::NEVER,
     );
 }
+
+/// A run that writes no `FOR ALL` interns no quantified position, and the probe answers from that
+/// alone — the reading every dispatch in such a run takes.
+#[test]
+fn a_run_that_quantifies_over_nothing_answers_without_walking() {
+    let registry = TypeRegistry::new();
+    let listed = registry.intern(TypeNode::List {
+        element: KType::NUMBER,
+    });
+    assert!(!registry.contains_quantified(listed));
+    assert!(!registry.references_quantifier(listed, 0));
+}
+
+/// The two quantifier probes read the same graph with different questions, so each pins its own
+/// edge. `contains_quantified` stops at a nested shape's binder — those indices belong to that
+/// shape, not this one — and `references_quantifier` answers one index exactly, not "some index".
+#[test]
+fn the_quantifier_probes_stop_at_a_nested_binder_and_answer_one_index() {
+    let registry = TypeRegistry::new();
+    let second = registry.quantified(1);
+    let listed = registry.intern(TypeNode::List { element: second });
+
+    assert!(registry.contains_quantified(listed));
+    assert!(registry.references_quantifier(listed, 1));
+    assert!(!registry.references_quantifier(listed, 0));
+
+    // A shape of its own carries its own group, so nothing under it answers for the enclosing one.
+    let nested = registry.shape_type(
+        &[],
+        &[DispatchTokenElement::Slot(KType::NUMBER)],
+        KType::NUMBER,
+    );
+    let holding = registry.intern(TypeNode::List { element: nested });
+    assert!(!registry.contains_quantified(holding));
+    assert!(!registry.contains_quantified(KType::NUMBER));
+}
+
+/// Memoizing the probe is behaviour-neutral: the second reading of a digest is the first's answer,
+/// and a warmed subtree does not colour a sibling the walk reaches later.
+#[test]
+fn the_quantifier_memo_answers_each_digest_on_its_own_terms() {
+    let registry = TypeRegistry::new();
+    let first = registry.quantified(0);
+    let quantified_list = registry.intern(TypeNode::List { element: first });
+    let plain_list = registry.intern(TypeNode::List {
+        element: KType::NUMBER,
+    });
+
+    for _ in 0..2 {
+        assert!(registry.contains_quantified(quantified_list));
+        assert!(!registry.contains_quantified(plain_list));
+        assert!(registry.contains_quantified(first));
+        assert!(!registry.contains_quantified(KType::NUMBER));
+    }
+}

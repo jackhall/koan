@@ -48,7 +48,7 @@ a bare `(…)` is admitted as the sigiled spelling at parse
 The body binds `left` and `right`, both of the operand type, and its result type
 *is* the operand type — a fold member feeds its result back in as the next
 operand, so the two coincide. The body captures its declaring scope, so it sees
-its sibling module bindings exactly as a bare `FN` body does, and the declaration
+its sibling module bindings exactly as a bare definition body does, and the declaration
 evaluates to the function it declares.
 
 A member of a **pairwise** group has a result type of its own, and says so:
@@ -149,8 +149,8 @@ registered into the group's child scope *before a single body statement runs*, a
 subsets pointing at the one record. So declaration order inside the body does not
 matter, and a mixed-member run reduces inside the group's own body as readily as
 through a `USING` window. Only top-level `OP` statements are members: an `OP`
-nested inside an `FN` or a branch declares an operator in *that* scope and joins
-no group. Any other statement — a `LET`, an `FN`, the combiner's own `OP` — is
+nested inside a definition or a branch declares an operator in *that* scope and joins
+no group. Any other statement — a `LET`, a definition, the combiner's own `OP` — is
 ordinary module content.
 
 A group is the sole registrar for its members: a member `OP` writes the function
@@ -325,12 +325,12 @@ dropped the `GROUP` head would print the two identically — including in the mi
 diagnostic that names the signature a module failed.
 
 A member is rendered as an operator head — `OP #(+) OVER Carrier` — precisely when its
-bucket key is an operator key, its symbol belongs to one of the schema's records, *and*
-its own parameters are the operand binders an operator body binds (`left` / `right`, or
-`operands` for a unary list form). The last clause is per-overload rather than
-per-symbol: a bucket may hold an operator member beside an `FN`-declared overload at
-other types, and each renders as the head that declared it. Both keys of a unary triple
-render as the one `UNARY OP` head that declares them.
+bucket key is an operator key *and* its symbol belongs to one of the schema's records.
+Nothing finer distinguishes the overloads under such a key: a shape type carries no
+argument names, so a member declared by a plain `EXPR` head at an operator key renders
+as an operator head too once a record claims the symbol. A key no record names keeps the
+plain head rendering, overload by overload. Both keys of a unary triple render as the one
+`UNARY OP` head that declares them.
 
 ### Satisfaction: equal mode, member inclusion
 
@@ -380,25 +380,25 @@ the other two. A source group chaining `⊕`, `⊖` and `⊗` against a signatur
 group at all.
 
 The replay installs **without** the builtin-shadow guard. That guard exists to stop a
-user `FN` from joining a builtin's bucket, and the source's own overload already
+user definition from joining a builtin's bucket, and the source's own overload already
 passed it where it was declared; a replay is not a second declaration. So a signature
 may declare `OP #(+) OVER Elt` and a view over it ascribes, while shadowing stays
 type-gated as everywhere else — inside the same window an arithmetic run still
 resolves to the builtin.
 
-### The FN-head spelling declares the bucket only
+### The EXPR-head spelling declares the bucket only
 
-The bodyless `FN` head spelling of an operator key —
-`(FN (left :Carrier + right :Carrier) -> Carrier)` — stays legal and means exactly
-what it says: the bucket, and no claim about chaining. It declares no record, renders
-as an FN head, and is satisfied by any module supplying the overload, grouped or not.
-A module supplying only that half fails a signature that declares `OP #(+) OVER
-Carrier`, because the head declares a `{+}` fold-left record the module has not.
+The bodyless `EXPR` head spelling of an operator key —
+`(EXPR (left :Carrier + right :Carrier) -> Carrier)` — stays legal and means exactly
+what it says: the bucket, and no claim about chaining. It declares no record, and is
+satisfied by any module supplying the overload, grouped or not. A module supplying only
+that half fails a signature that declares `OP #(+) OVER Carrier`, because the head
+declares a `{+}` fold-left record the module has not.
 
 ## Visibility
 
 An `OP` writes into its **enclosing scope** — a module body's child scope, a
-`GROUP`'s child scope, a per-call `FN` scope, or the top level — and a use site
+`GROUP`'s child scope, a per-call function scope, or the top level — and a use site
 finds it by the ordinary innermost-wins scope walk with lexical cutoff. The
 `USING` window's borrowed façade surfaces a module's operator registrations
 alongside its values and function overloads, so opening a group puts both its
@@ -417,10 +417,10 @@ parks on a visible pending declaration rather than erroring.
 ## Generic groups are functors
 
 A group parameterized by a type is an ordinary
-[functor](typing/functors.md) — an `FN` whose body is a `GROUP`:
+[functor](typing/functors.md) — a definition whose body is a `GROUP`:
 
 ```
-LET make_ops = FN (MAKEOPS Elt :Type) -> Module = (
+LET make_ops = FN EXPR (MAKEOPS Elt :Type) -> Module = (
   GROUP result FOLD LEFT = (
     (OP #(+) OVER :(LIST OF Elt) = (…))
     (OP #(-) OVER :(LIST OF Elt) = (…))))
@@ -428,7 +428,7 @@ LET make_ops = FN (MAKEOPS Elt :Type) -> Module = (
 
 Instantiate it at a concrete type (`MAKEOPS Number`) when the member bodies need
 no operation on the element type, or at a witness module satisfying a signature
-(dictionary passing) when they do. Both are shipped `FN` mechanics; the group adds
+(dictionary passing) when they do. Both are shipped definition mechanics; the group adds
 nothing.
 
 Selection is always **explicit**: an instantiation binds a module, and only a

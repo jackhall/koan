@@ -46,7 +46,7 @@ pub use resolver::{
 pub use sig_schema::{
     CoercionTables, DeclaredGroup, MemberCoercion, OperatorMembers, SigSchema, TypeMemberMap,
     canonical_overloads, constructor_param_names, render_keyworded_head,
-    select_keyworded_satisfier, shape_key, sig_subtype, substitute_sig_members,
+    select_keyworded_satisfier, shape_key_is, sig_subtype, substitute_sig_members,
     unsaturated_constructor_message,
 };
 #[allow(unused_imports)]

@@ -32,7 +32,7 @@ declaration either fully registers or is fully refused.
   identically in every context — bare, inside a `GROUP` body, and under
   `UNARY`: both register the same overloads and registry entry, both install
   the same park edges, both join the same group memberships.
-- `FN (ADD left :Number right :Number) = (…)` and its quoted spelling behave
+- `EXPR (ADD left :Number right :Number) = (…)` and its quoted spelling behave
   identically likewise, park edges included.
 - `GROUP … PAIRWISE FOLD (BOTH) LEFT` and the quoted combiner spelling behave
   identically.

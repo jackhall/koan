@@ -72,7 +72,7 @@ Module-system mechanics:
   `Infer` / `ImplicitSearch` node-kind track.
 - [type-language-via-dispatch.md](type-language-via-dispatch.md) — the
   sigil `:(...)` as a parse-context marker; parameterized type
-  construction (`LIST`, `MAP`, `FN`) registered as keyworded overloads
+  construction (`LIST`, `MAP`, the `FN :{…} -> R` lambda type) registered as keyworded overloads
   sharing the value-side candidate-bucket and binder-admission machinery.
 
 [open-work.md](open-work.md) carries the roadmap pointers for the

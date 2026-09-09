@@ -45,7 +45,7 @@ fn members_keyed(
     schema
         .keyworded
         .iter()
-        .filter(|member| crate::machine::model::shape_key(**member, types) == wanted)
+        .filter(|member| crate::machine::model::shape_key_is(**member, &wanted, types))
         .copied()
         .collect()
 }

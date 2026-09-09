@@ -4,7 +4,7 @@
 //! body. Every other eagerly-dispatched position — including another binder's own declaration slot
 //! — pre-errors the slot with a TRY-catchable [`KErrorKind::NestedBinder`]. A value position takes
 //! the anonymous `FN :{…}` form, which installs nothing; a definition that must also bind a name is
-//! one statement in the combined `LET <name> = FN …` spelling.
+//! one statement in the combined `LET <name> = FN EXPR …` spelling.
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
@@ -148,7 +148,7 @@ fn definition_in_a_declaration_slot_suggests_the_flat_spelling() {
         "expected NestedBinder for a binder's declaration slot, got {message}",
     );
     assert!(
-        message.contains("LET <name> = FN <signature>"),
+        message.contains("LET <name> = FN EXPR (<head>)"),
         "a rejected definition should name the flat spelling, got {message}",
     );
 }

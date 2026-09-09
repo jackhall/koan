@@ -70,10 +70,10 @@ a node as a leaf, so an omission surfaces as a wrong answer rather than a non-ex
 
 ## Dependencies
 
-[Expression shapes are their own kind of function](../type_language/expression-shapes.md) adds an
-`ExpressionShape` node — one more compound arm. Landing this item first means that variant arrives
-into a derived framework; landing it second means one more walk set to convert. Neither blocks the
-other.
+The shipped `ExpressionShape` node
+([modules.md § Keyworded members](../../design/typing/modules.md#keyworded-members)) is one more
+compound arm every structural walk carries by hand, so it is part of what this item derives rather
+than a prerequisite for it.
 
 **Requires:** none — a leaf refactor over shipped shapes.
 

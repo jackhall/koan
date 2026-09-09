@@ -134,13 +134,13 @@ fn fn_parameter_rejects_bare_constructor() {
         "EXPR (ECHO x :Wrapper) -> Number = (1.0)",
         "Wrapper",
         &["Elem"],
-        "the type of FN parameter `x`",
+        "the type of parameter `x`",
     );
     assert_kind_error(
         "EXPR (ECHO x :Pair) -> Number = (1.0)",
         "Pair",
         &["Key", "Val"],
-        "the type of FN parameter `x`",
+        "the type of parameter `x`",
     );
 }
 
@@ -150,7 +150,7 @@ fn fn_return_type_rejects_bare_constructor() {
         "EXPR (ECHO x :Number) -> Wrapper = (1.0)",
         "Wrapper",
         &["Elem"],
-        "the FN return type",
+        "the return type",
     );
 }
 

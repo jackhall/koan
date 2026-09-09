@@ -95,8 +95,8 @@ shape that self-referential-struct crates model.
 
 Free names in a user-fn body resolve through the function's **definition**
 scope, carried on [`KFunction.captured`](../src/machine/core/kfunction.rs) — not the
-call-site scope. Top-level `FN` definitions capture the run-root, so their free
-names resolve through it; nested `FN`s correctly close over their enclosing
+call-site scope. Top-level definitions capture the run-root, so their free
+names resolve through it; nested ones correctly close over their enclosing
 locals.
 
 Lexical scoping is what makes the F_{k+1}→F_k chain in tail-recursive code O(1)

@@ -121,7 +121,7 @@ impl<'a> ScopeBindings<'a> {
 /// A SIG decl scope's keyworded-member collector: the expression shapes declared in the body, in
 /// declaration order. The [`ScopeKind::Sig`] twin of the VAL slot collector. Flat rather than
 /// keyed, because a member's bucket key is a reading of its own shape type
-/// ([`shape_key`](crate::machine::model::shape_key)) and nothing stores it twice.
+/// ([`shape_key_is`](crate::machine::model::shape_key_is)) and nothing stores it twice.
 ///
 /// The buffer is bump-backed like every other scope-hosted allocation, and `ManuallyDrop` for the
 /// reason a dispatch bucket carries it: a `KType` is a `Copy` handle with no glue, and the buffer

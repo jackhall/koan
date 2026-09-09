@@ -83,7 +83,7 @@ Root concerns:
 - [expressions-and-parsing.md](expressions-and-parsing.md) — the
   parse pipeline (quotes → whitespace → expression tree → tokens →
   operators), the `KExpression` shape it produces, the
-  eager-by-default evaluation rule, and how `FN` definitions extend
+  eager-by-default evaluation rule, and how `EXPR` definitions extend
   the surface syntax without macros.
 - [operators.md](operators.md) — the `OP` / `GROUP` declaration
   surface: the parse-static quote that makes an operator symbol an
@@ -167,7 +167,7 @@ Type and module system ([typing/](typing/README.md)):
   rather than a parallel node-kind track.
 - [typing/type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
   — the `:(...)` sigil as a parse-context marker; parameterized type
-  construction (`LIST`, `MAP`, `FN`) as keyworded overloads sharing the
+  construction (`LIST`, `MAP`, the `FN :{…} -> R` lambda type) as keyworded overloads sharing the
   value-side candidate-bucket and binder-admission machinery.
 - [typing/open-work.md](typing/open-work.md) — roadmap pointers for
   the module-system stages plus the cross-cutting standard-library,

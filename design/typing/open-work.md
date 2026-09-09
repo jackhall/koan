@@ -32,7 +32,7 @@ Future work on the type and module system. Each entry points at a
 ## Cross-cutting
 
 - [Standard library](../../roadmap/libraries/standard-library.md) — collections built
-  as functors — module-returning FNs — over their element/key types. Parks the
+  as functors — module-returning definitions — over their element/key types. Parks the
   **applicative functor semantics** open question: the decided seam is the
   *derived* classification of a function's return slot ("does it name a
   signature?", [functors.md](functors.md)), not a binder or a stored flag, but

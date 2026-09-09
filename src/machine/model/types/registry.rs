@@ -101,6 +101,8 @@ pub(crate) enum Relation {
 pub struct TypeRegistry {
     nodes: RefCell<NodeMap>,
     verdicts: RefCell<HashMap<(TypeDigest, TypeDigest, Relation), bool>>,
+    quantified: RefCell<HashMap<TypeDigest, bool, IdentityBuildHasher>>,
+    quantifiers_exist: std::cell::Cell<bool>,
     #[cfg(test)]
     hits: std::cell::Cell<usize>,
     #[cfg(test)]
@@ -115,6 +117,8 @@ impl TypeRegistry {
         let registry = Self {
             nodes: RefCell::new(NodeMap::with_hasher(IdentityBuildHasher::default())),
             verdicts: RefCell::new(HashMap::new()),
+            quantified: RefCell::new(HashMap::default()),
+            quantifiers_exist: std::cell::Cell::new(false),
             #[cfg(test)]
             hits: std::cell::Cell::new(0),
             #[cfg(test)]
@@ -347,8 +351,11 @@ impl TypeRegistry {
         self.shape_type(quantifiers, &mapped, ret)
     }
 
-    /// The `index`-th quantifier of the enclosing shape.
+    /// The `index`-th quantifier of the enclosing shape. The one door a `Quantified` node is born
+    /// through, so it is also where the run learns it has any — see
+    /// [`contains_quantified`](Self::contains_quantified).
     pub fn quantified(&self, index: usize) -> KType {
+        self.quantifiers_exist.set(true);
         self.intern(TypeNode::Quantified(index))
     }
 
@@ -429,37 +436,86 @@ impl TypeRegistry {
     /// Whether any `Quantified` position is reachable from `kt` without crossing a nested shape's
     /// own binder — the probe that lets a slot type with nothing to solve answer the relations in
     /// one step instead of walking under a unifier.
+    ///
+    /// Every dispatched call in the language asks this once per slot per candidate, and the
+    /// unification walk asks it again at each level it descends — where it is load-bearing, not
+    /// merely a fast path, since an unquantified subtree must answer through the memoized subtype
+    /// relation rather than through a structural descent that would re-derive it wrongly. Two
+    /// readings keep that affordable, in the order a run meets them:
+    ///
+    /// A run that has interned no `Quantified` node at all — every run that writes no `FOR ALL` —
+    /// answers from one flag and never walks. [`Self::quantified`] is the only door such a node is
+    /// born through, and a handle names an interned node, so the flag is exact: false means no
+    /// quantified position exists anywhere for a type to reach.
+    ///
+    /// A run that does quantify memoizes per digest, in its own cell alongside the verdict cache
+    /// and on the same terms: a digest names fixed content, so the answer is a pure function of the
+    /// key and can never go stale, and the memo is never load-bearing — a cold registry costs a
+    /// re-walk, never a wrong answer. The walk recurses through this door rather than past it, so a
+    /// miss warms every subtree it crosses and the graph is walked at most once.
     pub fn contains_quantified(&self, kt: KType) -> bool {
-        self.any_quantified(kt, &|_| true)
-    }
-
-    /// Whether `kt` reads the `index`-th quantifier of the enclosing shape — what a definition
-    /// asks of each name its `FOR ALL` group lists.
-    pub fn references_quantifier(&self, kt: KType, index: usize) -> bool {
-        self.any_quantified(kt, &|i| i == index)
-    }
-
-    /// The shared walk behind both probes: some quantified position `wanted` accepts, reachable
-    /// without crossing a nested shape's binder (whose indices are its own, not this shape's).
-    fn any_quantified(&self, kt: KType, wanted: &impl Fn(usize) -> bool) -> bool {
-        self.with_node(kt, |node| match node {
-            TypeNode::Quantified(index) => wanted(*index),
-            TypeNode::List { element } => self.any_quantified(*element, wanted),
+        if !self.quantifiers_exist.get() {
+            return false;
+        }
+        if let Some(known) = self.quantified.borrow().get(&kt.digest()) {
+            return *known;
+        }
+        let answer = self.with_node(kt, |node| match node {
+            TypeNode::Quantified(_) => true,
+            TypeNode::List { element } => self.contains_quantified(*element),
             TypeNode::Dict { key, value } => {
-                self.any_quantified(*key, wanted) || self.any_quantified(*value, wanted)
+                self.contains_quantified(*key) || self.contains_quantified(*value)
             }
-            TypeNode::Record { fields } => fields.values().any(|v| self.any_quantified(*v, wanted)),
+            TypeNode::Record { fields } => fields.values().any(|v| self.contains_quantified(*v)),
             TypeNode::KFunction { params, ret } => {
-                params.values().any(|v| self.any_quantified(*v, wanted))
-                    || self.any_quantified(*ret, wanted)
+                params.values().any(|v| self.contains_quantified(*v))
+                    || self.contains_quantified(*ret)
             }
-            TypeNode::Union { members } => members.iter().any(|m| self.any_quantified(*m, wanted)),
+            TypeNode::Union { members } => members.iter().any(|m| self.contains_quantified(*m)),
             TypeNode::ConstructorApply {
                 constructor,
                 arguments,
             } => {
-                self.any_quantified(*constructor, wanted)
-                    || arguments.values().any(|a| self.any_quantified(*a, wanted))
+                self.contains_quantified(*constructor)
+                    || arguments.values().any(|a| self.contains_quantified(*a))
+            }
+            _ => false,
+        });
+        self.quantified.borrow_mut().insert(kt.digest(), answer);
+        answer
+    }
+
+    /// Whether `kt` reads the `index`-th quantifier of the enclosing shape — what a definition
+    /// asks of each name its `FOR ALL` group lists. Definition-time and one index at a time, so it
+    /// takes the exact walk; the memoized probe above is what keeps a type that reads no
+    /// quantifier at all from paying for it.
+    pub fn references_quantifier(&self, kt: KType, index: usize) -> bool {
+        self.contains_quantified(kt) && self.reads_quantifier(kt, index)
+    }
+
+    /// [`Self::references_quantifier`]'s walk: the `index`-th quantified position, reachable
+    /// without crossing a nested shape's binder (whose indices are its own, not this shape's).
+    fn reads_quantifier(&self, kt: KType, index: usize) -> bool {
+        self.with_node(kt, |node| match node {
+            TypeNode::Quantified(found) => *found == index,
+            TypeNode::List { element } => self.reads_quantifier(*element, index),
+            TypeNode::Dict { key, value } => {
+                self.reads_quantifier(*key, index) || self.reads_quantifier(*value, index)
+            }
+            TypeNode::Record { fields } => {
+                fields.values().any(|v| self.reads_quantifier(*v, index))
+            }
+            TypeNode::KFunction { params, ret } => {
+                params.values().any(|v| self.reads_quantifier(*v, index))
+                    || self.reads_quantifier(*ret, index)
+            }
+            TypeNode::Union { members } => members.iter().any(|m| self.reads_quantifier(*m, index)),
+            TypeNode::ConstructorApply {
+                constructor,
+                arguments,
+            } => {
+                self.reads_quantifier(*constructor, index)
+                    || arguments.values().any(|a| self.reads_quantifier(*a, index))
             }
             _ => false,
         })

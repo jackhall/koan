@@ -77,7 +77,7 @@ Consequently every declaration surface accepts both spellings uniformly:
 OP #(+) OVER :(LIST OF Number) = (…)      -- identical to the line below
 OP (+) OVER :(LIST OF Number) = (…)
 
-FN (ADD left :Number right :Number) = (…) -- identical to the line below
+EXPR (ADD left :Number right :Number) = (…) -- identical to the line below
 FN #(ADD left :Number right :Number) = (…)
 
 GROUP num_compare PAIRWISE FOLD (BOTH) LEFT = (…)   -- combiner slot likewise

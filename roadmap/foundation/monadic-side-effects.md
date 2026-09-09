@@ -12,18 +12,16 @@ bake `std::io` calls into individual builtins. Nothing in the runtime carries a 
 *paired with* a pending effect: a builtin performs its effect inline and returns a plain
 carrier.
 
-The type system cannot yet express the interface that would replace it.
-[design/effects.md](../../design/effects.md) specifies a `Monad` signature, but its `pure`
-and `bind` are written at `Number` because a signature member cannot quantify over the
-element type. A bodyless `FN` head refuses a return type naming one of its own parameters
-([modules.md § Keyworded members](../../design/typing/modules.md#keyworded-members)), and a
-`VAL` slot takes a closed `KFunction` whose parameter and return types are already resolved.
-The higher-kinded half has shipped — `TYPE (Type AS Wrap)` declares a constructor slot,
-`:(Number AS Wrap)` applies it, and opaque ascription mints a per-call `TypeConstructor`
-member so two ascribing modules carry distinct `Wrap` identities
-([functors.md § Higher-kinded type slots](../../design/typing/functors.md#higher-kinded-type-slots)).
-What is missing is the quantification that makes `Monad` one signature rather than a family
-of per-element ones.
+The type surface that replaces it exists; nothing is written against it.
+[design/effects.md](../../design/effects.md) specifies the `Monad` signature, and both halves
+it needs are shipped: `TYPE (Type AS Wrap)` declares a constructor slot, `:(Number AS Wrap)`
+applies it, and opaque ascription mints a per-call `TypeConstructor` member so two ascribing
+modules carry distinct `Wrap` identities
+([functors.md § Higher-kinded type slots](../../design/typing/functors.md#higher-kinded-type-slots));
+and an `EXPR FOR ALL (<names>)` member quantifies over its element types, solved per call, so
+one ascription admits a module at every element type
+([modules.md § Keyworded members](../../design/typing/modules.md#keyworded-members)). No Koan
+code declares `Monad`, no effect module ascribes it, and no builtin routes through one.
 
 **Acceptance criteria.**
 
@@ -44,12 +42,13 @@ of per-element ones.
 
 **Directions.**
 
-- *Quantifying a member over the element type — decided per
-  [Expression shapes are their own kind of function](../type_language/expression-shapes.md).*
-  `pure` and `bind` are **quantified members**: the shape binds its own `:Type` parameters and
+- *Quantifying a member over the element type — decided.* `pure` and `bind` are **quantified
+  members**: the shape binds its own type parameters in an `EXPR FOR ALL (<names>)` group and
   declares the operation at every choice of them, so `Monad` is one signature and one ascription
-  admits a module at every element type. That item owns the representation (a quantifier list on
-  the shape type) and the satisfaction-time solve; this one writes the signature against it.
+  admits a module at every element type. The representation (a quantifier list on the shape type)
+  and the per-call solve are shipped
+  ([modules.md § Keyworded members](../../design/typing/modules.md#keyworded-members)); this item
+  writes the signature against them.
 - *Standard effect modules — decided.* `Random`, `IO`, `Time`, with the existing
   effect-emitting builtins folded into `IO`. Each ascribes `Monad` and adds per-effect
   operations on top of the inherited `pure` and `bind`.
@@ -75,12 +74,9 @@ of per-element ones.
 This is a currency revision sweeping every builtin in [builtins/](../../src/builtins), so it
 folds naturally into the eventual static-typing/JIT pass if their schedules align.
 
-**Requires:**
-
-- [Expression shapes are their own kind of function](../type_language/expression-shapes.md) — the
-  `Monad` signature's `pure` and `bind` are quantified members, which that item's shape type
-  carries. The other half of the surface — the `TYPE (Type AS Wrap)` constructor slot — has
-  shipped.
+**Requires:** none — the surface it needs is shipped: quantified keyworded members
+([modules.md § Keyworded members](../../design/typing/modules.md#keyworded-members)) and the
+`TYPE (Type AS Wrap)` constructor slot.
 
 **Unblocks:**
 

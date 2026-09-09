@@ -15,8 +15,10 @@ the link in each section to the relevant chapter.
 
 | Form                                       | Meaning                                  |
 |--------------------------------------------|------------------------------------------|
-| `EXPR (<signature>) -> <Type> = (<body>)`    | Define a function — a keyword/slot shape with an enforced return type. |
-| `FN :{<fields>} -> <Type> = (<body>)`      | Anonymous function: a keyword-less record-schema shape. |
+| `EXPR (<head>) -> <Type> = (<body>)`       | Define an expression shape — a keyword/slot run with an enforced return type, reached by dispatch. |
+| `EXPR FOR ALL (<names>) (<head>) -> <Type> = (<body>)` | The same, quantified: each name is solved per call from the types the arguments carry. |
+| `LET <name> = FN EXPR (<head>) -> <Type> = (<body>)` | Both channels from one statement: the value name and the shape's bucket. |
+| `FN :{<fields>} -> <Type> = (<body>)`      | A lambda: keyword-less, reached by name, called with a record of named arguments. |
 | `<keyword> <args>`                         | Call a function by writing its shape (e.g. `ECHO 21`). |
 | `<fn> {name = value, ...}`                 | Call a captured function by named arguments. |
 | `CLOSE OVER (<captures>) (<block>)`        | Run a block over a region of its own, copying the named values in; only the block's last expression escapes, and it holds copies rather than the enclosing call. |
@@ -62,10 +64,11 @@ the link in each section to the relevant chapter.
 | `<module>.<member>`                              | Read a module member.              |
 | `SIG <Name> = (VAL <name> :<Type> ...)`          | Declare a signature (a module's type; Type-token name). |
 | `VAL <name> :<Type>`                             | A required value member, inside a `SIG`. |
+| `EXPR (<head>) -> <Type>`                        | A required keyworded member, inside a `SIG` (bodyless; `FOR ALL` twin included). |
 | `<module> :! <Sig>`                              | Transparent ascription.            |
 | `<module> :\| <Sig>`                             | Opaque ascription.                 |
 | `USING <module> SCOPE (<body>)`                  | Run a body with a module's members in scope. |
-| `EXPR (<KW> <p> :<Sig>) -> Module = (<body>)`      | A functor: an FN returning a module (a module parameterized by a module). |
+| `EXPR (<KW> <p> :<Sig>) -> Module = (<body>)`      | A functor: a function returning a module (a module parameterized by a module). |
 | `<Sig> WITH {<Slot> = <Type>}`                   | Specialize a signature by pinning a type slot. |
 | `TYPE OF <value>`                                | The type a value reports for itself; a module's is its signature. |
 
@@ -77,7 +80,9 @@ the link in each section to the relevant chapter.
 | `Any`                         | Accepts any value (opts a slot out of checking).   |
 | `:(LIST OF <Type>)`           | List type.                                         |
 | `:(MAP <Key> -> <Value>)`     | Map / dictionary type.                             |
-| `:(FN :{<params>} -> <Result>)`| Function type — the parameter list is a record type (`:{}` when nullary). |
+| `:(FN :{<params>} -> <Result>)`| Lambda type — the parameter list is a record type (`:{}` when nullary). |
+| `:(EXPR (<head>) -> <Result>)` | Expression-shape type — the type of a keyworded definition; write `_` at each slot. |
+| `:(EXPR FOR ALL (<names>) (<head>) -> <Result>)` | The quantified shape type. |
 | `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |
 | `NEWTYPE (Key Val AS Pair)`   | A type constructor with one or more parameters.    |
 | `:(Pair {Key = Number, Val = Str})` | Apply a type constructor, binding each parameter by name. |

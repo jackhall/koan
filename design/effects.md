@@ -50,6 +50,27 @@ Quantification is not a functor's `:Type` parameter, which the caller passes
 as an argument: a quantifier is never an argument, and a definition solves it
 per call from the types its arguments carry — `PURE 5` binds `Elt = Number`.
 
+A satisfying module supplies one definition per member, quantified the same way, and
+ascribes once:
+
+```
+MODULE io = (
+  (NEWTYPE (Type AS Wrap))
+  (EXPR FOR ALL (Elt) (PURE x :Elt) -> :(Elt AS Wrap) = (Wrap (x)))
+  (EXPR FOR ALL (Elt Res)
+        (BIND m :(Elt AS Wrap)
+              f :(FN :{x :Elt} -> :(Res AS Wrap))) -> :(Res AS Wrap) = (...))
+)
+LET view = (io :| Monad)
+```
+
+Each call through `view` solves its own quantifiers from the types its arguments
+carry: `PURE 5` binds `Elt = Number` and returns a `:(Number AS Wrap)`, and the same
+definition answers at `Str` on the next line. Satisfaction itself runs no solver —
+it pairs the declared shape with the module's positionally, and a quantified position
+is the unconstrained top there
+([typing/modules.md § Keyworded members](typing/modules.md#keyworded-members)).
+
 **Keyworded members, not `VAL` slots.** `PURE` and `BIND` are dispatch keys a
 satisfying module answers to, checked by the same most-specific selection
 dispatch runs
@@ -78,11 +99,11 @@ Each effect module exposes operations in the shape its semantics demand
 
 Until modular implicits ship (module-system stage 5), effect-using FNs
 take their effect module as an explicit parameter. The signature declares
-the dependency at the FN's parameter list; the call site supplies the
+the dependency at the head's argument positions; the call site supplies the
 module:
 
 ```
-LET gen = FN (GEN r :Random) -> Number = (... r ...)
+LET gen = FN EXPR (GEN r :Random) -> Number = (... r ...)
 ```
 
 Stage 5's implicit dispatch elides the parameter at call sites where the
@@ -118,5 +139,7 @@ wrapper's purity, not the inner effectful body.
 ## Open work
 
 - [Monadic side effects](../roadmap/foundation/monadic-side-effects.md)
-  — the implementation work: the member quantification the `Monad` signature
-  needs, the standard effect modules, and the runtime drainage path.
+  — the implementation work that remains: the standard effect modules and the
+  runtime drainage path. The member quantification the `Monad` signature needs
+  is shipped
+  ([typing/modules.md § Keyworded members](typing/modules.md#keyworded-members)).

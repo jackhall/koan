@@ -10,10 +10,14 @@ resolves.
 
 ## User-defined functions
 
-The surface form is:
+Koan has two kinds of callable and spells them apart. An **expression shape** is
+keyworded, reached by dispatch, and takes its arguments positionally; a **lambda** is
+anonymous, reached by name, and takes a record of named fields
+([typing/modules.md § Keyworded members](typing/modules.md#keyworded-members)). The
+expression shape's surface form is:
 
 ```
-FN (<signature>) -> ReturnType = (<body>)
+EXPR (<signature>) -> ReturnType = (<body>)
 ```
 
 The signature is itself a [`KExpression`](../src/machine/model/ast.rs) mixing
@@ -25,14 +29,14 @@ key. The body is a `KExpression` evaluated at call time.
 Example:
 
 ```
-FN (ECHO x :Number) -> Number = (x)
+EXPR (ECHO x :Number) -> Number = (x)
 LET y = (ECHO 21)
 ```
 
 ## Anonymous functions
 
-A keyword-less function literal uses a record-schema binder in place of the
-parenthesized signature:
+The lambda — the keyword-less function literal — uses `FN` with a record-schema
+binder in place of a parenthesized head:
 
 ```
 FN :{<field schema>} -> ReturnType = (<body>)
@@ -49,34 +53,37 @@ LET inc = (FN :{x :Number} -> Number = (x))
 LET n = (inc {x = 41})
 ```
 
-A **named** `FN` — the keyworded form above — is a binder, and binding is a
+An `EXPR` definition — the keyworded form above — is a binder, and binding is a
 statement-level act: it may stand only at a statement position or in a
 lazily-captured body, never inline in an eagerly evaluated value position such as
 a call argument, another binder's value slot, or a list / dict element (that is a
-`NestedBinder` error). The two value routes are the anonymous `FN :{…}` form,
+`NestedBinder` error). The two value routes are the lambda `FN :{…}` form,
 which installs nothing, and the **combined statement form**, which binds the name
-and registers the keyworded shape from one binder:
+and registers the keyworded shape from one binder — the double-barrelled `FN EXPR`
+spelling names both channels it installs:
 
 ```
-LET g = FN (SHOW x :Number) -> Str = ("hi")
+LET g = FN EXPR (SHOW x :Number) -> Str = ("hi")
 LET greeting = (USE g)
 ```
 
 The [position rule](execution/name-placeholders.md#submission-time-binder-install-and-the-position-rule)
 gives the full set of legal binder positions.
 
-Dispatch tells the two forms apart by the signature operand's part kind: a
-parenthesized `(…)` signature is a `KExpression`, while a `:{…}` schema is a
-first-class `RecordType` part that sub-dispatches to a resolved
-[`KType::Record`](../src/machine/model/types/ktype.rs) before the binder runs.
-Two `FN` overloads share one bucket ([fn_def.rs](../src/builtins/fn_def.rs)) — the
-keyworded one and the one whose signature slot admits the resolved record schema. The
-return-type carrier needs no third: both spell that slot as a single
+The two families never compete for a pick: they key different buckets, `EXPR` for the
+head form and `FN` for the record-schema one ([fn_def.rs](../src/builtins/fn_def.rs)), and
+their operands differ in part kind besides — a parenthesized `(…)` head is a
+`KExpression`, while a `:{…}` schema is a first-class `RecordType` part that
+sub-dispatches to a resolved
+[`KType::Record`](../src/machine/model/types/ktype.rs) before the binder runs. The
+return-type carrier is shared: both spell that slot as a single
 [union carrier slot](typing/ktype/slots-and-signatures.md#union-carrier-slots). The record's
 fields become keyword-less `Argument`s, and everything downstream —
 `reconstruct_positional`, lexical closure capture, and contravariant function
-subtyping — is shared with the keyworded form, so an anonymous function projects
-the same `KType::KFunction` and fills the same function-typed parameter slots.
+subtyping — is shared with the keyworded form, so a lambda projects the same
+`KType::KFunction` and fills the same function-typed parameter slots. What it does *not*
+project is an expression shape a keyworded head could be declared by: a lambda carries no
+keyword, so it fills no shape-typed slot.
 
 ## Body representation
 
@@ -124,7 +131,7 @@ End-to-end verification:
 
 ## Composition with the language extension story
 
-Because signatures are themselves `KExpression`s, a user-defined `FN` introduces
+Because heads are themselves `KExpression`s, a user-defined `EXPR` introduces
 a new dispatchable shape that participates in the same scoring as builtins. A
 function isn't just a callable value; the dispatch table is the language's
 extension mechanism. See [expressions-and-parsing.md](expressions-and-parsing.md)
@@ -144,7 +151,7 @@ system](typing/modules.md). Modular implicits
 ([stage 5](../roadmap/predicate_typing/modular-implicits.md)) add a second
 kind of dispatch alongside slot-specificity: a function declares an implicit
 module parameter, and the compiler infers and inserts a satisfying module at
-each call site. `sort {mo : ORDERED} (xs :(LIST OF mo.t))` is an ordinary `FN`
+each call site. `sort {mo : ORDERED} (xs :(LIST OF mo.t))` is an ordinary definition
 in the value language whose `mo` is resolved by lexical implicit search rather
 than by a runtime argument. Functors
 ([typing/functors.md](typing/functors.md)) give the *module*

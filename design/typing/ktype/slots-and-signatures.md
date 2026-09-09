@@ -100,7 +100,7 @@ hop.
 
 The guarantee it belongs to is broader than the one arm: **a slot that holds a type name raw
 holds the name the source wrote**, so diagnostics quote the user's identifier exactly rather than
-an elaborated canonical form. A `FN` declared `FN (DOIT) -> SomeWeirdName = (1)` whose return-type
+an elaborated canonical form. A definition written `EXPR (DOIT) -> SomeWeirdName = (1)` whose return-type
 name never binds surfaces a `ShapeError` mentioning `SomeWeirdName` verbatim, not a synthesized
 rewrite — there through the return slot's `TypeNameToken` carrier member (§ Union carrier slots),
 which delivers `Held::Name(BinderSymbol::Type)` and lets the body resolve it against its own scope
@@ -235,10 +235,10 @@ its names through some *other* member.
 
 ## Function signatures
 
-`FN` syntax requires both per-parameter types and a return type:
+Definition syntax requires both per-argument types and a return type:
 
 ```
-FN (sig) -> ReturnType = (body)
+EXPR (sig) -> ReturnType = (body)
 ```
 
 Each parameter slot in `<sig>` is written as `name: Type`. A bare identifier
@@ -250,8 +250,9 @@ arguments don't satisfy the signature surfaces as
 with different parameter types routes to a different overload by
 slot-specificity (see below).
 
-Parameter names within one signature are distinct, and a signature declaring one
-twice is refused where it is written — `FN (BETWEEN x :Number AND x :Number)` is a
+Parameter names within one **definition** are distinct, and a definition declaring one
+twice is refused where it is written — `EXPR (BETWEEN x :Number AND x :Number) -> Number = (x)`
+is a
 [`KErrorKind::ShapeError`](../../../src/machine/core/kerror.rs) naming the repeated
 parameter, raised by `check_distinct_parameter_names` in
 [`src/builtins/fn_def/finalize.rs`](../../../src/builtins/fn_def/finalize.rs) before the
@@ -259,7 +260,9 @@ callable is built. There is no reading of a repeat that works: positionally the 
 slot's binding would shadow the first, leaving one of the caller's arguments unreachable
 in the body, and by name no call could fill both slots at all, since a field record
 carries one value per name. Refusing the definition puts the diagnostic on the signature
-that is wrong rather than on a call site that did nothing wrong. Distinctness is what
+that is wrong rather than on a call site that did nothing wrong. A **bodyless** head is
+the exception: its shape drops argument names entirely, so two slots sharing one collide
+over nothing and it may equally write `_`. Distinctness is what
 lets the named-argument lane's reconstruction
 ([`KFunction::reconstruct_positional`](../../../src/machine/core/kfunction.rs)) check its
 slots by presence alone.

@@ -1,7 +1,7 @@
 # Functors
 
 A functor is a module parameterized by another module — a function from modules
-to modules. In koan a functor is not a separate construct: it is just an `FN`
+to modules. In koan a functor is not a separate construct: it is just a function
 whose body builds and returns a module. Functors are how you write a component
 once and specialize it to many implementations: anything that supplies the
 required signature can be plugged in.
@@ -9,7 +9,7 @@ required signature can be plugged in.
 ## Defining and applying
 
 `EXPR (<keyword> <param> :<Signature>) -> <ReturnType> = (<body>)` — the ordinary
-function binder from [chapter 4](04-functions.md). The parameter is a module
+expression-shape binder from [chapter 4](04-functions.md). The parameter is a module
 constrained by a signature, and the body builds and returns a new module. You
 apply it by calling its keyword with a module that satisfies the parameter's
 signature, exactly as you would call any other function:
@@ -37,16 +37,17 @@ way to *narrow* what the argument exposes, never a prerequisite for passing it.
 Each application is *generative* — it produces a fresh module distinct from every
 other application.
 
-There is no return-slot restriction: an `FN` may return anything, and a module is
+There is no return-slot restriction: a function may return anything, and a module is
 just one of the things it can return. "Functor" names how you are *reading* the
 function, not a kind the language tracks.
 
 ## The function is an ordinary value
 
 Because a functor is an ordinary function, the combined
-`LET <name> = FN …` statement binds it like any other function — under a
-snake_case (value-class) name — and the value-side call form works alongside the
-keyworded one:
+`LET <name> = FN EXPR …` statement from
+[chapter 4](04-functions.md#two-kinds-of-function) binds it like any other function
+— under a snake_case (value-class) name — and the value-side call form works
+alongside the keyworded one:
 
 ```koan
 SIG Ordered = (VAL compare :Number)
@@ -214,6 +215,68 @@ constructor's only parameter, so it means exactly `:(Boxed {Type = Number})`. A
 constructor with two or more parameters has to use the brace form, and it can only be
 used in *type* position: `Boxed (7)` wraps one value and infers one type argument, so
 there is nothing for a second parameter to be inferred from.
+
+## One definition at every type: `FOR ALL`
+
+The `OPEN` overloads above name one boxed type each. When an operation works the
+same way at *every* type, write it once and quantify over the type instead. A
+`FOR ALL (<names>)` group sits between `EXPR` and the head, and the names it lists
+can be used by the slots and the return:
+
+```koan
+NEWTYPE (Type AS Boxed)
+EXPR FOR ALL (Elt) (BOX x :Elt) -> :(Elt AS Boxed) = (Boxed (x))
+PRINT (BOX 7)
+PRINT (BOX "hi")
+```
+
+```text
+:(Boxed {Type = Number})(7)
+:(Boxed {Type = Str})(hi)
+```
+
+One definition answered both calls. Each call works out what `Elt` stands for from
+the type of the argument you passed — `BOX 7` reads `Elt = Number` and returns a
+`:(Number AS Boxed)`, `BOX "hi"` reads `Elt = Str`. Nothing is written at the call
+site to say so, and the body can use `Elt` as an ordinary type name. A name your
+arguments never mention is refused when you define the function, because no call
+could ever work it out.
+
+A signature can declare a quantified member the same way, and a module satisfies it
+with a single implementation:
+
+```koan
+SIG Boxes = (
+  (TYPE (Type AS Wrap))
+  (EXPR FOR ALL (Elt) (BOX _ :Elt) -> :(Elt AS Wrap))
+)
+MODULE boxing = (
+  (NEWTYPE (Type AS Wrap))
+  (EXPR FOR ALL (Elt) (BOX x :Elt) -> :(Elt AS Wrap) = (Wrap (x)))
+)
+LET boxes = (boxing :| Boxes)
+PRINT (USING boxes SCOPE (BOX 7))
+PRINT (USING boxes SCOPE (BOX "hi"))
+```
+
+```text
+:(Wrap {Type = Number})(7)
+:(Wrap {Type = Str})(hi)
+```
+
+The module ascribes **once**, not once per element type. A module offering only
+`(EXPR (BOX x :Number) -> :(Number AS Wrap) = …)` is refused, and the error names the
+quantifier the overload pinned down: one implementation has to hold at every `Elt`.
+
+Note that `_` in the signature's head. A declaration has no body, so it has no use
+for a parameter name — write `_` and give the slot its type. A definition names its
+parameters because its body reads them, and two definitions that differ only in what
+they call their parameters satisfy the same declaration.
+
+A quantifier is not the same thing as a `:Type` parameter. `EXPR (MAKESET Elt :Type) …`
+takes the type as an *argument*, written at the call (`MAKESET Number`).
+`EXPR FOR ALL (Elt) …` takes no such argument: the type is worked out from what the
+other arguments carry.
 
 ---
 

@@ -48,6 +48,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [A flattened dispatch registration pins its defining frame](foundation/flattened-registration-pins-its-frame.md)
 - [A module's retention answer is conservative](foundation/module-retention-answer.md)
 - [Module scope consolidation](foundation/module-scope-consolidation.md)
+- [Monadic side effects](foundation/monadic-side-effects.md)
 - [Yielding iterators](foundation/yielding-iterators.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [EVAL splices in place](metaprogramming/eval-splices-in-place.md)
@@ -63,6 +64,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One structural walk over `TypeNode`](refactor/type-structure-combinator.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
-- [Expression shapes are their own kind of function](type_language/expression-shapes.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

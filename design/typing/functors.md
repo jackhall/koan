@@ -1,10 +1,10 @@
 # Functors
 
 A **functor** — a module-returning function — is how koan parameterizes a module by another
-module. It is not a construct: it is an ordinary `FN` whose body evaluates to a module value,
-so a functor is a *special case of a function*, named for the pattern rather than for any
-machinery. `FN` is koan's only function binder. A functor may also take a bare `:Type`
-parameter; generic functions are built this way — see [generics.md](generics.md).
+module. It is not a construct: it is an ordinary definition whose body evaluates to a module
+value, so a functor is a *special case of a function*, named for the pattern rather than for any
+machinery. A functor may also take a bare `:Type` parameter; generic functions are built this way
+— see [generics.md](generics.md).
 
 - *Surface semantics* — a functor's module parameter is an ordinary **value**
   parameter under a signature-typed slot (`er :Ordered`), so its name is
@@ -24,10 +24,10 @@ parameter; generic functions are built this way — see [generics.md](generics.m
   functor-specific state — no flag, no type variant, no binder.
 
 ```
-LET make_set = FN (MAKESET er :Ordered) -> Module = (
+LET make_set = FN EXPR (MAKESET er :Ordered) -> Module = (
   MODULE result = (
     (LET Carrier = ...)
-    (LET insert = FN (INSERT s :Carrier x :er.Carrier) -> Carrier = ...)
+    (LET insert = FN EXPR (INSERT s :Carrier x :er.Carrier) -> Carrier = ...)
     ...
   )
 )
@@ -138,11 +138,11 @@ through the value channel: [`attr.rs`](../../src/builtins/attr.rs)'s
 off the module value. The argument module's own signature is named `:(TYPE OF er)` —
 see [modules.md § Modules in type position](modules.md#modules-in-type-position-type-of).
 
-A functor's parameters are **unrestricted ordinary FN parameters** — there is no other kind.
+A functor's parameters are **unrestricted ordinary argument positions** — there is no other kind.
 Because koan unifies the value and module languages — a module is a first-class
-`KObject::Module` in the value channel's `Object` arm — a module-returning FN can take
-anything an FN can take, including a bare value
-(`FN (MAKETREE factor :Number) -> …`, with
+`KObject::Module` in the value channel's `Object` arm — a module-returning definition can take
+anything a definition can take, including a bare value
+(`EXPR (MAKETREE factor :Number) -> …`, with
 the body's `MODULE` closing over `factor` lexically). This is where koan
 departs from OCaml: OCaml stratifies a separate module language above the
 value language, so a functor takes only module arguments and a value must be
@@ -161,7 +161,7 @@ The same no-stratum reasoning extends symmetrically to bare type tokens. A
 builtin tokens (`Number`, `Str`, `Bool`, `Null`) and the
 `SetMember` handle a struct / union nominal token
 resolves to — so `(MAKETREE Number)` against
-`FN (MAKETREE Elt :Type) -> …` binds `Elt = KType::NUMBER` per call
+`EXPR (MAKETREE Elt :Type) -> …` binds `Elt = KType::NUMBER` per call
 with no call-site wrapping. The per-call type-side bind treats the
 builtin-keyed and nominal-keyed paths identically: a body-position `Elt`
 resolves to `KType::Number` through `Scope::resolve_type`, and a deferred
@@ -172,6 +172,22 @@ through a `Signature { .. }` slot, neither of which a `:Type` slot admits — ke
 the `:Type` vs `:Module` overload distinction. OCaml structurally cannot match
 this without modular implicits, because its module language is stratified
 above the value language.
+
+### `:Type` parameters and quantifiers are different things
+
+A `:Type` parameter is an **argument**: the caller writes the type at the call
+(`MAKETREE Number`), it occupies an argument position in the head, and it binds into the
+per-call scope like any other. A **quantifier** — a name in an `EXPR FOR ALL (<names>)`
+group ahead of the head
+([modules.md § Keyworded members](modules.md#keyworded-members)) — is never written at a
+call. It is solved from the types the *other* arguments carry, by one unification walk
+over the call's argument positions in order. So `EXPR (MAKETREE Elt :Type) -> …` and
+`EXPR FOR ALL (Elt) (MAKETREE x :Elt) -> …` are different surfaces asking for different
+things, and a `Name :Type` pair inside a head keeps its one meaning either way.
+
+Both land in the same place: each solved quantifier registers into the call's own scope
+through the `:Type`-parameter door, so a body reads `Elt` as an ordinary type name and a
+deferred return elaborates against it exactly as a `:Type` argument's does.
 
 ## Deferred return-type elaboration
 
@@ -234,24 +250,26 @@ admission helper at
 [`function_compat`](../../src/machine/model/types/ktype_predicates.rs) then admits
 a deferred return by syntactic shadow equality — an `Any` slot admits any deferred
 return, a `KType::DeferredReturn` slot admits iff the shadows match
-([ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance)). The deferred-*parameter* half of this
-precision — a per-call parameter type that reads as `Any` — is folded into
-[modular implicits (stage 5)](../../roadmap/predicate_typing/modular-implicits.md),
-where implicit search dispatches on parameter types.
+([ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance)). The parameter-side
+projection — reading a declared parameter position against the type an argument
+carries, structurally and one position at a time — is the shape unifier
+([modules.md § Keyworded members](modules.md#keyworded-members)); what
+[modular implicits (stage 5)](../../roadmap/predicate_typing/modular-implicits.md) adds
+on top of it is the *search* for a witness, not a second walk.
 
-Multi-argument functors are ordinary multi-parameter FNs. Currying is
-just nested FNs whose outer return type is the inner function's type,
+Multi-argument functors are ordinary multi-argument definitions. Currying is
+just a nested lambda whose type is the outer definition's return type,
 written with the `:(FN :{params…} -> R)` sigil:
 
 ```
-LET make_map = FN (MAKEMAP er :Ordered) -> :(FN :{vo :Monoid} -> :(Map WITH {Key = er.Carrier})) = (
-  FN (MAKEVALS vo :Monoid) -> :(Map WITH {Key = er.Carrier}) = (
+LET make_map = FN EXPR (MAKEMAP er :Ordered) -> :(FN :{vo :Monoid} -> :(Map WITH {Key = er.Carrier})) = (
+  FN :{vo :Monoid} -> :(Map WITH {Key = er.Carrier}) = (
     MODULE result = ( ... )
   )
 )
 ```
 
-The inner FN inherits the outer's per-call scope, so `er.Carrier` in its return slot resolves
+The inner lambda inherits the outer's per-call scope, so `er.Carrier` in its return slot resolves
 through the same per-call type-side bind path body-position references use.
 
 ## Higher-kinded type slots
@@ -263,8 +281,10 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 ```
 SIG Monad = (
   (TYPE (Type AS Wrap))
-  (VAL pure :(FN :{x :Number} -> :(Number AS Wrap)))
-  (VAL bind :(FN :{m :(Number AS Wrap), f :(FN :{x :Number} -> :(Number AS Wrap))} -> :(Number AS Wrap)))
+  (EXPR FOR ALL (Elt) (PURE x :Elt) -> :(Elt AS Wrap))
+  (EXPR FOR ALL (Elt Res)
+        (BIND m :(Elt AS Wrap)
+              f :(FN :{x :Elt} -> :(Res AS Wrap))) -> :(Res AS Wrap))
 )
 ```
 

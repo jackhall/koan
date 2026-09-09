@@ -69,9 +69,10 @@ supply:
 - `(VAL <name> :<TypeExpr>)` declares a value slot: the canonical surface for
   naming an operation the signature requires, with the slot's declared type
   recorded explicitly rather than inferred from an example value.
-- `(FN (<head>) -> <Return>)` — a bodyless `FN` head — declares a **keyworded
+- `(EXPR (<head>) -> <Return>)` — a bodyless `EXPR` head — declares a **keyworded
   member**: an entry in the module's dispatch buckets, the half of a module's
-  callable surface `VAL` cannot name. See
+  callable surface `VAL` cannot name. Its `EXPR FOR ALL (<names>) (<head>) -> <Return>`
+  twin declares one that quantifies over the type parameters it names. See
   [Keyworded members](#keyworded-members) below.
 - `(OP #(<sym>) OVER <Operand>)` and `(UNARY OP #(<sym>) OVER <Operand> -> <Result>)`
   — bodyless **operator heads** — declare an operator member: its dispatch bucket(s)
@@ -86,10 +87,11 @@ each `TYPE <Name>` abstract member and each `LET <Name> = <Type>` manifest membe
 Type-token name — genuine type bindings. Each `VAL <name> :<Type>` value slot instead records
 its declared type into a **slot collector** on the decl scope
 ([`Scope::sig_slot`](../../src/machine/core/scope.rs) / `sig_value_slots`), keyed by the slot's
-value name — a schema in progress, off the binding map. Each bodyless `FN` head — and each
-operator head, whose buckets are ordinary keyworded members — records its
-`(params) -> ret` type into the slot collector's twin, a **keyworded collector**
-(`Scope::write_sig_keyworded` / `sig_keyworded_members`) keyed by the head's untyped bucket key.
+value name — a schema in progress, off the binding map. Each bodyless `EXPR` head — and each
+operator head, whose buckets are ordinary keyworded members — records its **expression shape**
+into the slot collector's twin, a **keyworded collector**
+(`Scope::write_sig_keyworded` / `sig_keyworded_members`), an unkeyed run: the head's bucket key is
+read back off the shape, so nothing stores it a second time.
 The third collector is the **operator collector** (`Scope::write_sig_operator_group` /
 `sig_operator_groups`), keyed by a record's own member-run digest, which a bare head fills with
 the singleton its surface implies and a bodyless `GROUP` with one record over all its members.
@@ -104,11 +106,13 @@ a SIG body's `Bindings` is an ordinary `Bindings::new()`. A bodyless `GROUP` run
 SIG-body gate, so a head inside it still records into the enclosing signature's collectors and
 reads the mode only to know the group is the sole registrar for its members.
 
-`VAL`, `TYPE`, the bodyless `FN` head and the two operator declarators are meaningful only
-inside a SIG body; outside it the
-declarator is unbound and a bodyless head is an error naming the definition spelling. The
+`VAL`, `TYPE` and the two operator declarators are meaningful only inside a SIG body; outside it
+the declarator is unbound. The bodyless `EXPR` head is the exception: it denotes its head's
+expression shape as a type value wherever it stands, and *declaring* is what it additionally does
+when it stands bare — sigil-free — inside a SIG body. Under a `:(…)` sigil, or anywhere outside a
+SIG body, it is the type value and nothing else. The
 lowercase-name `(LET name = <value>)` form is
-rejected inside SIG bodies with a diagnostic directing to `VAL`, and a bare `FN` *with* a body —
+rejected inside SIG bodies with a diagnostic directing to `VAL`, and an `EXPR` head *with* a body —
 or an `OP`, `UNARY OP` or `GROUP` definition — there is rejected with one directing to the
 corresponding bodyless declarator. The implementation lives at
 [`val_decl.rs`](../../src/builtins/val_decl.rs); ascription
@@ -363,7 +367,7 @@ abstract `Type` (opaque), not the underlying `Number` — a
 [`KObject::Wrapped`](../../src/machine/model/values/kobject.rs) carrier whose
 `type_id` is that identity, the same `Wrapped` variant NEWTYPE uses and
 distinguished by its `type_id`'s KType — and a functor body
-`(FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero))` whose return type is the
+`(EXPR (GET_ZERO er :WithZero) -> er.Carrier = (er.zero))` whose return type is the
 per-call abstract member admits the slot read. The coerced member lives in the view
 scope's own region (declaration-stable), whose composition retains the source
 module's region for the payload substrate a re-tag shares, so both outlive any lift
@@ -374,86 +378,149 @@ newtype-with-private-fields pattern that a trait system would need.
 
 ### Keyworded members
 
-A module's callable surface has two halves. A `LET pure = FN (PURE x :Number) …`
-binds `pure` in `data` *and* registers `PURE` in the module's dispatch buckets; a
-bare `FN (PURE x :Number) …` registers only the bucket. `VAL pure :(FN …)` names the
-value half. The **bodyless `FN` head** names the other:
+Koan has two kinds of callable and spells them apart. A **lambda** is `FN :{…} -> <Return>`:
+anonymous, reached by name, its arguments a record of named fields. An **expression shape** is
+`EXPR (<head>) -> <Return>`: keyworded, reached by dispatch, its arguments positional. Every
+`EXPR` key carries at least one keyword, so the two families are disjoint by construction —
+no shape is equal to, satisfies, or is satisfied by a lambda type.
+
+A module's callable surface splits along the same seam. `LET pure = FN EXPR (PURE x :Number) …`
+binds `pure` in `data` *and* registers `PURE` in the module's dispatch buckets — the
+double-barrelled spelling names both channels the one statement installs, `FN` for the
+lambda-typed value name and `EXPR` for the shape. A bare `EXPR (PURE x :Number) …` registers only
+the bucket. `VAL pure :(FN …)` names the value half. The **bodyless `EXPR` head** names the other:
 
 ```
-SIG Box = ((TYPE Elt) (VAL zero :Elt) (FN (PURE x :Elt) -> Elt))
+SIG Box = ((TYPE Elt) (VAL zero :Elt) (EXPR (PURE _ :Elt) -> Elt))
 ```
 
-The head is the definition form's head with the `= (<body>)` dropped, and it parses
-through the definition form's own path
-([`fn_def.rs`](../../src/builtins/fn_def.rs)), so a declaration and the definition
-that satisfies it derive their bucket key and slot types from one implementation.
-Because it takes no body, its bucket key `[FN, Slot, ->, Slot]` is shorter than every
-definition spelling and the two never compete; the key *is* shared with the
-function-type expression `FN :{…} -> <Ret>`
-([`parameterized_types.rs`](../../src/builtins/parameterized_types.rs)), and the
-signature slot tells them apart — a `(…)` head is captured raw by the bucket's
-lazy-slot entry and reaches the declarator, a `:{…}` record type resolves and reaches
-the type form. A head with no fixed token has no bucket to declare, and a return type
-naming a parameter (`-> er.Carrier`) is a per-call elaboration a declaration has no
-call to run; both are refused at the declaration rather than at an ascription later.
+The head is the definition form's head with the `= (<body>)` dropped, and it parses through the
+definition form's own path ([`fn_def.rs`](../../src/builtins/fn_def.rs)), so a declaration, the
+definition satisfying it, and the callable's own registered type all derive one shape from one
+implementation. A declaration may write `_` where it has no use for a name; the shape drops names
+either way. A head with no fixed token has no bucket to declare, and a return type naming a
+*parameter* (`-> er.Carrier`) is a per-call elaboration a declaration has no call to run — both
+are refused at the declaration rather than at an ascription later.
 
-**An overload's identity** is its untyped bucket key plus an interned `KFunction`
-type — a record of *named* argument types and a return type. Parameter names are
-interface, exactly as in a `VAL` FN slot; slot order within the key is presentation.
-Several declarations may share one key, and the key's overloads are a *set*, held in a
-canonical order so two signatures declaring the same overloads intern to one type. An
-exact duplicate is a `Rebind`; a same-key declaration at a different type joins the
-set.
+Outside a SIG body, or under a `:(…)` sigil anywhere, the same head is its shape as a type value,
+so a shape is nameable like any other type and a slot can expect one:
 
-The keyworded channel is signature content: it feeds the schema's content digest, is
-rendered after the value slots in a signature's name
-(`SIG (zero: Elt, (PURE x :Elt) -> Elt)`), rides `TYPE OF`, folds through `WITH` pins
-like any other declared type (two overloads that collapse to one under a pin become
-one), and intersects in a signature join — per shared key, overloads pair by
-parameter-name set, and one with no unique partner drops.
+```
+LET Doubling = :(EXPR (DOUBLE _ :Number) -> Number)
+EXPR (APPLY g :(EXPR (DOUBLE _ :Number) -> Number)) -> Number = (DOUBLE 4)
+```
 
-**Satisfaction mirrors dispatch resolution.** For each declared overload,
-`sig_subtype` finds the module overloads under the same key that *satisfy* it — the
-same covariant `KFunction` rule a value slot's function type is checked by — and takes
-the most specific of them. Three failures are named at the head that wanted them: no
-bucket under the key (`MissingKeyworded`), a bucket whose overloads all fail
-(`KeywordedMismatch`), and an incomparable tie among satisfiers
-(`AmbiguousKeyworded`) — the keyworded reading of a dispatch ambiguity, raised at the
-ascription rather than at the call.
+A shape-typed slot is filled by a *registered* callable whose own shape satisfies it, and refuses
+a lambda and a callable under another bucket key alike.
 
-"Most specific" is **the same code dispatch uses**, not a second lattice. The per-slot
-fold behind `ExpressionSignature::specificity_vs` — the ranking dispatch applies to
-co-bucket call shapes — is extracted as `specificity_over`, and both callers route
-through it: `specificity_vs` pairs two live signatures' argument slots positionally,
-`fn_type_specificity` pairs two declared function types' parameters *by name*
-([`signature.rs`](../../src/machine/model/types/signature.rs)). Returns are excluded,
-because dispatch never selects on them. A test pins the agreement directly: the
-type-level verdict equals `specificity_vs` on the live signatures.
+**An overload's identity is its shape type** — an interned
+[`ExpressionShape`](../../src/machine/model/types/node.rs) node holding the interleaved element
+run a call spells (fixed keywords and typed argument positions, in order), the type parameters the
+shape quantifies over, and the return type. Argument **names** are binder-side only: they appear
+where a body needs them and are absent from the type, so two definitions differing only in
+parameter names project one shape. Argument *order* and keyword placement are identity — what a
+canonically ordered parameter record erases and an element run keeps. The bucket key is a reading
+of the member — the element run with its slot types erased — so nothing stores it a
+second time and every consumer — satisfaction, `join_schemas`, `fold_pins`, specificity, rendering,
+the view's install path — reads one representation. A schema's `keyworded` channel is therefore a
+flat canonical run of shapes rather than a key-indexed map: several members may key one bucket, an
+exact duplicate is a `Rebind`, and a same-key declaration at different slot types is one more
+overload.
+
+**A shape may quantify.** A `FOR ALL (<names>)` group between `EXPR` and the head binds type
+parameters the later element types and the return read:
+
+```
+SIG Monad = (
+  (TYPE (Type AS Wrap))
+  (EXPR FOR ALL (Elt) (PURE x :Elt) -> :(Elt AS Wrap))
+)
+```
+
+Each name lowers to a `Quantified(index)` leaf at its position in the group, so two shapes
+alpha-equivalent under a renaming intern once and the stored names are render-only. The group's
+*arity* is identity: it feeds the digest, and two shapes over different arities are different
+types. A name no argument position reads is refused at the definition — a quantifier is solved from
+the arguments, so one nothing mentions could never be solved. A `Name :Type` pair inside the head
+keeps its own meaning, a call-time type argument ([functors.md](functors.md)); that is why the
+group is its own syntax rather than a reading of the head.
+
+**Quantifiers are solved per call, not at satisfaction.** A call runs one
+[`Unifier`](../../src/machine/model/types/ktype_predicates.rs) across its argument slots in order:
+the first position reaching a quantifier binds it to the type that argument carries, and every
+later one must agree — at a covariant position by refining the binding, at a contravariant one (a
+continuation's parameter) by being at least as general. The walk descends the compounds a
+quantifier hides inside — list, dict, record, wrapper, union, lambda, shape — and falls to the
+ordinary `satisfied_by` relation at every leaf, so a declared type holding no quantifier answers
+exactly as that relation does, in one step. The solution registers into the call's own scope
+through the same door a `:Type` parameter takes, so the body reads `Elt` as an ordinary type name,
+and it substitutes into a resolved return before the lift checks it. A quantifier this call's
+arguments leave undetermined is refused at the call, naming it. That walk is also the
+parameter-side projection a type-parameterized implicit functor needs for its `:Type` arguments
+([modular implicits](../../roadmap/predicate_typing/modular-implicits.md)).
+
+On the **value** lane a quantified callable reports a lambda type with every quantified position
+erased to `Any` — a lambda type carries no binder — so a `VAL` slot over it keeps working and a
+call by name solves the quantifiers exactly as a dispatched call does.
+
+The keyworded channel is signature content: it feeds the schema's content digest, is rendered
+after the value slots in a signature's name (`SIG (zero: Elt, (PURE _ :Elt) -> Elt)`), rides
+`TYPE OF`, folds through `WITH` pins like any other declared type (two overloads that collapse to
+one under a pin become one), and intersects in a signature join. The join takes **all pairs** under
+a shared key: every left member joins positionally against every right member keying the same
+bucket — slots meet, the return joins — and a pair whose slot met to `Never` is dropped as vacuous.
+Each kept pair is an upper bound of both operands, so the canonical set of them is the strongest
+interface both still satisfy.
+
+**Satisfaction mirrors dispatch resolution.** For each declared member, `sig_subtype` filters the
+module's members to those keying the same bucket, keeps the ones that *satisfy* the declared shape,
+and takes the most specific. In the type relations a quantified position is the unconstrained top:
+every other type refines it, and it refines nothing but `Any`. So satisfaction is **positional and
+solver-free** — a declared quantified slot is filled by a candidate slot that is quantified or
+`Any` and refused by a concrete one, which is what admits a module with *one* implementation
+holding at every instantiation and refuses one implementation per instantiation. Quantifier arity
+is not read here; arity belongs to a shape's identity, not to the relation, so an overload
+quantifying over nothing whose positions are `Any` fills a quantified declaration exactly as a
+quantified one does. Four failures are named at the head that wanted them: no bucket under the key
+(`MissingKeyworded`), a bucket whose members all fail (`KeywordedMismatch`), a failure at a
+position the declaration quantifies over, which names the parameter the overload fixed
+(`QuantifiedMismatch`), and an incomparable tie among satisfiers (`AmbiguousKeyworded`) — the
+keyworded reading of a dispatch ambiguity, raised at the ascription rather than at the call.
+
+"Most specific" is **the same code dispatch uses**, not a second lattice. The per-slot fold behind
+`ExpressionSignature::specificity_vs` — the ranking dispatch applies to co-bucket call shapes — is
+extracted as `specificity_over`, and both callers route through it: `specificity_vs` pairs two live
+signatures' argument slots, `shape_specificity` pairs two declared shapes' argument positions
+([`signature.rs`](../../src/machine/model/types/signature.rs)). Both pair **positionally** —
+dispatch never sees an argument name, and a shape type carries none. Returns are excluded, because
+dispatch never selects on them. A test pins the agreement directly: the type-level verdict equals
+`specificity_vs` on the live signatures.
 
 **A view publishes the selection.** The ascription replay installs, per declared
-overload, the one source overload that satisfies it — wrapped by the same
+member, the one source overload that satisfies it — wrapped by the same
 `coerce_function` eta-wrapper a `VAL` FN slot takes where the coercion tables say the
 declared type crosses the barrier, and as the source's own seal where it does not. So
 a keyworded call through an opaque view coerces exactly as the value-lane read of the
 same function does: results carry the view's types, a source-typed argument is a
-mismatch at the wrapper. Selection and satisfaction run
-`select_keyworded_satisfier` ([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)),
-one implementation, so the member the check admitted is the member the view installs.
-A module overload no declared member selects is **not** installed: under a signature
-declaring `(PICK x :Number)`, a module's `(PICK x :Any)` is unreachable through the
-view. Two declared overloads may legitimately select one source overload; the pair
-they publish under dedupes them.
+mismatch at the wrapper. Selection and satisfaction reach the relation through **one**
+entrance — `select_keyworded_satisfier`
+([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)) over the source's own overloads,
+under the same substitution the check runs (`slot_satisfied_by`, given the binder and the source's
+bindings) — so the member the check admitted is the member the view installs, and the view then
+locates the callable by shape-type equality, which is total because the shape carries everything
+the dispatch table distinguishes overloads by. A module overload no declared member selects is
+**not** installed: under a signature declaring `(PICK x :Number)`, a module's `(PICK x :Any)` is
+unreachable through the view. Two declared members may legitimately select one source overload; the
+pair they publish under dedupes them.
 
 **Operator members are keyworded members.** A bodyless `OP` head declares the same
 bucket entries the definition registers — one for a binary operator, the list form and
 the binary bridge for a unary one — so they are declared, digested, satisfied and
 installed by everything above with no operator-specific handling. What the head adds is
-the schema's fourth channel, the chaining record; a member whose key is an operator
-key, whose symbol one of those records names, *and* whose parameters are the operand
-binders an operator body binds, renders as its own head (`OP #(+) OVER Carrier`,
-`UNARY OP #(~) OVER Carrier -> Result`) wherever a signature's name or a keyworded
-failure spells it; the `FN`-head spelling of the same key keeps the FN rendering,
-overload by overload, because it declares the bucket and claims no chaining
+the schema's fourth channel, the chaining record; a member whose key is an operator key
+*and* whose symbol one of those records names renders as its own head (`OP #(+) OVER Carrier`,
+`UNARY OP #(~) OVER Carrier -> Result`) wherever a signature's name or a keyworded failure
+spells it. A key no chaining record claims keeps the plain head rendering, overload by overload
 ([operators.md § Operators as signature members](../operators.md#operators-as-signature-members)).
 
 A keyworded member is reached by dispatch, so it is called through a
@@ -570,8 +637,8 @@ replacement spelling. The one door from a module to type position is the `TYPE O
 builtin ([`type_ops/type_of.rs`](../../src/builtins/type_ops/type_of.rs)):
 
 ```
-FN (TAKE_ORD m :(TYPE OF int_ord)) -> Number = (m.zero)
-FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)
+EXPR (TAKE_ORD m :(TYPE OF int_ord)) -> Number = (m.zero)
+EXPR (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)
 LET SetType = (TYPE OF int_set)
 ```
 
@@ -780,7 +847,7 @@ region's `Rc` per the
 the call-site region so the borrowed window survives both the block and any
 closure that escapes it reading a surfaced member.
 
-A bare `FN` registration writes only the `functions` dispatch bucket, never
-`data`; only the combined `LET f = FN …` statement also writes `data`. The surfaced
+A bare `EXPR` definition writes only the `functions` dispatch bucket, never
+`data`; only the combined `LET f = FN EXPR …` statement also writes `data`. The surfaced
 window therefore carries captured values in `data` and the dispatch surface in
 `functions`, cleanly separated rather than conflated.

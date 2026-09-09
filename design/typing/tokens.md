@@ -19,7 +19,7 @@ three classes:
   each slot position ([lazy-closures.md](../lazy-closures.md)).
 
 This split is what lets the language reserve a syntactic slot for type names
-without quoting. `FN (x :Number) -> Str = (...)` works because `Number` and
+without quoting. `EXPR (SHOW x :Number) -> Str = (...)` works because `Number` and
 `Str` are recognizable as types from their shape alone.
 
 ## Token class is a binding rule, not just a lexical one
@@ -40,7 +40,7 @@ the channel it binds into is a hard error there:
 
 A keyword-class name (all-uppercase, no lowercase) classifies into neither bindable
 channel: **nothing binds to a keyword**, so an all-caps name can hold no value binding and
-no type binding. Keyworded dispatch registration is unaffected — an `FN` or `OP`
+no type binding. Keyworded dispatch registration is unaffected — an `EXPR` or `OP`
 registration labels a bucket in the dispatch table rather than binding a name.
 
 The rule reaches past declarations to **parameters**: a

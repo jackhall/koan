@@ -149,7 +149,7 @@ pub(crate) struct DeferredInputs<'a> {
     /// slot's own edge off that source and nothing here retires the producer behind it.
     pub awaited_producers: Vec<ProducerId>,
     /// `Some` only when the return-type slot is an `Expression(_)` carrier that
-    /// doesn't reference any FN parameter (resolves once at FN-def time, not
+    /// doesn't reference any parameter (resolves once at definition time, not
     /// per call). Appended ahead of `sub_dispatches`.
     pub return_type_sub: Option<KExpression<'a>>,
     /// `(slot_idx, sub_expr)` — `slot_idx` tells the finish closure which
@@ -284,7 +284,7 @@ fn check_value_type_kinds(
             && let Some(message) = unsaturated_constructor_message(
                 argument.ktype,
                 format_args!(
-                    "the type of FN parameter `{}`",
+                    "the type of parameter `{}`",
                     display_label(argument.name.symbol(), registries)
                 ),
                 registries,
@@ -294,8 +294,7 @@ fn check_value_type_kinds(
         }
     }
     if let ReturnType::Resolved(kt) = return_type
-        && let Some(message) =
-            unsaturated_constructor_message(*kt, "the FN return type", registries)
+        && let Some(message) = unsaturated_constructor_message(*kt, "the return type", registries)
     {
         return Err(KError::new(KErrorKind::ShapeError(message)));
     }
@@ -325,7 +324,7 @@ fn check_distinct_parameter_names(
     for (slot, name) in names().enumerate() {
         if names().take(slot).any(|earlier| earlier == name) {
             return Err(KError::new(KErrorKind::ShapeError(format!(
-                "FN parameter `{}` is declared more than once; each parameter of a \
+                "parameter `{}` is declared more than once; each parameter of a \
                  signature must have its own name",
                 render_label(name.symbol(), registries),
             ))));

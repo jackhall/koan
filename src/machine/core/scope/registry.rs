@@ -34,7 +34,7 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::{
     BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol,
     coerce_function_cell, render_keyworded_head, render_label, select_keyworded_satisfier,
-    shape_key,
+    shape_key_is,
 };
 
 /// What an ascription decides about a view's members once the newborn view scope's id — the
@@ -648,7 +648,7 @@ impl<'a> Scope<'a> {
             let declared_here: Vec<KType> = members
                 .keyworded
                 .iter()
-                .filter(|declared| shape_key(**declared, types) == key)
+                .filter(|declared| shape_key_is(**declared, &key, types))
                 .copied()
                 .collect();
             if declared_here.is_empty() {

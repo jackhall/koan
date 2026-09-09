@@ -109,7 +109,7 @@ read the spelling back.
 Hence the rule for calling a form that takes code: **quote what must not run.**
 
 The built-in forms that *do* take a bare body — the branches of a
-[`MATCH`](06-pattern-matching.md), the block of a `TRY`, the body of an `FN` —
+[`MATCH`](06-pattern-matching.md), the block of a `TRY`, the body of a function —
 are fixed syntax, and their unevaluated slots are a closed list you cannot add
 to. Your own forms take code the one way: as a `#(…)` value at every call site,
 which is also what makes it visible to a reader that the group does not run

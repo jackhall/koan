@@ -86,7 +86,7 @@ fn check_pairwise_combiners(
         let key = binary_key(combiner);
         if declared
             .iter()
-            .any(|shape| crate::machine::model::shape_key(*shape, &registries.types) == key)
+            .any(|shape| crate::machine::model::shape_key_is(*shape, &key, &registries.types))
         {
             continue;
         }

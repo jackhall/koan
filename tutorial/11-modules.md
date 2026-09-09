@@ -83,6 +83,28 @@ provide, without supplying them. `SIG <Name> = (<body>)` declares one, with
 SIG HasLabel = (VAL label :Str)
 ```
 
+`VAL` names a member you reach by name. The other half of a module's surface is
+the shapes it defines, and those are declared with a **bodyless `EXPR` head** —
+the definition form from [chapter 4](04-functions.md) with the `= (<body>)`
+dropped. Write `_` where a declaration has no use for a parameter name:
+
+```koan
+SIG Doubler = (EXPR (DOUBLE _ :Number) -> Number)
+MODULE doubling = (EXPR (DOUBLE x :Number) -> Number = (x * 2))
+LET doubles = (doubling :| Doubler)
+PRINT
+  USING doubles SCOPE (DOUBLE 21)
+```
+
+```text
+42
+```
+
+The names are the definition's business, not the signature's: any module defining
+`DOUBLE` over a `Number` and returning a `Number` satisfies `Doubler`, whatever it
+calls the parameter. Chapter 12 covers the `FOR ALL` form, which declares a member
+that holds at *every* type rather than one.
+
 A signature on its own produces no output; it's a description. You connect a
 module to a signature by **ascribing** it.
 

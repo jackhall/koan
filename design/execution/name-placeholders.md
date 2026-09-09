@@ -25,9 +25,9 @@ announced before any of them runs and are therefore mutually visible within that
 its own name and needs no wrapper.
 
 Every binder is value-style gated (strict `b.idx < c`), so a forward
-reference to a later-sibling `LET`, `NEWTYPE`, `FN`, or any other binder is
+reference to a later-sibling `LET`, `NEWTYPE`, `EXPR`, or any other binder is
 invisible. A later-sibling `LET` surfaces `UnboundName`; a forward call to a
-later-sibling `FN` overload surfaces `DispatchFailed` rather than parking on
+later-sibling `EXPR` overload surfaces `DispatchFailed` rather than parking on
 the not-yet-finalized overload; a forward type reference is a position error.
 A *keyword-headed* function call (`ID 7`) resolves through the
 `functions` bucket, which applies the same per-overload visibility filter:
@@ -140,9 +140,9 @@ claim keys on the same full `UntypedKey` as the overload it becomes, so
 "a binder for this bucket is in flight" and the bucket answers "these overloads
 are registered", and a dispatch walk consults both at a scope. Keying by the full
 bucket key is what keeps `(MAKESET _)` and `(MAKESET _ USING _)` from colliding.
-A bare named `FN` / `OP` uses the bucket channel and not the name channel,
-because sibling overloads under one head keyword (e.g. two `FN (PICK xs :A) ...`
-/ `FN (PICK xs :B) ...` declarations) must not collide on a single name slot.
+A bare `EXPR` / `OP` definition uses the bucket channel and not the name channel,
+because sibling overloads under one head keyword (e.g. two `EXPR (PICK xs :A) ...`
+/ `EXPR (PICK xs :B) ...` declarations) must not collide on a single name slot.
 
 The two channels are two fields of one key, not two alternatives: a
 [`StoredBinderKey`](../../src/machine/model/binder.rs) carries an optional
@@ -152,7 +152,7 @@ token — and an optional
 [`BucketKeys`](../../src/machine/model/binder.rs) pair, so one statement may fill
 either channel or both. The variant *is* the bind kind, so the record states no
 separate kind tag beside the name. The **combined statement forms** —
-`LET <name> = FN <signature> -> <Return> = (<body>)` and the
+`LET <name> = FN EXPR (<head>) -> <Return> = (<body>)` and the
 `LET <name> = OP …` / `LET <name> = UNARY OP …` twins — fill both from a single
 binder: the value name and the bucket key(s) the declaration's body registers
 under. Two bucket keys is the maximum any form reaches (a `UNARY OP` declares the
@@ -391,10 +391,10 @@ is an error. When such a sub-dispatch carries a plan, `submit_expression`
 allocates the slot pre-errored with
 [`KErrorKind::NestedBinder`](../../src/machine/core/kerror.rs): slot-terminal and
 TRY-catchable, it propagates through the dep like any other failed dep. The rule
-covers **every** binder form — name-installing declarations and named `FN` / `OP`
-definitions alike; a named `FN` / `OP` in an eager value position is the same
+covers **every** binder form — name-installing declarations and `EXPR` / `OP`
+definitions alike; an `EXPR` / `OP` definition in an eager value position is the same
 error, not a value whose registration silently vanishes. The value route is the
-anonymous `FN :{…}` form, which installs nothing; a definition that must also
+lambda `FN :{…}` form, which installs nothing; a definition that must also
 bind a name is one statement in the combined spelling, which the error message
 names when the rejected node registers overloads.
 

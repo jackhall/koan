@@ -22,9 +22,7 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::registry::{IdentityBuildHasher, TypeRegistry};
-use super::signature::{
-    DispatchTokenElement, KeyElement, Specificity, UntypedKey, shape_specificity,
-};
+use super::signature::{DispatchTokenElement, KeyElement, Specificity, shape_specificity};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::{KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::values::ModuleDraft;
@@ -63,7 +61,8 @@ pub struct SigSchema {
     pub value_slots: HashMap<ValueSymbol, KType, IdentityBuildHasher>,
     /// Keyworded (dispatch-bucket) members: the expression shapes the interface declares, in
     /// [`canonical_overloads`] order so equality, digesting and iteration are deterministic. The
-    /// bucket key is [`shape_key`] of each member — read off the member's own type, never stored
+    /// bucket key is each member's own element run with its slot types erased ([`shape_keys_equal`],
+    /// [`shape_key_is`]) — read off the member's type, never stored
     /// beside it — so two overloads under one key are two entries here and an exact duplicate is
     /// illegal at declaration.
     pub keyworded: Vec<KType>,
@@ -216,38 +215,68 @@ pub fn canonical_overloads(mut overloads: Vec<KType>) -> Vec<KType> {
     overloads
 }
 
-/// The dispatch bucket key a shape type keys — its element sequence with the slot types erased.
-/// The key is a *reading* of the member's type, not a second copy of it: a schema stores the
-/// shape and derives this wherever a bucket has to be named.
+/// Whether two shapes key the same dispatch bucket — each one's element sequence with the slot
+/// types erased, compared position by position.
 ///
-/// Empty for anything that is not a shape, which no schema member ever is.
-pub fn shape_key(kt: KType, types: &TypeRegistry) -> UntypedKey {
-    // Owns: the key is the function's return value, so it outlives the read.
-    types.with_node(kt, |node| match node {
-        TypeNode::ExpressionShape { elements, .. } => elements
-            .iter()
-            .map(|element| match element {
-                DispatchTokenElement::Keyword(symbol) => KeyElement::Keyword(*symbol),
-                DispatchTokenElement::Slot(_) => KeyElement::Slot,
-            })
-            .collect(),
-        _ => Vec::new(),
+/// The bucket key is a *reading* of the member's type, never a second copy of it, and a reading
+/// only ever has to be compared: against another member's, or against a key already in hand
+/// ([`shape_key_is`]). So no consumer materializes one, and the pairwise readers — which group a
+/// candidate run by bucket, and are therefore quadratic in the run — allocate nothing at all.
+pub(crate) fn shape_keys_equal(left: KType, right: KType, types: &TypeRegistry) -> bool {
+    types.with_node(left, |left_node| {
+        types.with_node(right, |right_node| {
+            let (left, right) = (shape_elements(left_node), shape_elements(right_node));
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(a, b)| key_element(a) == key_element(b))
+        })
     })
 }
 
-/// A shape's argument-position types, in order — [`shape_key`]'s typed half, for the readers that
+/// Whether `shape` keys exactly `key` — [`shape_keys_equal`] against a key already in hand, for
+/// the readers that walk a bucket table and ask which declared members draw from a given bucket.
+pub fn shape_key_is(shape: KType, key: &[KeyElement], types: &TypeRegistry) -> bool {
+    types.with_node(shape, |node| {
+        let elements = shape_elements(node);
+        elements.len() == key.len()
+            && elements
+                .iter()
+                .zip(key)
+                .all(|(element, wanted)| key_element(element) == *wanted)
+    })
+}
+
+/// A shape node's element sequence; empty for a node that is not a shape, which no schema member
+/// ever is. The one place the "not a shape reads as the empty key" convention lives.
+fn shape_elements(node: &TypeNode) -> &[DispatchTokenElement] {
+    match node {
+        TypeNode::ExpressionShape { elements, .. } => elements,
+        _ => &[],
+    }
+}
+
+/// One element's key reading: a keyword keeps its symbol, a slot erases its type.
+fn key_element(element: &DispatchTokenElement) -> KeyElement {
+    match element {
+        DispatchTokenElement::Keyword(symbol) => KeyElement::Keyword(*symbol),
+        DispatchTokenElement::Slot(_) => KeyElement::Slot,
+    }
+}
+
+/// A shape's argument-position types, in order — the bucket key's typed half, for the readers that
 /// compare or render one position at a time.
 pub(super) fn shape_slots(kt: KType, types: &TypeRegistry) -> Vec<KType> {
     // Owns: the slot list is the function's return value, so it outlives the read.
-    types.with_node(kt, |node| match node {
-        TypeNode::ExpressionShape { elements, .. } => elements
+    types.with_node(kt, |node| {
+        shape_elements(node)
             .iter()
             .filter_map(|element| match element {
                 DispatchTokenElement::Slot(kt) => Some(*kt),
                 DispatchTokenElement::Keyword(_) => None,
             })
-            .collect(),
-        _ => Vec::new(),
+            .collect()
     })
 }
 
@@ -313,16 +342,18 @@ fn render_operator_head(
     registries: &RunRegistries,
 ) -> Option<String> {
     let types = &registries.types;
-    let key = shape_key(shape, types);
-    let (symbol, is_list_form) = match key.as_slice() {
+    let (symbol, is_list_form) = types.with_node(shape, |node| match shape_elements(node) {
         [
-            KeyElement::Slot,
-            KeyElement::Keyword(symbol),
-            KeyElement::Slot,
-        ] => (*symbol, false),
-        [KeyElement::Keyword(symbol), KeyElement::Slot] => (*symbol, true),
-        _ => return None,
-    };
+            DispatchTokenElement::Slot(_),
+            DispatchTokenElement::Keyword(symbol),
+            DispatchTokenElement::Slot(_),
+        ] => Some((*symbol, false)),
+        [
+            DispatchTokenElement::Keyword(symbol),
+            DispatchTokenElement::Slot(_),
+        ] => Some((*symbol, true)),
+        _ => None,
+    })?;
     let mode = operators
         .iter()
         .find(|record| record.members.contains(&symbol))?
@@ -555,8 +586,8 @@ pub fn constructor_param_names(kt: KType, types: &TypeRegistry) -> Option<Vec<Ty
 /// of an application, a `TYPE (Elem AS Wrap)` declaration, a module's type-constructor member —
 /// takes a bare constructor legitimately and never consults this.
 ///
-/// `position` is a noun phrase naming the *type slot* the constructor stands in — "the type of FN
-/// parameter `x`", "the FN return type", "the element type of `LIST OF`" — so it reads as the
+/// `position` is a noun phrase naming the *type slot* the constructor stands in — "the type of
+/// parameter `x`", "the return type", "the element type of `LIST OF`" — so it reads as the
 /// subject of "must be a proper type". It names the type, never the value or field whose type it
 /// is: "the type of SIG value slot `boxed`", not "SIG value slot `boxed`", since a slot is not
 /// itself a type. The constructor's parameter names follow, since supplying them is the fix.
@@ -974,9 +1005,8 @@ pub fn join_schemas(a: &SigSchema, b: &SigSchema, types: &TypeRegistry) -> SigSc
     // canonical set of them is the strongest interface both still satisfy.
     let mut keyworded: Vec<KType> = Vec::new();
     for left in &a.keyworded {
-        let key = shape_key(*left, types);
         for right in &b.keyworded {
-            if shape_key(*right, types) != key {
+            if !shape_keys_equal(*left, *right, types) {
                 continue;
             }
             let joined = sig_slot_join(*left, *right, &generalizations, types);
@@ -1557,11 +1587,10 @@ pub fn sig_subtype(
     // most specific is the one it selects. An incomparable tie is the keyworded reading of a
     // dispatch ambiguity, and rejects here rather than at the call.
     for declared in &sup.keyworded {
-        let key = shape_key(*declared, types);
         let candidates: Vec<KType> = sub
             .keyworded
             .iter()
-            .filter(|candidate| shape_key(**candidate, types) == key)
+            .filter(|candidate| shape_keys_equal(*declared, **candidate, types))
             .copied()
             .collect();
         let head = || render_keyworded_head(*declared, &sup.operators, registries);

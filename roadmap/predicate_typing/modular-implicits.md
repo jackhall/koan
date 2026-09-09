@@ -49,25 +49,22 @@ site needs.
   than supplied at the call site. Stage 1 shipped the unconstrained
   `AnyModule` slot; this stage tightens it.
 - *Type-parameterized implicit functors — decided.* Implicit candidates include
-  functors — module-returning `FN`s — taking one or more `:Type` parameters, not
+  functors — module-returning definitions — taking one or more `:Type` parameters, not
   only module-parameterized
   ones. The resolver solves such a functor's type argument by reading the call's
   carried argument type (`List(Number)` yields `Number`) — a projection, not a
   search. This keeps the higher-order restriction intact: type arguments come
   from carried types, module arguments come from search, so a `:Type`-parameterized
-  implicit functor does not itself take an implicit parameter. The structural
-  walk that locates each type parameter inside a parameter slot (`LIST OF Ty`,
-  `Result Ty E`, nested containers, a name repeated across slots) lives here,
-  matching the slot's elaborated `KType` against the value's carried `KType`.
-- *Deferred-parameter type precision — open.* A parameter slot referencing a
-  type parameter not yet solved by implicit-functor resolution has no carrier in
-  the `params: Record<KType>` storage, so it coarsens to `KType::Any` and admission
-  reads `Any` on both sides. The deferred-*return* case already ships its fix — a
-  confined `KType::DeferredReturn` shadow carried in the `ret` box, admitted by
-  syntactic shadow equality
-  ([ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance)); the parameter side
-  wants the contravariant mirror. Recommended: reuse the surface-shadow shape for
-  symmetry, decided alongside the resolution that first produces such a slot.
+  implicit functor does not itself take an implicit parameter.
+- *The parameter-side projection — decided.* The structural walk that
+  locates each type parameter inside a parameter slot (`LIST OF Ty`, `Result Ty E`, nested
+  containers, a name repeated across slots), matching the slot's elaborated `KType` against the
+  value's carried one, is the shape unifier
+  ([modules.md § Keyworded members](../../design/typing/modules.md#keyworded-members)): it binds a
+  parameter position at its first occurrence and requires every later one to agree, descending
+  containers, wrappers, unions, lambdas and shapes and flipping variance at a parameter position.
+  This stage inherits it rather than building its own, and adds only the *search* for a witness
+  module on top.
 - *Implicit-parameter declaration syntax — open.* The function signature
   needs a slot for implicit module parameters; surface form follows stage
   1's conventions but the exact spelling is unsettled.

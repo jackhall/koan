@@ -22,9 +22,9 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators (see [operators](design/operators.md)); `CLOSE OVER (<captures>) (<block>)`, which runs a block over a region of its own so the value it yields copies its captures instead of pinning the frames it was built in (see [lazy closures](design/lazy-closures.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [seed_builtins](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The builtins wired into the default scope include `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators (see [operators](design/operators.md)); `CLOSE OVER (<captures>) (<block>)`, which runs a block over a region of its own so the value it yields copies its captures instead of pinning the frames it was built in (see [lazy closures](design/lazy-closures.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [seed_builtins](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
-User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN :{arg :Arg} -> Out)` (the parameter list is a record type, so `:{}` is the nullary form), `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
+User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN :{arg :Arg} -> Out)` (a lambda type; the parameter list is a record type, so `:{}` is the nullary form), `:(EXPR (<head>) -> Out)` (an expression shape — the type of a keyworded definition, optionally under a `FOR ALL (<names>)` quantifier group), `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
 Example:
 
@@ -162,8 +162,9 @@ src/
 │   ├── let_binding.rs
 │   ├── print.rs
 │   ├── attr.rs
-│   ├── fn_def.rs             FN — user function definition
-│   ├── fn_def/signature.rs      parameter-list parsing for FN
+│   ├── fn_def.rs             EXPR / FN — the two callable definition surfaces
+│   ├── fn_def/signature.rs      head / record-schema parsing (keywords, slots, `_` wildcards)
+│   ├── fn_def/quantifiers.rs    the `FOR ALL (<names>)` group a quantified head binds
 │   ├── fn_def/return_type.rs    return-type slot elaboration
 │   ├── fn_def/param_refs.rs     parameter-reference resolution
 │   ├── fn_def/finalize.rs       seal the function once its slots resolve
@@ -173,7 +174,7 @@ src/
 │   ├── branch_walk.rs        the shared member-arm parser + MATCH's by-member and by-type walkers + TRY's member walker + shared arm-tail machinery
 │   ├── result.rs             Result — the prelude two-member union (Ok / Error)
 │   ├── error_union.rs        KError — the prelude union of every catchable error kind
-│   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN)
+│   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / the `FN :{…} -> R` lambda type)
 │   ├── type_ops.rs           WITH — infix signature specialization; TYPE OF — value → type
 │   ├── type_ops/with.rs               WITH — abstract-slot pinning + manifest fixity
 │   ├── type_ops/type_of.rs            TYPE OF — a value's own type (a module's is its signature)
@@ -209,7 +210,7 @@ src/
     │   │   ├── kkind.rs           KKind — the shallow dispatch *kind* of a type (the OfKind expectation)
     │   │   ├── node.rs            TypeNode — one interned type's content, the thing a KType handle names
     │   │   ├── registry.rs        TypeRegistry — the run-frame-owned interning graph and verdict cache
-    │   │   ├── record.rs          Record<V> — ordered BinderSymbol-keyed map over a Vec<(BinderSymbol, V)>, identity on the key's symbol bits, backing record-type schemas and FN parameter identity
+    │   │   ├── record.rs          Record<V> — ordered BinderSymbol-keyed map over a Vec<(BinderSymbol, V)>, identity on the key's symbol bits, backing record-type schemas and lambda parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   builtin type-name elaboration (from_symbol, twelve symbol compares against builtin_names)
     │   │   ├── builtin_names.rs   the twelve builtin type names as StaticName<TypeSymbol>s, each beside the KType it lowers to

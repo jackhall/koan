@@ -6,10 +6,11 @@ the main way you extend Koan.
 
 ## Defining and calling
 
-`EXPR (<signature>) -> <ReturnType> = (<body>)` registers a function. The
-signature is a parenthesized mix of fixed keywords and typed parameter slots;
-the body is a parenthesized expression evaluated each time the function is
-called.
+`EXPR (<head>) -> <ReturnType> = (<body>)` registers a function. The head is a
+parenthesized mix of fixed keywords and typed parameter slots; the body is a
+parenthesized expression evaluated each time the function is called. (`EXPR` is
+one of koan's two function words — the other, `FN`, writes an anonymous lambda;
+[Two kinds of function](#two-kinds-of-function) below covers the split.)
 
 ```koan
 EXPR (ECHO x :Number) -> Number = (x)
@@ -146,24 +147,39 @@ something else
 `:(LIST OF Number)` is more specific than `:Any`, so the list routes to the
 first definition and everything else falls through to the second.
 
-## Functions as values
+## Two kinds of function
 
-There are three function forms, and which one you write is the choice of how the
-function can be reached:
+Koan has two callables, and they are spelled apart because they are reached in
+different ways.
 
-- **`EXPR (<signature>) -> <Type> = (<body>)`** — the bare named form above. It
+`EXPR` writes an **expression shape**: a fixed run of keywords and typed slots,
+reached by writing that run (`ECHO 21`). Its arguments are positional — the call
+supplies them in the order the head spells them, and the parameter names are for
+the body's use only.
+
+`FN` writes a **lambda**: no keywords, so nothing to dispatch on. It is reached by
+name, and its arguments are a record of named fields (`inc {x = 41}`).
+
+Every `EXPR` head carries at least one keyword and no `FN` does, so the two never
+compete — a call either spells a shape or names a value.
+
+There are three forms, and which one you write is the choice of how the function
+can be reached:
+
+- **`EXPR (<head>) -> <Type> = (<body>)`** — the bare shape definition above. It
   registers a shape, so it is reached by writing that shape (`ECHO 21`). It binds
   no name.
-- **`FN :{<fields>} -> <Type> = (<body>)`** — the anonymous form. No keyword, so
-  no shape is registered; the function is only the value the expression produces,
-  and you bind that value with `LET`.
-- **`LET <name> = EXPR (<signature>) -> <Type> = (<body>)`** — the combined form.
+- **`FN :{<fields>} -> <Type> = (<body>)`** — the lambda. No keyword, so no shape
+  is registered; the function is only the value the expression produces, and you
+  bind that value with `LET`.
+- **`LET <name> = FN EXPR (<head>) -> <Type> = (<body>)`** — the combined form.
   One statement, one definition, reached *both* ways: the shape dispatches and
-  the name holds the same function.
+  the name holds the same function. It spells both words because it installs both
+  channels — `FN` for the name, which is lambda-typed, and `EXPR` for the shape.
 
 `LET <name> = OP …` (and the `UNARY OP` twin) does the same for operators.
 
-Writing `LET <name> = FN …` as one statement binds a name to the function
+Writing `LET <name> = FN EXPR …` as one statement binds a name to the function
 *and* registers its shape — one declaration reaching both. To break it across
 lines, end the line with `,`: a bare indented continuation is read as a nested
 expression, which puts the definition back in a value slot. A function bound
@@ -260,7 +276,7 @@ in, one per name, and `CLOSE OVER ()` names none. Inside the block you can see
 the captures, anything the block itself binds, and every top-level and
 built-in definition — but *not* the rest of the enclosing call, so a value
 from the enclosing function that you did not capture is unbound there.
-Definitions are the exception: shapes defined with `FN`, operators declared
+Definitions are the exception: shapes defined with `EXPR`, operators declared
 with `OP`, and modules all come along on their own, so the block can still
 call them.
 

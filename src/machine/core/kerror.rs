@@ -663,7 +663,7 @@ impl fmt::Display for KErrorKind {
                     write!(
                         f,
                         ". To bind a name and register the definition in one statement, write it \
-                         flat: `LET <name> = FN <signature> -> <Return> = (<body>)`, or the `OP` / \
+                         flat: `LET <name> = FN EXPR (<head>) -> <Return> = (<body>)`, or the `OP` / \
                          `UNARY OP` twins"
                     )?;
                 }

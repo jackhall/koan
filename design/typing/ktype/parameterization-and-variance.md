@@ -107,33 +107,33 @@ Concretely:
 ```
 LET nums = [1 2 3]
 
-FN (PICK xs :(LIST OF Any))    -> Str = ("any")
-FN (PICK xs :(LIST OF Number)) -> Str = ("number")
+EXPR (PICK xs :(LIST OF Any))    -> Str = ("any")
+EXPR (PICK xs :(LIST OF Number)) -> Str = ("number")
 
 PICK nums   # → "number"   (covariant: :(LIST OF Number) ≺ :(LIST OF Any))
 ```
 
 ```
-FN (BAD) -> :(LIST OF Number) = ([1 "x"])
+EXPR (BAD) -> :(LIST OF Number) = ([1 "x"])
 BAD   # → TypeMismatch: expected :(LIST OF Number), got :(LIST OF Any)
         # (matches_value walks elements; covariant — Any.matches_value(_) is true,
         #  Number.matches_value("x") is false)
 ```
 
 ```
-FN (USE f :(FN :{x :Number} -> Str)) -> Str = ("got fn")
+EXPR (USE f :(FN :{x :Number} -> Str)) -> Str = ("got fn")
 
-USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (function_compat: equal by name+type)
-USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → "got fn"   (contravariant param: a value
-                                            #   accepting Any fills a slot promising only Number)
+USE (FN :{x :Number} -> Str = ("hi"))   # → "got fn"   (function_compat: equal by name+type)
+USE (FN :{x :Any}    -> Str = ("hi"))   # → "got fn"   (contravariant param: a value
+                                        #   accepting Any fills a slot promising only Number)
 ```
 
 ```
-FN (USE f :(FN :{x :Number, y :Str} -> Str)) -> Str = ("got fn")
+EXPR (USE f :(FN :{x :Number, y :Str} -> Str)) -> Str = ("got fn")
 
-USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (width drop: a unary value fills a
-                                            #   binary slot; the extra slot param `y` arrives
-                                            #   unbound under call-by-name)
+USE (FN :{x :Number} -> Str = ("hi"))   # → "got fn"   (width drop: a unary value fills a
+                                        #   binary slot; the extra slot param `y` arrives
+                                        #   unbound under call-by-name)
 ```
 
 **Element-type inference for literals** is the join of element types via

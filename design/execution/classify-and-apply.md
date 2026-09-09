@@ -372,7 +372,7 @@ An edge install lands the forward `notify` wake and the consumer's `pending`
 bump atomically with the edge record, so a park-edge install is one atomic
 step, and a consumer's teardown releases only the edges it holds — its
 reclamation cannot transit a park edge into a sibling producer's subtree. Same-scope
-rebind of a value name surfaces as `KErrorKind::Rebind`; an `FN` overload
+rebind of a value name surfaces as `KErrorKind::Rebind`; an overload
 indistinguishable from an existing one surfaces as
 `KErrorKind::DuplicateOverload`. Type bindings share this placeholder
 mechanism: a type-binding site claims its name in the store exactly like a value

@@ -23,8 +23,9 @@ call or pass around — they're fixed markers that only mean something as part o
 shape. Lowercase **identifiers** name values; capitalized **type names** name
 types.
 
-You extend the language by defining functions with `FN`, which simply registers
-a new shape. Built-in forms and your own functions work the same way, so the
+You extend the language by defining functions with `EXPR`, which simply registers
+a new shape (`FN`, its counterpart, writes an anonymous function that registers
+nothing). Built-in forms and your own functions work the same way, so the
 language grows from the inside. Types come in two flavors you'll declare
 yourself: **tagged unions** (a value that is one of several alternatives) and
 **newtypes** (a fresh identity over a representation, including records with

@@ -293,11 +293,11 @@ declaration writes decides the *only* way its callable can be reached:
 - **The `functions` dispatch buckets** hold overloads, keyed by
   [`UntypedKey`](../../src/machine/model/types/signature.rs). A keyworded
   expression becomes dispatchable through exactly one door,
-  [`WriteOp::Overload`](../../src/machine/core/bindings/ops.rs) — the `FN` and `OP`
-  registration channel. A bare `FN` registration binds no value; it writes a bucket
+  [`WriteOp::Overload`](../../src/machine/core/bindings/ops.rs) — the `EXPR` and `OP`
+  registration channel. A bare `EXPR` definition binds no value; it writes a bucket
   entry only.
 
-The combined statement form `LET <name> = FN …` (and its `OP` twins) writes one
+The combined statement form `LET <name> = FN EXPR …` (and its `OP` twins) writes one
 entry in each: a `WriteOp::Value` and a `WriteOp::Overload` over the same sealed
 cell, so the name-callable value and the dispatchable overload are one
 `KFunction`. That is one declaration reaching both channels — not either channel
@@ -308,7 +308,7 @@ makes the keyworded and by-name lanes disjoint rather than overlapping. Binding 
 callable under a second name creates an ordinary alias readable by that name; it
 adds no overload, and it can neither join nor collide with any dispatch bucket.
 Overload identity therefore belongs to declarations, not to bindings: two
-overloads collide only when two `FN` / `OP` declarations land in one bucket with
+overloads collide only when two `EXPR` / `OP` declarations land in one bucket with
 equal [`DispatchToken`](../../src/machine/model/types/signature.rs)s, which is the
 `DuplicateOverload` diagnostic.
 

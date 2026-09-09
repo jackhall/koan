@@ -364,7 +364,7 @@ Two consumers still take a name unresolved, for two unrelated reasons:
   ([`park_exempt_slot`](../../src/machine/model/ast/working.rs)); the wait belongs to the body,
   which runs `resolve_or_await` against its own scope and chain
   ([`newtype_def.rs`](../../src/builtins/newtype_def.rs)). Every other repr name is lane-resolved.
-- **`FN`'s return slot and `OP`'s operand / result slots**, whose content may name an `FN`
+- **A definition's return slot and `OP`'s operand / result slots**, whose content may name a
   parameter unbound in the defining scope. They say so by spelling a carrier union, and take the
   name on its `TypeNameToken` member's `Held::Name(BinderSymbol::Type)` rather than on this
   carrier ([`return_type.rs`](../../src/builtins/fn_def/return_type.rs)).

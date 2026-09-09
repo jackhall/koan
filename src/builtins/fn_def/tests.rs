@@ -3,7 +3,7 @@
 //!
 //! - [`anonymous`] — keyword-less `FN :{…}` record-schema binder.
 //! - [`basic`] — registration, dispatch routing, param binding, infix shapes.
-//! - [`combined`] — the `LET <name> = FN …` statement form: name + bucket from one binder.
+//! - [`combined`] — the `LET <name> = FN EXPR …` statement form: name + bucket from one binder.
 //! - [`region`] — run-root and scheduler-slot reclamation invariants.
 //! - [`body_block`] — multi-statement body split, sibling visibility, TCO on last.
 //! - [`body_routing`] — selection of the body to evaluate per call.

@@ -50,7 +50,7 @@ the payload's shape, and it is why the pre-seal window path
 
 Every other return type is written without a sigil (`-> Number`, not `-> :Number`), so the
 parenthesized constructor forms are spelled bare too: **inside a binder form's type slots,
-`(…)` ≡ `:(…)`.** `FN (WRAP s :Str) -> (LIST OF Str) = ([s])` and
+`(…)` ≡ `:(…)`.** `EXPR (WRAP s :Str) -> (LIST OF Str) = ([s])` and
 `OP #(++) OVER (LIST OF Str) = (…)` are the same declarations as their sigiled twins.
 
 The equivalence is minted at parse, and its scope is exactly the masked slots. Each entry of
@@ -383,9 +383,9 @@ parallel one per family.
 ## Binder install: name-keyed vs bucket-keyed
 
 `LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`, and `NEWTYPE` register a single
-name binding and ride the name-keyed placeholder channel. A bare `FN` / `OP` registers *overloads* in a function
+name binding and ride the name-keyed placeholder channel. A bare `EXPR` / `OP` registers *overloads* in a function
 bucket and rides the bucket-keyed channel instead; the combined
-`LET <name> = FN/OP …` statement rides both from one binder. Which forms are
+`LET <name> = FN EXPR …` statement (and its `OP` twin) rides both from one binder. Which forms are
 binders — and the name and buckets each declares — is read parse-statically from
 the static [`BINDER_SPECS`](../../src/machine/model/binder.rs) table; the two
 channels are the two fields of one
@@ -393,7 +393,7 @@ channels are the two fields of one
 and up to two bucket keys.
 
 The bucket-keyed channel admits *sibling* overloads under one head
-keyword. Two `FN (PICK xs :A) ...` / `FN (PICK xs :B) ...`
+keyword. Two `EXPR (PICK xs :A) ...` / `EXPR (PICK xs :B) ...`
 declarations each stamp a distinct claim on the same bucket key — the very key
 the sealed overloads land under; the earlier-index claim
 is the wake target for a consumer parking on the bucket, and the

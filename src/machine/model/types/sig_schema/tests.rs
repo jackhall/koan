@@ -6,6 +6,7 @@ use super::*;
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{type_name, value_name};
 use crate::machine::core::ScopeId;
+use crate::machine::model::UntypedKey;
 use crate::machine::model::types::{Record, RecursiveGroupWindow, RelativeSchema};
 
 // --- region-free builders -------------------------------------------------------------
@@ -1306,7 +1307,7 @@ fn members_keyed(schema: &SigSchema, types: &TypeRegistry, spelling: &[&str]) ->
     schema
         .keyworded
         .iter()
-        .filter(|member| crate::machine::model::shape_key(**member, types) == wanted)
+        .filter(|member| crate::machine::model::shape_key_is(**member, &wanted, types))
         .copied()
         .collect()
 }

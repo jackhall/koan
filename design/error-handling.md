@@ -47,7 +47,7 @@ with these `KErrorKind` variants:
   in hand and neither yet run, so it names both positions instead of landing on
   whichever body committed second (see
   [execution/name-placeholders.md](execution/name-placeholders.md#a-claim-lives-in-the-scopes-claim-store)).
-- `DuplicateOverload` — an `FN` indistinguishable from a registered overload: same
+- `DuplicateOverload` — a definition indistinguishable from a registered overload: same
   element shape, same type in every argument slot.
 - `SchedulerDeadlock` — the scheduler reached a fixed point with work still outstanding.
 - `User` — landing pad for user-side error construction; see open work.

@@ -59,7 +59,7 @@ pub(crate) use miss_diagnostics::{diagnose_miss, key_is_reserved};
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
 pub(crate) use types::{
     CoercionTables, DeclaredGroup, MemberCoercion, OperatorMembers, TypeDigest,
-    canonical_overloads, select_keyworded_satisfier, shape_key, sig_subtype,
+    canonical_overloads, select_keyworded_satisfier, shape_key_is, sig_subtype,
     substitute_sig_members,
 };
 pub(crate) use types::{
