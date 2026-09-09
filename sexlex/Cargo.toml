@@ -1,0 +1,12 @@
+[package]
+name = "sexlex"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+# Random trees rendered under random layouts: the hand-written tests pin the rulings, the
+# properties pin that layout never changes structure and that every span slices back to its text.
+proptest = "1"
