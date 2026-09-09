@@ -18,6 +18,7 @@ use std::rc::Rc;
 
 use super::carrier::DeliveredCarried;
 use super::cell::{CarriedFamily, Held};
+use super::container_substrate::ContainerSubstrate;
 use super::frame::{FrameCoverage, FrameReach};
 use super::substrate::{
     BumpAllocator, BumpBackedMap, Delivered, DropFree, FoldedPlacement, Reattachable, Region,
@@ -27,7 +28,7 @@ use super::substrate::{
 use crate::machine::core::KFunction;
 use crate::machine::core::Scope;
 use crate::machine::model::KType;
-use crate::machine::model::{ContainerSubstrate, KObject, ProgramExpression, Scalar};
+use crate::machine::model::{KObject, ProgramExpression, Scalar};
 
 /// The Koan workload's storage declaration — the frame-owner type its reach descriptions name, and
 /// nothing else.

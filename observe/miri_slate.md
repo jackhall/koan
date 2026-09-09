@@ -45,16 +45,19 @@ group just to silence the stale-anchor check.
   *death* ordering, so the reset-under-a-live-read shape is distinct and unpinned elsewhere. The
   file carries no `unsafe` of its own — koan-side `src/` carries none at all — and the backing
   `unsafe` is `BumpAllocator`'s in `witnessed.rs`, reached through `BumpVec`.
-- `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator}` child
-  modules. Its groups (CallFrame lifetime erasure, the record substrate door, MATCH-variant /
-  TRY-WITH TCO, per-call frame
-  re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region drop-order and reattach
+- `src/memory/region.rs` — the storage profile and the allocation brands. Its groups (the record
+  substrate door, drop-free region death) pin safe-code carrier / region drop-order and reattach
   disciplines whose backing `unsafe` is the branded re-anchor in `witnessed.rs`. Every koan family is
   `Drop`-free and lives in the region's bump: a value whose fields are all at the caller's `'a` —
   a `KFunction`, a `Module`, a same-region `Scope` — is bumped with no brand and no `unsafe` at all,
   and the two `Scope` stores embedding a foreign operand ride `RegionHandle::bump_born_with`, whose
   `for<'b>` brand discharges residence at compile time. Koan-side `src/` production code carries no
   `unsafe` of its own at all.
+- `src/memory/frame.rs` — the per-call frame shell over the region owner, split out of the brand
+  file it used to share. Its groups (CallFrame lifetime erasure, MATCH-variant / TRY-WITH TCO,
+  per-call frame re-anchor, NodeStore reinstall) pin the same safe-code frame drop-order and
+  reattach disciplines `region.rs`'s entry describes, backed by the branded re-anchor in
+  `witnessed.rs`; the file carries no `unsafe` of its own.
 - `src/machine/core/scope.rs` — `Scope::add` re-entry pins the queue-and-drain
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
@@ -68,7 +71,7 @@ group just to silence the stale-anchor check.
   `witnessed.rs`) via an end-to-end tail-chain return-contract-coarsening shape no
   minimal test reproduces. The file's only former `unsafe` was the test-family markers,
   now `reattachable!`-generated.
-- `src/machine/core/ref_carriers.rs` — pointer-only group: every holder stores its captured /
+- `src/machine/core/scope.rs` (reference families) — pointer-only group: every holder stores its captured /
   defining / parent scope as a plain `&'a Scope<'a>` re-anchored **with the holder as a whole** by
   the branded re-anchor in `witnessed.rs`, and the shape is pinned library-side by
   the workgraph slate's bump-residence group (invariant holder, foreign-region parent, post-store
@@ -144,7 +147,7 @@ boxed, and fat-pointer carriers) is audited there, over library-only profiles; t
 only shapes
 whose discipline lives in koan's own `src/` — its doors, seams, and scheduler-driving programs.
 
-**`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
+**`CallFrame` lifetime erasure** ([src/memory/frame.rs](../src/memory/frame.rs)) — the
 child-scope `Option<SealedExtern<ScopeRefFamily>>` opened at a `for<'b>` brand via `CallFrame::with_scope`
 (`SealedExtern::open`, the frame's own storage `Rc` as the pin). The `Rc<CallFrame>` chain that keeps
 per-call regions pinned across re-borrow is pinned library-side
@@ -213,7 +216,7 @@ use-after-free, read through `nearest_group_context` when the escaped closure re
 - `an_escaped_body_applies_a_per_call_operator`
 - `an_escaped_closure_applies_an_operator_from_its_group_body`
 
-**Record substrate door — construction, O(1) ownership, fold-shared retype** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+**Record substrate door — construction, O(1) ownership, fold-shared retype** ([src/memory/region.rs](../src/memory/region.rs))
 — `FoldingBrand::alloc_substrate_folded` (the sole `RecordSubstrate` mint, routed through by
 `KObject::record_of_held`) stores the substrate into its own brand's region exactly like
 `alloc_object_folded`, so it carries no `unsafe` of its own beyond the `reattachable!`-generated
@@ -319,7 +322,7 @@ consult. Safe code; the only `unsafe` routed is the shared `retype` in `witnesse
 
 - `substrate_indexes_rehome_and_read_back_after_producer_free`
 
-**Drop-free region death** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+**Drop-free region death** ([src/memory/region.rs](../src/memory/region.rs))
 — the closing claim of the shared per-region bump: every `Drop`-free value family lands there, so
 region death for those bytes is chunk deallocation with **no per-slot destructor pass**. That is a
 leak claim rather than a UB claim, and it is the one shape a bump cannot fail loudly on: a family
@@ -433,7 +436,7 @@ plain `cargo test`; tree borrows is what confirms no read crosses the reset.
 
 - `a_boolean_match_selects_across_a_self_tail_loop_without_outliving_the_scratch`
 
-**MATCH / TRY-WITH arm overlays inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
+**MATCH / TRY-WITH arm overlays inside TCO position** ([src/memory/frame.rs](../src/memory/frame.rs)) —
 MATCH and TRY run the selected arm frameless, in a bump-allocated overlay child of the enclosing
 cart's scope, and seed the `it` bind into that overlay: the matched value, deep-cloned at the caller
 lifetime, is relocated into the enclosing cart's own region through the substrate (rebuilt at the
@@ -446,7 +449,7 @@ framed TCO replace are all exercised together.
 
 - `try_inside_tco_position_preserves_frame_chain`
 
-**`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
+**`KFunction::invoke` per-call frame re-anchor** ([src/memory/frame.rs](../src/memory/frame.rs)) — the
 seed bind routed through `CallFrame::with_scope`: the deep-cloned argument record is relocated into the
 opened child scope's own region through the substrate (rebuilt at the destination brand, which is
 where the caller lifetime is dropped) and each parameter bound, while the scope rides the `for<'b>`
@@ -458,11 +461,11 @@ scope, and `MODULE_TYPE_OF` lift-out. The repeated-call growth bound
 runs under plain `cargo test`; its process-exit leak residue is covered by the aggregate census
 test below. No separate minimal test.
 
-**Stored reference-carrier re-anchor** ([src/machine/core/ref_carriers.rs](../src/machine/core/ref_carriers.rs)) — every
+**Stored reference-carrier re-anchor** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — every
 holder stores a captured / defining / parent scope as a plain `&'a Scope<'a>` (`Module::child_scope`,
 `KFunction::captured`, `Scope::outer` / `root`) and re-anchors it **with
 the holder as a whole** when the holder is read out of its region (the branded re-anchor in
-`witnessed.rs`), so the accessors are bare field reads and ref_carriers.rs carries no `unsafe` of its own.
+`witnessed.rs`), so the accessors are bare field reads and the families carry no `unsafe` of their own.
 The construction-time reference is built at `'a` by plain coercion (a same-region child) or at the
 construction door's generative brand (a per-call frame child, `build_frame_child_witnessed`) — there is
 no construction-time re-anchor verb. The shape is pinned library-side by the workgraph slate's
@@ -503,14 +506,14 @@ re-attach it backs at the Done boundary are audited in the `workgraph` crate's o
 slate — [workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md) — since
 their tests live in that crate's lib test binary, a separate `cargo test` target from
 koan's. `CarriedFamily`'s `unsafe impl Reattachable`
-([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)) and this
+([src/memory/cell.rs](../src/memory/cell.rs)) and this
 embedder's `HasRegionHandle` destination operands
-([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — over the library's
+([src/memory/region.rs](../src/memory/region.rs)) — over the library's
 `RegionSet<FrameStorage>` that `FrameSet` aliases (`FrameStorage` = `RegionHost`, whose `PinsRegion`
 lives library-side) — are the Koan-side instantiations that primitive
 routes for; `RegionSet::union`'s antichain logic (union with `outer`-chain subsumption) is pinned by
 the `frameset_*` / `pins_region_walks_outer_chain` unit tests in
-[arena/tests.rs](../src/machine/core/arena/tests.rs), which run under plain `cargo test`.
+[memory/tests.rs](../src/memory/tests.rs), which run under plain `cargo test`.
 
 **`ContinuationFamily` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))
 — the continuation generalizes the contract discipline from a `ReturnContract` enum to the whole
@@ -562,7 +565,7 @@ whose type is one of the sealed handles.
 
 - `announced_members_construct_through_using`
 
-**`Scheduler::replace` / `NodeStore::reinstall` slot re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
+**`Scheduler::replace` / `NodeStore::reinstall` slot re-anchor** ([src/memory/frame.rs](../src/memory/frame.rs)) —
 the Replace arm stores the slot's scope as a payload-less `NodeScope::Yoked` marker re-projected
 from the frame cart (no fabricated `&'a` persists), so the `Rc<CallFrame>` witness in `Node.frame`
 remains the sole liveness root for the re-installed slot's scope.
@@ -705,9 +708,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-09: 1267s — 34 tests, 0 leaks, 0 UB
 - 2026-09-08: 1831s — 34 tests, 0 leaks, 0 UB
 - 2026-09-06: 956s — 34 tests, 0 leaks, 0 UB
 - 2026-09-04: 965s — 34 tests, 0 leaks, 0 UB
 - 2026-09-03: 1098s — 33 tests, 0 leaks, 0 UB
-- 2026-09-03: 1140s — 32 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

@@ -759,7 +759,6 @@ digraph {
     "koan::machine::execute::step" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::step" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::step" -> "koan::memory" [label="uses", style="dashed"];
-    "koan::machine::model" -> "koan::memory" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::lazy_slots" [label="uses", style="dashed"];
@@ -993,6 +992,7 @@ digraph {
     "koan::memory::region" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::memory::region" -> "koan::memory::carrier" [label="uses", style="dashed"];
     "koan::memory::region" -> "koan::memory::cell" [label="uses", style="dashed"];
+    "koan::memory::region" -> "koan::memory::container_substrate" [label="uses", style="dashed"];
     "koan::memory::region" -> "koan::memory::frame" [label="uses", style="dashed"];
     "koan::memory::region" -> "koan::memory::substrate" [label="uses", style="dashed"];
     "koan::memory::rehomed" -> "koan::machine::model" [label="uses", style="dashed"];

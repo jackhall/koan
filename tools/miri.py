@@ -83,7 +83,7 @@ def list_lib_tests(features: list[str]) -> list[str]:
         check=True,
         env=_env(),
     ).stdout
-    # Lines look like `machine::core::arena::tests::foo: test`.
+    # Lines look like `memory::tests::foo: test`.
     return [ln[: -len(": test")] for ln in out.splitlines() if ln.endswith(": test")]
 
 
