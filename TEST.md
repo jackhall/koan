@@ -12,8 +12,9 @@ Four layers, each with a distinct job:
 ## Unit tests
 
 ```sh
-cargo test                  # all unit tests
+cargo test                  # all unit tests, across the workspace
 cargo test parse::          # one module
+cargo test -p sexlex        # the layout crate alone
 cargo test -- --nocapture   # show stdout
 ```
 

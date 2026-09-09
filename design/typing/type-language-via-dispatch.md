@@ -38,7 +38,7 @@ to the value-side path.
 
 **One shape, whether the sigil was written or synthesized.** A sigil whose body is a lone
 sub-expression re-labels that node onto the wrapper instead of building a fresh layer
-([`BracketFrame::into_part`](../../src/parse/frame.rs)), so `:(Point.x)` lands on exactly the
+([the type-sigil lowering](../../src/parse/lower.rs)), so `:(Point.x)` lands on exactly the
 one-node shape `build_attr` already emits for a Type-class tail (`Maybe.Some`), and `:(…)` is
 idempotent. A lone non-expression part (`:(Number)`) and a multi-part body (`:(LIST OF Number)`)
 are untouched. This is normalization, not recognition — the parser still reads no meaning out of
@@ -56,8 +56,8 @@ parenthesized constructor forms are spelled bare too: **inside a binder form's t
 The equivalence is minted at parse, and its scope is exactly the masked slots. Each entry of
 [`BINDER_SPECS`](../../src/machine/model/binder.rs) carries a `type_slots` mask — the parts-run
 positions its form reads as a type expression — and
-[`admit_bare_type_slots`](../../src/machine/model/binder.rs), called from the parse frames as
-each run closes ([`BracketFrame::into_part`](../../src/parse/frame.rs)), rewrites a plain
+[`admit_bare_type_slots`](../../src/machine/model/binder.rs), called as each expression run
+closes ([`lower_body`](../../src/parse/lower.rs)), rewrites a plain
 `Expression` part at each masked index to `SigiledTypeExpr`. Same `KExpression` payload, new
 parse-context marker; any other part kind there (a `Type` token, a `:(…)`, a `:{…}`, an
 identifier) is left alone, a run matching no binder key is untouched, and the rewrite is
@@ -205,7 +205,7 @@ stays an unknown-type error. See
 schema lowering to a [`TypeNode::Record`](ktype/records-and-limits.md#record-fields-and-ktype-hashing) node,
 distinct from any nominal struct. The `:` type-sigil anchors to `{` (not only `(`),
 and the parser emits a first-class `ExpressionPart::RecordType(<field list>)` part
-([frame.rs](../../src/parse/frame.rs)) whose nested `KExpression` is the bare
+([lower.rs](../../src/parse/lower.rs)) whose nested `KExpression` is the bare
 `(x :Number, …)` field list. Unlike `:(...)` (which wraps a `SigiledTypeExpr` for the
 dispatcher to route), `:{...}` is matched *structurally*: the `DispatchShape::RecordType`
 handler folds the field list straight to a `Record` node via the shared field-list parser
@@ -233,16 +233,22 @@ on the first pairing operator, so `:` pairs (`{k: v}`) stay a dict and `=` pairs
 record, mixing the two is a parse error, and an empty `{}` is the empty record. Subtyping over
 record values is width/depth — see [ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance).
 
-A `:` inside a brace frame is the pair separator **only in the positions that can still
-take one** — a dict frame awaiting its key. A record frame has committed to `=`, and a
-dict frame mid-value has spent its pair's one `:`, so in both a `:` opens an ordinary
-type sigil: `{x = :Number}` and `{a: :Number}` parse, and so does
-`(Setish WITH {Ord = :(TYPE OF int_ord)})`. When a diverted `:` then fails to parse as a
-sigil, the failure reports the pairing rule that declined it (`mixed ':' and '=' in a
-brace literal`) rather than a type-position complaint — the diagnostic lives on the
-error path, so the accepting path stays one predicate test with no lookahead
-([`dict_literal.rs`](../../src/parse/dict_literal.rs)'s `colon_is_separator` /
-`declined_colon_reason`).
+Which of the two roles a `:` plays inside a brace is decided by what it is glued to,
+not by where the brace frame stands. A `:` glued to a group is the **type sigil**
+everywhere, brace included, so `{x = :Number}`, `{a: :Number}` and
+`(Setish WITH {Ord = :(TYPE OF int_ord)})` all parse — in the first two the annotation
+rides inside its own atom, and in the third the `=` has already taken the pairing role.
+A `:` that takes no group — a lone `:` atom, or the trailing `:` an atom like `a:` ends
+in — is the brace's **pair separator**, and an error outside a brace.
+
+One reading, applied uniformly, is what that buys: `name :Type` is an annotation wherever
+it appears, and never also a pair. So the annotation form belongs to the record *type*,
+whose `:{` sigil is exactly what distinguishes it — `:{xs :(List Number)}` — and inside a
+plain brace the same spelling leaves the entry unpaired. `{k :Number}` and `{'k':(f x)}`
+are errors naming the sigil reading; `{k: Number}`, `{k : Number}` and `{'k': (f x)}` are
+the dict entries they were reaching for. ([`brace.rs`](../../src/parse/brace.rs) owns the
+pairing state machine; the sigil arm is in [`lower.rs`](../../src/parse/lower.rs).) Mixing
+`:` and `=` pairs in one brace is its own error (`mixed ':' and '=' in a brace literal`).
 
 A **repeated field name in a record literal is a parse error**: a record's field list is
 a static shape, so a duplicate is a mistake rather than an override. Dict keys stay

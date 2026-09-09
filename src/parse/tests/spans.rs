@@ -4,7 +4,7 @@
 use crate::builtins::test_support::probe_symbol;
 use crate::machine::core::{ProgramBrand, program_storage};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::parse::expression_tree::{parse, parse_with_path};
+use crate::parse::{parse, parse_with_path};
 use crate::source::{self, SourceFile, Span, Spanned};
 
 fn span_of(expr: &KExpression<'_>) -> Option<Span> {
@@ -52,7 +52,8 @@ fn nested_call_carries_inner_span() {
 
 #[test]
 fn multi_line_top_level_uses_original_byte_offsets() {
-    // Collapse strips the newline but the JUMP anchor re-aligns the cursor before line 2.
+    // Each line is its own layout group and every span indexes the source text directly, so
+    // line 2's parts carry the offsets they have in the file, newline included.
     let program = program_storage();
     let exprs = top(program.brand(), "foo\nbar");
     assert_eq!(exprs.len(), 2);

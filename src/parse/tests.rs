@@ -1,4 +1,4 @@
-//! Tests for `expression_tree::parse`.
+//! Tests for `parse`.
 //!
 //! Each test parses a source snippet and compares the result against an expected
 //! shape string produced by the local `describe` helper, which renders an
@@ -6,6 +6,7 @@
 
 mod basics;
 mod interning;
+mod layout;
 mod list_dict;
 mod literals;
 mod probes;
@@ -13,11 +14,11 @@ mod spans;
 mod type_sigil;
 mod value_sigil;
 
-use super::{build_tree, parse};
+use super::lower::lower_run_for_tests;
+use super::parse;
 use crate::machine::core::program_storage;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::labels::LabelInterner;
-use crate::parse::quotes::mask_quotes;
 
 pub(super) fn describe(e: &KExpression<'_>, labels: &LabelInterner) -> String {
     fn describe_part(p: &ExpressionPart<'_>, labels: &LabelInterner) -> String {
@@ -86,11 +87,13 @@ pub(super) fn describe(e: &KExpression<'_>, labels: &LabelInterner) -> String {
     format!("[{}]", parts.join(" "))
 }
 
+/// One line's parts, without the peel a statement gets: the run as written, so an expectation
+/// here names the parts a paren or sigil produced rather than what a redundant wrapper collapses
+/// to. Rejects an input that is not exactly one line.
 pub(super) fn tree(input: &str) -> Result<String, String> {
     let program = program_storage();
-    let (masked, dict) = mask_quotes(input);
     let labels = LabelInterner::new();
-    build_tree(program.brand(), &labels, &masked, &dict)
+    lower_run_for_tests(program.brand(), &labels, input)
         .map(|e| describe(&e, &labels))
         .map_err(|e| e.to_string())
 }

@@ -21,8 +21,8 @@ first-class `ExpressionPart::RecordType` instead — see
 Shape decisions (keyworded `:(LIST OF Number)`, nominal construction
 `:(MyStruct {x = 1})`, etc.) are the dispatcher's responsibility — the
 parser's only job is to flag "this slot evaluates to a type". `<` and `>` flow through unencumbered as keyword
-tokens, leaving the arithmetic comparison operators available. The framing
-logic lives in [frame.rs](../../../src/parse/frame.rs) (`Frame::TypeExpr`);
+tokens, leaving the arithmetic comparison operators available. The lowering is
+the `:`-sigil arm of [lower.rs](../../../src/parse/lower.rs);
 the dispatcher's `sigiled_type_expr` handler
 ([decide.rs](../../../src/machine/execute/decide.rs))
 tail-replaces the slot with a `Dispatch` of the wrapped expression. See

@@ -7,37 +7,53 @@ system.
 
 ## Parser pipeline
 
-[`parse`](../src/parse/expression_tree.rs) runs in passes, one file each under
-[src/parse/](../src/parse/):
+[`parse`](../src/parse.rs) runs in two phases, and the split is a split of
+authority: the first knows layout and no vocabulary, the second knows koan and no
+layout.
 
-1. [quotes.rs](../src/parse/quotes.rs) — replace string-literal contents with
-   placeholders so later passes don't re-tokenize them.
-2. [whitespace.rs](../src/parse/whitespace.rs) — turn indentation-based block
-   structure into parenthesized form (2-space increments, no tabs).
-3. [expression_tree.rs](../src/parse/expression_tree.rs) — walk the
-   paren-delimited string into a nested expression tree.
-4. [tokens.rs](../src/parse/tokens.rs) — classify each whitespace-delimited
-   token as a literal, keyword (any pure-symbol token that is not a builtin
-   compound trigger — `=`, `->`, `:|`, `:!`, `+`, `|`, `<=`, `>>`, `==`, `!=` — or
-   alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`),
-   type name (uppercase-leading with at least one lowercase — `Number`,
-   `KFunction`, `Ordered`), identifier, or compound (member access, indexing,
-   prefix/suffix operators). Tagging arbitrary symbol tokens as keywords is what
-   lets a post-parse detector recognize chainable operators (see the
-   `OperatorChain` shape below); the builtin triggers `.`/`?` keep their
-   compound desugaring instead. A token that starts uppercase but classifies as
-   neither keyword nor type (single uppercase letter, or uppercase + digits
-   only) is a parse error. See
-   [typing/tokens.md](typing/tokens.md)
-   for what the three classes mean.
-5. [operators.rs](../src/parse/operators.rs) — table of compound-token
-   operators (`.`, `[]`, `?`); add a row to extend.
+1. **Layout.** [`sexlex::read`](../sexlex/src/lib.rs) reads the text into a tree
+   of atoms, strings, commas and bracketed or line-shaped groups. A token is a
+   maximal run of anything that is not whitespace, a bracket, a quote or a comma,
+   so `:Number`, `a.b`, `->` and `#` all arrive as single atoms; string bodies
+   come through verbatim; each line becomes a `Layout` group that deeper lines
+   nest inside; and every item records whether the next sibling touched it
+   (`glued`), which is all a sigil needs. The crate's own doc is the spec for the
+   five rules it applies, and it interprets nothing else — which atoms are
+   keywords, which glued prefixes are sigils, what a comma means inside a brace
+   are all the layer above's business.
+2. **Lowering.** [lower.rs](../src/parse/lower.rs) walks that tree into
+   `KExpression`s: sigils and their groups, the redundant-wrapper peel, brace
+   pairing, collection adjacency, and the spans every part carries. The rules are
+   the sections below.
+
+Two files serve the lowering:
+
+- [atom.rs](../src/parse/atom.rs) — classify one atom. It splits the atom on its
+  colons (`x:Number` is the word `x` and the type `Number`) and classifies each
+  piece as a literal, keyword (any pure-symbol token that is not a builtin
+  compound trigger — `=`, `->`, `:|`, `:!`, `+`, `|`, `<=`, `>>`, `==`, `!=` — or
+  alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`), type
+  name (uppercase-leading with at least one lowercase — `Number`, `KFunction`,
+  `Ordered`), identifier, or compound (member access, prefix/suffix operators).
+  Tagging arbitrary symbol tokens as keywords is what lets a post-parse detector
+  recognize chainable operators (see the `OperatorChain` shape below); the builtin
+  triggers `.`/`?` keep their compound desugaring instead. A token that starts
+  uppercase but classifies as neither keyword nor type (single uppercase letter,
+  or uppercase + digits only) is a parse error. See
+  [typing/tokens.md](typing/tokens.md) for what the three classes mean.
+- [operators.rs](../src/parse/operators.rs) — table of compound-atom operators
+  (`.`, `?`); add a row to extend.
+
+Because whitespace is the only thing that delimits an atom, an operator has to be
+whitespace-delimited too: `a < b` is three atoms and `a<b` is one, which no
+identifier may be. The same holds for `=`, so a record field is `{x = 1}`.
 
 ## Line continuation
 
-The whitespace pass turns each non-blank line into a `(...)` group, with deeper
-indentation nesting and dedents closing. Three things let a single expression
-span multiple physical lines:
+Indentation is layout, so the rules are [`sexlex`](../sexlex/src/lib.rs)'s and
+its crate doc is their spec; what follows is the shape they give koan. Each
+non-blank line is a group, with deeper indentation nesting and dedents closing.
+Three things let a single expression span multiple physical lines:
 
 - **Trailing comma.** A line ending in `,` continues onto the next non-blank
   line regardless of indentation; the joined lines flatten into one group.
@@ -60,13 +76,42 @@ span multiple physical lines:
   So `PRINT (\n  3.14\n)` parses (the `)` returns to `PRINT`'s column), but
   `PRINT (\n3.14\n)` is a syntax error.
 
-  Nest-per-line holds for the line that carries the closer too: it wraps its own
-  content as a group, closes that group where the content ends, and the literal
-  `)` goes on to pair with the opener it was written to close. So where the
+  Nest-per-line holds for the line that carries the closer too: its own content
+  is a group and the `)` closes the paren that content sits in. So where the
   closer sits is layout, not structure — a three-member body reads as three
   siblings whether the group closes on its last member's line or on one of its
-  own. A line of nothing *but* closers has no content to wrap, adds no group, and
-  hands each `)` to the innermost one still open.
+  own — and text written *after* the closer continues the line the paren was
+  opened on.
+
+### The redundant-wrapper peel
+
+A body whose whole content is one group means what that group means: `((a b))`
+and `(a b)` are the same call, and so is the single body line of
+
+```
+PRINT (
+  3.14
+)
+```
+
+which is why that reads exactly as `PRINT (3.14)` does rather than
+adding a layer for the body line. The peel runs on the layout tree, before any node
+is built, so no node is ever built and then rewritten. It descends through parens
+and body lines only — never into a `[`/`{` literal, which is a value rather than
+a wrapper, never into a `:(...)`, where a paren is structure the dispatcher reads
+(`(Function ((List Number)) -> Bool)` takes one argument whose own type is
+parenthesized), and never past a sigil-led line, whose group is the quote's body.
+A compound atom reaches the same shape without a group — `a.b` classifies to one
+`ATTR` sub-expression — so a body that came out as a single sub-expression is
+unwrapped too, which is what makes a line reading `a.b` that call rather than a
+statement holding it.
+
+### Collection adjacency
+
+A `[` or `{` may not be glued to a token on either side: `foo[1]` would read as
+an index and `[1]foo` as an application, and koan spells neither that way, so
+both are parse errors. Parens carry no such rule — `Some(42)` and `f(x)` are an
+atom followed by a group, which is exactly the application koan means by them.
 
 ## `KExpression` shape
 
@@ -94,7 +139,7 @@ The `Keyword`-vs-slot split is the parser's contract with dispatch:
   delimiters the frame consumes itself, and everything else in it is a value.
   `[FOO 1]`, `[1 + 2]`, `{count: FOO}` and `{x = FOO}` are parse errors naming the
   spelling, raised at the one part-push funnel
-  ([parse_stack.rs](../src/parse/parse_stack.rs)). A keyword inside a *nested*
+  ([lower.rs](../src/parse/lower.rs)). A keyword inside a *nested*
   expression is untouched — `[(1 + 2) 3]` is an ordinary two-element list, and
   `a.b` / `x?` inside a literal are too, because the compound builders wrap their
   `ATTR` / `TRY` keyword in a nested part before it is pushed.
@@ -122,10 +167,9 @@ afterwards. The public doors — `KExpression::{new, build, nested}` and the
 region: each takes a borrowed run to copy in, and each has a `_from_iter` peer
 that fills the region's bytes straight from an exact-length iterator, so a
 caller whose slots are computed one at a time pays no owned staging run. The
-parser's incremental sites (frame finalization in
-[frame.rs](../src/parse/frame.rs), the redundant-wrapper peel in
-[expression_tree.rs](../src/parse/expression_tree.rs)) take the iterator doors,
-freezing each run through the chokepoint once. The cache is invariant under the dispatch-time
+parser collects each run in a plain `Vec` and takes the iterator doors, freezing
+it through the chokepoint once, when the run is complete
+([lower.rs](../src/parse/lower.rs)). The cache is invariant under the dispatch-time
 splice that swaps a `StagedSlot` for the resolved sub-result's `Spliced` cell —
 one part for one part, no structural change — so a working node copies it from
 the AST node it derives from rather than re-deriving it.
@@ -274,9 +318,17 @@ parser collects the inner tokens into a regular `KExpression` and wraps it as
 (keyworded `:(LIST OF Number)`, nominal construction `:(MyStruct {x = 1})`,
 etc.) are the dispatcher's responsibility: the
 sigil's only job is to flag "this slot evaluates to a type, not a value". The
-framing logic lives in [frame.rs](../src/parse/frame.rs)
-(`Frame::TypeExpr`); the dispatcher's `sigiled_type_expr` handler
-tail-replaces the slot with a `Dispatch` of the wrapped expression.
+lowering is the `:`-sigil arm of [lower.rs](../src/parse/lower.rs); the
+dispatcher's `sigiled_type_expr` handler tail-replaces the slot with a `Dispatch`
+of the wrapped expression.
+
+Two spellings of the sigil exist and mean the same thing. `:(...)` takes a type
+expression; `:{...}` takes a record type, an
+[`ExpressionPart::RecordType`](../src/machine/model/ast.rs) the elaborator folds
+straight to a record `KType`. Both require the `:` to be glued to its group, and
+a `:` glued to a name (`x:Number`, `:Number`) is the annotation form — the atom
+splits on the colon and the name after it must be a type name. A `:` that is
+glued to neither is an error.
 
 The same marker is minted without a sigil in one place: as each parts run closes,
 [`admit_bare_type_slots`](../src/machine/model/binder.rs) rewrites a plain `(…)` sitting
@@ -381,20 +433,19 @@ reaches a user signature — and `$` threads a captured expression value back
 into evaluation.
 
 The sigils are **expression-level operators** in
-[expression_tree.rs](../src/parse/expression_tree.rs), not entries in the
-compound-operator registry. The parser keeps a `pending_sigil` flag while it
-walks the input; consuming `#` or `$` sets the flag, and only the immediately
-following `(` clears it by opening a frame.
+[lower.rs](../src/parse/lower.rs), not entries in the compound-operator registry.
+A sigil is an atom that is exactly `#` or `$` and is glued to the group after it
+— which is all the layout tree has to record for the lowering to recognize one.
 
-Quoting is **parse-static**: `#(` opens a `Quote` frame, and on frame-close the
-body folds into an [`ExpressionPart::QuotedExpression`](../src/machine/model/ast.rs)
+Quoting is **parse-static**: `#(...)` folds its body into an
+[`ExpressionPart::QuotedExpression`](../src/machine/model/ast.rs)
 — a part that is a slot for dispatch purposes and behaves like a literal, resolving
 to the `KObject::KExpression` value of the captured body. There is no quoting
 operation at run time and the body never dispatches.
 
-Evaluation is genuinely a run-time operation, so `$(` opens an `Expression` frame
-tagged with the head keyword `EVAL`, producing the AST shape `(EVAL <body>)` the
-EVAL builtin dispatches on.
+Evaluation is genuinely a run-time operation, so `$(...)` wraps its body under
+the head keyword `EVAL`, producing the AST shape `(EVAL <body>)` the EVAL builtin
+dispatches on.
 [EVAL](../src/builtins/eval.rs)'s slot is `Any` so the scheduler
 eagerly evaluates the operand first, after which the body checks the result is
 a `KExpression` and tail-dispatches the inner AST in a fresh `CallFrame`
@@ -403,24 +454,20 @@ surrounding lexical scope but body-introduced bindings don't leak). EVAL
 returns whatever the inner AST evaluates to; a non-`KExpression` operand
 produces a structured `TypeMismatch`.
 
-From the user's point of view, two surface forms are available. On its own
-line — whether top-level or as the body of an indent-introduced block — `#expr`
-and `$expr` work, with the operand running to end-of-line: `LET x =\n  #3`
-binds `x` to the quoted AST of `3`. Inside a comma-continuation or a
-bracket/dict-continuation, the bare form is unavailable and the user must
-write `#(expr)` / `$(expr)` explicitly; a bare `#sym` in those contexts
-errors. The asymmetry follows from where line-collapse runs: a sigil at the
-head of an indent-led continuation gets wrapped to `<sigil>(<rest>)` before
-the parser sees it, while comma- and bracket-continuation lines are appended
-verbatim with no rewrite, so the bare sigil reaches the parser unchanged.
-Tests lock both halves of the contract — explicit `#(2)` works in every
-continuation form, bare `#2` works only under indent.
+From the user's point of view, two surface forms are available. A **whole line**
+whose first atom starts with `#` or `$` quotes (or evaluates) that line, its
+child lines included: `LET x =\n  #3` binds `x` to the quoted AST of `3`, and
+`#bar\n  baz` quotes `bar (baz)`. Anywhere else the sigil must take a group —
+`#(expr)` / `$(expr)` — so inside a comma-continuation or a bracket/dict
+continuation, which are line joins rather than lines of their own, the bare form
+is unavailable and a bare `#sym` there errors. Tests lock both halves of the
+contract: explicit `#(2)` works in every continuation form, bare `#2` works only
+as a line's own head.
 
-At the `build_tree` layer the rule is uniformly paren-only: any character
-following `#` or `$` other than `(` is a parse error
-(`expected '(' after '#', found <c>`), which is why the indent-collapse
-rewrite in [whitespace.rs](../src/parse/whitespace.rs) is what makes the
-bare-line surface possible. The bare `EVAL` keyword form that the `$`
+Mid-line the rule is uniformly group-only: any character following a `#` or `$`
+other than `(` is a parse error (`expected '(' after '#', found <c>`). The
+whole-line form is what a sigil-led layout line means, not a rewrite the parser
+performs on the text before reading it. The bare `EVAL` keyword form that the `$`
 desugaring produces happens to dispatch (the parser classifies all-caps
 tokens as keywords, and the dispatch table matches), but it is not
 documented surface — user code goes through the sigil. `#` desugars to no

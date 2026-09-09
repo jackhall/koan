@@ -1,4 +1,4 @@
-//! `literals` parse cases for `expression_tree::parse`.
+//! `literals` parse cases for `parse`.
 
 use super::tree;
 

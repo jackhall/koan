@@ -1,4 +1,4 @@
-//! `basics` parse cases for `expression_tree::parse`.
+//! `basics` parse cases for `parse`.
 
 use super::{top, tree};
 

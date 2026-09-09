@@ -6,6 +6,7 @@ pub(crate) mod labels;
 pub(crate) mod lazy_slots;
 pub(crate) mod miss_diagnostics;
 pub mod operators;
+pub(crate) mod pair_list;
 pub(crate) mod registries;
 pub(crate) mod types;
 pub(crate) mod values;
@@ -56,6 +57,7 @@ pub(crate) use binder::{StoredBinderKey, symbol_from_parts, symbol_from_quote_bo
 pub use close_inference::DynamicNameForm;
 pub(crate) use close_inference::infer_close_captures;
 pub(crate) use miss_diagnostics::{diagnose_miss, key_is_reserved};
+pub(crate) use pair_list::FieldNameKind;
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
 pub(crate) use types::{
     CoercionTables, DeclaredGroup, MemberCoercion, OperatorMembers, TypeDigest,
@@ -63,9 +65,9 @@ pub(crate) use types::{
     substitute_sig_members,
 };
 pub(crate) use types::{
-    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
-    SealOutcome, SigSchema, TypeMemberMap, TypeResolution, constructor_param_names,
-    declarator_window, elaborate_type_identifier, finalize_nominal_member, pair_list_names,
+    Elaborator, FieldListContext, FieldListOutcome, FieldParts, ResultFeed, SealOutcome, SigSchema,
+    TypeMemberMap, TypeResolution, constructor_param_names, declarator_window,
+    elaborate_type_identifier, finalize_nominal_member, pair_list_names,
     parse_typed_field_list_via_elaborator, rewrite_window_refs, seal_writes, type_name_miss,
     unsaturated_constructor_message,
 };

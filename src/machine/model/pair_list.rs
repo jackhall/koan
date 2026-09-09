@@ -1,5 +1,8 @@
 //! Generic walker for ordered `<Identifier> <slot>` field/parameter lists.
 //!
+//! It reads a built parts run, never source text, so it lives beside the AST rather than in the
+//! parser: every caller hands it an already-parsed `KExpression`'s parts.
+//!
 //! [`parse_pair_list`] handles `<Identifier> <slot>` PAIRS — typed field declarations
 //! (STRUCT, SIG, FN signature). The Design-B type sigil consumes the `:`, so a typed
 //! parameter `xs :Number` lands as `[Identifier("xs"), Type(Number)]`. Identifier

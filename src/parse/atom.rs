@@ -1,7 +1,8 @@
-//! Token classification: turn each whitespace-delimited word into a
-//! `Spanned<ExpressionPart>`. Recognizes literals, classifies non-literal atoms into
-//! keywords / types / identifiers, and desugars compound atoms (`a.b`, `a?`)
-//! into nested `ExpressionPart`s using the `operators` table.
+//! Atom classification: turn one atom of the layout tree into the one or two
+//! `Spanned<ExpressionPart>`s it stands for. Recognizes literals, splits an atom on its colons
+//! into a word and the type names annotating it (`x:Number`), classifies non-literal words into
+//! keywords / types / identifiers, and desugars compound words (`a.b`, `a?`) into nested
+//! `ExpressionPart`s using the `operators` table.
 //!
 //! A pure-symbol token that is not a builtin compound trigger (`+`, `|`, `<=`, `==`, `!=`) reaches
 //! `classify_atom` and tags as a `Keyword`, so a post-parse chain detector recognizes
@@ -16,6 +17,8 @@
 use std::iter::Peekable;
 use std::str::CharIndices;
 
+use smallvec::SmallVec;
+
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
@@ -23,6 +26,99 @@ use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol, Va
 use crate::machine::model::{is_keyword_token, is_type_name};
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
+
+/// One atom's parts, plus whether the atom ended in a bare `:` (`a:`). A trailing colon pairs a
+/// dict key with its value inside a brace and is an error anywhere else, and only the caller knows
+/// which run the atom sits in — so the disposition is reported, not decided.
+///
+/// Nearly every atom is one part and an annotated one (`x:Number`) is two, so the run is inline:
+/// classification is the parser's innermost loop and must not allocate per word.
+pub(super) struct Classified<'a> {
+    pub(super) parts: SmallVec<[Spanned<ExpressionPart<'a>>; 2]>,
+    pub(super) trailing_colon: bool,
+}
+
+/// Split `text` on its colons and classify each piece. An atom without a colon is one word and
+/// one part. Otherwise the leading piece (empty for `:Number`) is a word, and every piece after a
+/// colon is a type annotation, which must be uppercase-leading — `x:Number` is the word `x` and
+/// the type `Number`, and the type's span covers the name alone, not the colon that introduced it.
+///
+/// `:|` and `:!` are whole keywords rather than a colon plus an operand, so they are matched
+/// before the split.
+pub(super) fn classify<'a>(
+    brand: ProgramBrand<'a>,
+    labels: &LabelInterner,
+    text: &str,
+    span: Span,
+) -> Result<Classified<'a>, KError> {
+    let Some(first_colon) = text.find(':') else {
+        return Ok(Classified {
+            parts: smallvec::smallvec![classify_token(brand, labels, text, span.start)?],
+            trailing_colon: false,
+        });
+    };
+    if matches!(text, ":|" | ":!") {
+        return Ok(Classified {
+            parts: smallvec::smallvec![Spanned::at(
+                ExpressionPart::Keyword(
+                    KeywordSymbol::declared(text, labels).expect("`:|` and `:!` are keyword-class"),
+                ),
+                span,
+            )],
+            trailing_colon: false,
+        });
+    }
+    let mut parts = SmallVec::new();
+    if first_colon > 0 {
+        parts.push(classify_token(
+            brand,
+            labels,
+            &text[..first_colon],
+            span.start,
+        )?);
+    }
+    let mut at = first_colon;
+    while at < text.len() {
+        let name_start = at + 1;
+        if name_start == text.len() {
+            return Ok(Classified {
+                parts,
+                trailing_colon: true,
+            });
+        }
+        let name_end = text[name_start..]
+            .find(':')
+            .map_or(text.len(), |offset| name_start + offset);
+        let name = &text[name_start..name_end];
+        if !name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            let got = text[name_start..]
+                .chars()
+                .next()
+                .expect("name_start is inside the atom");
+            return Err(KError::parse(not_a_type_name(got), Some(span)));
+        }
+        parts.push(classify_token(
+            brand,
+            labels,
+            name,
+            span.start + name_start as u32,
+        )?);
+        at = name_end;
+    }
+    Ok(Classified {
+        parts,
+        trailing_colon: false,
+    })
+}
+
+/// The one message every colon-in-a-value-position mistake reports, wherever the colon was
+/// written: an annotation names a type, and a value expression reaches its type through `TYPE OF`.
+pub(super) fn not_a_type_name(got: char) -> String {
+    format!(
+        "':' must be followed by a type name (uppercase-leading) or `(`; got `{got}`. \
+         A value token names no type — for the type of a value, write `:(TYPE OF <value>)`"
+    )
+}
 
 /// Whole-token literal match runs first so e.g. `3.14` stays a number rather than
 /// being desugared as `(attr 3 14)`. `start` is the token's original-source byte

@@ -60,6 +60,6 @@ pub use signature::{
 pub(crate) use signature::{render_untyped_key, summarize_dispatch, untyped_key_of};
 pub(crate) use type_digest::{TypeDigest, empty_schema_digest};
 pub use typed_field_list::{
-    FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed, pair_list_names,
+    FieldListContext, FieldListOutcome, FieldParts, ResultFeed, pair_list_names,
     parse_typed_field_list_via_elaborator, rewrite_window_refs,
 };

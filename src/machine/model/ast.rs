@@ -311,7 +311,7 @@ impl<'a> ExpressionPart<'a> {
     pub fn resolve(&self, brand: RegionBrand<'a>) -> KObject<'a> {
         match self {
             // A keyword part is fixed syntax, never data: a literal rejects one at parse
-            // (`parse_stack::push_part`), and dispatch consumes a fixed token positionally against
+            // (`lower::Lower::push_part`), and dispatch consumes a fixed token positionally against
             // its bucket key rather than resolving it.
             ExpressionPart::Keyword(_) => {
                 unreachable!("a keyword part is fixed syntax and never resolves to a value")
@@ -484,47 +484,6 @@ impl<'a> KExpression<'a> {
         RunIter<I>: ExactSizeIterator,
     {
         Self::from_run(brand, brand.allocator().slice_from_iter(parts), span, file)
-    }
-
-    /// **Rebuild** door for a run whose parts were rewritten *without* changing what the structural
-    /// cache reads: the peel pass ([`peel_redundant`](crate::parse::peel_redundant)) drops redundant
-    /// wrappers from the innards of nested parts, so every surviving node keeps its part-kind
-    /// sequence and every keyword symbol in its run. The three cached facts — bucket key, dispatch
-    /// shape, operator probe — are exactly those two things read, so they carry over from `cache_of`
-    /// instead of being recomputed, which is what keeps peel from re-bumping a bucket key and
-    /// re-minting a probe digest per nested node. The `debug_assert` is the contract: a caller whose
-    /// rewrite changes the shape has no business here.
-    ///
-    /// `cache_of` must be the node the run was rewritten *from* and must live in the same region, so
-    /// the carried key slice stays resident where the new node does.
-    pub(crate) fn rebuild_from_iter<I>(
-        brand: RegionBrand<'a>,
-        parts: I,
-        span: Option<Span>,
-        file: Option<FileId>,
-        cache_of: &KExpression<'a>,
-    ) -> Self
-    where
-        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
-        RunIter<I>: ExactSizeIterator,
-    {
-        let parts = brand.allocator().slice_from_iter(parts);
-        debug_assert_eq!(
-            cache_of.shape,
-            classify_dispatch_shape(parts),
-            "a rebuild carries its source's structural cache, so the rewrite must preserve the shape"
-        );
-        Self::seal(
-            brand,
-            parts,
-            span,
-            file,
-            StructuralCache {
-                untyped_key: cache_of.untyped_key,
-                shape: cache_of.shape,
-                operator_probe: cache_of.operator_probe,
-            },
-        )
     }
 
     /// Construction chokepoint, over a parts run **already resident** in `brand`'s region: fills the

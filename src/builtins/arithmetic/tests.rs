@@ -32,7 +32,7 @@ fn and_dispatches_to_bool() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     // koan's boolean literals are lowercase (`true` / `false` — see
-    // `src/parse/tokens.rs::try_literal`); `AND` is the keyword.
+    // `src/parse/atom.rs::try_literal`); `AND` is the keyword.
     let result = test_run.run_one(test_run.parse_one("true AND false"));
     assert!(matches!(result, KObject::Bool(false)));
 }

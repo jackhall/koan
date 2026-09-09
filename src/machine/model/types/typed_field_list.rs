@@ -15,9 +15,8 @@ use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart, part_summary,
 };
 use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
+use crate::machine::model::pair_list::{FieldNameKind, parse_pair_list, parse_type_tag_names};
 use crate::machine::model::values::Carried;
-pub use crate::parse::FieldNameKind;
-use crate::parse::{parse_pair_list, parse_type_tag_names};
 use crate::source::Spanned;
 use std::collections::HashSet;
 
@@ -361,7 +360,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
 /// The `(head, tag)` pair a sigil body spells as a member projection — `:(Tree.Leaf)` — or [`None`]
 /// for any other body. The `.` operator lowers to the `ATTR` compound and, because both operands
 /// are `Type`-classed, wraps it in a `SigiledTypeExpr`; an explicit sigil around that single atom
-/// collapses onto the same one node ([`BracketFrame::into_part`](crate::parse::frame)), so `Tree.Leaf`
+/// collapses onto the same one node (the type-sigil normalization in `src/parse/lower.rs`), so `Tree.Leaf`
 /// and `:(Tree.Leaf)` reach this read as the same body and the projection surface is identical
 /// pre-seal and post.
 fn window_member_projection<'a, 'p>(

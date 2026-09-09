@@ -1,6 +1,6 @@
 # Token classes — the parser-level foundation
 
-The lexer ([tokens.rs](../../src/parse/tokens.rs)) splits non-literal atoms into
+The lexer ([atom.rs](../../src/parse/atom.rs)) splits non-literal atoms into
 three classes:
 
 - **Keyword** — pure-symbol tokens (`=`, `->`, `:|`, `:!`, `+`) and alphabetic

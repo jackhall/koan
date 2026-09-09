@@ -1,9 +1,9 @@
-//! Brace-literal sub-state-machine for `build_tree`. One `{…}` frame serves both
-//! containers: a **dict** (`{k: v}`, `:` pairs) and a **record** (`{x = 1}`, `=` pairs).
-//! The first pairing operator selects the mode (`accept_colon` / `accept_equals`); mixing
-//! the two is an error, and an empty `{}` is the empty record. The surrounding character handlers
-//! delegate to `accept_colon`, `accept_equals`, `accept_comma`, and `finish`; multi-part
-//! keys/values collapse into a sub-expression via `single_or_wrapped`.
+//! Brace-literal sub-state-machine. One `{…}` frame serves both containers: a **dict**
+//! (`{k: v}`, `:` pairs) and a **record** (`{x = 1}`, `=` pairs). The first pairing operator
+//! selects the mode (`accept_colon` / `accept_equals`); mixing the two is an error, and an empty
+//! `{}` is the empty record. The lowering delegates to `accept_colon`, `accept_equals`,
+//! `accept_comma`, and `finish`; multi-part keys/values collapse into a sub-expression via
+//! `single_or_wrapped`.
 
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
@@ -37,6 +37,38 @@ pub(super) enum BraceContents<'a> {
 
 const MIXED_DELIMITERS: &str = "mixed `:` and `=` in a brace literal: use `=` for every field (record) \
      or `:` for every entry (dict)";
+
+/// An entry that reached the end of the brace, or a comma, without its pairing operator. Which
+/// operator is missing follows from the mode the frame committed to; before either has been seen
+/// neither is more expected than the other, so the message names both.
+///
+/// A key run holding a type is the case worth a second sentence. A `:` glued to what follows it
+/// is a type sigil wherever it is written, so `{k :Number}` and `{'k':(f x)}` are a key beside an
+/// annotation with nothing pairing them — and without the hint the writer sees only that a
+/// separator is missing, not that the `:` they wrote was read as the other thing.
+fn unterminated_entry(mode: BraceMode, key: &[ExpressionPart<'_>]) -> KError {
+    let mut message = match mode {
+        BraceMode::Record => "unterminated field in record literal (missing '=')".to_string(),
+        BraceMode::Dict => "unterminated key in dict literal (missing ':')".to_string(),
+        BraceMode::Unknown => "unterminated entry in a brace literal: write `key: value` for a \
+             dict entry, or `name = value` for a record field"
+            .to_string(),
+    };
+    if mode == BraceMode::Unknown
+        && key.iter().any(|part| {
+            matches!(
+                part,
+                ExpressionPart::Type(_) | ExpressionPart::SigiledTypeExpr(_)
+            )
+        })
+    {
+        message.push_str(
+            ". The `:` here is glued to what follows it, so it reads as a type sigil rather \
+             than a separator — and a record *type* is written `:{name :Type}`",
+        );
+    }
+    KError::parse(message, None)
+}
 
 enum DictPairState<'a> {
     Empty,
@@ -141,31 +173,6 @@ impl<'a> DictFrame<'a> {
         }
     }
 
-    /// Whether a `:` arriving at this frame pairs a key with its value. A record frame
-    /// has committed to `=` pairing, and a dict frame mid-value has already spent the one
-    /// `:` its pair gets — in both positions a `:` can only open a type sigil, so the
-    /// character handler falls through to sigil parsing. A legitimate separator always
-    /// arrives in `Key` state (or `Empty`, which keeps the "missing key" diagnostic),
-    /// because [`push`](Self::push)'s auto-commit returns the frame to `Key` before the
-    /// next key's `:`.
-    pub(super) fn colon_is_separator(&self) -> bool {
-        self.mode != BraceMode::Record && !matches!(self.state, DictPairState::Value { .. })
-    }
-
-    /// Why a diverted `:` could not have paired here, for a sigil that then fails to
-    /// parse. A `:` this frame declined is a type sigil, and the sigil arms diagnose it
-    /// as one; when it turns out not to be a sigil either, the writer meant a pair, so
-    /// the failure reports the pairing rule that declined it rather than a type-position
-    /// complaint. Only the error path consults this — the accepting path stays a single
-    /// [`colon_is_separator`](Self::colon_is_separator) test.
-    pub(super) fn declined_colon_reason(&self) -> Option<&'static str> {
-        match (self.mode, &self.state) {
-            (BraceMode::Record, _) => Some(MIXED_DELIMITERS),
-            (_, DictPairState::Value { .. }) => Some("unexpected ':' inside dict value"),
-            _ => None,
-        }
-    }
-
     /// Errors if no key was buffered or if a `:` arrives while a value is already
     /// being built — one `:` per pair. Selects (or confirms) dict mode.
     pub(super) fn accept_colon(&mut self) -> Result<(), KError> {
@@ -195,8 +202,9 @@ impl<'a> DictFrame<'a> {
             DictPairState::Empty => Ok(()),
             DictPairState::Key(parts) if parts.is_empty() => Ok(()),
             DictPairState::Key(parts) => {
+                let error = unterminated_entry(self.mode, &parts);
                 self.state = DictPairState::Key(parts);
-                Err(KError::parse("key without value in dict literal", None))
+                Err(error)
             }
             DictPairState::Value { value, .. } if value.is_empty() => Err(KError::parse(
                 "missing value after ':' in dict literal",
@@ -219,15 +227,8 @@ impl<'a> DictFrame<'a> {
         match self.state {
             DictPairState::Empty => {}
             DictPairState::Key(parts) if parts.is_empty() => {}
-            DictPairState::Key(_) => {
-                return Err(KError::parse(
-                    if is_record {
-                        "unterminated field in record literal (missing '=')"
-                    } else {
-                        "unterminated key in dict literal (missing ':')"
-                    },
-                    None,
-                ));
+            DictPairState::Key(parts) => {
+                return Err(unterminated_entry(self.mode, &parts));
             }
             DictPairState::Value { value, .. } if value.is_empty() => {
                 return Err(KError::parse(

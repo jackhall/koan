@@ -76,6 +76,15 @@ as its own line rather than riding inside another expression's arguments —
 [chapter 3](03-names-and-dispatch.md) covers exactly where declarations may
 appear.
 
+### Spaces separate words
+
+Whitespace is the only thing that separates one word from the next, so an
+operator needs space around it: `a + b`, `x = 1`, `a <= b`. Written glued to its
+operands, `a+b` is a single word with a `+` in the middle, which no name may
+contain — a parse error, not addition. Brackets and quotes are the exception:
+they separate on their own, so `f (x)`, `[1, 2]` and `PRINT "hi"` need no extra
+space, and `Some(42)` reads as `Some` applied to `42`.
+
 ### Indentation is grouping
 
 Two-space indentation under a line means the same thing as wrapping the

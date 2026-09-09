@@ -129,7 +129,7 @@ one `NewType` per variant — the sum-side counterpart of the struct → record-
 to the [union](../../src/machine/model/types/registry.rs) of those two member handles
 ([union.rs](../../src/builtins/union.rs)). Variant tags are capitalized
 [`Type` tokens](tokens.md): the `UNION` schema field-list runs under
-[`FieldNameKind::Type`](../../src/parse/triple_list.rs), so a lowercase tag is a
+[`FieldNameKind::Type`](../../src/machine/model/pair_list.rs), so a lowercase tag is a
 parse error — a variant name is a nominal type, not a field.
 
 **A variant value is a `KObject::Wrapped`** like any newtype instance, carrying its

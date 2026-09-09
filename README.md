@@ -63,13 +63,15 @@ source ──▶ parse ──▶ dispatch ──▶ execute
 
 ### parse — text → `KExpression` tree
 
-Entry point: `parse` in [src/parse/expression_tree.rs](src/parse/expression_tree.rs). The pipeline runs in passes:
+Entry point: `parse` in [src/parse.rs](src/parse.rs). It runs in two phases, splitting layout from vocabulary:
 
-1. [quotes.rs](src/parse/quotes.rs) — replace string-literal contents with placeholders so later passes don't re-tokenize them.
-2. [whitespace.rs](src/parse/whitespace.rs) — turn indentation-based block structure into parenthesized form.
-3. [expression_tree.rs](src/parse/expression_tree.rs) — walk the paren-delimited string into a nested expression tree.
-4. [tokens.rs](src/parse/tokens.rs) — classify each whitespace-delimited token as a literal, keyword (pure-symbol like `=`, `->`, `:|`, or alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`), type name (uppercase-leading with at least one lowercase — `Number`, `KFunction`, `Ordered`), identifier, or compound (member access, indexing, suffix operators).
-5. [operators.rs](src/parse/operators.rs) — table of compound-token operators (`.`, `[]`, `?`); add a row to extend.
+1. [sexlex](sexlex/README.md) — the workspace crate that reads the text into a layout tree of atoms, strings, commas and groups. Whitespace separates, three bracket families group, quotes delimit strings, indentation nests lines, and adjacency between siblings is recorded rather than interpreted. It knows no koan.
+2. [lower.rs](src/parse/lower.rs) — walk that tree into `KExpression`s. This is where koan's vocabulary enters: sigils (`#`, `$`, `:`) and the groups they take, the redundant-wrapper peel, brace pairing, collection adjacency, and spans.
+
+Two files serve the lowering:
+
+- [atom.rs](src/parse/atom.rs) — classify one atom: split it on its colons (`x:Number` is the word `x` and the type `Number`) and tag each piece as a literal, keyword (pure-symbol like `=`, `->`, `:|`, or alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`), type name (uppercase-leading with at least one lowercase — `Number`, `KFunction`, `Ordered`), identifier, or compound (member access, suffix operators).
+- [operators.rs](src/parse/operators.rs) — table of compound-atom operators (`.`, `?`); add a row to extend.
 
 The output is one [`KExpression`](src/machine/model/ast.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
 
@@ -148,14 +150,9 @@ src/
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally fixed-cost measurements read
 ├── parse.rs             pub mod parse; …
 ├── parse/
-│   ├── quotes.rs           mask string literals
-│   ├── whitespace.rs       indentation → parens
-│   ├── expression_tree.rs  build nested expressions; top-level parse()
-│   ├── dict_literal.rs     DictFrame state machine for `{k: v}` parsing
-│   ├── frame.rs            Frame enum — per-paren-group parser sub-state
-│   ├── parse_stack.rs      ParseStack — Frame stack with invariant-preserving methods
-│   ├── triple_list.rs      `<name> <slot>` pair lists: parse_pair_list (classified names + slots) and parse_type_tag_names (the variant-tag pre-scan)
-│   ├── tokens.rs           classify tokens, compound-operator desugaring
+│   ├── lower.rs            layout tree → KExpressions: sigils, the redundant-wrapper peel, adjacency, spans
+│   ├── atom.rs             classify one atom — the colon split, compound-operator desugaring
+│   ├── brace.rs            DictFrame state machine for `{k: v}` / `{x = 1}` pairing
 │   └── operators.rs        operator registry
 ├── builtins.rs          register_builtin, unseeded_scopes(), seed_builtins()
 ├── builtins/            one file per builtin (body + register paired)
@@ -201,6 +198,7 @@ src/
     │   ├── ast/
     │   │   ├── shape.rs           Part / PartClass / FieldSlot + the structural readers both part families share (classify_dispatch_shape, the bucket key, the operator probe)
     │   │   └── working.rs         WorkingExpression / WorkingPart — the scheduler's own node, the only one that can hold a spliced sub-result
+    │   ├── pair_list.rs           `<name> <slot>` pair lists over a built parts run: parse_pair_list (classified names + slots) and parse_type_tag_names (the variant-tag pre-scan)
     │   ├── operators.rs           OperatorGroup registry record — chainable-operator precedence/associativity
     │   ├── labels.rs              Symbol — a label's 128-bit content digest, and LabelInterner, the run's digest→text side table read only when rendering
     │   ├── registries.rs          RunRegistries — the run frame's owned bundle of run-lifetime lookup state (the TypeRegistry beside the LabelInterner)
@@ -316,3 +314,9 @@ across all three trees and `doclinks` gates them as one dependency graph, but
 each tree derives its own "Next items" list. The boundary between the stack and
 Koan — what is library, what is Koan — is
 [design/scheduler-library.md](design/scheduler-library.md).
+
+[sexlex/](sexlex/README.md) is the third crate Koan embeds: the layout half of
+the parser, with no vocabulary of its own. Unlike the other two it carries no
+design or roadmap tree — its README introduces the five rules about whitespace,
+brackets, quotes, adjacency and indentation, and the crate doc on
+[sexlex/src/lib.rs](sexlex/src/lib.rs) is their precise statement.

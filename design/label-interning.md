@@ -347,7 +347,7 @@ reached differently: two convert where the parser classifies the token, one wher
 consults a table.
 
 The **keyword** vocabulary converts at the **parse boundary**. Where the parser classifies a
-token as keyword-class ([tokens.rs](../src/parse/tokens.rs)) it mints the token's
+atom as keyword-class ([atom.rs](../src/parse/atom.rs)) it mints the token's
 `KeywordSymbol` and interns it in the same step, and the part carries that symbol alone —
 `ExpressionPart::Keyword(KeywordSymbol)`, no spelling beside it
 ([ast.rs](../src/machine/model/ast.rs)). Nothing downstream re-hashes: a node's bucket key, a
@@ -466,7 +466,7 @@ rendering of a part, an expression or a trace frame resolves through the run's r
 do the walkers that quote a name in a diagnostic. A field or parameter list is the shape
 to read that against: `parse_pair_list` and
 `parse_type_tag_names` — the pair-list door and the variant-tag pre-scan
-([triple_list.rs](../src/parse/triple_list.rs)) — take the run bundle, read labels through it, and
+([pair_list.rs](../src/machine/model/pair_list.rs)) — take the run bundle, read labels through it, and
 hand each name on as the symbol its own token minted, rendering only inside the message a rejected
 or duplicated name raises. The name a declaration *keeps* is never rendered — text appears on the
 error path and the print path, nowhere else.
@@ -528,7 +528,7 @@ render `<staged>` rather than name a type they do not have.
 The two expression families differ in signature here: `ExpressionPart`'s inherent `summary` keeps a
 bare `&LabelInterner` and renders surface spelling, which is what a *parse*-time shape error wants
 (a record literal's rejected field name, in
-[dict_literal.rs](../src/parse/dict_literal.rs)) — and parse renders it while still *filling* the
+[brace.rs](../src/parse/brace.rs)) — and parse renders it while still *filling* the
 interner a run frame has yet to adopt, so the bundle is not available to it. Its `Part` impl narrows
 the bundle down to that interner.
 

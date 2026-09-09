@@ -170,13 +170,12 @@ mod tests {
     use super::*;
 
     /// Pins the parser invariant [`KExpression::is_statement_block`]'s `len() >= 2` guard relies
-    /// on: a
-    /// real, parser-produced body is never a lone `[Expression(_)]`. That shape is the one case
-    /// where `len() >= 2` would treat a body differently from an `!is_empty()` guard, so were it
-    /// reachable the guard would mis-split a single-statement body. It is unreachable because
-    /// `peel_redundant` collapses redundant parens at every nesting level, so a body captured as
-    /// a `(...)` argument arrives already peeled. If a parser change ever lets a real body surface
-    /// as a lone `[Expression(_)]`, this fails.
+    /// on: a real, parser-produced body is never a lone `[Expression(_)]`. That shape is the one
+    /// case where `len() >= 2` would treat a body differently from an `!is_empty()` guard, so
+    /// were it reachable the guard would mis-split a single-statement body. It is unreachable
+    /// because the parser's redundant-wrapper peel collapses a lone wrapping group at every
+    /// nesting level, so a body captured as a `(...)` argument arrives already peeled. If a
+    /// parser change ever lets a real body surface as a lone `[Expression(_)]`, this fails.
     #[test]
     fn parser_never_yields_lone_expression_body() {
         use crate::machine::core::program_storage;

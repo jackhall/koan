@@ -322,6 +322,7 @@ dependencies = [
  "imbl",
  "indexmap",
  "mimalloc",
+ "sexlex",
  "smallvec",
  "stable_deref_trait",
  "trybuild",

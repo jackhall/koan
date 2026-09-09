@@ -10,12 +10,9 @@ use std::rc::Rc;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FileId(pub u32);
 
-/// Byte-offset half-open range into a `SourceFile.text`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Span {
-    pub start: u32,
-    pub end: u32,
-}
+/// Byte-offset half-open range into a `SourceFile.text`. The parser reads its layout tree from
+/// `sexlex`, whose spans index the same text, so the two passes share one span type.
+pub use sexlex::Span;
 
 /// A resolved source extent: a span paired with the registered file it indexes
 /// into. `Copy` and lifetime-free, so a deferred diagnostic can retain one and

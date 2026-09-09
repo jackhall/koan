@@ -1,4 +1,4 @@
-//! `list_dict` parse cases for `expression_tree::parse`.
+//! `list_dict` parse cases for `parse`.
 
 use super::{top, tree};
 
@@ -63,8 +63,8 @@ fn close_bracket_without_open_errors() {
 fn close_paren_when_innermost_is_list_errors() {
     let err = tree("[1 2)").unwrap_err();
     assert!(
-        err.contains("unclosed '['"),
-        "expected unclosed-'[' diagnostic, got: {err}",
+        err.contains("does not match the open '['"),
+        "expected a mismatched-closer diagnostic naming '[', got: {err}",
     );
 }
 
@@ -72,8 +72,8 @@ fn close_paren_when_innermost_is_list_errors() {
 fn close_paren_when_innermost_is_dict_errors() {
     let err = tree("{a: 1)").unwrap_err();
     assert!(
-        err.contains("unclosed '{'"),
-        "expected unclosed-'{{' diagnostic, got: {err}",
+        err.contains("does not match the open '{'"),
+        "expected a mismatched-closer diagnostic naming '{{', got: {err}",
     );
 }
 
@@ -270,7 +270,7 @@ fn close_brace_glued_to_token_errors() {
 
 #[test]
 fn multiline_dict_via_top_level_pipeline() {
-    // Multi-line continuation lives in `collapse_whitespace`, which `tree` skips — use `top`.
+    // `tree` reads a single line, so a multi-line literal needs the whole pipeline — use `top`.
     assert_eq!(
         top("LET d = {\n  a: 1\n  b: 2\n}").unwrap(),
         vec!["[t(LET) t(d) t(=) D{t(a): n(1), t(b): n(2)}]"],
@@ -493,4 +493,48 @@ fn keyword_as_record_field_value_errors() {
 #[test]
 fn keyword_inside_a_nested_expression_stays_legal() {
     assert_eq!(tree("[(1 + 2) 3]").unwrap(), "[L[[n(1) t(+) n(2)] n(3)]]",);
+}
+
+// --- Which role a `:` plays inside a brace ---
+
+/// A `:` glued to what follows is the type sigil wherever it is written, so it never doubles as
+/// a brace's pair separator. `name :Type` is therefore an annotation even inside a `{…}`, which
+/// leaves the entry unpaired — the one spelling that reads as a pair is a separated `:`.
+#[test]
+fn a_glued_colon_inside_a_brace_is_an_annotation_not_a_separator() {
+    for source in ["{k :Number}", "{k :(List Number)}", "{'k':(f x)}"] {
+        let error = top(source).unwrap_err();
+        assert!(
+            error.contains("reads as a type sigil rather than a separator"),
+            "{source} should name the sigil reading, got: {error}",
+        );
+    }
+}
+
+#[test]
+fn a_separated_colon_inside_a_brace_pairs_the_entry() {
+    assert_eq!(top("{k: Number}").unwrap(), vec!["[D{t(k): T(Number)}]"]);
+    assert_eq!(top("{k : Number}").unwrap(), top("{k: Number}").unwrap());
+    assert_eq!(top("{'k': (f x)}").unwrap(), vec!["[D{s(k): [t(f) t(x)]}]"]);
+}
+
+/// The record *type* is the form `name :Type` belongs to, and its `:{` sigil is what tells the
+/// two braces apart — the annotation reading is the same one it takes everywhere else.
+#[test]
+fn a_record_type_takes_the_annotation_form_the_brace_literal_refuses() {
+    assert_eq!(
+        top(":{xs :(List Number), n :Number}").unwrap(),
+        vec!["[:{t(xs) :(T(List) T(Number)) t(n) T(Number)}]"],
+    );
+}
+
+/// A dict *value* may still be a type: the entry's pairing `:` has already been spent, so the
+/// sigil in value position is unambiguous.
+#[test]
+fn a_dict_value_may_be_a_type_sigil() {
+    assert_eq!(
+        top("{k: :(List Number)}").unwrap(),
+        vec!["[D{t(k): :(T(List) T(Number))}]"],
+    );
+    assert_eq!(top("{a: :Number}").unwrap(), vec!["[D{t(a): T(Number)}]"]);
 }

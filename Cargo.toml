@@ -45,6 +45,8 @@ indexmap = "2"
 mimalloc = { version = "0.1", default-features = false }
 stable_deref_trait = "1.2.1"
 workgraph = { path = "workgraph" }
+# The layout half of the parser: whitespace-sensitive s-expressions with glue, no vocabulary.
+sexlex = { path = "sexlex" }
 blake3 = "1.8.5"
 # Hash table for the per-scope binding tables, built over workgraph's `BumpAllocator` so a scope's
 # buckets live in its region's bump. Same major as workgraph's, so `DefaultHashBuilder` and the

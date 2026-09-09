@@ -69,7 +69,7 @@ positions against. The `declare_n10` / `declare_n100` shapes in
 - *Layout lifetime — open.* (a) bumped into the program-lived AST region beside the body node;
   (b) a heap `Rc` on the body node. Either satisfies no-global-state; (a) matches how a node's
   parts and structural cache are already bumped together at parse
-  ([parse/frame.rs](../../src/parse/frame.rs)). Recommended: (a).
+  ([parse/lower.rs](../../src/parse/lower.rs)). Recommended: (a).
 - *Types channel — deferred.* `types` could be slotted by the same lexical argument, which would
   delete the residual name-channel claim store entirely, but the `DeclarationSite` installer
   identity and the announced-window interaction need their own check. Left keyed here; a

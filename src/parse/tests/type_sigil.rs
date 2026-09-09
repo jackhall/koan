@@ -1,6 +1,6 @@
-//! `type_sigil` parse cases for `expression_tree::parse`.
+//! `type_sigil` parse cases for `parse`.
 //!
-//! See [type-language-via-dispatch](../../../../design/typing/type-language-via-dispatch.md).
+//! See [type-language-via-dispatch](../../../design/typing/type-language-via-dispatch.md).
 //! The parser does no shape-folding inside `:(...)`: every sigil emits
 //! `ExpressionPart::SigiledTypeExpr(inner)` whose inner mirrors the parens contents.
 //! Shape recognition is the dispatcher's job — these tests assert only parser output.
@@ -86,29 +86,29 @@ fn lt_after_non_type_with_whitespace_emits_keyword() {
     assert_eq!(tree("a < b").unwrap(), "[t(a) t(<) t(b)]");
 }
 
+/// An operator is a word like any other, so whitespace is what delimits it: `a<b` is one atom,
+/// and no identifier may hold a `<`.
 #[test]
-fn lt_glued_to_non_type_no_longer_special() {
-    assert_eq!(tree("a<b").unwrap(), "[t(a) t(<) t(b)]");
+fn an_operator_glued_to_its_operands_is_one_invalid_atom() {
+    assert!(tree("a<b").is_err());
+    assert!(tree("a>b").is_err());
+    assert!(tree("a<=b").is_err());
 }
 
 #[test]
 fn gt_lt_outside_type_emit_keywords() {
-    // `prev=='-'` rule keeps `->` contiguous; `<` / `>` are otherwise standalone.
     assert_eq!(tree("a > b").unwrap(), "[t(a) t(>) t(b)]");
     assert_eq!(tree("Number > 0").unwrap(), "[T(Number) t(>) n(0)]");
     assert_eq!(tree("a -> b").unwrap(), "[t(a) t(->) t(b)]");
-    assert_eq!(tree("a>b").unwrap(), "[t(a) t(>) t(b)]");
 }
 
 #[test]
-fn lt_gt_glue_a_following_equals_into_one_compound_keyword() {
+fn compound_comparison_operators_are_one_keyword() {
     // `<=` / `>=` are single pure-symbol keyword tokens (see
-    // `operator_tokens_classify_as_keywords`, `src/parse/tokens.rs`) — the raw scanner
-    // glues a directly-following `=` onto `<` / `>` the same way it glues `>` onto a
-    // preceding `-` for `->`, rather than splitting into two standalone keywords.
+    // `operator_tokens_classify_as_keywords`, `src/parse/atom.rs`), not a comparison glyph
+    // followed by a separate `=`.
     assert_eq!(tree("a <= b").unwrap(), "[t(a) t(<=) t(b)]");
     assert_eq!(tree("a >= b").unwrap(), "[t(a) t(>=) t(b)]");
-    assert_eq!(tree("a<=b").unwrap(), "[t(a) t(<=) t(b)]");
 }
 
 #[test]
