@@ -86,7 +86,7 @@ operations:
   module-system stage 4 take `Random` as an explicit parameter (until
   stage 5 makes it implicit).
 - **`IO`** — read/write byte streams. Replaces the run frame's
-  [`RunWriter`](../src/machine/core/arena/frame.rs) `Box<dyn Write>` channel,
+  [`RunWriter`](../src/memory/frame.rs) `Box<dyn Write>` channel,
   and gives a failed write a result for Koan code to read.
 - **`Time`** — clock reads.
 - *(others as the language grows)* — file IO, network, environment.

@@ -22,7 +22,7 @@
 use smallvec::SmallVec;
 
 use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
-use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
+use crate::machine::core::seals::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{
     KType, KeywordSymbol, LabelInterner, ReductionMode, RunRegistries, TypeSymbol, ValueSymbol,

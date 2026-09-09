@@ -1,8 +1,11 @@
-//! `Carried` — the scheduler's value currency: what a node produces and the node store
-//! holds. A produced result is either a runtime [`KObject`] (the `Object` arm), a type
-//! flowing raw in the type channel (the `Type` arm), so a type-operator returns a `KType`
-//! handle without boxing it into a `KObject`, or a surface type name the bind seam could not
-//! lower to a type (the `UnresolvedType` arm).
+//! The value-channel cells: [`Carried`], the scheduler's value currency — what a node produces and
+//! the node store holds — and [`Held`], its owned by-value dual, the cell type of a container
+//! substrate and of a builtin's bound argument slot.
+//!
+//! A produced result is either a runtime [`KObject`] (the `Object` arm), a type flowing raw in the
+//! type channel (the `Type` arm), so a type-operator returns a `KType` handle without boxing it
+//! into a `KObject`, or a surface type name the bind seam could not lower to a type (the
+//! `UnresolvedType` arm).
 //!
 //! `UnresolvedType` carries the token's [`TypeSymbol`] verbatim: no type handle ever denotes an
 //! unresolved name. [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
@@ -10,15 +13,18 @@
 //! [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier)
 //! consumes it.
 //!
-//! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
+//! A cell answers no question that needs a registry: its type tag is
+//! [`TypeRegistry::ktype_of`](crate::machine::model::TypeRegistry::ktype_of) and its rendering
+//! [`RunRegistries::held_summary`](crate::machine::model::RunRegistries::held_summary), both owned
+//! by the registry that holds the answer.
+//!
+//! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
-use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
-use crate::machine::model::types::{KKind, KType, TypeRegistry, display_label};
-use crate::witnessed::reattachable;
-
-use super::KObject;
-use crate::machine::model::RunRegistries;
+use super::substrate::reattachable;
+use crate::machine::model::KObject;
 use crate::machine::model::ast::ProgramNode;
+use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
+use crate::machine::model::types::KType;
 
 /// Three-arm value currency. `Copy` — the object arms wrap `&'a` references and the `Type` arm a
 /// `Copy` [`KType`] handle, so it threads through node results and the lift path without clones.
@@ -69,46 +75,6 @@ impl<'a> Carried<'a> {
                     ti.symbol().0
                 )
             }
-        }
-    }
-
-    /// Surface rendering of any arm, written straight into `f` — an object's summary, a type's
-    /// name, or the unlowered name's surface form.
-    pub fn write_summary(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        registries: &RunRegistries,
-    ) -> std::fmt::Result {
-        match self {
-            Carried::Object(o) => o.write_summary(f, registries),
-            Carried::Type(t) => t.write_name(f, registries),
-            Carried::UnresolvedType(ti) => {
-                write!(f, "{}", display_label(ti.symbol(), registries))
-            }
-        }
-    }
-
-    /// [`write_summary`](Self::write_summary) as a `Display` view.
-    pub fn summary<'x>(&'x self, registries: &'x RunRegistries) -> CarriedSummary<'x, 'a> {
-        CarriedSummary {
-            carried: self,
-            registries,
-        }
-    }
-
-    /// The carried value's surface as an owned `String`.
-    pub fn summarize(&self, registries: &RunRegistries) -> String {
-        self.summary(registries).to_string()
-    }
-
-    /// The shallow type tag of the carried value: an object's `ktype()`, or a type-channel
-    /// arm's own `OfKind` classification.
-    pub fn ktype(&self, types: &TypeRegistry) -> KType {
-        match self {
-            Carried::Object(o) => o.ktype(),
-            Carried::Type(t) => KType::of_kind(t.kind_of(types)),
-            // An unlowered name denotes a proper type once resolved.
-            Carried::UnresolvedType(_) => KType::of_kind(KKind::ProperType),
         }
     }
 }
@@ -202,72 +168,6 @@ impl<'a> Held<'a> {
             Held::Name(b) => Held::Name(*b),
             Held::RecordType(e) => Held::RecordType(*e),
         }
-    }
-
-    /// The cell's shallow type tag: an object's `ktype()`, or a type-channel arm's own
-    /// `OfKind` classification (mirrors [`Carried::ktype`]).
-    pub fn ktype(&self, types: &TypeRegistry) -> KType {
-        match self {
-            Held::Object(o) => o.ktype(),
-            Held::Type(t) => KType::of_kind(t.kind_of(types)),
-            Held::UnresolvedType(_) => KType::of_kind(KKind::ProperType),
-            Held::Name(BinderSymbol::Value(_)) => KType::IDENTIFIER,
-            Held::Name(BinderSymbol::Type(_)) => KType::NAME_TOKEN,
-            Held::RecordType(_) => KType::RECORD_TYPE,
-        }
-    }
-
-    /// Surface rendering of any arm, written straight into `f` — an object's summary, a type's
-    /// name, or the unlowered name's surface form.
-    pub fn write_summary(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        registries: &RunRegistries,
-    ) -> std::fmt::Result {
-        match self {
-            Held::Object(o) => o.write_summary(f, registries),
-            Held::Type(t) => t.write_name(f, registries),
-            Held::UnresolvedType(ti) => write!(f, "{}", display_label(ti.symbol(), registries)),
-            Held::Name(b) => write!(f, "{}", display_label(b.symbol(), registries)),
-            Held::RecordType(e) => e.write_summary(f, &registries.labels),
-        }
-    }
-
-    /// [`write_summary`](Self::write_summary) as a `Display` view.
-    pub fn summary<'x>(&'x self, registries: &'x RunRegistries) -> HeldSummary<'x, 'a> {
-        HeldSummary {
-            held: self,
-            registries,
-        }
-    }
-
-    /// The cell's surface as an owned `String`.
-    pub fn summarize(&self, registries: &RunRegistries) -> String {
-        self.summary(registries).to_string()
-    }
-}
-
-/// A [`Carried::summary`] view: one borrowed cell plus the registries it resolves through.
-pub struct CarriedSummary<'x, 'a> {
-    carried: &'x Carried<'a>,
-    registries: &'x RunRegistries,
-}
-
-impl std::fmt::Display for CarriedSummary<'_, '_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.carried.write_summary(f, self.registries)
-    }
-}
-
-/// A [`Held::summary`] view: one owned cell plus the registries it resolves through.
-pub struct HeldSummary<'x, 'a> {
-    held: &'x Held<'a>,
-    registries: &'x RunRegistries,
-}
-
-impl std::fmt::Display for HeldSummary<'_, '_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.held.write_summary(f, self.registries)
     }
 }
 

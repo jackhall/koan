@@ -6,15 +6,15 @@ top-level module, `src/memory/`, that the rest of the crate builds on.
 **Problem.** The payload-generic region engine is [workgraph's witnessed
 module](../../workgraph/design/witnessed-memory.md); Koan's instantiation of it is spread across two
 unrelated parents. Under `machine::core` sit the storage profile, `KoanRegion`, `CallFrame`, program
-storage and the step allocator ([arena.rs](../../src/machine/core/arena.rs),
-[arena/frame.rs](../../src/machine/core/arena/frame.rs),
-[arena/step_allocator.rs](../../src/machine/core/arena/step_allocator.rs)), the sealed and
-delivered carrier aliases ([carrier_witness.rs](../../src/machine/core/carrier_witness.rs)) and the
-reference families ([ref_carriers.rs](../../src/machine/core/ref_carriers.rs)). Under
+storage and the step allocator ([arena.rs](../../src/memory/region.rs),
+[arena/frame.rs](../../src/memory/frame.rs),
+[arena/step_allocator.rs](../../src/machine/execute/step.rs)), the sealed and
+delivered carrier aliases ([carrier_witness.rs](../../src/memory/carrier.rs)) and the
+reference families ([ref_carriers.rs](../../src/machine/core/scope.rs)). Under
 `machine::model::values` sit the value-channel cells `Held` and `Carried`
-([carried.rs](../../src/machine/model/values/carried.rs)), the container substrates
-([container_substrate.rs](../../src/machine/model/values/container_substrate.rs)) and the rehoming
-door ([rehomed.rs](../../src/machine/model/values/rehomed.rs)). Nothing names the set: a reader
+([carried.rs](../../src/memory/cell.rs)), the container substrates
+([container_substrate.rs](../../src/memory/container_substrate.rs)) and the rehoming
+door ([rehomed.rs](../../src/memory/rehomed.rs)). Nothing names the set: a reader
 looking for "where a value lives and how long" walks [memory-model.md](../../design/memory-model.md),
 [value-substrates.md](../../design/value-substrates.md) and
 [per-call-region/](../../design/per-call-region/README.md) to find files in two directories that

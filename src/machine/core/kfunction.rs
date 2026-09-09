@@ -6,7 +6,6 @@ use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::source::{SourceRef, Spanned};
 
 use crate::machine::core::DeliveredCarried;
-use crate::machine::core::carrier_witness::DeliveredFunction;
 use crate::machine::core::kfunction::action::BoundArg;
 use crate::machine::core::{
     FoldingBrand, KError, KErrorKind, KoanStorageProfile, RegionBrand, Scope,
@@ -17,6 +16,7 @@ use crate::machine::model::SignatureDraft;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
 use crate::machine::model::{ExpressionSignature, Record, SignatureElement, shape_type_of};
 use crate::machine::model::{Unifier, UnifyFailure, Variance, admits_with};
+use crate::memory::DeliveredFunction;
 use crate::witnessed::BumpVec;
 use crate::witnessed::RegionHandleFamily;
 

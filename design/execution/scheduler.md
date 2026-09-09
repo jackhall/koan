@@ -109,7 +109,7 @@ data, and a single harness method applies them. The three pieces:
   [`Action`](../../src/machine/core/kfunction/action.rs)). It is AST-free — no
   variant names a `KFunction` or a `KExpression`. Its single lifetime `'step` is the
   per-step cart-scale frame lifetime the `Done` value is born at — the `Done` carrier rides it as a
-  [`StepCarried`](../../src/machine/execute/step_carried.rs), confined to the step until it exits
+  [`StepCarried`](../../src/machine/execute/step.rs), confined to the step until it exits
   through `seal_at_step` into finalize; the delivery walk adopts it
   across each dep edge ([per-call-region/lifecycle.md § Node-output delivery](../per-call-region/lifecycle.md#node-output-delivery)).
   Four variants: `Done` (the node's terminal value at `'step`, or an

@@ -22,7 +22,6 @@ use std::rc::Rc;
 
 use crate::machine::core::KoanStorageProfile;
 use crate::machine::core::bindings::{WriteGate, WriteOp};
-use crate::machine::core::scope_frame;
 use crate::machine::core::{BlockEntry, BlockRequest, DepPlacement, FramePlacement, ScopeId};
 use crate::machine::core::{ProgramBrand, RegionBrand, ScopeRefFamily};
 use crate::machine::model::CarriedFamily;
@@ -47,7 +46,7 @@ use super::finalize::{NodeFinalize, finalize_error};
 use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodePayload, NodeScope, NodeWork, SlotFrame, WorkLabel};
 use super::outcome::{Await, Continuation, DepTerminal, Outcome, ParkDeps, dep_error_frame};
-use super::step_carried::StepCarried;
+use super::step::StepCarried;
 use super::{ContinuationCall, ContinuationFamily, NodeContinuation, erase_bumped, gated};
 #[cfg(test)]
 use super::{erase_boxed, gated_once};
@@ -406,7 +405,7 @@ impl<'run> Host<'run> {
                         let view = DecideCtx::new(
                             &host.ambient,
                             scope,
-                            scope_frame(scope),
+                            scope.frame(),
                             Installer::Statement(anchor.statement()),
                             &step_effects,
                             host.program,

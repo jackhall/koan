@@ -43,7 +43,7 @@ unaskable.
 - *Where the module's region is read — open.* `Module::child_scope().region()` is the direct
   reading; whether the value should instead carry its home region beside the scope, the way a
   substrate carries its stored reach, depends on whether any other caller wants the same fact.
-- *Scope of the change — open.* [`carrier_witness.rs`](../../src/machine/core/carrier_witness.rs)
+- *Scope of the change — open.* [`carrier_witness.rs`](../../src/memory/carrier.rs)
   routes its `is_home` claim through the same predicate, so the narrower answer reaches the witness
   channel too and its audit shapes are part of the acceptance surface.
 

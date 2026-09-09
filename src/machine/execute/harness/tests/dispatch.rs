@@ -164,7 +164,9 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let slot = runtime.dispatch_in_scope(working(&program, expr), scope, 1);
     let id = runtime.install_edge_for_test(slot, scope);
     runtime.execute().unwrap();
-    let err = match runtime.read_edge_result_with(id, |v| v.summarize(registry.registries())) {
+    let err = match runtime.read_edge_result_with(id, |v| {
+        registry.registries().carried_summary(&v).to_string()
+    }) {
         Err(e) => e.clone(),
         Ok(summary) => panic!(
             "stateful BareIdentifier must surface UnboundName for an unbound name; \

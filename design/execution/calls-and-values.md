@@ -9,7 +9,7 @@ of the [execution model](README.md).
 
 [`KObject`](../../src/machine/model/values/kobject.rs) is the universal
 runtime value type — the `Object` arm of the scheduler's value currency
-[`Carried`](../../src/machine/model/values/carried.rs); a type rides the
+[`Carried`](../../src/memory/cell.rs); a type rides the
 `Type` arm as a raw `&KType`, with no `KObject` box. Pure-data variants
 (`Number`, `KString`, `Bool`, `List`, `Dict`, `KExpression`,
 `Record`, `Null`) carry no references into

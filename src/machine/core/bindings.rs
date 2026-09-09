@@ -59,7 +59,6 @@ use allocator_api2::vec::Vec as AllocVec;
 #[cfg(test)]
 use std::cell::Ref;
 use std::cell::{Cell, RefCell};
-use std::hash::BuildHasher;
 use std::mem::ManuallyDrop;
 
 use crate::machine::CarrierWitness;
@@ -67,10 +66,7 @@ use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::StatementId;
-use crate::machine::core::carrier_witness::{
-    DeliveredFunction, DeliveredOperatorGroup, GroupSeal, OverloadSeal, SealedFunction,
-    SealedOperatorGroup,
-};
+use crate::machine::core::seals::{GroupSeal, OverloadSeal};
 #[cfg(test)]
 use crate::machine::model::BindKind;
 use crate::machine::model::CarriedFamily;
@@ -83,8 +79,12 @@ use crate::machine::model::{
     DispatchTokenElement, KeyElement, render_untyped_key, summarize_dispatch,
 };
 use crate::machine::model::{KType, UntypedKey};
+use crate::memory::{
+    BumpVec, DeliveredFunction, DeliveredOperatorGroup, SealedFunction, SealedOperatorGroup,
+    bump_table, reattachable,
+};
 use crate::witnessed::BumpBackedMap;
-use crate::witnessed::{BumpAllocator, Sealed};
+use crate::witnessed::Sealed;
 
 use super::kerror::{KError, KErrorKind};
 
@@ -410,8 +410,7 @@ struct Tables<'a> {
 /// Suppressing it is also what makes `needs_drop::<Bucket>()` false, so the map holding buckets
 /// passes [`bump_table`]'s assert and its own teardown never walks them. No `unsafe` — the
 /// suppressed destructor had nothing to do.
-type Bucket<'a> =
-    ManuallyDrop<allocator_api2::vec::Vec<FunctionBucketEntry<'a>, BumpAllocator<'a>>>;
+type Bucket<'a> = ManuallyDrop<BumpVec<'a, FunctionBucketEntry<'a>>>;
 
 /// The element proof the `ManuallyDrop` above would otherwise swallow. `needs_drop` is false for
 /// *any* `ManuallyDrop<U>`, so the wrapper that makes a bucket storable in a bump-backed table also
@@ -420,28 +419,9 @@ type Bucket<'a> =
 /// destructor back fails the build rather than leaking silently.
 const _: () = assert!(!std::mem::needs_drop::<FunctionBucketEntry<'static>>());
 
-/// Build one of a scope's tables over its region bump, **proving at compile time** that its entries
-/// carry no drop glue. The bump runs no destructor, so a `Drop`-bearing key or value would silently
-/// leak whatever it owns; the assert is monomorphization-checked, so a future entry field that
-/// brings glue back is a build error at the declaration that admitted it rather than a leak.
-///
-/// This is where each table's storage choice is stated: all five tables route here, so none has an
-/// unstated exemption.
-pub(in crate::machine::core) fn bump_table<'a, K, V, S: BuildHasher + Default>(
-    brand: RegionBrand<'a>,
-) -> BumpBackedMap<'a, K, V, S> {
-    const {
-        assert!(
-            !std::mem::needs_drop::<K>() && !std::mem::needs_drop::<V>(),
-            "a bump-backed table's entries must carry no drop glue: the bump runs no destructor",
-        )
-    };
-    hashbrown::HashMap::with_hasher_in(S::default(), brand.allocator())
-}
-
 /// An empty dispatch bucket over the same bump — the `functions` table's value constructor.
 fn bump_bucket(brand: RegionBrand<'_>) -> Bucket<'_> {
-    ManuallyDrop::new(allocator_api2::vec::Vec::new_in(brand.allocator()))
+    ManuallyDrop::new(BumpVec::new_in(brand.allocator()))
 }
 
 /// What installing `seal`'s entry costs a rebuild of this table: the flat [`OperatorEntry`] plus
@@ -475,6 +455,16 @@ fn operator_entry_weight(tables: &Tables<'_>, seal: &GroupSeal<'_>) -> u64 {
 /// The brand rides beside the cell because a write re-homes the text it stores: a dispatch
 /// bucket's key and an overload's dispatch token all land in the same region the tables'
 /// buckets do, so a table never points at bytes that can die before it.
+/// `Reattachable` family for a **reference** to a [`Bindings`] table — `&'r Bindings<'r>`.
+/// Layout-invariant: the reference is a thin pointer independent of `'r`, whatever the table it
+/// points at names. The family exists so a transparent `USING … SCOPE` window can cross a
+/// construction brand alongside its parent scope
+/// ([`Scope::open_module_window`](crate::machine::core::Scope)), which a bare `&'a Bindings<'a>`
+/// cannot — an ambient borrow has no outlives relation to a `for<'b>` brand.
+pub struct BindingsReferenceFamily;
+
+reattachable!(BindingsReferenceFamily => &'r Bindings<'r>);
+
 pub struct Bindings<'a> {
     brand: RegionBrand<'a>,
     /// `ManuallyDrop` for [`Bucket`]'s reason, one level up: a `hashbrown` map has a destructor

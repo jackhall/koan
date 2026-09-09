@@ -16,7 +16,7 @@ use crate::machine::model::ast::{
 };
 use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::machine::model::pair_list::{FieldNameKind, parse_pair_list, parse_type_tag_names};
-use crate::machine::model::values::Carried;
+use crate::memory::Carried;
 use crate::source::Spanned;
 use std::collections::HashSet;
 
@@ -214,7 +214,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         other => Err(shape(format!(
                             "{context_list} type for `{}` resolved to non-type value `{}`",
                             rendered(),
-                            other.summary(registries),
+                            registries.carried_summary(&other),
                         ))),
                     })
             }
@@ -226,7 +226,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     Err(shape(format!(
                         "{context_list} type for `{}` resolved to non-type value `{}`",
                         rendered(),
-                        other.summary(registries),
+                        registries.carried_summary(&other),
                     )))
                 }
                 None if results.is_some() => Err(shape(format!(
@@ -291,7 +291,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         Err(shape(format!(
                             "{context_list} type for `{}` resolved to non-type value `{}`",
                             rendered(),
-                            other.summary(registries),
+                            registries.carried_summary(&other),
                         )))
                     }
                     None if results.is_some() => Err(shape(format!(

@@ -13,23 +13,22 @@
 //! is non-empty", borrows-home is the description's own home-relative query. The cost memo is a
 //! read on the storage's own weight for the same reason — a stored construction-time fact, not a
 //! fold a door re-runs. See
-//! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
+//! [design/value-substrates.md § Sectioned reach](../../design/value-substrates.md#sectioned-reach).
 
-use crate::machine::core::{FrameReach, FrameStorage};
+use super::cell::Held;
+use super::frame::FrameReach;
+use super::substrate::{BumpBackedMap, CellRef, Opened, Sectioned};
 use crate::machine::model::labels::Symbol;
-use crate::witnessed::{BumpBackedMap, CellRef, Sectioned};
-
-use super::{Held, KKey, KObject};
+use crate::machine::model::{KKey, KObject};
 
 /// The sectioned cell storage every container substrate holds: [`Held`] cells anchored to the
 /// container's own region `'a`, partitioned into runs.
-pub type HeldCells<'a> = Sectioned<'a, Held<'static>, FrameStorage>;
+pub type HeldCells<'a> = Sectioned<'a, Held<'static>>;
 
 /// A cell parted from a container by [`ContainerSubstrate::project`]: the cell reference bundled with
 /// a carrier naming exactly its run's stored reach — never a payload and a description as loose
 /// parts.
-pub type PartedCell<'a> =
-    crate::witnessed::Opened<'a, CellRef<Held<'static>>, crate::witnessed::Carrier<FrameStorage>>;
+pub type PartedCell<'a> = Opened<'a, CellRef<Held<'static>>>;
 
 /// The index layout of a [`RecordSubstrate`]: the field symbols, region-hosted and sorted in
 /// numeric symbol order, one per cell and positionally aligned with them. That order is the whole
@@ -37,7 +36,7 @@ pub type PartedCell<'a> =
 /// record needs no table, and no field text lives in the substrate at all.
 ///
 /// `Copy`, and the slice it names is bump-hosted through
-/// [`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator). A [`Symbol`] is
+/// [`RegionBrand::allocator`](super::region::RegionBrand::allocator). A [`Symbol`] is
 /// fixed-width and owns nothing, so a record's index runs no `Drop` at region death.
 #[derive(Clone, Copy)]
 pub struct RecordLayout<'a> {
@@ -132,7 +131,7 @@ impl<'a, C> ContainerSubstrate<'a, C> {
     /// **The parting seam.** Hand the cell at `index` out bundled with a carrier naming exactly its
     /// run's stored reach — read off the run, never derived by a subset walk over the container. The
     /// bundle is `'a`-confined, so a cell that genuinely relocates has to pass
-    /// [`Opened::reseal`](crate::witnessed::Opened::reseal), which is where the mint happens.
+    /// [`Opened::reseal`](Opened::reseal), which is where the mint happens.
     pub fn project(&self, index: usize) -> Option<PartedCell<'a>> {
         self.cells.project(index)
     }
@@ -232,7 +231,7 @@ impl<'a> ListSubstrate<'a> {
 /// [`KKey`]. The index is frozen at construction (last-wins dedup happens in the transient
 /// construction map) and never written again; cell order follows the construction map's iteration
 /// order, so entry order is unspecified. The index block is a
-/// [`BumpAllocator::frozen_table`](crate::witnessed::BumpAllocator::frozen_table) hosted in the
+/// [`BumpAllocator::frozen_table`](super::substrate::BumpAllocator::frozen_table) hosted in the
 /// substrate's own region bump:
 /// its glue-free key and value are what let region death reclaim the buckets by releasing chunks
 /// rather than by running a destructor. Every key's string bytes are region-hosted too, so the table

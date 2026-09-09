@@ -24,7 +24,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let carrier = ctx.ctx.alloc_carried_with(&[], |brand, _| {
         let rendered = brand
             .allocator()
-            .text_from_display(&value.summary(ctx.registries));
+            .text_from_display(&ctx.registries.held_summary(value));
         // Two writes rather than one joined buffer: appending a newline is the whole job a
         // `format!` would do here, and the run is single-threaded, so nothing can land between
         // them.

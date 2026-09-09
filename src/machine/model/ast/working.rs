@@ -171,7 +171,10 @@ impl<'a> WorkingPart<'a> {
             // Reached through `read_resting`, which states the coverage a pin-less probe stands
             // under.
             WorkingPart::Spliced { cell, .. } => read_resting(cell, |carried| {
-                carried.ktype(&registries.types).write_name(f, registries)
+                registries
+                    .types
+                    .ktype_of_carried(carried)
+                    .write_name(f, registries)
             }),
             // A node the scheduler synthesized and will dispatch, and a hole awaiting a sibling's
             // carrier, both denote no value yet — only an `Any` slot admits one, so neither

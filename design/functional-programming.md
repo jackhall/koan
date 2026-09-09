@@ -100,7 +100,7 @@ have hidden both.
 ## Calling convention: per-call scope
 
 The user-fn body executor (`run_user_fn`, lowered onto the scheduler by
-`dispatch::exec::invoke`) allocates a per-call [`CallFrame`](../src/machine/core/arena.rs),
+`dispatch::exec::invoke`) allocates a per-call [`CallFrame`](../src/memory/region.rs),
 binds each parameter into a fresh child `Scope` whose `outer` is the function's
 captured definition scope, and returns the body unmodified as
 `Action::Tail` (lowered to `Outcome::Continue`) for the scheduler to dispatch in the same slot.

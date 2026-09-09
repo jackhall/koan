@@ -9,7 +9,7 @@ compares the regions a fold pins against the addresses its product actually
 embeds, and flags the difference. It sees two things it should not miss.
 
 *Uninstrumented fold sinks.* Only `StepAllocator::alloc_carried_with`
-([step_allocator.rs](../../src/machine/core/arena/step_allocator.rs)) carries the
+([step_allocator.rs](../../src/machine/execute/step.rs)) carries the
 instrumentation. The relocation verbs `Delivered::transfer_into` and
 `Delivered::merge_into` ([delivered.rs](../../workgraph/src/witnessed/delivered.rs))
 compose operand reach into a product the same way and are the accumulating fold

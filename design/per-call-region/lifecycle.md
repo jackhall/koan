@@ -6,7 +6,7 @@ value is kept alive. Part of the [per-call region protocol](README.md).
 ## Carriers
 
 The lifecycle pin is a `Rc<FrameStorage>`, not a `Rc<CallFrame>`.
-`CallFrame` is a thin shell over a refcounted [`FrameStorage`](../../src/machine/core/arena.rs)
+`CallFrame` is a thin shell over a refcounted [`FrameStorage`](../../src/memory/region.rs)
 — the per-call `KoanRegion` plus the `outer` link that keeps the
 lexical-ancestor frames' storage alive. An escaping value pins the
 *storage*, so the region outlives the shell independently — a `FreshTail` tail
@@ -66,7 +66,7 @@ relocates it across each dep edge — never the producer.
   re-stamps the value **in place**, in the producer's own region (a coarsening
   re-tag, e.g. `List<Number>` through `:(LIST OF Any)`, re-allocates there too).
   Declared or not, it seals the
-  [`CarrierWitness`](../../src/machine/core/carrier_witness.rs) — the
+  [`CarrierWitness`](../../src/memory/carrier.rs) — the
   reference-only carrier, pinning nothing — **as-is**: there is no Done-boundary
   relocation or sever gate. The producer frame's lifetime is decided by
   delivery at finalize: a copy verdict frees it there, a pin verdict transfers

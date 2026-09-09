@@ -13,7 +13,8 @@
 //! See [design/label-interning.md](../../../design/label-interning.md).
 
 use super::labels::LabelInterner;
-use super::types::TypeRegistry;
+use super::types::{TypeRegistry, display_label};
+use crate::memory::{Carried, Held};
 
 /// See the module-level documentation.
 pub struct RunRegistries {
@@ -36,6 +37,66 @@ impl RunRegistries {
         RunRegistries {
             types: TypeRegistry::new(),
             labels,
+        }
+    }
+}
+
+/// The rendering of a produced value against the registries that resolve its labels — the `Display`
+/// view [`RunRegistries::carried_summary`] hands back. Owned by the registries rather than by the
+/// cell: every arm's surface form is a label lookup or a type name, both of which live here.
+pub struct CarriedSummary<'x, 'a> {
+    carried: &'x Carried<'a>,
+    registries: &'x RunRegistries,
+}
+
+/// [`CarriedSummary`] for an owned cell — the two extra arms a capture slot mints render as their
+/// captured symbol's surface text and as the raw record-type expression respectively.
+pub struct HeldSummary<'x, 'a> {
+    cell: &'x Held<'a>,
+    registries: &'x RunRegistries,
+}
+
+impl RunRegistries {
+    /// Render a produced value: an object's summary, a type's name, or an unlowered name's surface
+    /// form. `.to_string()` on the view is the owned-`String` spelling.
+    pub fn carried_summary<'x, 'a>(&'x self, carried: &'x Carried<'a>) -> CarriedSummary<'x, 'a> {
+        CarriedSummary {
+            carried,
+            registries: self,
+        }
+    }
+
+    /// [`Self::carried_summary`] for an owned cell.
+    pub fn held_summary<'x, 'a>(&'x self, cell: &'x Held<'a>) -> HeldSummary<'x, 'a> {
+        HeldSummary {
+            cell,
+            registries: self,
+        }
+    }
+}
+
+impl std::fmt::Display for CarriedSummary<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.carried {
+            Carried::Object(o) => o.write_summary(f, self.registries),
+            Carried::Type(t) => t.write_name(f, self.registries),
+            Carried::UnresolvedType(ti) => {
+                write!(f, "{}", display_label(ti.symbol(), self.registries))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for HeldSummary<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.cell {
+            Held::Object(o) => o.write_summary(f, self.registries),
+            Held::Type(t) => t.write_name(f, self.registries),
+            Held::UnresolvedType(ti) => {
+                write!(f, "{}", display_label(ti.symbol(), self.registries))
+            }
+            Held::Name(b) => write!(f, "{}", display_label(b.symbol(), self.registries)),
+            Held::RecordType(e) => e.write_summary(f, &self.registries.labels),
         }
     }
 }

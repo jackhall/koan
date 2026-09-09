@@ -35,12 +35,13 @@ use allocator_api2::alloc::Global;
 
 use super::{Scope, ScopeKind};
 use crate::machine::DeliveredCarried;
+use crate::machine::core::RegionScopeFamily;
 use crate::machine::core::bindings::BindingIndex;
-use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
-use crate::machine::core::ref_carriers::RegionScopeFamily;
+use crate::machine::core::seals::{GroupSeal, OverloadSeal};
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanStorageProfile, RegionBrand};
 use crate::machine::model::{Carried, KObject};
+use crate::memory::DeliveredFunction;
 use crate::witnessed::{FoldedPlacement, RegionHandle};
 
 /// One relocation's memo: the address of a source scope beside the copy built for it. Address *is*

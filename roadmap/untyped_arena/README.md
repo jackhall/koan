@@ -18,7 +18,7 @@ freedom structural and compile-asserted — and a scope's binding tables are
 bump-backed down to their keys and entry payloads. What is left is one policy
 decision the shipped cost seam makes local (evacuating a dying frame). The
 `ContainerSubstrate<'a, C>` shape
-([src/machine/model/values/container_substrate.rs](../../src/machine/model/values/container_substrate.rs))
+([src/machine/model/values/container_substrate.rs](../../src/memory/container_substrate.rs))
 is the realized pattern a later conversion copies: one `Copy` wrapper over cells,
 a bump-hosted index, and a stored reach the doors derive.
 

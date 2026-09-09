@@ -9,6 +9,10 @@ pub mod builtins;
 #[doc(hidden)]
 pub mod fold_fixture;
 pub mod machine;
+/// Koan's instantiation of the region substrate, and every substrate name Koan spells — the
+/// storage profile, the allocation brands, the per-call frame, program storage, the carrier
+/// aliases, the value-channel cells and the container substrates.
+pub mod memory;
 pub mod parse;
 pub mod source;
 /// Guard-fixture surface for the step-brand `compile_fail` tests, which compile as external
@@ -16,10 +20,13 @@ pub mod source;
 /// of koan's real API.
 #[doc(hidden)]
 pub mod step_fixture;
-/// The lifetime-erasure carrier substrate (`Witnessed`, `Reattachable`, `Erased`) and the
-/// workload-generic DAG scheduler, re-exported from the `workgraph` crate so `machine` and
-/// integration tests keep resolving `koan::witnessed::…` / `koan::scheduler::…` paths unchanged.
-pub use workgraph::{scheduler, witnessed};
+/// The workload-generic DAG scheduler, re-exported from the `workgraph` crate so `machine` and
+/// integration tests keep resolving `koan::scheduler::…` paths unchanged. The carrier substrate
+/// beside it reaches Koan through [`memory`], never from here.
+pub use workgraph::scheduler;
+
+/// Temporary re-export while the import sweep lands — deleted at the end of phase 2.
+pub use workgraph::witnessed;
 
 /// Crate-wide test scaffolding: installs the counting global allocator from
 /// [`audit/counting_alloc.rs`](../audit/counting_alloc.rs) for the lib-test binary and exposes

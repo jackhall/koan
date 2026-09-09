@@ -208,3 +208,13 @@ impl<'a> Module<'a> {
 
 #[cfg(test)]
 mod tests;
+
+/// `Reattachable` family for a **reference** to a [`Module`] — `&'r Module<'r>`. Layout-invariant:
+/// the reference is a thin pointer independent of `'r`, so a borrowed module erases to `&'static`
+/// through the safe erase door with no `unsafe` cast. It is the source-operand family of the module
+/// store fold ([`Scope::store_module_object`](crate::machine::core::Scope)), which merges an
+/// already-resident module reference into the storing scope's region so the composition — not a
+/// runtime walk — is what covers the module's own home.
+pub struct ModuleRefFamily;
+
+crate::memory::reattachable!(ModuleRefFamily => &'r Module<'r>);

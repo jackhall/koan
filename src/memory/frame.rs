@@ -1,126 +1,20 @@
-//! The per-call allocation frame: [`FrameStorage`] (the Koan [`RegionHost`] alias), the run-root
-//! storage entry, the [`FrameReach`] / [`FrameCoverage`] reach-evidence aliases, the witnessed
-//! child-scope construction door, and
-//! the [`CallFrame`] shell over a refcounted `FrameStorage` that holds the per-call child [`Scope`].
-//! The region/brand substrate these build on lives in the parent `arena` module.
+//! The per-call allocation frame: the [`FrameReach`] / [`FrameCoverage`] reach-evidence aliases,
+//! the witnessed child-scope construction door, the run's output sink, and the [`CallFrame`] shell
+//! over a refcounted [`FrameStorage`] that holds the per-call child [`Scope`]. The region and brand
+//! substrate these build on lives in [`region`](super::region).
 
 use std::cell::RefCell;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
-use super::{KoanRegion, KoanStorageProfile, RegionBrand};
-use crate::machine::CarrierWitness;
-use crate::machine::core::{Scope, ScopeId, ScopeRefFamily, scope_frame};
-use crate::machine::model::LabelInterner;
-use crate::machine::model::RunRegistries;
-use crate::witnessed::{
+#[cfg(test)]
+use super::region::FrameStorageExt;
+use super::region::{FrameStorage, KoanRegion, RegionBrand};
+use super::substrate::{
     Delivered, ReachDescription, RegionHandle, RegionHost, SealedExtern, StepCoverage,
 };
-
-/// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
-/// set. `RegionHost` lazily mints its region on first allocation — reached by the child `Scope`
-/// [`CallFrame::new`] builds immediately, so a constructed frame's region is minted by the time
-/// anything reads it — and the `outer` link chains the lexical-ancestor frames' storage alive. An
-/// escaping value (a returned closure, a module frame) pins *this* — not the [`CallFrame`] shell —
-/// so a tail hop's shell can drop outright while the escapee's captured
-/// environment rides the old `FrameStorage` it still holds.
-/// The library's raw-region constructor is sealed to `workgraph`, so nothing outside the library
-/// can mint a `KoanRegion` directly; the Koan-typed [`RegionBrand`] mint over a `FrameStorage` lives
-/// on [`FrameStorageExt`] (an extension trait, since a type alias takes no inherent impls of its own).
-pub type FrameStorage = RegionHost<KoanStorageProfile>;
-
-/// The run-root storage: a fresh run region with no `outer` link, stamped at the eternal tier
-/// ([`RegionHost::is_eternal`]) so anything holding it can tell the run region from a per-call one.
-/// Held by `run_program` (and the test harness) so the run-root scope's region has an owning Rc;
-/// [`CallFrame::adopting`] reuses it as the run frame's storage, and the run-root scope reads it
-/// back as its region owner through the region's own host back-link. Public so an integration test
-/// can stand one up: it mints nothing itself, only building the library's `RegionHost` shell whose
-/// region lazily mints on first allocation.
-pub fn run_root_storage() -> Rc<FrameStorage> {
-    RegionHost::fresh_eternal()
-}
-
-/// The **program storage**: where program text and the raw AST live, outside the region model's
-/// per-call tier and above even the run root. Stood up by
-/// [`interpret_with_writer_path`](crate::machine::execute::interpret_with_writer_path) before the run
-/// region and held for the whole run, so it is created first and released last.
-///
-/// Same species as [`run_root_storage`] — a [`FrameStorage`] at the eternal tier — which is what
-/// makes an expression whose parts live only here reach nothing: [`RegionHost::is_eternal`] drives
-/// `needs_no_pin`, and the eternal rule filters such a member out of every pin bundle and reach
-/// description with no special case anywhere. It never enters the frame lifecycle or the scheduler:
-/// the wrapped storage is private and [`brand`](ProgramStorage::brand) is the only capability the
-/// type exposes, so nothing outside this module can adopt it into a `CallFrame` or open a `Scope`
-/// in its region.
-pub fn program_storage() -> ProgramStorage {
-    ProgramStorage(RegionHost::fresh_eternal())
-}
-
-/// The host whose region an AST borrows. Its own type, not a [`FrameStorage`] alias, because
-/// the property the AST's reach answers rest on is a property of *this host* rather than of the
-/// eternal tier at large: the run root is eternal too, but a `CallFrame` adopts it and a `Scope`
-/// names it, so it can be a `home` and a pin-bundle member. Program storage is neither, and the
-/// wrapped `Rc` is private, so [`program_storage`] is the type's only constructor.
-pub struct ProgramStorage(Rc<FrameStorage>);
-
-impl ProgramStorage {
-    /// Mint this storage's [`ProgramBrand`] — the allocation capability the parse entry points take.
-    pub fn brand(&self) -> ProgramBrand<'_> {
-        ProgramBrand(self.0.brand(), PhantomData)
-    }
-}
-
-/// A [`RegionBrand`] carrying the proof that its region is [`ProgramStorage`]'s. The parse entry
-/// points take this rather than a bare `RegionBrand`, so a parsed AST's storage tier is checked at
-/// every call site rather than held by the discipline of one.
-///
-/// This is also the value channel's only key. Two answers in
-/// [`KObject`](crate::machine::model::KObject) — `object_cell_reach` calling an expression's cell
-/// `Owned`, `retains_home` answering `false` — hold because no expression reaching the value
-/// channel borrows a region a holder can outlive, and so does the expression door's own claim that
-/// the cell it bumps names no producer region ([`RegionBrand::alloc_expression`]). All three cite
-/// one type rather than a flow: the channel admits only a
-/// [`ProgramExpression`](crate::machine::model::ast::ProgramExpression), which this brand's doors
-/// alone mint. A node built at an ordinary [`RegionBrand`] carries no such marker, so the channel
-/// is closed to it by type — a runtime-synthesized node dispatches in place instead, and a site
-/// that needs one as a value takes this brand (`op_def`'s bridge body) or threads the proof out of
-/// the arm it matched.
-///
-/// The distinction needs a type because `KExpression` is covariant: a node borrowing a per-call
-/// region coerces to any shorter lifetime, so the borrow checker sees nothing to object to.
-/// Widening through [`ProgramBrand::region`] is free; the reverse does not exist.
-///
-/// The brand is **invariant** in `'a`, so a held brand never shortens either. A door call therefore
-/// pins its `parts` at the storage's own lifetime rather than at whatever shorter lifetime the
-/// caller happens to run at — which is what carries the storage-tier obligation in the parameter
-/// types instead of in prose. The doors' *products* stay covariant, so program-hosted AST still
-/// reaches step code by ordinary subtyping.
-#[derive(Clone, Copy)]
-pub struct ProgramBrand<'a>(RegionBrand<'a>, PhantomData<fn(&'a ()) -> &'a ()>);
-
-impl<'a> ProgramBrand<'a> {
-    /// The plain allocation capability underneath — for the parser's own `alloc_*` calls, which
-    /// need no more than a region to bump into.
-    pub fn region(self) -> RegionBrand<'a> {
-        self.0
-    }
-}
-
-/// Koan's [`RegionBrand`] mint over a [`FrameStorage`] — an extension trait because `FrameStorage`
-/// is a `workgraph` type alias, so Koan cannot add an inherent method to it directly.
-pub(crate) trait FrameStorageExt {
-    /// Mint this storage's region's [`RegionBrand`] allocation capability. Minting is the library's
-    /// [`RegionHandle::from_owner`] rule (it requires the storage that *owns* the region, via its
-    /// `RegionOwner` impl); this method pairs it with the Koan veneer, and a bare `&KoanRegion`
-    /// exposes no `alloc_*` of its own.
-    fn brand(&self) -> RegionBrand<'_>;
-}
-
-impl FrameStorageExt for FrameStorage {
-    fn brand(&self) -> RegionBrand<'_> {
-        RegionBrand(RegionHandle::from_owner(self))
-    }
-}
+use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
+use crate::machine::model::LabelInterner;
+use crate::machine::model::RunRegistries;
 
 /// **The run's output sink** — where `PRINT` writes. One per run, owned by the run [`CallFrame`]
 /// beside the run's [`TypeRegistry`] and reached the same way: through the execution context, never
@@ -129,7 +23,7 @@ impl FrameStorageExt for FrameStorage {
 ///
 /// Write errors are dropped: `PRINT` is a statement with no error channel, so there is nothing for a
 /// caller to do with one. This is a stopgap — see
-/// [monadic side effects](../../../../roadmap/foundation/monadic-side-effects.md), which replaces
+/// [monadic side effects](../../roadmap/foundation/monadic-side-effects.md), which replaces
 /// direct writer plumbing with an effect the language expresses.
 pub struct RunWriter(RefCell<Box<dyn std::io::Write>>);
 
@@ -150,7 +44,7 @@ impl RunWriter {
 /// The non-owning reach description backing carrier witnesses: names the regions a carrier's value
 /// reaches, hosted in the value's home region's side table and referenced (never owned) by the
 /// carrier. See [`ReachDescription`] for the shared mechanism (membership queries, the self rule);
-/// Koan's member semantics are the library's [`PinsRegion`](crate::witnessed::PinsRegion) impl for
+/// Koan's member semantics are the library's [`PinsRegion`](super::substrate::PinsRegion) impl for
 /// [`RegionHost`]. Its owning counterpart is [`FrameCoverage`].
 pub type FrameReach = ReachDescription<FrameStorage>;
 
@@ -159,7 +53,7 @@ pub type FrameReach = ReachDescription<FrameStorage>;
 /// composed it to the seal that consumes it, the delivery envelope carries one across transit). See
 /// [`StepCoverage`] for the surface: Koan holds, clones, threads and drops coverage, and computes
 /// with it only through the container verbs on [`Delivered`] and
-/// [`RegionHandle`](crate::witnessed::RegionHandle).
+/// [`RegionHandle`].
 pub type FrameCoverage = StepCoverage<FrameStorage>;
 
 /// Build a per-call frame's child scope **witnessed**, sealing it to the externally-witnessed
@@ -192,7 +86,7 @@ pub type FrameCoverage = StepCoverage<FrameStorage>;
 pub(crate) fn build_frame_child_witnessed<'p>(
     outer: &'p Scope<'p>,
     storage: &Rc<FrameStorage>,
-) -> Delivered<ScopeRefFamily, CarrierWitness, FrameStorage> {
+) -> Delivered<ScopeRefFamily> {
     let handle = RegionHandle::from_owner(&**storage);
     let live = handle.bump_born_with::<Scope<'static>, ScopeRefFamily, _>(
         SealedExtern::<ScopeRefFamily>::erase(outer),
@@ -209,9 +103,9 @@ pub(crate) fn build_frame_child_witnessed<'p>(
 /// *storage* (via [`Self::storage_rc`]), not the shell, so a `FreshTail` tail hop can drop this
 /// frame's shell outright without foreclosing on the escapee.
 ///
-/// See [per-call-region/README.md](../../../../design/per-call-region/README.md) for the
+/// See [per-call-region/README.md](../../design/per-call-region/README.md) for the
 /// carrier set, escaping-value retention, ancestor chain, and TCO
-/// frame reuse; [memory-model.md § Region lifetime erasure](../../../../design/memory-model.md#region-lifetime-erasure)
+/// frame reuse; [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure)
 /// for the heap-pinning / drop-order invariants.
 pub struct CallFrame {
     /// The per-call child scope paired with the frame storage that owns its region, as one delivery
@@ -222,7 +116,7 @@ pub struct CallFrame {
     /// storage-pins-the-scope co-location the pair kept by field-order convention is now a
     /// construction invariant of the envelope, and dropping the sealed carrier never dereferences the
     /// child pointer, so no drop-order rule is left to hand-maintain.
-    envelope: Delivered<ScopeRefFamily, CarrierWitness, FrameStorage>,
+    envelope: Delivered<ScopeRefFamily>,
     /// This frame's own [`FrameStorage`] — the owner of the region its child scope lives in, and
     /// the pin every escapee extends ([`Self::storage_rc`]). Held beside the envelope rather than
     /// read off it: the envelope's members are one flat antichain in which a value's home is an
@@ -311,7 +205,7 @@ impl CallFrame {
         let envelope = scope.deliver_resident::<ScopeRefFamily>(scope);
         Rc::new(CallFrame {
             envelope,
-            storage: scope_frame(scope),
+            storage: scope.frame(),
             run_registries: Some(RunRegistries::with_labels(labels)),
             writer: Some(RunWriter::new(out)),
         })
@@ -378,13 +272,13 @@ impl CallFrame {
     ///
     /// Answered from the **pin that actually holds**, not from the lexical scope graph: this
     /// frame's storage and the `outer` chain it keeps alive are the regions it owns a claim on, so
-    /// the question is [`RegionHost::pins_region`](crate::witnessed::RegionHost::pins_region) over
+    /// the question is [`RegionHost::pins_region`](RegionHost::pins_region) over
     /// that chain, asked of the storage `scope` names as its own region's owner. A scope living at
     /// the **eternal tier** (the run root) needs no claim at all — its region outlives every
     /// per-call frame, which is exactly why [`Scope::parent_frame_pin`] declines to chain it — so
     /// it answers `true` without consulting the chain.
     pub(crate) fn pins_scope_region(&self, scope: &Scope<'_>) -> bool {
-        let owner = scope_frame(scope);
+        let owner = scope.frame();
         owner.is_eternal() || self.storage.pins_region(owner.region())
     }
 
@@ -401,19 +295,19 @@ impl CallFrame {
     /// [`Scope::seal_reaching`](crate::machine::core::Scope), for the suite that allocates at the
     /// frame lifetime rather than inside a transient [`Self::with_scope`] sub-brand. Value and
     /// description come off the same brand, which is the pairing
-    /// [`RegionHandle::seal_reaching`](crate::witnessed::RegionHandle::seal_reaching) takes: a
+    /// [`RegionHandle::seal_reaching`](RegionHandle::seal_reaching) takes: a
     /// sub-brand's `'b` is universally quantified and outlives nothing, so a frame-lifetime value
     /// cannot be sealed through it at all.
     #[cfg(test)]
     pub(crate) fn seal_born_here<
         's,
         'v: 's,
-        T: crate::witnessed::Reattachable + crate::witnessed::DropFree,
+        T: super::substrate::Reattachable + super::substrate::DropFree,
     >(
         &'s self,
         value: T::At<'v>,
         borrows_home: bool,
-    ) -> crate::witnessed::Witnessed<T, CarrierWitness> {
+    ) -> super::substrate::Witnessed<T> {
         let brand = self.brand();
         let home = FrameCoverage::of(self.storage_rc());
         let sources: &[&FrameCoverage] = match borrows_home {

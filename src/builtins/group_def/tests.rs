@@ -25,7 +25,7 @@ fn list_numbers(object: &KObject<'_>, registries: &RunRegistries) -> Vec<f64> {
                 Held::Object(KObject::Number(n)) => *n,
                 other => panic!(
                     "expected a Number element, got {}",
-                    other.summarize(registries)
+                    registries.held_summary(other)
                 ),
             })
             .collect(),

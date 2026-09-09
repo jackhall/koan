@@ -26,7 +26,8 @@ use crate::machine::model::types::{
     SignatureElement, TypeNode, TypeRegistry,
 };
 
-use super::{Held, KKey, KObject, Module, ModuleDraft};
+use super::{KKey, KObject, Module, ModuleDraft};
+use crate::memory::Held;
 
 /// Rewrite `value` — currently inhabiting `tables`' `from` substitution of `declared` — so it
 /// inhabits the `to` substitution, building whatever has to be rebuilt at `door`.

@@ -179,7 +179,7 @@ checking: every value has a queryable type, and any declared type can be checked
 against it.
 
 A first-class type may also sit *inside* a container, as a
-[`Held::Type`](../../../src/machine/model/values/carried.rs) cell. Such a cell is classified
+[`Held::Type`](../../../src/memory/cell.rs) cell. Such a cell is classified
 by [`KType::matches_type`](../../../src/machine/model/types/ktype_predicates.rs) — the same
 door a bare type in the value channel's `Type` arm goes through, which the cell classifier
 `matches_held` delegates to, so stored and bare positions answer the channel question once.
@@ -188,7 +188,7 @@ A value slot therefore admits no type cell: a list holding the type `Number` doe
 type value (a module is what satisfies a signature). Only a type-accepting slot takes one —
 `Any`, an `OfKind` whose kind subsumes the stored type's `kind_of`, or a union with such a
 member — which is exactly the set the `OfKind(kind_of)` element type the container memoizes
-for that cell ([`Held::ktype`](../../../src/machine/model/values/carried.rs)) satisfies. The
+for that cell ([`Held::ktype`](../../../src/memory/cell.rs)) satisfies. The
 contents-walking ascription boundary and the carrier-trusting dispatch path therefore rule
 alike, and no boundary crossing can stamp a carrier its own cells contradict.
 

@@ -170,7 +170,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     let types = test_run.registry_handle();
     let res = test_run
         .runtime
-        .read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)));
+        .read_edge_result_with(edge, |v| format!("{:?}", types.ktype_of_carried(v)));
     assert!(
         res.is_err(),
         "MAKEBAD must fail return-type check (mismatched pin), got Ok({:?})",
@@ -213,7 +213,7 @@ fn functor_return_with_matching_sharing_constraint_passes() {
     let types = test_run.registry_handle();
     let res = test_run
         .runtime
-        .read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)));
+        .read_edge_result_with(edge, |v| format!("{:?}", types.ktype_of_carried(v)));
     assert!(
         res.is_ok(),
         "MAKEGOOD must pass return-type check — the unascribed body module structurally \

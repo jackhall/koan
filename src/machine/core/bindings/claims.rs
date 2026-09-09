@@ -42,7 +42,8 @@ use crate::machine::model::UntypedKey;
 use crate::machine::model::{IdentityBuildHasher, Symbol};
 use crate::witnessed::{BumpBackedMap, BumpVec};
 
-use super::{BindingIndex, Bindings, bump_table};
+use super::{BindingIndex, Bindings};
+use crate::memory::bump_table;
 
 /// One in-flight binder's claim: the [`ProducerId`] naming its submission's own installed edge,
 /// tagged with the binder's lexical [`BindingIndex`] so the same visibility predicate gates a claim

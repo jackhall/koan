@@ -39,9 +39,13 @@ pub use types::{
 };
 pub use types::{display_label, render_label};
 pub(crate) use types::{render_untyped_key, summarize_dispatch, untyped_key_of};
-pub use values::{
-    Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, Scalar, ValueEqualityError,
-};
+pub use values::{KKey, KObject, Scalar, ValueEqualityError};
+
+// TEMPORARY (phase 1 of the memory-module move): the value-channel cells and the container
+// substrates now live in `crate::memory`; these keep the old paths resolving until the import
+// sweep lands, and are deleted with it.
+pub use crate::memory::{Carried, ContainerSubstrate, Held, PartedCell};
+pub(crate) use crate::memory::{CarriedFamily, object_copy_cost};
 
 pub(crate) use ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass, ProgramExpression,
@@ -72,7 +76,7 @@ pub(crate) use types::{
     unsaturated_constructor_message,
 };
 pub(crate) use values::{
-    CarriedFamily, DeclaredSlots, Module, ModuleDraft, NamedPairs, RegionEscape,
+    DeclaredSlots, Module, ModuleDraft, ModuleRefFamily, NamedPairs, RegionEscape,
     coerce_function_cell, coerce_object_into, copy_or_pin, copy_or_pin_callable, declared_return,
-    object_copy_cost, relocate_object_into, retains_home,
+    relocate_object_into, retains_home,
 };

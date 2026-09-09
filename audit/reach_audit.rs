@@ -34,7 +34,7 @@ use crate::machine::DeliveredCarried;
 use crate::machine::model::{Carried, Held, KObject};
 use crate::witnessed::PinsRegion;
 
-use super::arena::FrameStorage;
+use crate::memory::FrameStorage;
 
 /// The addresses a value's borrows reach — every region-hosted pointee the walk below finds,
 /// identified by address alone. A set rather than a list: the comparison is an intersection test,

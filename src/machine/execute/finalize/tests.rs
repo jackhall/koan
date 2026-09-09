@@ -87,7 +87,7 @@ fn region_pure_scalar_rides_the_envelope_and_releases_at_envelope_drop() {
         Carried::Object(KObject::Number(n)) => assert_eq!(*n, 7.0, "value rides the envelope"),
         other => panic!(
             "expected the retained Number, got {:?}",
-            other.ktype(test_run.types())
+            test_run.types().ktype_of_carried(other)
         ),
     });
     drop(envelope);
@@ -412,7 +412,7 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
         }
         other => panic!(
             "expected the adopted Number, got {:?}",
-            other.ktype(test_run.types())
+            test_run.types().ktype_of_carried(other)
         ),
     }
 }

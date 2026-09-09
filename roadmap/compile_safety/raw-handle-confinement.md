@@ -4,7 +4,7 @@ Confine raw `RegionHandle` access to `machine::core`, so the veneer is the only
 door koan code stores through.
 
 **Problem.** `pub(crate)` `RegionBrand::handle()`
-([arena.rs](../../src/machine/core/arena.rs)) hands any koan crate code the raw
+([arena.rs](../../src/memory/region.rs)) hands any koan crate code the raw
 `RegionHandle`, bypassing every veneer door; production reaches exist
 across `src/machine`, most inside `machine::core` and several outside
 (`execute/decide/constructors.rs`, `execute/decide/literal.rs`,

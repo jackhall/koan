@@ -19,7 +19,8 @@ use crate::machine::SplicedCell;
 use crate::machine::core::read_resting;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, WorkingPart};
-use crate::machine::model::values::{Carried, Held, KObject};
+use crate::machine::model::values::KObject;
+use crate::memory::{Carried, Held};
 use smallvec::SmallVec;
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
@@ -475,7 +476,7 @@ pub(crate) fn carried_channel_ktype(
         {
             f.shape_ktype()
         }
-        other => other.ktype(types),
+        other => types.ktype_of_carried(other),
     }
 }
 
@@ -1097,11 +1098,11 @@ impl KType {
             // Handle equality is the per-declaration identity check for a sealed nominal type. A
             // per-variant newtype value carries its member handle, so a union-typed slot admits
             // each variant via the member delegation below.
-            TypeNode::SetMember { .. } => c.ktype(types) == self,
+            TypeNode::SetMember { .. } => types.ktype_of_carried(c) == self,
             // A union slot admits an argument any of its members admits. `Carried` is `Copy`,
             // so each member reads the same carried value.
             TypeNode::Union { members } => members.iter().any(|m| m.accepts_carried(c, registries)),
-            TypeNode::AbstractType { .. } => c.ktype(types) == self,
+            TypeNode::AbstractType { .. } => types.ktype_of_carried(c) == self,
             // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
             // signature — no ascription required. A `WITH` pin is a manifest member of the
             // folded schema, checked by the same structural relation. A module is a value, so

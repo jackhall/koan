@@ -126,7 +126,7 @@ a concept, not a final identifier.
   `allocator` is `pub(crate)` to `workgraph`, so a bare
   `&Region` has no allocation surface at all — the only public minter is
   `RegionHandle::from_owner`, gated on the (unsafe-to-implement) `RegionOwner`
-  contract. [arena.rs](../src/machine/core/arena.rs) holds only Koan's
+  contract. [arena.rs](../src/memory/region.rs) holds only Koan's
   profile (`KoanStorageProfile`, `KoanRegion`, `FrameSet`, `CallFrame`) and a
   thin `RegionBrand` veneer over `RegionHandle` adding Koan-family-typed
   `alloc_*` wrappers, carrying no capability rule of its own; it allocates

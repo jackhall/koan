@@ -21,7 +21,15 @@ mod nodes;
 mod obligation;
 mod outcome;
 mod producer_id;
-mod step_carried;
+/// The reach-tightness report — the over-pinning audit at the fold chokepoint, compiled only under
+/// the `region-audit` gate. Its body lives in [`audit/`](../../audit/README.md), the home for
+/// measurement code that no build ships; what stays in `src/` is this declaration and the hooks
+/// inside [`StepAllocator::alloc_carried_with`](step::StepAllocator), which are the fold moment
+/// itself and so cannot move.
+#[cfg(any(test, feature = "region-audit"))]
+#[path = "../../audit/reach_audit.rs"]
+pub mod reach_audit;
+pub(crate) mod step;
 #[cfg(test)]
 mod test_support;
 
@@ -36,7 +44,7 @@ pub(in crate::machine::execute) use outcome::{
 pub(in crate::machine::execute) use outcome::{erase_boxed, gated_once};
 pub use producer_id::ProducerId;
 pub(crate) use producer_id::{deps_on, extend_deps_on};
-pub use step_carried::{StepCarried, drive_step_allocator};
+pub use step::{StepAllocator, StepCarried, drive_step_allocator};
 #[cfg(test)]
 pub(crate) use test_support::edge_delivered;
 

@@ -132,7 +132,7 @@ fn bare_type_leaf_short_circuits() {
     assert!(
         matches!(result, Carried::Type(KType::NUMBER)),
         "(Number) must terminate to a Number type; got {}",
-        result.summarize(test_run.registries()),
+        test_run.registries().carried_summary(&result),
     );
 }
 
@@ -209,7 +209,7 @@ fn function_value_call_named_args_missing_short_circuits() {
         .expect("scheduler should not surface errors directly");
     let err = match test_run
         .runtime
-        .read_edge_result_with(id, |v| v.summarize(types.registries()))
+        .read_edge_result_with(id, |v| types.registries().carried_summary(&v).to_string())
     {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
@@ -247,7 +247,7 @@ fn fn_definition_with_a_repeated_parameter_name_is_refused() {
         .expect("scheduler should not surface errors directly");
     let err = match test_run
         .runtime
-        .read_edge_result_with(id, |v| v.summarize(types.registries()))
+        .read_edge_result_with(id, |v| types.registries().carried_summary(&v).to_string())
     {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected a repeated-parameter ShapeError, got value {summary}"),
@@ -898,7 +898,7 @@ fn operator_chain_undeclared_errors_cleanly() {
         .expect("scheduler drains without deadlock");
     let msg = match test_run
         .runtime
-        .read_edge_result_with(id, |v| v.summarize(types.registries()))
+        .read_edge_result_with(id, |v| types.registries().carried_summary(&v).to_string())
     {
         Err(e) => e.to_string(),
         Ok(summary) => {
@@ -954,7 +954,9 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
         .expect("scheduler drains without deadlock");
     let inner_result = test_run
         .runtime
-        .read_edge_result_with(inner_id, |v| v.summarize(types.registries()))
+        .read_edge_result_with(inner_id, |v| {
+            types.registries().carried_summary(&v).to_string()
+        })
         .unwrap_or_else(|e| panic!("a registered FoldRight group must evaluate; got error {e}"));
     assert_eq!(
         inner_result, "9",
@@ -969,7 +971,9 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
         .expect("scheduler drains without deadlock");
     let root_result = test_run
         .runtime
-        .read_edge_result_with(root_id, |v| v.summarize(types.registries()))
+        .read_edge_result_with(root_id, |v| {
+            types.registries().carried_summary(&v).to_string()
+        })
         .unwrap_or_else(|e| panic!("the builtin additive group must evaluate; got error {e}"));
     assert_eq!(
         root_result, "5",
@@ -1013,7 +1017,9 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
         .expect("scheduler drains without deadlock");
     let infix = test_run
         .runtime
-        .read_edge_result_with(infix_id, |v| v.summarize(types.registries()))
+        .read_edge_result_with(infix_id, |v| {
+            types.registries().carried_summary(&v).to_string()
+        })
         .unwrap_or_else(|e| panic!("a registered Unary group must evaluate; got error {e}"));
     assert_eq!(
         infix, "[1, 2, 3, 4]",
@@ -1028,7 +1034,9 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
         .expect("scheduler drains without deadlock");
     let prefix = test_run
         .runtime
-        .read_edge_result_with(prefix_id, |v| v.summarize(types.registries()))
+        .read_edge_result_with(prefix_id, |v| {
+            types.registries().carried_summary(&v).to_string()
+        })
         .unwrap_or_else(|e| {
             panic!(
                 "the prefix form must dispatch to the same body as the infix chain; got error {e}"

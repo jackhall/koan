@@ -524,7 +524,7 @@ fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_
                     Held::Object(KObject::KString(s)) => *s,
                     other => panic!(
                         "expected a string cell, got {:?}",
-                        other.ktype(test_run.types())
+                        test_run.types().ktype_of(other)
                     ),
                 })
                 .collect();

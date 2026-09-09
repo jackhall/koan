@@ -13,8 +13,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::core::bindings::WriteOp;
-use crate::machine::core::scope_frame;
-use crate::machine::core::{FrameStorage, ProgramBrand, RunWriter, StepAllocator};
+use crate::machine::core::{FrameStorage, ProgramBrand, RunWriter};
+use crate::machine::execute::StepAllocator;
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, RunRegistries, WorkingPart};
 use crate::machine::{CallFrame, Installer, LexicalFrame, Scope};
@@ -62,7 +62,7 @@ pub(in crate::machine::execute) fn with_current_node_scope<R>(
 pub(in crate::machine::execute) fn current_dest_frame(
     ambient: &AmbientContext,
 ) -> Rc<FrameStorage> {
-    with_current_node_scope(ambient, scope_frame)
+    with_current_node_scope(ambient, |scope| scope.frame())
 }
 
 /// The decide-phase context: the ambient step values a shape handler reads while deciding. A

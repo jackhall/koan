@@ -124,8 +124,8 @@ fn retaining_adopt_reanchors_the_same_value_copy_free() {
 /// assert that the composed description names the child region and nothing else.
 #[test]
 fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
-    use crate::machine::core::arena::KoanRegion;
     use crate::machine::model::{KObject, Module, ModuleDraft};
+    use crate::memory::KoanRegion;
 
     // A frame foreign to everything else here — the region a nested member's own reach names.
     let inner_storage = per_call_storage();

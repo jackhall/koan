@@ -1,6 +1,6 @@
 # Per-call region protocol
 
-The contract for [`Rc<CallFrame>`](../../src/machine/core/arena.rs): which
+The contract for [`Rc<CallFrame>`](../../src/memory/region.rs): which
 [`KObject`](../../src/machine/model/values/kobject.rs) variants carry a
 per-call anchor, how
 [`lift_kobject`](../../src/machine/execute/lift.rs) decides to attach one,

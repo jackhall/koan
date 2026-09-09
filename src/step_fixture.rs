@@ -18,7 +18,7 @@ use crate::machine::core::FrameStorageExt;
 use crate::machine::model::Scalar;
 use crate::machine::run_root_storage;
 
-pub use crate::machine::core::StepAllocator;
+pub use crate::machine::execute::StepAllocator;
 pub use crate::machine::execute::{StepCarried, drive_step_allocator};
 pub use crate::machine::model::KObject;
 

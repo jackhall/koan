@@ -117,7 +117,7 @@ eponymous Koan-runtime type: [kobject.rs](src/machine/model/values/kobject.rs) d
 [ktype.rs](src/machine/model/types/ktype.rs) defines `KType`,
 [ktraits.rs](src/machine/model/types/ktraits.rs) holds the `K*`-typed core traits.
 Files without the prefix are infrastructure that don't introduce a single namesake type:
-[arena.rs](src/machine/core/arena.rs) (allocation),
+[arena.rs](src/memory/region.rs) (allocation),
 [scope.rs](src/machine/core/scope.rs) (lexical environment),
 [resolve_dispatch.rs](src/machine/execute/decide/resolve_dispatch.rs) (the
 overload-resolution walk returning a `DispatchOutcome`),

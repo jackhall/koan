@@ -357,7 +357,7 @@ fn let_type_to_value_name_rejected() {
     let types = test_run.registry_handle();
     match test_run
         .runtime
-        .read_edge_result_with(watch, |v| format!("{:?}", v.ktype(&types)))
+        .read_edge_result_with(watch, |v| format!("{:?}", types.ktype_of_carried(v)))
     {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(msg)

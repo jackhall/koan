@@ -6,8 +6,8 @@ use std::rc::Rc;
 use super::*;
 use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
-use crate::machine::model::values::DictSubstrate;
 use crate::machine::model::{Held, KKey};
+use crate::memory::DictSubstrate;
 
 use super::run;
 use crate::machine::program_storage;

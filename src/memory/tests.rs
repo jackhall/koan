@@ -2,25 +2,26 @@
 //! specific aliasing/lifetime shape under tree borrows; logical assertions are minimal
 //! — these tests fail when Miri reports UB, not on values.
 
+use std::rc::Rc;
+
+use super::container_substrate::RecordSubstrate;
+use super::region::*;
+use super::substrate::{RegionHost, WitnessRegion};
 use super::*;
 use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::{
     TestRun, per_call_storage, run_root_bare, type_name, type_token, value_name,
 };
 use crate::machine::BindingIndex;
-use crate::machine::CarrierWitness;
-use crate::machine::DeliveredCarried;
 use crate::machine::core::Bindings;
 use crate::machine::core::{Action, Body, KFunction};
+use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
-use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::{Argument, ReturnType, SignatureDraft, SignatureElement};
-use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::model::{Module, ModuleDraft, SigSchema};
-use crate::witnessed::{Delivered, FoldedPlacement, RegionHost, Sealed, WitnessRegion};
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameReach`
 /// subsumption walks. Region escape is irrelevant to the `outer`-chain test, so a plain region.
@@ -365,7 +366,7 @@ fn fold_witnessed_yokes_a_reference_only_value() {
 /// layer); this stand-in exercises `transfer_into`'s multi-step composition, which the 1:1
 /// relocation sites still depend on.
 struct AggBuildFamily;
-crate::witnessed::reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
+super::substrate::reattachable!(AggBuildFamily => (RegionHandle<'r>, &'r [Held<'r>]));
 
 /// A multi-step **pairwise** construction fold over several dep producers, the composition rule
 /// the 1:1 relocation sites (`relocate_seam`, the `catch` and tag arms) rest on. The
@@ -397,7 +398,7 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
-    let acc0: Delivered<AggBuildFamily, CarrierWitness, FrameStorage> =
+    let acc0: Delivered<AggBuildFamily> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
             (region.handle(), &[][..])
         });
@@ -540,101 +541,6 @@ fn region_union_foreign_pins_release_at_region_death() {
     );
 }
 
-/// FROM's own construction shape — [`record_projection::body`](crate::builtins::record_projection)
-/// narrows a record's carried type by sharing its substrate borrow whole, built at the fold brand
-/// from the delivered `record` operand's view (`alloc_carried_with`). The combinator's
-/// by-construction dep-run relocation is pinned library-side
-/// (`alloc_with_folds_dep_reach_before_result_read` in the workgraph slate); this exercises it over
-/// the `Record` substrate specifically: the substrate stays in the *producer's* region (never
-/// copied — `record_with_type` swaps only the type handle), and the composed reach is what keeps
-/// that region alive once every producer handle drops. A regression that copied the substrate instead of sharing it would still pass
-/// (a copy is also readable); the pointer-identity assertion is what actually pins "shares, never
-/// copies," while Miri is what catches a dangling read if the reach fold is skipped.
-#[test]
-fn record_retype_shares_substrate_across_producer_frame_free() {
-    let program = program_storage();
-    let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
-    let scope = test_run.scope;
-    let types = test_run.registry_handle();
-
-    // Producer: a plain-data record resident in its own frame's region, born through the fold
-    // door — the exact shape FROM's `record` operand arrives as. Allocated through the frame's own
-    // brand (not a transient `with_scope` sub-brand), so the reference escapes at the frame's own
-    // lifetime.
-    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
-    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
-        producer_frame.brand().handle(),
-    ))
-    .with_holder(&owned_cells);
-    let fields = Vec::from([
-        (
-            crate::builtins::test_support::binder_token("x"),
-            Held::Object(KObject::Number(1.0)),
-        ),
-        (
-            crate::builtins::test_support::binder_token("y"),
-            Held::Object(KObject::Number(2.0)),
-        ),
-    ]);
-    let obj: &KObject<'_> =
-        door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), &types));
-    // `RecordSubstrate` is invariant in its lifetime, so the comparison casts through `usize`
-    // rather than keeping a lifetime-parameterized raw pointer type alive across the fold below.
-    let expected_addr = match obj {
-        KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
-        other => panic!(
-            "expected a Record, got {}",
-            other.ktype().name(types.registries())
-        ),
-    };
-    let dep: DeliveredCarried = producer_frame
-        .brand()
-        .deliver_resident::<CarriedFamily>(Carried::Object(obj));
-
-    // Consumer: a different frame — FROM's own step surface, narrowing to just `{x}`.
-    let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
-    let narrowed_type = types.record(Record::from_pairs([(
-        crate::builtins::test_support::binder_token("x"),
-        KType::NUMBER,
-    )]));
-    let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], move |b, views| {
-        let substrate = match views[0] {
-            Carried::Object(KObject::Record(substrate, _)) => substrate,
-            _ => panic!("expected a Record dep view"),
-        };
-        Carried::Object(b.alloc_object_folded(KObject::record_with_type(substrate, narrowed_type)))
-    });
-
-    // Drop the dep envelope and every frame shell: only the fold's minted reach (through the
-    // retained consumer storage) keeps the producer's region alive.
-    let consumer_storage = consumer_frame.storage_rc();
-    drop(dep);
-    drop(producer_frame);
-    drop(consumer_frame);
-
-    let read_addr = sealed.inspect_at(Rc::clone(&consumer_storage), |c| match c.object() {
-        KObject::Record(substrate, record_type) => {
-            assert_eq!(
-                *record_type, narrowed_type,
-                "narrowed to the FROM-selected type"
-            );
-            *substrate as *const RecordSubstrate<'_> as usize
-        }
-        other => panic!(
-            "expected a Record, got {}",
-            other.ktype().name(types.registries())
-        ),
-    });
-    assert_eq!(
-        read_addr, expected_addr,
-        "the narrowed record shares the exact same substrate borrow — never copies — read back \
-         after the producer frame freed"
-    );
-}
-
 /// The **single escape seam** re-stamp: [`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place)
 /// re-tags a declared substrate return's top node to its declared type and re-anchors it into the
 /// *producer's own region*, sharing the substrate borrow verbatim — the exact `finalize_terminal`
@@ -710,7 +616,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // it there retains nothing (the self rule strips the one member) and the seal read below names
     // that storage.
     let producer_storage = producer_frame.storage_rc();
-    let restamped: Sealed<'_, CarriedFamily, CarrierWitness> =
+    let restamped: Sealed<'_, CarriedFamily> =
         restamped.rest_into(RegionHandle::from_owner(&*producer_storage));
     drop(envelope);
     drop(producer_frame);
@@ -968,7 +874,7 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
     let frame = run_root_storage();
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let acc0: Delivered<AggBuildFamily, CarrierWitness, FrameStorage> =
+    let acc0: Delivered<AggBuildFamily> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&frame), |region| {
             (region.handle(), &[][..])
         });

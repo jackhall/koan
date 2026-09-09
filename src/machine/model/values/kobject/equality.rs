@@ -20,7 +20,7 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KType, TypeRegistry};
-use crate::machine::model::values::Held;
+use crate::memory::Held;
 
 use super::KObject;
 use crate::machine::model::RunRegistries;

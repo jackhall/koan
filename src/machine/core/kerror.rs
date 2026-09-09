@@ -7,7 +7,7 @@ use crate::source::{self, FileId, SourceLoc, SourceRef, Span};
 use crate::witnessed::RegionHandleFamily;
 
 use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
-use super::{KoanStorageProfile, Scope, scope_frame};
+use super::{KoanStorageProfile, Scope};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::close_inference::DynamicNameForm;
 use crate::machine::model::labels::{BinderSymbol, ValueSymbol};
@@ -282,7 +282,7 @@ impl KError {
         scope: &'a Scope<'a>,
         registries: &RunRegistries,
     ) -> DeliveredCarried {
-        let frame = scope_frame(scope);
+        let frame = scope.frame();
         // The seed is a bare region handle living in this scope's own region — it borrows nothing,
         // so it seals resident under an empty foreign bundle.
         let seed = scope

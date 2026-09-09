@@ -362,8 +362,8 @@ fn spliced_cell_classifies_by_opening() {
     let registries = RunRegistries::new();
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::run_root_storage;
-    use crate::machine::model::values::Carried;
     use crate::machine::model::values::KObject;
+    use crate::memory::Carried;
 
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);

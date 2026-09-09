@@ -14,14 +14,14 @@ use std::rc::Rc;
 use super::*;
 use crate::builtins::test_support::{TestRun, value_name};
 use crate::builtins::test_support::{operator_run, probe_symbol};
-use crate::machine::core::arena::CallFrame;
 use crate::machine::core::bindings::OperatorEntry;
 use crate::machine::core::bindings::{BindingIndex, WriteGate};
-use crate::machine::core::carrier_witness::GroupSeal;
 use crate::machine::core::kfunction::Body;
+use crate::machine::core::seals::GroupSeal;
 use crate::machine::core::tests::{body_no_op, unit_signature};
 use crate::machine::model::{KeywordSymbol, OperatorGroup, ReductionMode, RunRegistries};
 use crate::machine::{program_storage, run_root_storage};
+use crate::memory::CallFrame;
 use crate::witnessed::FoldedPlacement;
 
 /// Bind `name` in `scope` to a fresh closure capturing `scope` itself, and hand the callable back.

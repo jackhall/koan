@@ -28,7 +28,8 @@ use std::hash::{BuildHasherDefault, Hasher};
 use imbl::shared_ptr::RcK;
 use smallvec::SmallVec;
 
-use crate::machine::model::labels::{Symbol, TypeSymbol};
+use crate::machine::model::labels::{BinderSymbol, Symbol, TypeSymbol};
+use crate::memory::{Carried, Held};
 
 use super::kkind::KKind;
 use super::ktype::KType;
@@ -110,6 +111,33 @@ pub struct TypeRegistry {
 }
 
 impl TypeRegistry {
+    /// The shallow type tag of a produced value: an object's own `ktype()`, or a type-channel arm's
+    /// `OfKind` classification. A registry method rather than a cell method because the answer for
+    /// the type arms is the registry's — the kind of a `KType` is a lookup here — and the cells hold
+    /// no registry of their own.
+    pub fn ktype_of_carried(&self, carried: Carried<'_>) -> KType {
+        match carried {
+            Carried::Object(o) => o.ktype(),
+            Carried::Type(t) => KType::of_kind(t.kind_of(self)),
+            // An unlowered name denotes a proper type once resolved.
+            Carried::UnresolvedType(_) => KType::of_kind(KKind::ProperType),
+        }
+    }
+
+    /// [`Self::ktype_of_carried`] for an owned cell: the same three arms, plus the two a capture
+    /// slot mints — a captured name token and a raw record-type expression, each of which denotes
+    /// its own part-kind-exact type.
+    pub fn ktype_of(&self, cell: &Held<'_>) -> KType {
+        match cell {
+            Held::Object(o) => o.ktype(),
+            Held::Type(t) => KType::of_kind(t.kind_of(self)),
+            Held::UnresolvedType(_) => KType::of_kind(KKind::ProperType),
+            Held::Name(BinderSymbol::Value(_)) => KType::IDENTIFIER,
+            Held::Name(BinderSymbol::Type(_)) => KType::NAME_TOKEN,
+            Held::RecordType(_) => KType::RECORD_TYPE,
+        }
+    }
+
     /// Crate-internal. Pre-seeds the fixed handles — the leaves, the `OfKind` values,
     /// `List<Any>`, `Dict<Any, Any>`, and the empty signature — so the constants those names
     /// lower to are dereferenceable in a registry that has interned nothing else.

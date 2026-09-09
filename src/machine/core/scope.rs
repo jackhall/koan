@@ -8,13 +8,13 @@ use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::machine::model::{IdentityBuildHasher, KType, TypeSymbol, ValueSymbol};
 use crate::machine::model::{OperatorGroup, ReductionMode};
 use crate::machine::{DeliveredOperatorGroup, KError, WriteGate};
-use crate::witnessed::{And, BumpAllocator, RegionHandle, SealedExtern};
+use crate::memory::{
+    And, BumpAllocator, BumpBackedMap, FrameStorage, KoanRegion, RegionBrand, RegionHandle,
+    SealedExtern, bump_table, reattachable,
+};
 
-use super::arena::{FrameStorage, KoanRegion, RegionBrand};
-use super::bindings::{Bindings, bump_table};
-use super::ref_carriers::{BindingsReferenceFamily, ScopeRefFamily};
+use super::bindings::{Bindings, BindingsReferenceFamily};
 use super::scope_id::ScopeId;
-use crate::witnessed::BumpBackedMap;
 
 mod copy;
 mod reach;
@@ -28,14 +28,43 @@ pub(crate) use copy::consolidate_object;
 pub(crate) use reach::AdoptSeam;
 pub(crate) use resolve::HitTier;
 
+/// `Reattachable` family for a **reference** to a [`Scope`] — `&'r Scope<'r>`. Layout-invariant:
+/// `&'r Scope<'r>` is a thin pointer independent of `'r`, so a borrowed scope erases to `&'static`
+/// through the safe [`erase_to_static`](crate::memory::erase_to_static) / [`SealedExtern::erase`]
+/// with no `unsafe` cast. Recovery routes the rank-2 [`SealedExtern::open`], re-anchoring the erased
+/// reference to a fresh existential `'b` the caller cannot leak.
+pub struct ScopeRefFamily;
+
+/// `Reattachable` family for a **destination scope** — a region handle paired with a scope
+/// resident in that same region. The environment copy's relocation operand: a nested relocation
+/// rebuilding a captured callable needs both the region to build into and the copied scope the
+/// rebuilt callable attaches under, and a fold takes exactly one destination operand.
+///
+/// Pairing them is also what discharges the destination's
+/// `HasRegionHandle` obligation — the library's handle-headed blanket covers any
+/// `(RegionHandle<'r, _>, T)`, so the family needs no `unsafe impl` of its own. Layout-invariant
+/// like [`ScopeRefFamily`]: a `Copy` handle beside a thin pointer, representation independent of
+/// `'r`.
+pub struct RegionScopeFamily;
+
+// A carrier holds a `&'a Scope<'a>` whose real lifetime the borrow checker can't track across the
+// region's `'static` storage. The reference is held outright as a thin pointer (layout-invariant in
+// `'a`) and re-anchored to the holder's `'a` as part of the holder's own substrate retype on read.
+// See [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
+// for the soundness argument the carriers' pinning supplies.
+reattachable!(
+    ScopeRefFamily => &'r Scope<'r>,
+    RegionScopeFamily => (RegionHandle<'r>, &'r Scope<'r>),
+);
+
 /// Lexical environment, resident in its region's **bump**.
 ///
 /// Every field is `Copy`, a [`Cell`] of a `Copy`, or a bump-backed table whose own destructor is
 /// suppressed and whose elements are proved glue-free where they are named — so a `Scope` carries
 /// **no drop glue at all**, which is what lets it live in a bump that runs no destructor. The
 /// `reattachable!` declaration in
-/// [`arena`](crate::machine::core::arena) states that as a compile-time assert; the bump doors
-/// ([`BumpAllocator::in_place`](crate::witnessed::BumpAllocator::in_place),
+/// [`region`](crate::memory::region) states that as a compile-time assert; the bump doors
+/// ([`BumpAllocator::in_place`](crate::memory::BumpAllocator::in_place),
 /// [`RegionHandle::bump_born_with`]) restate it at each store.
 ///
 /// All mutable binding state lives in the embedded [`Bindings`] façade
@@ -225,10 +254,10 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// The storage pin [`CallFrame::new`](super::arena::CallFrame::new) chains for a frame whose
+    /// The storage pin [`CallFrame::new`](crate::memory::CallFrame::new) chains for a frame whose
     /// child scope borrows into this scope's region: the region's owning storage — or no pin when
     /// that owner is at the eternal tier
-    /// ([`is_eternal`](crate::witnessed::RegionHost::is_eternal)), whose region outlives everything
+    /// ([`is_eternal`](crate::memory::RegionHost::is_eternal)), whose region outlives everything
     /// that could retain it and must not be strong-chained (a root chain plus an escaping value's
     /// reach-set pin is the region↔value `Rc` cycle the frame design excludes). The owner answers
     /// its own tier, so the two outcomes stay distinct: the `expect` reports a **dead owner**, which
@@ -248,6 +277,22 @@ impl<'a> Scope<'a> {
     /// back-edge would leak. Upgrades whenever the region is live.
     pub(crate) fn region_owner(&self) -> Weak<FrameStorage> {
         self.brand.handle().host()
+    }
+
+    /// The `Rc<FrameStorage>` that owns this scope's region — the witness a value built into it is
+    /// `yoke`d under (the object-family construction inversion: a region-resident object is born bundled
+    /// with its frame as its reach). The link a scope derives its owner through is `Weak` — an in-region
+    /// value holds no owning `Rc` back to its frame — and upgrades for as long as the scope can run: a **producing**
+    /// scope during its own step (the producing node holds the frame); a **consumer/current** scope
+    /// during a step (the slot's cart — or a cart ancestor via the `FrameStorage.outer` chain, for a
+    /// `YokedChild` overlay scope — is held by the step machinery for the whole step); or the **run
+    /// root** (the run storage is held by the interpreter for the whole run). The single owner of this
+    /// invariant's assertion; step-scoped callers should route through `DecideCtx::dest_frame` or a
+    /// finish's `ctx.frame()` instead of upgrading directly.
+    pub(crate) fn frame(&self) -> Rc<FrameStorage> {
+        self.region_owner().upgrade().expect(
+            "a scope's region owner is held while the scope can run: its cart (or a cart ancestor) for the step, the run storage for the run root",
+        )
     }
 
     /// The bare region this scope lives in — for identity compares (`ptr::eq`, region-pointer
@@ -318,7 +363,7 @@ impl<'a> Scope<'a> {
 
     /// Per-call frame child built **witnessed**, at the construction-door brand `'a`. The lexical
     /// parent and the fresh region arrive already coupled at one generative `'a` — the door
-    /// ([`build_frame_child_witnessed`](crate::machine::core::arena::frame::build_frame_child_witnessed)) brands them
+    /// ([`build_frame_child_witnessed`](crate::memory::frame::build_frame_child_witnessed)) brands them
     /// together — so every field stores by plain coercion, honouring `Scope`'s invariance with no
     /// retype of its own. The brand `'a` is un-nameable and the result erases witness-less, so
     /// nothing at the brand escapes. The frame `Rc` pins the real parent (via `FrameStorage.outer`)

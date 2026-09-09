@@ -16,7 +16,7 @@ roadmap items use with fixed meanings. The machinery behind them is owned by
 just enough to read the policy.
 
 - **Region** — the per-call allocation unit
-  ([`KoanRegion`](../src/machine/core/arena.rs)): a set of arenas owned by one
+  ([`KoanRegion`](../src/memory/region.rs)): a set of arenas owned by one
   call frame, freed all at once when the frame's last hold drops. "Arena"
   names storage inside a region.
 - **Substrate** — the stored cells behind a composite value (a list's element
@@ -83,7 +83,7 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
 
 Each cell-bearing substrate is one index-generic **wrapper struct**,
-[`ContainerSubstrate<'a, C>`](../src/machine/model/values/container_substrate.rs):
+[`ContainerSubstrate<'a, C>`](../src/memory/container_substrate.rs):
 the cells in workgraph's sectioned storage ([§ Sectioned reach](#sectioned-reach)),
 a payload-specific index `C` mapping a name / key / position onto a cell index,
 and the interned union over the runs. Reach and cost both ride the sectioned
@@ -135,7 +135,7 @@ Three consequences define the regime:
 
 Every composite substrate is born through a **branded door** — a fold placement
 ([`FoldedPlacement`](../workgraph/src/witnessed.rs) via
-[`FoldingBrand`](../src/machine/core/arena.rs)), the step allocator, or a
+[`FoldingBrand`](../src/memory/region.rs)), the step allocator, or a
 scope door — whose enclosing combinator composes the witness naming every
 operand the value was built from. Residence is
 compile-enforced by the door's brand: there is **no runtime residence audit
@@ -148,7 +148,7 @@ scalars, which own their data outright, and a quoted expression, whose parts run
 already sits in the eternal-tier storage that parsed it; no container is ever
 built without a door in hand. The door is a brand paired with the **holder-rule proof** its
 per-cell verdicts are read under
-([`SubstrateDoor`](../src/machine/core/arena.rs)), so a container cannot be
+([`SubstrateDoor`](../src/memory/region.rs)), so a container cannot be
 built through a bare brand: a cell that keeps borrowing a foreign source hands
 the alloc door that source's stored description, and reading a description's
 members back out is sound only while something pins every region it names.
@@ -250,7 +250,7 @@ needs both).
 Every string a value-family slot holds — a `KObject::KString`, a
 `KKey::String` dict key — is a `&'a str` bumped into the
 region the value lives in
-([`RegionBrand::allocator`](../src/machine/core/arena.rs), over workgraph's
+([`RegionBrand::allocator`](../src/memory/region.rs), over workgraph's
 [`BumpAllocator::text`](../workgraph/src/witnessed/bump.rs)). The slot
 owns no allocation, so it runs no destructor at region death and the bytes go
 with the bump's chunks; that is what makes the slot `Copy` and `deep_clone` a
@@ -397,7 +397,7 @@ question than contains-borrows: contains-borrows asks only whether
 conservatism input; the copy decision needs the home-relative question, and gets
 an exact answer. The verb names only the act; the release itself is claimed by
 the fold's retention predicate reading the **rebuilt product's** stored reach
-([`product_reaches_region`](../src/machine/core/carrier_witness.rs)): the copy
+([`product_reaches_region`](../src/memory/carrier.rs)): the copy
 releases the retiring host exactly when no run description of the product names
 it ([§ Sectioned reach](#sectioned-reach)) — so a value whose leaves all point
 into foreign regions still releases its home, and a verdict that disagreed with
@@ -455,7 +455,7 @@ cannot be `Copy`: copying it would fork the state its holders share. It is
 structurally `Drop`-free all the same: every field is `Copy`, a `Cell` of a `Copy`,
 or a bump-backed table whose own vacuous destructor is suppressed. That claim is a
 compile-time assert, not an audited marker — the `reattachable!` declaration in
-[arena.rs](../src/machine/core/arena.rs) carries
+[arena.rs](../src/memory/region.rs) carries
 `!needs_drop::<Scope<'static>>()`, and the bump verb that admits it
 ([`BumpAllocator::in_place`](../workgraph/src/witnessed/bump.rs)) restates the same
 assert per store. A field that later brings glue back fails the build at both.
@@ -515,7 +515,7 @@ region death for a spliced node's part storage is chunk deallocation. Their
 storage tiers differ and that difference is what the value channel reads:
 
 - **Raw AST lives in program storage**, a `FrameStorage` at the eternal tier
-  minted by [`program_storage`](../src/machine/core/arena/frame.rs) above the run
+  minted by [`program_storage`](../src/memory/program.rs) above the run
   root ([memory-model.md](memory-model.md)). The eternal rule filters such a
   member out of every pin bundle and reach description, so a value pointing at
   program text reaches nothing.
@@ -541,7 +541,7 @@ reachable from it.
 That fact is a type, [`ProgramExpression` / `ProgramNode`](../src/machine/model/ast/program.rs)
 — `Copy` newtypes whose fields are private to their module, so the only way to
 obtain one is a mint door taking a
-[`ProgramBrand`](../src/machine/core/arena/frame.rs) or an accessor on a value
+[`ProgramBrand`](../src/memory/program.rs) or an accessor on a value
 that already carries the proof. The door's contract is its **parameter type**,
 not a promise: `ProgramBrand<'a>` is invariant in `'a`, so a held brand never
 shortens, and a door's `parts` are therefore taken at program storage's own

@@ -12,10 +12,10 @@ use crate::builtins::test_support::TestRun;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::Symbol;
-use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::{Held, ReturnType, SignatureDraft, SignatureElement, TypeRegistry};
 use crate::machine::{Body, CallFrame, KFunction};
 use crate::machine::{program_storage, run_root_storage};
+use crate::memory::RecordSubstrate;
 use crate::witnessed::{Delivered, FoldedPlacement, Sealed};
 
 /// A `KFunction` whose captured scope lives in `home`'s region, allocated into `home`'s region — a

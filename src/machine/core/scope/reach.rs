@@ -9,15 +9,15 @@
 use std::rc::Rc;
 
 use super::Scope;
+use crate::machine::core::BindingsReferenceFamily;
 use crate::machine::core::bindings::SealedValue;
-use crate::machine::core::carrier_witness::{DeliveredFunction, OpenedFunction, SealedFunction};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
-use crate::machine::core::ref_carriers::BindingsReferenceFamily;
 use crate::machine::core::{
     FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt,
-    KoanStorageProfile, ModuleRefFamily, RegionBrand, product_reaches_region,
+    KoanStorageProfile, RegionBrand, product_reaches_region,
 };
 use crate::machine::model::KeywordSymbol;
+use crate::machine::model::ModuleRefFamily;
 use crate::machine::model::{
     Carried, CarriedFamily, KObject, KType, Module, OperatorGroup, OperatorGroupFamily,
     ReductionMode, RegionEscape, coerce_object_into, copy_or_pin, relocate_object_into,
@@ -26,6 +26,7 @@ use crate::machine::{
     CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, KError, SealedOperatorGroup,
     SplicedCell,
 };
+use crate::memory::{DeliveredFunction, OpenedFunction, SealedFunction};
 use crate::witnessed::{
     Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, SealedExtern, Witnessed,
 };
@@ -41,7 +42,7 @@ impl<'a> Scope<'a> {
     /// carrier opens under. A live scope reference implies a live owner: the cart, a cart ancestor
     /// (through the `FrameStorage.outer` chain), or the run storage holds it for as long as the
     /// scope can run. Stated once here for the whole reach cluster;
-    /// [`scope_frame`](crate::machine::core::scope_frame) is the crate-wide twin, which spells the
+    /// [`Scope::frame`](super::Scope::frame) is the crate-wide twin, which spells the
     /// same invariant out against the step context.
     fn home(&self) -> Rc<FrameStorage> {
         self.region_owner()
@@ -710,7 +711,7 @@ impl<'a> Scope<'a> {
     /// smuggle an ambient borrow into `&'b OperatorGroup<'b>`.
     ///
     /// The envelope carries the description the yoke composed — hosted here, no members — which is
-    /// what [`GroupSeal::of_delivered`](crate::machine::core::carrier_witness::GroupSeal) rests into
+    /// what [`GroupSeal::of_delivered`](crate::memory::GroupSeal) rests into
     /// the registry rather than minting a claim of its own. `members` and `mode` are read at their
     /// own ambient lifetimes: only what the closure *returns* is confined by the brand.
     pub(crate) fn birth_operator_group(

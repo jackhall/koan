@@ -23,7 +23,7 @@ invariant is not a rule Koan is asked to honor but one it has no way to break.
 ## The carrier families
 
 There is **one** value family per storable kind — objects via
-[`CarriedFamily`](../src/machine/model/values/carried.rs), functions via
+[`CarriedFamily`](../src/memory/cell.rs), functions via
 [`KFunctionFamily`](../src/machine/core/kfunction.rs). The witnessed library is
 generic over `Reattachable` families, so a function is a family rather than a
 carrier variant, and both ride the same three carrier states
@@ -32,7 +32,7 @@ carrier variant, and both ride the same three carrier states
 Koan's own type positions name `Delivered` where a value is in transit: a
 finish's result handed to `finalize`, a relocation product crossing a step. At
 rest a binding entry holds a `Sealed`; inside a step a read is an `Opened<'b>`.
-[`StepCarried`](../src/machine/execute/step_carried.rs) types the step's own Done-arm
+[`StepCarried`](../src/machine/execute/step.rs) types the step's own Done-arm
 carrier at the `'step` lifetime, wrapping an `Unhosted` — the envelope minus its home
 pin, since the host is the finalizing node's anchor owner and no door that builds a
 Done-arm value knows it yet. Dispatch's picked overload
@@ -180,7 +180,7 @@ hold any witness state — the pins live one level down, in the library's region
 A composite value's **residence** — every region its borrows reach is covered by the
 destination — is discharged **at construction, by the fold brand**, not by a runtime
 walk. A relocation or bind builds the value inside a `for<'b>` fold closure
-([`FoldingBrand::alloc_object_folded`](../src/machine/core/arena.rs)), where the only
+([`FoldingBrand::alloc_object_folded`](../src/memory/region.rs)), where the only
 inhabitants of `KObject<'b>` are the fold's declared operand views, the brand's own
 allocations, and owned data — all named by the witness the enclosing combinator
 composes. An ambient-lifetime capture is a compile error at the closure signature, so
@@ -201,7 +201,7 @@ destination through a door whose *signature* is the enforcement instead:
   region-hosted: re-homing them into the destination *is* the store.
 - **Raw AST** takes `RegionBrand::alloc_expression`, which admits a
   [`ProgramExpression`](../src/machine/model/ast/program.rs) and nothing else — the marker
-  minted only through a [`ProgramBrand`](../src/machine/core/arena/frame.rs) door. A
+  minted only through a [`ProgramBrand`](../src/memory/program.rs) door. A
   `KObject::KExpression` needs no *coverage* claim of its own either: the marker on its
   payload is the proof that the node's parts run is eternal-tier program storage, and the
   one part kind that could name a producer region lives on the scheduler's own node type,
@@ -260,7 +260,7 @@ rather than adding an obligation class.
 
 Where a seam has to *ask* where a composite lives — the copy-versus-pin decision's
 home-crossing test — it reads the answer off the value:
-[`ContainerSubstrate::homed_in`](../src/machine/model/values/container_substrate.rs)
+[`ContainerSubstrate::homed_in`](../src/memory/container_substrate.rs)
 compares the substrate's own stored description's host region by pointer. A region keeps no
 address table at all, so there is nothing else to consult; and nothing else is needed,
 because the door that placed the substrate is what made the stored host true.

@@ -7,13 +7,13 @@ use std::rc::Rc;
 
 use super::*;
 use crate::machine::ProducerId;
-use crate::machine::core::arena::RegionBrand;
-use crate::machine::core::arena::{FrameStorageExt, run_root_storage};
 use crate::machine::core::{FrameCoverage, FrameReach, FrameStorage};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Scalar;
-use crate::machine::model::values::Carried;
+use crate::memory::Carried;
+use crate::memory::RegionBrand;
+use crate::memory::{FrameStorageExt, run_root_storage};
 use workgraph::witnessed::Sealed;
 
 use crate::builtins::test_support::{

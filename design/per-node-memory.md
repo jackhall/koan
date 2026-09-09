@@ -21,7 +21,7 @@ above the substrate.
 
 `KoanRegion` is `Region<KoanStorageProfile>` over ten sub-arenas. The witness is
 the per-call `Rc<FrameStorage>`, whose held `Rc` heap-pins the region for its life.
-[arena.rs](../src/machine/core/arena.rs) holds only that profile
+[arena.rs](../src/memory/region.rs) holds only that profile
 (`KoanStorageProfile`, `KoanRegion`, `FrameSet`, `CallFrame`) plus a thin
 `RegionBrand` veneer over the library's
 [`RegionHandle`](../workgraph/src/witnessed/region.rs) adding Koan-family-typed
@@ -48,12 +48,12 @@ separate facts make that borrow harmless:
 
 - **The value channel borrows program storage.** Every `KObject::KExpression` cell
   holds parsed AST, whose storage is the eternal-tier
-  [`ProgramStorage`](../src/machine/core/arena/frame.rs) the parse door bumped it
+  [`ProgramStorage`](../src/memory/program.rs) the parse door bumped it
   into. The eternal rule filters such a member out of every reach description
   ([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)),
   so the cell reaches nothing. That tier is typed: the cell holds a
   [`ProgramExpression`](../src/machine/model/ast/program.rs), minted only through a
-  [`ProgramBrand`](../src/machine/core/arena/frame.rs) door, so a node the runtime
+  [`ProgramBrand`](../src/memory/program.rs) door, so a node the runtime
   synthesizes at a per-call brand cannot enter the value channel at all
   ([value-substrates.md § Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
   Shortening the brand into a step is what lets step code borrow long-lived data;
@@ -69,7 +69,7 @@ separate facts make that borrow harmless:
 So the AST-embedding object is **region-pure**, born under the empty
 (foreign-reach-only) set exactly as any region-pure leaf. The quote-capture site
 takes its own door
-([`RegionBrand::alloc_expression`](../src/machine/core/arena.rs), witnessed as
+([`RegionBrand::alloc_expression`](../src/memory/region.rs), witnessed as
 `alloc_expression_witnessed`) rather than the scalar one, for a lifetime reason
 only: `KObject<'a>` is invariant, so a cell holding raw AST has no owned rebuild to
 offer a lifetime-free signature. The door's own signature is the enforcement —
@@ -106,7 +106,7 @@ The value-embedding sites that take a *bare arg* —
 — climb off it the same way: each receives the value it embeds as a delivered
 `Sealed` carrier and folds it into the result's own construction. `attr` / `FROM`
 go through the step context's
-[`alloc_carried_with`](../src/machine/core/arena.rs), which re-projects the value
+[`alloc_carried_with`](../src/memory/region.rs), which re-projects the value
 at the fold brand from the lhs operand's own view (crossed via
 [`BoundArgs::carrier`](../src/machine/core/kfunction/action.rs)), so its reach
 folds in by construction; the Resolved arm goes through the binding scope's own
@@ -145,10 +145,10 @@ region handle. That emptiness is sound as a within-step transient, the producing
 in at close ([`reseal_under`](../workgraph/src/witnessed.rs)) before the carrier is
 stored. The transient is **typed**, not merely disciplined: the step doors return
 the carrier wrapped as a
-[`StepCarried`](../src/machine/execute/step_carried.rs) branded at the step's
+[`StepCarried`](../src/machine/execute/step.rs) branded at the step's
 `'step` lifetime, so the borrow checker rejects any attempt to stash it past its
 construction step, and its sole exit to node storage is
-[`StepCarried::seal_at_step`](../src/machine/execute/step_carried.rs) into
+[`StepCarried::seal_at_step`](../src/machine/execute/step.rs) into
 finalize's fold.
 
 A node's own value terminal is witnessed the same way — a region-pure result (a
@@ -171,7 +171,7 @@ relocation operand exists at Done.
 A read of an *already-built* region-resident value — a bound name, an `ATTR` value
 member, a defined FN object — does **not** rebuild a witness: it pre-exists its
 carrier, so the read bundles it through the confined
-[`RegionBrand::seal_resident`](../src/machine/core/arena.rs) surface, reached by the
+[`RegionBrand::seal_resident`](../src/memory/region.rs) surface, reached by the
 one generic [`Scope::seal_resident`](../src/machine/core/scope/reach.rs) instantiated
 per family, under the reach stored on its binding. `Witnessed::resident` is never
 reached from a builtin, and no read walks a value to recover its reach.
@@ -203,7 +203,7 @@ region** ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs)) — 
 description into that region's reach table, the owned pins folded into that
 region's one deduped union bundle. The binding entry itself owns **nothing**: it is
 a `BindingIndex` beside a resting
-[`SealedValue`](../src/machine/core/carrier_witness.rs), both `Copy` and
+[`SealedValue`](../src/memory/carrier.rs), both `Copy` and
 `Drop`-free. Because bindings are bind-once and a scope's entries never outlive its
 region, entry death and region death are one schedule, so a region-owned union is
 exactly as tight as a per-entry bundle and costs one `Rc` per distinct foreign
@@ -259,7 +259,7 @@ accumulator or deposit list exists to keep consistent alongside it.
 ## The step's coverage
 
 Every re-anchor a step performs runs under one pin bundle: the **step's coverage**,
-a [`FrameCoverage`](../src/machine/core/arena/frame.rs) built at step start over the
+a [`FrameCoverage`](../src/memory/frame.rs) built at step start over the
 slot anchor's own region owner
 ([`Host::step`](../src/machine/execute/harness.rs)). A single `Rc` is the whole of
 it, because that owner's `FrameStorage.outer` chain already pins every ancestor
@@ -321,7 +321,7 @@ nothing branded crosses the step boundary.
   The step `open` bounds its brand above with a
   [`Within<'b, 'run>`](../workgraph/src/witnessed/dormant.rs) token whose declared
   `'run: 'b` the `for<'b>` instantiation discharges, which is what lets the
-  [`ProgramBrand<'run>`](../src/machine/core/arena/frame.rs) the runtime holds be
+  [`ProgramBrand<'run>`](../src/memory/program.rs) the runtime holds be
   stored **unshortened** in the step's `DecideCtx`: that struct keeps
   `'program` distinct from `'step`, related only by its own `'program: 'step`
   bound, and the token discharges it. The brand is invariant, so it could not
@@ -330,7 +330,7 @@ nothing branded crosses the step boundary.
   bundle filters out anyway.
 - **Frame-side reads** fold onto `open` the same way: a frame's own child scope
   opens at a `for<'b>` brand through
-  [`CallFrame::with_scope`](../src/machine/core/arena.rs) — the `&mut self` submit /
+  [`CallFrame::with_scope`](../src/memory/region.rs) — the `&mut self` submit /
   classify paths reach it through `with_node_scope` / `with_current_node_scope`,
   copying out a scalar (an id, a region) where they need no live scope — so no
   `&Scope` rides up a `&mut self` path.
@@ -358,7 +358,7 @@ directly. With every frame-side and seed-side read on `open`, the access surface
 The construction-time scope re-anchor closes the same way: a same-region child
 stores its already-`'a` parent by plain coercion, and the per-call frame child
 builds through the externally-witnessed construction door
-[`build_frame_child_witnessed`](../src/machine/core/arena.rs), which brands the
+[`build_frame_child_witnessed`](../src/memory/region.rs), which brands the
 fresh region and the foreign parent at one `for<'b>` and erases the child
 witness-less. No scope re-anchor survives outside the witnessed substrate.
 

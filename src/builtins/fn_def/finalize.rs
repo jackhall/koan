@@ -593,7 +593,7 @@ pub(crate) fn defer<'a>(
                     return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                         "FN signature slot at part-index {slot_idx} expected a type expression, \
                          got a {} value",
-                        other.ktype(fctx.types()).name(fctx.registries),
+                        fctx.types().ktype_of_carried(other).name(fctx.registries),
                     )))));
                 }
             }

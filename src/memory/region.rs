@@ -1,43 +1,33 @@
-//! The Koan instantiation of the generic [`Region`](crate::witnessed::Region)
-//! storage substrate: `KoanRegion = Region<KoanStorageProfile>` and the Koan-typed `alloc_*`
-//! wrappers over the region's bump. `CallFrame`
-//! — the per-call frame shell over a refcounted `FrameStorage` (the `KoanRegion` plus the ancestor
-//! chain), holding the child `Scope` — also lives here.
+//! The Koan instantiation of the generic [`Region`] storage substrate:
+//! `KoanRegion = Region<KoanStorageProfile>`, the [`FrameStorage`] owner a per-call region hangs
+//! off, and the Koan-typed `alloc_*` brands over the region's bump — [`RegionBrand`] at a frame
+//! lifetime, [`FoldingBrand`] and [`SubstrateDoor`] inside a fold closure.
 //!
-//! The generic region engine lives in [`crate::witnessed::region`]; this file supplies the
-//! Koan policy it runs.
+//! The generic region engine lives in `workgraph`, reached through
+//! [`substrate`](super::substrate); this file supplies the Koan policy it runs. The per-call frame
+//! shell over a `FrameStorage` is [`frame`](super::frame); the program-text tier above the run root
+//! is [`program`](super::program).
 //!
-//! See [per-call-region/README.md](../../../design/per-call-region/README.md) for the carrier
+//! See [per-call-region/README.md](../../design/per-call-region/README.md) for the carrier
 //! set, escaping-value retention, ancestor chain, and TCO frame reuse;
-//! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
+//! [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
-use crate::machine::{CarrierWitness, DeliveredCarried};
+use std::hash::BuildHasher;
 use std::rc::Rc;
 
-use crate::machine::execute::StepCarried;
-
-use super::kfunction::KFunction;
-use super::scope::Scope;
+use super::carrier::DeliveredCarried;
+use super::cell::{CarriedFamily, Held};
+use super::frame::{FrameCoverage, FrameReach};
+use super::substrate::{
+    BumpAllocator, BumpBackedMap, Delivered, DropFree, FoldedPlacement, Reattachable, Region,
+    RegionHandle, RegionHost, Retained, Sealed, StepContext, StorageProfile, Witnessed,
+    reattachable,
+};
+use crate::machine::core::KFunction;
+use crate::machine::core::Scope;
 use crate::machine::model::KType;
-use crate::machine::model::{
-    Carried, CarriedFamily, ContainerSubstrate, Held, KObject, ProgramExpression, Scalar,
-};
-use crate::witnessed::reattachable;
-use crate::witnessed::{
-    BumpAllocator, Delivered, DropFree, FoldedPlacement, Reattachable, Region, RegionHandle,
-    StepContext, StorageProfile, Witnessed,
-};
-
-mod frame;
-mod step_allocator;
-
-pub(crate) use frame::FrameStorageExt;
-pub use frame::{
-    CallFrame, FrameCoverage, FrameReach, FrameStorage, ProgramBrand, ProgramStorage, RunWriter,
-    program_storage, run_root_storage,
-};
-pub use step_allocator::StepAllocator;
+use crate::machine::model::{ContainerSubstrate, KObject, ProgramExpression, Scalar};
 
 /// The Koan workload's storage declaration — the frame-owner type its reach descriptions name, and
 /// nothing else.
@@ -47,7 +37,7 @@ pub use step_allocator::StepAllocator;
 /// a bumped run of `&str`, a `Module` with its path and member tables bump-hosted, and a
 /// [`Scope`] with its binding tables built over the same allocator and its own destructor
 /// structurally absent. See
-/// [value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
+/// [value-substrates.md § Untyped arenas](../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
 ///
 /// A [`TypeSymbol`](crate::machine::model::TypeSymbol) and a [`KType`] need no storage at
 /// all: both are lifetime-free `Copy` handles — a name's hash digest and an interned registry
@@ -80,7 +70,7 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 /// is sealed to `workgraph`, so the only route to a region is a library-provisioned [`FrameStorage`],
 /// never an ambient region reference Koan mints itself.
 #[derive(Clone, Copy)]
-pub struct RegionBrand<'a>(pub(crate) RegionHandle<'a, KoanStorageProfile>);
+pub struct RegionBrand<'a>(pub(crate) RegionHandle<'a>);
 
 impl<'a> RegionBrand<'a> {
     /// The bare region this brand authorizes — for identity compares (`ptr::eq`, `pins_region`). A
@@ -96,7 +86,7 @@ impl<'a> RegionBrand<'a> {
     /// library's own `HasRegionHandle` impls for `RegionHandle`/`(RegionHandle, T)` discharge their
     /// obligation with no koan-side impl. A closure that needs the koan-typed `alloc_*` veneer back
     /// rewraps locally: `RegionBrand(handle)`.
-    pub(crate) fn handle(self) -> RegionHandle<'a, KoanStorageProfile> {
+    pub(crate) fn handle(self) -> RegionHandle<'a> {
         self.0
     }
 
@@ -139,36 +129,14 @@ impl<'a> RegionBrand<'a> {
     /// entry-glue proof itself. A table that keeps **mutating** — a scope's binding tables — is built
     /// over the same allocator's raw seam, which is where the `Copy` guard stops travelling with the
     /// bytes and the writer restates it with a `const` assert at the declaration naming its entry
-    /// types ([`bump_table`](super::bindings::bump_table)).
+    /// types ([`bump_table`]).
     pub(crate) fn allocator(self) -> BumpAllocator<'a> {
         self.0.allocator()
     }
 
-    /// The witnessed-allocation surface for an owned leaf built fresh inside the brand. Born under
-    /// a description hosted in this region with **no members**: [`Self::alloc_scalar`] stores the
-    /// value and [`Self::seal_resident`] names
-    /// the region-pure obligation, so the active frame is deliberately excluded from the pins. The
-    /// producing frame is folded in only at finalize/close (the scope-reach seal), so a
-    /// region-resident value never strong-owns its own frame (the `region → object → frame` cycle that
-    /// would keep the frame's `Rc` alive forever and defeat the refcount-driven region free).
-    ///
-    /// The within-step transient invariant is typed: the member-less carrier pins nothing, so it
-    /// returns as a [`StepCarried`] branded at this brand's own `'a` — in production a step's
-    /// rank-2 open lifetime — and the borrow checker rejects any use past the step. The active
-    /// frame pins the region across the step; the seal that moves the product into node storage is
-    /// where finalize's fold names the producer in the carrier's own reach.
-    ///
-    /// [`Scalar`] is region-purity as a signature: a value that references another region cannot
-    /// spell itself as one, and takes the `yoke` / `merge` path or
-    /// [`Self::alloc_expression_witnessed`] instead.
-    pub(crate) fn alloc_scalar_witnessed(self, scalar: Scalar) -> StepCarried<'a> {
-        StepCarried::born(
-            self.seal_resident::<CarriedFamily>(Carried::Object(self.alloc_scalar(scalar))),
-        )
-    }
-
-    /// The store for a `#(...)` quote's body as data — the shape [`Self::alloc_scalar_witnessed`]
-    /// cannot take, since `KObject<'a>` is invariant and raw AST has no `'static` rebuild. The
+    /// The store for a `#(...)` quote's body as data — the shape
+    /// [`alloc_scalar`](Self::alloc_scalar) cannot take, since `KObject<'a>` is invariant and raw
+    /// AST has no `'static` rebuild. The
     /// signature is the enforcement: the parameter is a
     /// [`ProgramExpression`](crate::machine::model::ast::ProgramExpression), so the node's parts run
     /// is program-storage hosted by type, and the cell the door bumps here borrows nothing a seal
@@ -178,17 +146,6 @@ impl<'a> RegionBrand<'a> {
     /// and it costs region death nothing — an expression's parts are already bump-hosted runs.
     pub(crate) fn alloc_expression(self, expression: ProgramExpression<'a>) -> &'a KObject<'a> {
         self.allocator().value(KObject::KExpression(expression))
-    }
-
-    /// [`Self::alloc_expression`] bundled as the resident carrier, sealed under the same
-    /// member-less own-region description [`Self::alloc_scalar_witnessed`] mints.
-    pub(crate) fn alloc_expression_witnessed(
-        self,
-        expression: ProgramExpression<'a>,
-    ) -> StepCarried<'a> {
-        StepCarried::born(
-            self.seal_resident::<CarriedFamily>(Carried::Object(self.alloc_expression(expression))),
-        )
     }
 
     /// Bundle a value **already resident in this brand's region** whose borrows reach nothing — the
@@ -207,7 +164,7 @@ impl<'a> RegionBrand<'a> {
     pub(crate) fn seal_resident<'v: 'a, T: Reattachable + DropFree>(
         self,
         value: T::At<'v>,
-    ) -> Witnessed<T, CarrierWitness> {
+    ) -> Witnessed<T> {
         // A mint with no sources composes nothing, so the retained bundle is empty and the frozen
         // description names this region's owner as host and no member at all.
         self.seal_reaching(value, self.0.mint_retained(&[]))
@@ -226,7 +183,7 @@ impl<'a> RegionBrand<'a> {
         self,
         value: T::At<'v>,
         reach: &'a FrameReach,
-    ) -> Witnessed<T, CarrierWitness> {
+    ) -> Witnessed<T> {
         self.0.seal_reaching(value, reach)
     }
 
@@ -237,7 +194,7 @@ impl<'a> RegionBrand<'a> {
     pub(crate) fn deliver_resident<'v: 'a, T: Reattachable + DropFree>(
         self,
         value: T::At<'v>,
-    ) -> Delivered<T, CarrierWitness, FrameStorage> {
+    ) -> Delivered<T> {
         self.0.deliver_resident(value)
     }
 
@@ -253,10 +210,10 @@ impl<'a> RegionBrand<'a> {
     /// module's, not its window scope's — reaches this door through its own brand.
     pub(crate) fn lift_resident<T: Reattachable + DropFree>(
         self,
-        sealed: crate::witnessed::Sealed<T, CarrierWitness>,
-    ) -> Delivered<T, CarrierWitness, FrameStorage> {
+        sealed: Sealed<T>,
+    ) -> Delivered<T> {
         Delivered::lift(
-            crate::witnessed::Retained::from_sealed(sealed),
+            Retained::from_sealed(sealed),
             self.0
                 .host()
                 .upgrade()
@@ -277,7 +234,7 @@ impl<'a> RegionBrand<'a> {
 #[derive(Clone, Copy)]
 pub struct FoldingBrand<'a> {
     brand: RegionBrand<'a>,
-    placement: FoldedPlacement<'a, KoanStorageProfile>,
+    placement: FoldedPlacement<'a>,
 }
 
 impl<'a> std::ops::Deref for FoldingBrand<'a> {
@@ -293,7 +250,7 @@ impl<'a> FoldingBrand<'a> {
     /// closure alongside the operands, and its `'a` brand keeps it confined there — so this
     /// constructor is callable only where the enclosing combinator already folds the operands' reach
     /// into the result.
-    pub(crate) fn in_fold_closure(placement: FoldedPlacement<'a, KoanStorageProfile>) -> Self {
+    pub(crate) fn in_fold_closure(placement: FoldedPlacement<'a>) -> Self {
         FoldingBrand {
             brand: RegionBrand(placement.handle()),
             placement,
@@ -353,7 +310,7 @@ impl<'a> FoldingBrand<'a> {
 
     /// Store one container cell at this fold's own brand, handing back the resident `&'a Held<'a>`
     /// borrow the sectioned alloc door takes as its payload
-    /// ([`Sectioned::build`](crate::witnessed::Sectioned::build)). Sound by the same rank-2
+    /// ([`Sectioned::build`](super::substrate::Sectioned::build)). Sound by the same rank-2
     /// fold-brand argument as [`Self::alloc_object_folded`]: the cell is typed at the brand lifetime,
     /// so an ambient-lifetime capture is a compile error at this signature. Residing the cell before
     /// the door runs is what ties it to the same `'a` the container's run descriptions are interned
@@ -377,7 +334,7 @@ impl<'a> FoldingBrand<'a> {
 /// proof** its per-cell reach verdicts are read under.
 ///
 /// A cell that keeps borrowing a foreign source hands the sectioned alloc door that source's stored
-/// description ([`CellReach::Pinned`](crate::witnessed::CellReach::Pinned)), and reading a
+/// description ([`CellReach::Pinned`](super::substrate::CellReach::Pinned)), and reading a
 /// description's members back out is sound only while something pins every region it names. Inside a
 /// fold closure the operands' pins are held by the enclosing combinator — but a `for<'b>` closure has
 /// no route back to them, so the coverage is captured at the call site and moved in. Pairing it with
@@ -438,7 +395,7 @@ reattachable! {
 /// newtype and union-variant constructors and the `CATCH` `Result` build. Layout-invariant: a thin
 /// pointer and a `Copy` `KType` handle, representation independent of `'r`.
 pub struct RegionTypeFamily;
-reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, KType));
+reattachable!(RegionTypeFamily => (RegionHandle<'r>, KType));
 
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
@@ -487,7 +444,7 @@ pub(crate) trait KoanRegionExt {
     fn yoke_branded<T: Reattachable + DropFree, F>(
         owner: Rc<FrameStorage>,
         build: F,
-    ) -> Delivered<T, CarrierWitness, FrameStorage>
+    ) -> Delivered<T>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>;
 
@@ -520,7 +477,7 @@ impl KoanRegionExt for KoanRegion {
     fn yoke_branded<T: Reattachable + DropFree, F>(
         owner: Rc<FrameStorage>,
         build: F,
-    ) -> Delivered<T, CarrierWitness, FrameStorage>
+    ) -> Delivered<T>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>,
     {
@@ -539,5 +496,63 @@ impl KoanRegionExt for KoanRegion {
     }
 }
 
-#[cfg(test)]
-mod tests;
+/// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
+/// set. `RegionHost` lazily mints its region on first allocation — reached by the child `Scope`
+/// [`CallFrame::new`](super::frame::CallFrame::new) builds immediately, so a constructed frame's
+/// region is minted by the time anything reads it — and the `outer` link chains the
+/// lexical-ancestor frames' storage alive. An escaping value (a returned closure, a module frame)
+/// pins *this* — not the [`CallFrame`](super::frame::CallFrame) shell — so a tail hop's shell can
+/// drop outright while the escapee's captured environment rides the old `FrameStorage` it still
+/// holds.
+/// The library's raw-region constructor is sealed to `workgraph`, so nothing outside the library
+/// can mint a `KoanRegion` directly; the Koan-typed [`RegionBrand`] mint over a `FrameStorage` lives
+/// on [`FrameStorageExt`] (an extension trait, since a type alias takes no inherent impls of its own).
+pub type FrameStorage = RegionHost<KoanStorageProfile>;
+
+/// The run-root storage: a fresh run region with no `outer` link, stamped at the eternal tier
+/// ([`RegionHost::is_eternal`]) so anything holding it can tell the run region from a per-call one.
+/// Held by `run_program` (and the test harness) so the run-root scope's region has an owning Rc;
+/// [`CallFrame::adopting`](super::frame::CallFrame::adopting) reuses it as the run frame's storage,
+/// and the run-root scope reads it back as its region owner through the region's own host
+/// back-link. Public so an integration test can stand one up: it mints nothing itself, only
+/// building the library's `RegionHost` shell whose region lazily mints on first allocation.
+pub fn run_root_storage() -> Rc<FrameStorage> {
+    RegionHost::fresh_eternal()
+}
+
+/// Koan's [`RegionBrand`] mint over a [`FrameStorage`] — an extension trait because `FrameStorage`
+/// is a `workgraph` type alias, so Koan cannot add an inherent method to it directly.
+pub(crate) trait FrameStorageExt {
+    /// Mint this storage's region's [`RegionBrand`] allocation capability. Minting is the library's
+    /// [`RegionHandle::from_owner`] rule (it requires the storage that *owns* the region, via its
+    /// `RegionOwner` impl); this method pairs it with the Koan veneer, and a bare `&KoanRegion`
+    /// exposes no `alloc_*` of its own.
+    fn brand(&self) -> RegionBrand<'_>;
+}
+
+impl FrameStorageExt for FrameStorage {
+    fn brand(&self) -> RegionBrand<'_> {
+        RegionBrand(RegionHandle::from_owner(self))
+    }
+}
+
+/// Build one of a scope's tables over its region bump, **proving at compile time** that its entries
+/// carry no drop glue. The bump runs no destructor, so a `Drop`-bearing key or value would silently
+/// leak whatever it owns; the assert is monomorphization-checked, so a future entry field that
+/// brings glue back is a build error at the declaration that admitted it rather than a leak.
+///
+/// This is where each table's storage choice is stated: all five of a scope's tables route here, so
+/// none has an unstated exemption. It lives beside the brand rather than beside the tables because
+/// it is the one construction that names the map implementation directly — the substrate rule keeps
+/// that spelling inside `memory`.
+pub(crate) fn bump_table<'a, K, V, S: BuildHasher + Default>(
+    brand: RegionBrand<'a>,
+) -> BumpBackedMap<'a, K, V, S> {
+    const {
+        assert!(
+            !std::mem::needs_drop::<K>() && !std::mem::needs_drop::<V>(),
+            "a bump-backed table's entries must carry no drop glue: the bump runs no destructor",
+        )
+    };
+    hashbrown::HashMap::with_hasher_in(S::default(), brand.allocator())
+}

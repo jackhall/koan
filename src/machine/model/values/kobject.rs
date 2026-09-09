@@ -14,13 +14,13 @@ use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegis
 use crate::witnessed::{BumpVec, CellInput, CellReach, Sectioned};
 use smallvec::SmallVec;
 
-use super::container_substrate::{
+use super::{KKey, Module};
+use crate::memory::Rehomed;
+use crate::memory::container_substrate::{
     HeldCells, ListLayout, PayloadLayout, RecordLayout, held_copy_cost,
 };
-use super::rehomed::Rehomed;
-use super::{
-    ContainerSubstrate, DictSubstrate, Held, KKey, ListSubstrate, Module, PayloadSubstrate,
-    RecordSubstrate,
+use crate::memory::{
+    ContainerSubstrate, DictSubstrate, Held, ListSubstrate, PayloadSubstrate, RecordSubstrate,
 };
 
 mod equality;
@@ -205,7 +205,7 @@ impl<'a> KObject<'a> {
         items: &[Held<'a>],
         types: &TypeRegistry,
     ) -> KObject<'a> {
-        let element = types.join_iter(items.iter().map(|i| i.ktype(types)));
+        let element = types.join_iter(items.iter().map(|i| types.ktype_of(i)));
         KObject::List(alloc_list(door, items), types.list(element))
     }
 
@@ -261,7 +261,7 @@ impl<'a> KObject<'a> {
         types: &TypeRegistry,
     ) -> KObject<'a> {
         let key = types.join_iter(map.keys().map(|k| k.ktype()));
-        let value = types.join_iter(map.values().map(|v| v.ktype(types)));
+        let value = types.join_iter(map.values().map(|v| types.ktype_of(v)));
         KObject::Dict(alloc_dict(door, map), types.dict(key, value))
     }
 
@@ -313,8 +313,11 @@ impl<'a> KObject<'a> {
         fields: &[(BinderSymbol, Held<'a>)],
         types: &TypeRegistry,
     ) -> KObject<'a> {
-        let field_types =
-            Record::from_pairs(fields.iter().map(|(name, cell)| (*name, cell.ktype(types))));
+        let field_types = Record::from_pairs(
+            fields
+                .iter()
+                .map(|(name, cell)| (*name, types.ktype_of(cell))),
+        );
         KObject::Record(
             alloc_record(
                 door,
@@ -437,7 +440,7 @@ impl<'a> KObject<'a> {
     /// A [`Scalar`] embeds no `&'a` region borrow and no [`Held`] cell, so it cannot reference any dep
     /// the construction fold was handed and the dep-witness union over it would be pure
     /// over-retention: the combinator gate
-    /// ([`alloc_object_scalar`](crate::machine::core::StepAllocator::alloc_object_scalar)) routes a
+    /// ([`alloc_object_scalar`](crate::machine::execute::StepAllocator::alloc_object_scalar)) routes a
     /// hit to the no-fold path, where it seals with an empty reach.
     ///
     /// A `KString` is **not** one: its bytes live in a region's bump, so a rebuild has to re-bump them
@@ -1101,7 +1104,7 @@ impl<'a> KObject<'a> {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    item.write_summary(f, registries)?;
+                    write!(f, "{}", registries.held_summary(item))?;
                 }
                 f.write_str("]")
             }
@@ -1112,7 +1115,7 @@ impl<'a> KObject<'a> {
                         f.write_str(", ")?;
                     }
                     write!(f, "{key}: ")?;
-                    value.write_summary(f, registries)?;
+                    write!(f, "{}", registries.held_summary(value))?;
                 }
                 f.write_str("}")
             }
@@ -1133,7 +1136,7 @@ impl<'a> KObject<'a> {
                         f.write_str(", ")?;
                     }
                     write!(f, "{} = ", display_label(*name, registries))?;
-                    value.write_summary(f, registries)?;
+                    write!(f, "{}", registries.held_summary(value))?;
                 }
                 f.write_str("}")
             }

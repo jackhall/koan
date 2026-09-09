@@ -576,7 +576,7 @@ module value rides the value channel's Object arm as
 principal signature — `ktype()` reports
 `KType::Signature { content, .. }` sharing the module's sealed self-sig content, so dispatch
 trusts the carried self-sig. A signature value rides the
-[`Carried::Type`](../../src/machine/model/values/carried.rs) arm as
+[`Carried::Type`](../../src/memory/cell.rs) arm as
 `KType::Signature { schema, .. }` — the same arm that carries `Number`,
 `Str`, and builtin type values. A module value flows through `LET`, ATTR, and function
 calls like any other value: there is no separate pack/unpack form, no

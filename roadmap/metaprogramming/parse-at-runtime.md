@@ -8,7 +8,7 @@ between "combine quotes with ordinary functions" and a metaprogramming story
 that can assemble a declaration from data.
 
 The missing capability is storage, not syntax. `crate::parse::parse` takes a
-`ProgramBrand` ([`arena/frame.rs`](../../src/machine/core/arena/frame.rs)),
+`ProgramBrand` ([`memory/program.rs`](../../src/memory/program.rs)),
 mintable only from a `ProgramStorage`, and the only one that exists is a local
 in
 [`interpret_with_writer_path`](../../src/machine/execute/interpret.rs).
@@ -72,7 +72,7 @@ what makes the correct brand the reachable one.
 ## Dependencies
 
 **Requires:** none — `ProgramBrand` and `ProgramStorage` already exist in
-[`arena/frame.rs`](../../src/machine/core/arena/frame.rs); this item threads
+[`memory/program.rs`](../../src/memory/program.rs); this item threads
 them to a reachable place.
 
 **Unblocks:** none. [EVAL splices in place](eval-splices-in-place.md) is

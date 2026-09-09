@@ -4,7 +4,7 @@ error[E0624]: associated function `in_fold_closure` is private
 9 |     let _forge = FoldingBrand::in_fold_closure;
   |                                ^^^^^^^^^^^^^^^ private associated function
   |
- ::: src/machine/core/arena.rs
+ ::: src/memory/region.rs
   |
-  |     pub(crate) fn in_fold_closure(placement: FoldedPlacement<'a, KoanStorageProfile>) -> Self {
-  |     ----------------------------------------------------------------------------------------- private associated function defined here
+  |     pub(crate) fn in_fold_closure(placement: FoldedPlacement<'a>) -> Self {
+  |     --------------------------------------------------------------------- private associated function defined here

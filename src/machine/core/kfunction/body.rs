@@ -9,7 +9,7 @@ use crate::machine::model::KType;
 use crate::machine::model::MemberCoercion;
 use crate::source::SourceRef;
 
-use crate::machine::core::carrier_witness::SealedFunction;
+use crate::memory::SealedFunction;
 
 /// Return-type contract a tail-replace carries to its Done arm, for both the
 /// declared-return check and the error-frame label. A function-less return-typed tail (a

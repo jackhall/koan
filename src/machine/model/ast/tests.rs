@@ -7,7 +7,7 @@ use crate::machine::model::ast::{
 use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
-use crate::machine::model::values::Held;
+use crate::memory::Held;
 use crate::source::Spanned;
 
 fn kw(s: &str) -> ExpressionPart<'_> {
@@ -106,7 +106,7 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
         }
         other => panic!(
             "expected the unlowered-name carrier, got {}",
-            other.summarize(&registries)
+            registries.held_summary(&other)
         ),
     }
 }
@@ -122,7 +122,7 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
     let part = ExpressionPart::Type(type_token("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
     let held = part.resolve_for(&slot, scope, types);
-    assert_eq!(held.ktype(types), KType::of_kind(KKind::ProperType));
+    assert_eq!(types.ktype_of(&held), KType::of_kind(KKind::ProperType));
     assert!(held.as_type().is_none(), "it carries no type handle");
     assert!(held.as_object().is_none(), "and it is not a value");
 }

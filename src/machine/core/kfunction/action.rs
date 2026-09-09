@@ -9,11 +9,8 @@ use std::rc::Rc;
 
 use super::body::ReturnContract;
 use crate::machine::core::bindings::WriteOp;
-use crate::machine::core::carrier_witness::{SealedFunction, SplicedCell};
-use crate::machine::core::{
-    CallFrame, FrameStorage, LexicalFrame, ProgramBrand, RegionBrand, RunWriter, Scope,
-    StepAllocator,
-};
+use crate::machine::core::{CallFrame, LexicalFrame, ProgramBrand, RegionBrand, RunWriter, Scope};
+use crate::machine::execute::StepAllocator;
 use crate::machine::execute::StepCarried;
 use crate::machine::model::BinderSymbol;
 #[cfg(test)]
@@ -31,6 +28,7 @@ use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{
     BindingIndex, DeclarationSite, DeliveredCarried, Installer, KError, KErrorKind,
 };
+use crate::memory::{SealedFunction, SplicedCell};
 use crate::scheduler::Deps;
 use crate::source::SourceRef;
 use crate::witnessed::{BumpAllocator, BumpVec};
@@ -48,22 +46,6 @@ macro_rules! try_action {
             Err(error) => return $crate::machine::core::kfunction::action::Action::done(Err(error)),
         }
     };
-}
-
-/// The `Rc<FrameStorage>` that owns `scope`'s region — the witness a value built into that region is
-/// `yoke`d under (the object-family construction inversion: a region-resident object is born bundled
-/// with its frame as its reach). The link a scope derives its owner through is `Weak` — an in-region
-/// value holds no owning `Rc` back to its frame — and upgrades for as long as the scope can run: a **producing**
-/// scope during its own step (the producing node holds the frame); a **consumer/current** scope
-/// during a step (the slot's cart — or a cart ancestor via the `FrameStorage.outer` chain, for a
-/// `YokedChild` overlay scope — is held by the step machinery for the whole step); or the **run
-/// root** (the run storage is held by the interpreter for the whole run). The single owner of this
-/// invariant's assertion; step-scoped callers should route through `DecideCtx::dest_frame` or a
-/// finish's `ctx.frame()` instead of upgrading directly.
-pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
-    scope.region_owner().upgrade().expect(
-        "a scope's region owner is held while the scope can run: its cart (or a cart ancestor) for the step, the run storage for the run root",
-    )
 }
 
 /// One bound argument slot: the resolved value and, when the argument arrived as a delivered
@@ -257,7 +239,7 @@ pub fn require_identifier_name<'a>(
         Some(Held::Name(BinderSymbol::Value(v))) => Ok(*v),
         Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {spelling} must be a bare identifier, got `{}`",
-            other.ktype(&registries.types).name(registries),
+            registries.types.ktype_of(other).name(registries),
         )))),
         None => Err(KError::new(KErrorKind::MissingArg(spelling.to_string()))),
     }
@@ -456,7 +438,7 @@ pub struct FinishCtx<'a, 'r> {
 impl<'a, 'r> FinishCtx<'a, 'r> {
     /// Build a `FinishCtx` from a scope alone, reconstructing the step context over the scope's own
     /// frame — for a synchronous site that holds a scope but no live step context (a resolve
-    /// combinator's `Done` arm, a unit test). `scope_frame(scope)` names the same dest frame the
+    /// combinator's `Done` arm, a unit test). `scope.frame()` names the same dest frame the
     /// harness step context wraps at wake, so both allocate in the same region. A site that already
     /// holds the live step context (a builtin body) uses [`BodyCtx::finish_ctx`] instead.
     /// The scratch it fills is the scope's own region: this path holds no drain arena, and a

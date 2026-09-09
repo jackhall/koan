@@ -360,7 +360,7 @@ fn resolve_module_and_signature<'a>(
             Some(held) => KError::new(KErrorKind::TypeMismatch {
                 arg: name.text().to_string(),
                 expected: expected.to_string(),
-                got: held.ktype(&registries.types).name(registries),
+                got: registries.types.ktype_of(held).name(registries),
             }),
             None => KError::new(KErrorKind::MissingArg(name.text().to_string())),
         }

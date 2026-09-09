@@ -79,7 +79,7 @@ fn let_t_cycle_errors() {
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = runtime.read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)));
+    let res = runtime.read_edge_result_with(edge, |v| format!("{:?}", types.ktype_of_carried(v)));
     match res {
         // The bare-leaf RHS resolves through the memoized type-expr bridge, whose miss
         // surfaces the elaborator's `unknown type name` diagnostic naming `Ty`. The
@@ -123,7 +123,7 @@ fn let_type_class_with_non_type_value_errors() {
         let types = test_run.registry_handle();
         match test_run
             .runtime
-            .read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)))
+            .read_edge_result_with(edge, |v| format!("{:?}", types.ktype_of_carried(v)))
         {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
@@ -253,7 +253,7 @@ fn let_parameterized_type_lhs_matches_no_overload() {
     let types = test_run.registry_handle();
     let res = test_run
         .runtime
-        .read_edge_result_with(edges[0], |v| format!("{:?}", v.ktype(&types)));
+        .read_edge_result_with(edges[0], |v| format!("{:?}", types.ktype_of_carried(v)));
     match res {
         Err(e) => {
             assert!(
