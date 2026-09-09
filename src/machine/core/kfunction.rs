@@ -82,6 +82,19 @@ crate::memory::reattachable! {
     KFunctionFamily => &'r KFunction<'r>,
 }
 
+impl<'a> FoldingBrand<'a> {
+    /// Store a [`KFunction`] built at this fold's own brand — the door [`KFunction::alloc_captured`]
+    /// is born through. One line over [`FoldingBrand::alloc_folded`], which carries the rank-2
+    /// soundness argument: the callable is typed at the brand lifetime, so its captured-scope borrow
+    /// is the fold's own operand view and an ambient-lifetime capture is a compile error here. A
+    /// `KFunction` is `Copy`, its signature text already re-homed at this same region by
+    /// [`ExpressionSignature::mint`](crate::machine::model::ExpressionSignature). Assembling the
+    /// struct literal stays with this file, which owns the private fields; this door only stores.
+    pub(crate) fn alloc_function_folded(self, f: KFunction<'a>) -> &'a KFunction<'a> {
+        self.alloc_folded(f)
+    }
+}
+
 /// A callable **in transit from its birth**: the merge-born `KFunction` carrier paired with the home
 /// pin its birth composed. What [`KFunction::alloc_captured`] hands back and what every registration
 /// door composes from — the seal ([`OverloadSeal::of_delivered`](crate::machine::core::OverloadSeal))

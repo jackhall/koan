@@ -957,6 +957,7 @@ digraph {
     "koan::memory::container_substrate" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::memory::container_substrate" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::memory::container_substrate" -> "koan::memory::frame" [label="uses", style="dashed"];
+    "koan::memory::container_substrate" -> "koan::memory::region" [label="uses", style="dashed"];
     "koan::memory::container_substrate" -> "koan::memory::substrate" [label="uses", style="dashed"];
     "koan::memory::frame" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::memory::frame" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -964,9 +965,7 @@ digraph {
     "koan::memory::frame" -> "koan::memory::substrate" [label="uses", style="dashed"];
     "koan::memory::program" -> "koan::memory::region" [label="uses", style="dashed"];
     "koan::memory::program" -> "koan::memory::substrate" [label="uses", style="dashed"];
-    "koan::memory::region" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::memory::region" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::memory::region" -> "koan::memory::container_substrate" [label="uses", style="dashed"];
     "koan::memory::region" -> "koan::memory::frame" [label="uses", style="dashed"];
     "koan::memory::region" -> "koan::memory::substrate" [label="uses", style="dashed"];
     "koan::memory::rehomed" -> "koan::machine::model" [label="uses", style="dashed"];

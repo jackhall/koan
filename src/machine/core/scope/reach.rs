@@ -331,7 +331,7 @@ impl<'a> Scope<'a> {
         &self,
         build: impl for<'b> FnOnce(FoldingBrand<'b>) -> KObject<'b>,
     ) -> &'a KObject<'a> {
-        KoanRegion::fold_witnessed(self.home(), |brand| {
+        KoanRegion::fold_witnessed::<CarriedFamily>(self.home(), |brand| {
             Carried::Object(brand.alloc_object_folded(build(brand)))
         })
         .adopt_into(self.brand().handle())

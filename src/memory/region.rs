@@ -16,17 +16,13 @@
 use std::hash::BuildHasher;
 use std::rc::Rc;
 
-use super::container_substrate::ContainerSubstrate;
 use super::frame::{FrameCoverage, FrameReach};
 use super::substrate::{
     BumpAllocator, BumpBackedMap, Delivered, DropFree, FoldedPlacement, Reattachable, Region,
     RegionHandle, RegionHost, Retained, Sealed, StepContext, StorageProfile, Witnessed,
     reattachable,
 };
-use crate::machine::core::KFunction;
 use crate::machine::model::KType;
-use crate::machine::model::{CarriedFamily, DeliveredCarried, Held};
-use crate::machine::model::{KObject, ProgramExpression, Scalar};
 
 /// The Koan workload's storage declaration — the frame-owner type its reach descriptions name, and
 /// nothing else.
@@ -89,26 +85,6 @@ impl<'a> RegionBrand<'a> {
         self.0
     }
 
-    /// Store an owned, region-free leaf into the region (no value holds an owning `Rc` back to a
-    /// region, so the store forms no back-edge). Yields a co-located `&'a` resident.
-    ///
-    /// [`Scalar`] is the gate, and it is the *signature*: a value that borrows any region has no way
-    /// to spell itself as one, so it cannot reach this door and takes a fold or merge whose
-    /// composition names what it borrows instead. The cell lands in the bump, so region death frees it
-    /// with the chunks.
-    pub fn alloc_scalar(self, scalar: Scalar) -> &'a KObject<'a> {
-        self.allocator().value(scalar.into_object())
-    }
-
-    /// [`Self::alloc_scalar`] for a string: copy the bytes into this region and store the cell around
-    /// the co-located borrow. A separate door because a string is exactly the leaf whose
-    /// *representation* is region-hosted even though its meaning is owned — so re-homing the bytes is
-    /// the store, and there is nothing for a caller to get wrong between the two.
-    pub fn alloc_string(self, text: &str) -> &'a KObject<'a> {
-        let allocator = self.allocator();
-        allocator.value(KObject::KString(allocator.text(text)))
-    }
-
     /// **This brand's region bump as a [`BumpAllocator`]** — the door every byte a value family slot
     /// holds is born through: a string's characters ([`KObject::KString`], a
     /// [`KKey::String`](crate::machine::model::KKey) dict key) through `text`, an expression's parts
@@ -131,20 +107,6 @@ impl<'a> RegionBrand<'a> {
     /// types ([`bump_table`]).
     pub(crate) fn allocator(self) -> BumpAllocator<'a> {
         self.0.allocator()
-    }
-
-    /// The store for a `#(...)` quote's body as data — the shape
-    /// [`alloc_scalar`](Self::alloc_scalar) cannot take, since `KObject<'a>` is invariant and raw
-    /// AST has no `'static` rebuild. The
-    /// signature is the enforcement: the parameter is a
-    /// [`ProgramExpression`](crate::machine::model::ast::ProgramExpression), so the node's parts run
-    /// is program-storage hosted by type, and the cell the door bumps here borrows nothing a seal
-    /// would have to pin.
-    ///
-    /// The cell lands in this brand's own region bump, so its residence is where it was placed,
-    /// and it costs region death nothing — an expression's parts are already bump-hosted runs.
-    pub(crate) fn alloc_expression(self, expression: ProgramExpression<'a>) -> &'a KObject<'a> {
-        self.allocator().value(KObject::KExpression(expression))
     }
 
     /// Bundle a value **already resident in this brand's region** whose borrows reach nothing — the
@@ -256,67 +218,28 @@ impl<'a> FoldingBrand<'a> {
         }
     }
 
-    /// Store a value built at this fold's own brand. Sound without a per-value audit: the input is
-    /// typed at the brand lifetime, and inside a `for<'b>` fold closure the only inhabitants of
-    /// `KObject<'b>` are values derived from the fold's declared operand views, the brand's own
-    /// allocations, and owned/`'static` data — all named by the witness the enclosing combinator
-    /// composes. An ambient-lifetime capture is a compile error at this signature (a
-    /// `KObject<'ambient>` cannot coerce to `KObject<'b>`, since `'b` has no outlives relation to any
-    /// enclosing lifetime), so the store is discharged at compile time by the placement capability,
-    /// with no runtime audit at all.
+    /// **Store a value built at this fold's own brand** — the one folded-residence door; every
+    /// typed spelling in the value layer is a one-line call to it.
     ///
-    /// The cell lands in the destination's bump, through the fold placement's own
-    /// [`allocator`](FoldedPlacement::allocator): a `KObject` is `Copy`, so region death frees the
-    /// cell as a bump chunk and runs no per-slot glue. The placement is what makes this a *residence*
-    /// door rather than the untargeted [`RegionBrand::allocator`] — the brand's `'a` is the fold's
-    /// own, so a value resident somewhere else cannot be written here.
-    pub(crate) fn alloc_object_folded(self, o: KObject<'a>) -> &'a KObject<'a> {
-        self.placement.allocator().value(o)
-    }
-
-    /// Store a [`KFunction`] built at this fold's own brand — the door
-    /// [`KFunction::alloc_captured`](crate::machine::core::KFunction) is born through. Sound by the
-    /// same rank-2 fold-brand argument as [`Self::alloc_object_folded`]: the callable is typed at
-    /// the brand lifetime, so its captured-scope borrow is the fold's own operand view and an
-    /// ambient-lifetime capture is a compile error at this signature. That is what turns "a function
-    /// borrows only the scope it captures" from an asserted claim into the composition's own fact —
-    /// the merge's source operand names the captured scope's region, and the closure can reach no
-    /// other.
+    /// Sound without a per-value audit, for one argument that does not vary with `T`: the input is
+    /// typed at the brand lifetime, and inside a `for<'b>` fold closure the only inhabitants of a
+    /// `'b`-parameterised type are values derived from the fold's declared operand views, the
+    /// brand's own allocations, and owned/`'static` data — all named by the witness the enclosing
+    /// combinator composes. An ambient-lifetime capture is a compile error at this signature (a
+    /// `T<'ambient>` cannot coerce to `T<'b>`, since `'b` has no outlives relation to any enclosing
+    /// lifetime), so the store's residence obligation is discharged at compile time by the placement
+    /// capability, with no runtime audit at all. That is what turns "a function borrows only the
+    /// scope it captures" from an asserted claim into the composition's own fact: the merge's source
+    /// operand names the captured scope's region, and the closure can reach no other.
     ///
-    /// The store is the placement's own bump, exactly as [`Self::alloc_object_folded`]'s is: a
-    /// `KFunction` is `Copy`, its signature text already re-homed at this same region by
-    /// [`ExpressionSignature::mint`](crate::machine::model::ExpressionSignature), so region death
-    /// frees the value as a chunk and runs no per-slot glue. Assembling the struct literal stays
-    /// with `kfunction.rs`, which owns the private fields; this door only stores.
-    pub(crate) fn alloc_function_folded(self, f: KFunction<'a>) -> &'a KFunction<'a> {
-        self.placement.allocator().value(f)
-    }
-
-    /// Store a container substrate built at this fold's own brand — the container door, generic over
-    /// the substrate payload family `C`. Sound by the same rank-2
-    /// fold-brand argument as [`Self::alloc_object_folded`]: `substrate` is typed at the brand
-    /// lifetime, so an ambient-lifetime capture is a compile error at this signature, discharging the
-    /// store's residence obligation at compile time. A substrate is `Copy` in every arm — its index
-    /// is a bump-hosted name slice or a frozen bump-backed table, its cells a [`Sectioned`] run — so
-    /// it takes the
-    /// same bump door as [`Self::alloc_object_folded`] and costs region death nothing.
-    pub(crate) fn alloc_substrate_folded<C: Copy>(
-        self,
-        substrate: ContainerSubstrate<'a, C>,
-    ) -> &'a ContainerSubstrate<'a, C> {
-        self.placement.allocator().value(substrate)
-    }
-
-    /// Store one container cell at this fold's own brand, handing back the resident `&'a Held<'a>`
-    /// borrow the sectioned alloc door takes as its payload
-    /// ([`Sectioned::build`](super::substrate::Sectioned::build)). Sound by the same rank-2
-    /// fold-brand argument as [`Self::alloc_object_folded`]: the cell is typed at the brand lifetime,
-    /// so an ambient-lifetime capture is a compile error at this signature. Residing the cell before
-    /// the door runs is what ties it to the same `'a` the container's run descriptions are interned
-    /// at, so one pin covers a projected cell and its reach together. A `Held` is `Copy`, so the cell
-    /// takes the same bump door as [`Self::alloc_object_folded`].
-    pub(crate) fn alloc_cell_folded(self, cell: Held<'a>) -> &'a Held<'a> {
-        self.placement.allocator().value(cell)
+    /// The value lands in the destination's bump, through the fold placement's own
+    /// [`allocator`](FoldedPlacement::allocator). `T: Copy` is the drop-free gate the bump requires —
+    /// every Koan family that reaches this door is `Copy`, so region death frees the value as a bump
+    /// chunk and runs no per-slot glue. The placement is what makes this a *residence* door rather
+    /// than the untargeted [`RegionBrand::allocator`]: the brand's `'a` is the fold's own, so a value
+    /// resident somewhere else cannot be written here.
+    pub(crate) fn alloc_folded<T: Copy>(self, value: T) -> &'a T {
+        self.placement.allocator().value(value)
     }
 
     /// This brand as a [`SubstrateDoor`] over `holder` — the coverage the enclosing fold's operand
@@ -387,32 +310,31 @@ pub(crate) trait KoanRegionExt {
     /// `owner`'s region *inside* a **zero-dep fold**, returning it bundled with the [`FrameReach`]
     /// singleton pinning `owner` so it is co-located by construction rather than paired with an
     /// asserted witness. The closure receives a per-construction [`FoldingBrand`] confined to the
-    /// `for<'b>` brand (it cannot escape the closure). One primitive for both value families — the
-    /// closure returns a `Carried::Object`
-    /// (an [`alloc_object_folded`](FoldingBrand::alloc_object_folded)) or a
-    /// `Carried::Type` (a `Copy` `KType` handle, needing no storage door). A value that *references*
-    /// another region's resident value folds that in with the envelope merge instead,
-    /// unioning its reach; this primitive covers the case whose references are all region-derived or
-    /// owned, so the `for<'b>` brand admits them.
+    /// `for<'b>` brand (it cannot escape the closure). A value that *references* another region's
+    /// resident value folds that in with the envelope merge instead, unioning its reach; this
+    /// primitive covers the case whose references are all region-derived or owned, so the `for<'b>`
+    /// brand admits them.
     ///
     /// The fold brand rather than a bare [`RegionBrand`] because a region-pure leaf is no longer
     /// necessarily `'static`: a string literal's bytes are bumped into this same region
     /// ([`RegionBrand::allocator`]), so the value is region-self-referential and only
-    /// [`alloc_object_folded`](FoldingBrand::alloc_object_folded)'s rank-2 argument admits it. With no
-    /// deps the fold composes nothing, so the product's reach is exactly what it was: this region and
-    /// no member.
+    /// [`alloc_folded`](FoldingBrand::alloc_folded)'s rank-2 argument admits it. With no deps the
+    /// fold composes nothing, so the product's reach is exactly what it was: this region and no
+    /// member.
     ///
-    /// `build`'s return is spelled `<CarriedFamily as Reattachable>::At<'b>`, not the concrete
-    /// `Carried<'b>`: the two are equal by the family's definition, but under the `for<'b>` binder the
-    /// compiler does not normalize the projection lazily, so a `build` typed `-> Carried<'b>` fails to
-    /// satisfy the `-> T::At<'b>` bound. Naming the projection makes the bounds syntactically
-    /// identical. An inline closure returning a `Carried` still unifies fine at the call site.
+    /// `build`'s return is spelled `T::At<'b>`, not a concrete payload type: the two are equal by the
+    /// family's definition, but under the `for<'b>` binder the compiler does not normalize the
+    /// projection lazily, so a `build` typed `-> Carried<'b>` fails to satisfy a `-> T::At<'b>`
+    /// bound. Naming the projection makes the bounds syntactically identical. An inline closure
+    /// returning the concrete type still unifies fine at the call site.
     // Drives the object-family construction inversion
-    // (design/per-node-memory.md): a region-pure leaf builds its `KObject` inside this closure.
-    fn fold_witnessed(
+    // (design/per-node-memory.md): a region-pure leaf builds its value inside this closure.
+    fn fold_witnessed<T: Reattachable + DropFree>(
         owner: Rc<FrameStorage>,
-        build: impl for<'b> FnOnce(FoldingBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> DeliveredCarried;
+        build: impl for<'b> FnOnce(FoldingBrand<'b>) -> T::At<'b>,
+    ) -> Delivered<T>
+    where
+        for<'b> T::At<'b>: Copy;
 
     /// `yoke` a value of **any** carrier family into `owner`'s region, handing the build closure a
     /// per-construction [`RegionBrand`] confined to the `for<'b>` brand. Generalizes
@@ -442,17 +364,20 @@ pub(crate) trait KoanRegionExt {
 }
 
 impl KoanRegionExt for KoanRegion {
-    fn fold_witnessed(
+    fn fold_witnessed<T: Reattachable + DropFree>(
         owner: Rc<FrameStorage>,
-        build: impl for<'b> FnOnce(FoldingBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> DeliveredCarried {
+        build: impl for<'b> FnOnce(FoldingBrand<'b>) -> T::At<'b>,
+    ) -> Delivered<T>
+    where
+        for<'b> T::At<'b>: Copy,
+    {
         // A zero-dep fold: the engine composes no operand reach, so the envelope it hands back is
         // homed in `owner`'s own region and covers nothing beyond it — the same claim
-        // `yoke_branded` makes, reached through the fold door instead.
-        StepContext::new(owner).alloc_with::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
-            &[],
-            |placement, _views| build(FoldingBrand::in_fold_closure(placement)),
-        )
+        // `yoke_branded` makes, reached through the fold door instead. The dep family is `T` only
+        // because the door names one; with an empty dep slice it constrains nothing.
+        StepContext::new(owner).alloc_with::<KoanStorageProfile, T, T>(&[], |placement, _views| {
+            build(FoldingBrand::in_fold_closure(placement))
+        })
     }
 
     fn yoke_branded<T: Reattachable + DropFree, F>(

@@ -16,6 +16,7 @@
 //! [design/value-substrates.md § Sectioned reach](../../design/value-substrates.md#sectioned-reach).
 
 use super::frame::FrameReach;
+use super::region::FoldingBrand;
 use super::substrate::{BumpBackedMap, CellRef, Opened, Sectioned};
 use crate::machine::model::Held;
 use crate::machine::model::labels::Symbol;
@@ -306,5 +307,18 @@ pub(crate) fn object_copy_cost(o: &KObject<'_>) -> u64 {
         KObject::List(substrate, _) => substrate.copy_cost(),
         KObject::Dict(substrate, _) => substrate.copy_cost(),
         KObject::Wrapped { inner, .. } => inner.copy_cost(),
+    }
+}
+
+impl<'a> FoldingBrand<'a> {
+    /// Store a [`ContainerSubstrate`] built at this fold's own brand, generic over the payload
+    /// family `C`. One line over [`FoldingBrand::alloc_folded`], which carries the rank-2 soundness
+    /// argument. A substrate is `Copy` in every arm — its index is a bump-hosted name slice or a
+    /// frozen bump-backed table, its cells a [`Sectioned`] run — so it costs region death nothing.
+    pub(crate) fn alloc_substrate_folded<C: Copy>(
+        self,
+        substrate: ContainerSubstrate<'a, C>,
+    ) -> &'a ContainerSubstrate<'a, C> {
+        self.alloc_folded(substrate)
     }
 }

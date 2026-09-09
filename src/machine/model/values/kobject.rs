@@ -10,7 +10,8 @@ use crate::machine::model::types::display_label;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 use crate::memory::{BumpVec, CellInput, CellReach, Sectioned};
 use crate::memory::{
-    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
+    FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, RegionBrand,
+    SubstrateDoor,
 };
 use smallvec::SmallVec;
 
@@ -923,6 +924,57 @@ pub(crate) fn retains_home(value: &KObject<'_>, home: &KoanRegion) -> bool {
         KObject::List(substrate, _) => substrate.reach().pins_region(home),
         KObject::Dict(substrate, _) => substrate.reach().pins_region(home),
         KObject::Wrapped { inner, .. } => inner.reach().pins_region(home),
+    }
+}
+
+/// The value layer's own store doors over a [`RegionBrand`] — the three shapes that build a
+/// [`KObject`] into a region and hand back its co-located resident. Inherent on the brand so no call
+/// site changes, but written here: [`region`](crate::memory::region) declares the capability and
+/// this file owns what a `KObject` is.
+impl<'a> RegionBrand<'a> {
+    /// Store an owned, region-free leaf into the region (no value holds an owning `Rc` back to a
+    /// region, so the store forms no back-edge). Yields a co-located `&'a` resident.
+    ///
+    /// [`Scalar`] is the gate, and it is the *signature*: a value that borrows any region has no way
+    /// to spell itself as one, so it cannot reach this door and takes a fold or merge whose
+    /// composition names what it borrows instead. The cell lands in the bump, so region death frees it
+    /// with the chunks.
+    pub fn alloc_scalar(self, scalar: Scalar) -> &'a KObject<'a> {
+        self.allocator().value(scalar.into_object())
+    }
+
+    /// [`Self::alloc_scalar`] for a string: copy the bytes into this region and store the cell around
+    /// the co-located borrow. A separate door because a string is exactly the leaf whose
+    /// *representation* is region-hosted even though its meaning is owned — so re-homing the bytes is
+    /// the store, and there is nothing for a caller to get wrong between the two.
+    pub fn alloc_string(self, text: &str) -> &'a KObject<'a> {
+        let allocator = self.allocator();
+        allocator.value(KObject::KString(allocator.text(text)))
+    }
+
+    /// The store for a `#(...)` quote's body as data — the shape
+    /// [`alloc_scalar`](Self::alloc_scalar) cannot take, since `KObject<'a>` is invariant and raw
+    /// AST has no `'static` rebuild. The
+    /// signature is the enforcement: the parameter is a
+    /// [`ProgramExpression`](crate::machine::model::ast::ProgramExpression), so the node's parts run
+    /// is program-storage hosted by type, and the cell the door bumps here borrows nothing a seal
+    /// would have to pin.
+    ///
+    /// The cell lands in this brand's own region bump, so its residence is where it was placed,
+    /// and it costs region death nothing — an expression's parts are already bump-hosted runs.
+    pub(crate) fn alloc_expression(self, expression: ProgramExpression<'a>) -> &'a KObject<'a> {
+        self.allocator().value(KObject::KExpression(expression))
+    }
+}
+
+/// The value layer's folded-residence doors — one line each over
+/// [`FoldingBrand::alloc_folded`], which carries the whole rank-2 soundness argument. Named per
+/// payload so a call site reads as the store it is, and so a family that stops being `Copy` fails
+/// here rather than at a generic call.
+impl<'a> FoldingBrand<'a> {
+    /// Store a [`KObject`] built at this fold's own brand.
+    pub(crate) fn alloc_object_folded(self, o: KObject<'a>) -> &'a KObject<'a> {
+        self.alloc_folded(o)
     }
 }
 

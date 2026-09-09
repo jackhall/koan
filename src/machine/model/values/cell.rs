@@ -30,7 +30,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::ast::ProgramNode;
 use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::machine::model::types::KType;
-use crate::memory::{Delivered, Sealed, reattachable};
+use crate::memory::{Delivered, FoldingBrand, Sealed, reattachable};
 
 /// Three-arm value currency. `Copy` — the object arms wrap `&'a` references and the `Type` arm a
 /// `Copy` [`KType`] handle, so it threads through node results and the lift path without clones.
@@ -238,5 +238,17 @@ impl<'a> Held<'a> {
 impl<'a> From<KObject<'a>> for Held<'a> {
     fn from(o: KObject<'a>) -> Held<'a> {
         Held::Object(o)
+    }
+}
+
+impl<'a> FoldingBrand<'a> {
+    /// Store one container cell at this fold's own brand, handing back the resident `&'a Held<'a>`
+    /// borrow the sectioned alloc door takes as its payload
+    /// ([`Sectioned::build`](crate::memory::Sectioned::build)). One line over
+    /// [`FoldingBrand::alloc_folded`], which carries the rank-2 soundness argument. Residing the cell
+    /// before the door runs is what ties it to the same `'a` the container's run descriptions are
+    /// interned at, so one pin covers a projected cell and its reach together.
+    pub(crate) fn alloc_cell_folded(self, cell: Held<'a>) -> &'a Held<'a> {
+        self.alloc_folded(cell)
     }
 }
