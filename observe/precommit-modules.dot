@@ -90,6 +90,7 @@ digraph {
     "koan::machine::execute::obligation" [label="koan::machine::execute::obligation"];
     "koan::machine::execute::outcome" [label="koan::machine::execute::outcome"];
     "koan::machine::execute::producer_id" [label="koan::machine::execute::producer_id"];
+    "koan::machine::execute::run_frame" [label="koan::machine::execute::run_frame"];
     "koan::machine::execute::step" [label="koan::machine::execute::step"];
     "koan::machine::model" [label="koan::machine::model"];
     "koan::machine::model::ast" [label="koan::machine::model::ast"];
@@ -226,6 +227,7 @@ digraph {
     "koan::machine::execute" -> "koan::machine::execute::obligation" [label="owns", style="solid"];
     "koan::machine::execute" -> "koan::machine::execute::outcome" [label="owns", style="solid"];
     "koan::machine::execute" -> "koan::machine::execute::producer_id" [label="owns", style="solid"];
+    "koan::machine::execute" -> "koan::machine::execute::run_frame" [label="owns", style="solid"];
     "koan::machine::execute" -> "koan::machine::execute::step" [label="owns", style="solid"];
     "koan::machine::execute::decide" -> "koan::machine::execute::decide::apply_callable" [label="owns", style="solid"];
     "koan::machine::execute::decide" -> "koan::machine::execute::decide::constructors" [label="owns", style="solid"];
@@ -545,6 +547,7 @@ digraph {
     "koan::machine::execute::ambient" -> "koan::machine::execute::harness" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
+    "koan::machine::execute::ambient" -> "koan::machine::execute::run_frame" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::memory" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan" [label="uses", style="dashed"];
@@ -704,6 +707,7 @@ digraph {
     "koan::machine::execute::harness" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
+    "koan::machine::execute::harness" -> "koan::machine::execute::run_frame" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::machine::execute::step" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::memory" [label="uses", style="dashed"];
@@ -737,6 +741,9 @@ digraph {
     "koan::machine::execute::outcome" -> "koan::memory" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::producer_id" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::execute::run_frame" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::execute::run_frame" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::run_frame" -> "koan::memory" [label="uses", style="dashed"];
     "koan::machine::execute::step" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::step" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::step" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -960,7 +967,6 @@ digraph {
     "koan::memory::container_substrate" -> "koan::memory::region" [label="uses", style="dashed"];
     "koan::memory::container_substrate" -> "koan::memory::substrate" [label="uses", style="dashed"];
     "koan::memory::frame" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::memory::frame" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::memory::frame" -> "koan::memory::region" [label="uses", style="dashed"];
     "koan::memory::frame" -> "koan::memory::substrate" [label="uses", style="dashed"];
     "koan::memory::program" -> "koan::memory::region" [label="uses", style="dashed"];

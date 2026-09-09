@@ -46,6 +46,7 @@ use super::finalize::{NodeFinalize, finalize_error};
 use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodePayload, NodeScope, NodeWork, SlotFrame, WorkLabel};
 use super::outcome::{Await, Continuation, DepTerminal, Outcome, ParkDeps, dep_error_frame};
+use super::run_frame::RunFrame;
 use super::step::StepCarried;
 use super::{ContinuationCall, ContinuationFamily, NodeContinuation, erase_bumped, gated};
 #[cfg(test)]
@@ -221,10 +222,10 @@ impl<'run> KoanRuntime<'run> {
         self.host.ambient.registries_opt()
     }
 
-    /// The run frame itself, shared out. The registries hang off it, so a holder of this handle
-    /// reads them without borrowing the runtime — and keeps them alive past the runtime's drop.
-    pub(crate) fn run_frame(&self) -> Option<Rc<CallFrame>> {
-        self.host.ambient.run_frame_ref().cloned()
+    /// The run's registries, shared out — a holder reads them without borrowing the runtime, and
+    /// keeps them alive past the runtime's drop.
+    pub(crate) fn registries_rc(&self) -> Option<Rc<crate::machine::model::RunRegistries>> {
+        self.host.ambient.registries_rc()
     }
 
     /// Submit each `statement` as a fresh lexical block over `scope`. The program / test-harness
@@ -1006,7 +1007,7 @@ impl<'run> Host<'run> {
             let out = self.out.take().unwrap_or_else(|| Box::new(std::io::sink()));
             let labels = self.labels.take().unwrap_or_default();
             self.ambient
-                .set_run_frame(CallFrame::adopting(scope, out, labels));
+                .set_run_frame(RunFrame::adopting(scope, out, labels));
         }
     }
 

@@ -48,7 +48,7 @@ pub use container_substrate::{ContainerSubstrate, PartedCell};
 pub(crate) use container_substrate::{
     DictSubstrate, ListSubstrate, PayloadSubstrate, RecordSubstrate, object_copy_cost,
 };
-pub use frame::{CallFrame, FrameCoverage, FrameReach, RunWriter};
+pub use frame::{CallFrame, FrameCoverage, FrameReach};
 pub use program::{ProgramBrand, ProgramStorage, program_storage};
 pub use region::{
     FoldingBrand, FrameStorage, KoanRegion, RegionBrand, RegionTypeFamily, SubstrateDoor,

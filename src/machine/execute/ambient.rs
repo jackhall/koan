@@ -14,11 +14,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::model::RunRegistries;
-use crate::memory::{CallFrame, RunWriter};
+use crate::memory::CallFrame;
 
 use super::harness::Host;
 use super::nodes::NodePayload;
 use super::obligation::{ParkState, ReturnObligation};
+use super::run_frame::{RunFrame, RunWriter};
 
 /// The ambient per-step context the host carries while a decided
 /// [`Outcome`](super::outcome::Outcome) is realized.
@@ -27,11 +28,11 @@ pub(in crate::machine::execute) struct AmbientContext {
     /// Active per-call cart of the slot currently being executed. See
     /// [per-call-region/frames.md § Active-frame propagation](../../../design/per-call-region/frames.md#active-frame-propagation).
     active_frame: Option<Rc<CallFrame>>,
-    /// A non-dying frame adopting the top-level run scope, lazily minted on the first run-lifetime
-    /// submission. Top-level slots carry it as their cart, so `active_frame` is never `None` during
-    /// a top-level step and a body's re-dispatch against its own scope is uniformly framed (Yoked)
-    /// at every depth.
-    run_frame: Option<Rc<CallFrame>>,
+    /// The run's own frame and the run-lifetime state beside it, lazily minted on the first
+    /// run-lifetime submission. Top-level slots carry its frame as their cart, so `active_frame` is
+    /// never `None` during a top-level step and a body's re-dispatch against its own scope is
+    /// uniformly framed (Yoked) at every depth.
+    run_frame: Option<RunFrame>,
     /// The executing slot's opaque workload payload (scope handle + lexical chain). `None` between
     /// slot steps.
     active_payload: Option<NodePayload>,
@@ -60,8 +61,8 @@ impl AmbientContext {
         self.active_payload.as_ref()
     }
 
-    /// The run's lookup state, owned by the run frame. `ensure_run_frame` installs that frame
-    /// before any step runs, so the registries are always reachable from step code.
+    /// The run's lookup state, owned by the [`RunFrame`]. `ensure_run_frame` installs it before any
+    /// step runs, so the registries are always reachable from step code.
     pub(in crate::machine::execute) fn registries(&self) -> &RunRegistries {
         self.registries_opt()
             .expect("run frame (and its registries) established before any step")
@@ -70,7 +71,12 @@ impl AmbientContext {
     /// [`Self::registries`] as an `Option` — a detached read, valid before the run frame exists
     /// and after the run ends.
     pub(in crate::machine::execute) fn registries_opt(&self) -> Option<&RunRegistries> {
-        self.run_frame.as_ref().and_then(|frame| frame.registries())
+        self.run_frame.as_ref().map(RunFrame::registries)
+    }
+
+    /// [`Self::registries`] shared out, for a test holder that outlives a `&mut` drive call.
+    pub(in crate::machine::execute) fn registries_rc(&self) -> Option<Rc<RunRegistries>> {
+        self.run_frame.as_ref().map(RunFrame::registries_rc)
     }
 
     /// The run's output sink, owned by the run frame exactly as the type registry is, and reached
@@ -78,7 +84,7 @@ impl AmbientContext {
     pub(in crate::machine::execute) fn writer(&self) -> &RunWriter {
         self.run_frame
             .as_ref()
-            .and_then(|frame| frame.writer())
+            .map(RunFrame::writer)
             .expect("run frame (and its writer) established before any step")
     }
 
@@ -134,11 +140,11 @@ impl AmbientContext {
     /// slot's cart, so the root re-projects from it as `Yoked` rather than anchoring at `'run` —
     /// see [`Host::resolve_node_scope`](super::harness::Host).
     pub(in crate::machine::execute) fn run_frame_ref(&self) -> Option<&Rc<CallFrame>> {
-        self.run_frame.as_ref()
+        self.run_frame.as_ref().map(RunFrame::frame)
     }
 
-    pub(in crate::machine::execute) fn set_run_frame(&mut self, frame: Rc<CallFrame>) {
-        self.run_frame = Some(frame);
+    pub(in crate::machine::execute) fn set_run_frame(&mut self, run: RunFrame) {
+        self.run_frame = Some(run);
     }
 
     /// Resolve the cart a submission's slot carries, plus whether a frame was active. Top-level
@@ -148,8 +154,8 @@ impl AmbientContext {
     pub(in crate::machine::execute) fn submission_cart(&self) -> (Rc<CallFrame>, bool) {
         let framed = self.active_frame.is_some();
         let cart = self.active_frame.clone().unwrap_or_else(|| {
-            self.run_frame
-                .clone()
+            self.run_frame_ref()
+                .cloned()
                 .expect("run_frame established by ensure_run_frame before any submission")
         });
         (cart, framed)

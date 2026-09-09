@@ -33,7 +33,6 @@ use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, Signatu
 use crate::machine::{AdoptSeam, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, Installer};
-use crate::memory::CallFrame;
 use crate::memory::FrameStorage;
 use crate::memory::{ProgramBrand, ProgramStorage, RegionBrand};
 #[cfg(test)]
@@ -125,7 +124,7 @@ pub struct TestRun<'a> {
     pub runtime: KoanRuntime<'a>,
     /// The run frame, shared out so its registries stay readable after the runtime drops — and
     /// without borrowing the runtime, which every `run` call needs mutably.
-    run_frame: Rc<CallFrame>,
+    registries: Rc<RunRegistries>,
     /// Per-scope statement cursors — the session's own record of how many top-level statements it
     /// has submitted against each scope, which is what numbers the next one. The lexical position
     /// of a statement-at-a-time submission exists only in the submitting session (statement N is
@@ -150,12 +149,14 @@ impl<'a> TestRun<'a> {
             .registries()
             .expect("run frame was just established");
         crate::machine::seed_run_root(root, registries);
-        let run_frame = runtime.run_frame().expect("run frame was just established");
+        let registries = runtime
+            .registries_rc()
+            .expect("run frame was just established");
         Self {
             program,
             scope: child,
             runtime,
-            run_frame,
+            registries,
             cursors: HashMap::new(),
         }
     }
@@ -178,7 +179,7 @@ impl<'a> TestRun<'a> {
     /// The run frame held for its registries — what a test binds when it needs the registry
     /// across `run` calls, which borrow the `TestRun` mutably.
     pub fn registry_handle(&self) -> RegistryHandle {
-        RegistryHandle(Rc::clone(&self.run_frame))
+        RegistryHandle(Rc::clone(&self.registries))
     }
 
     /// [`parse_one`] into this bundle's own program storage and interner — what production does,
@@ -190,9 +191,7 @@ impl<'a> TestRun<'a> {
 
     /// The run's lookup state — the currency for anything that renders a label or builds a record.
     pub fn registries(&self) -> &RunRegistries {
-        self.run_frame
-            .registries()
-            .expect("the run frame carries the registries")
+        &self.registries
     }
 
     /// The run's registry as a plain reference — the `types` argument the type-system surface takes.
@@ -729,13 +728,11 @@ pub(crate) fn one_slot_sig<'a>(name: &'a str, kt: KType) -> SignatureDraft<'a> {
 /// decouples the two, and keeps the registries readable after the runtime drops.
 ///
 /// Derefs to the type registry, the half nearly every assertion wants.
-pub struct RegistryHandle(Rc<CallFrame>);
+pub struct RegistryHandle(Rc<RunRegistries>);
 
 impl RegistryHandle {
     pub fn registries(&self) -> &RunRegistries {
-        self.0
-            .registries()
-            .expect("run frame carries the registries")
+        &self.0
     }
 }
 

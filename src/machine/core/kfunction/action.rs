@@ -11,6 +11,7 @@ use super::body::ReturnContract;
 use crate::machine::core::SealedFunction;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{LexicalFrame, Scope};
+use crate::machine::execute::RunWriter;
 use crate::machine::execute::StepAllocator;
 use crate::machine::execute::StepCarried;
 use crate::machine::model::BinderSymbol;
@@ -30,7 +31,7 @@ use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{BindingIndex, DeclarationSite, Installer, KError, KErrorKind};
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::memory::{CallFrame, ProgramBrand, RegionBrand, RunWriter};
+use crate::memory::{CallFrame, ProgramBrand, RegionBrand};
 use crate::scheduler::Deps;
 use crate::source::SourceRef;
 

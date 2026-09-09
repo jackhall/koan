@@ -1,9 +1,12 @@
 //! The per-call allocation frame: the [`FrameReach`] / [`FrameCoverage`] reach-evidence aliases,
-//! the witnessed child-scope construction door, the run's output sink, and the [`CallFrame`] shell
-//! over a refcounted [`FrameStorage`] that holds the per-call child [`Scope`]. The region and brand
-//! substrate these build on lives in [`region`](super::region).
+//! the witnessed child-scope construction door, and the [`CallFrame`] shell over a refcounted
+//! [`FrameStorage`] that holds the per-call child [`Scope`]. The region and brand substrate these
+//! build on lives in [`region`](super::region).
+//!
+//! A frame is a region shell and nothing else. The run's lookup state and output sink belong to the
+//! run, not to a frame that happens to be first, and live in
+//! [`execute::RunFrame`](crate::machine::execute) with the frame that adopts the run-root scope.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 #[cfg(test)]
@@ -13,33 +16,6 @@ use super::substrate::{
     Delivered, ReachDescription, RegionHandle, RegionHost, SealedExtern, StepCoverage,
 };
 use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
-use crate::machine::model::LabelInterner;
-use crate::machine::model::RunRegistries;
-
-/// **The run's output sink** — where `PRINT` writes. One per run, owned by the run [`CallFrame`]
-/// beside the run's [`TypeRegistry`] and reached the same way: through the execution context, never
-/// off a scope. `RefCell` because writing is a `&self` act on a value the whole run shares, and
-/// nothing holds the borrow across a call.
-///
-/// Write errors are dropped: `PRINT` is a statement with no error channel, so there is nothing for a
-/// caller to do with one. This is a stopgap — see
-/// [monadic side effects](../../roadmap/foundation/monadic-side-effects.md), which replaces
-/// direct writer plumbing with an effect the language expresses.
-pub struct RunWriter(RefCell<Box<dyn std::io::Write>>);
-
-impl RunWriter {
-    /// Wrap the caller-supplied sink. `'static` is what every entry point already passes — stdout, a
-    /// sink, an `Rc`-shared buffer — and it is what lets the writer rest on a frame that names no
-    /// region.
-    pub fn new(out: Box<dyn std::io::Write>) -> Self {
-        RunWriter(RefCell::new(out))
-    }
-
-    /// Write `bytes` to the run's sink, dropping any write error.
-    pub fn write_out(&self, bytes: &[u8]) {
-        let _ = self.0.borrow_mut().write_all(bytes);
-    }
-}
 
 /// The non-owning reach description backing carrier witnesses: names the regions a carrier's value
 /// reaches, hosted in the value's home region's side table and referenced (never owned) by the
@@ -122,16 +98,6 @@ pub struct CallFrame {
     /// read off it: the envelope's members are one flat antichain in which a value's home is an
     /// ordinary member, so the frame's own storage is not recoverable from it by identity.
     storage: Rc<FrameStorage>,
-    /// The run's lookup state — the type registry and the label interner — `Some` only on the run
-    /// frame ([`Self::adopting`]). Per-call frames reach it through the execution context rather
-    /// than owning one, so a verdict recorded or a label interned anywhere in the run is visible
-    /// everywhere in it; the maps drop when the run frame does. Owned outright, not `Rc`-shared:
-    /// nothing needs shared ownership, and the heap tables inside must `Drop`.
-    run_registries: Option<RunRegistries>,
-    /// The run's output sink, `Some` only on the run frame ([`Self::adopting`]) — the same home and
-    /// the same reach path as [`run_registries`](Self::run_registries): per-call frames own none and
-    /// `PRINT` reaches this one through the execution context.
-    writer: Option<RunWriter>,
 }
 
 impl CallFrame {
@@ -168,12 +134,7 @@ impl CallFrame {
         // members — its cross-region borrow into the parent rides `FrameStorage`'s own `outer` `Rc`
         // chain, not the reach system — so the envelope covers that storage and nothing else.
         let envelope = build_frame_child_witnessed(outer, &storage);
-        Rc::new(CallFrame {
-            envelope,
-            storage,
-            run_registries: None,
-            writer: None,
-        })
+        Rc::new(CallFrame { envelope, storage })
     }
 
     /// The scheduler-owned **run frame**: a frame that *carries an already-built run scope*
@@ -190,15 +151,9 @@ impl CallFrame {
     /// scope's borrow is erased into the envelope exactly as every per-call child scope's is — the
     /// fabrication hazard is deferred to the witness-bounded re-attach.
     ///
-    /// `out` is the run's output sink and `labels` the interner parse populated, both taken here
-    /// for the same reason the registries are built here: all are run-lifetime state with exactly
-    /// one home, and this constructor is the only one that fills the two fields ([`Self::new`]
-    /// leaves them `None`).
-    pub fn adopting<'a>(
-        scope: &'a Scope<'a>,
-        out: Box<dyn std::io::Write>,
-        labels: LabelInterner,
-    ) -> Rc<CallFrame> {
+    /// The run's lookup state and output sink are not taken here: they are the run's, and
+    /// [`RunFrame`](crate::machine::execute) owns them beside the frame this mints.
+    pub fn adopting<'a>(scope: &'a Scope<'a>) -> Rc<CallFrame> {
         // The run scope lives in the run region and reaches nothing beyond it, so the envelope
         // covers that one region — read off the scope's own handle, which is also where the
         // adopted storage comes from.
@@ -206,22 +161,7 @@ impl CallFrame {
         Rc::new(CallFrame {
             envelope,
             storage: scope.frame(),
-            run_registries: Some(RunRegistries::with_labels(labels)),
-            writer: Some(RunWriter::new(out)),
         })
-    }
-
-    /// The run's type registry and label interner — `Some` only on the run frame. The execution
-    /// context reads them from there (`AmbientContext::registries`) and hands `&TypeRegistry` to
-    /// the memoized predicates, `&RunRegistries` to anything that renders or constructs a record.
-    pub(crate) fn registries(&self) -> Option<&RunRegistries> {
-        self.run_registries.as_ref()
-    }
-
-    /// The run's output sink — `Some` only on the run frame, read the same way the registry is
-    /// (`AmbientContext::writer`), and handed to a builtin body as `BodyCtx::out`.
-    pub(crate) fn writer(&self) -> Option<&RunWriter> {
-        self.writer.as_ref()
     }
 
     /// This frame's own `FrameStorage` — the owner of the region its child scope lives in, which
@@ -340,7 +280,7 @@ impl CallFrame {
         frame: &'f Rc<CallFrame>,
         signature: crate::machine::model::SignatureDraft<'f>,
         body: crate::machine::core::Body<'f>,
-        registries: &RunRegistries,
+        registries: &crate::machine::model::RunRegistries,
     ) -> &'f crate::machine::core::KFunction<'f> {
         let captured = Scope::alloc_run_root(frame.storage());
         crate::machine::core::KFunction::alloc_captured_for_test(

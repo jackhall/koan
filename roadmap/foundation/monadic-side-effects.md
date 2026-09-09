@@ -1,7 +1,7 @@
 # Monadic side effects
 
 **Problem.** The runtime has exactly one effect channel:
-[`RunWriter`](../../src/memory/frame.rs), a
+[`RunWriter`](../../src/machine/execute/run_frame.rs), a
 `RefCell<Box<dyn std::io::Write>>` on the run frame, reached as
 `ctx.out.write_out(bytes)`. It exists so [`PRINT`](../../src/builtins/print.rs) has
 somewhere to send bytes and tests can swap stdout for a buffer. It is hard-coded to one

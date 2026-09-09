@@ -13,13 +13,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::core::bindings::WriteOp;
+use crate::machine::execute::RunWriter;
 use crate::machine::execute::StepAllocator;
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, RunRegistries, WorkingPart};
 use crate::machine::{Installer, LexicalFrame, Scope};
 use crate::memory::CallFrame;
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::memory::{FrameStorage, ProgramBrand, RunWriter};
+use crate::memory::{FrameStorage, ProgramBrand};
 use crate::source::Spanned;
 
 use super::super::ambient::AmbientContext;

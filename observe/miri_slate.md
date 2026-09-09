@@ -341,12 +341,13 @@ with nothing outside borrowing in. Miri's process-exit leak count is the asserti
 
 Its mirror is the run's **registries**, the one deliberately `Drop`-bearing thing the engine hosts:
 `RunRegistries` owns the type registry's nodes and the label interner's digest→text map, so it sits
-on the run `CallFrame` as a plain owned field rather than in any region's bump — bumping it is
-exactly the stranding the claim above describes. The test drives a program that populates the
-interner from every syntactic label site (a record type's fields, a two-keyword function's
-parameters, a record literal's labels), asserts the map is non-empty so the drop is not vacuous,
-and drops the frame as the sole owner. An `Rc` cycle through the frame, or a migration of the
-registries into region storage, leaks both maps at process exit.
+on the run's [`RunFrame`](../src/machine/execute/run_frame.rs) — refcounted, outside every region's
+bump — rather than in a region: bumping it is exactly the stranding the claim above describes. The
+test drives a program that populates the interner from every syntactic label site (a record type's
+fields, a two-keyword function's parameters, a record literal's labels), asserts the map is
+non-empty so the drop is not vacuous, and drops the run as the sole owner. An `Rc` cycle back to
+the run frame, or a migration of the registries into region storage, leaks both maps at process
+exit.
 
 - `run_registries_free_with_the_run_frame`
 

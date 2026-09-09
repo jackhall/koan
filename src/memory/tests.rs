@@ -1167,13 +1167,13 @@ fn region_death_frees_every_drop_free_family() {
 /// The mirror of the region-death claim above. Every koan value family is `Drop`-free so region
 /// death can be chunk deallocation, but the run's registries are the one thing in the engine that
 /// deliberately is not: [`RunRegistries`] owns the type registry's nodes and the label interner's
-/// digest→text map, both heap maps with real destructors. That is why they sit on the run
-/// [`CallFrame`] as a plain owned field rather than in any region's bump — a bump frees its chunks
-/// without visiting them, so hosting them there would strand both maps at run end. This test drives
+/// digest→text map, both heap maps with real destructors. That is why they sit on the run's
+/// `RunFrame`, refcounted outside every region's bump — a bump frees its chunks without visiting
+/// them, so hosting them there would strand both maps at run end. This test drives
 /// a program that populates the interner from every syntactic label site — a record type's field
 /// names, a two-keyword function's parameter names, and a record literal's own labels — then drops
-/// the run frame with nothing outside it holding a reference. Miri's process-exit leak count is the
-/// assertion: the frame is the sole owner, so if the `Rc` ever entered a cycle, or the registries
+/// the run with nothing outside it holding a reference. Miri's process-exit leak count is the
+/// assertion: the run is the sole owner, so if the `Rc` ever entered a cycle, or the registries
 /// migrated into region storage, both maps leak here.
 #[test]
 fn run_registries_free_with_the_run_frame() {

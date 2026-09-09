@@ -29,6 +29,7 @@ mod producer_id;
 #[cfg(any(test, feature = "region-audit"))]
 #[path = "../../audit/reach_audit.rs"]
 pub mod reach_audit;
+mod run_frame;
 pub(crate) mod step;
 #[cfg(test)]
 mod test_support;
@@ -44,6 +45,7 @@ pub(in crate::machine::execute) use outcome::{
 pub(in crate::machine::execute) use outcome::{erase_boxed, gated_once};
 pub use producer_id::ProducerId;
 pub(crate) use producer_id::{deps_on, extend_deps_on};
+pub(crate) use run_frame::RunWriter;
 pub use step::{StepAllocator, StepCarried, drive_step_allocator};
 #[cfg(test)]
 pub(crate) use test_support::edge_delivered;
