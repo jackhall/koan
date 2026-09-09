@@ -340,7 +340,7 @@ mod tests {
         // door — the exact shape FROM's `record` operand arrives as. Allocated through the frame's own
         // brand (not a transient `with_scope` sub-brand), so the reference escapes at the frame's own
         // lifetime.
-        let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
+        let producer_frame: Rc<CallFrame> = scope.open_frame();
         let owned_cells = crate::memory::FrameCoverage::empty();
         let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             producer_frame.brand().handle(),
@@ -372,7 +372,7 @@ mod tests {
             .deliver_resident::<CarriedFamily>(Carried::Object(obj));
 
         // Consumer: a different frame — FROM's own step surface, narrowing to just `{x}`.
-        let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
+        let consumer_frame: Rc<CallFrame> = scope.open_frame();
         let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
         let narrowed_type = types.record(Record::from_pairs([(
             crate::builtins::test_support::binder_token("x"),

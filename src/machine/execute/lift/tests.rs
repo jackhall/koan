@@ -43,7 +43,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
     // The captured scope and the function both land in `home`'s region, so the `&KFunction` comes back
     // at `home`'s own lifetime with nothing retyped. Mirrors a closure capturing its defining scope.
     let registries = RunRegistries::new();
-    CallFrame::alloc_capturing_scope(
+    crate::machine::KFunction::alloc_capturing_frame_scope(
         home,
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::NULL),
@@ -67,8 +67,8 @@ fn object_top_node_relocates_into_dest() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let source = CallFrame::new(scope);
-    let dest = CallFrame::new(scope);
+    let source = scope.open_frame();
+    let dest = scope.open_frame();
 
     let obj: &KObject = source.brand().alloc_scalar(Scalar::Number(2.5));
     let owned_cells = crate::memory::FrameCoverage::empty();
@@ -102,8 +102,8 @@ fn list_relocation_rebuilds_substrate_into_dest() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let source = CallFrame::new(scope);
-    let dest = CallFrame::new(scope);
+    let source = scope.open_frame();
+    let dest = scope.open_frame();
     let types = test_run.registry_handle();
 
     let owned_cells = crate::memory::FrameCoverage::empty();
@@ -157,8 +157,8 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let source = CallFrame::new(scope);
-    let dest = CallFrame::new(scope);
+    let source = scope.open_frame();
+    let dest = scope.open_frame();
     let types = test_run.registry_handle();
 
     let owned_cells = crate::memory::FrameCoverage::empty();
@@ -207,8 +207,8 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let source = CallFrame::new(scope);
-    let dest = CallFrame::new(scope);
+    let source = scope.open_frame();
+    let dest = scope.open_frame();
     let types = test_run.registry_handle();
 
     let type_id = types.intern(TypeNode::AbstractType {
@@ -273,8 +273,8 @@ fn kfunction_borrow_preserved_verbatim() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let source = CallFrame::new(scope);
-    let dest = CallFrame::new(scope);
+    let source = scope.open_frame();
+    let dest = scope.open_frame();
 
     let kf_ref = alloc_local_kf(&source);
     let source_scope = run_root_bare(source.storage());
@@ -317,7 +317,7 @@ fn type_recursive_member_relocates_and_navigates() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let dest = CallFrame::new(scope);
+    let dest = scope.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
 
@@ -432,7 +432,7 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let dest_frame: Rc<CallFrame> = scope.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
@@ -506,7 +506,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let dest_frame: Rc<CallFrame> = scope.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
@@ -569,7 +569,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let dest_frame: Rc<CallFrame> = scope.open_frame();
     let registries = RunRegistries::new();
     let dest_storage = dest_frame.storage_rc();
 
@@ -634,7 +634,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let dest_frame: Rc<CallFrame> = scope.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
@@ -643,7 +643,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
     let mut expected_ids = Vec::with_capacity(DEPTH);
     let relocated: Vec<DeliveredCarried> = (0..DEPTH)
         .map(|_| {
-            let producer: Rc<CallFrame> = CallFrame::new(scope);
+            let producer: Rc<CallFrame> = scope.open_frame();
             let obj = alloc_home_closure_record(&producer, types);
             expected_ids.push(match obj {
                 KObject::Record(substrate, _) => match substrate
@@ -726,12 +726,12 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let dest_frame: Rc<CallFrame> = scope.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
-    let producer: Rc<CallFrame> = CallFrame::new(scope);
+    let producer: Rc<CallFrame> = scope.open_frame();
     let born_cells = crate::memory::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(producer.brand().handle()))
@@ -871,7 +871,7 @@ fn substrate_memo_scalar_record_is_priceable_and_home_free() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let home = CallFrame::new(scope);
+    let home = scope.open_frame();
     let registries = RunRegistries::new();
 
     let fields = Vec::from([
@@ -896,7 +896,7 @@ fn substrate_memo_string_cell_adds_its_length() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let home = CallFrame::new(scope);
+    let home = scope.open_frame();
     let registries = RunRegistries::new();
 
     let fields = Vec::from([(
@@ -920,8 +920,8 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let home = CallFrame::new(scope);
-    let foreign = CallFrame::new(scope);
+    let home = scope.open_frame();
+    let foreign = scope.open_frame();
     let registries = RunRegistries::new();
 
     let base = Vec::from([(
@@ -981,7 +981,7 @@ fn substrate_memo_nested_record_composes_by_memo() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let home = CallFrame::new(scope);
+    let home = scope.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
 
@@ -1039,7 +1039,7 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let home = CallFrame::new(scope);
+    let home = scope.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
 
@@ -1104,7 +1104,7 @@ mod seam_verb_table {
         let root = run_root_storage();
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
-        let home = CallFrame::new(scope);
+        let home = scope.open_frame();
         let registries = RunRegistries::new();
         let types = &registries.types;
 
@@ -1131,7 +1131,7 @@ mod seam_verb_table {
         let root = run_root_storage();
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
-        let home = CallFrame::new(scope);
+        let home = scope.open_frame();
         let registries = RunRegistries::new();
         let types = &registries.types;
 
@@ -1155,7 +1155,7 @@ mod seam_verb_table {
         let root = run_root_storage();
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
-        let home = CallFrame::new(scope);
+        let home = scope.open_frame();
         let registries = RunRegistries::new();
         let types = &registries.types;
 
@@ -1190,7 +1190,7 @@ mod seam_verb_table {
         let root = run_root_storage();
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
-        let home = CallFrame::new(scope);
+        let home = scope.open_frame();
         let registries = RunRegistries::new();
         let types = &registries.types;
 
@@ -1223,8 +1223,8 @@ mod seam_verb_table {
         let root = run_root_storage();
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
-        let home = CallFrame::new(scope);
-        let foreign = CallFrame::new(scope);
+        let home = scope.open_frame();
+        let foreign = scope.open_frame();
         let registries = RunRegistries::new();
         let types = &registries.types;
 
@@ -1260,7 +1260,7 @@ fn a_mixed_run_retains_exactly_the_producers_its_own_cells_still_borrow() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let dest_frame: Rc<CallFrame> = scope.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
@@ -1356,7 +1356,7 @@ fn region_bytes_for_a_relocated_run_grow_linearly_in_its_length() {
         let root = run_root_storage();
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
-        let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+        let dest_frame: Rc<CallFrame> = scope.open_frame();
         let registries = RunRegistries::new();
         let types = &registries.types;
         let dest_storage = dest_frame.storage_rc();
@@ -1400,7 +1400,7 @@ fn plain_record_cell_run<'run>(
     let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(count);
     let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(count);
     for index in 0..count {
-        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let producer: Rc<CallFrame> = scope.open_frame();
         let born_cells = crate::memory::FrameCoverage::empty();
         let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             producer.brand().handle(),
@@ -1439,7 +1439,7 @@ fn two_element_relocation_allocates_no_more_than_the_pairwise_fold() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let dest_frame: Rc<CallFrame> = scope.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
@@ -1479,7 +1479,7 @@ fn closure_record_cell_run<'run>(
     let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(count);
     let mut captured: Vec<ScopeId> = Vec::with_capacity(count);
     for _ in 0..count {
-        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let producer: Rc<CallFrame> = scope.open_frame();
         let object = alloc_home_closure_record(&producer, types);
         captured.push(captured_scope_id(object, registries));
         let sealed = producer.seal_born_here(Carried::Object(object), true);

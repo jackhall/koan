@@ -9,19 +9,17 @@
 
 use std::rc::Rc;
 
+use super::region::{FrameStorage, KoanRegion};
 #[cfg(test)]
-use super::region::FrameStorageExt;
-use super::region::{FrameStorage, KoanRegion, RegionBrand};
-use super::substrate::{
-    Delivered, ReachDescription, RegionHandle, RegionHost, SealedExtern, StepCoverage,
-};
+use super::region::{FrameStorageExt, RegionBrand};
+use super::substrate::{Delivered, ReachDescription, SealedExtern, StepCoverage};
 use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
 
 /// The non-owning reach description backing carrier witnesses: names the regions a carrier's value
 /// reaches, hosted in the value's home region's side table and referenced (never owned) by the
 /// carrier. See [`ReachDescription`] for the shared mechanism (membership queries, the self rule);
 /// Koan's member semantics are the library's [`PinsRegion`](super::substrate::PinsRegion) impl for
-/// [`RegionHost`]. Its owning counterpart is [`FrameCoverage`].
+/// [`RegionHost`](super::substrate::RegionHost). Its owning counterpart is [`FrameCoverage`].
 pub type FrameReach = ReachDescription<FrameStorage>;
 
 /// The owned coverage a holder keeps to pin every region a value reaches — the ownership
@@ -29,50 +27,8 @@ pub type FrameReach = ReachDescription<FrameStorage>;
 /// composed it to the seal that consumes it, the delivery envelope carries one across transit). See
 /// [`StepCoverage`] for the surface: Koan holds, clones, threads and drops coverage, and computes
 /// with it only through the container verbs on [`Delivered`] and
-/// [`RegionHandle`].
+/// [`RegionHandle`](super::substrate::RegionHandle).
 pub type FrameCoverage = StepCoverage<FrameStorage>;
-
-/// Build a per-call frame's child scope **witnessed**, sealing it to the externally-witnessed
-/// [`SealedExtern<ScopeRefFamily>`] the [`CallFrame`] holds — the construction door that re-anchors the
-/// longer-lived lexical parent into the fresh region, with no retype outside the witnessed substrate.
-///
-/// The child is *born* at the destination: [`RegionHandle::bump_born_with`] hands the
-/// construction closure a placement over the fresh region at a `for<'b>` brand, with the foreign
-/// parent (as [`ScopeRefFamily`]) re-anchored to that same `'b`. The real invariant `Scope<'b>` is
-/// built coupling the two (its `root` falling out as `outer.root`) and stored in the same act, so
-/// residence is discharged by the brand rather than by a runtime check: an ambient `&Region` cannot
-/// coerce to `'b`, so `child.region()` is the destination's by construction. `Scope`'s invariance is
-/// honoured for free — branding the parent and the region at *independent* `'b`s is what invariance
-/// rejects, and the door unifies them at a single one.
-///
-/// `child.outer` is a genuine cross-region borrow into the lexical parent's (possibly foreign)
-/// region: `child` cannot rebuild at `'static`, and its liveness is not the reach-witness system's
-/// business to name. It is guaranteed instead by `FrameStorage`'s own `outer` `Rc` chain, the pin
-/// this call hands the door: a structural invariant this construction door upholds by always
-/// chaining `storage`'s `outer` to the same frame that owns the parent's region. That chain is
-/// **derived**, not asserted — [`CallFrame::new`] computes it
-/// from the parent scope's own region owner ([`Scope::parent_frame_pin`]), and root-region parents
-/// chain nothing. A fresh-tail hop's parent is the callee closure's captured scope, so the same chain
-/// keeps that captured (possibly per-call) region alive across the hop that retires the caller.
-///
-/// The child scope lives in `storage`'s own region, so it comes back **enveloped** under a
-/// description hosted there with no members and pinned by that same storage — one door reads the
-/// home off the region the child was born in, so the [`CallFrame`] that holds the envelope takes it
-/// whole rather than pairing a carrier with a host.
-pub(crate) fn build_frame_child_witnessed<'p>(
-    outer: &'p Scope<'p>,
-    storage: &Rc<FrameStorage>,
-) -> Delivered<ScopeRefFamily> {
-    let handle = RegionHandle::from_owner(&**storage);
-    let live = handle.bump_born_with::<Scope<'static>, ScopeRefFamily, _>(
-        SealedExtern::<ScopeRefFamily>::erase(outer),
-        storage,
-        |placement, outer_b| {
-            Scope::child_for_frame_witnessed(outer_b, RegionBrand(placement.handle()))
-        },
-    );
-    handle.deliver_resident::<ScopeRefFamily>(live)
-}
 
 /// One user-fn call's allocation frame: a thin shell over a refcounted [`FrameStorage`]. `Rc`-pinned
 /// so the scheduler manages the frame by `Rc<CallFrame>`; an escaping closure extends only the
@@ -101,67 +57,20 @@ pub struct CallFrame {
 }
 
 impl CallFrame {
-    /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link. The
-    /// storage pin chained for the parent is **derived** from `outer` via
-    /// [`Scope::parent_frame_pin`]: the parent scope's own region owner when it is per-call, or no
-    /// chain when the parent lives in the run-root region (which outlives the run). No caller can
-    /// under-pin — there is no pin parameter to mis-wire.
+    /// Wrap a finished `(storage, envelope)` pair as a frame shell. The *only* constructor: the
+    /// two halves arrive already coupled — the envelope's carrier is a scope resident in `storage`'s
+    /// own region, pinned by `storage` itself — so there is no pairing left for a caller to get
+    /// wrong and no scope-building this file has to know about.
     ///
-    /// The one entry for every per-call frame, the TCO fresh-tail cart included: a fresh-tail hop's
-    /// `outer` is the callee closure's captured (definition) scope, so chaining that scope's region
-    /// owner is exactly what keeps a closure's captured frame alive across the hop that retires the
-    /// caller. This never over-retains in the common tail loop — a top-level-defined recursive fn
-    /// captures the run-root scope, whose [`Scope::parent_frame_pin`] is `None` (no chain), and a
-    /// locally-defined tail-recursive helper captures one stable per-call def frame, pinned once (the
-    /// same `Rc` every iteration). Only a loop that genuinely builds a fresh closure over each
-    /// iteration's frame retains `O(N)` frames — an unavoidable data dependency, since evaluating the
-    /// final closure reaches every one. The chain is a DAG (each frame's `outer` names a strictly
-    /// older frame), so it forms no cycle; see `design/tail-call-optimization.md`.
-    pub fn new<'p>(outer: &'p Scope<'p>) -> Rc<CallFrame> {
-        let outer_frame = outer.parent_frame_pin();
-        // The storage is heap-pinned behind its own `Rc` from this point on (its region minted
-        // lazily, on the child scope's allocation below), so the erased child-scope pointer stays
-        // valid as the storage Rc moves into the shell.
-        let storage = RegionHost::fresh(outer_frame);
-        // The child scope is born externally-witnessed through the construction door: it brands the
-        // fresh region and the longer-lived lexical parent at one `for<'b>`, builds the real invariant
-        // `Scope<'b>` coupling them, allocs it through the brand, and erases it straight into a
-        // `SealedExtern` — no transient `&'a` minted, no re-anchor outside the substrate. The local
-        // borrow of `storage` ends here (the carrier holds a `&'static` reference, not a borrow of
-        // `storage`), so `storage` moves into the shell below; the `KoanRegion` stays at a fixed heap
-        // address behind the Rc, keeping the erased reference valid.
-        // The child scope seals under a description hosted in this storage's own region with no
-        // members — its cross-region borrow into the parent rides `FrameStorage`'s own `outer` `Rc`
-        // chain, not the reach system — so the envelope covers that storage and nothing else.
-        let envelope = build_frame_child_witnessed(outer, &storage);
+    /// Both spellings of that coupling live with `Scope`, which owns what a scope is:
+    /// [`Scope::open_frame`](crate::machine::core::Scope::open_frame) mints a fresh region and
+    /// births a child in it, and [`Scope::adopt_as_run_frame`](crate::machine::core::Scope::adopt_as_run_frame)
+    /// adopts an already-built run root into the storage that already owns its region.
+    pub(crate) fn around(
+        storage: Rc<FrameStorage>,
+        envelope: Delivered<ScopeRefFamily>,
+    ) -> Rc<CallFrame> {
         Rc::new(CallFrame { envelope, storage })
-    }
-
-    /// The scheduler-owned **run frame**: a frame that *carries an already-built run scope*
-    /// rather than minting a child. Top-level execution runs against this frame so `active_frame`
-    /// is never `None`, which makes a body's re-dispatch-against-its-own-scope uniformly framed
-    /// (Yoked) at every depth — top level included. It never drops mid-run, and its `region` is
-    /// empty — top-level values live in the externally-owned run region, reached via
-    /// `scope.region` — so a Done against it has nothing to lift.
-    ///
-    /// The storage this frame adopts is **derived** from `scope`, not taken: the run root's own
-    /// region owner is by definition the storage that owns the run region, so this frame's
-    /// `region()` equals the run-root region and a top-level-defined FN's captured-region owner
-    /// resolves to it. There is no second storage argument to disagree with `scope`. The adopted run
-    /// scope's borrow is erased into the envelope exactly as every per-call child scope's is — the
-    /// fabrication hazard is deferred to the witness-bounded re-attach.
-    ///
-    /// The run's lookup state and output sink are not taken here: they are the run's, and
-    /// [`RunFrame`](crate::machine::execute) owns them beside the frame this mints.
-    pub fn adopting<'a>(scope: &'a Scope<'a>) -> Rc<CallFrame> {
-        // The run scope lives in the run region and reaches nothing beyond it, so the envelope
-        // covers that one region — read off the scope's own handle, which is also where the
-        // adopted storage comes from.
-        let envelope = scope.deliver_resident::<ScopeRefFamily>(scope);
-        Rc::new(CallFrame {
-            envelope,
-            storage: scope.frame(),
-        })
     }
 
     /// This frame's own `FrameStorage` — the owner of the region its child scope lives in, which
@@ -206,19 +115,19 @@ impl CallFrame {
         self.storage().region()
     }
 
-    /// Whether holding this frame keeps `scope`'s region alive — the gate a scheduler submission
+    /// Whether holding this frame keeps `owner`'s region alive — the gate a scheduler submission
     /// reads before storing a scope reference erased and frame-bounded
-    /// (`NodeScope::YokedChild`).
+    /// (`NodeScope::YokedChild`), asked of the storage that owns the scope's region
+    /// ([`Scope::frame`](crate::machine::core::Scope::frame)).
     ///
     /// Answered from the **pin that actually holds**, not from the lexical scope graph: this
     /// frame's storage and the `outer` chain it keeps alive are the regions it owns a claim on, so
     /// the question is [`RegionHost::pins_region`](RegionHost::pins_region) over
-    /// that chain, asked of the storage `scope` names as its own region's owner. A scope living at
-    /// the **eternal tier** (the run root) needs no claim at all — its region outlives every
-    /// per-call frame, which is exactly why [`Scope::parent_frame_pin`] declines to chain it — so
-    /// it answers `true` without consulting the chain.
-    pub(crate) fn pins_scope_region(&self, scope: &Scope<'_>) -> bool {
-        let owner = scope.frame();
+    /// that chain. Storage at the **eternal tier** (the run root) needs no claim at all — its
+    /// region outlives every per-call frame, which is exactly why
+    /// [`Scope::parent_frame_pin`](crate::machine::core::Scope::parent_frame_pin) declines to chain
+    /// it — so it answers `true` without consulting the chain.
+    pub(crate) fn pins_storage_region(&self, owner: &FrameStorage) -> bool {
         owner.is_eternal() || self.storage.pins_region(owner.region())
     }
 
@@ -263,28 +172,5 @@ impl CallFrame {
     /// the region it names alive regardless.
     pub fn storage_rc(&self) -> Rc<FrameStorage> {
         Rc::clone(self.storage())
-    }
-
-    /// Build a [`KFunction`] capturing a scope **in this frame's own region**, and hand it back at the
-    /// frame borrow's lifetime — the shape a closure capturing its defining frame takes.
-    ///
-    /// Test-only. Production functions take [`KFunction::alloc_captured`] directly, with a scope the
-    /// caller already holds; the Miri shapes need the same value at the *frame's* lifetime. The
-    /// captured scope is minted here rather than read off [`Self::scope_sealed`]: the birth door stores
-    /// the function at the destination's own `'f`, so it needs a `&'f Scope<'f>`, and the frame's
-    /// envelope opens only at a rank-2 brand nothing escapes. What the tests exercise — a callable
-    /// whose captured scope lives in the region the callable itself lives in — holds either way, since
-    /// the minted scope is allocated in `frame`'s storage.
-    #[cfg(test)]
-    pub(crate) fn alloc_capturing_scope<'f>(
-        frame: &'f Rc<CallFrame>,
-        signature: crate::machine::model::SignatureDraft<'f>,
-        body: crate::machine::core::Body<'f>,
-        registries: &crate::machine::model::RunRegistries,
-    ) -> &'f crate::machine::core::KFunction<'f> {
-        let captured = Scope::alloc_run_root(frame.storage());
-        crate::machine::core::KFunction::alloc_captured_for_test(
-            captured, signature, body, registries,
-        )
     }
 }

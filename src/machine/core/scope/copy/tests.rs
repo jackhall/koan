@@ -94,7 +94,7 @@ fn a_self_capturing_binding_copies_to_one_that_binds_the_copy() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let registries = RunRegistries::new();
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
     frame.with_scope(|source| {
         let top = bind_self_capturing(source, "f", 0, &registries);
@@ -124,7 +124,7 @@ fn sibling_bindings_copy_to_closures_over_one_copied_scope() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let registries = RunRegistries::new();
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
     frame.with_scope(|source| {
         bind_self_capturing(source, "a", 0, &registries);
@@ -162,7 +162,7 @@ fn the_eternal_home_is_referenced_verbatim() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let registries = RunRegistries::new();
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
     frame.with_scope(|source| {
         let top = bind_self_capturing(source, "f", 0, &registries);
@@ -190,7 +190,7 @@ fn an_open_source_chain_declines() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let registries = RunRegistries::new();
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
     frame.with_scope(|source| {
         let top = bind_self_capturing(source, "f", 0, &registries);
@@ -244,7 +244,7 @@ fn an_operator_registration_copies_over_one_reborn_record() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let registries = RunRegistries::new();
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
     frame.with_scope(|source| {
         let (source_address, probes) = register_powerset(source, &registries);
@@ -289,7 +289,7 @@ fn a_copied_group_body_shares_one_record_between_its_kind_and_its_table() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let registries = RunRegistries::new();
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
     frame.with_scope(|outer| {
         let source = Scope::alloc_group_child(
@@ -338,7 +338,7 @@ fn a_copied_table_preserves_the_upsert_decisions() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let registries = RunRegistries::new();
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
     frame.with_scope(|source| {
         let (_, probes) = register_powerset(source, &registries);
@@ -388,7 +388,7 @@ fn an_operator_table_prices_its_rebuild() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let registries = RunRegistries::new();
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
     frame.with_scope(|source| {
         let before = source.bindings().binding_copy_cost();
@@ -431,7 +431,7 @@ fn copied_cost(copy: &KFunction<'_>) -> u64 {
 /// charge is read against, so the measurement isolates the table from whatever the rebuilt callable
 /// binding itself contributes.
 fn copied_cost_without_operators<'a>(outer: &'a Scope<'a>, registries: &RunRegistries) -> u64 {
-    let frame: Rc<CallFrame> = CallFrame::new(outer);
+    let frame: Rc<CallFrame> = outer.open_frame();
     frame.with_scope(|source| {
         let top = bind_self_capturing(source, "f", 0, registries);
         source.close();

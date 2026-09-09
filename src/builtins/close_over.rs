@@ -7,7 +7,7 @@
 //!
 //! The block runs over a dedicated **per-call-tier region with no `outer` storage link**, so a value
 //! homed there pins that one region and whatever its captures still borrow — never the chain of
-//! frames the block was written inside. The region comes from `CallFrame::new` handed the innermost
+//! frames the block was written inside. The region comes from `Scope::open_frame` on the innermost
 //! eternal-homed enclosing scope ([`Scope::innermost_eternal_home`]): `parent_frame_pin` declines to
 //! chain an eternal owner, so the fresh storage's `outer` is `None` and the frame's child scope's
 //! *lexical* outer is that eternal scope. Builtins and top-level definitions stay visible through
@@ -232,7 +232,7 @@ fn build<'a>(
         "the block frame's lexical outer must be eternal-homed: an unpinned `&Scope` outer is \
          sound only because its region outlives the run",
     );
-    let frame: Rc<CallFrame> = CallFrame::new(eternal);
+    let frame: Rc<CallFrame> = eternal.open_frame();
 
     // The body crosses to the scheduler raw and is frozen by the reinstalled step, so the working
     // copies land in the block frame's own region and are released with it. The seed's failure

@@ -38,7 +38,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // new frame's `outer` pointer) — matching a normal call frame. The tail is the whole quoted
     // expression run in the fresh frame's own scope (`BlockScope::None`): no block push, no seed,
     // and — unlike an arm — no split, so a parenthesized group evaluates as one expression.
-    let frame: Rc<CallFrame> = CallFrame::new(ctx.scope);
+    let frame: Rc<CallFrame> = ctx.scope.open_frame();
     block_tail(
         ctx.scope.brand(),
         FramePlacement::FreshChild { frame },

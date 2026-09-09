@@ -203,7 +203,7 @@ fn enter_user_fn<'step>(
     };
     // Chained off the closure's captured (definition) scope, so a closure's captured per-call frame
     // survives the hop while the caller's cart does not.
-    let frame = CallFrame::new(function.captured_scope());
+    let frame = function.captured_scope().open_frame();
     let exec_frame = ExecFrame {
         region: Rc::clone(&frame),
     };

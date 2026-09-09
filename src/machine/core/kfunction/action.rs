@@ -845,10 +845,10 @@ pub enum BlockEntry<'a> {
 /// The cart a `Tail` runs in.
 pub enum FramePlacement {
     /// The TCO tail-call cart — FN-body invoke, deferred `PerCall` tails — minted by the decide
-    /// through `CallFrame::new(outer)`, where `outer` is the callee closure's captured (definition)
+    /// through `outer.open_frame()`, where `outer` is the callee closure's captured (definition)
     /// scope, so the fresh cart chains that scope's region owner and a closure's captured per-call
     /// frame survives the hop. (A top-level-defined recursive fn captures the run-root scope and so
-    /// chains nothing; see [`CallFrame::new`].)
+    /// chains nothing; see [`Scope::open_frame`](crate::machine::core::Scope::open_frame).)
     ///
     /// Carrying the built cart rather than the scope to build it from is what puts the callee's
     /// argument bind in the step that *emits* the replace: the arguments are relocated into this
@@ -856,7 +856,7 @@ pub enum FramePlacement {
     /// the reinstall with nothing left reading it. Distinct from [`FreshChild`](Self::FreshChild),
     /// which installs a cart the same way but does not retire the slot's current scope.
     FreshTail { frame: Rc<CallFrame> },
-    /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`), handed
+    /// A **pre-built** fresh cart the builtin minted (`Scope::open_frame`), handed
     /// to the harness to install: EVAL builds one for the UAF guard, so bindings the quoted body
     /// introduces die with it.
     FreshChild { frame: Rc<CallFrame> },

@@ -404,7 +404,7 @@ impl KoanRegionExt for KoanRegion {
 
 /// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
 /// set. `RegionHost` lazily mints its region on first allocation — reached by the child `Scope`
-/// [`CallFrame::new`](super::frame::CallFrame::new) builds immediately, so a constructed frame's
+/// [`Scope::open_frame`](crate::machine::core::Scope::open_frame) builds immediately, so a constructed frame's
 /// region is minted by the time anything reads it — and the `outer` link chains the
 /// lexical-ancestor frames' storage alive. An escaping value (a returned closure, a module frame)
 /// pins *this* — not the [`CallFrame`](super::frame::CallFrame) shell — so a tail hop's shell can
@@ -418,7 +418,8 @@ pub type FrameStorage = RegionHost<KoanStorageProfile>;
 /// The run-root storage: a fresh run region with no `outer` link, stamped at the eternal tier
 /// ([`RegionHost::is_eternal`]) so anything holding it can tell the run region from a per-call one.
 /// Held by `run_program` (and the test harness) so the run-root scope's region has an owning Rc;
-/// [`CallFrame::adopting`](super::frame::CallFrame::adopting) reuses it as the run frame's storage,
+/// [`Scope::adopt_as_run_frame`](crate::machine::core::Scope::adopt_as_run_frame) reuses it as
+/// the run frame's storage,
 /// and the run-root scope reads it back as its region owner through the region's own host
 /// back-link. Public so an integration test can stand one up: it mints nothing itself, only
 /// building the library's `RegionHost` shell whose region lazily mints on first allocation.

@@ -56,7 +56,7 @@ fn region_pure_scalar_rides_the_envelope_and_releases_at_envelope_drop() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let producer = CallFrame::new(scope);
+    let producer = scope.open_frame();
 
     let (carrier, weak) = resident_scalar(&producer, false);
     let delivered = Delivered::lift(
@@ -107,7 +107,7 @@ fn delivery_envelope_foreign_bundle_releases_at_envelope_drop() {
     let program = program_storage();
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
-    let producer = CallFrame::new(test_run.scope);
+    let producer = test_run.scope.open_frame();
     // A distinct region the terminal reaches; the envelope's foreign bundle will be its sole owner.
     let foreign = run_root_storage();
     let weak = Rc::downgrade(&foreign);
@@ -140,7 +140,7 @@ fn home_borrowing_value_keeps_its_home_membership_and_rides_the_envelope() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let producer = CallFrame::new(scope);
+    let producer = scope.open_frame();
 
     let (carrier, weak) = resident_scalar(&producer, true);
     let delivered = Delivered::lift(
@@ -369,7 +369,7 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let producer = CallFrame::new(scope);
+    let producer = scope.open_frame();
 
     let (carrier, weak) = resident_scalar(&producer, false);
     let cell = test_run
@@ -426,7 +426,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let producer = CallFrame::new(scope);
+    let producer = scope.open_frame();
 
     let (carrier, birth_addr) = producer.with_scope(|child| {
         let obj = child.brand().alloc_scalar(Scalar::Number(7.0));

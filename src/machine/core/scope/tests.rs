@@ -204,7 +204,7 @@ fn the_per_call_chain_stops_at_the_eternal_home() {
         "an eternal-homed scope has no per-call portion of its own",
     );
 
-    let frame: Rc<CallFrame> = CallFrame::new(eternal);
+    let frame: Rc<CallFrame> = eternal.open_frame();
     frame.with_scope(|inner| {
         let block = inner.alloc_child_under();
         assert_eq!(
@@ -227,7 +227,7 @@ fn the_chain_cost_sums_only_the_per_call_portion() {
     let eternal = test_run.scope.alloc_child_under();
     bind_number(eternal, "outer", 1.0, &registries);
 
-    let frame: Rc<CallFrame> = CallFrame::new(eternal);
+    let frame: Rc<CallFrame> = eternal.open_frame();
     frame.with_scope(|inner| {
         bind_number(inner, "inner", 2.0, &registries);
         assert_eq!(
@@ -250,7 +250,7 @@ fn the_callable_chooser_pins_a_foreign_crossing() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
 
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
     frame.with_scope(|inner| {
         inner.close();
         assert_eq!(
@@ -272,7 +272,7 @@ fn the_callable_chooser_pins_an_unready_chain() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
 
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
     frame.with_scope(|inner| {
         let host = inner.region();
         assert_eq!(
@@ -306,7 +306,7 @@ fn the_callable_chooser_pins_a_large_enough_environment() {
     // A fresh frame per size: a bind into a closed scope is illegal, so the environment has to be
     // built before the scope closes and the chooser can be asked.
     let pinned_at = (1usize..40).find(|entries| {
-        let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+        let frame: Rc<CallFrame> = test_run.scope.open_frame();
         frame.with_scope(|inner| {
             for entry in 0..*entries {
                 let text = inner.brand().allocator().text(&"x".repeat(512));
@@ -345,7 +345,7 @@ fn the_callable_chooser_consolidates_a_cheap_environment() {
     let test_run = TestRun::silent(&program, &root);
     let registries = RunRegistries::new();
 
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
     frame.with_scope(|inner| {
         // Bulk allocated into the region without being bound: the pin would retain all of it, and
         // the environment's own weight is one scalar.

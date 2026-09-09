@@ -23,12 +23,16 @@
 //! alias to a local family, so the payload's own file is where a reader finds every state it travels
 //! in.
 //!
-//! **What this module imports back.** [`region`] names the value families its typed alloc doors
-//! store — `KObject`, `KFunction`, `Held` — and [`frame`] names `Scope` and the run-frame
-//! registries; the container storage names `Held`, `KObject`, `KKey` and `Symbol`. Nothing from
-//! `machine::execute`, and nothing from `machine::model::types` beyond the lifetime-free [`KType`]
-//! handle. That list is the inventory a future payload-family inversion would work from; anything
-//! not on it is a new edge, not a detail.
+//! **What this module imports back.** [`frame`] names [`Scope`](crate::machine::core::Scope) to
+//! read the child a frame's envelope carries — the payload of the family it holds — and the
+//! container storage names `Held`, `KObject`, `KKey` and `Symbol` for the same reason. [`region`]
+//! names nothing but the lifetime-free [`KType`](crate::machine::model::KType) handle its
+//! `RegionTypeFamily` carries. Nothing from `machine::execute`, nothing that builds a value (a
+//! frame's child scope is born by [`Scope::open_frame`](crate::machine::core::Scope::open_frame),
+//! which hands this module the finished pair), and nothing of the run's own state — the registries,
+//! the interner and the output sink belong to
+//! [`execute::RunFrame`](crate::machine::execute). That list is the inventory a future
+//! payload-family inversion would work from; anything not on it is a new edge, not a detail.
 //!
 //! See [memory-model.md](../design/memory-model.md),
 //! [value-substrates.md](../design/value-substrates.md) and

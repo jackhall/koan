@@ -1014,7 +1014,7 @@ impl<'run> Host<'run> {
     /// Decide a run-scope submission's [`NodeScope`] handle — always cart-witnessed, never anchored
     /// at a free `'run`. The witnessing frame is the active cart, else the run frame: its *own*
     /// scope yields [`NodeScope::Yoked`], and a scope whose region it merely pins
-    /// ([`CallFrame::pins_scope_region`]) yields [`NodeScope::YokedChild`] — a block scope
+    /// ([`CallFrame::pins_storage_region`]) yields [`NodeScope::YokedChild`] — a block scope
     /// allocated in an ancestor region, held by the frame's `FrameStorage.outer` chain, stored
     /// erased and reattached frame-bounded.
     pub(in crate::machine::execute) fn resolve_node_scope<'a>(
@@ -1025,7 +1025,7 @@ impl<'run> Host<'run> {
             if f.with_scope(|fs| scopes_eq(fs, scope)) {
                 return NodeScope::Yoked;
             }
-            if f.pins_scope_region(scope) {
+            if f.pins_storage_region(&scope.frame()) {
                 return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");
@@ -1034,7 +1034,7 @@ impl<'run> Host<'run> {
             if rf.with_scope(|rs| scopes_eq(rs, scope)) {
                 return NodeScope::Yoked;
             }
-            if rf.pins_scope_region(scope) {
+            if rf.pins_storage_region(&scope.frame()) {
                 return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
             }
         }

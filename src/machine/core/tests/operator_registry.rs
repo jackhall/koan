@@ -450,7 +450,7 @@ fn resolved_group_survives_the_declaring_frames_shell_drop() {
     let test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
 
-    let declaring: Rc<CallFrame> = CallFrame::new(root);
+    let declaring: Rc<CallFrame> = root.open_frame();
     let envelope: DeliveredOperatorGroup = declaring.with_scope(|scope| {
         let group = declare(scope, &["≺"], ReductionMode::FoldRight);
         scope
@@ -464,7 +464,7 @@ fn resolved_group_survives_the_declaring_frames_shell_drop() {
             .expect("the declaring scope owns the probe");
         // The reading chain sits one region further down, so the hit is an ancestor's and the lift
         // happens at the declaring scope.
-        let reader: Rc<CallFrame> = CallFrame::new(scope);
+        let reader: Rc<CallFrame> = scope.open_frame();
         reader.with_scope(|chain_scope| {
             chain_scope
                 .resolve_operator_group_delivered(operator_run(&["≺"], test_run.registries()), None)
@@ -504,7 +504,7 @@ fn resolved_carrier_reaches_the_declaring_ancestors_region() {
         .unwrap();
 
     // A per-call frame opens its own region; the group was declared one region up.
-    let frame: Rc<CallFrame> = CallFrame::new(ancestor);
+    let frame: Rc<CallFrame> = ancestor.open_frame();
     frame.with_scope(|inner| {
         assert!(
             !std::ptr::eq(inner.region(), ancestor.region()),

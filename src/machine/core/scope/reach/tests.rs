@@ -24,7 +24,7 @@ use crate::memory::{program_storage, run_root_storage};
 /// borrow leaf pointing at `home`, the shape a closure capturing its own defining frame takes.
 fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KFunction<'run> {
     let registries = RunRegistries::new();
-    CallFrame::alloc_capturing_scope(
+    crate::machine::KFunction::alloc_capturing_frame_scope(
         home,
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::NULL),
@@ -87,7 +87,7 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let consumer = test_run.scope;
-    let producer: Rc<CallFrame> = CallFrame::new(consumer);
+    let producer: Rc<CallFrame> = consumer.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
 
@@ -193,8 +193,8 @@ fn a_projected_cell_carries_its_own_run_not_the_containers_union() {
     let consumer = test_run.scope;
     // Two sibling frames: neither one's owner chain keeps the other's region alive, so a run naming
     // one provably does not cover the other.
-    let home: Rc<CallFrame> = CallFrame::new(consumer);
-    let foreign: Rc<CallFrame> = CallFrame::new(consumer);
+    let home: Rc<CallFrame> = consumer.open_frame();
+    let foreign: Rc<CallFrame> = consumer.open_frame();
     let registries = RunRegistries::new();
     let types = &registries.types;
 

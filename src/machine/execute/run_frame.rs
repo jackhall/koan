@@ -71,7 +71,7 @@ impl RunFrame {
         labels: LabelInterner,
     ) -> RunFrame {
         RunFrame {
-            frame: CallFrame::adopting(scope),
+            frame: scope.adopt_as_run_frame(),
             registries: Rc::new(RunRegistries::with_labels(labels)),
             writer: RunWriter::new(out),
         }

@@ -158,9 +158,9 @@ runs under plain `cargo test`. One test here pins
 the **seed-side re-anchor** — a caller-lifetime value crossing into the opened scope's own region as
 a delivery envelope, whose bind relocates it there, the shape the MATCH / TRY `it`-bind and the
 user-fn param-bind take. A bare caller reference cannot cross the `for<'b>` signature at all, so the
-envelope is the whole route. `CallFrame::adopting` (the scheduler-owned run
-frame) carries the same `&Scope<'_>` erasure as `new`, over the run scope it adopts rather than a
-freshly-minted child; it is built on the first run-lifetime submission, so every scheduler-driving slate
+envelope is the whole route. `Scope::adopt_as_run_frame` (the scheduler-owned run
+frame) carries the same `&Scope<'_>` erasure as `Scope::open_frame`, over the run scope it adopts
+rather than a freshly-minted child; it is built on the first run-lifetime submission, so every scheduler-driving slate
 test below (`try_inside_tco_position_preserves_frame_chain`, `park_and_replay_minimal_program_for_miri`, …) exercises it
 end-to-end — the run scope outlives the frame, so no separate minimal test. A second test pins the
 **born door's own round trip** nested inside that open: a grandchild scope built and stored at the
@@ -468,7 +468,7 @@ holder stores a captured / defining / parent scope as a plain `&'a Scope<'a>` (`
 the holder as a whole** when the holder is read out of its region (the branded re-anchor in
 `witnessed.rs`), so the accessors are bare field reads and the families carry no `unsafe` of their own.
 The construction-time reference is built at `'a` by plain coercion (a same-region child) or at the
-construction door's generative brand (a per-call frame child, `build_frame_child_witnessed`) — there is
+construction door's generative brand (a per-call frame child, `Scope::open_frame`) — there is
 no construction-time re-anchor verb. The shape is pinned library-side by the workgraph slate's
 born-door group over an invariant holder that embeds a foreign-region parent and takes an
 interior-mutable write after the store (`the_born_with_door_embeds_a_parent_from_another_region`,

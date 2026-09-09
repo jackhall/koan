@@ -269,6 +269,27 @@ impl<'a> KFunction<'a> {
     /// value rests for free — the library's self rule strips its own region from what is retained —
     /// so this adds no coverage the birth did not already compose. Production keeps the envelope and
     /// feeds both registration doors from it.
+    /// Build a `KFunction` capturing a scope **in `frame`'s own region**, handed back at the frame
+    /// borrow's lifetime — the shape a closure capturing its defining frame takes.
+    ///
+    /// Test-only. Production functions take [`Self::alloc_captured`] directly, with a scope the
+    /// caller already holds; the Miri shapes need the same value at the *frame's* lifetime. The
+    /// captured scope is minted here rather than read off `CallFrame::scope_sealed`: the birth door
+    /// stores the function at the destination's own `'f`, so it needs a `&'f Scope<'f>`, and the
+    /// frame's envelope opens only at a rank-2 brand nothing escapes. What the tests exercise — a
+    /// callable whose captured scope lives in the region the callable itself lives in — holds either
+    /// way, since the minted scope is allocated in `frame`'s storage.
+    #[cfg(test)]
+    pub(crate) fn alloc_capturing_frame_scope<'f>(
+        frame: &'f std::rc::Rc<crate::memory::CallFrame>,
+        signature: SignatureDraft<'f>,
+        body: Body<'f>,
+        registries: &RunRegistries,
+    ) -> &'f KFunction<'f> {
+        let captured = Scope::alloc_run_root(frame.storage());
+        KFunction::alloc_captured_for_test(captured, signature, body, registries)
+    }
+
     #[cfg(test)]
     pub(crate) fn alloc_captured_for_test(
         captured: &'a Scope<'a>,

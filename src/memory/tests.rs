@@ -50,21 +50,21 @@ fn pins_region_walks_outer_chain() {
     );
 }
 
-/// `CallFrame::pins_scope_region` reads the **storage** chain, not the lexical scope graph: a frame
+/// `CallFrame::pins_storage_region` reads the **storage** chain, not the lexical scope graph: a frame
 /// pins its own child scope's region, answers `true` for an eternal-tier scope (which needs no pin
 /// at all), and `false` for a scope in an unrelated per-call region.
 #[test]
-fn pins_scope_region_reads_the_storage_chain() {
+fn pins_storage_region_reads_the_storage_chain() {
     let root = run_root_storage();
     let run_scope = run_root_bare(&root);
-    let frame = CallFrame::new(run_scope);
+    let frame = run_scope.open_frame();
 
     assert!(
-        frame.with_scope(|child| frame.pins_scope_region(child)),
+        frame.with_scope(|child| frame.pins_storage_region(&child.frame())),
         "a frame pins the region its own child scope lives in"
     );
     assert!(
-        frame.pins_scope_region(run_scope),
+        frame.pins_storage_region(&run_scope.frame()),
         "an eternal-tier scope needs no pin, so every frame answers for it"
     );
 
@@ -72,7 +72,7 @@ fn pins_scope_region_reads_the_storage_chain() {
     let unrelated_storage = per_call_storage();
     let unrelated = run_root_bare(&unrelated_storage);
     assert!(
-        !frame.pins_scope_region(unrelated),
+        !frame.pins_storage_region(&unrelated.frame()),
         "a frame does not pin an unrelated per-call region"
     );
 }
@@ -98,7 +98,7 @@ fn with_scope_opens_child_scope_at_brand() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let frame: Rc<CallFrame> = CallFrame::new(scope);
+    let frame: Rc<CallFrame> = scope.open_frame();
     // Scalar copy-out: matches `scope_id`.
     let id = frame.with_scope(|s| s.id);
     assert_eq!(id, frame.scope_id());
@@ -136,7 +136,7 @@ fn with_scope_relocates_seed_value_into_brand() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let frame: Rc<CallFrame> = CallFrame::new(scope);
+    let frame: Rc<CallFrame> = scope.open_frame();
     let registries = test_run.registries();
     frame.with_scope(|child| {
         child
@@ -167,7 +167,7 @@ fn born_child_scope_survives_subsequent_alloc_in_its_own_region() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let frame: Rc<CallFrame> = CallFrame::new(scope);
+    let frame: Rc<CallFrame> = scope.open_frame();
     let registries = test_run.registries();
     frame.with_scope(|child| {
         let _sibling = child.brand().alloc_scalar(Scalar::Number(1.0));
@@ -207,9 +207,9 @@ fn call_frame_chained_outer_frame_walkable() {
     let region = run_root_storage();
     let run_test_run = TestRun::silent(&program, &region);
     let run_scope = run_test_run.scope;
-    let outer = CallFrame::new(run_scope);
+    let outer = run_scope.open_frame();
     // The returned `Rc<CallFrame>` carries no brand lifetime, so it escapes the open.
-    let inner = outer.with_scope(CallFrame::new);
+    let inner = outer.with_scope(|scope| scope.open_frame());
     drop(outer);
     inner.with_scope(|inner_child| {
         let outer_scope = inner_child
@@ -233,7 +233,7 @@ fn builtin_frame_at_top_level_chains_nothing() {
     let run_test_run = TestRun::silent(&program, &region);
     let run_scope = run_test_run.scope;
     assert!(run_scope.parent_frame_pin().is_none());
-    let frame = CallFrame::new(run_scope);
+    let frame = run_scope.open_frame();
     assert!(frame.storage_rc().outer().is_none());
 }
 
@@ -246,7 +246,7 @@ fn builtin_frame_under_per_call_parent_chains_region_owner() {
     let region = run_root_storage();
     let run_test_run = TestRun::silent(&program, &region);
     let run_scope = run_test_run.scope;
-    let outer = CallFrame::new(run_scope);
+    let outer = run_scope.open_frame();
     let inner = outer.with_scope(|outer_child| {
         // `outer_child` lives in `outer`'s per-call region, so it derives `Some(outer.storage)`.
         assert!(Rc::ptr_eq(
@@ -255,7 +255,7 @@ fn builtin_frame_under_per_call_parent_chains_region_owner() {
                 .expect("a per-call parent scope pins its region owner"),
             &outer.storage_rc(),
         ));
-        CallFrame::new(outer_child)
+        outer_child.open_frame()
     });
     assert!(Rc::ptr_eq(
         inner
@@ -269,7 +269,7 @@ fn builtin_frame_under_per_call_parent_chains_region_owner() {
 /// A fresh-tail hop over a **per-call** captured scope chains that scope's region owner, so a
 /// closure capturing a per-call frame survives the hop that retires the caller — the same derivation
 /// as [`builtin_frame_under_per_call_parent_chains_region_owner`], reached through the fresh-tail
-/// path (`enter_user_fn` mints the `FreshTail` cart via `CallFrame::new`). A top-level-defined
+/// path (`enter_user_fn` mints the `FreshTail` cart via `Scope::open_frame`). A top-level-defined
 /// recursive fn instead captures the run-root scope and chains nothing (see
 /// [`builtin_frame_at_top_level_chains_nothing`]), keeping the common tail loop constant-space.
 #[test]
@@ -278,9 +278,9 @@ fn fresh_tail_hop_over_per_call_captured_scope_pins_it() {
     let region = run_root_storage();
     let run_test_run = TestRun::silent(&program, &region);
     let run_scope = run_test_run.scope;
-    let outer = CallFrame::new(run_scope);
+    let outer = run_scope.open_frame();
     // The fresh-tail hop's `outer` is the callee's captured scope; here that scope is per-call.
-    let tail = outer.with_scope(CallFrame::new);
+    let tail = outer.with_scope(|scope| scope.open_frame());
     assert!(Rc::ptr_eq(
         tail.storage_rc()
             .outer()
@@ -317,7 +317,7 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
     // escaped closure pins. The frame shell and the borrowing scope drop at the block boundary.
     let escapee = {
         let scope = run_root_bare(&run_root);
-        let frame = CallFrame::new(scope);
+        let frame = scope.open_frame();
         frame.storage_rc()
     };
     assert_eq!(
@@ -559,7 +559,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
 
     // Producer: a plain-data record resident in its own frame's region, born through the fold door —
     // the shape a declared substrate return arrives as at the Done boundary.
-    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let producer_frame: Rc<CallFrame> = scope.open_frame();
     let owned_cells = crate::memory::FrameCoverage::empty();
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
         producer_frame.brand().handle(),
@@ -945,7 +945,7 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
     let test_run = TestRun::silent(&program, &root);
     let consumer = test_run.scope;
 
-    let producer: Rc<CallFrame> = CallFrame::new(consumer);
+    let producer: Rc<CallFrame> = consumer.open_frame();
     let producer_scope = run_root_bare(producer.storage());
     // The bytes land in `producer`'s bump, so the value genuinely borrows into the region the copy
     // below claims to release.
@@ -1001,7 +1001,7 @@ fn region_death_frees_every_drop_free_family() {
     let test_run = TestRun::silent(&program, &root);
     let types = test_run.registry_handle();
 
-    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
     let scope = run_root_bare(frame.storage());
     let owned_cells = FrameCoverage::empty();
 
