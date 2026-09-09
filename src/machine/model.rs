@@ -41,10 +41,13 @@ pub use types::{
 pub use types::{display_label, render_label};
 pub(crate) use types::{render_untyped_key, summarize_dispatch, untyped_key_of};
 pub use values::{
-    Carried, CarriedFamily, DeliveredCarried, Held, KKey, KObject, Scalar, SplicedCell,
-    ValueEqualityError,
+    Carried, CarriedFamily, ContainerSubstrate, DeliveredCarried, Held, KKey, KObject, PartedCell,
+    Scalar, SplicedCell, ValueEqualityError,
 };
-pub(crate) use values::{product_reaches_region, read_resting};
+pub(crate) use values::{
+    DictSubstrate, ListSubstrate, PayloadSubstrate, RecordSubstrate, Rehomed, object_copy_cost,
+    product_reaches_region, read_resting,
+};
 
 pub(crate) use ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass, ProgramExpression,

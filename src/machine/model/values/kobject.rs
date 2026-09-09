@@ -18,11 +18,11 @@ use smallvec::SmallVec;
 use super::cell::DeliveredCarried;
 use super::{KKey, Module};
 use crate::machine::model::Held;
-use crate::memory::Rehomed;
-use crate::memory::container_substrate::{
+use crate::machine::model::Rehomed;
+use crate::machine::model::values::container_substrate::{
     HeldCells, ListLayout, PayloadLayout, RecordLayout, held_copy_cost,
 };
-use crate::memory::{
+use crate::machine::model::{
     ContainerSubstrate, DictSubstrate, ListSubstrate, PayloadSubstrate, RecordSubstrate,
 };
 

@@ -297,11 +297,11 @@ pub fn drive_step_allocator(guard: impl for<'b> FnOnce(StepAllocator<'b>)) {
 mod tests {
     use super::*;
     use crate::builtins::test_support::TestRun;
+    use crate::machine::model::RecordSubstrate;
     use crate::machine::model::{DeliveredCarried, Held};
     use crate::machine::model::{KObject, Record};
     use crate::memory::{
-        CallFrame, FoldedPlacement, FrameStorageExt, RecordSubstrate, program_storage,
-        run_root_storage,
+        CallFrame, FoldedPlacement, FrameStorageExt, program_storage, run_root_storage,
     };
 
     /// The legal shape: born a region-pure carrier, then exit through the sole seal door into a

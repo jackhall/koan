@@ -1084,7 +1084,7 @@ mod seam_verb_table {
     }
 
     /// The chooser's substrate borrow, extracted from a `&KObject::Record`.
-    fn substrate_of<'a>(value: &KObject<'a>) -> &'a crate::memory::RecordSubstrate<'a> {
+    fn substrate_of<'a>(value: &KObject<'a>) -> &'a crate::machine::model::RecordSubstrate<'a> {
         match value {
             KObject::Record(substrate, _) => substrate,
             other => panic!("expected a Record, got {:?}", other.ktype()),

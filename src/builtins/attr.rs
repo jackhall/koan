@@ -31,11 +31,11 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::Carried;
 use crate::machine::model::KKind;
+use crate::machine::model::PartedCell;
 use crate::machine::model::{BinderSymbol, Module, NodeSchema, TypeSymbol};
 use crate::machine::model::{CarriedFamily, Held};
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
-use crate::memory::PartedCell;
 
 use super::{arg, kw, sig};
 use crate::machine::BoundArgs;

@@ -83,7 +83,7 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
 
 Each cell-bearing substrate is one index-generic **wrapper struct**,
-[`ContainerSubstrate<'a, C>`](../src/memory/container_substrate.rs):
+[`ContainerSubstrate<'a, C>`](../src/machine/model/values/container_substrate.rs):
 the cells in workgraph's sectioned storage ([§ Sectioned reach](#sectioned-reach)),
 a payload-specific index `C` mapping a name / key / position onto a cell index,
 and the interned union over the runs. Reach and cost both ride the sectioned

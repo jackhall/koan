@@ -69,6 +69,7 @@ use crate::machine::core::{DeliveredFunction, SealedFunction};
 use crate::machine::model::BindKind;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DeliveredCarried;
+use crate::machine::model::object_copy_cost;
 use crate::machine::model::{
     BinderSymbol, IdentityBuildHasher, KeywordSymbol, RunRegistries, TypeSymbol, ValueSymbol,
     render_label,
@@ -81,7 +82,6 @@ use crate::machine::model::{KType, UntypedKey};
 use crate::memory::BumpBackedMap;
 use crate::memory::RegionBrand;
 use crate::memory::Sealed;
-use crate::memory::object_copy_cost;
 use crate::memory::{BumpVec, bump_table, reattachable};
 
 use super::kerror::{KError, KErrorKind};

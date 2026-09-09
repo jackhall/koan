@@ -118,7 +118,7 @@ fn collect_object_addresses(object: &KObject<'_>, out: &mut AddressSet) {
 /// The substrate's own address plus every cell it stores — the shared arm of the four composite
 /// carriers, which differ only in their index block.
 fn collect_substrate_addresses<C>(
-    substrate: &crate::memory::ContainerSubstrate<'_, C>,
+    substrate: &crate::machine::model::ContainerSubstrate<'_, C>,
     out: &mut AddressSet,
 ) {
     out.insert(substrate as *const _ as usize);

@@ -4,7 +4,6 @@
 
 use std::rc::Rc;
 
-use super::container_substrate::RecordSubstrate;
 use super::region::*;
 use super::substrate::{RegionHost, WitnessRegion};
 use super::*;
@@ -18,6 +17,7 @@ use crate::machine::core::{Action, Body, KFunction};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::RecordSubstrate;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::{Argument, ReturnType, SignatureDraft, SignatureElement};

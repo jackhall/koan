@@ -11,9 +11,9 @@ use crate::machine::ProducerId;
 use crate::machine::core::bindings::{BindingIndex, WriteGate};
 use crate::machine::model::AnnouncedData;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::object_copy_cost;
 use crate::machine::model::{KObject, RegionEscape, copy_or_pin_callable};
 use crate::memory::CallFrame;
-use crate::memory::object_copy_cost;
 use crate::memory::{program_storage, run_root_storage};
 
 /// Bind `name` to the number `value` in `scope`, through the construction-time value door.

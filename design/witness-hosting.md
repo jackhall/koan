@@ -260,7 +260,7 @@ rather than adding an obligation class.
 
 Where a seam has to *ask* where a composite lives — the copy-versus-pin decision's
 home-crossing test — it reads the answer off the value:
-[`ContainerSubstrate::homed_in`](../src/memory/container_substrate.rs)
+[`ContainerSubstrate::homed_in`](../src/machine/model/values/container_substrate.rs)
 compares the substrate's own stored description's host region by pointer. A region keeps no
 address table at all, so there is nothing else to consult; and nothing else is needed,
 because the door that placed the substrate is what made the stored host true.

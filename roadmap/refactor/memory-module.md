@@ -13,8 +13,8 @@ delivered carrier aliases ([carrier_witness.rs](../../src/memory/substrate.rs)) 
 reference families ([ref_carriers.rs](../../src/machine/core/scope.rs)). Under
 `machine::model::values` sit the value-channel cells `Held` and `Carried`
 ([carried.rs](../../src/machine/model/values/cell.rs)), the container substrates
-([container_substrate.rs](../../src/memory/container_substrate.rs)) and the rehoming
-door ([rehomed.rs](../../src/memory/rehomed.rs)). Nothing names the set: a reader
+([container_substrate.rs](../../src/machine/model/values/container_substrate.rs)) and the rehoming
+door ([rehomed.rs](../../src/machine/model/values/rehomed.rs)). Nothing names the set: a reader
 looking for "where a value lives and how long" walks [memory-model.md](../../design/memory-model.md),
 [value-substrates.md](../../design/value-substrates.md) and
 [per-call-region/](../../design/per-call-region/README.md) to find files in two directories that

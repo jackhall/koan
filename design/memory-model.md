@@ -554,7 +554,7 @@ and the parent-liveness chain stays typed by `CallFrame::new`.
 
 Where a seam still has to *ask* where a composite lives — the copy-versus-pin decision's
 home-crossing test — it reads the answer off the value:
-[`ContainerSubstrate::homed_in`](../src/memory/container_substrate.rs) compares the
+[`ContainerSubstrate::homed_in`](../src/machine/model/values/container_substrate.rs) compares the
 substrate's own stored reach description's host region by pointer. A region keeps no address table
 at all — no membership vector, no per-family recording hook, no post-store side effect — so there is
 nothing else it *could* consult; and there is no need, because the door that placed the substrate is

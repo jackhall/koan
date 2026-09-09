@@ -13,14 +13,11 @@
 //! is non-empty", borrows-home is the description's own home-relative query. The cost memo is a
 //! read on the storage's own weight for the same reason — a stored construction-time fact, not a
 //! fold a door re-runs. See
-//! [design/value-substrates.md § Sectioned reach](../../design/value-substrates.md#sectioned-reach).
+//! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
 
-use super::frame::FrameReach;
-use super::region::FoldingBrand;
-use super::substrate::{BumpBackedMap, CellRef, Opened, Sectioned};
-use crate::machine::model::Held;
 use crate::machine::model::labels::Symbol;
-use crate::machine::model::{KKey, KObject};
+use crate::machine::model::{Held, KKey, KObject};
+use crate::memory::{BumpBackedMap, CellRef, FoldingBrand, FrameReach, Opened, Sectioned};
 
 /// The sectioned cell storage every container substrate holds: [`Held`] cells anchored to the
 /// container's own region `'a`, partitioned into runs.
@@ -37,7 +34,7 @@ pub type PartedCell<'a> = Opened<'a, CellRef<Held<'static>>>;
 /// record needs no table, and no field text lives in the substrate at all.
 ///
 /// `Copy`, and the slice it names is bump-hosted through
-/// [`RegionBrand::allocator`](super::region::RegionBrand::allocator). A [`Symbol`] is
+/// [`RegionBrand::allocator`](crate::memory::RegionBrand::allocator). A [`Symbol`] is
 /// fixed-width and owns nothing, so a record's index runs no `Drop` at region death.
 #[derive(Clone, Copy)]
 pub struct RecordLayout<'a> {
@@ -232,7 +229,7 @@ impl<'a> ListSubstrate<'a> {
 /// [`KKey`]. The index is frozen at construction (last-wins dedup happens in the transient
 /// construction map) and never written again; cell order follows the construction map's iteration
 /// order, so entry order is unspecified. The index block is a
-/// [`BumpAllocator::frozen_table`](super::substrate::BumpAllocator::frozen_table) hosted in the
+/// [`BumpAllocator::frozen_table`](crate::memory::BumpAllocator::frozen_table) hosted in the
 /// substrate's own region bump:
 /// its glue-free key and value are what let region death reclaim the buckets by releasing chunks
 /// rather than by running a destructor. Every key's string bytes are region-hosted too, so the table
