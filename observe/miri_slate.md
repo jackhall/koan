@@ -709,9 +709,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-09: 1282s — 34 tests, 0 leaks, 0 UB
 - 2026-09-09: 1267s — 34 tests, 0 leaks, 0 UB
 - 2026-09-08: 1831s — 34 tests, 0 leaks, 0 UB
 - 2026-09-06: 956s — 34 tests, 0 leaks, 0 UB
 - 2026-09-04: 965s — 34 tests, 0 leaks, 0 UB
-- 2026-09-03: 1098s — 33 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
