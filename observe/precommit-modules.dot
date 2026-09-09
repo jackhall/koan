@@ -314,6 +314,7 @@ digraph {
     "koan::builtins::branch_walk" -> "koan::memory" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::catch" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::memory" [label="uses", style="dashed"];
     "koan::builtins::close_over" -> "koan::builtins" [label="uses", style="dashed"];
@@ -970,7 +971,6 @@ digraph {
     "koan::memory::frame" -> "koan::memory::substrate" [label="uses", style="dashed"];
     "koan::memory::program" -> "koan::memory::region" [label="uses", style="dashed"];
     "koan::memory::program" -> "koan::memory::substrate" [label="uses", style="dashed"];
-    "koan::memory::region" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::memory::region" -> "koan::memory::frame" [label="uses", style="dashed"];
     "koan::memory::region" -> "koan::memory::substrate" [label="uses", style="dashed"];
     "koan::memory::substrate" -> "koan::memory::region" [label="uses", style="dashed"];

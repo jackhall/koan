@@ -75,11 +75,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 /// (`Result.Ok v` / `Result.Error <lowered KError>`) via a `Catch` finish.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::build_type_operand;
+    use crate::machine::execute::RegionTypeFamily;
     use crate::machine::model::Carried;
     use crate::machine::model::CarriedFamily;
     use crate::machine::{Action, DepPlacement, DepRequest, require_kexpression};
     use crate::memory::FoldingBrand;
-    use crate::memory::RegionTypeFamily;
     use crate::memory::SubstrateDoor;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", &SLOTS.expr));
     // Capture the prelude `Result` members at body time so the CATCH value carries the same

@@ -20,9 +20,7 @@ use super::frame::{FrameCoverage, FrameReach};
 use super::substrate::{
     BumpAllocator, BumpBackedMap, Delivered, DropFree, FoldedPlacement, Reattachable, Region,
     RegionHandle, RegionHost, Retained, Sealed, StepContext, StorageProfile, Witnessed,
-    reattachable,
 };
-use crate::machine::model::KType;
 
 /// The Koan workload's storage declaration — the frame-owner type its reach descriptions name, and
 /// nothing else.
@@ -34,7 +32,8 @@ use crate::machine::model::KType;
 /// structurally absent. See
 /// [value-substrates.md § Untyped arenas](../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
 ///
-/// A [`TypeSymbol`](crate::machine::model::TypeSymbol) and a [`KType`] need no storage at
+/// A [`TypeSymbol`](crate::machine::model::TypeSymbol) and a
+/// [`KType`](crate::machine::model::KType) need no storage at
 /// all: both are lifetime-free `Copy` handles — a name's hash digest and an interned registry
 /// index — so the type channel's carriers hold them by value.
 pub struct KoanStorageProfile;
@@ -290,17 +289,6 @@ impl SubstrateDoor<'_, '_> {
     }
 }
 
-/// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
-/// type-channel identity (a `SetMember` / declared type) that must cross the build brand. A
-/// value-embedding construction `transfer_into`s its object carrier into this operand so the wrapped
-/// value lands — allocated through the handle — tagged by the identity, both re-anchored to the
-/// build brand under the same witness. The identity is a bare interned handle pointing into no
-/// region, so the whole operand is born co-located in the dest region by a single yoke. Used by the
-/// newtype and union-variant constructors and the `CATCH` `Result` build. Layout-invariant: a thin
-/// pointer and a `Copy` `KType` handle, representation independent of `'r`.
-pub struct RegionTypeFamily;
-reattachable!(RegionTypeFamily => (RegionHandle<'r>, KType));
-
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
 /// Every co-located `alloc_*` lives on [`RegionBrand`] (minted via [`FrameStorage::brand`]); a bare
@@ -339,8 +327,8 @@ pub(crate) trait KoanRegionExt {
     /// `yoke` a value of **any** carrier family into `owner`'s region, handing the build closure a
     /// per-construction [`RegionBrand`] confined to the `for<'b>` brand. Generalizes
     /// [`fold_witnessed`](Self::fold_witnessed) (the `CarriedFamily` case) for the operand yokes
-    /// over a non-carried family (`RegionTypeFamily`, `OperatorGroupFamily`) whose closures alloc
-    /// into the dest region. The yoke hands a
+    /// over a non-carried family (the construction operands' `RegionTypeFamily`,
+    /// `OperatorGroupFamily`) whose closures alloc into the dest region. The yoke hands a
     /// `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
     /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
     /// co-location holds by construction and nothing branded escapes the closure.

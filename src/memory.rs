@@ -25,15 +25,16 @@
 //! [`substrate`] alias, or one type over the [`Sectioned`] run the library hands it — so the
 //! payload's own file is where a reader finds every state it travels in.
 //!
-//! **What this module imports back — two names.** [`frame`] names `Scope` (with `ScopeId` and
+//! **What this module imports back — one name.** [`frame`] names `Scope` (with `ScopeId` and
 //! `ScopeRefFamily`) to read the child a frame's envelope carries, which is the payload of the
-//! family it holds; [`region`] names the lifetime-free [`KType`](crate::machine::model::KType)
-//! handle its `RegionTypeFamily` carries. That is the whole inventory. Nothing from
-//! `machine::execute`; no Koan value type at all; nothing that *builds* a value — a frame's child
-//! scope is born by [`Scope::open_frame`](crate::machine::core::Scope::open_frame), which hands
-//! this module the finished pair; and nothing of the run's own state — the registries, the interner
-//! and the output sink belong to [`execute::RunFrame`](crate::machine::execute). Anything not on
-//! that list is a new edge, not a detail.
+//! family it holds. That is the whole inventory: [`region`], [`program`] and [`substrate`] import
+//! nothing from the rest of Koan at all. No Koan value type is named here; nothing here *builds*
+//! one — a frame's child scope is born by
+//! [`Scope::open_frame`](crate::machine::core::Scope::open_frame), which hands this module the
+//! finished pair, and a construction operand over a region handle belongs with the constructor
+//! that mints it; and none of the run's own state lives here — the registries, the interner and
+//! the output sink belong to [`execute::RunFrame`](crate::machine::execute). Anything not on that
+//! list is a new edge, not a detail.
 //!
 //! See [memory-model.md](../design/memory-model.md),
 //! [value-substrates.md](../design/value-substrates.md) and
@@ -50,8 +51,7 @@ mod tests;
 pub use frame::{CallFrame, FrameCoverage, FrameReach};
 pub use program::{ProgramBrand, ProgramStorage, program_storage};
 pub use region::{
-    FoldingBrand, FrameStorage, KoanRegion, RegionBrand, RegionTypeFamily, SubstrateDoor,
-    run_root_storage,
+    FoldingBrand, FrameStorage, KoanRegion, RegionBrand, SubstrateDoor, run_root_storage,
 };
 pub(crate) use region::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, bump_table};
 pub use substrate::*;

@@ -61,7 +61,7 @@ mod tests;
 pub(in crate::machine::execute) use super::outcome::{
     Await, Continuation, DeferredTraceFrame, Outcome,
 };
-pub(crate) use constructors::{build_type_operand, seal_type_identity};
+pub(crate) use constructors::{RegionTypeFamily, build_type_operand, seal_type_identity};
 pub(in crate::machine::execute) use ctx::{DecideCtx, with_node_scope};
 pub(crate) use field_list::FieldListDeferral;
 pub(crate) use resolve::Resolution;

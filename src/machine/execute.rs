@@ -53,4 +53,6 @@ pub(crate) use test_support::edge_delivered;
 pub(crate) use decide::DispatchOutcome;
 #[cfg(test)]
 pub(crate) use decide::Resolution;
-pub(crate) use decide::{FieldListDeferral, build_type_operand, seal_type_identity};
+pub(crate) use decide::{
+    FieldListDeferral, RegionTypeFamily, build_type_operand, seal_type_identity,
+};
