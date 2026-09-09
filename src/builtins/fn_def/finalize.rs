@@ -15,14 +15,14 @@ use crate::machine::ProducerId;
 use crate::machine::StepCarried;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::execute::deps_on;
+use crate::machine::model::Carried;
+use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{Elaborator, ReturnType};
 use crate::machine::model::{SignatureElement, shape_type_of};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
-use crate::memory::Carried;
-use crate::memory::CarriedFamily;
 use crate::memory::{BumpAllocator, BumpVec, Witnessed};
 
 use super::return_type::{

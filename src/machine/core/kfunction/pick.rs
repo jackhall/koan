@@ -100,7 +100,7 @@ pub fn carried_slot_ktype(
 ) -> Option<KType> {
     match part {
         WorkingPart::Ast(ast) => KType::slot_ktype(ast, &registries.types),
-        WorkingPart::Spliced { cell, .. } => Some(crate::memory::read_resting(cell, |c| {
+        WorkingPart::Spliced { cell, .. } => Some(crate::machine::model::read_resting(cell, |c| {
             carried_channel_ktype(c, declared, registries)
         })),
         WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => None,

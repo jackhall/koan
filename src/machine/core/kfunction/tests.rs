@@ -15,7 +15,7 @@ use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
 fn body_any<'a>(ctx: &super::action::BodyCtx<'_, 'a, '_>) -> super::action::Action<'a> {
     super::action::Action::done_resident(
         ctx.scope,
-        crate::memory::Carried::Object(marker(ctx.scope, "any")),
+        crate::machine::model::Carried::Object(marker(ctx.scope, "any")),
     )
 }
 

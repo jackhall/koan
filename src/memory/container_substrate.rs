@@ -15,9 +15,9 @@
 //! fold a door re-runs. See
 //! [design/value-substrates.md § Sectioned reach](../../design/value-substrates.md#sectioned-reach).
 
-use super::cell::Held;
 use super::frame::FrameReach;
 use super::substrate::{BumpBackedMap, CellRef, Opened, Sectioned};
+use crate::machine::model::Held;
 use crate::machine::model::labels::Symbol;
 use crate::machine::model::{KKey, KObject};
 

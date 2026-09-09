@@ -16,10 +16,10 @@
 
 use crate::machine::model::{KObject, KType, TypeNode, TypeSymbol};
 
+use crate::machine::model::Held;
 use crate::machine::model::{display_label, render_label};
 use crate::machine::{KError, KErrorKind};
 use crate::memory::BumpVec;
-use crate::memory::Held;
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and

@@ -21,6 +21,7 @@ use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::{Argument, ReturnType, SignatureDraft, SignatureElement};
+use crate::machine::model::{Carried, CarriedFamily, DeliveredCarried, Held};
 use crate::machine::model::{Module, ModuleDraft, SigSchema};
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameReach`

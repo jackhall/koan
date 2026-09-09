@@ -9,9 +9,9 @@ mod sig_declaration;
 
 use crate::builtins::test_support::{TestRun, binds_module};
 use crate::machine::KErrorKind;
+use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::RunRegistries;
-use crate::memory::Held;
 use crate::memory::{program_storage, run_root_storage};
 
 /// The numbers of a `KObject::List` — the member bodies below return one of their two list

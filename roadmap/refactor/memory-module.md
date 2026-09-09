@@ -9,10 +9,10 @@ unrelated parents. Under `machine::core` sit the storage profile, `KoanRegion`, 
 storage and the step allocator ([arena.rs](../../src/memory/region.rs),
 [arena/frame.rs](../../src/memory/frame.rs),
 [arena/step_allocator.rs](../../src/machine/execute/step.rs)), the sealed and
-delivered carrier aliases ([carrier_witness.rs](../../src/memory/carrier.rs)) and the
+delivered carrier aliases ([carrier_witness.rs](../../src/memory/substrate.rs)) and the
 reference families ([ref_carriers.rs](../../src/machine/core/scope.rs)). Under
 `machine::model::values` sit the value-channel cells `Held` and `Carried`
-([carried.rs](../../src/memory/cell.rs)), the container substrates
+([carried.rs](../../src/machine/model/values/cell.rs)), the container substrates
 ([container_substrate.rs](../../src/memory/container_substrate.rs)) and the rehoming
 door ([rehomed.rs](../../src/memory/rehomed.rs)). Nothing names the set: a reader
 looking for "where a value lives and how long" walks [memory-model.md](../../design/memory-model.md),

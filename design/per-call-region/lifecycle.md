@@ -66,7 +66,7 @@ relocates it across each dep edge — never the producer.
   re-stamps the value **in place**, in the producer's own region (a coarsening
   re-tag, e.g. `List<Number>` through `:(LIST OF Any)`, re-allocates there too).
   Declared or not, it seals the
-  [`CarrierWitness`](../../src/memory/carrier.rs) — the
+  [`CarrierWitness`](../../src/memory/substrate.rs) — the
   reference-only carrier, pinning nothing — **as-is**: there is no Done-boundary
   relocation or sever gate. The producer frame's lifetime is decided by
   delivery at finalize: a copy verdict frees it there, a pin verdict transfers

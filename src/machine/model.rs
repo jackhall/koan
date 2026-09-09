@@ -18,7 +18,8 @@ pub use labels::{
     ValueSymbol, WILDCARD, is_type_name, snake_case_identifier, wrong_binder_class,
 };
 pub use operators::{
-    FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, unary_key,
+    DeliveredOperatorGroup, FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode,
+    SealedOperatorGroup, binary_key, unary_key,
 };
 pub use registries::RunRegistries;
 pub(crate) use types::IdentityBuildHasher;
@@ -39,11 +40,11 @@ pub use types::{
 };
 pub use types::{display_label, render_label};
 pub(crate) use types::{render_untyped_key, summarize_dispatch, untyped_key_of};
-pub use values::{KKey, KObject, Scalar, ValueEqualityError};
-
-// TEMPORARY (phase 1 of the memory-module move): the value-channel cells and the container
-// substrates now live in `crate::memory`; these keep the old paths resolving until the import
-// sweep lands, and are deleted with it.
+pub use values::{
+    Carried, CarriedFamily, DeliveredCarried, Held, KKey, KObject, Scalar, SplicedCell,
+    ValueEqualityError,
+};
+pub(crate) use values::{product_reaches_region, read_resting};
 
 pub(crate) use ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass, ProgramExpression,
@@ -76,5 +77,5 @@ pub(crate) use types::{
 pub(crate) use values::{
     DeclaredSlots, Module, ModuleDraft, ModuleRefFamily, NamedPairs, RegionEscape,
     coerce_function_cell, coerce_object_into, copy_or_pin, copy_or_pin_callable, declared_return,
-    relocate_object_into, retains_home,
+    relocate_object_into,
 };

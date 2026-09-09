@@ -23,15 +23,15 @@ use crate::memory::RegionHandleFamily;
 type DestHandleFamily = RegionHandleFamily;
 use crate::builtins::test_support::type_token;
 use crate::machine::model::BinderSymbol;
+use crate::machine::model::Carried;
+use crate::machine::model::CarriedFamily;
+use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
-use crate::memory::Carried;
-use crate::memory::CarriedFamily;
-use crate::memory::Held;
 use crate::memory::{Delivered, FoldedPlacement, RegionHandle, Sealed, reattachable};
 use std::rc::Rc;
 

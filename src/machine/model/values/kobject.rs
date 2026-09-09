@@ -14,13 +14,15 @@ use crate::memory::{
 };
 use smallvec::SmallVec;
 
+use super::cell::DeliveredCarried;
 use super::{KKey, Module};
+use crate::machine::model::Held;
 use crate::memory::Rehomed;
 use crate::memory::container_substrate::{
     HeldCells, ListLayout, PayloadLayout, RecordLayout, held_copy_cost,
 };
 use crate::memory::{
-    ContainerSubstrate, DictSubstrate, Held, ListSubstrate, PayloadSubstrate, RecordSubstrate,
+    ContainerSubstrate, DictSubstrate, ListSubstrate, PayloadSubstrate, RecordSubstrate,
 };
 
 mod equality;
@@ -924,6 +926,34 @@ pub(crate) fn retains_home(value: &KObject<'_>, home: &KoanRegion) -> bool {
     }
 }
 
+/// Koan's **retention claim** for a copying relocation of `envelope`
+/// ([`Delivered::transfer_into`](crate::memory::Delivered::transfer_into),
+/// design/witness-hosting.md § Escape): whether `product` — what the fold just built at the
+/// destination — still borrows `region`, one of the regions the envelope pins. Answered by
+/// [`retains_home`], a read over `product`'s stored reach; no probe walks its shape.
+///
+/// A copy releases only the value's own home region
+/// ([value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach)).
+/// `region` is home exactly when the value's own reach description names it as host — read off the
+/// carrier through the envelope's open, so residence is answered by identity against the value's own
+/// record rather than a side channel on the envelope. A non-home member is kept because it may be
+/// reached through structure the product's stored reach does not cover (a `KFunction`'s captured
+/// environment reaches on transitively), so releasing it would dangle.
+///
+/// A `product` of `None` (the fold built no object — a type-channel cell) keeps every member.
+/// Releasing home is what frees a tail loop's retiring region once its delivered carrier drops,
+/// instead of chaining it into every successor region's arena.
+pub(crate) fn product_reaches_region(
+    envelope: &DeliveredCarried,
+    product: Option<&KObject<'_>>,
+    region: &KoanRegion,
+) -> bool {
+    let is_home = envelope
+        .open_at()
+        .with_home_region(|home| std::ptr::eq(home, region));
+    !is_home || product.is_none_or(|value| retains_home(value, region))
+}
+
 /// The escape verb for a top-level container value, chosen per value in O(1) from its memos and the
 /// producer host's allocated total. Values with no container substrate never reach this — they
 /// always copy.
@@ -937,7 +967,6 @@ pub(crate) enum RegionEscape {
     /// derives it from the **product** the rebuild built ([`product_reaches_region`]), so the
     /// verdict and the act cannot disagree.
     ///
-    /// [`product_reaches_region`]: crate::memory::product_reaches_region
     Copy,
     /// Total rebuild of a **callable's captured environment** at the destination region: the
     /// per-call portion of the scope chain a `KFunction` captured is rebuilt there — data bindings

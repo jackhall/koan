@@ -18,11 +18,11 @@ use crate::machine::core::{
     Action, BlockBody, BlockEntry, FramePlacement, ReturnContract, ScopeId, TailContract,
     freeze_body,
 };
+#[cfg(test)]
+use crate::machine::model::Carried;
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::model::{KType, RunRegistries};
-#[cfg(test)]
-use crate::memory::Carried;
-use crate::memory::DeliveredCarried;
 use crate::memory::{CallFrame, FrameStorageExt, RegionBrand};
 use crate::source::SourceRef;
 

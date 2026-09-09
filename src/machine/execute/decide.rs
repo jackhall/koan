@@ -13,11 +13,11 @@ use crate::machine::core::{
     Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, CatchFn, FinishCtx,
     FramePlacement, ReturnContract, TailContract,
 };
+use crate::machine::model::Carried;
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::lazy_slots::LazyKinds;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
-use crate::memory::Carried;
-use crate::memory::DeliveredCarried;
 use crate::memory::RegionBrand;
 use crate::source::Spanned;
 use std::rc::Rc;

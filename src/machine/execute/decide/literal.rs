@@ -2,16 +2,16 @@ use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
+use crate::machine::model::CarriedFamily;
+use crate::machine::model::DeliveredCarried;
+use crate::machine::model::SplicedCell;
+use crate::machine::model::{Carried, Held};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KKey, KObject, TypeRegistry};
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
-use crate::memory::CarriedFamily;
+use crate::memory::KoanRegion;
 use crate::memory::{BumpAllocator, BumpVec, Delivered, RegionHandle, reattachable};
-use crate::memory::{Carried, Held};
-use crate::memory::{DeliveredCarried, KoanRegion};
-use crate::memory::{
-    FoldingBrand, KoanRegionExt, KoanStorageProfile, RegionBrand, SplicedCell, SubstrateDoor,
-};
+use crate::memory::{FoldingBrand, KoanRegionExt, KoanStorageProfile, RegionBrand, SubstrateDoor};
 use crate::source::Spanned;
 
 use super::super::StepCarried;

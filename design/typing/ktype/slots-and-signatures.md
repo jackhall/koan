@@ -67,7 +67,7 @@ which token classes they admit:
   `LET <name> = FN …` statement.
 
 All three deliver
-[`Held::Name(BinderSymbol)`](../../../src/memory/cell.rs), minted straight
+[`Held::Name(BinderSymbol)`](../../../src/machine/model/values/cell.rs), minted straight
 from the part variant by
 [`ExpressionPart::resolve_for`](../../../src/machine/model/ast.rs), so the class a body reads
 is the class the parse assigned. None admits a resolved cell
@@ -90,7 +90,7 @@ A type-position value whose surface `TypeName` doesn't resolve at
 [`KType::from_symbol`](../../../src/machine/model/types/ktype_resolution.rs)'s
 builtin table (`Point`, `Ordered`, `MyList`, or an unknown name like
 `SomeWeirdName`) — rides through bind on a dedicated
-[`Carried::UnresolvedType` / `Held::UnresolvedType`](../../../src/memory/cell.rs)
+[`Carried::UnresolvedType` / `Held::UnresolvedType`](../../../src/machine/model/values/cell.rs)
 arm carrying the token's `TypeSymbol` verbatim, rather than as a resolved
 `KType` handle in the `Type` arm — so no type handle ever denotes an unresolved
 name. See
@@ -179,7 +179,7 @@ types (`:(Number | Str)`, which a user can spell) is an eager slot and is uncons
 Each delivers a carrier a body can tell apart from every other member's, which is what makes a
 union readable at all: the three name members deliver `Held::Name(BinderSymbol)` (above),
 `SigiledTypeExpr` delivers `Held::Object(KObject::KExpression)`, and `RecordType` delivers
-[`Held::RecordType`](../../../src/memory/cell.rs) — its own arm, not the
+[`Held::RecordType`](../../../src/machine/model/values/cell.rs) — its own arm, not the
 `KExpression` one, because `:( :{…} )` can make a sigil's inner a lone record part, so sniffing
 the captured expression would confuse the two spellings. Like `Held::Name`, it has no `Carried`
 peer: a raw part capture reaches a bound argument slot and never a substrate cell or a produced

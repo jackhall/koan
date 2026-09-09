@@ -7,10 +7,10 @@ use std::rc::Rc;
 
 use super::*;
 use crate::machine::ProducerId;
+use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Scalar;
-use crate::memory::Carried;
 use crate::memory::RegionBrand;
 use crate::memory::Sealed;
 use crate::memory::{FrameCoverage, FrameReach, FrameStorage};

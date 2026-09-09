@@ -8,14 +8,20 @@
 use std::rc::Rc;
 
 use super::body::ReturnContract;
+use crate::machine::core::SealedFunction;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{LexicalFrame, Scope};
 use crate::machine::execute::StepAllocator;
 use crate::machine::execute::StepCarried;
 use crate::machine::model::BinderSymbol;
+#[cfg(test)]
+use crate::machine::model::Carried;
+use crate::machine::model::DeliveredCarried;
+use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::SplicedCell;
 use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::WorkingExpression;
@@ -23,13 +29,8 @@ use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{BindingIndex, DeclarationSite, Installer, KError, KErrorKind};
-#[cfg(test)]
-use crate::memory::Carried;
-use crate::memory::DeliveredCarried;
-use crate::memory::Held;
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::memory::{CallFrame, ProgramBrand, RegionBrand, RunWriter};
-use crate::memory::{SealedFunction, SplicedCell};
 use crate::scheduler::Deps;
 use crate::source::SourceRef;
 

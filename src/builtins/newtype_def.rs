@@ -34,8 +34,8 @@ use crate::source::Spanned;
 
 use super::{arg, arg_labeled, kw, sig};
 use crate::machine::model::BinderSymbol;
+use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
-use crate::memory::Carried;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { decl, name, repr } }

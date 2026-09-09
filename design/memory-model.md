@@ -271,7 +271,7 @@ carry none; `yoke` in fact routes only the safe `erase`, carrying no retype of i
 
 The value channel is borrow-checked end to end. `finalize` takes the workload's finished terminal
 as a [`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope bundling the erased value under
-a [`CarrierWitness`](../src/memory/carrier.rs) — the **reference-only** carrier, a
+a [`CarrierWitness`](../src/memory/substrate.rs) — the **reference-only** carrier, a
 reference to the value's reach description and nothing else, pinning nothing itself; the description
 is where both of the value's region facts live, its host region and the regions its borrows reach —
 sealed **as-is** (a declared return is checked and re-stamped in place first): there is no
@@ -495,7 +495,7 @@ its one member. A group record's birth is a *yoke* instead
 [`OperatorGroup::alloc`](../src/machine/model/operators.rs), which re-homes every byte at the brand
 it is handed), so its composed description names the declaring region as host with **no members** at
 all — the record borrows nothing, where a callable borrows its home. Both bucket doors
-([`OverloadSeal::of_delivered`](../src/memory/carrier.rs) and its group sibling) and
+([`OverloadSeal::of_delivered`](../src/machine/core/seals.rs) and its group sibling) and
 the value wrapper ([`Scope::store_function_cell`](../src/machine/core/scope/reach.rs)) take that one
 birth envelope as their operand — the seal rests it, the wrapper merges it — so the bound name and
 the registered overload carry the same derived fact rather than two independent claims.

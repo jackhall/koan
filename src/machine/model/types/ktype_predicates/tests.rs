@@ -2,13 +2,13 @@ use super::*;
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{spliced_part, type_name, type_token, value_name};
 use crate::machine::model::BinderSymbol;
+use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeMemberMap;
 use crate::machine::model::ast::{ExpressionPart, WorkingPart};
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
-use crate::memory::Carried;
 use crate::memory::SubstrateDoor;
 
 /// Mint the zero-dep fold door a `Tagged`/`Wrapped` test value needs, over a fresh root region, as
@@ -361,8 +361,8 @@ fn accepts_carried_matches_spliced_delegation() {
 fn spliced_cell_classifies_by_opening() {
     let registries = RunRegistries::new();
     use crate::builtins::test_support::run_root_bare;
+    use crate::machine::model::Carried;
     use crate::machine::model::values::KObject;
-    use crate::memory::Carried;
     use crate::memory::run_root_storage;
 
     let storage = run_root_storage();

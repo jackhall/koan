@@ -18,7 +18,6 @@
 //! [workgraph/design/witnessed-memory.md](../../workgraph/design/witnessed-memory.md) for the
 //! machinery itself.
 
-use super::carrier::CarrierWitness;
 use super::region::{FrameStorage, KoanStorageProfile};
 
 // The library shape, re-exported unchanged: these take no Koan parameter, so Koan's spelling is the
@@ -46,6 +45,17 @@ pub use workgraph::witnessed::{RegionMetrics, region_metrics, reset_region_metri
 /// run, compiled out of a release build along with the detector itself.
 #[cfg(debug_assertions)]
 pub use workgraph::witnessed::{PinCycleReport, pin_cycle_reports};
+
+/// Koan's value-carrier witness: the library [`Carrier`] over Koan's frame owner — a reference to
+/// the value's hosted reach description and nothing else. The description carries both of the
+/// value's region facts: its *host* is the region the value lives in, its *members* are the regions
+/// the value's borrows reach, home among them exactly when the value genuinely borrows into its own
+/// region. The carrier pins nothing; liveness is always the containing region — the producer's own
+/// while the delivery walk carries the terminal, the destination's the moment the walk adopts it in.
+///
+/// Every alias below binds this as the `W` parameter, which is why no use site spells it: a site
+/// that constructs or inspects a carrier routes the library's [`Carrier`] surface directly.
+pub type CarrierWitness = Carrier<FrameStorage>;
 
 /// A value carrier **in transit**, with its whole reach owned: the library envelope over Koan's
 /// carrier witness, pinned by a [`FrameStorage`] home.

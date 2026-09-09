@@ -128,7 +128,7 @@ fn bare_module_name_surfaces_as_object_value() {
 /// — the same result the parenthesized `[(m)]` form produces.
 #[test]
 fn bare_module_names_in_list_resolve_and_memoize_self_sig() {
-    use crate::memory::Held;
+    use crate::machine::model::Held;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -160,7 +160,7 @@ fn bare_module_names_in_list_resolve_and_memoize_self_sig() {
 
 #[test]
 fn module_in_list_surfaces_as_object_element_memoized_to_self_sig() {
-    use crate::memory::Held;
+    use crate::machine::model::Held;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);

@@ -6,9 +6,9 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{BindKind, BinderSymbol, display_label, snake_case_identifier};
-use crate::memory::Carried;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, value } }
@@ -20,7 +20,7 @@ crate::slots! { SLOTS { name, value } }
 /// (interior-mutable), and returns the bound carrier as `Action::Done`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    use crate::memory::Held;
+    use crate::machine::model::Held;
 
     let done_err = |e: KError| Action::done(Err(e));
     let bind_index = ctx.bind_index();

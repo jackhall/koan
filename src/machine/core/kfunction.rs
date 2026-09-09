@@ -7,6 +7,7 @@ use crate::source::{SourceRef, Spanned};
 
 use crate::machine::core::kfunction::action::BoundArg;
 use crate::machine::core::{KError, KErrorKind, Scope};
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::NamedPairs;
 #[cfg(test)]
 use crate::machine::model::SignatureDraft;
@@ -14,9 +15,7 @@ use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
 use crate::machine::model::{ExpressionSignature, Record, SignatureElement, shape_type_of};
 use crate::machine::model::{Unifier, UnifyFailure, Variance, admits_with};
 use crate::memory::BumpVec;
-use crate::memory::DeliveredCarried;
-use crate::memory::DeliveredFunction;
-use crate::memory::RegionHandleFamily;
+use crate::memory::{Delivered, Opened, RegionHandleFamily, Sealed};
 use crate::memory::{FoldingBrand, KoanStorageProfile, RegionBrand};
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
@@ -68,7 +67,7 @@ pub struct KFunction<'a> {
 /// [`Reattachable`](crate::memory::Reattachable) family for [`KFunction`] — the carrier family a
 /// function value travels under when it flows through the three witnessed-carrier states as
 /// `Sealed<KFunctionFamily, _>` / `Opened<'step, KFunctionFamily, _>`, the function-table twin of
-/// [`CarriedFamily`](crate::memory::CarriedFamily). Registered here rather than adding a
+/// [`CarriedFamily`](crate::machine::model::CarriedFamily). Registered here rather than adding a
 /// `Carried::Function` variant because the witnessed library is generic over `Reattachable`
 /// families.
 ///
@@ -82,6 +81,26 @@ pub struct KFunctionFamily;
 crate::memory::reattachable! {
     KFunctionFamily => &'r KFunction<'r>,
 }
+
+/// A callable **in transit from its birth**: the merge-born `KFunction` carrier paired with the home
+/// pin its birth composed. What [`KFunction::alloc_captured`] hands back and what every registration
+/// door composes from — the seal ([`OverloadSeal::of_delivered`](crate::machine::core::OverloadSeal))
+/// rests it, the `KObject` wrapper ([`Scope::store_function_cell`](Scope::store_function_cell))
+/// merges it — so no door re-states the callable's reach on its own authority.
+pub type DeliveredFunction = Delivered<KFunctionFamily>;
+
+/// A callable's **dormant** carrier: the `KFunction` fused to the exact reach description its birth
+/// composed for it, over the [`KFunctionFamily`] the library dispatches on. This is what a
+/// `functions` dispatch bucket stores and what a
+/// [`ReturnContract`](crate::machine::core::ReturnContract) carries across a tail chain: the seal
+/// fuses the callable with its reach claim, where a bare `&KFunction` would state no reach at all.
+pub type SealedFunction<'home> = Sealed<'home, KFunctionFamily>;
+
+/// A callable **in use**: re-anchored at a region's own lifetime, paired with the reach witness it
+/// was opened under. Dispatch resolves on one of these and carries it across argument evaluation
+/// (`Resolved<'step>`); the escape into the call chain
+/// [`reseal`](crate::memory::Opened::reseal)s it back to a [`SealedFunction`].
+pub type OpenedFunction<'a> = Opened<'a, KFunctionFamily>;
 
 /// The birth operands that cross the merge brand together: the captured scope — the callable's one
 /// region borrow — the signature already minted into that same region, and the body. All `Copy`, and
@@ -377,7 +396,7 @@ impl<'a> KFunction<'a> {
     ///
     /// Each argument is resolved against its declared parameter type by the slot-aware
     /// [`WorkingPart::resolve_for`], which lifts a resolved sub-result out of its cell and lowers a
-    /// raw `Type` / `SigiledTypeExpr` / `RecordType` part into the matching [`Held`] arm; its
+    /// raw `Type` / `SigiledTypeExpr` / `RecordType` part into the matching [`Held`](crate::machine::model::Held) arm; its
     /// delivery envelope is read off `carriers` at the same part index. `scope` is the call scope:
     /// `resolve_for` adopts a spliced **cell** into it before owning the value, so an owned type
     /// that still borrows the producer region stays pinned.

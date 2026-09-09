@@ -1,4 +1,5 @@
 use crate::builtins::test_support::{kw_part, probe_symbol, type_name, type_token};
+use crate::machine::model::Held;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, classify_dispatch_shape,
@@ -6,7 +7,6 @@ use crate::machine::model::ast::{
 use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
-use crate::memory::Held;
 use crate::memory::{ProgramBrand, program_storage};
 use crate::source::Spanned;
 

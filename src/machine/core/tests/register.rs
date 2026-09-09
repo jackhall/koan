@@ -8,9 +8,9 @@ use crate::builtins::test_support::{
 };
 use crate::machine::ProducerId;
 use crate::machine::core::kfunction::{Body, KFunction};
+use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::memory::Carried;
 use crate::memory::Global;
 use crate::memory::{FrameStorageExt, run_root_storage};
 

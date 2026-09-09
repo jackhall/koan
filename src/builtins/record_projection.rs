@@ -13,11 +13,11 @@
 
 use crate::machine::WriteGate;
 
+use crate::machine::model::Carried;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::Record;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
-use crate::memory::Carried;
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
@@ -126,7 +126,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // shape-split pure door and enveloped there — coverage-equivalent to an empty-reach seal. No region-pure
     // shape is a `Record`, so that arm's diagnostic is what a construction bug would surface here.
     let resident;
-    let lhs: &crate::memory::DeliveredCarried = match ctx.args.carrier(&SLOTS.record) {
+    let lhs: &crate::machine::model::DeliveredCarried = match ctx.args.carrier(&SLOTS.record) {
         Some(c) => c,
         None => {
             resident = match ctx.scope.deliver_pure_value(record_obj) {

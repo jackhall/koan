@@ -5,14 +5,15 @@
 //! release read live in [`crate::machine::model`], shared with the core binding seams. See
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
+use crate::machine::model::DeliveredCarried;
+use crate::machine::model::product_reaches_region;
+use crate::machine::model::{Carried, CarriedFamily, Held};
 use crate::machine::model::{
     KObject, RegionEscape, copy_or_pin, copy_or_pin_callable, relocate_object_into,
 };
-use crate::memory::DeliveredCarried;
-use crate::memory::{Carried, CarriedFamily, Held};
 use crate::memory::{Delivered, RegionHandleFamily, reattachable};
 use crate::memory::{FoldingBrand, SubstrateDoor};
-use crate::memory::{KoanRegion, KoanStorageProfile, product_reaches_region};
+use crate::memory::{KoanRegion, KoanStorageProfile};
 
 /// The structural-copy callback a witnessed transfer's fold runs
 /// ([`Delivered::transfer_into`](crate::memory::Delivered)): copy a [`Carried`] into `dest`'s

@@ -14,13 +14,13 @@
 //! could strict-pick the bare name as an `:Identifier` slot.
 
 use crate::machine::ProducerId;
+use crate::machine::core::OpenedFunction;
 use crate::machine::core::WrapIndices;
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
 use crate::machine::model::KeyElement;
 use crate::machine::model::labels::BinderSymbol;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
-use crate::memory::OpenedFunction;
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::source::Spanned;
 

@@ -12,12 +12,13 @@
 //! reach the value channel at all — not by audit, but because no constructor takes one.
 
 use crate::machine::AdoptSeam;
+use crate::machine::model::SplicedCell;
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner};
+use crate::machine::model::read_resting;
+use crate::machine::model::{Carried, Held};
 use crate::machine::model::{KObject, RunRegistries};
 use crate::machine::model::{KeyElement, UntypedKey};
-use crate::memory::SplicedCell;
-use crate::memory::{Carried, Held};
-use crate::memory::{RegionBrand, read_resting};
+use crate::memory::RegionBrand;
 use crate::source::{FileId, SourceRef, Span, Spanned};
 
 use super::shape::{

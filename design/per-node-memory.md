@@ -203,7 +203,7 @@ region** ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs)) — 
 description into that region's reach table, the owned pins folded into that
 region's one deduped union bundle. The binding entry itself owns **nothing**: it is
 a `BindingIndex` beside a resting
-[`SealedValue`](../src/memory/carrier.rs), both `Copy` and
+[`SealedValue`](../src/memory/substrate.rs), both `Copy` and
 `Drop`-free. Because bindings are bind-once and a scope's entries never outlive its
 region, entry death and region death are one schedule, so a region-owned union is
 exactly as tight as a per-entry bundle and costs one `Rc` per distinct foreign

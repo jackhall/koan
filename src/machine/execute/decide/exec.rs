@@ -16,18 +16,19 @@ use super::ctx::DecideCtx;
 use std::rc::Rc;
 
 use crate::machine::core::BoundArgs;
+use crate::machine::core::OpenedFunction;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, KFunction};
 use crate::machine::core::{
     ExecFrame, ExecOutcome, LeadingStatements, PerCallReturn, run_user_fn, solved_type,
 };
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::{CoercionTables, DeclaredSlots, KType, declared_return};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
 use crate::memory::BumpVec;
-use crate::memory::DeliveredCarried;
-use crate::memory::{CallFrame, OpenedFunction};
+use crate::memory::CallFrame;
 
 /// Fold a resolved call into a [`Outcome::Continue`] — the dispatcher's one invoke entry, routing on
 /// the picked body:
@@ -396,7 +397,7 @@ fn coerce_arguments_inward<'step>(
                 // The value channel only: a type-denoting parameter delivers an owned `KType`
                 // handle, which has no value identity to rewrite.
                 let on_value_channel =
-                    carrier.open(|live| matches!(live, crate::memory::Carried::Object(_)));
+                    carrier.open(|live| matches!(live, crate::machine::model::Carried::Object(_)));
                 match declared_slots.at(position, *name).filter(|declared_param| {
                     on_value_channel && inward.coerces(*declared_param, types)
                 }) {

@@ -31,7 +31,9 @@ pub(crate) use kfunction::block_tail::{
 };
 pub(crate) use kfunction::body::{LeadingStatements, ReturnContract, body_statement_refs};
 pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn, solved_type};
-pub(crate) use kfunction::{ActionFn, Body, KFunction, KFunctionFamily, WrapIndices};
+pub(crate) use kfunction::{
+    ActionFn, Body, DeliveredFunction, KFunction, OpenedFunction, SealedFunction, WrapIndices,
+};
 pub use lexical_frame::{LexicalFrame, assemble_body_chain};
 pub(crate) use scope::AdoptSeam;
 pub(crate) use scope::HitTier;

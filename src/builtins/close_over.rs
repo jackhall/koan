@@ -71,7 +71,10 @@
 use std::rc::Rc;
 
 use crate::machine::Scope;
+use crate::machine::core::DeliveredFunction;
 use crate::machine::execute::deps_on;
+use crate::machine::model::DeliveredCarried;
+use crate::machine::model::DeliveredOperatorGroup;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::infer_close_captures;
@@ -83,9 +86,8 @@ use crate::machine::{Action, AwaitContinue, WriteGate};
 use crate::machine::{BindingIndex, DeclarationSite};
 use crate::machine::{HitTier, KError, KErrorKind, LexicalFrame, NameLookup, ProducerId};
 use crate::machine::{fresh_cart_tail, seed};
+use crate::memory::CallFrame;
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::memory::{CallFrame, DeliveredCarried};
-use crate::memory::{DeliveredFunction, DeliveredOperatorGroup};
 
 use super::{arg, kw, sig};
 

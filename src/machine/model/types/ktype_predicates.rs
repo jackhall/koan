@@ -16,11 +16,11 @@ use super::sig_schema::{SigSchema, sig_subtype};
 use super::signature::{DispatchTokenElement, ExpressionSignature, SignatureElement};
 use super::type_digest::{TypeDigest, empty_schema_digest};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::SplicedCell;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, WorkingPart};
+use crate::machine::model::read_resting;
 use crate::machine::model::values::KObject;
-use crate::memory::SplicedCell;
-use crate::memory::read_resting;
-use crate::memory::{Carried, Held};
+use crate::machine::model::{Carried, Held};
 use smallvec::SmallVec;
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`

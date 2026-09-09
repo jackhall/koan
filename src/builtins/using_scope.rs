@@ -82,7 +82,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 /// rejects most non-modules against the `:Signature` slot, so this surfaces the shapes that satisfy
 /// an empty signature without being a module.
 fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> KError {
-    use crate::memory::Held;
+    use crate::machine::model::Held;
 
     let got = match ctx.args.held(&SLOTS.m) {
         Some(Held::Type(other)) => other.name(ctx.registries),

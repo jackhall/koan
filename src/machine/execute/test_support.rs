@@ -3,7 +3,8 @@
 
 use crate::machine::{KError, Scope};
 
-use crate::memory::{DeliveredCarried, FrameCoverage};
+use crate::machine::model::DeliveredCarried;
+use crate::memory::FrameCoverage;
 use crate::scheduler::EdgeId;
 
 use super::KoanRuntime;

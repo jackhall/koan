@@ -2,9 +2,8 @@
 //! about a callable or an operator group, computed at seal time — the one moment the carrier is
 //! open under its home pin — so no write verb ever opens a carrier itself.
 
-use crate::memory::{
-    DeliveredFunction, DeliveredOperatorGroup, SealedFunction, SealedOperatorGroup,
-};
+use crate::machine::core::{DeliveredFunction, SealedFunction};
+use crate::machine::model::{DeliveredOperatorGroup, SealedOperatorGroup};
 
 use crate::machine::model::{DispatchToken, KeywordSymbol, OperatorGroup, UntypedKey};
 

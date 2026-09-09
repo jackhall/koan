@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
+use crate::machine::model::Carried;
+use crate::machine::model::CarriedFamily;
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind};
-use crate::memory::Carried;
-use crate::memory::CarriedFamily;
-use crate::memory::DeliveredCarried;
 use crate::memory::{FoldingBrand, FrameStorage, KoanStorageProfile};
 
 use super::harness::Host;

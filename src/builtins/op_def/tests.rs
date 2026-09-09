@@ -7,9 +7,9 @@ mod sig_declaration;
 
 use crate::builtins::test_support::{TestRun, binds_module};
 use crate::machine::KErrorKind;
+use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::RunRegistries;
-use crate::memory::Held;
 use crate::memory::program_storage;
 use crate::memory::run_root_storage;
 

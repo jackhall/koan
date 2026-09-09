@@ -13,21 +13,24 @@ use crate::machine::KError;
 use crate::machine::core::BindingsReferenceFamily;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
+use crate::machine::core::{DeliveredFunction, OpenedFunction, SealedFunction};
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::ModuleRefFamily;
+use crate::machine::model::product_reaches_region;
+use crate::machine::model::{Carried, CarriedFamily};
+use crate::machine::model::{
+    DeliveredCarried, DeliveredOperatorGroup, SealedOperatorGroup, SplicedCell,
+};
 use crate::machine::model::{
     KObject, KType, Module, OperatorGroup, OperatorGroupFamily, ReductionMode, RegionEscape,
     coerce_object_into, copy_or_pin, relocate_object_into,
 };
-use crate::memory::{Carried, CarriedFamily};
 use crate::memory::{
     Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, SealedExtern, Witnessed,
 };
-use crate::memory::{DeliveredCarried, DeliveredOperatorGroup, SealedOperatorGroup, SplicedCell};
-use crate::memory::{DeliveredFunction, OpenedFunction, SealedFunction};
 use crate::memory::{
     FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt,
-    KoanStorageProfile, RegionBrand, product_reaches_region,
+    KoanStorageProfile, RegionBrand,
 };
 
 // The tests here pin the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy` build
@@ -271,7 +274,7 @@ impl<'a> Scope<'a> {
     /// nothing here upgrades the cell's members: the pin names one region, so it must be the one
     /// the description lives in.
     ///
-    /// The pin-less twin ([`read_resting`](crate::memory::read_resting)) stays for probes
+    /// The pin-less twin ([`read_resting`](crate::machine::model::read_resting)) stays for probes
     /// reached from signatures that carry no scope at all.
     pub(crate) fn read_spliced<R>(
         &self,

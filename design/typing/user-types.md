@@ -107,7 +107,7 @@ user-`UNION` variant value, and the `TypeConstructor` family (`Result`, and the
 `CATCH` / `TRY` error machinery); `ktype()` copies `type_id`, so dispatch identity
 is one `u128`. A **signature** value rides the value
 channel's `Type` arm as a `Signature` handle
-([`Carried::Type`](../../src/memory/cell.rs)); the
+([`Carried::Type`](../../src/machine/model/values/cell.rs)); the
 identity is the carried handle itself rather than a synthesized shadow. A
 **module** value rides the Object arm as `KObject::Module` — it is a value, not a
 type identity.

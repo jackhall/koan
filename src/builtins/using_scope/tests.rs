@@ -14,9 +14,9 @@ mod type_members;
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
+use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::RunRegistries;
-use crate::memory::Carried;
 use crate::memory::{program_storage, run_root_storage};
 
 #[test]
@@ -443,10 +443,10 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
 
     use crate::builtins::test_support::{per_call_storage, run_root_bare};
     use crate::machine::BindingIndex;
+    use crate::machine::model::Held;
     use crate::machine::model::{RegionEscape, copy_or_pin};
     use crate::memory::FoldedPlacement;
     use crate::memory::FrameCoverage;
-    use crate::memory::Held;
     use crate::memory::{FoldingBrand, FrameStorageExt};
 
     let module_storage = per_call_storage();

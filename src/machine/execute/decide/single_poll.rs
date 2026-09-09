@@ -8,13 +8,13 @@
 
 use crate::machine::core::Scope;
 
+use crate::machine::model::Carried;
 use crate::machine::model::FieldParts;
 use crate::machine::model::key_spec::KEYWORDS;
 use crate::machine::model::labels::{TypeSymbol, ValueSymbol};
 use crate::machine::model::type_name_miss;
 use crate::machine::model::{ExpressionPart, ProgramNode, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
-use crate::memory::Carried;
 use crate::memory::{KoanRegion, KoanRegionExt};
 use crate::source::Spanned;
 

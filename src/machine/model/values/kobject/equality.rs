@@ -18,9 +18,9 @@
 //! `==` intentionally intransitive across ascriptions and is documented in the value-equality
 //! design note.
 
+use crate::machine::model::Held;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KType, TypeRegistry};
-use crate::memory::Held;
 
 use super::KObject;
 use crate::machine::model::RunRegistries;

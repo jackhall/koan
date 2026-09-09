@@ -29,7 +29,7 @@ use crate::machine::model::types::{
 use crate::memory::SubstrateDoor;
 
 use super::{KKey, KObject, Module, ModuleDraft};
-use crate::memory::Held;
+use crate::machine::model::Held;
 
 /// Rewrite `value` — currently inhabiting `tables`' `from` substitution of `declared` — so it
 /// inhabits the `to` substitution, building whatever has to be rebuilt at `door`.
@@ -197,7 +197,7 @@ pub(crate) fn coerce_function_cell<'b>(
     declared: KType,
     tables: &CoercionTables,
     registries: &RunRegistries,
-) -> crate::memory::DeliveredFunction {
+) -> crate::machine::core::DeliveredFunction {
     let types = &registries.types;
     // The call shape is the underlying's — same keywords, same parameter names in the same order —
     // with each slot the declared type names re-typed to its `to` substitution. The two declared

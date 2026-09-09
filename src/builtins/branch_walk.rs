@@ -26,12 +26,12 @@ use crate::machine::model::{TypeNode, TypeResolution, most_specific_ktype};
 
 use crate::machine::LexicalFrame;
 use crate::machine::ReturnContract;
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::{Carried, CarriedFamily};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
-use crate::memory::DeliveredCarried;
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::memory::{Carried, CarriedFamily};
 use std::rc::Rc;
 
 // This builtin's slot spellings, minted once and read back by symbol.
@@ -111,7 +111,7 @@ pub(crate) fn payload_envelope(carrier: &DeliveredCarried) -> DeliveredCarried {
 /// here, so there is one `it` tier rather than two.
 pub(crate) fn arm_tail<'a>(
     root: &'a Scope<'a>,
-    it_carrier: crate::memory::DeliveredCarried,
+    it_carrier: crate::machine::model::DeliveredCarried,
     body_expr: KExpression<'a>,
     contract: ReturnContract<'a>,
     registries: &RunRegistries,

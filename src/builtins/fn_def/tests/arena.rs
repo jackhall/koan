@@ -498,8 +498,8 @@ fn closure_argument_stays_live_through_user_fn_call() {
 /// no-use-after-free checks in one scheduler run.)
 #[test]
 fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_free() {
+    use crate::machine::model::Held;
     use crate::machine::model::KObject;
-    use crate::memory::Held;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -554,8 +554,8 @@ fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_
 /// the stored key bytes (the `str` compare) and proves they are still there.
 #[test]
 fn let_bound_dict_with_call_produced_string_keys_survives_every_producer_free() {
+    use crate::machine::model::Held;
     use crate::machine::model::{KKey, KObject};
-    use crate::memory::Held;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);

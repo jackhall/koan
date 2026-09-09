@@ -15,7 +15,11 @@ use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
 use crate::machine::ScopeId;
 #[cfg(test)]
+use crate::machine::core::SealedFunction;
+#[cfg(test)]
 use crate::machine::core::StatementId;
+#[cfg(test)]
+use crate::machine::model::Carried;
 #[cfg(test)]
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KExpression;
@@ -30,11 +34,7 @@ use crate::machine::{AdoptSeam, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, Installer};
 use crate::memory::CallFrame;
-#[cfg(test)]
-use crate::memory::Carried;
 use crate::memory::FrameStorage;
-#[cfg(test)]
-use crate::memory::SealedFunction;
 use crate::memory::{ProgramBrand, ProgramStorage, RegionBrand};
 #[cfg(test)]
 use crate::memory::{RegionHandle, Sealed};
@@ -705,7 +705,7 @@ pub(crate) fn spliced_part<'a>(
     crate::machine::model::WorkingPart::Spliced {
         from_name: None,
         cell: Sealed::seal(
-            brand.seal_resident::<crate::memory::CarriedFamily>(c),
+            brand.seal_resident::<crate::machine::model::CarriedFamily>(c),
             brand.handle(),
         ),
     }

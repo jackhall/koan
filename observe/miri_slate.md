@@ -506,7 +506,7 @@ re-attach it backs at the Done boundary are audited in the `workgraph` crate's o
 slate — [workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md) — since
 their tests live in that crate's lib test binary, a separate `cargo test` target from
 koan's. `CarriedFamily`'s `unsafe impl Reattachable`
-([src/memory/cell.rs](../src/memory/cell.rs)) and this
+([src/machine/model/values/cell.rs](../src/machine/model/values/cell.rs)) and this
 embedder's `HasRegionHandle` destination operands
 ([src/memory/region.rs](../src/memory/region.rs)) — over the library's
 `RegionSet<FrameStorage>` that `FrameSet` aliases (`FrameStorage` = `RegionHost`, whose `PinsRegion`

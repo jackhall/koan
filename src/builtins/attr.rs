@@ -29,18 +29,19 @@ use std::borrow::Cow;
 use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
+use crate::machine::model::Carried;
 use crate::machine::model::KKind;
 use crate::machine::model::{BinderSymbol, Module, NodeSchema, TypeSymbol};
+use crate::machine::model::{CarriedFamily, Held};
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
-use crate::memory::Carried;
-use crate::memory::{CarriedFamily, Held, PartedCell};
+use crate::memory::PartedCell;
 
 use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
-use crate::memory::DeliveredCarried;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { field, s } }

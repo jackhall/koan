@@ -35,6 +35,7 @@ use crate::machine::KFunction;
 use crate::machine::StepCarried;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{WriteOp, powerset_probes};
+use crate::machine::model::CarriedFamily;
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KKind, KType};
@@ -45,7 +46,6 @@ use crate::machine::{
     require_kexpression,
 };
 use crate::machine::{Body, KError, KErrorKind, Scope};
-use crate::memory::CarriedFamily;
 use crate::memory::ProgramBrand;
 use crate::memory::Witnessed;
 use crate::source::Spanned;
@@ -788,7 +788,8 @@ fn declare<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, has_result: bool) -> Act
         });
     }
     Action::done(Ok(StepCarried::born(
-        ctx.scope.resident(crate::memory::Carried::Type(primary)),
+        ctx.scope
+            .resident(crate::machine::model::Carried::Type(primary)),
     )))
     .with_effects(ctx.scratch, writes)
 }

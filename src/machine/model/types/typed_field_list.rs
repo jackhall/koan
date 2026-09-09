@@ -9,6 +9,7 @@ use super::resolver::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::ProducerId;
 use crate::machine::Scope;
 use crate::machine::core::{KError, KErrorKind};
+use crate::machine::model::Carried;
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
@@ -16,7 +17,6 @@ use crate::machine::model::ast::{
 };
 use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::machine::model::pair_list::{FieldNameKind, parse_pair_list, parse_type_tag_names};
-use crate::memory::Carried;
 use crate::source::Spanned;
 use std::collections::HashSet;
 
@@ -431,7 +431,7 @@ fn rewrite_threaded_self_refs<'a>(
                         // foreign, so it rests with no coverage to lodge anywhere.
                         match resolve_threaded(window, *t, types) {
                             Some(handle) => WorkingPart::Spliced {
-                                cell: scope.seal_resident::<crate::memory::CarriedFamily>(
+                                cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
                                     Carried::Type(handle),
                                 ),
                                 from_name: Some(BinderSymbol::Type(*t)),

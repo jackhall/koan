@@ -29,7 +29,7 @@ use imbl::shared_ptr::RcK;
 use smallvec::SmallVec;
 
 use crate::machine::model::labels::{BinderSymbol, Symbol, TypeSymbol};
-use crate::memory::{Carried, Held};
+use crate::machine::model::{Carried, Held};
 
 use super::kkind::KKind;
 use super::ktype::KType;

@@ -10,8 +10,8 @@
 //! The token's field is private to this module and the mint is the only constructor, so the audited
 //! surface is one function body.
 
-use super::cell::Held;
 use super::region::SubstrateDoor;
+use crate::machine::model::Held;
 use crate::machine::model::KObject;
 
 /// A cell whose own top-node bytes are resident in the door that minted this token. Carries no

@@ -12,12 +12,12 @@ use super::NodeFinalize;
 use crate::builtins::test_support::{TestRun, run_root_bare};
 use crate::machine::AdoptSeam;
 use crate::machine::core::{Action, BodyCtx};
+use crate::machine::model::Carried;
 use crate::machine::model::Scalar;
 use crate::machine::model::Symbol;
 use crate::machine::model::{KObject, RunRegistries};
 use crate::machine::model::{KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::memory::CallFrame;
-use crate::memory::Carried;
 use crate::memory::{Delivered, Sealed};
 use crate::memory::{FrameCoverage, FrameStorage, program_storage, run_root_storage};
 
@@ -30,7 +30,7 @@ fn resident_scalar(
     producer: &Rc<CallFrame>,
     borrows_into_home: bool,
 ) -> (
-    crate::memory::Witnessed<crate::memory::CarriedFamily>,
+    crate::memory::Witnessed<crate::machine::model::CarriedFamily>,
     Weak<FrameStorage>,
 ) {
     let carrier = producer.with_scope(|child| {

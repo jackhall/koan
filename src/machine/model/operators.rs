@@ -94,6 +94,19 @@ crate::memory::reattachable! {
     OperatorGroupFamily => &'r OperatorGroup<'r>,
 }
 
+/// An operator group's **dormant** carrier: the region-hosted [`OperatorGroup`] record fused to the
+/// reach description its yoked birth composed for it, over the [`OperatorGroupFamily`]. This is what
+/// an `operators` registry entry stores — the same entry shape the `data` and `functions` tables use,
+/// so a [`Bindings`](crate::machine::core::Bindings) table stays lifetime-free. Every powerset key of
+/// one `GROUP` declaration holds a duplicate of the same seal over the same pointee, so sharing is
+/// address identity.
+pub type SealedOperatorGroup<'home> = crate::memory::Sealed<'home, OperatorGroupFamily>;
+
+/// An operator group **in transit**: [`SealedOperatorGroup`] lifted at its declaring scope, so the
+/// envelope's coverage owns the region hosting the record — which is what lets a chain resolve a
+/// group declared in an ancestor scope and read it under pins of its own.
+pub type DeliveredOperatorGroup = crate::memory::Delivered<OperatorGroupFamily>;
+
 impl<'a> OperatorGroup<'a> {
     /// The single allocation door: copy `members` (sorted by symbol bits and deduped here) into
     /// `brand`'s region and bump the record beside them. The mode is `Copy` and lifetime-free, so

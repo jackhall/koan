@@ -12,8 +12,8 @@ use std::rc::Rc;
 use super::*;
 use crate::builtins::test_support::per_call_storage;
 use crate::machine::execute::StepAllocator;
+use crate::machine::model::CarriedFamily;
 use crate::machine::model::Scalar;
-use crate::memory::CarriedFamily;
 use crate::memory::FrameStorageExt;
 use crate::memory::run_root_storage;
 

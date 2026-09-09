@@ -17,7 +17,7 @@ machinery. A functor may also take a bare `:Type` parameter; generic functions a
 - *Machine semantics* — modules are **first-class values**.
   `KObject::Module(&Module)` flows through the scheduler in the value channel's `Object` arm
   like any other value (a signature, by contrast, rides the
-  [`Carried::Type`](../../src/memory/cell.rs) arm alongside `Number`, `Str`,
+  [`Carried::Type`](../../src/machine/model/values/cell.rs) arm alongside `Number`, `Str`,
   and other type values). A functor is internally an ordinary `KFunctionValue`: same
   dispatch path, same scheduler integration, same per-call scope, same body executor
   (`run_user_fn`), and its `ktype()` is `KType::KFunction`. The engine holds no

@@ -34,14 +34,14 @@
 use crate::memory::Global;
 
 use super::{Scope, ScopeKind};
+use crate::machine::core::DeliveredFunction;
 use crate::machine::core::RegionScopeFamily;
 use crate::machine::core::bindings::BindingIndex;
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::seals::{GroupSeal, OverloadSeal};
+use crate::machine::model::Carried;
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::KObject;
-use crate::memory::Carried;
-use crate::memory::DeliveredCarried;
-use crate::memory::DeliveredFunction;
 use crate::memory::{FoldedPlacement, RegionHandle};
 use crate::memory::{FoldingBrand, KoanRegion, KoanStorageProfile, RegionBrand};
 

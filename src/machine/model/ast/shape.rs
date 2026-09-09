@@ -11,9 +11,9 @@ use smallvec::SmallVec;
 
 use crate::machine::model::KeyElement;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::SplicedCell;
 use crate::machine::model::labels::{KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::memory::RegionBrand;
-use crate::memory::SplicedCell;
 use crate::source::Spanned;
 
 use super::KExpression;

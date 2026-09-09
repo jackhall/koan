@@ -397,7 +397,7 @@ question than contains-borrows: contains-borrows asks only whether
 conservatism input; the copy decision needs the home-relative question, and gets
 an exact answer. The verb names only the act; the release itself is claimed by
 the fold's retention predicate reading the **rebuilt product's** stored reach
-([`product_reaches_region`](../src/memory/carrier.rs)): the copy
+([`product_reaches_region`](../src/machine/model/values/kobject.rs)): the copy
 releases the retiring host exactly when no run description of the product names
 it ([§ Sectioned reach](#sectioned-reach)) — so a value whose leaves all point
 into foreign regions still releases its home, and a verdict that disagreed with

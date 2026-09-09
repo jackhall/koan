@@ -4,13 +4,13 @@ use std::rc::Rc;
 use crate::builtins::test_support::type_name;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{identifier_part, kw_part};
+use crate::machine::model::Held;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeMemberMap;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KKind, KType, Record, RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::{KKey, KObject, ValueEqualityError};
-use crate::memory::Held;
 use crate::memory::program_storage;
 use crate::source::Spanned;
 

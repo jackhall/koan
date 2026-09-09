@@ -71,7 +71,7 @@ member that never fills is a typed error at the module's finish, so no unresolve
 forward reference escapes.
 
 **One canonical runtime type representation.** A type flows raw as a `KType` handle in the
-value channel's `Type` arm ([`Carried::Type`](../../src/memory/cell.rs)),
+value channel's `Type` arm ([`Carried::Type`](../../src/machine/model/values/cell.rs)),
 and a type binding finalizes to a `KType` in `bindings.types`. Consumers read the
 elaborated type directly; there is no surface/elaborated split, no per-lookup
 re-elaboration, no parallel surface-name representation flowing through
@@ -141,7 +141,7 @@ cross-link this section rather than restating its slice.
   [`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs)
   (twelve symbol compares against the declared builtin names, re-run per call). A hit lowers to a
   resolved `KType` handle in the value channel's `Type` arm; a miss — a user-bound leaf — defers
-  to the [`Carried::UnresolvedType`](../../src/memory/cell.rs) carrier over the
+  to the [`Carried::UnresolvedType`](../../src/machine/model/values/cell.rs) carrier over the
   token's `TypeSymbol`, which
   preserves the parser-side name verbatim until the park-capable
   `Scope::resolve_type_identifier` consumes it. Runs at `KFunction::bind` time, which has no
@@ -186,8 +186,8 @@ cross-link this section rather than restating its slice.
   [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) below for
   the downstream consumers.
 - **Layer 5 — surface-form-survives-bind carrier** in
-  [`carried.rs`](../../src/memory/cell.rs).
-  [`Carried::UnresolvedType` / `Held::UnresolvedType`](../../src/memory/cell.rs)
+  [`carried.rs`](../../src/machine/model/values/cell.rs).
+  [`Carried::UnresolvedType` / `Held::UnresolvedType`](../../src/machine/model/values/cell.rs)
   preserve the parser-side token's `TypeSymbol` verbatim for bare-leaf type names not in the
   builtin table — so diagnostics resolve the user's identifier exactly as written rather than
   naming the elaborated canonical form, and no type handle ever denotes an unresolved name. The
@@ -334,7 +334,7 @@ Bare-leaf type names that aren't in
 [`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs)'s builtin
 table (`Point`, `Ordered`, `MyList`) are lowered by
 [`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) onto the dedicated
-[`Carried::UnresolvedType`](../../src/memory/cell.rs) carrier — holding
+[`Carried::UnresolvedType`](../../src/machine/model/values/cell.rs) carrier — holding
 the token's `TypeSymbol` — rather than a resolved `KType` handle in the `Type` arm, so
 no type handle can denote an unresolved name. The carrier is lifetime-free and `Copy`, so a
 name crossing a region boundary is copied rather than re-bumped.

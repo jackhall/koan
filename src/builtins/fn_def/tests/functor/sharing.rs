@@ -2,7 +2,7 @@
 
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{TestRun, lookup_fn, lookup_module, spliced_part, type_token};
-use crate::memory::Carried;
+use crate::machine::model::Carried;
 use crate::memory::{program_storage, run_root_storage};
 
 /// Pinned-slot admissibility: a `Signature` slot with `{Elem = Number}` folded in admits a

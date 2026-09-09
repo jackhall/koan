@@ -14,7 +14,7 @@
 
 use super::labels::LabelInterner;
 use super::types::{TypeRegistry, display_label};
-use crate::memory::{Carried, Held};
+use crate::machine::model::{Carried, Held};
 
 /// See the module-level documentation.
 pub struct RunRegistries {

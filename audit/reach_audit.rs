@@ -30,10 +30,10 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::KObject;
-use crate::memory::DeliveredCarried;
+use crate::machine::model::{Carried, Held};
 use crate::memory::PinsRegion;
-use crate::memory::{Carried, Held};
 
 use crate::memory::FrameStorage;
 

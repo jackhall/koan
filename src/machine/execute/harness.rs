@@ -23,14 +23,15 @@ use std::rc::Rc;
 use crate::machine::core::ScopeRefFamily;
 use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::{BlockEntry, BlockRequest, DepPlacement, FramePlacement, ScopeId};
+use crate::machine::model::CarriedFamily;
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::{
     ExpressionPart, KExpression, LabelInterner, Part, PartClass, WorkingExpression, WorkingPart,
 };
 use crate::machine::{BindingIndex, Installer, KError, KErrorKind, LexicalFrame, NodeId, Scope};
-use crate::memory::CarriedFamily;
 use crate::memory::KoanStorageProfile;
 use crate::memory::{BumpAllocator, BumpVec, SealedExtern, Within, erase_to_static};
-use crate::memory::{CallFrame, DeliveredCarried, FrameCoverage};
+use crate::memory::{CallFrame, FrameCoverage};
 use crate::memory::{ProgramBrand, RegionBrand};
 use crate::scheduler::{
     Anchor, Dep, Deps, DrainDeadlock, EdgeId, InstalledEdge, Scheduler, Step, StepVerdict, Workload,
@@ -265,7 +266,7 @@ impl<'run> KoanRuntime<'run> {
     pub(crate) fn read_edge_result_with<R>(
         &self,
         edge: EdgeId,
-        f: impl for<'b> FnOnce(crate::memory::Carried<'b>) -> R,
+        f: impl for<'b> FnOnce(crate::machine::model::Carried<'b>) -> R,
     ) -> Result<R, &KError> {
         self.sched.read_edge_result_with(edge, f)
     }

@@ -8,17 +8,18 @@ use smallvec::SmallVec;
 
 use crate::machine::core::DepPlacement;
 use crate::machine::core::Scope;
+use crate::machine::model::Carried;
+use crate::machine::model::CarriedFamily;
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KObject, Record};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{KError, KErrorKind};
-use crate::memory::Carried;
-use crate::memory::CarriedFamily;
 use crate::memory::{
     BumpAllocator, BumpVec, Delivered, RegionHandle, RegionHandleFamily, reattachable,
 };
-use crate::memory::{DeliveredCarried, KoanRegion, RegionTypeFamily};
 use crate::memory::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand};
+use crate::memory::{KoanRegion, RegionTypeFamily};
 use crate::source::Spanned;
 
 use super::super::StepCarried;

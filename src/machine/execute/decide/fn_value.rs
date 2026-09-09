@@ -11,9 +11,9 @@
 //! and applies its resolved value through the same apply-a-callable tail.
 
 use crate::machine::ProducerId;
+use crate::machine::model::DeliveredCarried;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
-use crate::memory::DeliveredCarried;
 
 use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::DecideCtx;

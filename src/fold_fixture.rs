@@ -21,9 +21,9 @@ use crate::machine::model::Scalar;
 use crate::memory::FrameStorageExt;
 use crate::memory::run_root_storage;
 
+pub use crate::machine::model::Carried;
+pub use crate::machine::model::DeliveredCarried;
 pub use crate::machine::model::KObject;
-pub use crate::memory::Carried;
-pub use crate::memory::DeliveredCarried;
 pub use crate::memory::{FoldingBrand, FrameStorage};
 
 /// Run `f` with a [`KObject`] borrowed at an **ambient** (non-`'static`) lifetime — an object

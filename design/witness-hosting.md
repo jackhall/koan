@@ -23,7 +23,7 @@ invariant is not a rule Koan is asked to honor but one it has no way to break.
 ## The carrier families
 
 There is **one** value family per storable kind — objects via
-[`CarriedFamily`](../src/memory/cell.rs), functions via
+[`CarriedFamily`](../src/machine/model/values/cell.rs), functions via
 [`KFunctionFamily`](../src/machine/core/kfunction.rs). The witnessed library is
 generic over `Reattachable` families, so a function is a family rather than a
 carrier variant, and both ride the same three carrier states

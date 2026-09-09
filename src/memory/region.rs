@@ -16,8 +16,6 @@
 use std::hash::BuildHasher;
 use std::rc::Rc;
 
-use super::carrier::DeliveredCarried;
-use super::cell::{CarriedFamily, Held};
 use super::container_substrate::ContainerSubstrate;
 use super::frame::{FrameCoverage, FrameReach};
 use super::substrate::{
@@ -26,8 +24,8 @@ use super::substrate::{
     reattachable,
 };
 use crate::machine::core::KFunction;
-use crate::machine::core::Scope;
 use crate::machine::model::KType;
+use crate::machine::model::{CarriedFamily, DeliveredCarried, Held};
 use crate::machine::model::{KObject, ProgramExpression, Scalar};
 
 /// The Koan workload's storage declaration — the frame-owner type its reach descriptions name, and
@@ -36,7 +34,7 @@ use crate::machine::model::{KObject, ProgramExpression, Scalar};
 /// **Every Koan value family is `Drop`-free, so every one lives in the region's bump**, where death
 /// is chunk deallocation and no per-slot glue runs at all: a `KFunction` with its signature elements
 /// a bumped run of `&str`, a `Module` with its path and member tables bump-hosted, and a
-/// [`Scope`] with its binding tables built over the same allocator and its own destructor
+/// [`Scope`](crate::machine::core::Scope) with its binding tables built over the same allocator and its own destructor
 /// structurally absent. See
 /// [value-substrates.md § Untyped arenas](../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
 ///
@@ -224,7 +222,7 @@ impl<'a> RegionBrand<'a> {
 }
 
 /// The allocation capability inside a reach-folding closure: the enclosing combinator
-/// (`transfer_into` / `merge_into` / `project` / [`StepAllocator::alloc_carried_with`])
+/// (`transfer_into` / `merge_into` / `project` / [`StepAllocator::alloc_carried_with`](crate::machine::execute::step::StepAllocator::alloc_carried_with))
 /// composes a witness naming every source operand's reach, so a value built *from the closure's
 /// operands* is covered by the fold without a per-value audit. Carries the folded-placement
 /// methods [`RegionBrand`] deliberately lacks; everything else derefs. A [`FoldedPlacement`] is the
@@ -367,24 +365,6 @@ impl SubstrateDoor<'_, '_> {
     pub(crate) fn holder(&self) -> FrameCoverage {
         self.holder.clone()
     }
-}
-
-// The lifetime family of each stored type, keyed on its `'static` form — the GAT the
-// `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
-// Each family is one type generic only in a single lifetime, so its layout is identical for every
-// choice of that lifetime; `KType` is lifetime-free, trivially invariant. The
-// shared `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its
-// docs).
-//
-// The default arm's `!needs_drop` backstop is where `Scope`'s structural `Drop`-freedom is proved:
-// every field is `Copy`, a `Cell` of a `Copy`, or a bump-backed table whose own destructor is
-// suppressed, so the assert compiling *is* the claim that the bump — which runs no destructor —
-// loses nothing by hosting one. A field that later brings glue back fails the build here.
-// `Held` is a `Copy` cell handle for the same reason, which the aggregate folds' bumped cell slices
-// depend on.
-reattachable! {
-    Scope<'static> => Scope<'r>,
-    Held<'static> => Held<'r>,
 }
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a

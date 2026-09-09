@@ -13,15 +13,15 @@
 
 use crate::machine::KErrorKind;
 
-use crate::memory::DeliveredCarried;
+use crate::machine::model::DeliveredCarried;
 use std::rc::Rc;
 
 use crate::machine::core::{BindingIndex, DeclarationSite, KError};
 
+use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution, Unifier};
 use crate::memory::CallFrame;
-use crate::memory::Carried;
 use smallvec::SmallVec;
 
 use super::KFunction;

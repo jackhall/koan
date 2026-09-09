@@ -13,18 +13,24 @@
 //! [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier)
 //! consumes it.
 //!
+//! The carrier states a value cell travels and rests in are here too, beside the cell they carry:
+//! [`DeliveredCarried`] is the in-transit envelope, [`SplicedCell`] the resting form a working
+//! expression holds, and [`read_resting`] the pin-free read over one. Each is a Koan-bound alias
+//! from [`memory`](crate::memory) applied to [`CarriedFamily`] — an instantiation of the substrate,
+//! which is why it lives with the payload rather than with the substrate.
+//!
 //! A cell answers no question that needs a registry: its type tag is
 //! [`TypeRegistry::ktype_of`](crate::machine::model::TypeRegistry::ktype_of) and its rendering
 //! [`RunRegistries::held_summary`](crate::machine::model::RunRegistries::held_summary), both owned
 //! by the registry that holds the answer.
 //!
-//! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
+//! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
-use super::substrate::reattachable;
 use crate::machine::model::KObject;
 use crate::machine::model::ast::ProgramNode;
 use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::machine::model::types::KType;
+use crate::memory::{Delivered, Sealed, reattachable};
 
 /// Three-arm value currency. `Copy` — the object arms wrap `&'a` references and the `Type` arm a
 /// `Copy` [`KType`] handle, so it threads through node results and the lift path without clones.
@@ -46,6 +52,52 @@ pub struct CarriedFamily;
 // identical for every `'r`; the shared `reattachable!` macro discharges that obligation once.
 reattachable! {
     CarriedFamily => Carried<'r>,
+}
+
+/// Koan's **delivery envelope** for a value cell: the library [`Delivered`](crate::memory::Delivered)
+/// carrying a witnessed [`Carried`] paired with its retained frame owner. The in-transit form of a
+/// value's liveness — from a scheduler pull (or a resident seal) to its adoption. The retained frame
+/// is private to the envelope and materializes into a minted reach set only through the envelope's
+/// own verbs (`adopt_into` / `open_adopted` / `transfer_into`), so koan never holds a bare frame pin
+/// at a consumer site. The envelope's member set pins the value's home region alongside everything
+/// else it reaches, and the residence itself is the host of the description the carrier references —
+/// so a site that needs the home back reads it off the value's own record rather than off a side
+/// channel on the envelope, and a relocation derives what it still reaches from the product it built
+/// ([`product_reaches_region`](super::kobject::product_reaches_region)) rather than choosing a
+/// bundle up front.
+pub type DeliveredCarried = Delivered<CarriedFamily>;
+
+/// A resolved sub-result **at rest** inside a working expression: the producer's sealed value
+/// carrier alone, `Copy` and `Drop`-free, with the pins that keep its backing alive lodged one level
+/// down in the region the cell was rested into
+/// ([`Delivered::rest_in`](crate::memory::Delivered::rest_in), reached through
+/// [`Scope::rest_delivered`](crate::machine::core::Scope::rest_delivered)). The resting form of a
+/// [`DeliveredCarried`]: same carrier, ownership relocated — which is what lets a
+/// [`WorkingPart`](crate::machine::model::WorkingPart) hold one without becoming heap-shaped.
+///
+/// Reading one names its coverage, as every reference-only carrier does: the reach-carrying route is
+/// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced), back to an envelope for an
+/// adoption; a verdict-only reader opens the cell at its own brand through [`read_resting`].
+pub type SplicedCell<'home> = Sealed<'home, CarriedFamily>;
+
+/// Read a resting splice cell at a site with **no pin vocabulary** — the registry-free renderers
+/// ([`WorkingPart`](crate::machine::model::WorkingPart)'s `Debug` / `summarize`) and the slot
+/// classifier `KType::accepts_cell`). Each is a pure probe over a part the caller already holds,
+/// reached from signatures that carry no scope and (for `Debug::fmt`) could not be given one.
+///
+/// The coverage is the step's, not the reader's: a probe runs synchronously inside the step holding
+/// the expression, and a cell rests in that step's own cart — the splice and every read of it happen
+/// on one side of a tail hop, never across one. So the pointee outlives the read for a reason
+/// outside it, which is exactly what `NoPins` names. Stated once here so the assertion has one home
+/// rather than one per call site. A reader that holds a scope names a pin instead:
+/// [`Scope::read_spliced`](crate::machine::core::Scope::read_spliced) for another verdict,
+/// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) when it goes on to *adopt* the
+/// value, which owns the reach rather than merely naming it.
+pub(crate) fn read_resting<R>(
+    cell: &SplicedCell<'_>,
+    read: impl for<'b> FnOnce(Carried<'b>) -> R,
+) -> R {
+    cell.open(read)
 }
 
 impl<'a> Carried<'a> {
@@ -109,6 +161,18 @@ pub enum Held<'a> {
     /// There is no [`Carried`] peer: `RECORD_TYPE` is part-kind-exact, so no resolved cell ever
     /// lands here.
     RecordType(ProgramNode<'a>),
+}
+
+// `Held`'s own erase/reattach registration. A `Held<'r>` is a tag plus a `KObject<'r>`, a
+// lifetime-free `KType` or symbol, or a `ProgramNode<'r>` — layout identical for every `'r`, which
+// is the obligation the shared `reattachable!` macro discharges once.
+//
+// The macro's `!needs_drop` backstop is where `Held`'s structural `Drop`-freedom is proved: every
+// arm is a scalar handle or a region borrow, so the assert compiling *is* the claim that the bump —
+// which runs no destructor — loses nothing by hosting a cell. An arm that later brings glue back
+// fails the build here, and the aggregate folds' bumped cell runs depend on it not doing so.
+reattachable! {
+    Held<'static> => Held<'r>,
 }
 
 impl<'a> Held<'a> {

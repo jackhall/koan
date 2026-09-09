@@ -11,12 +11,12 @@
 //! value.
 
 use crate::machine::WriteGate;
+use crate::machine::model::Held;
 use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::{Action, require_ktype};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
-use crate::memory::Held;
 
 use super::op_def::OperatorForm;
 use super::{arg, kw};

@@ -21,11 +21,11 @@ use crate::machine::core::Scope;
 #[cfg(any(test, feature = "region-audit"))]
 use crate::machine::execute::reach_audit;
 use crate::machine::model::ast::ProgramExpression;
+use crate::machine::model::{Carried, CarriedFamily, DeliveredCarried};
 use crate::machine::model::{KObject, KType, Scalar};
 use crate::memory::{
-    Carried, CarriedFamily, Delivered, DeliveredCarried, DropFree, FoldingBrand, FrameStorage,
-    KoanStorageProfile, Reattachable, RegionBrand, StepContext, Unhosted, Witnessed,
-    run_root_storage,
+    Delivered, DropFree, FoldingBrand, FrameStorage, KoanStorageProfile, Reattachable, RegionBrand,
+    StepContext, Unhosted, Witnessed, run_root_storage,
 };
 
 /// A value carrier confined to the scheduler step that built it, so it cannot be stored past that
@@ -297,10 +297,11 @@ pub fn drive_step_allocator(guard: impl for<'b> FnOnce(StepAllocator<'b>)) {
 mod tests {
     use super::*;
     use crate::builtins::test_support::TestRun;
+    use crate::machine::model::{DeliveredCarried, Held};
     use crate::machine::model::{KObject, Record};
     use crate::memory::{
-        CallFrame, DeliveredCarried, FoldedPlacement, FrameStorageExt, Held, RecordSubstrate,
-        program_storage, run_root_storage,
+        CallFrame, FoldedPlacement, FrameStorageExt, RecordSubstrate, program_storage,
+        run_root_storage,
     };
 
     /// The legal shape: born a region-pure carrier, then exit through the sole seal door into a

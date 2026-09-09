@@ -9,8 +9,8 @@
 //!   outlives the adoption that reads it).
 
 use crate::builtins::test_support::TestRun;
+use crate::machine::model::Held;
 use crate::machine::model::KObject;
-use crate::memory::Held;
 use crate::memory::{program_storage, run_root_storage};
 use crate::memory::{region_metrics, reset_region_metrics};
 

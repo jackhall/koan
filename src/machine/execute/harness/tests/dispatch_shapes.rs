@@ -14,14 +14,14 @@ use crate::machine::core::{Action, BodyCtx};
 use crate::machine::execute::decide::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
+use crate::machine::model::Carried;
+use crate::machine::model::Held;
 use crate::machine::model::Scalar;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::model::{KObject, TypeNode};
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{BindingIndex, KFunction, Scope};
-use crate::memory::Carried;
-use crate::memory::Held;
 use crate::memory::{program_storage, run_root_storage};
 
 /// Cross a parsed node into the scheduler against `scope`'s region.
