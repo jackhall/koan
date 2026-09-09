@@ -58,6 +58,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Frame recycling](reduce_allocs/frame-recycling.md)
 - [Slot-shaped per-call scopes](reduce_allocs/slot-shaped-per-call-scopes.md)
 - [Source the free-identifier walk's last two rules](refactor/free-identifier-walk-sourcing.md)
+- [A top-level `memory` module](refactor/memory-module.md)
 - [One declaration-window representation](refactor/one-declaration-window.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Substitute, then ask](refactor/substitution-walk-collapse.md)
