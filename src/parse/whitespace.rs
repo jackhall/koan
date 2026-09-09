@@ -24,10 +24,14 @@ use crate::source::Span;
 ///   lines preserve the flag.
 /// - **Open `(`.** Indentation-sensitive: a deeper line nests as its own wrapped group
 ///   (nest-per-line); a same-or-shallower non-closing line is the dangling-`(` error; the
-///   matching `)` may sit at any indent >= its opener. Closing joins lazily so `build_tree`
-///   pairs the literal `)` with the innermost open group. Parens can't ride `delim_depth`
-///   because that counter ignores indent; an open-paren anchor stack keyed by `(indent,
-///   span)` carries the info instead.
+///   matching `)` may sit at any indent >= its opener. A line that carries the `)` is a
+///   continuation line like every other one, so its own content still takes a group — the
+///   line closes that group itself, right where the content ends, and the literal `)` that
+///   follows goes on to pair with the opener it was written to close. Where the closer sits
+///   is layout, not structure. A line of nothing *but* closers has no content to wrap and
+///   joins lazily, letting `build_tree` pair each `)` with the innermost open group. Parens
+///   can't ride `delim_depth` because that counter ignores indent; an open-paren anchor
+///   stack keyed by `(indent, span)` carries the info instead.
 pub fn collapse_whitespace(input: &[u8]) -> Result<Vec<u8>, KError> {
     let s = std::str::from_utf8(input)
         .map_err(|_| KError::parse("collapse_whitespace expected UTF-8 input", None))?;
@@ -111,6 +115,61 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
             }};
         }
 
+        // Open a group for one line's content: close every synthetic group this line's
+        // indentation ends, separate from the previous sibling, then wrap. Leaves the group
+        // *open* — the caller decides whether the stack closes it later or this line does.
+        macro_rules! open_group {
+            ($text:expr) => {{
+                let text: &str = $text;
+                while let Some(&top) = stack.last() {
+                    if top >= indent {
+                        stack.pop();
+                        emit_jump(&mut out, last_content_orig_end);
+                        out.push(b')');
+                    } else {
+                        break;
+                    }
+                }
+
+                // Sibling separator. The next line's own JUMP snaps the cursor, so this space
+                // needs no anchor of its own.
+                if !out.is_empty() {
+                    out.push(b' ');
+                }
+
+                // Sigil-led lines wrap *inside* the sigil (`#3` → `#(3)`, not `(#3)`) so the
+                // result satisfies `expression_tree`'s sigil-adjacency rule.
+                let first_byte = text.as_bytes()[0];
+                if first_byte == b'#' || first_byte == b'$' {
+                    emit_jump(&mut out, orig_at_content_start);
+                    out.push(first_byte);
+                    emit_jump(&mut out, orig_at_content_start + 1);
+                    out.push(b'(');
+                    out.extend_from_slice(&text.as_bytes()[1..]);
+                } else {
+                    emit_jump(&mut out, orig_at_content_start);
+                    out.push(b'(');
+                    out.extend_from_slice(text.as_bytes());
+                }
+            }};
+        }
+
+        macro_rules! finish_line {
+            () => {{
+                delim_depth += line_delim_delta(content);
+                adjust_parens(&mut paren_anchors, paren_delta, indent, content_span);
+                continuing = content.ends_with(',');
+                last_content_orig_end = orig_at_content_end;
+                orig_at_line_start = orig_at_next_line_start;
+                line_start = if line_end < bytes.len() {
+                    line_end + 1
+                } else {
+                    bytes.len() + 1
+                };
+                lineno += 1;
+            }};
+        }
+
         // Flat-continuation regimes: append verbatim regardless of indentation. Parens on
         // the line still adjust the anchor stack so a later indent-governed line sees the
         // right depth.
@@ -122,8 +181,6 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
         // Inside an open paren, indentation decides continuation vs. break.
         if let Some(&(anchor_indent, anchor_span)) = paren_anchors.last() {
             if paren_delta < 0 {
-                // Lazy join: let `build_tree` pair the literal `)` with the innermost open
-                // group instead of forcing a synthetic-frame pop here.
                 if indent < anchor_indent {
                     return Err(KError::parse(
                         "closing ')' is less indented than the '(' it closes; a paren must \
@@ -131,7 +188,27 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
                         Some(content_span),
                     ));
                 }
-                join_line!();
+                let (expression, closers) = content.split_at(closer_offset(content));
+                if expression.is_empty() {
+                    // Nothing but closers. Lazy join: let `build_tree` pair each literal `)`
+                    // with the innermost open group instead of forcing a synthetic-frame pop.
+                    join_line!();
+                    continue;
+                }
+                // An expression *and* the closer that ends the group it sits in. The
+                // expression is a continuation line like every other one and takes its own
+                // group — otherwise it would join the previous line's, which reads two
+                // siblings as an application. This line closes that group itself, right where
+                // the expression ends, so the literal `)` still pairs with the opener whose
+                // group it was written to close.
+                open_group!(expression);
+                emit_jump(
+                    &mut out,
+                    walk_content_cursor(expression.as_bytes(), orig_at_content_start)?,
+                );
+                out.push(b')');
+                out.extend_from_slice(closers.as_bytes());
+                finish_line!();
                 continue;
             }
             if indent <= anchor_indent {
@@ -167,50 +244,9 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
             ));
         }
 
-        while let Some(&top) = stack.last() {
-            if top >= indent {
-                stack.pop();
-                emit_jump(&mut out, last_content_orig_end);
-                out.push(b')');
-            } else {
-                break;
-            }
-        }
-
-        // Sibling separator. The next line's own JUMP snaps the cursor, so this space
-        // needs no anchor of its own.
-        if !out.is_empty() {
-            out.push(b' ');
-        }
-
-        // Sigil-led lines wrap *inside* the sigil (`#3` → `#(3)`, not `(#3)`) so the result
-        // satisfies `expression_tree`'s sigil-adjacency rule.
-        let first_byte = content.as_bytes()[0];
-        if first_byte == b'#' || first_byte == b'$' {
-            emit_jump(&mut out, orig_at_content_start);
-            out.push(first_byte);
-            emit_jump(&mut out, orig_at_content_start + 1);
-            out.push(b'(');
-            out.extend_from_slice(&content.as_bytes()[1..]);
-        } else {
-            emit_jump(&mut out, orig_at_content_start);
-            out.push(b'(');
-            out.extend_from_slice(content.as_bytes());
-        }
-
+        open_group!(content);
         stack.push(indent);
-        delim_depth += line_delim_delta(content);
-        adjust_parens(&mut paren_anchors, paren_delta, indent, content_span);
-        continuing = content.ends_with(',');
-        last_content_orig_end = orig_at_content_end;
-
-        orig_at_line_start = orig_at_next_line_start;
-        line_start = if line_end < bytes.len() {
-            line_end + 1
-        } else {
-            bytes.len() + 1
-        };
-        lineno += 1;
+        finish_line!();
     }
 
     while stack.pop().is_some() {
@@ -279,6 +315,23 @@ fn line_delim_delta(s: &str) -> i32 {
     let opens = s.chars().filter(|&c| c == '[' || c == '{').count() as i32;
     let closes = s.chars().filter(|&c| c == ']' || c == '}').count() as i32;
     opens - closes
+}
+
+/// Where a line's own content ends and the closer run that ends an enclosing group begins: the
+/// offset of the first `)` that takes the line's paren balance below zero, or the length of the
+/// line when none does. Parens inside string literals are already masked out by the `quotes`
+/// pass, so a bare byte scan sees only structural ones.
+fn closer_offset(content: &str) -> usize {
+    let mut balance: i32 = 0;
+    for (offset, c) in content.char_indices() {
+        match c {
+            '(' => balance += 1,
+            ')' if balance == 0 => return offset,
+            ')' => balance -= 1,
+            _ => {}
+        }
+    }
+    content.len()
 }
 
 fn line_paren_delta(s: &str) -> i32 {

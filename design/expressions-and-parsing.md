@@ -60,6 +60,14 @@ span multiple physical lines:
   So `PRINT (\n  3.14\n)` parses (the `)` returns to `PRINT`'s column), but
   `PRINT (\n3.14\n)` is a syntax error.
 
+  Nest-per-line holds for the line that carries the closer too: it wraps its own
+  content as a group, closes that group where the content ends, and the literal
+  `)` goes on to pair with the opener it was written to close. So where the
+  closer sits is layout, not structure — a three-member body reads as three
+  siblings whether the group closes on its last member's line or on one of its
+  own. A line of nothing *but* closers has no content to wrap, adds no group, and
+  hands each `)` to the innermost one still open.
+
 ## `KExpression` shape
 
 Output is one [`KExpression`](../src/machine/model/ast.rs) per top-level line:

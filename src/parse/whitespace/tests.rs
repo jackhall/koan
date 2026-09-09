@@ -266,6 +266,55 @@ fn nested_multiline_parens_pair_correctly() {
 }
 
 #[test]
+fn a_closing_line_still_nests_as_its_own_group() {
+    // Where the `)` sits is layout, not structure: both spellings of the same three-member
+    // body read as three siblings. Riding the closer on the last line used to join that line
+    // into the previous one's group, which reads the pair as an application.
+    assert_eq!(
+        collapse_whitespace("FOO (\n  A\n  B\n  C)").unwrap(),
+        "(FOO ( (A) (B) (C)))",
+    );
+    assert_eq!(
+        collapse_whitespace("FOO (\n  (A)\n  (B)\n  (C))").unwrap(),
+        "(FOO ( ((A)) ((B)) ((C))))",
+    );
+}
+
+#[test]
+fn a_closing_line_of_several_words_is_one_group() {
+    assert_eq!(
+        collapse_whitespace("FOO (\n  A\n  B C)").unwrap(),
+        "(FOO ( (A) (B C)))",
+    );
+}
+
+#[test]
+fn a_line_of_nothing_but_closers_opens_no_group() {
+    // The lazy join: with no expression of its own to wrap, the line hands each `)` straight
+    // to `build_tree`, which pairs it with the innermost group still open.
+    assert_eq!(
+        collapse_whitespace("FOO (\n  BAR (\n    x\n  ))").unwrap(),
+        "(FOO ( (BAR ( (x )))))",
+    );
+}
+
+#[test]
+fn a_closing_line_ends_every_group_it_closes() {
+    assert_eq!(
+        collapse_whitespace("FOO (\n  BAR (\n    x\n    y))").unwrap(),
+        "(FOO ( (BAR ( (x) (y)))))",
+    );
+}
+
+#[test]
+fn a_sigil_led_closing_line_still_wraps_inside_the_sigil() {
+    assert_eq!(
+        collapse_whitespace("FOO (\n  A\n  #3)").unwrap(),
+        "(FOO ( (A) #(3)))",
+    );
+}
+
+#[test]
 fn open_paren_same_indent_break_is_error() {
     let err = collapse_whitespace("PRINT (\n3.14\n)").unwrap_err();
     assert!(err.contains("unmatched '('"), "got: {err}");
