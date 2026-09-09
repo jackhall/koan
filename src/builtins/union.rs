@@ -509,8 +509,7 @@ mod tests {
         let region = run_root_storage();
         let test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let types = test_run.registry_handle();
-        let fctx = crate::machine::FinishCtx::for_scope(scope, types.registries());
+        let fctx = crate::machine::FinishCtx::for_scope(scope, test_run.registries());
         let fields = || {
             vec![
                 (
@@ -527,10 +526,10 @@ mod tests {
         // the members), exactly as the `nominal_schema_action` entry point does.
         let make_window = || {
             crate::machine::model::DeclWindow::Owned(RecursiveGroupWindow::for_binder(
-                type_name("Maybe", types.registries()),
+                type_name("Maybe", test_run.registries()),
                 vec![
-                    type_name("Some", types.registries()),
-                    type_name("None", types.registries()),
+                    type_name("Some", test_run.registries()),
+                    type_name("None", test_run.registries()),
                 ],
             ))
         };
@@ -583,7 +582,7 @@ mod tests {
             }
             carrier.inspect_at(std::rc::Rc::clone(&region), |c| {
                 matches!(c, Carried::Type(kt)
-                    if matches!(types.node(*kt), TypeNode::Union { members } if members.len() == 2))
+                    if matches!(test_run.types().node(*kt), TypeNode::Union { members } if members.len() == 2))
             })
         });
         assert_eq!(

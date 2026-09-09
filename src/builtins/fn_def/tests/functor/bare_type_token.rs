@@ -23,11 +23,11 @@ fn run_expecting_dispatch_error<'a>(test_run: &mut TestRun<'a>, expr: KExpressio
     match test_run.runtime.execute() {
         Err(e) => e,
         Ok(()) => {
-            let types = test_run.registry_handle();
             match test_run.runtime.read_edge_result_with(edge, |v| {
-                types
+                test_run
+                    .types()
                     .ktype_of_carried(v)
-                    .name(types.registries())
+                    .name(test_run.registries())
                     .to_string()
             }) {
                 Err(e) => e.clone(),

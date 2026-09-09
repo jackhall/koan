@@ -439,14 +439,13 @@ fn function_operand_is_error_at_any_position() {
     let program = program_storage();
     let storage = run_root_storage();
     let test_run = TestRun::silent(&program, &storage);
-    let types = test_run.registry_handle();
-    let f = a_function(&storage, test_run.scope, types.registries());
+    let f = a_function(&storage, test_run.scope, test_run.registries());
     assert_eq!(
-        f.value_equal(&num(1.0), types.registries()),
+        f.value_equal(&num(1.0), test_run.registries()),
         Err(ValueEqualityError::Function)
     );
     assert_eq!(
-        num(1.0).value_equal(&f, types.registries()),
+        num(1.0).value_equal(&f, test_run.registries()),
         Err(ValueEqualityError::Function)
     );
     // Nested: a function inside a list propagates the error.
@@ -465,17 +464,17 @@ fn function_operand_is_error_at_any_position() {
         &[Held::Object(
             a_function(&storage2, second_run.scope, second_run.registries()).deep_clone(),
         )],
-        &types,
+        test_run.types(),
     );
     let list_g = KObject::list_of_held(
         door,
         &[Held::Object(
             a_function(&storage2, second_run.scope, second_run.registries()).deep_clone(),
         )],
-        &types,
+        test_run.types(),
     );
     assert_eq!(
-        list_f.value_equal(&list_g, types.registries()),
+        list_f.value_equal(&list_g, test_run.registries()),
         Err(ValueEqualityError::Function)
     );
 }
@@ -489,7 +488,6 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     let program = program_storage();
     let storage = run_root_storage();
     let test_run = TestRun::silent(&program, &storage);
-    let types = test_run.registry_handle();
     let owned_cells = crate::memory::FrameCoverage::empty();
     let door = {
         use crate::memory::FoldedPlacement;
@@ -500,12 +498,12 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     let list_f = KObject::list_of_held(
         door,
         &[Held::Object(
-            a_function(&storage, test_run.scope, types.registries()).deep_clone(),
+            a_function(&storage, test_run.scope, test_run.registries()).deep_clone(),
         )],
-        &types,
+        test_run.types(),
     );
-    let empty = KObject::list(door, vec![], &types);
-    assert_eq!(list_f.value_equal(&empty, types.registries()), Ok(false));
+    let empty = KObject::list(door, vec![], test_run.types());
+    assert_eq!(list_f.value_equal(&empty, test_run.registries()), Ok(false));
 }
 
 #[test]
@@ -517,17 +515,18 @@ fn module_operand_is_error() {
     let program = program_storage();
     let storage = run_root_storage();
     let test_run = TestRun::silent(&program, &storage);
-    let types = test_run.registry_handle();
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(test_run.scope, &draft));
+    let self_sig = test_run
+        .types()
+        .signature(SigSchema::raw_self_sig(test_run.scope, &draft));
     let m = Module::alloc_at_child_scope("m", test_run.scope, draft, self_sig);
     let module = KObject::Module(m);
     assert_eq!(
-        module.value_equal(&num(1.0), types.registries()),
+        module.value_equal(&num(1.0), test_run.registries()),
         Err(ValueEqualityError::Module)
     );
     assert_eq!(
-        num(1.0).value_equal(&module, types.registries()),
+        num(1.0).value_equal(&module, test_run.registries()),
         Err(ValueEqualityError::Module)
     );
 }

@@ -159,13 +159,12 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
             test_run.registries(),
         )))],
     );
-    let registry = test_run.registry_handle();
     let runtime = &mut test_run.runtime;
     let slot = runtime.dispatch_in_scope(working(&program, expr), scope, 1);
     let id = runtime.install_edge_for_test(slot, scope);
     runtime.execute().unwrap();
-    let err = match runtime.read_edge_result_with(id, |v| {
-        registry.registries().carried_summary(&v).to_string()
+    let err = match test_run.runtime.read_edge_result_with(id, |v| {
+        test_run.registries().carried_summary(&v).to_string()
     }) {
         Err(e) => e.clone(),
         Ok(summary) => panic!(

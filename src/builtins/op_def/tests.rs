@@ -78,7 +78,6 @@ fn sigiled_operand_type_declares_over_lists() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.registry_handle();
     test_run.run(
         "LET xs = [1 2]\n\
          LET ys = [3]\n\
@@ -87,7 +86,7 @@ fn sigiled_operand_type_declares_over_lists() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("lists.result")),
-            types.registries()
+            test_run.registries()
         ),
         vec![3.0],
     );
@@ -101,7 +100,6 @@ fn declared_plus_over_lists_leaves_number_arithmetic_alone() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.registry_handle();
     test_run.run(
         "LET xs = [1]\n\
          LET ys = [2]\n\
@@ -119,7 +117,7 @@ fn declared_plus_over_lists_leaves_number_arithmetic_alone() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("lists.pair")),
-            types.registries()
+            test_run.registries()
         ),
         vec![2.0],
         "list operands miss the builtin's strict gate and fall through to the module body",
@@ -127,7 +125,7 @@ fn declared_plus_over_lists_leaves_number_arithmetic_alone() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("lists.chained")),
-            types.registries()
+            test_run.registries()
         ),
         vec![3.0],
         "the three-operand run resolves the module's singleton `+` group and folds left",
@@ -156,7 +154,6 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.registry_handle();
     test_run.run(
         "LET one = 1\n\
          LET two = 2\n\
@@ -170,7 +167,7 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("gather.named")),
-            types.registries()
+            test_run.registries()
         ),
         vec![1.0, 2.0, 3.0],
         "a named operand of a run resolves against scope, not as an interned symbol",
@@ -178,7 +175,7 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("gather.chained")),
-            types.registries()
+            test_run.registries()
         ),
         vec![1.0, 2.0, 3.0],
         "an infix run collects into `operands`",
@@ -186,7 +183,7 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("gather.pair")),
-            types.registries()
+            test_run.registries()
         ),
         vec![4.0, 5.0],
         "a two-operand call reaches the list body through the binary bridge",
@@ -194,7 +191,7 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("gather.prefix")),
-            types.registries()
+            test_run.registries()
         ),
         vec![6.0, 7.0, 8.0],
         "the prefix form is the same keyword-first shape a reduced run takes",
@@ -330,7 +327,6 @@ fn a_run_parks_on_a_still_finalizing_declaration() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.registry_handle();
     test_run.run(
         "LET xs = [1]\n\
          LET ys = [2]\n\
@@ -342,7 +338,7 @@ fn a_run_parks_on_a_still_finalizing_declaration() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("deferred.result")),
-            types.registries()
+            test_run.registries()
         ),
         vec![1.0],
     );
@@ -423,7 +419,6 @@ fn combined_unary_form_installs_both_bucket_keys() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.registry_handle();
     test_run.run(
         "MODULE gather = (\
            (LET collect = UNARY OP #(~) OVER Number -> :(LIST OF Number) = (operands))\
@@ -433,7 +428,7 @@ fn combined_unary_form_installs_both_bucket_keys() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("gather.chained")),
-            types.registries()
+            test_run.registries()
         ),
         vec![1.0, 2.0, 3.0],
         "the list key registered: an infix run collects into `operands`",
@@ -441,7 +436,7 @@ fn combined_unary_form_installs_both_bucket_keys() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("gather.pair")),
-            types.registries()
+            test_run.registries()
         ),
         vec![4.0, 5.0],
         "the binary bridge key registered: a two-operand run reaches the same body",

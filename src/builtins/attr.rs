@@ -1165,10 +1165,9 @@ mod tests {
              MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
              LET int_ord_view = (int_ord :| WithZero)",
         );
-        let types = test_run.registry_handle();
         let result = test_run.run_one(test_run.parse_one("int_ord_view.zero"));
         assert_eq!(
-            result.ktype().name(types.registries()),
+            result.ktype().name(test_run.registries()),
             "Carrier",
             "opaque-view slot read must carry the abstract `Carrier` identity, got {:?}",
             result.ktype(),

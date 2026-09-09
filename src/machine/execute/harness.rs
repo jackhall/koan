@@ -222,12 +222,6 @@ impl<'run> KoanRuntime<'run> {
         self.host.ambient.registries_opt()
     }
 
-    /// The run's registries, shared out — a holder reads them without borrowing the runtime, and
-    /// keeps them alive past the runtime's drop.
-    pub(crate) fn registries_rc(&self) -> Option<Rc<crate::machine::model::RunRegistries>> {
-        self.host.ambient.registries_rc()
-    }
-
     /// Submit each `statement` as a fresh lexical block over `scope`. The program / test-harness
     /// entry point for top-level statements; see [`Host::enter_block`].
     pub(crate) fn enter_block<'a>(

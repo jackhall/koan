@@ -23,9 +23,10 @@
 //! alias to a local family, so the payload's own file is where a reader finds every state it travels
 //! in.
 //!
-//! **What this module imports back.** [`frame`] names [`Scope`](crate::machine::core::Scope) to
-//! read the child a frame's envelope carries — the payload of the family it holds — and the
-//! container storage names `Held`, `KObject`, `KKey` and `Symbol` for the same reason. [`region`]
+//! **What this module imports back.** [`frame`] names `Scope`, `ScopeId` and `ScopeRefFamily` to
+//! read the child a frame's envelope carries — the payload of the family it holds — and
+//! [`container_substrate`] / [`rehomed`] name `Held`, `KObject`, `KKey` and `Symbol` for the same
+//! reason: they are the cells the storage holds. [`region`]
 //! names nothing but the lifetime-free [`KType`](crate::machine::model::KType) handle its
 //! `RegionTypeFamily` carries. Nothing from `machine::execute`, nothing that builds a value (a
 //! frame's child scope is born by [`Scope::open_frame`](crate::machine::core::Scope::open_frame),

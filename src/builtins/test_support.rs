@@ -124,7 +124,6 @@ pub struct TestRun<'a> {
     pub runtime: KoanRuntime<'a>,
     /// The run frame, shared out so its registries stay readable after the runtime drops — and
     /// without borrowing the runtime, which every `run` call needs mutably.
-    registries: Rc<RunRegistries>,
     /// Per-scope statement cursors — the session's own record of how many top-level statements it
     /// has submitted against each scope, which is what numbers the next one. The lexical position
     /// of a statement-at-a-time submission exists only in the submitting session (statement N is
@@ -149,14 +148,10 @@ impl<'a> TestRun<'a> {
             .registries()
             .expect("run frame was just established");
         crate::machine::seed_run_root(root, registries);
-        let registries = runtime
-            .registries_rc()
-            .expect("run frame was just established");
         Self {
             program,
             scope: child,
             runtime,
-            registries,
             cursors: HashMap::new(),
         }
     }
@@ -176,12 +171,6 @@ impl<'a> TestRun<'a> {
         (run, buf)
     }
 
-    /// The run frame held for its registries — what a test binds when it needs the registry
-    /// across `run` calls, which borrow the `TestRun` mutably.
-    pub fn registry_handle(&self) -> RegistryHandle {
-        RegistryHandle(Rc::clone(&self.registries))
-    }
-
     /// [`parse_one`] into this bundle's own program storage and interner — what production does,
     /// so a Type token this run declares is resolvable by every diagnostic it renders.
     #[cfg(test)]
@@ -191,7 +180,9 @@ impl<'a> TestRun<'a> {
 
     /// The run's lookup state — the currency for anything that renders a label or builds a record.
     pub fn registries(&self) -> &RunRegistries {
-        &self.registries
+        self.runtime
+            .registries()
+            .expect("the run frame carries the registries")
     }
 
     /// The run's registry as a plain reference — the `types` argument the type-system surface takes.
@@ -495,21 +486,20 @@ impl<'a> TestRun<'a> {
     }
 
     /// Like [`TestRun::run`], but splits the source in two phases: `prelude` first, then `probe`.
-    /// Returns the run's [`TypeRegistry`] together with its hit and miss counts as of the end of
-    /// `prelude`, so a test can measure each counter's movement across `probe` alone rather than
-    /// over the whole run.
+    /// Returns the registry's hit and miss counts as of the end of `prelude`, so a test can measure
+    /// each counter's movement across `probe` alone rather than over the whole run. The registry
+    /// itself is read afterwards through [`Self::types`] — the counts are the only thing that has
+    /// to be captured *between* the two runs.
     #[cfg(test)]
-    pub(crate) fn run_probe_returning_registry(
+    pub(crate) fn run_probe_counting_registry(
         &mut self,
         prelude: &str,
         probe: &str,
-    ) -> (RegistryHandle, usize, usize) {
+    ) -> (usize, usize) {
         self.run(prelude);
-        let registry = self.registry_handle();
-        let hits_before_probe = registry.hit_count();
-        let misses_before_probe = registry.miss_count();
+        let before = (self.types().hit_count(), self.types().miss_count());
         self.run(probe);
-        (registry, hits_before_probe, misses_before_probe)
+        before
     }
 }
 
@@ -720,25 +710,5 @@ pub(crate) fn one_slot_sig<'a>(name: &'a str, kt: KType) -> SignatureDraft<'a> {
                 .expect("a test fixture parameter is a value token"),
             kt,
         ))],
-    }
-}
-
-/// A run frame held for its registries. The registries are owned by the frame, so reading them off
-/// the [`TestRun`] borrows it — which every `run` call needs mutably. Holding the frame instead
-/// decouples the two, and keeps the registries readable after the runtime drops.
-///
-/// Derefs to the type registry, the half nearly every assertion wants.
-pub struct RegistryHandle(Rc<RunRegistries>);
-
-impl RegistryHandle {
-    pub fn registries(&self) -> &RunRegistries {
-        &self.0
-    }
-}
-
-impl std::ops::Deref for RegistryHandle {
-    type Target = TypeRegistry;
-    fn deref(&self) -> &TypeRegistry {
-        &self.registries().types
     }
 }

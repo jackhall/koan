@@ -104,7 +104,6 @@ fn list_relocation_rebuilds_substrate_into_dest() {
     let scope = test_run.scope;
     let source = scope.open_frame();
     let dest = scope.open_frame();
-    let types = test_run.registry_handle();
 
     let owned_cells = crate::memory::FrameCoverage::empty();
     let source_door =
@@ -116,7 +115,7 @@ fn list_relocation_rebuilds_substrate_into_dest() {
             Held::Object(KObject::Number(1.0)),
             Held::Object(KObject::Number(2.0)),
         ],
-        &types,
+        test_run.types(),
     ));
 
     let owned_cells = crate::memory::FrameCoverage::empty();
@@ -159,7 +158,6 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     let scope = test_run.scope;
     let source = scope.open_frame();
     let dest = scope.open_frame();
-    let types = test_run.registry_handle();
 
     let owned_cells = crate::memory::FrameCoverage::empty();
     let source_door =
@@ -168,7 +166,7 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     let mut map: HashMap<KKey, Held> = HashMap::new();
     map.insert(KKey::String("a"), Held::Object(KObject::Number(1.0)));
     let dict: &KObject =
-        source_door.alloc_object_folded(KObject::dict_of_held(source_door, map, &types));
+        source_door.alloc_object_folded(KObject::dict_of_held(source_door, map, test_run.types()));
 
     let owned_cells = crate::memory::FrameCoverage::empty();
     let relocated = copy_carried(
@@ -209,11 +207,10 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
     let scope = test_run.scope;
     let source = scope.open_frame();
     let dest = scope.open_frame();
-    let types = test_run.registry_handle();
 
-    let type_id = types.intern(TypeNode::AbstractType {
+    let type_id = test_run.types().intern(TypeNode::AbstractType {
         source: ScopeId::from_raw(0, 0x12),
-        name: crate::builtins::test_support::type_name("Distance", types.registries()),
+        name: crate::builtins::test_support::type_name("Distance", test_run.registries()),
         param_names: vec![],
         nonce: None,
     });

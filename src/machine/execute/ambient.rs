@@ -74,11 +74,6 @@ impl AmbientContext {
         self.run_frame.as_ref().map(RunFrame::registries)
     }
 
-    /// [`Self::registries`] shared out, for a test holder that outlives a `&mut` drive call.
-    pub(in crate::machine::execute) fn registries_rc(&self) -> Option<Rc<RunRegistries>> {
-        self.run_frame.as_ref().map(RunFrame::registries_rc)
-    }
-
     /// The run's output sink, owned by the run frame exactly as the type registry is, and reached
     /// the same way.
     pub(in crate::machine::execute) fn writer(&self) -> &RunWriter {

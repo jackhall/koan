@@ -29,15 +29,14 @@ fn type_token_cannot_bind_value_side() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(
         &mut el,
-        type_name("Gee", types.registries()),
-        types.registries(),
+        type_name("Gee", test_run.registries()),
+        test_run.registries(),
     ) {
         TypeResolution::Unbound(missing) => {
-            assert_eq!(missing, type_name("Gee", types.registries()))
+            assert_eq!(missing, type_name("Gee", test_run.registries()))
         }
         other => panic!("expected Unbound, got {:?}", other),
     }
@@ -49,15 +48,14 @@ fn unbound_leaf_names_unknown_type() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(
         &mut el,
-        type_name("NopeType", types.registries()),
-        types.registries(),
+        type_name("NopeType", test_run.registries()),
+        test_run.registries(),
     ) {
         TypeResolution::Unbound(missing) => {
-            assert_eq!(missing, type_name("NopeType", types.registries()));
+            assert_eq!(missing, type_name("NopeType", test_run.registries()));
             // A name declared nowhere renders the never-declared wording, framed by whatever
             // context the missing surface supplies.
             assert!(
@@ -66,7 +64,7 @@ fn unbound_leaf_names_unknown_type() {
                     missing,
                     None,
                     Some("a test slot"),
-                    types.registries()
+                    test_run.registries()
                 )
                 .to_string()
                 .contains("unknown type name `NopeType` in a test slot")
@@ -87,16 +85,17 @@ fn announced_member_lowers_to_sibling_for_a_declarator() {
     let parent = parent_test_run.scope;
     let child = announced_module(parent, &["Alpha", "Beta"]);
     let window = child.own_declaration_window().expect("the body announced");
-    let types = parent_test_run.registry_handle();
     let mut el = Elaborator::new(child).with_window(WindowView::Announced(window));
-    match elaborate_type_identifier(&mut el, type_token("Beta"), types.registries()) {
-        TypeResolution::Done(kt) => assert_eq!(kt, types.intern(TypeNode::Sibling(1))),
+    match elaborate_type_identifier(&mut el, type_token("Beta"), parent_test_run.registries()) {
+        TypeResolution::Done(kt) => {
+            assert_eq!(kt, parent_test_run.types().intern(TypeNode::Sibling(1)))
+        }
         other => panic!("expected a sibling back-edge for a window member, got {other:?}"),
     }
     let mut el2 = Elaborator::new(child).with_window(WindowView::Announced(window));
     assert!(
         matches!(
-            elaborate_type_identifier(&mut el2, type_token("Nope"), types.registries()),
+            elaborate_type_identifier(&mut el2, type_token("Nope"), parent_test_run.registries()),
             TypeResolution::Unbound(_)
         ),
         "a non-member must fall through to ordinary resolution",
@@ -111,9 +110,8 @@ fn announced_member_never_lowers_to_sibling_for_a_consumer() {
     let region = run_root_storage();
     let parent_test_run = TestRun::silent(&program, &region);
     let child = announced_module(parent_test_run.scope, &["Alpha", "Beta"]);
-    let types = parent_test_run.registry_handle();
     let mut el = Elaborator::new(child);
-    match elaborate_type_identifier(&mut el, type_token("Beta"), types.registries()) {
+    match elaborate_type_identifier(&mut el, type_token("Beta"), parent_test_run.registries()) {
         TypeResolution::Unbound(missing) => assert_eq!(missing, type_token("Beta")),
         other => panic!("a consumer must never observe a pre-seal member, got {other:?}"),
     }
@@ -126,15 +124,17 @@ fn window_binder_resolves_to_the_union_of_its_members() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
-    let types = test_run.registry_handle();
     let window = RecursiveGroupWindow::for_binder(
         type_token("Tree"),
         vec![type_token("Leaf"), type_token("Node")],
     );
     let mut el = Elaborator::new(test_run.scope).with_window(WindowView::Local(&window));
-    match elaborate_type_identifier(&mut el, type_token("Tree"), types.registries()) {
+    match elaborate_type_identifier(&mut el, type_token("Tree"), test_run.registries()) {
         TypeResolution::Done(kt) => {
-            assert_eq!(Some(kt), window.binder_union(type_token("Tree"), &types))
+            assert_eq!(
+                Some(kt),
+                window.binder_union(type_token("Tree"), test_run.types())
+            )
         }
         other => panic!("expected the binder union, got {other:?}"),
     }
@@ -149,7 +149,6 @@ fn announced_member_defers_until_the_window_seals() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = announced_module(test_run.scope, &["Node", "Leaf"]);
-    let types = test_run.registry_handle();
     let window = DeclWindow::Ambient(scope.own_declaration_window().expect("announced"));
     let fill = |name: &str, repr: KType, site: DeclarationSite| {
         finalize_nominal_member(
@@ -158,7 +157,7 @@ fn announced_member_defers_until_the_window_seals() {
             |_| repr,
             site,
             scope.brand(),
-            types.registries(),
+            test_run.registries(),
         )
     };
     match fill("Node", KType::NUMBER, mock_declaration_site(2)) {
@@ -191,14 +190,14 @@ fn announced_member_defers_until_the_window_seals() {
         scope
             .bindings()
             .types()
-            .get(&type_name("Leaf", types.registries()))
+            .get(&type_name("Leaf", test_run.registries()))
             .is_none()
     );
     for write in writes {
         write
             .apply(
                 scope,
-                types.registries(),
+                test_run.registries(),
                 &mut crate::machine::WriteGate::for_test(),
             )
             .expect("the first install lands");
@@ -216,7 +215,7 @@ fn announced_member_defers_until_the_window_seals() {
         |_| KType::BOOL,
         mock_declaration_site(4),
         scope.brand(),
-        types.registries(),
+        test_run.registries(),
     ) {
         SealOutcome::Sealed { writes, .. } => writes.into_iter().next().expect("one write"),
         other => panic!("the singleton window seals, got {}", outcome_tag(&other)),
@@ -224,7 +223,7 @@ fn announced_member_defers_until_the_window_seals() {
     let error = redeclare
         .apply(
             scope,
-            types.registries(),
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect_err("a redeclaration of Leaf must Rebind at apply");

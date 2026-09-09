@@ -19,17 +19,16 @@ fn a_finished_program_reclaims_every_slot() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-
-    let exprs = super::working_all(
+    let parsed_0 = super::working_all(
         &program,
-        labels,
+        &test_run.registries().labels,
         "LET x = 1\n\
          LET y = 2\n\
          LET z = (LET a = 3)",
     );
+    let runtime = &mut test_run.runtime;
+
+    let exprs = parsed_0;
     for (i, e) in exprs.into_iter().enumerate() {
         runtime.dispatch_in_scope(e, root, i + 1);
     }
@@ -54,17 +53,16 @@ fn no_notify_list_names_a_released_edge() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-
-    let exprs = super::working_all(
+    let parsed_0 = super::working_all(
         &program,
-        labels,
+        &test_run.registries().labels,
         "LET x = 1\n\
          LET y = 2\n\
          LET z = (LET a = 3)",
     );
+    let runtime = &mut test_run.runtime;
+
+    let exprs = parsed_0;
     for (i, e) in exprs.into_iter().enumerate() {
         runtime.dispatch_in_scope(e, root, i + 1);
     }

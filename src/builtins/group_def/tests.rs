@@ -48,7 +48,6 @@ fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.registry_handle();
     test_run.run(&format!(
         "{LISTS}\
          GROUP vec_ops FOLD LEFT = (\
@@ -60,7 +59,7 @@ fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("vec_ops.inside")),
-            types.registries()
+            test_run.registries()
         ),
         vec![3.0],
         "the mixed run reduces fold-left through both member bodies inside the group body",
@@ -68,7 +67,7 @@ fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("outside")),
-            types.registries()
+            test_run.registries()
         ),
         vec![3.0],
         "a USING window surfaces the group's registry entries alongside its operator bodies",
@@ -83,7 +82,6 @@ fn group_fold_right_nests_right_associated() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.registry_handle();
     test_run.run(&format!(
         "{LISTS}\
          GROUP vec_ops FOLD RIGHT = (\
@@ -94,7 +92,7 @@ fn group_fold_right_nests_right_associated() {
     assert_eq!(
         list_numbers(
             test_run.run_one(test_run.parse_one("vec_ops.inside")),
-            types.registries()
+            test_run.registries()
         ),
         vec![1.0],
         "a fold-right run nests `xs + (ys - zs)`, which returns `xs`",

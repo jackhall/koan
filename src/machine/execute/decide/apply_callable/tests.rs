@@ -327,13 +327,12 @@ fn erased_result_carrier_admits_named_application() {
         test_run.run_one_type(test_run.parse_one(":(Result {Ok = Number, Error = Any})"));
     let refusing = test_run.run_one_type(test_run.parse_one(":(Result {Ok = Str, Error = Any})"));
     let value = scope.expect_value("wrapped");
-    let types = test_run.registry_handle();
     assert!(
-        admitting.matches_value(value, types.registries()),
+        admitting.matches_value(value, test_run.registries()),
         "an `Ok` carrier of a Number must inhabit `:(Result {{Ok = Number, Error = Any}})`",
     );
     assert!(
-        !refusing.matches_value(value, types.registries()),
+        !refusing.matches_value(value, test_run.registries()),
         "the same carrier must not inhabit an application binding `Ok` to Str",
     );
 }

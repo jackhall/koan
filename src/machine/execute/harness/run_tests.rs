@@ -16,14 +16,14 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
+    let parsed_0 = parse_all(&program, &test_run.registries().labels, "LET x = 42");
+    let parsed_1 = parse_one(&program, &test_run.registries().labels, "(x)");
     let runtime = &mut test_run.runtime;
-    for e in parse_all(&program, labels, "LET x = 42") {
+    for e in parsed_0 {
         runtime.dispatch_in_scope(e, scope, 1);
     }
     runtime.execute().unwrap();
-    let id = runtime.dispatch_in_scope(parse_one(&program, labels, "(x)"), scope, 2);
+    let id = runtime.dispatch_in_scope(parsed_1, scope, 2);
     let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().unwrap();
     assert!(
@@ -44,14 +44,13 @@ fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-    let ids = runtime.enter_block(
-        scope.id,
-        parse_all(&program, labels, "LET y = (x)\nLET x = 1"),
-        scope,
+    let parsed_0 = parse_all(
+        &program,
+        &test_run.registries().labels,
+        "LET y = (x)\nLET x = 1",
     );
+    let runtime = &mut test_run.runtime;
+    let ids = runtime.enter_block(scope.id, parsed_0, scope);
     let edge = runtime.install_edge_for_test(ids[0], scope);
     runtime.execute().unwrap();
     let err = runtime
@@ -71,10 +70,9 @@ fn single_identifier_short_circuit_falls_through_when_unbound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
+    let parsed_0 = parse_one(&program, &test_run.registries().labels, "(missing)");
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(parse_one(&program, labels, "(missing)"), scope, 1);
+    let id = runtime.dispatch_in_scope(parsed_0, scope, 1);
     let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().unwrap();
     let err = match runtime.edge_result_error(edge) {
@@ -93,13 +91,13 @@ fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
+    let parsed_0 = parse_all(
+        &program,
+        &test_run.registries().labels,
+        "LET z = 7\nLET y = z",
+    );
     let runtime = &mut test_run.runtime;
-    for (i, e) in parse_all(&program, labels, "LET z = 7\nLET y = z")
-        .into_iter()
-        .enumerate()
-    {
+    for (i, e) in parsed_0.into_iter().enumerate() {
         runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
@@ -114,14 +112,13 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-    let ids = runtime.enter_block(
-        scope.id,
-        parse_all(&program, labels, "LET y = z\nLET z = 9"),
-        scope,
+    let parsed_0 = parse_all(
+        &program,
+        &test_run.registries().labels,
+        "LET y = z\nLET z = 9",
     );
+    let runtime = &mut test_run.runtime;
+    let ids = runtime.enter_block(scope.id, parsed_0, scope);
     let watched = super::tests::watch_all(runtime, &ids, scope);
     runtime.execute().unwrap();
     let err = runtime
@@ -143,20 +140,16 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-    for (i, e) in parse_all(
+    let parsed_0 = parse_all(
         &program,
-        labels,
+        &test_run.registries().labels,
         "EXPR (ADD a :Number BY b :Number) -> Number = (a)\n\
          LET aa = 3\n\
          LET bb = 4\n\
          LET out = (ADD aa BY bb)",
-    )
-    .into_iter()
-    .enumerate()
-    {
+    );
+    let runtime = &mut test_run.runtime;
+    for (i, e) in parsed_0.into_iter().enumerate() {
         runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
@@ -171,19 +164,14 @@ fn forward_keyword_function_reference_is_unbound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-    let ids = runtime.enter_block(
-        scope.id,
-        parse_all(
-            &program,
-            labels,
-            "LET out = (DOUBLE 7)\n\
+    let parsed_0 = parse_all(
+        &program,
+        &test_run.registries().labels,
+        "LET out = (DOUBLE 7)\n\
              EXPR (DOUBLE x :Number) -> Number = (x)",
-        ),
-        scope,
     );
+    let runtime = &mut test_run.runtime;
+    let ids = runtime.enter_block(scope.id, parsed_0, scope);
     let edge = runtime.install_edge_for_test(ids[0], scope);
     runtime
         .execute()
@@ -206,20 +194,16 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-    for (i, e) in parse_all(
+    let parsed_0 = parse_all(
         &program,
-        labels,
+        &test_run.registries().labels,
         "EXPR (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 11\n\
          LET bb = 22\n\
          LET out = (ADD aa BY bb)",
-    )
-    .into_iter()
-    .enumerate()
-    {
+    );
+    let runtime = &mut test_run.runtime;
+    for (i, e) in parsed_0.into_iter().enumerate() {
         runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
@@ -239,20 +223,16 @@ fn park_and_replay_minimal_program_for_miri() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-    for (i, e) in parse_all(
+    let parsed_0 = parse_all(
         &program,
-        labels,
+        &test_run.registries().labels,
         "LET z = 11\n\
          LET y = z\n\
          EXPR (DOUBLE x :Number) -> Number = (x)\n\
          LET out = (DOUBLE y)",
-    )
-    .into_iter()
-    .enumerate()
-    {
+    );
+    let runtime = &mut test_run.runtime;
+    for (i, e) in parsed_0.into_iter().enumerate() {
         runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
@@ -269,19 +249,18 @@ fn replay_park_propagates_producer_error() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-    let ids: Vec<_> = parse_all(
+    let parsed_0 = parse_all(
         &program,
-        labels,
+        &test_run.registries().labels,
         "LET y = (x)\n\
          LET x = (UNDEFINED_FN)",
-    )
-    .into_iter()
-    .enumerate()
-    .map(|(i, e)| runtime.dispatch_in_scope(e, scope, i + 1))
-    .collect();
+    );
+    let runtime = &mut test_run.runtime;
+    let ids: Vec<_> = parsed_0
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| runtime.dispatch_in_scope(e, scope, i + 1))
+        .collect();
     let edges: Vec<_> = ids
         .iter()
         .map(|&id| runtime.install_edge_for_test(id, scope))
@@ -316,19 +295,15 @@ fn bare_type_token_in_typeexprref_slot_parks_while_still_finalizing() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-    for (i, e) in parse_all(
+    let parsed_0 = parse_all(
         &program,
-        labels,
+        &test_run.registries().labels,
         "MODULE int_ord = (LET compare = 0)\n\
          SIG Ordered = (VAL compare :Number)\n\
          LET a_result = (int_ord :| Ordered)",
-    )
-    .into_iter()
-    .enumerate()
-    {
+    );
+    let runtime = &mut test_run.runtime;
+    for (i, e) in parsed_0.into_iter().enumerate() {
         runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
@@ -350,15 +325,13 @@ fn let_type_to_value_name_rejected() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let watch = test_run.dispatch_watched_in(scope, parse_one(&program, labels, "LET ty = Number"));
+    let value_alias = parse_one(&program, &test_run.registries().labels, "LET ty = Number");
+    let type_alias = parse_all(&program, &test_run.registries().labels, "LET Ty = Number");
+    let watch = test_run.dispatch_watched_in(scope, value_alias);
     test_run.runtime.execute().unwrap();
-    let types = test_run.registry_handle();
-    match test_run
-        .runtime
-        .read_edge_result_with(watch, |v| format!("{:?}", types.ktype_of_carried(v)))
-    {
+    match test_run.runtime.read_edge_result_with(watch, |v| {
+        format!("{:?}", test_run.types().ktype_of_carried(v))
+    }) {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("ty") && msg.contains("Type-classified")),
@@ -368,7 +341,7 @@ fn let_type_to_value_name_rejected() {
     }
 
     // The Type-classified alias is the legal form: it lands type-side.
-    for e in parse_all(&program, labels, "LET Ty = Number") {
+    for e in type_alias {
         test_run.dispatch_in_scope(e, scope);
     }
     test_run.runtime.execute().unwrap();

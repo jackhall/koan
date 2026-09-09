@@ -162,7 +162,6 @@ fn every_masked_index_is_a_raw_type_expression_slot() {
     let program = crate::memory::program_storage();
     let storage = crate::memory::run_root_storage();
     let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
-    let types = run.registry_handle();
     for spec in BINDER_SPECS {
         for &index in spec.type_slots {
             // Every slot type the seeded root registers at this index of a bucket matching the key.
@@ -184,12 +183,15 @@ fn every_masked_index_is_a_raw_type_expression_slot() {
             }
             assert!(
                 !live.is_empty(),
-                "spec key {:?} masks slot {index}, which no live registration types",
+                "spec key {:?} masks slot {index}, which no live registration run.types()",
                 render_key(spec.key)
             );
             let admits_sigiled = |kt: &KType| {
-                kt.union_has_member(KType::SIGILED_TYPE_EXPR, &types)
-                    || matches!(types.node(*kt), crate::machine::model::TypeNode::OfKind(_))
+                kt.union_has_member(KType::SIGILED_TYPE_EXPR, run.types())
+                    || matches!(
+                        run.types().node(*kt),
+                        crate::machine::model::TypeNode::OfKind(_)
+                    )
             };
             assert!(
                 live.iter().any(admits_sigiled),
@@ -199,7 +201,7 @@ fn every_masked_index_is_a_raw_type_expression_slot() {
             assert!(
                 !live
                     .iter()
-                    .any(|kt| kt.union_has_member(KType::KEXPRESSION, &types)),
+                    .any(|kt| kt.union_has_member(KType::KEXPRESSION, run.types())),
                 "spec key {:?} masks slot {index}, which some registration reads as code",
                 render_key(spec.key)
             );

@@ -46,7 +46,6 @@ fn live_lazy_slots() -> Vec<(UntypedKey, BTreeMap<usize, LazyKinds>)> {
     let program = program_storage();
     let storage = run_root_storage();
     let run = TestRun::silent(&program, &storage);
-    let types = run.registry_handle();
     let mut live = Vec::new();
     for scope in run.scope.ancestors() {
         for (key, bucket) in scope.bindings().functions().iter() {
@@ -55,7 +54,7 @@ fn live_lazy_slots() -> Vec<(UntypedKey, BTreeMap<usize, LazyKinds>)> {
                 let opened = entry.sealed.open_at();
                 for (i, element) in opened.value().signature.elements().iter().enumerate() {
                     if let SignatureElement::Argument(argument) = element
-                        && let Some(kind) = kind_of(argument.ktype, &types)
+                        && let Some(kind) = kind_of(argument.ktype, run.types())
                     {
                         let slot = slots.entry(i).or_default();
                         *slot = slot.with(kind);

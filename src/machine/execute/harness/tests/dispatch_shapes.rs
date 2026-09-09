@@ -202,16 +202,14 @@ fn function_value_call_named_args_missing_short_circuits() {
     test_run.run("LET f = FN EXPR (a :Number PICK b :Number) -> Number = (a)");
     let expr = test_run.parse_one("f {a = 1}");
     reset_resolve_dispatch_entry_count();
-    let types = test_run.registry_handle();
     let id = test_run.dispatch_watched_in(scope, working(scope, expr));
     test_run
         .runtime
         .execute()
         .expect("scheduler should not surface errors directly");
-    let err = match test_run
-        .runtime
-        .read_edge_result_with(id, |v| types.registries().carried_summary(&v).to_string())
-    {
+    let err = match test_run.runtime.read_edge_result_with(id, |v| {
+        test_run.registries().carried_summary(&v).to_string()
+    }) {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
     };
@@ -240,16 +238,14 @@ fn fn_definition_with_a_repeated_parameter_name_is_refused() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let expr = test_run.parse_one("EXPR (BETWEEN x :Number AND x :Number) -> Number = (x)");
-    let types = test_run.registry_handle();
     let id = test_run.dispatch_watched_in(scope, working(scope, expr));
     test_run
         .runtime
         .execute()
         .expect("scheduler should not surface errors directly");
-    let err = match test_run
-        .runtime
-        .read_edge_result_with(id, |v| types.registries().carried_summary(&v).to_string())
-    {
+    let err = match test_run.runtime.read_edge_result_with(id, |v| {
+        test_run.registries().carried_summary(&v).to_string()
+    }) {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected a repeated-parameter ShapeError, got value {summary}"),
     };
@@ -582,17 +578,14 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bind_value should succeed");
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
-    let runtime = &mut test_run.runtime;
-    let producer = runtime.dispatch_in_scope(
-        working(
-            scope,
-            parse_one(&program, labels, "producer_target {y = 1}"),
-        ),
-        scope,
-        1,
+    let parsed_0 = parse_one(
+        &program,
+        &test_run.registries().labels,
+        "producer_target {y = 1}",
     );
+    let parsed_1 = parse_one(&program, &test_run.registries().labels, "f {x = 7}");
+    let runtime = &mut test_run.runtime;
+    let producer = runtime.dispatch_in_scope(working(scope, parsed_0), scope, 1);
     let claim = ProducerId::from_scheduler_edge(runtime.install_edge_for_test(producer, scope));
     scope
         .install_placeholder(
@@ -604,14 +597,8 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
         )
         .expect("install_placeholder should succeed");
 
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
-    let f_call_slot = runtime.dispatch_in_scope(
-        working(scope, parse_one(&program, labels, "f {x = 7}")),
-        scope,
-        2,
-    );
+    let f_call_slot = runtime.dispatch_in_scope(working(scope, parsed_1), scope, 2);
     let f_call_id = runtime.install_edge_for_test(f_call_slot, scope);
 
     reset_resolve_dispatch_entry_count();
@@ -891,16 +878,14 @@ fn operator_chain_undeclared_errors_cleanly() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     let id = test_run.dispatch_watched_in(scope, working(scope, test_run.parse_one("a % b % c")));
     test_run
         .runtime
         .execute()
         .expect("scheduler drains without deadlock");
-    let msg = match test_run
-        .runtime
-        .read_edge_result_with(id, |v| types.registries().carried_summary(&v).to_string())
-    {
+    let msg = match test_run.runtime.read_edge_result_with(id, |v| {
+        test_run.registries().carried_summary(&v).to_string()
+    }) {
         Err(e) => e.to_string(),
         Ok(summary) => {
             panic!("an undeclared operator chain must terminate with an error; got {summary}")
@@ -931,16 +916,15 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     let inner = scope.alloc_child_under();
 
     let record = inner.birth_operator_group(&[probe_symbol("-")], ReductionMode::FoldRight);
     inner
         .register_operator_group_direct(
-            operator_run(&["-"], types.registries()),
+            operator_run(&["-"], test_run.registries()),
             GroupSeal::of_delivered(inner, &record),
             BindingIndex::value(0),
-            types.registries(),
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("an inner scope may register a builtin operator's probe");
@@ -956,7 +940,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let inner_result = test_run
         .runtime
         .read_edge_result_with(inner_id, |v| {
-            types.registries().carried_summary(&v).to_string()
+            test_run.registries().carried_summary(&v).to_string()
         })
         .unwrap_or_else(|e| panic!("a registered FoldRight group must evaluate; got error {e}"));
     assert_eq!(
@@ -973,7 +957,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let root_result = test_run
         .runtime
         .read_edge_result_with(root_id, |v| {
-            types.registries().carried_summary(&v).to_string()
+            test_run.registries().carried_summary(&v).to_string()
         })
         .unwrap_or_else(|e| panic!("the builtin additive group must evaluate; got error {e}"));
     assert_eq!(
@@ -997,14 +981,13 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     let record = scope.birth_operator_group(&[probe_symbol("~")], ReductionMode::Unary);
     scope
         .register_operator_group_direct(
             operator_run(&["~"], test_run.registries()),
             GroupSeal::of_delivered(scope, &record),
             BindingIndex::BUILTIN,
-            types.registries(),
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register operator group");
@@ -1019,7 +1002,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     let infix = test_run
         .runtime
         .read_edge_result_with(infix_id, |v| {
-            types.registries().carried_summary(&v).to_string()
+            test_run.registries().carried_summary(&v).to_string()
         })
         .unwrap_or_else(|e| panic!("a registered Unary group must evaluate; got error {e}"));
     assert_eq!(
@@ -1036,7 +1019,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     let prefix = test_run
         .runtime
         .read_edge_result_with(prefix_id, |v| {
-            types.registries().carried_summary(&v).to_string()
+            test_run.registries().carried_summary(&v).to_string()
         })
         .unwrap_or_else(|e| {
             panic!(
@@ -1218,14 +1201,9 @@ fn non_callable_list_head_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
+    let parsed_0 = parse_one(&program, &test_run.registries().labels, "[1 2 3] x");
     let runtime = &mut test_run.runtime;
-    let slot = runtime.dispatch_in_scope(
-        working(scope, parse_one(&program, labels, "[1 2 3] x")),
-        scope,
-        1,
-    );
+    let slot = runtime.dispatch_in_scope(working(scope, parsed_0), scope, 1);
     let root = runtime.install_edge_for_test(slot, scope);
     runtime
         .execute()

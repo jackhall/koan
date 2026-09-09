@@ -217,7 +217,7 @@ fn satisfying_module_ascribes_and_repeat_hits_verdict() {
     // The miss counter is the discriminating one: flat misses across the repeat mean every lookup
     // it made hit, so nothing re-walked `sig_subtype`; the hit delta guards against a vacuously
     // lookup-free probe.
-    let (registry, hits_before, misses_before) = test_run.run_probe_returning_registry(
+    let (hits_before, misses_before) = test_run.run_probe_counting_registry(
         "NEWTYPE (Type AS Wrapper)\n\
          SIG Complete = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
          MODULE implementation = ((LET Wrap = Wrapper) (LET Tag = Number) (LET zero = 0))\n\
@@ -227,19 +227,19 @@ fn satisfying_module_ascribes_and_repeat_hits_verdict() {
     assert!(binds_module(scope, "first_view"));
     assert!(binds_module(scope, "second_view"));
     assert_eq!(
-        registry.miss_count(),
+        test_run.types().miss_count(),
         misses_before,
         "the repeat ascription should miss nothing — its checks share the first one's verdicts, \
          got {misses_before} misses before it and {} hits / {} misses after",
-        registry.hit_count(),
-        registry.miss_count(),
+        test_run.types().hit_count(),
+        test_run.types().miss_count(),
     );
     assert!(
-        registry.hit_count() > hits_before,
-        "the repeat ascription should consult the registry at all, got {hits_before} hits before \
+        test_run.types().hit_count() > hits_before,
+        "the repeat ascription should consult the test_run.types() at all, got {hits_before} hits before \
          it and {} hits / {} misses after",
-        registry.hit_count(),
-        registry.miss_count(),
+        test_run.types().hit_count(),
+        test_run.types().miss_count(),
     );
 }
 
@@ -301,7 +301,7 @@ fn identical_modules_share_satisfaction_verdict() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let (registry, hits_before, misses_before) = test_run.run_probe_returning_registry(
+    let (hits_before, misses_before) = test_run.run_probe_counting_registry(
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1) (LET extra = 9))\n\
          MODULE b = ((LET x = 2) (LET extra = 9))\n\
@@ -310,19 +310,19 @@ fn identical_modules_share_satisfaction_verdict() {
         "TAKE b",
     );
     assert_eq!(
-        registry.miss_count(),
+        test_run.types().miss_count(),
         misses_before,
         "`TAKE b` should miss nothing — its satisfaction check shares `TAKE a`'s verdict, \
          got {misses_before} misses before it and {} hits / {} misses after",
-        registry.hit_count(),
-        registry.miss_count(),
+        test_run.types().hit_count(),
+        test_run.types().miss_count(),
     );
     assert!(
-        registry.hit_count() > hits_before,
-        "`TAKE b` should consult the registry at all, got {hits_before} hits before it \
+        test_run.types().hit_count() > hits_before,
+        "`TAKE b` should consult the test_run.types() at all, got {hits_before} hits before it \
          and {} hits / {} misses after",
-        registry.hit_count(),
-        registry.miss_count(),
+        test_run.types().hit_count(),
+        test_run.types().miss_count(),
     );
 }
 
@@ -334,7 +334,7 @@ fn differing_module_interface_misses_the_shared_verdict() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let (registry, _, misses_before) = test_run.run_probe_returning_registry(
+    let (_, misses_before) = test_run.run_probe_counting_registry(
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1))\n\
          MODULE c = ((LET x = 1) (LET extra = \"tag\"))\n\
@@ -343,11 +343,11 @@ fn differing_module_interface_misses_the_shared_verdict() {
         "TAKE c",
     );
     assert!(
-        registry.miss_count() > misses_before,
+        test_run.types().miss_count() > misses_before,
         "`TAKE c`'s differing interface should miss `TAKE a`'s verdict, got {misses_before} \
          misses before it and {} hits / {} misses after",
-        registry.hit_count(),
-        registry.miss_count(),
+        test_run.types().hit_count(),
+        test_run.types().miss_count(),
     );
 }
 

@@ -555,7 +555,6 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
 
     // Producer: a plain-data record resident in its own frame's region, born through the fold door —
     // the shape a declared substrate return arrives as at the Done boundary.
@@ -569,13 +568,16 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
         crate::builtins::test_support::binder_token("a"),
         Held::Object(KObject::Number(3.0)),
     )]);
-    let obj: &KObject<'_> =
-        door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), &types));
+    let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(
+        door,
+        fields.as_slice(),
+        test_run.types(),
+    ));
     let expected_addr = match obj {
         KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
         other => panic!(
             "expected a Record, got {}",
-            other.ktype().name(types.registries())
+            other.ktype().name(test_run.registries())
         ),
     };
     let envelope: DeliveredCarried = producer_frame
@@ -583,7 +585,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
         .deliver_resident::<CarriedFamily>(Carried::Object(obj));
 
     // The declared type the return re-stamps to — a distinct handle for the same record shape.
-    let declared = types.record(Record::from_pairs([(
+    let declared = test_run.types().record(Record::from_pairs([(
         crate::builtins::test_support::binder_token("a"),
         KType::NUMBER,
     )]));
@@ -599,7 +601,10 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
                 let region = FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells);
                 Carried::Object(
                     region.alloc_object_folded(
-                        value.object().deep_clone().stamp_type(declared, &types),
+                        value
+                            .object()
+                            .deep_clone()
+                            .stamp_type(declared, test_run.types()),
                     ),
                 )
             },
@@ -629,7 +634,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
         }
         other => panic!(
             "expected a Record, got {}",
-            other.ktype().name(types.registries())
+            other.ktype().name(test_run.registries())
         ),
     });
     assert_eq!(
@@ -999,7 +1004,6 @@ fn region_death_frees_every_drop_free_family() {
     let program = program_storage();
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
-    let types = test_run.registry_handle();
 
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
     let scope = run_root_bare(frame.storage());
@@ -1014,7 +1018,7 @@ fn region_death_frees_every_drop_free_family() {
                     Held::Object(KObject::KString(door.allocator().text("first"))),
                     Held::Object(KObject::Number(2.0)),
                 ],
-                &types,
+                test_run.types(),
             )
         }),
         scope.fold_resident_object(|brand| {
@@ -1024,7 +1028,7 @@ fn region_death_frees_every_drop_free_family() {
                 KKey::String("key"),
                 Held::Object(KObject::KString(door.allocator().text("value"))),
             );
-            KObject::dict_of_held(door, map, &types)
+            KObject::dict_of_held(door, map, test_run.types())
         }),
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);
@@ -1032,7 +1036,7 @@ fn region_death_frees_every_drop_free_family() {
                 crate::builtins::test_support::binder_token("field"),
                 Held::Object(KObject::KString(door.allocator().text("payload"))),
             )]);
-            KObject::record_of_held(door, fields.as_slice(), &types)
+            KObject::record_of_held(door, fields.as_slice(), test_run.types())
         }),
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);
@@ -1072,7 +1076,7 @@ fn region_death_frees_every_drop_free_family() {
                         Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
                     )
                 }),
-                types.registries(),
+                test_run.registries(),
             )
         })
         .collect();
@@ -1086,10 +1090,12 @@ fn region_death_frees_every_drop_free_family() {
             let child = scope.alloc_child_under_module(None);
             let mut draft = ModuleDraft::empty();
             draft.type_members.insert(
-                type_name(&format!("Member_{i}"), types.registries()),
+                type_name(&format!("Member_{i}"), test_run.registries()),
                 KType::NUMBER,
             );
-            let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+            let self_sig = test_run
+                .types()
+                .signature(SigSchema::raw_self_sig(child, &draft));
             Module::alloc_at_child_scope(&format!("module_{i}"), child, draft, self_sig)
         })
         .collect();
@@ -1097,7 +1103,7 @@ fn region_death_frees_every_drop_free_family() {
     assert!(
         modules[0]
             .type_members
-            .get(&type_name("Member_0", types.registries()))
+            .get(&type_name("Member_0", test_run.registries()))
             .is_some(),
         "the member map reads back by content through its re-homed keys",
     );
@@ -1113,10 +1119,10 @@ fn region_death_frees_every_drop_free_family() {
         let value = block.brand().alloc_scalar(Scalar::Number(i as f64));
         block
             .bind_resident_for_test(
-                value_name(&format!("value_{i}"), types.registries()),
+                value_name(&format!("value_{i}"), test_run.registries()),
                 value,
                 BindingIndex::value(i),
-                types.registries(),
+                test_run.registries(),
                 &mut gate,
             )
             .expect("a fresh value bind lands");
@@ -1124,7 +1130,7 @@ fn region_death_frees_every_drop_free_family() {
     assert!(
         block
             .bindings()
-            .lookup_value(value_name("value_95", types.registries()), None)
+            .lookup_value(value_name("value_95", test_run.registries()), None)
             .is_some()
     );
 
@@ -1132,9 +1138,9 @@ fn region_death_frees_every_drop_free_family() {
     for i in 0..64 {
         sig_child
             .write_sig_slot(
-                value_name(&format!("slot_{i}"), types.registries()),
+                value_name(&format!("slot_{i}"), test_run.registries()),
                 KType::NUMBER,
-                types.registries(),
+                test_run.registries(),
             )
             .expect("a fresh VAL slot records");
     }
@@ -1146,13 +1152,13 @@ fn region_death_frees_every_drop_free_family() {
     assert_eq!(leaf.ancestors().count(), 4);
     assert!(
         leaf.bindings()
-            .lookup_value(value_name("value_95", types.registries()), None)
+            .lookup_value(value_name("value_95", test_run.registries()), None)
             .is_none()
     );
     assert!(
         block
             .bindings()
-            .lookup_value(value_name("value_95", types.registries()), None)
+            .lookup_value(value_name("value_95", test_run.registries()), None)
             .is_some()
     );
 

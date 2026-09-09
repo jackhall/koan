@@ -458,7 +458,6 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     let t = KType::of_kind(KKind::AnyType);
     let kt_number: KType = KType::NUMBER;
     let kt_str: KType = KType::STR;
@@ -466,64 +465,68 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let kt_null: KType = KType::NULL;
     assert!(t.accepts_working_part(
         &spliced_part(&region, Carried::Type(kt_number)),
-        types.registries()
+        test_run.registries()
     ));
     assert!(t.accepts_working_part(
         &spliced_part(&region, Carried::Type(kt_str)),
-        types.registries()
+        test_run.registries()
     ));
     assert!(t.accepts_working_part(
         &spliced_part(&region, Carried::Type(kt_bool)),
-        types.registries()
+        test_run.registries()
     ));
     assert!(t.accepts_working_part(
         &spliced_part(&region, Carried::Type(kt_null)),
-        types.registries()
+        test_run.registries()
     ));
     // NewType / union-variant type tokens flow as sealed member handles in the type channel — a
     // `:Type` slot admits them when the spliced cell opens to a `Carried::Type`.
-    let newtype_token: KType = newtype_member("Some", KType::NUMBER, &types);
-    let struct_token: KType = record_newtype_member("Point", &types);
+    let newtype_token: KType = newtype_member("Some", KType::NUMBER, test_run.types());
+    let struct_token: KType = record_newtype_member("Point", test_run.types());
     assert!(t.accepts_working_part(
         &spliced_part(&region, Carried::Type(newtype_token)),
-        types.registries()
+        test_run.registries()
     ));
     assert!(t.accepts_working_part(
         &spliced_part(&region, Carried::Type(struct_token)),
-        types.registries()
+        test_run.registries()
     ));
     let child = scope.alloc_child_under_module(None);
     // A module value surfaces its principal signature, interned from its members before the value
     // exists — build it through the same door production does.
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+    let self_sig = test_run
+        .types()
+        .signature(SigSchema::raw_self_sig(child, &draft));
     let module = Module::alloc_at_child_scope("IntMod", child, draft, self_sig);
     // A module is a value: it reaches a slot on the Object channel, and a `:Type` slot refuses it.
     let module_value = scope.brand().allocator().value(KObject::Module(module));
     assert!(!t.accepts_working_part(
         &spliced_part(&region, Carried::Object(module_value)),
-        types.registries()
+        test_run.registries()
     ));
     let sig_scope = scope.alloc_child_under_sig(type_token("Ordered"));
-    let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, types.registries()));
+    let kt_sig: KType = test_run
+        .types()
+        .signature(SigSchema::project_decl(sig_scope, test_run.registries()));
     // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
     assert!(t.accepts_working_part(
         &spliced_part(&region, Carried::Type(kt_sig)),
-        types.registries()
+        test_run.registries()
     ));
     assert!(!KType::of_kind(KKind::ProperType).accepts_working_part(
         &spliced_part(&region, Carried::Type(kt_sig)),
-        types.registries()
+        test_run.registries()
     ));
     let n: &KObject<'_> = region.brand().alloc_scalar(Scalar::Number(7.0));
     let s: &KObject<'_> = region.brand().alloc_string("hi");
     assert!(!t.accepts_working_part(
         &spliced_part(&region, Carried::Object(n)),
-        types.registries()
+        test_run.registries()
     ));
     assert!(!t.accepts_working_part(
         &spliced_part(&region, Carried::Object(s)),
-        types.registries()
+        test_run.registries()
     ));
 }
 
@@ -1199,7 +1202,6 @@ fn module_object_ktype_reports_self_sig() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
 
     // One-member modules built through the production door: the draft carries `Elt`, and the
     // self-sig is derived from it and interned before the value exists.
@@ -1208,8 +1210,10 @@ fn module_object_ktype_reports_self_sig() {
         let mut draft = ModuleDraft::empty();
         draft
             .type_members
-            .insert(type_name("Elt", types.registries()), elt);
-        let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+            .insert(type_name("Elt", test_run.registries()), elt);
+        let self_sig = test_run
+            .types()
+            .signature(SigSchema::raw_self_sig(child, &draft));
         (
             Module::alloc_at_child_scope(name, child, draft, self_sig),
             self_sig,
@@ -1220,7 +1224,10 @@ fn module_object_ktype_reports_self_sig() {
     let kt = KObject::Module(m).ktype();
     // Ruling 12: the `Signature` node carries no `sig_id` — identity is its self-sig
     // *content*, checked below.
-    assert!(matches!(types.node(kt), TypeNode::Signature { .. }));
+    assert!(matches!(
+        test_run.types().node(kt),
+        TypeNode::Signature { .. }
+    ));
     // Identity is content: the module's type is the self-sig its members derive.
     assert_eq!(kt, m_self_sig);
 
@@ -1247,36 +1254,39 @@ fn matches_value_admits_module_object_via_signature_slot() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
 
     // An empty signature (empty decl scope): every module bare-satisfies it, so the pins gate.
     let sig_scope = scope.alloc_child_under_sig(type_token("Ss"));
-    let schema = SigSchema::project_decl(sig_scope, types.registries());
+    let schema = SigSchema::project_decl(sig_scope, test_run.registries());
 
     let child = scope.alloc_child_under_module(None);
     let mut draft = ModuleDraft::empty();
     draft
         .type_members
-        .insert(type_name("Type", types.registries()), KType::NUMBER);
-    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+        .insert(type_name("Type", test_run.registries()), KType::NUMBER);
+    let self_sig = test_run
+        .types()
+        .signature(SigSchema::raw_self_sig(child, &draft));
     let m: &Module = Module::alloc_at_child_scope("M", child, draft, self_sig);
 
-    let declared = types.signature(schema.clone());
-    assert!(declared.matches_value(&KObject::Module(m), types.registries()));
+    let declared = test_run.types().signature(schema.clone());
+    assert!(declared.matches_value(&KObject::Module(m), test_run.registries()));
 
-    let type_sym = type_name("Type", types.registries());
-    let pinned_ok = types.signature(
+    let type_sym = type_name("Type", test_run.registries());
+    let pinned_ok = test_run.types().signature(
         schema
             .clone()
-            .fold_pins(&[(type_sym, KType::NUMBER)], &types),
+            .fold_pins(&[(type_sym, KType::NUMBER)], test_run.types()),
     );
-    let pinned_bad = types.signature(schema.fold_pins(&[(type_sym, KType::STR)], &types));
-    assert!(pinned_ok.matches_value(&KObject::Module(m), types.registries()));
-    assert!(!pinned_bad.matches_value(&KObject::Module(m), types.registries()));
+    let pinned_bad = test_run
+        .types()
+        .signature(schema.fold_pins(&[(type_sym, KType::STR)], test_run.types()));
+    assert!(pinned_ok.matches_value(&KObject::Module(m), test_run.registries()));
+    assert!(!pinned_bad.matches_value(&KObject::Module(m), test_run.registries()));
 
     let empty = KType::EMPTY_SIGNATURE;
-    assert!(empty.matches_value(&KObject::Module(m), types.registries()));
-    assert!(!empty.matches_value(&KObject::Number(1.0), types.registries()));
+    assert!(empty.matches_value(&KObject::Module(m), test_run.registries()));
+    assert!(!empty.matches_value(&KObject::Number(1.0), test_run.registries()));
 }
 
 /// Specificity over the module lattice: a module's self-sig refines a declared
@@ -1293,7 +1303,6 @@ fn specificity_self_sig_refines_declared_and_empty() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
 
     // `Ordered` requires a `compare` slot; `int_ord` supplies it plus an extra member, so its
     // self-sig strictly satisfies `Ordered`.
@@ -1302,19 +1311,19 @@ fn specificity_self_sig_refines_declared_and_empty() {
          MODULE int_ord = ((LET compare = 7) (LET extra = 1))",
     );
     let declared = lookup_type(scope, "Ordered").expect("Ordered must bind a Signature KType");
-    let m = lookup_module(scope, "int_ord", types.registries());
+    let m = lookup_module(scope, "int_ord", test_run.registries());
 
     let self_of = KObject::Module(m).ktype();
     let empty = KType::EMPTY_SIGNATURE;
 
     // `self_of ≺ declared` because `m`'s self-sig satisfies `Ordered`.
-    assert!(self_of.is_more_specific_than(declared, types.registries()));
+    assert!(self_of.is_more_specific_than(declared, test_run.registries()));
     // Any non-empty signature `≺ Empty`; `Empty` refines nothing narrower.
-    assert!(declared.is_more_specific_than(empty, types.registries()));
-    assert!(self_of.is_more_specific_than(empty, types.registries()));
-    assert!(!empty.is_more_specific_than(declared, types.registries()));
+    assert!(declared.is_more_specific_than(empty, test_run.registries()));
+    assert!(self_of.is_more_specific_than(empty, test_run.registries()));
+    assert!(!empty.is_more_specific_than(declared, test_run.registries()));
     // `satisfied_by` routes a memoized self-sig element type through the `self-sig ≺ Declared` arm.
-    assert!(declared.satisfied_by(self_of, types.registries()));
+    assert!(declared.satisfied_by(self_of, test_run.registries()));
 }
 
 /// A member-free declared signature and a module with the matching slot shape are ONE type: the
@@ -1329,14 +1338,13 @@ fn self_sig_type_equals_member_free_declared_sig() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
 
     test_run.run(
         "SIG HasLabel = ((VAL label :Str))\n\
          MODULE widget = ((LET label = (\"button\")))",
     );
     let declared = lookup_type(scope, "HasLabel").expect("HasLabel must bind a type");
-    let m = lookup_module(scope, "widget", types.registries());
+    let m = lookup_module(scope, "widget", test_run.registries());
     assert_eq!(
         KObject::Module(m).ktype(),
         declared,
@@ -1358,14 +1366,13 @@ fn self_sig_type_equals_fully_manifest_declared_sig() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
 
     test_run.run(
         "SIG Pinned = ((LET Elem = Number) (VAL x :Elem))\n\
          MODULE pinned_mod = ((LET Elem = Number) (LET x = 5))",
     );
     let declared = lookup_type(scope, "Pinned").expect("Pinned must bind a type");
-    let m = lookup_module(scope, "pinned_mod", types.registries());
+    let m = lookup_module(scope, "pinned_mod", test_run.registries());
     assert_eq!(
         KObject::Module(m).ktype(),
         declared,
@@ -1387,14 +1394,13 @@ fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
 
     test_run.run(
         "SIG Abstracted = ((TYPE Elem) (VAL x :Elem))\n\
          MODULE concrete = ((LET Elem = Number) (LET x = 5))",
     );
     let declared = lookup_type(scope, "Abstracted").expect("Abstracted must bind a type");
-    let m = lookup_module(scope, "concrete", types.registries());
+    let m = lookup_module(scope, "concrete", test_run.registries());
     let self_of = KObject::Module(m).ktype();
 
     assert_ne!(
@@ -1402,11 +1408,11 @@ fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
         "an abstract declared sig is a distinct type from any self-sig",
     );
     assert!(
-        self_of.is_more_specific_than(declared, types.registries()),
+        self_of.is_more_specific_than(declared, test_run.registries()),
         "the manifest self-sig strictly refines the abstract sig it satisfies",
     );
     assert!(
-        !declared.is_more_specific_than(self_of, types.registries()),
+        !declared.is_more_specific_than(self_of, test_run.registries()),
         "the abstract sig must not refine the manifest self-sig back — the pair is ordered, \
          not mutually satisfying",
     );

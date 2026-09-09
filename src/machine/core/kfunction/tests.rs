@@ -161,7 +161,6 @@ fn classify_excludes_binder_name_slot_from_wrap() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     let brand = region.brand();
     let expr = KExpression::new(
         brand,
@@ -172,11 +171,11 @@ fn classify_excludes_binder_name_slot_from_wrap() {
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ],
     );
-    let f = find_match(scope, &expr, &types).expect("LET should match");
+    let f = find_match(scope, &expr, test_run.types()).expect("LET should match");
     let pick = f.classify_for_pick(
         &WorkingExpression::from_ast(brand, expr),
         &[],
-        &types,
+        test_run.types(),
         brand.allocator(),
     );
     assert!(

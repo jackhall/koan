@@ -97,13 +97,12 @@ fn abstract_member_kind_tracks_parameters() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("SIG Monad = ((TYPE Elt) (TYPE (Type AS Wrap)))");
-    let types = test_run.registry_handle();
     assert_eq!(
-        member_type(scope, types.registries(), "Monad", "Wrap").kind_of(&types),
+        member_type(scope, test_run.registries(), "Monad", "Wrap").kind_of(test_run.types()),
         KKind::TypeConstructor,
     );
     assert_eq!(
-        member_type(scope, types.registries(), "Monad", "Elt").kind_of(&types),
+        member_type(scope, test_run.registries(), "Monad", "Elt").kind_of(test_run.types()),
         KKind::ProperType,
     );
 }

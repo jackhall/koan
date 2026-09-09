@@ -17,11 +17,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     // An empty signature: every module bare-satisfies it, so the pins alone gate. Declared
     // directly rather than through `SIG`, which has no empty-body surface form.
     let sig_scope = scope.alloc_child_under_sig(type_token("Ordered"));
-    let schema = SigSchema::project_decl(sig_scope, types.registries());
+    let schema = SigSchema::project_decl(sig_scope, test_run.registries());
 
     // `no_elem_pin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree
     // with. `num_bare` is a second `Elem = Number` module, ascribed to nothing: admission is
@@ -33,8 +32,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
          MODULE num_bare = ((LET Elem = Number) (LET compare = 0))",
     );
 
-    let elem = crate::builtins::test_support::type_name("Elem", types.registries());
-    let slot = types.signature(schema.fold_pins(&[(elem, KType::NUMBER)], &types));
+    let elem = crate::builtins::test_support::type_name("Elem", test_run.registries());
+    let slot = test_run
+        .types()
+        .signature(schema.fold_pins(&[(elem, KType::NUMBER)], test_run.types()));
 
     // A module binds value-side, so both the overload probe and the built argument cell carry it
     // on the Object channel — its satisfaction of a `Signature` slot goes through
@@ -47,10 +48,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
             })),
         )
     };
-    assert!(slot.accepts_working_part(&module_part("num_pinned"), types.registries()));
-    assert!(!slot.accepts_working_part(&module_part("str_pinned"), types.registries()));
-    assert!(!slot.accepts_working_part(&module_part("no_elem_pin"), types.registries()));
-    assert!(slot.accepts_working_part(&module_part("num_bare"), types.registries()));
+    assert!(slot.accepts_working_part(&module_part("num_pinned"), test_run.registries()));
+    assert!(!slot.accepts_working_part(&module_part("str_pinned"), test_run.registries()));
+    assert!(!slot.accepts_working_part(&module_part("no_elem_pin"), test_run.registries()));
+    assert!(slot.accepts_working_part(&module_part("num_bare"), test_run.registries()));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at
@@ -167,10 +168,9 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let types = test_run.registry_handle();
-    let res = test_run
-        .runtime
-        .read_edge_result_with(edge, |v| format!("{:?}", types.ktype_of_carried(v)));
+    let res = test_run.runtime.read_edge_result_with(edge, |v| {
+        format!("{:?}", test_run.types().ktype_of_carried(v))
+    });
     assert!(
         res.is_err(),
         "MAKEBAD must fail return-type check (mismatched pin), got Ok({:?})",
@@ -210,10 +210,9 @@ fn functor_return_with_matching_sharing_constraint_passes() {
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let types = test_run.registry_handle();
-    let res = test_run
-        .runtime
-        .read_edge_result_with(edge, |v| format!("{:?}", types.ktype_of_carried(v)));
+    let res = test_run.runtime.read_edge_result_with(edge, |v| {
+        format!("{:?}", test_run.types().ktype_of_carried(v))
+    });
     assert!(
         res.is_ok(),
         "MAKEGOOD must pass return-type check — the unascribed body module structurally \
@@ -234,7 +233,6 @@ fn transparent_view_pin_agreement_reads_source_types() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     test_run.run(
         "MODULE num_mod = ((LET Elem = Number) (LET compare = 0))\n\
          MODULE str_mod = ((LET Elem = Str) (LET compare = 0))\n\
@@ -243,26 +241,28 @@ fn transparent_view_pin_agreement_reads_source_types() {
          LET str_view = (str_mod :! Ordered)",
     );
     let ordered = lookup_type(scope, "Ordered").expect("Ordered must bind a Signature KType");
-    let schema = match types.node(ordered) {
+    let schema = match test_run.types().node(ordered) {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("Ordered must bind a Signature KType, got {ordered:?}"),
     };
-    let elem = crate::builtins::test_support::type_name("Elem", types.registries());
-    let slot = types.signature(schema.fold_pins(&[(elem, KType::NUMBER)], &types));
+    let elem = crate::builtins::test_support::type_name("Elem", test_run.registries());
+    let slot = test_run
+        .types()
+        .signature(schema.fold_pins(&[(elem, KType::NUMBER)], test_run.types()));
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let num_view = scope.lookup("num_view").expect("num_view bound");
     let str_view = scope.lookup("str_view").expect("str_view bound");
     assert!(
         slot.accepts_working_part(
             &spliced_part(&region, Carried::Object(num_view)),
-            types.registries()
+            test_run.registries()
         ),
         "transparent view over `Elem = Number` must agree with the `{{Elem = Number}}` pin",
     );
     assert!(
         !slot.accepts_working_part(
             &spliced_part(&region, Carried::Object(str_view)),
-            types.registries()
+            test_run.registries()
         ),
         "transparent view over `Elem = Str` must not agree with the `{{Elem = Number}}` pin",
     );
@@ -278,34 +278,35 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     test_run.run(
         "MODULE int_ord = ((LET Carrier = Number) (LET compare = 0))\n\
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          LET view = (int_ord :| Ordered)",
     );
     let ordered = lookup_type(scope, "Ordered").expect("Ordered must bind a Signature KType");
-    let schema = match types.node(ordered) {
+    let schema = match test_run.types().node(ordered) {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("Ordered must bind a Signature KType, got {ordered:?}"),
     };
-    let view = lookup_module(scope, "view", types.registries());
+    let view = lookup_module(scope, "view", test_run.registries());
     let carrier_abstract = view
         .type_members
         .get(&crate::builtins::test_support::type_name(
             "Carrier",
-            types.registries(),
+            test_run.registries(),
         ))
         .copied()
         .expect("opaque view mints an abstract `Carrier`");
-    let carrier = crate::builtins::test_support::type_name("Carrier", types.registries());
-    let slot = types.signature(schema.fold_pins(&[(carrier, carrier_abstract)], &types));
+    let carrier = crate::builtins::test_support::type_name("Carrier", test_run.registries());
+    let slot = test_run
+        .types()
+        .signature(schema.fold_pins(&[(carrier, carrier_abstract)], test_run.types()));
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let view_obj = scope.lookup("view").expect("view bound");
     assert!(
         slot.accepts_working_part(
             &spliced_part(&region, Carried::Object(view_obj)),
-            types.registries()
+            test_run.registries()
         ),
         "opaque view must agree with a pin naming its own per-call abstract `Carrier`",
     );

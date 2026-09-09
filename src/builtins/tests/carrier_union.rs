@@ -87,20 +87,21 @@ fn one_union_overload_captures_both_name_shapes_raw() {
     let program = program_storage();
     let region = run_root_storage();
     let mut run = TestRun::silent(&program, &region);
-    let registries = run.registry_handle();
     let scope = run.scope;
-    let slot = registries.union_of(&[KType::TYPE_NAME_TOKEN, KType::IDENTIFIER]);
+    let slot = run
+        .types()
+        .union_of(&[KType::TYPE_NAME_TOKEN, KType::IDENTIFIER]);
     register_builtin(
         scope,
         sig(
             KType::STR,
             vec![
-                kw(registries.registries(), "MYCAP"),
-                arg(registries.registries(), &SLOT, slot),
+                kw(run.registries(), "MYCAP"),
+                arg(run.registries(), &SLOT, slot),
             ],
         ),
         echo_captured_class,
-        registries.registries(),
+        run.registries(),
         &mut crate::machine::WriteGate::for_test(),
     );
     // A fresh `Type` token and a bare value name, neither of which is bound to anything.

@@ -52,11 +52,9 @@ pub(in crate::machine::execute) struct RunFrame {
     /// The frame adopting the run-root scope — a top-level submission's cart, so the root
     /// re-projects from it as `Yoked` rather than anchoring at `'run`.
     frame: Rc<CallFrame>,
-    /// The run's lookup state — the type registry and the label interner. Behind an `Rc` because
-    /// the test harness hands out a registry handle that outlives a `&mut` drive call; the heap
-    /// tables inside must `Drop`, and they do at run teardown because nothing forms a cycle back to
-    /// this frame.
-    registries: Rc<RunRegistries>,
+    /// The run's lookup state — the type registry and the label interner. Owned outright, not
+    /// `Rc`-shared: nothing needs shared ownership, and the heap tables inside must `Drop`.
+    registries: RunRegistries,
     /// The run's output sink, with the same home and the same reach path as
     /// [`registries`](Self::registries).
     writer: RunWriter,
@@ -72,7 +70,7 @@ impl RunFrame {
     ) -> RunFrame {
         RunFrame {
             frame: scope.adopt_as_run_frame(),
-            registries: Rc::new(RunRegistries::with_labels(labels)),
+            registries: RunRegistries::with_labels(labels),
             writer: RunWriter::new(out),
         }
     }
@@ -85,12 +83,6 @@ impl RunFrame {
     /// The run's type registry and label interner.
     pub(in crate::machine::execute) fn registries(&self) -> &RunRegistries {
         &self.registries
-    }
-
-    /// The run's lookup state shared out — the handle a test holds across a drive call, and what
-    /// keeps the registries readable for as long as the holder lives.
-    pub(in crate::machine::execute) fn registries_rc(&self) -> Rc<RunRegistries> {
-        Rc::clone(&self.registries)
     }
 
     /// The run's output sink, handed to a builtin body as `BodyCtx::out`.

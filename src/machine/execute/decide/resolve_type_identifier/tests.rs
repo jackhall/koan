@@ -8,14 +8,13 @@ fn resolve_type_expr_builtin_leaf_resolves_stably() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     let te = type_token("Number");
-    let first = match scope.resolve_type_identifier(te, None, types.registries()) {
+    let first = match scope.resolve_type_identifier(te, None, test_run.registries()) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done"),
     };
     assert_eq!(first, KType::NUMBER);
-    let second = match scope.resolve_type_identifier(te, None, types.registries()) {
+    let second = match scope.resolve_type_identifier(te, None, test_run.registries()) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on second call"),
     };
@@ -28,9 +27,8 @@ fn resolve_type_expr_unbound_returns_unbound() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.registry_handle();
     let te = type_token("NotABuiltin");
-    match scope.resolve_type_identifier(te, None, types.registries()) {
+    match scope.resolve_type_identifier(te, None, test_run.registries()) {
         TypeResolution::Unbound(_) => {}
         _ => panic!("expected Unbound for unknown leaf"),
     }
@@ -45,19 +43,18 @@ fn resolve_type_expr_user_struct_resolves_after_finalize() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
-    let types = test_run.registry_handle();
     let te = type_token("Point");
-    let kt = match scope.resolve_type_identifier(te, None, types.registries()) {
+    let kt = match scope.resolve_type_identifier(te, None, test_run.registries()) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done after the declaration"),
     };
-    match types.node(kt) {
+    match test_run.types().node(kt) {
         TypeNode::SetMember { name, .. } => {
-            assert_eq!(name, type_name("Point", types.registries()))
+            assert_eq!(name, type_name("Point", test_run.registries()))
         }
         _ => panic!("expected a sealed member node for Point"),
     }
-    let kt2 = match scope.resolve_type_identifier(te, None, types.registries()) {
+    let kt2 = match scope.resolve_type_identifier(te, None, test_run.registries()) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on re-resolve"),
     };

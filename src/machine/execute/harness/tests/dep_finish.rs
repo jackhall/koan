@@ -18,11 +18,11 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
+    let parsed_0 = let_expr(&program, &test_run.registries().labels, "ca", 7.0);
+    let parsed_1 = let_expr(&program, &test_run.registries().labels, "cb", 11.0);
     let runtime = &mut test_run.runtime;
-    let dep_a = runtime.dispatch_in_scope(let_expr(&program, labels, "ca", 7.0), scope, 1);
-    let dep_b = runtime.dispatch_in_scope(let_expr(&program, labels, "cb", 11.0), scope, 2);
+    let dep_a = runtime.dispatch_in_scope(parsed_0, scope, 1);
+    let dep_b = runtime.dispatch_in_scope(parsed_1, scope, 2);
     let dep_finish_id = runtime.add_dep_finish(
         &[dep_a, dep_b],
         scope,
@@ -73,18 +73,18 @@ fn dep_finish_short_circuits_on_dep_error() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
+    let parsed_0 = let_expr(&program, &test_run.registries().labels, "ok", 99.0);
+    let parsed_1 = working_one(
+        &program,
+        &test_run.registries().labels,
+        "LET bad = (undefined_thing)",
+    );
     let runtime = &mut test_run.runtime;
 
     // One dep that delivers a value and one that cannot resolve its name — an ordinary erroring
     // dispatch, which is what the consumer's walk fills its edge with.
-    let dep_ok = runtime.dispatch_in_scope(let_expr(&program, labels, "ok", 99.0), scope, 1);
-    let dep_err = runtime.dispatch_in_scope(
-        working_one(&program, labels, "LET bad = (undefined_thing)"),
-        scope,
-        2,
-    );
+    let dep_ok = runtime.dispatch_in_scope(parsed_0, scope, 1);
+    let dep_err = runtime.dispatch_in_scope(parsed_1, scope, 2);
 
     let invoked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let invoked_clone = Rc::clone(&invoked);
@@ -173,8 +173,7 @@ fn tail_call_reuses_node_slot_in_place() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
+    let labels = &test_run.registries().labels;
     let watch = test_run.dispatch_watched_in(
         root,
         working_one(

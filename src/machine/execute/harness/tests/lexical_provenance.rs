@@ -17,18 +17,11 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
-    let registry = test_run.registry_handle();
-    let labels = &registry.registries().labels;
+    let parsed_0 = let_expr(&program, &test_run.registries().labels, "a", 1.0);
+    let parsed_1 = let_expr(&program, &test_run.registries().labels, "b", 2.0);
+    let parsed_2 = let_expr(&program, &test_run.registries().labels, "c", 3.0);
     let runtime = &mut test_run.runtime;
-    let ids = runtime.enter_block(
-        root.id,
-        vec![
-            let_expr(&program, labels, "a", 1.0),
-            let_expr(&program, labels, "b", 2.0),
-            let_expr(&program, labels, "c", 3.0),
-        ],
-        root,
-    );
+    let ids = runtime.enter_block(root.id, vec![parsed_0, parsed_1, parsed_2], root);
     let chains: Vec<_> = ids
         .iter()
         .map(|id| runtime.chain_of(*id).unwrap())

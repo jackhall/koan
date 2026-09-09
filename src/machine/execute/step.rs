@@ -334,7 +334,6 @@ mod tests {
         let root = run_root_storage();
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
-        let types = test_run.registry_handle();
 
         // Producer: a plain-data record resident in its own frame's region, born through the fold
         // door — the exact shape FROM's `record` operand arrives as. Allocated through the frame's own
@@ -356,15 +355,18 @@ mod tests {
                 Held::Object(KObject::Number(2.0)),
             ),
         ]);
-        let obj: &KObject<'_> =
-            door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), &types));
+        let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(
+            door,
+            fields.as_slice(),
+            test_run.types(),
+        ));
         // `RecordSubstrate` is invariant in its lifetime, so the comparison casts through `usize`
         // rather than keeping a lifetime-parameterized raw pointer type alive across the fold below.
         let expected_addr = match obj {
             KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
             other => panic!(
                 "expected a Record, got {}",
-                other.ktype().name(types.registries())
+                other.ktype().name(test_run.registries())
             ),
         };
         let dep: DeliveredCarried = producer_frame
@@ -374,7 +376,7 @@ mod tests {
         // Consumer: a different frame — FROM's own step surface, narrowing to just `{x}`.
         let consumer_frame: Rc<CallFrame> = scope.open_frame();
         let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
-        let narrowed_type = types.record(Record::from_pairs([(
+        let narrowed_type = test_run.types().record(Record::from_pairs([(
             crate::builtins::test_support::binder_token("x"),
             KType::NUMBER,
         )]));
@@ -405,7 +407,7 @@ mod tests {
             }
             other => panic!(
                 "expected a Record, got {}",
-                other.ktype().name(types.registries())
+                other.ktype().name(test_run.registries())
             ),
         });
         assert_eq!(
