@@ -643,7 +643,7 @@ fn keyworded_unchanged() {
 /// body. Classifier must route to `TypeCall`, not `Keyworded`.
 #[test]
 fn classifier_struct_construct_routes_to_type_call() {
-    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::DispatchShape;
     let program = program_storage();
     let expr = parse_one(
         &program,
@@ -651,7 +651,7 @@ fn classifier_struct_construct_routes_to_type_call() {
         "MyStruct {x = 1, y = 2}",
     );
     assert!(
-        matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
+        matches!(expr.shape(), DispatchShape::TypeCall),
         "expected TypeCall for `MyStruct {{x = 1, y = 2}}`",
     );
 }
@@ -661,7 +661,7 @@ fn classifier_struct_construct_routes_to_type_call() {
 /// business — a union head is admitted here and refused where it is applied.
 #[test]
 fn classifier_nested_body_construct_routes_to_type_call() {
-    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::DispatchShape;
     let program = program_storage();
     let expr = parse_one(
         &program,
@@ -669,7 +669,7 @@ fn classifier_nested_body_construct_routes_to_type_call() {
         "Wrap (Inner 42)",
     );
     assert!(
-        matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
+        matches!(expr.shape(), DispatchShape::TypeCall),
         "expected TypeCall for `Wrap (Inner 42)`",
     );
 }
@@ -678,7 +678,7 @@ fn classifier_nested_body_construct_routes_to_type_call() {
 /// identifier (the newtype-construction shape). Routes to `TypeCall`.
 #[test]
 fn classifier_newtype_construct_routes_to_type_call() {
-    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::DispatchShape;
     let program = program_storage();
     let expr = parse_one(
         &program,
@@ -686,7 +686,7 @@ fn classifier_newtype_construct_routes_to_type_call() {
         "Bar (x)",
     );
     assert!(
-        matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
+        matches!(expr.shape(), DispatchShape::TypeCall),
         "expected TypeCall for `Bar (x)`",
     );
 }
@@ -696,7 +696,7 @@ fn classifier_newtype_construct_routes_to_type_call() {
 /// `LIST OF` overload is the supported way to elaborate `List<Number>`.
 #[test]
 fn classifier_legacy_positional_collapses_to_type_call() {
-    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::DispatchShape;
     let program = program_storage();
     let expr = parse_one(
         &program,
@@ -704,7 +704,7 @@ fn classifier_legacy_positional_collapses_to_type_call() {
         "(List Number)",
     );
     assert!(
-        matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
+        matches!(expr.shape(), DispatchShape::TypeCall),
         "leaf-Type head + leaf-Type args must classify as TypeCall",
     );
 }
@@ -829,7 +829,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
 /// not `Keyworded`.
 #[test]
 fn classifier_operator_chain_routes_to_operator_chain() {
-    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::DispatchShape;
     let program = program_storage();
     let expr = parse_one(
         &program,
@@ -837,7 +837,7 @@ fn classifier_operator_chain_routes_to_operator_chain() {
         "a + b + c",
     );
     assert_eq!(
-        classify_dispatch_shape(expr.parts),
+        expr.shape(),
         DispatchShape::OperatorChain,
         "`a + b + c` must classify as OperatorChain",
     );
@@ -853,7 +853,7 @@ fn classifier_operator_chain_routes_to_operator_chain() {
 /// `Keyworded` dispatch, not a chain.
 #[test]
 fn classifier_single_operator_stays_keyworded() {
-    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::DispatchShape;
     let program = program_storage();
     let expr = parse_one(
         &program,
@@ -861,7 +861,7 @@ fn classifier_single_operator_stays_keyworded() {
         "a + b",
     );
     assert_eq!(
-        classify_dispatch_shape(expr.parts),
+        expr.shape(),
         DispatchShape::Keyworded,
         "`a + b` is a single operator — Keyworded, not a chain",
     );

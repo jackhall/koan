@@ -42,7 +42,7 @@ fn a_resplice_inherits_the_key_run_and_the_operator_probe() {
         "a splice writes no keyword position, so the key run is the same allocation",
     );
     assert_eq!(chain.operator_probe(), respliced.operator_probe());
-    assert_eq!(chain.untyped_key(), respliced.untyped_key());
+    assert_eq!(chain.stored_key(), respliced.stored_key());
 }
 
 /// The type-context stamp rides the splice too, and for the same reason the structural cache does:

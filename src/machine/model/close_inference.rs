@@ -7,7 +7,7 @@
 //! uses rather than restating it:
 //!
 //! - which slots hold raw code — [`KExpression::lazy_kinds_at`], the seal-time
-//!   [`LAZY_SLOT_SPECS`](crate::machine::model::lazy_slots::LAZY_SLOT_SPECS) stamp;
+//!   [`Form::lazy_slots`](crate::machine::model::key_spec::Form::lazy_slots) stamp;
 //! - what a statement declares — [`KExpression::statement_binder_plan`];
 //! - which position of a declaration form is the declared name — [`KExpression::binder_name_slot`];
 //! - which surfaces are nominal declarations — [`announced_type_declaration`];
@@ -15,12 +15,10 @@
 //! - where a signature's binders sit — [`SignatureScan`];
 //! - what a `MATCH` arm or an `OP` body binds — [`MACHINE_BINDERS`].
 //!
-//! What is left is stated here and pinned by tests: the positional visibility rule, and the label
-//! positions no table answers. [`FORM_SPECS`] holds the second — one entry per builtin form whose
-//! slots the generic walk would misread — keyed by full untyped bucket key, sound for the same
-//! reason [`BINDER_SPECS`](crate::machine::model::binder::BINDER_SPECS) is: builtin buckets are
-//! unshadowable, so a node whose key matches an entry can only ever resolve to that builtin's
-//! overloads.
+//! What is left is stated here and pinned by properties: the positional visibility rule, and the
+//! label positions no table answers. [`CLOSE_RULES`] holds the second — one entry per builtin form
+//! whose slots the generic walk would misread, named by the [`FormId`] the node already resolved at
+//! construction, so no key is respelled here.
 //!
 //! The walk is exact rather than conservative, because laziness is static: a bare `(…)` outside a
 //! builtin's lazy slot evaluates in the block's own chain, so its identifiers are genuine uses. See
@@ -30,7 +28,7 @@ use crate::machine::core::body_statement_refs;
 use crate::machine::model::binder::{
     TypeDeclarationSurface, announced_type_declaration, union_schema,
 };
-use crate::machine::model::key_spec::{KEYWORDS, KeyElementSpec, key_matches_parts};
+use crate::machine::model::key_spec::FormId;
 use crate::machine::model::labels::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::lazy_slots::LazyKinds;
 use crate::machine::model::{
@@ -117,8 +115,6 @@ pub(crate) fn infer_close_captures<'s>(
 
 // ---------- the recognized forms ----------
 
-use KeyElementSpec::{Keyword as Kw, Slot};
-
 /// What the walk does with the slots of a form its full untyped bucket key names. Every entry
 /// states only what the sourced readers do not: which slot is a label rather than a use, which is
 /// severed rather than walked, and which child scope is seeded with what.
@@ -158,420 +154,193 @@ enum FormRule {
     Dynamic(DynamicNameForm),
 }
 
-/// A builtin form the generic walk would misread, and the rule that reads it.
-struct FormSpec {
-    /// Full untyped bucket key — ALL keywords in position, never just the lead keyword.
-    key: &'static [KeyElementSpec],
-    rule: FormRule,
-}
-
-/// The forms the walk recognizes structurally. Pinned against the live registration table by the
-/// consistency tests, so an entry whose builtin was renamed, re-shaped, or dropped fails the suite.
+/// The rules the walk reads a recognized form's slots by, tagged with the form's
+/// [`FormId`]. Every key lives in [`FORMS`](crate::machine::model::key_spec::FORMS); an entry here
+/// names only what the sourced readers do not.
 ///
 /// The nominal declarations (`NEWTYPE <name> = <repr>`, `UNION <name> = <schema>`) are absent on
-/// purpose: [`announced_type_declaration`] already recognizes them off `BINDER_SPECS`, so the walk
-/// asks that rather than restating their keys.
-static FORM_SPECS: &[FormSpec] = &[
+/// purpose: [`announced_type_declaration`] already recognizes them off their binder facts, so the
+/// walk asks that rather than restating them.
+static CLOSE_RULES: &[(FormId, FormRule)] = &[
     // FN <record schema> -> <return type> — the lambda type expression, no body.
-    FormSpec {
-        key: &[Kw(&KEYWORDS.fn_), Slot, Kw(&KEYWORDS.arrow), Slot],
-        rule: FormRule::Signature {
+    (
+        FormId::LambdaType,
+        FormRule::Signature {
             signature: 1,
             body: None,
         },
-    },
+    ),
     // FN <record schema> -> <return type> = <body> — the lambda.
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.fn_),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Signature {
+    (
+        FormId::Lambda,
+        FormRule::Signature {
             signature: 1,
             body: Some(5),
         },
-    },
+    ),
     // EXPR <head> -> <return type> — the bodyless head, no body.
-    FormSpec {
-        key: &[Kw(&KEYWORDS.expr), Slot, Kw(&KEYWORDS.arrow), Slot],
-        rule: FormRule::Signature {
+    (
+        FormId::ExpressionHead,
+        FormRule::Signature {
             signature: 1,
             body: None,
         },
-    },
+    ),
     // EXPR <head> -> <return type> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.expr),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Signature {
+    (
+        FormId::ExpressionDefinition,
+        FormRule::Signature {
             signature: 1,
             body: Some(5),
         },
-    },
+    ),
     // LET <name> = FN EXPR <head> -> <return type> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Kw(&KEYWORDS.expr),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Signature {
+    (
+        FormId::CombinedExpression,
+        FormRule::Signature {
             signature: 5,
             body: Some(9),
         },
-    },
+    ),
     // EXPR FOR ALL <names> <head> -> <return type> — the quantified bodyless head.
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.expr),
-            Kw(&KEYWORDS.for_),
-            Kw(&KEYWORDS.all),
-            Slot,
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-        ],
-        rule: FormRule::Signature {
+    (
+        FormId::QuantifiedExpressionHead,
+        FormRule::Signature {
             signature: 4,
             body: None,
         },
-    },
+    ),
     // EXPR FOR ALL <names> <head> -> <return type> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.expr),
-            Kw(&KEYWORDS.for_),
-            Kw(&KEYWORDS.all),
-            Slot,
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Signature {
+    (
+        FormId::QuantifiedExpressionDefinition,
+        FormRule::Signature {
             signature: 4,
             body: Some(8),
         },
-    },
+    ),
     // LET <name> = FN EXPR FOR ALL <names> <head> -> <return type> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Kw(&KEYWORDS.expr),
-            Kw(&KEYWORDS.for_),
-            Kw(&KEYWORDS.all),
-            Slot,
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Signature {
+    (
+        FormId::CombinedQuantifiedExpression,
+        FormRule::Signature {
             signature: 8,
             body: Some(12),
         },
-    },
+    ),
     // OP <symbol> OVER <operand> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Operator {
+    (
+        FormId::OperatorDefinition,
+        FormRule::Operator {
             unary: false,
             body: 5,
         },
-    },
+    ),
     // OP <symbol> OVER <operand> -> <return type> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Operator {
+    (
+        FormId::OperatorDefinitionReturning,
+        FormRule::Operator {
             unary: false,
             body: 7,
         },
-    },
+    ),
     // UNARY OP <symbol> OVER <operand> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Operator {
+    (
+        FormId::UnaryOperatorDefinition,
+        FormRule::Operator {
             unary: true,
             body: 6,
         },
-    },
+    ),
     // UNARY OP <symbol> OVER <operand> -> <return type> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Operator {
+    (
+        FormId::UnaryOperatorDefinitionReturning,
+        FormRule::Operator {
             unary: true,
             body: 8,
         },
-    },
+    ),
     // LET <name> = OP <symbol> OVER <operand> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Operator {
+    (
+        FormId::CombinedOperator,
+        FormRule::Operator {
             unary: false,
             body: 8,
         },
-    },
+    ),
     // LET <name> = OP <symbol> OVER <operand> -> <return type> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Operator {
+    (
+        FormId::CombinedOperatorReturning,
+        FormRule::Operator {
             unary: false,
             body: 10,
         },
-    },
+    ),
     // LET <name> = UNARY OP <symbol> OVER <operand> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Operator {
+    (
+        FormId::CombinedUnaryOperator,
+        FormRule::Operator {
             unary: true,
             body: 9,
         },
-    },
+    ),
     // LET <name> = UNARY OP <symbol> OVER <operand> -> <return type> = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::Operator {
+    (
+        FormId::CombinedUnaryOperatorReturning,
+        FormRule::Operator {
             unary: true,
             body: 11,
         },
-    },
+    ),
     // MATCH <scrutinee> -> <result type> WITH <branches>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.match_),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.with),
-            Slot,
-        ],
-        rule: FormRule::Arms { arms: 5 },
-    },
+    (FormId::Match, FormRule::Arms { arms: 5 }),
     // TRY <body> -> <result type> WITH <branches>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.try_),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.with),
-            Slot,
-        ],
-        rule: FormRule::MemberArms { arms: 5 },
-    },
+    (FormId::Try, FormRule::MemberArms { arms: 5 }),
     // MATCH <scrutinee> OVER <union> -> <result type> WITH <branches>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.match_),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.with),
-            Slot,
-        ],
-        rule: FormRule::MemberArms { arms: 7 },
-    },
+    (FormId::MatchOver, FormRule::MemberArms { arms: 7 }),
     // MODULE <name> = <body>
-    FormSpec {
-        key: &[Kw(&KEYWORDS.module), Slot, Kw(&KEYWORDS.equals), Slot],
-        rule: FormRule::ModuleBody { body: 3 },
-    },
+    (FormId::Module, FormRule::ModuleBody { body: 3 }),
     // GROUP <name> FOLD LEFT|RIGHT = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.fold),
-            Kw(&KEYWORDS.left),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::ModuleBody { body: 5 },
-    },
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.fold),
-            Kw(&KEYWORDS.right),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::ModuleBody { body: 5 },
-    },
+    (FormId::GroupFoldLeft, FormRule::ModuleBody { body: 5 }),
+    (FormId::GroupFoldRight, FormRule::ModuleBody { body: 5 }),
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT|RIGHT = <body>
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.pairwise),
-            Kw(&KEYWORDS.fold),
-            Slot,
-            Kw(&KEYWORDS.left),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::ModuleBody { body: 7 },
-    },
-    FormSpec {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.pairwise),
-            Kw(&KEYWORDS.fold),
-            Slot,
-            Kw(&KEYWORDS.right),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        rule: FormRule::ModuleBody { body: 7 },
-    },
+    (
+        FormId::GroupPairwiseFoldLeft,
+        FormRule::ModuleBody { body: 7 },
+    ),
+    (
+        FormId::GroupPairwiseFoldRight,
+        FormRule::ModuleBody { body: 7 },
+    ),
     // ATTR <record> <field> — the parse of `m.x`.
-    FormSpec {
-        key: &[Kw(&KEYWORDS.attr), Slot, Slot],
-        rule: FormRule::Attribute { field: 2 },
-    },
+    (FormId::Attribute, FormRule::Attribute { field: 2 }),
     // <field list> FROM <record>
-    FormSpec {
-        key: &[Slot, Kw(&KEYWORDS.from), Slot],
-        rule: FormRule::Projection { fields: 0 },
-    },
+    (FormId::Projection, FormRule::Projection { fields: 0 }),
     // CLOSE OVER <captures> <body>
-    FormSpec {
-        key: &[Kw(&KEYWORDS.close), Kw(&KEYWORDS.over), Slot, Slot],
-        rule: FormRule::ExplicitClose {
+    (
+        FormId::CloseOver,
+        FormRule::ExplicitClose {
             captures: 2,
             body: 3,
         },
-    },
+    ),
     // CLOSE <body>
-    FormSpec {
-        key: &[Kw(&KEYWORDS.close), Slot],
-        rule: FormRule::InferredClose { body: 1 },
-    },
+    (FormId::Close, FormRule::InferredClose { body: 1 }),
     // USING <module> SCOPE <body>
-    FormSpec {
-        key: &[Kw(&KEYWORDS.using), Slot, Kw(&KEYWORDS.scope), Slot],
-        rule: FormRule::Dynamic(DynamicNameForm::Using),
-    },
+    (
+        FormId::UsingScope,
+        FormRule::Dynamic(DynamicNameForm::Using),
+    ),
     // EVAL <expr> — the parse of `$(expr)`.
-    FormSpec {
-        key: &[Kw(&KEYWORDS.eval), Slot],
-        rule: FormRule::Dynamic(DynamicNameForm::Eval),
-    },
+    (FormId::Eval, FormRule::Dynamic(DynamicNameForm::Eval)),
 ];
 
-/// The [`FORM_SPECS`] entry `expression`'s bucket key matches, or `None` when the generic walk
-/// reads every slot correctly. The one table probe.
+/// The [`CLOSE_RULES`] entry for `expression`'s cached form, or `None` when the generic walk reads
+/// every slot correctly. The one rule probe.
 fn form_rule_for(expression: &KExpression<'_>) -> Option<&'static FormRule> {
-    FORM_SPECS
+    let id = expression.cache().form()?.id;
+    CLOSE_RULES
         .iter()
-        .find(|spec| key_matches_parts(spec.key, expression.parts))
-        .map(|spec| &spec.rule)
+        .find(|(tag, _)| *tag == id)
+        .map(|(_, rule)| rule)
 }
 
 // ---------- the scope stack ----------

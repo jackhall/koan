@@ -772,9 +772,10 @@ digraph {
     "koan::machine::model::ast::shape" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine::model::ast::working" [label="uses", style="dashed"];
+    "koan::machine::model::ast::shape" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::ast::shape" -> "koan::machine::model::lazy_slots" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::memory" [label="uses", style="dashed"];
-    "koan::machine::model::ast::shape" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine::model::ast" [label="uses", style="dashed"];
@@ -785,7 +786,6 @@ digraph {
     "koan::machine::model::ast::working" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::model::binder" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model::registries" [label="uses", style="dashed"];
@@ -807,13 +807,10 @@ digraph {
     "koan::machine::model::close_inference" -> "koan::memory" [label="uses", style="dashed"];
     "koan::machine::model::close_inference" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::model::key_spec" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::key_spec" -> "koan::machine::model::binder" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model::labels" [label="uses", style="dashed"];
-    "koan::machine::model::key_spec" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::key_spec" -> "koan::machine::model::lazy_slots" [label="uses", style="dashed"];
     "koan::machine::model::labels" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
-    "koan::machine::model::lazy_slots" -> "koan::machine::model::ast" [label="uses", style="dashed"];
-    "koan::machine::model::lazy_slots" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
-    "koan::machine::model::lazy_slots" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::miss_diagnostics" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::miss_diagnostics" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
     "koan::machine::model::miss_diagnostics" -> "koan::machine::model::labels" [label="uses", style="dashed"];

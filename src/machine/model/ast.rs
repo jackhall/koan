@@ -10,13 +10,13 @@
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::model::Held;
+use crate::machine::model::KeyElement;
 use crate::machine::model::binder::layout::SlotLayout;
 use crate::machine::model::labels::{
     BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol,
 };
-use crate::machine::model::lazy_slots::{LazyKinds, LazySlotSpec};
+use crate::machine::model::lazy_slots::LazyKinds;
 use crate::machine::model::{KObject, Parseable, RunRegistries, StoredBinderKey};
-use crate::machine::model::{KeyElement, UntypedKey};
 use crate::memory::reattachable;
 use crate::memory::{ProgramBrand, RegionBrand};
 
@@ -26,7 +26,7 @@ pub mod working;
 
 pub use program::{ProgramExpression, ProgramNode};
 pub use shape::{
-    DispatchShape, FieldSlot, Part, PartClass, PartSummary, classify_dispatch_shape,
+    DispatchShape, FieldSlot, NodeCache, Part, PartClass, PartSummary, classify_dispatch_shape,
     operator_probe_for, part_summary, stored_untyped_key,
 };
 pub use working::{WorkingExpression, WorkingPart, WorkingSummary};
@@ -102,19 +102,7 @@ pub enum ExpressionPart<'a> {
 
 impl<'a> Part<'a> for ExpressionPart<'a> {
     fn class(&self) -> PartClass {
-        match self {
-            ExpressionPart::Keyword(symbol) => PartClass::Keyword(*symbol),
-            ExpressionPart::Identifier(_) => PartClass::Identifier,
-            ExpressionPart::Type(_) => PartClass::Type,
-            ExpressionPart::Expression(_) => PartClass::Expression,
-            ExpressionPart::SigiledTypeExpr(_) => PartClass::SigiledTypeExpr,
-            ExpressionPart::RecordType(_) => PartClass::RecordType,
-            ExpressionPart::ListLiteral(_) => PartClass::ListLiteral,
-            ExpressionPart::DictLiteral(_) => PartClass::DictLiteral,
-            ExpressionPart::RecordLiteral(_) => PartClass::RecordLiteral,
-            ExpressionPart::Literal(_) => PartClass::Literal,
-            ExpressionPart::QuotedExpression(_) => PartClass::QuotedExpression,
-        }
+        ExpressionPart::class(self)
     }
 
     fn field_slot(&self) -> FieldSlot<'a> {
@@ -151,6 +139,32 @@ impl<'a> Part<'a> for ExpressionPart<'a> {
 pub(crate) type RunIter<I> = <I as IntoIterator>::IntoIter;
 
 impl<'a> ExpressionPart<'a> {
+    /// The structural family this part belongs to — what dispatch-shape classification reads.
+    pub fn class(&self) -> PartClass {
+        match self {
+            ExpressionPart::Keyword(symbol) => PartClass::Keyword(*symbol),
+            ExpressionPart::Identifier(_) => PartClass::Identifier,
+            ExpressionPart::Type(_) => PartClass::Type,
+            ExpressionPart::Expression(_) => PartClass::Expression,
+            ExpressionPart::SigiledTypeExpr(_) => PartClass::SigiledTypeExpr,
+            ExpressionPart::RecordType(_) => PartClass::RecordType,
+            ExpressionPart::ListLiteral(_) => PartClass::ListLiteral,
+            ExpressionPart::DictLiteral(_) => PartClass::DictLiteral,
+            ExpressionPart::RecordLiteral(_) => PartClass::RecordLiteral,
+            ExpressionPart::Literal(_) => PartClass::Literal,
+            ExpressionPart::QuotedExpression(_) => PartClass::QuotedExpression,
+        }
+    }
+
+    /// This part's position in a bucket key: the symbol a keyword carries, `Slot` for every other
+    /// part. What the stored key is built from, and what the pre-freeze form match compares.
+    pub fn key_element(&self) -> KeyElement {
+        match self.class() {
+            PartClass::Keyword(symbol) => KeyElement::Keyword(symbol),
+            _ => KeyElement::Slot,
+        }
+    }
+
     /// Wrap a run of parts as a nested `Expression` part, bumping both the run and the node into
     /// the program storage `brand` names. Takes a [`ProgramBrand`] because the arm it builds is a
     /// value-channel conduit: the marker on its payload is the proof the cell doors cite.
@@ -408,15 +422,12 @@ impl<'a> ExpressionPart<'a> {
 ///
 /// `span` and `file` are `None` for hand-built ASTs.
 ///
-/// `untyped_key`, `shape`, and `operator_probe` are a structural cache filled by the construction
-/// doors once the parts run is complete, so the dispatch driver reads the cache rather than
-/// re-deriving on every call of the enclosing function. `binder_plan` is the binder-position cache:
-/// what this node installs when it is submitted as a statement, and `None` when it is not itself a
-/// binder. It is per-node only — a statement's namespace is legible from its own spine, never from
-/// what its slots contain. `binder_name_slot` is the matched binder form's declared-name position
-/// ([`BinderSpec::name_slot`](crate::machine::model::binder::BinderSpec)), cached separately from
-/// the plan because `VAL` and the anonymous `FN :{…}` match binder keys — and their declaration
-/// slots need declaration treatment in dispatch — while installing nothing.
+/// [`cache`](Self::cache) is the structural cache the construction doors fill once the parts run is
+/// complete — the bucket key, the dispatch shape, the operator probe, the matched builtin form and
+/// the binder plan — so the dispatch driver reads it rather than re-deriving on every call of the
+/// enclosing function. The binder plan is per-node only: what this node installs when it is
+/// submitted as a statement, and `None` when it is not itself a binder. A statement's namespace is
+/// legible from its own spine, never from what its slots contain.
 ///
 /// Every field is a shared borrow at `'a` or a `Copy` handle, so the node is covariant in `'a`: a
 /// program-storage node flows into shorter-lived code by ordinary subtyping, with no reattach and no
@@ -426,28 +437,13 @@ pub struct KExpression<'a> {
     pub parts: &'a [Spanned<ExpressionPart<'a>>],
     pub span: Option<Span>,
     pub file: Option<FileId>,
-    untyped_key: &'a [KeyElement],
-    shape: DispatchShape,
-    operator_probe: Option<KeywordSymbol>,
-    binder_plan: Option<&'a StoredBinderKey<'a>>,
-    binder_name_slot: Option<usize>,
+    cache: NodeCache<'a>,
     body_layout: &'a SlotLayout<'a>,
-    lazy_slots: Option<&'static LazySlotSpec>,
 }
 
 // Lifetimes do not affect layout, so this retype is a no-op transmute. The witness's `'b: 'w` bound
 // is what makes a reattach a shortening; nothing here weakens it.
 reattachable! { KExpression<'static> => KExpression<'r> }
-
-/// The three structural facts a node caches at construction, as one value so the doors that
-/// compute them and the door that carries them from a peeled source hand the same thing to the
-/// chokepoint.
-#[derive(Clone, Copy)]
-struct StructuralCache<'a> {
-    untyped_key: &'a [KeyElement],
-    shape: DispatchShape,
-    operator_probe: Option<KeywordSymbol>,
-}
 
 impl<'a> KExpression<'a> {
     /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.
@@ -499,51 +495,39 @@ impl<'a> KExpression<'a> {
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
-        let shape = classify_dispatch_shape(parts);
+        let key = stored_untyped_key(brand, parts.iter().map(|part| part.value.key_element()));
         Self::seal(
             brand,
             parts,
             span,
             file,
-            StructuralCache {
-                untyped_key: stored_untyped_key(brand, parts),
-                shape,
-                operator_probe: operator_probe_for(parts, shape),
-            },
+            NodeCache::build(key, parts.first().map(|part| part.value.class())),
         )
     }
 
-    /// The node itself, over a resident run and a settled structural cache: fills the two binder
-    /// caches and freezes. The one place a `KExpression` is written, so neither door above can ship
-    /// a node whose binder caches disagree with its parts.
+    /// The node itself, over a resident run and a settled structural cache: fills the binder plan
+    /// and freezes. The one place a `KExpression` is written, so neither door above can ship a node
+    /// whose plan disagrees with its parts.
     fn seal(
         brand: RegionBrand<'a>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
-        cache: StructuralCache<'a>,
+        cache: NodeCache<'a>,
     ) -> Self {
         let mut expression = KExpression {
             parts,
             span,
             file,
-            untyped_key: cache.untyped_key,
-            shape: cache.shape,
-            operator_probe: cache.operator_probe,
-            binder_plan: None,
-            binder_name_slot: None,
+            cache,
             body_layout: SlotLayout::EMPTY,
-            lazy_slots: crate::machine::model::lazy_slots::lazy_slot_spec_for(parts),
         };
-        // One spec-table probe fills both binder caches. The plan is bumped behind a reference
-        // rather than stored inline: it is the widest thing a node would carry, and `KExpression`
-        // is copied on every part walk.
-        if let Some(spec) = crate::machine::model::binder::binder_spec_for(&expression) {
-            expression.binder_name_slot = spec.name_slot;
-            expression.binder_plan =
-                crate::machine::model::binder::binder_plan_from_spec(brand, spec, &expression)
-                    .map(|key| brand.allocator().value(key));
-        }
+        // The extractors read the node, so the plan is filled once it stands. It is bumped behind a
+        // reference rather than stored inline: it is the widest thing a node would carry, and
+        // `KExpression` is copied on every part walk.
+        let plan = crate::machine::model::binder::binder_plan_for(brand, cache.form(), &expression)
+            .map(|key| brand.allocator().value(key));
+        expression.cache = cache.with_binder_plan(plan);
         // The value binders this node would open a frame over, read off the same statement plans
         // the claim stamp and the `CLOSE` capture walk read. Filled for every node — a node is a
         // body only where a callable names it as one, and the read is a walk of plans already
@@ -578,9 +562,15 @@ impl<'a> KExpression<'a> {
         self.body_layout
     }
 
+    /// The structural facts this node cached at construction. Every accessor below reads it, and
+    /// the working copy carries it over whole.
+    pub fn cache(&self) -> &NodeCache<'a> {
+        &self.cache
+    }
+
     /// This node's own binder plan — `Some` iff this node is itself a binder.
     pub fn binder_plan(&self) -> Option<StoredBinderKey<'a>> {
-        self.binder_plan.copied()
+        self.cache.binder_plan()
     }
 
     /// The statement this node stands for. A redundant single-`Expression` paren wrapper
@@ -606,29 +596,18 @@ impl<'a> KExpression<'a> {
         self.statement_spine().binder_plan()
     }
 
-    /// The plan as the bumped borrow it is stored as, for the working copy that carries it through
-    /// a splice unchanged.
-    pub(crate) fn binder_plan_ref(&self) -> Option<&'a StoredBinderKey<'a>> {
-        self.binder_plan
-    }
-
-    /// This node's lazy-slot stamp — the [`LazySlotSpec`] its bucket key matches, `None` for every
-    /// form with no lazy slot. Read by the scheduler to decide which children submit.
-    pub(crate) fn lazy_slots(&self) -> Option<&'static LazySlotSpec> {
-        self.lazy_slots
-    }
-
-    /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates.
+    /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates. Read by the
+    /// scheduler to decide which children submit.
     pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
-        self.lazy_slots
-            .map_or(LazyKinds::EMPTY, |spec| spec.kinds_at(index))
+        self.cache.lazy_kinds_at(index)
     }
 
     /// The declared-name position of the binder form this node's bucket key matches
-    /// ([`BinderSpec::name_slot`](crate::machine::model::binder::BinderSpec)); `None` when the node
-    /// is not a binder form, or the form's spine carries no declared name (`FN`, `OP`).
+    /// ([`BinderFacts::name_slot`](crate::machine::model::binder::BinderFacts::name_slot)); `None`
+    /// when the node is not a binder form, or the form's spine carries no declared name (`FN`,
+    /// `OP`).
     pub fn binder_name_slot(&self) -> Option<usize> {
-        self.binder_name_slot
+        self.cache.binder_name_slot()
     }
 
     /// True when this expression is a statement block: two or more parts, all of them
@@ -647,25 +626,20 @@ impl<'a> KExpression<'a> {
 
     /// Cached dispatch shape (see [`classify_dispatch_shape`]).
     pub fn shape(&self) -> DispatchShape {
-        self.shape
+        self.cache.shape()
     }
 
     /// Cached operator-registry probe key: `Some` only for an `OperatorChain`, holding the symbol
     /// of its sorted-joined unique operator keywords.
     pub fn operator_probe(&self) -> Option<KeywordSymbol> {
-        self.operator_probe
+        self.cache.operator_probe()
     }
 
-    /// The stored bucket key, as a borrow of the run bumped at construction.
+    /// The stored bucket key, as a borrow of the run bumped at construction: `Keyword` parts
+    /// contribute `Keyword(symbol)`, every other variant a `Slot`. Must agree with
+    /// `ExpressionSignature::untyped_key` for any signature that should match.
     pub fn stored_key(&self) -> &'a [KeyElement] {
-        self.untyped_key
-    }
-
-    /// Bucket key: `Keyword` parts contribute `Keyword(symbol)`; every other variant contributes
-    /// `Slot`. Must agree with `ExpressionSignature::untyped_key` for any signature that
-    /// should match. Copies the stored run into the owned key a caller passes onward as plain data.
-    pub fn untyped_key(&self) -> UntypedKey {
-        self.untyped_key.to_vec()
+        self.cache.stored_key()
     }
 
     /// Binder-name extractor for typed-binder builtins (`SIG <Name> = …`, `UNION <Name> = …`):

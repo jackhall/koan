@@ -27,7 +27,7 @@ use crate::machine::core::{BlockEntry, BlockRequest, DepPlacement, FramePlacemen
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::{
-    ExpressionPart, KExpression, LabelInterner, Part, PartClass, WorkingExpression, WorkingPart,
+    ExpressionPart, KExpression, LabelInterner, PartClass, WorkingExpression, WorkingPart,
 };
 use crate::machine::{BindingIndex, Installer, KError, KErrorKind, LexicalFrame, NodeId, Scope};
 use crate::memory::KoanStorageProfile;

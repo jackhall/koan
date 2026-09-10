@@ -451,7 +451,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     // In-flight pending sibling on the same bucket key, finalizing at index 3.
     scope
         .install_pending_overload(
-            &expr.untyped_key(),
+            expr.stored_key(),
             ProducerId::for_test(77),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
@@ -532,7 +532,7 @@ fn scope_install_pending<'a>(
 ) {
     scope
         .install_pending_overload(
-            &expr.untyped_key(),
+            expr.stored_key(),
             claim,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),

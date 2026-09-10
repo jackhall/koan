@@ -50,7 +50,7 @@ pub(crate) use values::{
 };
 
 pub(crate) use ast::{
-    DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass, ProgramExpression,
+    DispatchShape, ExpressionPart, KExpression, KLiteral, PartClass, ProgramExpression,
     ProgramNode, WorkingExpression, WorkingPart, classify_dispatch_shape,
 };
 pub(crate) use binder::MACHINE_BINDERS;

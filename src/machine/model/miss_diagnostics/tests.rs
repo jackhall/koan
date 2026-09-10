@@ -6,9 +6,9 @@ use std::collections::HashSet;
 
 use super::MISS_DIAGNOSTICS;
 use crate::builtins::test_support::TestRun;
+use crate::machine::KErrorKind;
 use crate::machine::model::UntypedKey;
-use crate::machine::model::key_spec::{key_matches_untyped, render_key};
-use crate::machine::{KErrorKind, model::key_spec::key_specs_agree};
+use crate::machine::model::key_spec::{FORMS, Form, FormId, key_matches, render_key};
 use crate::memory::{program_storage, run_root_storage};
 
 /// Every bucket key the seeded root registers a callable under.
@@ -29,49 +29,48 @@ fn live_buckets() -> HashSet<UntypedKey> {
         .collect()
 }
 
-/// A non-reserved entry rides a key that *does* register: its render fires only on the shape its
-/// success-path siblings reject, so a key whose builtin was renamed, re-shaped, or dropped would
-/// leave the entry diagnosing a bucket nothing reaches.
+/// The [`FORMS`] entry a diagnosis tags.
+fn form_of(id: FormId) -> &'static Form {
+    FORMS
+        .iter()
+        .find(|form| form.id == id)
+        .expect("every tag names a table entry")
+}
+
+/// A diagnosis on a non-reserved form rides a key that *does* register: its render fires only on
+/// the shape its success-path siblings reject, so a key whose builtin was renamed, re-shaped, or
+/// dropped would leave the entry diagnosing a bucket nothing reaches.
 #[test]
 fn every_diagnosing_entry_names_a_live_bucket() {
     let live = live_buckets();
-    for entry in MISS_DIAGNOSTICS.iter().filter(|entry| !entry.reserved) {
-        assert!(
-            live.iter().any(|key| key_matches_untyped(entry.key, key)),
-            "miss-diagnosis key {:?} has no registered bucket",
-            render_key(entry.key)
-        );
-    }
-}
-
-/// The other kind: a reserved entry's whole point is that nothing registers under its key. A
-/// registration appearing there would mean the shape has a success reading after all, and the
-/// entry would be diagnosing a form that works.
-#[test]
-fn every_reserved_entry_names_no_bucket() {
-    let live = live_buckets();
-    for entry in MISS_DIAGNOSTICS.iter().filter(|entry| entry.reserved) {
-        assert!(
-            !live.iter().any(|key| key_matches_untyped(entry.key, key)),
-            "reserved miss-diagnosis key {:?} has a registered bucket",
-            render_key(entry.key)
-        );
-    }
-}
-
-/// Two entries may share a key — one `FN` shape spells two different mistakes — but a *reserved*
-/// key must not also carry a diagnosing entry: reserved says nothing registers there, and a
-/// diagnosing sibling would assert the opposite.
-#[test]
-fn no_reserved_key_also_carries_a_diagnosing_entry() {
-    for reserved in MISS_DIAGNOSTICS.iter().filter(|entry| entry.reserved) {
-        for other in MISS_DIAGNOSTICS.iter().filter(|entry| !entry.reserved) {
-            assert!(
-                !key_specs_agree(reserved.key, other.key),
-                "reserved key {:?} also carries a diagnosing entry",
-                render_key(reserved.key)
-            );
+    for (id, _) in MISS_DIAGNOSTICS {
+        let form = form_of(*id);
+        if form.reserved {
+            continue;
         }
+        assert!(
+            live.iter()
+                .any(|key| key_matches(form.key, key.iter().copied())),
+            "miss-diagnosis key {:?} has no registered bucket",
+            render_key(form.key)
+        );
+    }
+}
+
+/// The other kind: a reserved form's whole point is that nothing registers under its key. A
+/// registration appearing there would mean the shape has a success reading after all, and its
+/// diagnosis would be describing a form that works.
+#[test]
+fn every_reserved_form_names_no_bucket() {
+    let live = live_buckets();
+    for form in FORMS.iter().filter(|form| form.reserved) {
+        assert!(
+            !live
+                .iter()
+                .any(|key| key_matches(form.key, key.iter().copied())),
+            "reserved form key {:?} has a registered bucket",
+            render_key(form.key)
+        );
     }
 }
 

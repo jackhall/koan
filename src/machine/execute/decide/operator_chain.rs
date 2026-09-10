@@ -18,7 +18,6 @@
 
 use crate::machine::core::Scope;
 use crate::machine::core::location_from_expr;
-use crate::machine::model::Part;
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionMode};

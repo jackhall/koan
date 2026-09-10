@@ -1,13 +1,13 @@
-//! Binder-model tests: the spec⟺registration consistency pin (the table matches the live builtin
-//! function table) and the parse-time binder plan each statement caches.
+//! Binder-model tests: the table⟺registration consistency pin (the form table matches the live
+//! builtin function table) and the parse-time binder plan each statement caches.
 
 use std::collections::HashSet;
 
-use super::{BINDER_SPECS, BinderSpec, StoredBinderKey};
+use super::{BinderFacts, StoredBinderKey};
 use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::machine::model::UntypedKey;
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
-use crate::machine::model::key_spec::key_matches_untyped;
+use crate::machine::model::key_spec::{FORMS, Form, KeyElementSpec, key_matches, render_key};
 use crate::memory::{ProgramBrand, RegionBrand, program_storage};
 use crate::parse::parse;
 use crate::source::Spanned;
@@ -32,96 +32,93 @@ fn live_buckets() -> HashSet<UntypedKey> {
         .collect()
 }
 
-/// A spec key rendered for a failure message: keywords verbatim, slots as `_`.
-fn render_key(key: &[super::KeyElementSpec]) -> Vec<String> {
-    key.iter()
-        .map(|element| match element {
-            super::KeyElementSpec::Keyword(name) => name.text().to_string(),
-            super::KeyElementSpec::Slot => "_".to_string(),
-        })
-        .collect()
+/// Every form the table gives binder facts, with those facts beside it.
+fn binder_forms() -> impl Iterator<Item = (&'static Form, BinderFacts)> {
+    FORMS
+        .iter()
+        .filter_map(|form| form.binder.map(|binder| (form, binder)))
 }
 
-/// Build a bucket-shaped `KExpression` from a spec key (keywords verbatim, slots as bare
+/// Build a bucket-shaped `KExpression` from a form key (keywords verbatim, slots as bare
 /// identifiers) so its cached `DispatchShape` can be inspected.
-fn expression_for_key<'a>(brand: RegionBrand<'a>, spec: &BinderSpec) -> KExpression<'a> {
+fn expression_for_key<'a>(brand: RegionBrand<'a>, form: &Form) -> KExpression<'a> {
     KExpression::new_from_iter(
         brand,
-        spec.key.iter().map(|element| match element {
-            super::KeyElementSpec::Keyword(name) => Spanned::bare(kw_part(name.text())),
-            super::KeyElementSpec::Slot => Spanned::bare(identifier_part("x")),
+        form.key.iter().map(|element| match element {
+            KeyElementSpec::Keyword(name) => Spanned::bare(kw_part(name.text())),
+            KeyElementSpec::Slot => Spanned::bare(identifier_part("x")),
         }),
     )
 }
 
-/// Every spec entry names a bucket the seeded root actually registers, and every spec key
+/// Every binder-bearing form names a bucket the seeded root actually registers, and its key
 /// classifies `Keyworded`. Recomputed independently from the seeded root, so it is not a tautology
-/// against the table: a spec key whose builtin was renamed, re-shaped, or dropped fails here.
+/// against the table: a key whose builtin was renamed, re-shaped, or dropped fails here.
 #[test]
-fn spec_table_matches_live_registration() {
+fn binder_forms_match_live_registration() {
     let program = program_storage();
     let brand = program.brand();
     let live = live_buckets();
 
-    for spec in BINDER_SPECS {
+    for (form, _) in binder_forms() {
         assert!(
-            live.iter().any(|key| spec.matches_key(key)),
-            "spec key {:?} has no registered bucket",
-            render_key(spec.key)
+            live.iter()
+                .any(|key| key_matches(form.key, key.iter().copied())),
+            "form key {:?} has no registered bucket",
+            render_key(form.key)
         );
 
         assert_eq!(
-            expression_for_key(brand.region(), spec).shape(),
+            expression_for_key(brand.region(), form).shape(),
             DispatchShape::Keyworded,
-            "spec key {:?} does not classify Keyworded",
-            render_key(spec.key)
+            "form key {:?} does not classify Keyworded",
+            render_key(form.key)
         );
     }
 }
 
-/// Every spec entry that installs anything declares at least one channel, and a `names` entry
-/// carries the bind kind the placeholder is tagged with. Pins that the table's two channels are
-/// the only routes into an install.
+/// Every form that installs anything declares at least one channel, and a `names` entry carries the
+/// bind kind the placeholder is tagged with. Pins that the binder facts' two channels are the only
+/// routes into an install.
 ///
 /// The silent entries are the SIG **declaration** forms — `VAL` and the three bodyless operator
 /// heads, each recording into the decl scope's own collectors rather than into a binding map — plus
 /// the lambda, which has neither a name nor a head to key a bucket on and is listed only for its
 /// type slot. Anything else appearing here means a binder builtin lost its extractor.
 #[test]
-fn spec_channels_cover_every_installing_entry() {
-    let silent: Vec<Vec<String>> = BINDER_SPECS
-        .iter()
-        .filter(|spec| spec.installs_nothing())
-        .map(|spec| render_key(spec.key))
+fn binder_channels_cover_every_installing_form() {
+    let silent: Vec<Vec<String>> = binder_forms()
+        .filter(|(_, binder)| binder.installs_nothing())
+        .map(|(form, _)| render_key(form.key))
         .collect();
     assert_eq!(
         silent,
         vec![
+            vec!["VAL", "_", "_"],
             vec!["FN", "_", "->", "_", "=", "_"],
             vec!["OP", "_", "OVER", "_"],
             vec!["OP", "_", "OVER", "_", "->", "_"],
             vec!["UNARY", "OP", "_", "OVER", "_", "->", "_"],
-            vec!["VAL", "_", "_"],
         ],
     );
 }
 
-/// The `OperatorDef` marker agrees with the keys it labels: a spec entry is marked iff its key
-/// names the `OP` declarator keyword. The marker is what `GROUP`'s member scan keys on, so a new
+/// The `OperatorDef` marker agrees with the keys it labels: a binder-bearing form is marked iff its
+/// key names the `OP` declarator keyword. The marker is what `GROUP`'s member scan keys on, so a new
 /// operator surface that forgets it — or a non-operator form that wrongly carries it — fails here
 /// rather than silently changing which body statements a group treats as members.
 #[test]
 fn operator_def_marker_agrees_with_the_keys_it_labels() {
-    for spec in BINDER_SPECS {
-        let names_op = spec
+    for (form, binder) in binder_forms() {
+        let names_op = form
             .key
             .iter()
-            .any(|element| matches!(element, super::KeyElementSpec::Keyword(name) if name.text() == "OP"));
+            .any(|element| matches!(element, KeyElementSpec::Keyword(name) if name.text() == "OP"));
         assert_eq!(
-            spec.surface == super::BinderSurface::OperatorDef,
+            binder.surface == super::BinderSurface::OperatorDef,
             names_op,
-            "spec key {:?} disagrees with its surface marker",
-            render_key(spec.key),
+            "form key {:?} disagrees with its surface marker",
+            render_key(form.key),
         );
     }
 }
@@ -132,17 +129,17 @@ fn operator_def_marker_agrees_with_the_keys_it_labels() {
 /// keyword position or an index past the run would corrupt the statement.
 #[test]
 fn every_masked_index_names_a_slot_position() {
-    for spec in BINDER_SPECS {
-        for &index in spec.type_slots {
+    for (form, binder) in binder_forms() {
+        for &index in binder.type_slots {
             assert!(
-                index < spec.key.len(),
-                "spec key {:?} masks slot {index} past its run",
-                render_key(spec.key)
+                index < form.key.len(),
+                "form key {:?} masks slot {index} past its run",
+                render_key(form.key)
             );
             assert!(
-                matches!(spec.key[index], super::KeyElementSpec::Slot),
-                "spec key {:?} masks its keyword position {index}",
-                render_key(spec.key)
+                matches!(form.key[index], KeyElementSpec::Slot),
+                "form key {:?} masks its keyword position {index}",
+                render_key(form.key)
             );
         }
     }
@@ -162,13 +159,13 @@ fn every_masked_index_is_a_raw_type_expression_slot() {
     let program = crate::memory::program_storage();
     let storage = crate::memory::run_root_storage();
     let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
-    for spec in BINDER_SPECS {
-        for &index in spec.type_slots {
+    for (form, binder) in binder_forms() {
+        for &index in binder.type_slots {
             // Every slot type the seeded root registers at this index of a bucket matching the key.
             let mut live: Vec<KType> = Vec::new();
             for scope in run.scope.ancestors() {
                 for (key, bucket) in scope.bindings().functions().iter() {
-                    if !key_matches_untyped(spec.key, &key.to_vec()) {
+                    if !key_matches(form.key, key.iter().copied()) {
                         continue;
                     }
                     for entry in bucket.iter() {
@@ -183,8 +180,8 @@ fn every_masked_index_is_a_raw_type_expression_slot() {
             }
             assert!(
                 !live.is_empty(),
-                "spec key {:?} masks slot {index}, which no live registration run.types()",
-                render_key(spec.key)
+                "form key {:?} masks slot {index}, which no live registration types",
+                render_key(form.key)
             );
             let admits_sigiled = |kt: &KType| {
                 kt.union_has_member(KType::SIGILED_TYPE_EXPR, run.types())
@@ -195,15 +192,15 @@ fn every_masked_index_is_a_raw_type_expression_slot() {
             };
             assert!(
                 live.iter().any(admits_sigiled),
-                "spec key {:?} masks slot {index}, which no registration admits a `:(…)` at",
-                render_key(spec.key)
+                "form key {:?} masks slot {index}, which no registration admits a `:(…)` at",
+                render_key(form.key)
             );
             assert!(
                 !live
                     .iter()
                     .any(|kt| kt.union_has_member(KType::KEXPRESSION, run.types())),
-                "spec key {:?} masks slot {index}, which some registration reads as code",
-                render_key(spec.key)
+                "form key {:?} masks slot {index}, which some registration reads as code",
+                render_key(form.key)
             );
         }
     }
@@ -284,7 +281,7 @@ fn a_statements_plan_is_its_own_spine() {
     }
 }
 
-/// The spec table's `name_slot` agrees with the name extractors: for every parsed binder form
+/// The binder facts' `name_slot` agrees with the name extractors: for every parsed binder form
 /// whose plan carries a name, the token at the cached `binder_name_slot` position IS that name;
 /// `VAL` declares at its slot while installing nothing; the bucket-only forms cache no position.
 #[test]
@@ -332,8 +329,8 @@ fn name_slot_agrees_with_the_extractors() {
     }
 }
 
-/// A `VAL` declaration installs nothing: its spec entry has no channel, so its parse-time plan is
-/// `None`.
+/// A `VAL` declaration installs nothing: its binder facts have no channel, so its parse-time plan
+/// is `None`.
 #[test]
 fn val_installs_nothing() {
     let program = program_storage();

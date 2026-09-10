@@ -8,55 +8,43 @@
 //! has already failed, each entry pairing a full untyped key with a render fn that confirms the
 //! mistake from the raw parts. No hit means the generic miss reason stands.
 //!
-//! Recognition is by full untyped bucket key, sound for the same reason
-//! [`BINDER_SPECS`](crate::machine::model::binder::BINDER_SPECS) and
-//! [`LAZY_SLOT_SPECS`](crate::machine::model::lazy_slots::LAZY_SLOT_SPECS) are: builtin buckets are
-//! unshadowable, so a node whose key matches an entry can only ever resolve to that builtin's
-//! overloads. An entry whose key has *no* registration at all — the missing-result `UNARY OP` forms,
-//! whose only shape is the mistake — carries that argument itself: it is marked
-//! [`reserved`](MissDiagnostic::reserved), and the overload write door refuses a user registration
-//! under a reserved key, so the shape stays unshadowable and the diagnosis stays sound.
+//! Recognition is by the [`FormId`] the node resolved at construction — a full untyped bucket key,
+//! sound because builtin buckets are unshadowable, so a node whose key matches a
+//! [`FORMS`](crate::machine::model::key_spec::FORMS) entry can only ever resolve to that builtin's
+//! overloads. A form whose key has *no* registration at all — the missing-result `UNARY OP` forms,
+//! whose only shape is the mistake — carries that argument itself: its entry is marked
+//! [`reserved`](crate::machine::model::key_spec::Form::reserved), and the overload write door
+//! refuses a user registration under a reserved key, so the shape stays unshadowable and the
+//! diagnosis stays sound.
 
-use crate::machine::model::key_spec::key_matches_untyped;
-use crate::machine::model::key_spec::{KEYWORDS, KeyElementSpec, key_matches_parts};
+use crate::machine::model::key_spec::{FormId, form_for};
 use crate::machine::model::labels::snake_case_identifier;
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::{ExpressionPart, UntypedKey, WorkingExpression, render_label};
 
-use KeyElementSpec::{Keyword as Kw, Slot};
-
-/// One diagnosable dispatch miss.
-pub struct MissDiagnostic {
-    /// Full untyped bucket key, every keyword pinned — the same vocabulary and soundness argument as
-    /// the sibling spec tables.
-    pub key: &'static [KeyElementSpec],
-    /// The targeted message, when the parts confirm the mistake this entry names (the name slot
-    /// really is a Type token, say); `None` leaves the generic dispatch-miss reason standing.
-    pub render: for<'a> fn(&WorkingExpression<'a>, &RunRegistries) -> Option<String>,
-    /// True when nothing registers under `key`: the overload write door refuses a user registration
-    /// there, so the shape stays diagnosable rather than being claimable by a user form.
-    pub reserved: bool,
-}
+/// The targeted message a miss under one form earns, when the parts confirm the mistake the entry
+/// names (the name slot really is a Type token, say); `None` leaves the generic dispatch-miss reason
+/// standing.
+pub type MissRender = for<'a> fn(&WorkingExpression<'a>, &RunRegistries) -> Option<String>;
 
 /// The targeted message `expr`'s miss earns, or `None` for a miss no entry names. Entries may share
-/// a key — two different mistakes are spellable under one `FN` shape — so the walk takes the first
-/// entry whose key matches *and* whose render confirms.
+/// a form — two different mistakes are spellable under one `FN` shape — so the walk takes the first
+/// entry for the node's form whose render confirms.
 pub(crate) fn diagnose_miss(
     expr: &WorkingExpression<'_>,
     registries: &RunRegistries,
 ) -> Option<String> {
+    let id = expr.cache().form()?.id;
     MISS_DIAGNOSTICS
         .iter()
-        .filter(|entry| key_matches_parts(entry.key, expr.parts))
-        .find_map(|entry| (entry.render)(expr, registries))
+        .filter(|(tag, _)| *tag == id)
+        .find_map(|(_, render)| render(expr, registries))
 }
 
-/// True iff `key` is one this table reserves — a shape whose only reading is the mistake it
-/// diagnoses, which therefore admits no registration at all.
+/// True iff `key` names a reserved form — a shape whose only reading is the mistake it diagnoses,
+/// which therefore admits no registration at all.
 pub(crate) fn key_is_reserved(key: &UntypedKey) -> bool {
-    MISS_DIAGNOSTICS
-        .iter()
-        .any(|entry| entry.reserved && key_matches_untyped(entry.key, key))
+    form_for(key.iter().copied()).is_some_and(|form| form.reserved)
 }
 
 // ---------- part reads ----------
@@ -234,235 +222,46 @@ fn combined_expr_value_named_return(
 
 // ---------- the table ----------
 
-/// The single source of truth for the diagnosable dispatch misses. The reserved keys are the
-/// missing-result `UNARY OP` forms and the combined `LET … = FN <signature> …` statement; every
-/// other key keeps success-path siblings, and its entry speaks only when its own render confirms
-/// the mistake.
-pub static MISS_DIAGNOSTICS: &[MissDiagnostic] = &[
+/// The diagnosable dispatch misses, by the form whose shape spells the mistake. The reserved forms
+/// are the missing-result `UNARY OP` shapes and the combined `LET … = FN <signature> …` statement;
+/// every other form here keeps success-path siblings, and its entry speaks only when its own render
+/// confirms the mistake.
+pub static MISS_DIAGNOSTICS: &[(FormId, MissRender)] = &[
     // UNARY OP <symbol> OVER <operand> = <body> — the shape whose only reading is the mistake.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: unary_missing_result,
-        reserved: true,
-    },
-    // UNARY OP <symbol> OVER <operand> — the head form, missing its result. Reserved for the same
-    // reason the definition form is: the shape has no other reading, and a user form claiming the
-    // key would turn the pointed message into a typed miss under its own bucket.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-        ],
-        render: unary_head_missing_result,
-        reserved: true,
-    },
+    (FormId::UnaryOperatorDefinition, unary_missing_result),
+    // UNARY OP <symbol> OVER <operand> — the head form, missing its result.
+    (FormId::UnaryOperatorHead, unary_head_missing_result),
     // LET <name> = UNARY OP <symbol> OVER <operand> = <body>.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: unary_missing_result_combined,
-        reserved: true,
-    },
+    (FormId::CombinedUnaryOperator, unary_missing_result_combined),
     // MODULE <name> = <body>.
-    MissDiagnostic {
-        key: &[Kw(&KEYWORDS.module), Slot, Kw(&KEYWORDS.equals), Slot],
-        render: module_type_named,
-        reserved: false,
-    },
+    (FormId::Module, module_type_named),
     // GROUP <name> FOLD LEFT|RIGHT = <body>.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.fold),
-            Kw(&KEYWORDS.left),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: module_type_named,
-        reserved: false,
-    },
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.fold),
-            Kw(&KEYWORDS.right),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: module_type_named,
-        reserved: false,
-    },
+    (FormId::GroupFoldLeft, module_type_named),
+    (FormId::GroupFoldRight, module_type_named),
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT|RIGHT = <body>.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.pairwise),
-            Kw(&KEYWORDS.fold),
-            Slot,
-            Kw(&KEYWORDS.left),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: module_type_named,
-        reserved: false,
-    },
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.pairwise),
-            Kw(&KEYWORDS.fold),
-            Slot,
-            Kw(&KEYWORDS.right),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: module_type_named,
-        reserved: false,
-    },
-    // LET <name> = FN <signature> -> <return type> = <body> — reserved: a combined statement
-    // installs a dispatch bucket, and no `FN` signature has a head to key one on, so nothing
-    // registers here.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: combined_lambda_has_no_binder,
-        reserved: true,
-    },
+    (FormId::GroupPairwiseFoldLeft, module_type_named),
+    (FormId::GroupPairwiseFoldRight, module_type_named),
+    // LET <name> = FN <signature> -> <return type> = <body>.
+    (FormId::CombinedLambda, combined_lambda_has_no_binder),
     // EXPR <head> -> <return type> = <body>: a value-named return slot.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.expr),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: fn_value_named_return,
-        reserved: false,
-    },
+    (FormId::ExpressionDefinition, fn_value_named_return),
     // LET <name> = FN EXPR <head> -> <return type> = <body>: a Type-classified binder, or a
-    // value-named return slot. Two mistakes under one key, each confirmed by its own render.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Kw(&KEYWORDS.expr),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: function_bound_type_named,
-        reserved: false,
-    },
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Kw(&KEYWORDS.expr),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: combined_expr_value_named_return,
-        reserved: false,
-    },
+    // value-named return slot. Two mistakes under one form, each confirmed by its own render.
+    (FormId::CombinedExpression, function_bound_type_named),
+    (FormId::CombinedExpression, combined_expr_value_named_return),
     // The quantified twins of the two rows above, whose group shifts every slot after it.
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.expr),
-            Kw(&KEYWORDS.for_),
-            Kw(&KEYWORDS.all),
-            Slot,
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: quantified_value_named_return,
-        reserved: false,
-    },
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Kw(&KEYWORDS.expr),
-            Kw(&KEYWORDS.for_),
-            Kw(&KEYWORDS.all),
-            Slot,
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: function_bound_type_named,
-        reserved: false,
-    },
-    MissDiagnostic {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Kw(&KEYWORDS.expr),
-            Kw(&KEYWORDS.for_),
-            Kw(&KEYWORDS.all),
-            Slot,
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        render: combined_quantified_value_named_return,
-        reserved: false,
-    },
+    (
+        FormId::QuantifiedExpressionDefinition,
+        quantified_value_named_return,
+    ),
+    (
+        FormId::CombinedQuantifiedExpression,
+        function_bound_type_named,
+    ),
+    (
+        FormId::CombinedQuantifiedExpression,
+        combined_quantified_value_named_return,
+    ),
 ];
 
 #[cfg(test)]

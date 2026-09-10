@@ -1,15 +1,13 @@
-//! Inference-walk tests: the spec⟺registration consistency pin (every recognized form names a live
+//! Inference-walk tests: the rule⟺registration consistency pin (every recognized form names a live
 //! builtin bucket) and the free-identifier walk itself, read off parsed blocks.
 
-use super::{DynamicNameForm, FORM_SPECS, FormRule, infer_close_captures};
+use super::{CLOSE_RULES, DynamicNameForm, FormRule, infer_close_captures};
 use crate::builtins::test_support::TestRun;
-use crate::machine::model::key_spec::{
-    KeyElementSpec, key_matches_untyped, key_specs_agree, render_key,
-};
+use crate::machine::model::key_spec::{FormId, KeyElementSpec, key_matches, render_key};
 use crate::machine::model::{UntypedKey, render_label};
 use crate::memory::{ProgramStorage, program_storage, run_root_storage};
 
-// ---------- spec ⟺ registration ----------
+// ---------- rule ⟺ registration ----------
 
 /// Every bucket key a builtin is registered under, anywhere on a seeded chain.
 fn live_keys() -> Vec<UntypedKey> {
@@ -29,72 +27,76 @@ fn live_keys() -> Vec<UntypedKey> {
 /// overloads, so an entry naming no live bucket — a builtin renamed, re-shaped, or dropped — is a
 /// rule the walk would apply to user code.
 ///
-/// A key the dispatch-miss diagnosis table **reserves** carries that soundness itself: nothing
-/// registers there by design and the write door refuses a user registration, so the shape is as
-/// unshadowable as a builtin bucket and the walk's reading of it is as fixed.
+/// A **reserved** key carries that soundness itself: nothing registers there by design and the
+/// write door refuses a user registration, so the shape is as unshadowable as a builtin bucket and
+/// the walk's reading of it is as fixed.
 #[test]
-fn every_form_spec_names_a_live_builtin_bucket() {
+fn every_close_rule_names_a_live_builtin_bucket() {
     let live = live_keys();
-    for spec in FORM_SPECS {
+    for (id, _) in CLOSE_RULES {
+        let form = form_of(*id);
         assert!(
-            live.iter().any(|key| key_matches_untyped(spec.key, key)) || reserves(spec.key),
-            "form spec {:?} names no live builtin bucket",
-            render_key(spec.key)
+            live.iter()
+                .any(|key| key_matches(form.key, key.iter().copied()))
+                || form.reserved,
+            "close rule {:?} names no live builtin bucket",
+            render_key(form.key)
         );
     }
 }
 
-/// True iff the dispatch-miss diagnosis table reserves this key.
-fn reserves(key: &[KeyElementSpec]) -> bool {
-    crate::machine::model::miss_diagnostics::MISS_DIAGNOSTICS
+/// The [`FORMS`](crate::machine::model::key_spec::FORMS) entry a rule tags.
+fn form_of(id: FormId) -> &'static crate::machine::model::key_spec::Form {
+    crate::machine::model::key_spec::FORMS
         .iter()
-        .any(|entry| entry.reserved && key_specs_agree(entry.key, key))
+        .find(|form| form.id == id)
+        .expect("every tag names a table entry")
 }
 
-/// One rule per key: two entries matching the same run would make the walk's reading depend on
-/// table order.
+/// One rule per form: two entries under the same tag would make the walk's reading depend on table
+/// order.
 #[test]
-fn no_two_form_specs_share_a_key() {
-    for (index, spec) in FORM_SPECS.iter().enumerate() {
-        for other in &FORM_SPECS[index + 1..] {
+fn no_two_close_rules_share_a_form() {
+    for (index, (id, _)) in CLOSE_RULES.iter().enumerate() {
+        for (other, _) in &CLOSE_RULES[index + 1..] {
             assert!(
-                !(spec.key.len() == other.key.len()
-                    && render_key(spec.key) == render_key(other.key)),
-                "two form specs share the key {:?}",
-                render_key(spec.key)
+                other != id,
+                "two close rules share the form {:?}",
+                render_key(form_of(*id).key)
             );
         }
     }
 }
 
-/// Every slot a rule claims is a slot position of its own key. A rule pointing past its run, or at
-/// one of its keywords, would read the wrong part.
+/// Every slot a rule claims is a slot position of its form's key. A rule pointing past its run, or
+/// at one of its keywords, would read the wrong part.
 #[test]
 fn every_claimed_slot_names_a_slot_position() {
-    for spec in FORM_SPECS {
-        let claimed: Vec<usize> = match spec.rule {
+    for (id, rule) in CLOSE_RULES {
+        let form = form_of(*id);
+        let claimed: Vec<usize> = match rule {
             FormRule::Signature { signature, body } => {
-                std::iter::once(signature).chain(body).collect()
+                std::iter::once(*signature).chain(*body).collect()
             }
-            FormRule::Operator { body, .. } => vec![body],
-            FormRule::Arms { arms } | FormRule::MemberArms { arms } => vec![arms],
-            FormRule::ModuleBody { body } => vec![body],
-            FormRule::Attribute { field } => vec![field],
-            FormRule::Projection { fields } => vec![fields],
-            FormRule::ExplicitClose { captures, body } => vec![captures, body],
-            FormRule::InferredClose { body } => vec![body],
+            FormRule::Operator { body, .. } => vec![*body],
+            FormRule::Arms { arms } | FormRule::MemberArms { arms } => vec![*arms],
+            FormRule::ModuleBody { body } => vec![*body],
+            FormRule::Attribute { field } => vec![*field],
+            FormRule::Projection { fields } => vec![*fields],
+            FormRule::ExplicitClose { captures, body } => vec![*captures, *body],
+            FormRule::InferredClose { body } => vec![*body],
             FormRule::Dynamic(_) => vec![],
         };
         for index in claimed {
             assert!(
-                index < spec.key.len(),
-                "form spec {:?} claims slot {index} past its run",
-                render_key(spec.key)
+                index < form.key.len(),
+                "close rule {:?} claims slot {index} past its run",
+                render_key(form.key)
             );
             assert!(
-                matches!(spec.key[index], KeyElementSpec::Slot),
-                "form spec {:?} claims its keyword position {index}",
-                render_key(spec.key)
+                matches!(form.key[index], KeyElementSpec::Slot),
+                "close rule {:?} claims its keyword position {index}",
+                render_key(form.key)
             );
         }
     }

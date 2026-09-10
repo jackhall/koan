@@ -12,9 +12,11 @@ use smallvec::SmallVec;
 use crate::machine::model::KeyElement;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::SplicedCell;
+use crate::machine::model::StoredBinderKey;
+use crate::machine::model::key_spec::{Form, form_for};
 use crate::machine::model::labels::{KeywordSymbol, TypeSymbol, ValueSymbol};
+use crate::machine::model::lazy_slots::LazyKinds;
 use crate::memory::RegionBrand;
-use crate::source::Spanned;
 
 use super::KExpression;
 use super::working::WorkingExpression;
@@ -169,22 +171,27 @@ pub enum DispatchShape {
     NonCallableHead,
 }
 
-/// Sweeps every part for `Keyword` first so a mixed shape like `(f IF x)` goes to
-/// `Keyworded`; only with the no-keyword precondition established does it branch on
-/// head shape. A keyword-bearing expression is refined to `OperatorChain` when it
-/// matches the `Slot (Keyword Slot)+` shape with ≥2 keyword positions.
-pub fn classify_dispatch_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> DispatchShape {
-    if parts
-        .iter()
-        .any(|p| matches!(p.value.class(), PartClass::Keyword(_)))
-    {
-        if is_operator_chain_shape(parts) {
+/// Sweeps the key for `Keyword` first so a mixed shape like `(f IF x)` goes to `Keyworded`; only
+/// with the no-keyword precondition established does it branch on the head part's class. A
+/// keyword-bearing key is refined to `OperatorChain` when it matches the `Slot (Keyword Slot)+`
+/// shape with ≥2 keyword positions.
+///
+/// A function of the stored key and the head's class — the two facts a parts run contributes — so
+/// the rule is written once and both expression families reach it with what they already carry.
+pub fn classify_dispatch_shape(key: &[KeyElement], head: Option<PartClass>) -> DispatchShape {
+    if key.iter().any(|e| matches!(e, KeyElement::Keyword(_))) {
+        if is_operator_chain_shape(key) {
             return DispatchShape::OperatorChain;
         }
         return DispatchShape::Keyworded;
     }
-    if let [only] = parts {
-        return match only.value.class() {
+    // `key` and the parts run are element-for-element, so a one-element key means a single part and
+    // an empty one means an empty run — which falls through as the explicit `NonCallableHead`.
+    let Some(head) = head else {
+        return DispatchShape::NonCallableHead;
+    };
+    if key.len() == 1 {
+        return match head {
             PartClass::Identifier => DispatchShape::BareIdentifier,
             PartClass::Type => DispatchShape::BareTypeLeaf,
             PartClass::SigiledTypeExpr => DispatchShape::SigiledTypeExpr,
@@ -200,16 +207,13 @@ pub fn classify_dispatch_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> Dispatc
             // takes.
             PartClass::StagedSlot => DispatchShape::BareIdentifier,
             PartClass::Keyword(_) => {
-                unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
+                unreachable!(
+                    "no-keyword precondition: the sweep above caught every Keyword element"
+                )
             }
         };
     }
-    // `len >= 2` here: the keyword sweep passed and the single-part block did not
-    // match, so an empty parts run falls through as the explicit `NonCallableHead`.
-    let Some(head) = parts.first() else {
-        return DispatchShape::NonCallableHead;
-    };
-    match head.value.class() {
+    match head {
         PartClass::Type => DispatchShape::TypeCall,
         PartClass::Identifier => DispatchShape::FunctionValueCall,
         PartClass::Expression => DispatchShape::HeadDeferred,
@@ -230,24 +234,23 @@ pub fn classify_dispatch_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> Dispatc
         // identifier head takes.
         PartClass::StagedSlot => DispatchShape::FunctionValueCall,
         PartClass::Keyword(_) => {
-            unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
+            unreachable!("no-keyword precondition: the sweep above caught every Keyword element")
         }
     }
 }
 
-/// True iff `parts` is the `Slot (Keyword Slot)+` chainable-operator shape: odd
-/// length ≥ 5 (slot, keyword, slot, …), every odd index a `Keyword`, every even
-/// index a non-keyword slot, with ≥2 keyword positions. The first keyword sits at
-/// index 1, so no keyword-led builtin (`LET …`) collides with it.
-fn is_operator_chain_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> bool {
-    // Need slot, keyword, slot, keyword, slot — at least 5 parts (2 keywords).
-    if parts.len() < 5 || parts.len().is_multiple_of(2) {
+/// True iff `key` is the `Slot (Keyword Slot)+` chainable-operator shape: odd length ≥ 5 (slot,
+/// keyword, slot, …), every odd index a `Keyword`, every even index a `Slot`, with ≥2 keyword
+/// positions. The first keyword sits at index 1, so no keyword-led builtin (`LET …`) collides
+/// with it.
+fn is_operator_chain_shape(key: &[KeyElement]) -> bool {
+    // Need slot, keyword, slot, keyword, slot — at least 5 elements (2 keywords).
+    if key.len() < 5 || key.len().is_multiple_of(2) {
         return false;
     }
-    parts.iter().enumerate().all(|(index, part)| {
-        let is_keyword = matches!(part.value.class(), PartClass::Keyword(_));
-        // Odd indices must be keywords; even indices must be non-keyword slots.
-        (index % 2 == 1) == is_keyword
+    key.iter().enumerate().all(|(index, element)| {
+        // Odd indices must be keywords; even indices must be slots.
+        (index % 2 == 1) == matches!(element, KeyElement::Keyword(_))
     })
 }
 
@@ -257,10 +260,7 @@ fn is_operator_chain_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> bool {
 /// The group registration mints its powerset keys through the same constructor, so a registered key
 /// and this probe agree by construction and neither side touches text. The node carries `u128`
 /// bits, and a registry probe compares them.
-pub fn operator_probe_for<'a, P: Part<'a>>(
-    parts: &[Spanned<P>],
-    shape: DispatchShape,
-) -> Option<KeywordSymbol> {
+pub fn operator_probe_for(key: &[KeyElement], shape: DispatchShape) -> Option<KeywordSymbol> {
     if shape != DispatchShape::OperatorChain {
         return None;
     }
@@ -269,27 +269,118 @@ pub fn operator_probe_for<'a, P: Part<'a>>(
     // operator it names, not one per term, so the buffer is sized by the member count of the group
     // the chain must resolve against rather than by the length of an arbitrarily long run.
     let mut operators: SmallVec<[KeywordSymbol; 8]> = SmallVec::new();
-    for part in parts {
-        if let PartClass::Keyword(symbol) = part.value.class()
-            && !operators.contains(&symbol)
+    for element in key {
+        if let KeyElement::Keyword(symbol) = element
+            && !operators.contains(symbol)
         {
-            operators.push(symbol);
+            operators.push(*symbol);
         }
     }
     Some(KeywordSymbol::of_run(&operators))
 }
 
-/// The stored bucket key: `Keyword` parts contribute the symbol they carry, every other part a
-/// `Slot`. Bumped once at construction, so reading it is a slice borrow and nothing is hashed —
-/// the parse already minted every symbol in the run.
-pub fn stored_untyped_key<'a, P: Part<'a>>(
+/// The stored bucket key: a run of the key elements the parts spell, bumped once at construction,
+/// so reading it is a slice borrow and nothing is hashed — the parse already minted every symbol in
+/// the run.
+pub fn stored_untyped_key<'a>(
     brand: RegionBrand<'a>,
-    parts: &[Spanned<P>],
+    elements: impl ExactSizeIterator<Item = KeyElement>,
 ) -> &'a [KeyElement] {
-    brand
-        .allocator()
-        .slice_from_iter(parts.iter().map(|part| match part.value.class() {
-            PartClass::Keyword(symbol) => KeyElement::Keyword(symbol),
-            _ => KeyElement::Slot,
-        }))
+    brand.allocator().slice_from_iter(elements)
+}
+
+/// The structural facts a node caches at construction: a function of its parts run and the form
+/// table, computed once, shared by the AST node and the scheduler's working node.
+///
+/// Every field but the binder plan is settled the moment the key is: a splice substitutes slots one
+/// for one and writes no keyword position, so the key, the probe and the form entry are invariant
+/// under it. The plan is filled by the AST node's seal alone — a binder is always parsed AST — and
+/// rides a working copy unchanged.
+#[derive(Clone, Copy)]
+pub struct NodeCache<'a> {
+    key: &'a [KeyElement],
+    shape: DispatchShape,
+    operator_probe: Option<KeywordSymbol>,
+    form: Option<&'static Form>,
+    binder_plan: Option<&'a StoredBinderKey<'a>>,
+}
+
+impl<'a> NodeCache<'a> {
+    /// The cache of a run whose key is `key` and whose head part reports `head` — every field but
+    /// the binder plan, which the AST node's seal adds.
+    pub fn build(key: &'a [KeyElement], head: Option<PartClass>) -> Self {
+        let shape = classify_dispatch_shape(key, head);
+        NodeCache {
+            key,
+            shape,
+            operator_probe: operator_probe_for(key, shape),
+            form: form_for(key.iter().copied()),
+            binder_plan: None,
+        }
+    }
+
+    /// This cache with the binder plan filled — the second half of the AST node's seal, once the
+    /// node the extractors read is standing.
+    pub fn with_binder_plan(self, binder_plan: Option<&'a StoredBinderKey<'a>>) -> Self {
+        NodeCache {
+            binder_plan,
+            ..self
+        }
+    }
+
+    /// This cache re-classified for a new head class, the key and every table fact riding through —
+    /// the splice path, where a resolved cell replaces the part that reported the old class.
+    pub fn resplice(self, head: Option<PartClass>) -> Self {
+        NodeCache {
+            shape: classify_dispatch_shape(self.key, head),
+            ..self
+        }
+    }
+
+    /// The stored bucket key, as a borrow of the run bumped at construction.
+    pub fn stored_key(&self) -> &'a [KeyElement] {
+        self.key
+    }
+
+    /// Cached dispatch shape (see [`classify_dispatch_shape`]).
+    pub fn shape(&self) -> DispatchShape {
+        self.shape
+    }
+
+    /// Cached operator-registry probe key: `Some` only for an `OperatorChain`, holding the symbol
+    /// of its distinct operator keywords.
+    pub fn operator_probe(&self) -> Option<KeywordSymbol> {
+        self.operator_probe
+    }
+
+    /// The [`FORMS`](crate::machine::model::key_spec::FORMS) entry this node's bucket key matches,
+    /// `None` for every user-defined bucket.
+    pub fn form(&self) -> Option<&'static Form> {
+        self.form
+    }
+
+    /// This node's own binder plan — `Some` iff this node is itself a binder.
+    pub fn binder_plan(&self) -> Option<StoredBinderKey<'a>> {
+        self.binder_plan.copied()
+    }
+
+    /// The plan as the bumped borrow it is stored as, for the working copy that carries it through
+    /// a splice unchanged.
+    pub fn binder_plan_ref(&self) -> Option<&'a StoredBinderKey<'a>> {
+        self.binder_plan
+    }
+
+    /// The declared-name position of the binder form this node's bucket key matches
+    /// ([`BinderFacts::name_slot`](crate::machine::model::binder::BinderFacts::name_slot)); `None`
+    /// when the node matches no form, the form installs no binder, or its spine carries no declared
+    /// name (`FN`, `OP`).
+    pub fn binder_name_slot(&self) -> Option<usize> {
+        self.form?.binder?.name_slot
+    }
+
+    /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates.
+    pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
+        self.form
+            .map_or(LazyKinds::EMPTY, |form| form.lazy_kinds_at(index))
+    }
 }

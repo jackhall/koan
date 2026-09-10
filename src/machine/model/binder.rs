@@ -1,11 +1,11 @@
 //! Binder discovery model: the pure, structural reading of which AST forms introduce a binder and
 //! which name and bucket keys they declare.
 //!
-//! Everything here is a pure `&KExpression -> Option<…>` reader plus a static spec table
-//! ([`BINDER_SPECS`]) that is the single source of truth for the binder-introducing forms — a form
-//! is a binder because it has an entry here, and nothing else declares it. The keys are pinned
-//! against the live builtin registration table by the spec⟺registration consistency test, so an
-//! entry whose builtin was renamed, re-shaped, or dropped fails the suite.
+//! Everything here is a pure `&KExpression -> Option<…>` reader plus the [`BinderFacts`] that ride
+//! a [`FORMS`](crate::machine::model::key_spec::FORMS) entry — a form is a binder because its entry
+//! carries them, and nothing else declares it. The keys are pinned against the live builtin
+//! registration table by the table⟺registration property, so an entry whose builtin was renamed,
+//! re-shaped, or dropped fails the suite.
 
 use smallvec::SmallVec;
 
@@ -15,12 +15,7 @@ pub(crate) mod signature;
 use crate::machine::core::{KError, KErrorKind, body_statement_refs};
 
 use crate::machine::model::KeyElement;
-#[cfg(test)]
-use crate::machine::model::UntypedKey;
-use crate::machine::model::ast::Part;
-#[cfg(test)]
-use crate::machine::model::key_spec::key_matches_untyped;
-use crate::machine::model::key_spec::{KEYWORDS, KeyElementSpec, key_matches_parts};
+use crate::machine::model::key_spec::{Form, KEYWORDS, form_for};
 use crate::machine::model::labels::{
     BinderSymbol, KeywordSymbol, LabelInterner, StaticName, ValueSymbol, WILDCARD,
 };
@@ -225,7 +220,7 @@ fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>
 /// for. Each declares as a [`StaticName`] and is minted once for the process, so a form binds by
 /// loading the symbol rather than by classifying the spelling again per evaluation.
 ///
-/// They live here, beside [`BINDER_SPECS`], because they answer the same question that table does
+/// They live here, beside the extractors, because they answer the same question the form table does
 /// — what a form binds — for the forms whose binder is implicit in the surface rather than written
 /// in it. The builtins that install them read them back from here, so there is one spelling of
 /// each.
@@ -401,17 +396,17 @@ pub enum BinderSurface {
     Other,
 }
 
-/// A binder-introducing form: the untyped bucket key it dispatches under and the extractors that
-/// read its declared name and bucket keys out of the AST.
+/// What a binder-introducing form installs: the extractors that read its declared name and bucket
+/// keys out of the AST, plus the positions its spine fixes. Rides its [`Form`] entry, which is what
+/// names the key.
 ///
 /// The two channels are separate fields rather than one extractor list because a combined form
 /// (`LET <name> = FN …`) fills both at once — a name *and* the bucket keys its body registers.
-pub struct BinderSpec {
-    /// Full untyped bucket key — ALL keywords in position, never just the lead keyword.
-    pub key: &'static [KeyElementSpec],
+#[derive(Clone, Copy)]
+pub struct BinderFacts {
     /// Name extractors tried in order; first `Some` wins. Empty for the bucket-only and
     /// declaration forms (`FN`, `OP`, `VAL`). Each extractor's [`BinderSymbol`] variant carries the
-    /// channel the name binds in, so the spec states no separate kind.
+    /// channel the name binds in, so the entry states no separate kind.
     pub names: &'static [BinderNameFn],
     /// Bucket-key extractor for a form whose body registers overloads (`FN`, `OP`). `None` for the
     /// name-only forms.
@@ -422,485 +417,60 @@ pub struct BinderSpec {
     /// the statement spine (`VAL` declares at this position even though it installs nothing;
     /// `TYPE`'s higher-kinded form nests its name inside the slot, so the position holds no bare
     /// name there and reads as vacuous). `None` for the bucket-only forms (`FN`, `OP`), whose
-    /// spine carries no declared name. Dispatch resolution reads this off the node's cached copy
+    /// spine carries no declared name. Dispatch resolution reads this off the node's cached form
     /// ([`KExpression::binder_name_slot`]) to exempt a declaration slot from parking on a
     /// still-finalizing same-named outer binder. Pinned against `names` by the
-    /// name-slot⟺extractor consistency test.
+    /// name-slot⟺extractor property.
     pub name_slot: Option<usize>,
     /// Parts-run positions where a bare parenthesized part is a **type expression**: the parser
     /// rewrites a plain `Expression` part at each listed index to `SigiledTypeExpr`, making `(…)` ≡
     /// `:(…)` in exactly those slots (see [`admit_bare_type_slots`]). Indices are
-    /// element-for-element with `key`, like `name_slot`.
+    /// element-for-element with the entry's key, like `name_slot`.
     ///
     /// The mask is opt-in, not derived: a slot may take a type without wanting the flip.
     /// `NEWTYPE <name> = <repr>` is the standing case — a bare `(…)` there already works by
-    /// evaluation, so it stays unmasked. The consistency test pins that every masked index is a
-    /// slot its bucket's live registrations type as a raw type-expression carrier and never as
-    /// code.
+    /// evaluation, so it stays unmasked. The table⟺registration property pins that every masked
+    /// index is a slot its bucket's live registrations type as a raw type-expression carrier and
+    /// never as code.
     pub type_slots: &'static [usize],
 }
 
-impl BinderSpec {
+impl BinderFacts {
     /// True iff this form declares no install channel at all — the `VAL` declaration form, which
     /// records into the decl scope's slot collector rather than a binding map.
     #[cfg(test)]
     pub fn installs_nothing(&self) -> bool {
         self.names.is_empty() && self.bucket.is_none()
     }
-
-    /// True iff this spec's key matches the runtime bucket key element-for-element.
-    #[cfg(test)]
-    pub fn matches_key(&self, key: &UntypedKey) -> bool {
-        key_matches_untyped(self.key, key)
-    }
-
-    /// [`Self::matches_key`] read straight off an expression's parts, materializing no key at all —
-    /// the parts already carry every token this compares.
-    pub fn matches_parts<'a, P: Part<'a>>(&self, parts: &[Spanned<P>]) -> bool {
-        key_matches_parts(self.key, parts)
-    }
 }
 
-use KeyElementSpec::{Keyword as Kw, Slot};
-
-/// The single source of truth for the binder-introducing forms. One entry per distinct untyped
-/// bucket key; the keys are pinned against the live builtin registration table by the
-/// spec⟺registration consistency test.
-pub static BINDER_SPECS: &[BinderSpec] = &[
-    // LET <name> = <value>: value-name overload then type-alias overload.
-    BinderSpec {
-        key: &[Kw(&KEYWORDS.let_), Slot, Kw(&KEYWORDS.equals), Slot],
-        names: &[identifier_part_binder_name, type_part_binder_name],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
-    BinderSpec {
-        key: &[Kw(&KEYWORDS.type_), Slot],
-        names: &[type_decl_binder_name],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // MODULE <name> = <body> (a module is a value, so the name slot is an `Identifier`; a
-    // Type-token name registers nothing and takes the miss table's respelling diagnostic).
-    BinderSpec {
-        key: &[Kw(&KEYWORDS.module), Slot, Kw(&KEYWORDS.equals), Slot],
-        names: &[identifier_part_binder_name],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // GROUP <name> FOLD LEFT = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.fold),
-            Kw(&KEYWORDS.left),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // GROUP <name> FOLD RIGHT = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.fold),
-            Kw(&KEYWORDS.right),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // GROUP <name> PAIRWISE FOLD <combiner> LEFT = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.pairwise),
-            Kw(&KEYWORDS.fold),
-            Slot,
-            Kw(&KEYWORDS.left),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // GROUP <name> PAIRWISE FOLD <combiner> RIGHT = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.group),
-            Slot,
-            Kw(&KEYWORDS.pairwise),
-            Kw(&KEYWORDS.fold),
-            Slot,
-            Kw(&KEYWORDS.right),
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // SIG <name> = <body>.
-    BinderSpec {
-        key: &[Kw(&KEYWORDS.sig), Slot, Kw(&KEYWORDS.equals), Slot],
-        names: &[type_part_binder_name],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // UNION <name> = <schema>.
-    BinderSpec {
-        key: &[Kw(&KEYWORDS.union), Slot, Kw(&KEYWORDS.equals), Slot],
-        names: &[type_part_binder_name],
-        bucket: None,
-        surface: BinderSurface::UnionDef,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key). The repr slot takes a
-    // type but is deliberately unmasked: a bare `(…)` there already works by evaluation, so flipping
-    // it would change a working spelling's route for nothing.
-    BinderSpec {
-        key: &[Kw(&KEYWORDS.newtype), Slot, Kw(&KEYWORDS.equals), Slot],
-        names: &[type_part_binder_name],
-        bucket: None,
-        surface: BinderSurface::NewTypeDef,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
-    BinderSpec {
-        key: &[Kw(&KEYWORDS.newtype), Slot],
-        names: &[type_decl_binder_name],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-    // FN <record schema> -> <return_type> = <body> — the lambda. It binds nothing: it has no name
-    // and no head to key a bucket on. The row is here for its type slot alone, so a bare `(…)`
-    // return spelling rewrites to a sigiled type expression as it does on every other form.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.fn_),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: None,
-        type_slots: &[3],
-    },
-    // EXPR <head> -> <return_type> = <body> (every EXPR definition overload shares this key).
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.expr),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[],
-        bucket: Some(fn_def_binder_bucket),
-        surface: BinderSurface::Other,
-        name_slot: None,
-        type_slots: &[3],
-    },
-    // EXPR FOR ALL <names> <head> -> <return_type> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.expr),
-            Kw(&KEYWORDS.for_),
-            Kw(&KEYWORDS.all),
-            Slot,
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[],
-        bucket: Some(fn_def_binder_bucket),
-        surface: BinderSurface::Other,
-        name_slot: None,
-        type_slots: &[6],
-    },
-    // OP <symbol> OVER <operand> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[],
-        bucket: Some(op_def_binder_bucket),
-        surface: BinderSurface::OperatorDef,
-        name_slot: None,
-        type_slots: &[3],
-    },
-    // OP <symbol> OVER <operand> -> <return_type> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[],
-        bucket: Some(op_def_binder_bucket),
-        surface: BinderSurface::OperatorDef,
-        name_slot: None,
-        type_slots: &[3, 5],
-    },
-    // UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[],
-        bucket: Some(op_def_binder_bucket),
-        surface: BinderSurface::OperatorDef,
-        name_slot: None,
-        type_slots: &[4, 6],
-    },
-    // The combined statement forms: one binder filling both channels — the LET value name and the
-    // bucket key(s) the declaration's body registers under. `LET <name> = UNARY OP …` is the
-    // two-bucket maximum.
-    //
-    // LET <name> = FN EXPR <head> -> <return_type> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Kw(&KEYWORDS.expr),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: Some(fn_def_binder_bucket),
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[7],
-    },
-    // LET <name> = FN EXPR FOR ALL <names> <head> -> <return_type> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.fn_),
-            Kw(&KEYWORDS.expr),
-            Kw(&KEYWORDS.for_),
-            Kw(&KEYWORDS.all),
-            Slot,
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: Some(fn_def_binder_bucket),
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[10],
-    },
-    // LET <name> = OP <symbol> OVER <operand> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: Some(op_def_binder_bucket),
-        surface: BinderSurface::OperatorDef,
-        name_slot: Some(1),
-        type_slots: &[6],
-    },
-    // LET <name> = OP <symbol> OVER <operand> -> <return_type> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: Some(op_def_binder_bucket),
-        surface: BinderSurface::OperatorDef,
-        name_slot: Some(1),
-        type_slots: &[6, 8],
-    },
-    // LET <name> = UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.let_),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-            Kw(&KEYWORDS.equals),
-            Slot,
-        ],
-        names: &[identifier_part_binder_name],
-        bucket: Some(op_def_binder_bucket),
-        surface: BinderSurface::OperatorDef,
-        name_slot: Some(1),
-        type_slots: &[7, 9],
-    },
-    // The SIG-body operator heads — the three definition surfaces minus their `= <body>`. Like
-    // `VAL` below they install nothing: a head records into the decl scope's collectors, not into
-    // a binding map any name lookup can see. They appear here for the `type_slots` mask (so a bare
-    // `(LIST OF Elt)` operand reads as a type expression, exactly as it does in the definition)
-    // and for the `OperatorDef` marker, which is what a SIG group's member scan keys on.
-    //
-    // OP <symbol> OVER <operand>.
-    BinderSpec {
-        key: &[Kw(&KEYWORDS.op), Slot, Kw(&KEYWORDS.over), Slot],
-        names: &[],
-        bucket: None,
-        surface: BinderSurface::OperatorDef,
-        name_slot: None,
-        type_slots: &[3],
-    },
-    // OP <symbol> OVER <operand> -> <result>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-        ],
-        names: &[],
-        bucket: None,
-        surface: BinderSurface::OperatorDef,
-        name_slot: None,
-        type_slots: &[3, 5],
-    },
-    // UNARY OP <symbol> OVER <operand> -> <result>.
-    BinderSpec {
-        key: &[
-            Kw(&KEYWORDS.unary),
-            Kw(&KEYWORDS.op),
-            Slot,
-            Kw(&KEYWORDS.over),
-            Slot,
-            Kw(&KEYWORDS.arrow),
-            Slot,
-        ],
-        names: &[],
-        bucket: None,
-        surface: BinderSurface::OperatorDef,
-        name_slot: None,
-        type_slots: &[4, 6],
-    },
-    // VAL <name> <ty> — a declaration form with no install channel. It records
-    // into the decl scope's slot collector, not a binding map any name lookup can see, so it
-    // installs nothing; it appears here so the one-place specification of the declaration forms is
-    // complete.
-    BinderSpec {
-        key: &[Kw(&KEYWORDS.val), Slot, Slot],
-        names: &[],
-        bucket: None,
-        surface: BinderSurface::Other,
-        name_slot: Some(1),
-        type_slots: &[],
-    },
-];
-
-/// Parse-side admission of the bare parenthesized type spelling. If `parts` matches a binder form's
-/// key, every plain `Expression` part at one of that form's [`type_slots`](BinderSpec::type_slots)
-/// is rewritten to `SigiledTypeExpr` — the same `ProgramNode` payload under a different
-/// parse-context marker, so `(LIST OF Str)` ≡ `:(LIST OF Str)` in exactly those positions and
-/// nowhere else.
+/// Parse-side admission of the bare parenthesized type spelling. If `parts` matches a builtin
+/// form's key, every plain `Expression` part at one of that form's
+/// [`type_slots`](BinderFacts::type_slots) is rewritten to `SigiledTypeExpr` — the same
+/// `ProgramNode` payload under a different parse-context marker, so `(LIST OF Str)` ≡
+/// `:(LIST OF Str)` in exactly those positions and nowhere else.
 ///
 /// A variant change is the whole of it, and everything downstream follows by construction: the
-/// statement's untyped key is unchanged (both variants are slots), the form's `LAZY_SLOT_SPECS`
-/// entry already stamps `TYPE_EXPR` at each masked index so the part is captured raw instead of
-/// staged, and the return/operand slot's carrier union already lists `SIGILED_TYPE_EXPR`. The two
-/// spellings are the same part by the time anything semantic looks at them, so parity is exact.
+/// statement's untyped key is unchanged (both variants are slots), the form's
+/// [`lazy_slots`](crate::machine::model::key_spec::Form::lazy_slots) already stamp `TYPE_EXPR` at
+/// each masked index so the part is captured raw instead of staged, and the return/operand slot's
+/// carrier union already lists `SIGILED_TYPE_EXPR`. The two spellings are the same part by the time
+/// anything semantic looks at them, so parity is exact.
 ///
 /// Any other part kind at a masked index — a `Type` token, a `:(…)`, a `:{…}`, an identifier — is
-/// left alone, and a run matching no binder key is untouched. Idempotent.
+/// left alone, and a run matching no form key is untouched. Idempotent.
 ///
 /// Called from the parse frames, on a run that is still an unfrozen `Vec`: a node's parts and its
-/// structural cache are bumped together and never touched again, so this must run before the freeze.
+/// structural cache are bumped together and never touched again, so this must run before the
+/// freeze. The run has no stored key yet, so it feeds the matcher the key elements its parts spell.
 pub(crate) fn admit_bare_type_slots(parts: &mut [Spanned<ExpressionPart<'_>>]) {
-    let Some(spec) = BINDER_SPECS.iter().find(|spec| spec.matches_parts(parts)) else {
+    let Some(binder) =
+        form_for(parts.iter().map(|part| part.value.key_element())).and_then(|form| form.binder)
+    else {
         return;
     };
-    for &index in spec.type_slots {
-        // `matches_parts` pinned `key.len() == parts.len()`, and the consistency test pins every
+    for &index in binder.type_slots {
+        // The key match pinned `key.len() == parts.len()`, and the table-shape property pins every
         // masked index to a slot position of that key, so the index is in range.
         if let ExpressionPart::Expression(node) = parts[index].value {
             parts[index].value = ExpressionPart::SigiledTypeExpr(node);
@@ -919,15 +489,16 @@ pub(crate) enum TypeDeclarationSurface {
 /// What `expression` announces to its module body's declaration window, or `None` if it announces
 /// nothing.
 ///
-/// Recognition is by **full bucket key** against the [`BINDER_SPECS`] entries — every keyword
-/// pinned in position — so a user overload that merely shares a head keyword announces nothing, and
-/// the constructor-family key `NEWTYPE <decl>` is excluded structurally rather than by inspecting
-/// what its extractor would return. Only a statement at the body's top level is offered here; a
-/// declaration nested inside another statement's slot keeps ordinary dataflow order.
+/// Recognition is by the node's cached [`FORMS`](crate::machine::model::key_spec::FORMS) entry —
+/// a full bucket key, every keyword pinned in position — so a user overload that merely shares a
+/// head keyword announces nothing, and the constructor-family key `NEWTYPE <decl>` is excluded
+/// structurally rather than by inspecting what its extractor would return. Only a statement at the
+/// body's top level is offered here; a declaration nested inside another statement's slot keeps
+/// ordinary dataflow order.
 pub(crate) fn announced_type_declaration(
     expression: &KExpression<'_>,
 ) -> Option<TypeDeclarationSurface> {
-    match binder_spec_for(expression)?.surface {
+    match expression.cache().form()?.binder?.surface {
         BinderSurface::NewTypeDef => Some(TypeDeclarationSurface::NewType),
         BinderSurface::UnionDef => Some(TypeDeclarationSurface::Union),
         BinderSurface::OperatorDef | BinderSurface::Other => None,
@@ -1000,14 +571,14 @@ pub(crate) fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpressio
 }
 
 /// The arity of the operator declaration `expression` is, or `None` if it is not one. Recognition
-/// is by **full bucket key** against the [`BINDER_SPECS`] entries marked
-/// [`BinderSurface::OperatorDef`] — every keyword pinned in position — so a statement that merely
-/// spells the `OP` token (a call to a user `FN` whose signature names it as a keyword) is not an
-/// operator declaration, and neither is an `OP` nested inside some other statement's slot. `GROUP`
-/// reads its members' symbols off exactly the statements this admits.
+/// is by the node's cached form, admitted only when its binder facts are marked
+/// [`BinderSurface::OperatorDef`] — a full bucket key, every keyword pinned in position — so a
+/// statement that merely spells the `OP` token (a call to a user `FN` whose signature names it as a
+/// keyword) is not an operator declaration, and neither is an `OP` nested inside some other
+/// statement's slot. `GROUP` reads its members' symbols off exactly the statements this admits.
 pub(crate) fn op_declaration_arity(expression: &KExpression<'_>) -> Option<OpArity> {
-    let spec = binder_spec_for(expression)?;
-    if spec.surface != BinderSurface::OperatorDef {
+    let binder = expression.cache().form()?.binder?;
+    if binder.surface != BinderSurface::OperatorDef {
         return None;
     }
     Some(if is_unary_form(expression) {
@@ -1024,27 +595,19 @@ pub enum OpArity {
     Unary,
 }
 
-/// The [`BINDER_SPECS`] entry `expression`'s bucket key matches, or `None` for a non-binder shape.
-/// The one spec-table probe — every reader of the table's per-form facts (install plan, surface
-/// classification, declared-name position) resolves its entry through here.
-pub(crate) fn binder_spec_for(expression: &KExpression<'_>) -> Option<&'static BinderSpec> {
-    BINDER_SPECS
-        .iter()
-        .find(|spec| spec.matches_parts(expression.parts))
-}
-
-/// What `expression` installs under its matched `spec`. Both channels are read — a combined form
-/// fills them together. The key is read off the node's own stored run, and a synthesized bucket key
-/// is bumped into `brand`'s region — the node's, since this runs from the construction door.
-/// Returns `None` for a form whose extractors install nothing (`VAL`, and the anonymous `FN :{…}`
-/// whose signature part names no bucket).
-pub(crate) fn binder_plan_from_spec<'a>(
+/// What `expression` installs under `form`. Both channels are read — a combined form fills them
+/// together. The key is read off the node's own stored run, and a synthesized bucket key is bumped
+/// into `brand`'s region — the node's, since this runs from the construction door. Returns `None`
+/// for a form with no binder facts, and for one whose extractors install nothing (`VAL`, and the
+/// anonymous `FN :{…}` whose signature part names no bucket).
+pub(crate) fn binder_plan_for<'a>(
     brand: RegionBrand<'a>,
-    spec: &BinderSpec,
+    form: Option<&'static Form>,
     expression: &KExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {
-    let name = spec.names.iter().find_map(|extract| extract(expression));
-    let buckets = spec.bucket.and_then(|extract| extract(brand, expression));
+    let binder = form?.binder?;
+    let name = binder.names.iter().find_map(|extract| extract(expression));
+    let buckets = binder.bucket.and_then(|extract| extract(brand, expression));
     if name.is_none() && buckets.is_none() {
         return None;
     }

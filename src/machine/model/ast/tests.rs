@@ -370,7 +370,10 @@ fn cached_fields_equal_on_demand_recompute() {
         ],
     );
     // Cache must match a fresh structural recompute.
-    assert_eq!(e.shape(), classify_dispatch_shape(e.parts));
+    assert_eq!(
+        e.shape(),
+        classify_dispatch_shape(e.stored_key(), e.parts.first().map(|p| p.value.class()))
+    );
     let recomputed_key: crate::machine::model::types::UntypedKey = e
         .parts
         .iter()
@@ -381,7 +384,7 @@ fn cached_fields_equal_on_demand_recompute() {
             _ => crate::machine::model::types::KeyElement::Slot,
         })
         .collect();
-    assert_eq!(e.untyped_key(), recomputed_key);
+    assert_eq!(e.stored_key().to_vec(), recomputed_key);
 }
 
 /// A node is `Copy`, so handing one on copies the whole structural cache with it — no rebuild and
@@ -404,7 +407,7 @@ fn cache_rides_a_copy() {
     let c = e;
     assert_eq!(c.shape(), DispatchShape::OperatorChain);
     assert_eq!(c.operator_probe(), Some(operator_probe_of(&["|"])));
-    assert_eq!(c.untyped_key(), e.untyped_key());
+    assert_eq!(c.stored_key(), e.stored_key());
     assert_eq!(c.stored_key(), e.stored_key());
 }
 
@@ -451,8 +454,8 @@ fn key_and_shape_invariant_across_eager_slot_variants() {
     assert_eq!(with_expr.shape(), DispatchShape::OperatorChain);
     assert_eq!(with_expr.shape(), with_list.shape());
     assert_eq!(with_expr.shape(), with_dict.shape());
-    assert_eq!(with_expr.untyped_key(), with_list.untyped_key());
-    assert_eq!(with_expr.untyped_key(), with_dict.untyped_key());
+    assert_eq!(with_expr.stored_key(), with_list.stored_key());
+    assert_eq!(with_expr.stored_key(), with_dict.stored_key());
     assert_eq!(with_expr.operator_probe(), with_list.operator_probe());
 }
 
@@ -496,7 +499,7 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
             )),
         ],
     };
-    assert_eq!(e.untyped_key(), sig.untyped_key());
+    assert_eq!(e.stored_key().to_vec(), sig.untyped_key());
 }
 
 /// `(f x) 1` — nested-`Expression` head followed by a non-keyword part.

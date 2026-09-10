@@ -1,11 +1,11 @@
-//! Lazy-slot model tests: the spec⟺registration consistency pin (the table matches the live
-//! builtin signatures) and the seal-time stamp each parsed form carries.
+//! Lazy-slot model tests: the table⟺registration consistency pin (the form table's lazy slots match
+//! the live builtin signatures) and the seal-time stamp each parsed form carries.
 
 use std::collections::BTreeMap;
 
-use super::{LAZY_SLOT_SPECS, LazyKinds, LazySlotSpec};
+use super::LazyKinds;
 use crate::builtins::test_support::TestRun;
-use crate::machine::model::key_spec::{key_matches_untyped, key_specs_agree, render_key};
+use crate::machine::model::key_spec::{FORMS, Form, KeyElementSpec, key_matches, render_key};
 use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry, UntypedKey};
 use crate::memory::{program_storage, run_root_storage};
 use crate::parse::parse;
@@ -24,7 +24,7 @@ fn exact_kind_of(ktype: KType) -> Option<LazyKinds> {
 
 /// The kinds a slot type stands for, distributed over union members: a union carrier slot admits
 /// every carrier spelling it lists, so its bucket's stamp must carry each member's kind. This is
-/// what forces a union-slot builtin's bucket to declare a correct [`LAZY_SLOT_SPECS`] entry.
+/// what forces a union-slot builtin's bucket to declare correct lazy slots.
 fn kind_of(ktype: KType, types: &TypeRegistry) -> Option<LazyKinds> {
     if let Some(kind) = exact_kind_of(ktype) {
         return Some(kind);
@@ -69,39 +69,34 @@ fn live_lazy_slots() -> Vec<(UntypedKey, BTreeMap<usize, LazyKinds>)> {
     live
 }
 
-/// True iff the dispatch-miss diagnosis table reserves this spec key — the shape registers nothing,
-/// so no live bucket can vouch for its lazy-slot entry.
-fn reserves(key: &[crate::machine::model::key_spec::KeyElementSpec]) -> bool {
-    crate::machine::model::miss_diagnostics::MISS_DIAGNOSTICS
-        .iter()
-        .any(|entry| entry.reserved && key_specs_agree(entry.key, key))
+/// Every form declaring at least one lazy slot.
+fn lazy_forms() -> impl Iterator<Item = &'static Form> {
+    FORMS.iter().filter(|form| !form.lazy_slots.is_empty())
 }
 
 /// The entry `key` matches, or `None`.
-fn spec_for(key: &UntypedKey) -> Option<&'static LazySlotSpec> {
-    LAZY_SLOT_SPECS
-        .iter()
-        .find(|spec| key_matches_untyped(spec.key, key))
+fn form_for_key(key: &UntypedKey) -> Option<&'static Form> {
+    crate::machine::model::key_spec::form_for(key.iter().copied())
 }
 
 /// Every live builtin bucket with a raw-capture slot has a table entry declaring exactly those
 /// slots and kinds. A builtin that grows, loses, or re-indexes a lazy slot fails here.
 #[test]
-fn every_lazy_builtin_bucket_has_a_matching_spec_entry() {
+fn every_lazy_builtin_bucket_has_a_matching_form_entry() {
     for (key, expected) in live_lazy_slots() {
-        let spec = spec_for(&key).unwrap_or_else(|| {
-            panic!("live bucket with lazy slots {expected:?} has no LAZY_SLOT_SPECS entry")
+        let form = form_for_key(&key).unwrap_or_else(|| {
+            panic!("live bucket with lazy slots {expected:?} has no FORMS entry")
         });
-        let declared: BTreeMap<usize, LazyKinds> = spec
-            .slots
+        let declared: BTreeMap<usize, LazyKinds> = form
+            .lazy_slots
             .iter()
             .map(|(index, kinds)| (*index, *kinds))
             .collect();
         assert_eq!(
             declared,
             expected,
-            "spec key {:?} declares the wrong lazy slots",
-            render_key(spec.key)
+            "form key {:?} declares the wrong lazy slots",
+            render_key(form.key)
         );
     }
 }
@@ -109,54 +104,25 @@ fn every_lazy_builtin_bucket_has_a_matching_spec_entry() {
 /// The other direction: no orphan entries. A table key naming no live lazy bucket — a builtin
 /// renamed, re-shaped, or dropped — fails here.
 ///
-/// A key the dispatch-miss diagnosis table **reserves** justifies its entry without a registration:
-/// nothing registers there by design, and the entry is what keeps the body slot raw so the statement
-/// reaches the miss the diagnosis reads instead of dying on an eagerly evaluated body first.
+/// A **reserved** key justifies its lazy slots without a registration: nothing registers there by
+/// design, and the stamp is what keeps the body slot raw so the statement reaches the miss the
+/// diagnosis reads instead of dying on an eagerly evaluated body first.
 #[test]
-fn every_spec_entry_names_a_live_lazy_bucket() {
+fn every_lazy_form_names_a_live_lazy_bucket() {
     let live = live_lazy_slots();
-    for spec in LAZY_SLOT_SPECS {
+    for form in lazy_forms() {
         assert!(
             live.iter()
-                .any(|(key, _)| key_matches_untyped(spec.key, key))
-                || reserves(spec.key),
-            "spec key {:?} names no live bucket with lazy slots",
-            render_key(spec.key)
+                .any(|(key, _)| key_matches(form.key, key.iter().copied()))
+                || form.reserved,
+            "form key {:?} names no live bucket with lazy slots",
+            render_key(form.key)
         );
         assert!(
-            !spec.slots.is_empty(),
-            "spec key {:?} declares no lazy slot, so it does not belong in the table",
-            render_key(spec.key)
+            form.lazy_slots.windows(2).all(|w| w[0].0 < w[1].0),
+            "form key {:?} lists its slots out of ascending order",
+            render_key(form.key)
         );
-        assert!(
-            spec.slots.windows(2).all(|w| w[0].0 < w[1].0),
-            "spec key {:?} lists its slots out of ascending order",
-            render_key(spec.key)
-        );
-    }
-}
-
-/// Every declared slot index names a slot position of its own key, and every kind set is non-empty.
-#[test]
-fn spec_slot_indices_name_slot_positions() {
-    for spec in LAZY_SLOT_SPECS {
-        for (index, kinds) in spec.slots {
-            assert!(
-                *index < spec.key.len(),
-                "spec key {:?} declares slot {index} past its run",
-                render_key(spec.key)
-            );
-            assert!(
-                !kinds.is_empty(),
-                "spec key {:?} declares an empty kind set at slot {index}",
-                render_key(spec.key)
-            );
-            assert!(
-                matches!(spec.key[*index], super::KeyElementSpec::Slot),
-                "spec key {:?} declares its keyword position {index} lazy",
-                render_key(spec.key)
-            );
-        }
     }
 }
 

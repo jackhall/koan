@@ -219,7 +219,7 @@ fn holds_evaluated_non_code(
 /// scan. Exempt are the slots a binder form's own machinery resolves:
 ///
 /// - the declared-name position (`binder_name_slot`, cached off
-///   [`BinderSpec::name_slot`](crate::machine::model::binder::BinderSpec::name_slot)): the slot
+///   [`BinderFacts::name_slot`](crate::machine::model::binder::BinderFacts::name_slot)): the slot
 ///   *owns* the name, so an inner shadowing binder must not wait on a same-named outer binder still
 ///   in flight (its own claim is already invisible to it by the exclusive visibility cutoff);
 /// - a binder form's `Type`-token operands (`NEWTYPE Meters = Length`, `LET Thing = OtherThing`, a

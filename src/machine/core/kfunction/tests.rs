@@ -27,7 +27,7 @@ fn find_match<'a>(
     expr: &KExpression<'a>,
     types: &TypeRegistry,
 ) -> Option<&'a KFunction<'a>> {
-    let key = expr.untyped_key();
+    let key = expr.stored_key().to_vec();
     let mut current: Option<&Scope<'a>> = Some(scope);
     while let Some(s) = current {
         let bucket: Vec<_> = match s.bindings().functions().get(key.as_slice()) {

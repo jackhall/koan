@@ -113,10 +113,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         ],
     );
     // VAL installs nothing: it records into the decl scope's slot collector, not into a binding map
-    // any name lookup or forward-reference walk can see. Its `BINDER_SPECS` entry has empty
-    // extractors to match — no name, no bucket. Its declaration slot is still
-    // declaration-classified in dispatch, via the spec entry's `name_slot` cached on the
-    // expression.
+    // any name lookup or forward-reference walk can see. Its binder facts have empty extractors to
+    // match — no name, no bucket. Its declaration slot is still declaration-classified in dispatch,
+    // via the form entry's `name_slot`, cached on the expression.
     crate::builtins::register_builtin(scope, signature, body, registries, gate);
 }
 
