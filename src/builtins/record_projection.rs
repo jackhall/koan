@@ -14,15 +14,15 @@
 use crate::machine::WriteGate;
 
 use crate::machine::model::Carried;
-use crate::machine::model::ExpressionPart;
 use crate::machine::model::Record;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::parse::ExpressionPart;
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
 use crate::memory::BumpVec;
+use crate::parse::Symbol;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { fields, record } }
@@ -189,33 +189,21 @@ mod tests {
         match result {
             KObject::Record(substrate, record_type) => {
                 assert_eq!(substrate.len(), 3);
-                assert!(
-                    substrate
-                        .field(crate::machine::model::Symbol::of("z"))
-                        .is_some()
-                );
+                assert!(substrate.field(crate::parse::Symbol::of("z")).is_some());
                 let field_types = match test_run.types().node(*record_type) {
                     TypeNode::Record { fields } => fields,
                     _ => panic!("record value's type must be a Record node, got {record_type:?}"),
                 };
                 assert_eq!(field_types.len(), 2);
                 assert_eq!(
-                    field_types
-                        .get(crate::machine::model::Symbol::of("x"))
-                        .copied(),
+                    field_types.get(crate::parse::Symbol::of("x")).copied(),
                     Some(KType::NUMBER)
                 );
                 assert_eq!(
-                    field_types
-                        .get(crate::machine::model::Symbol::of("y"))
-                        .copied(),
+                    field_types.get(crate::parse::Symbol::of("y")).copied(),
                     Some(KType::NUMBER)
                 );
-                assert!(
-                    field_types
-                        .get(crate::machine::model::Symbol::of("z"))
-                        .is_none()
-                );
+                assert!(field_types.get(crate::parse::Symbol::of("z")).is_none());
             }
             other => panic!("expected Record, got {:?}", other.ktype()),
         }
@@ -239,16 +227,10 @@ mod tests {
                 };
                 assert_eq!(field_types.len(), 1);
                 assert_eq!(
-                    field_types
-                        .get(crate::machine::model::Symbol::of("x"))
-                        .copied(),
+                    field_types.get(crate::parse::Symbol::of("x")).copied(),
                     Some(KType::NUMBER)
                 );
-                assert!(
-                    field_types
-                        .get(crate::machine::model::Symbol::of("y"))
-                        .is_none()
-                );
+                assert!(field_types.get(crate::parse::Symbol::of("y")).is_none());
             }
             other => panic!("expected Record, got {:?}", other.ktype()),
         }

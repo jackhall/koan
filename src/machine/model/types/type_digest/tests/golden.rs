@@ -16,11 +16,11 @@ use super::super::{TypeDigest, empty_schema_digest, schema_content_digest};
 use crate::machine::model::DispatchTokenElement;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::TypeSymbol;
 use crate::machine::model::types::{
     KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeMemberMap, TypeNode,
 };
 use crate::memory::ScopeId;
+use crate::parse::TypeSymbol;
 
 /// A fixture's Type-class name as the [`TypeSymbol`] the schema and node types key by. The pins
 /// here compare digests and never render, so the pure probe constructor is enough.
@@ -484,7 +484,7 @@ fn schema_abstract_member_digests_are_pinned() {
 fn expression_shape_digests_are_pinned() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let pure = crate::machine::model::KeywordSymbol::declared("PURE", &registries.labels)
+    let pure = crate::parse::KeywordSymbol::declared("PURE", &registries.labels)
         .expect("a fixture keyword classifies keyword-class");
     assert_handle_pinned(
         "(PURE _ :Number) -> Bool",

@@ -15,10 +15,7 @@ use crate::memory::{program_storage, run_root_storage};
 
 /// The `(name, arg)` pairs of a `ConstructorApply`, in the order the args record carries them —
 /// the constructor's declared parameter order.
-fn applied_args(
-    kt: KType,
-    registries: &RunRegistries,
-) -> Vec<(crate::machine::model::BinderSymbol, KType)> {
+fn applied_args(kt: KType, registries: &RunRegistries) -> Vec<(crate::parse::BinderSymbol, KType)> {
     match registries.types.node(kt) {
         TypeNode::ConstructorApply { arguments, .. } => {
             arguments.iter().map(|(name, arg)| (name, *arg)).collect()

@@ -2,8 +2,8 @@
 //!
 //! A bare `(…)` evaluates before its parent dispatches — everywhere except a lazy slot of a fixed
 //! builtin form. Which slots those are is a **seal-time** fact, not a dispatch-time one: the
-//! [`lazy_slots`](crate::machine::model::key_spec::Form::lazy_slots) of the node's
-//! [`FORMS`](crate::machine::model::key_spec::FORMS) entry are the single source of truth, a node's
+//! [`lazy_slots`](crate::parse::forms::Form::lazy_slots) of the node's
+//! [`FORMS`](crate::parse::forms::FORMS) entry are the single source of truth, a node's
 //! construction resolves that entry, and the scheduler reads it to decide child submission. So
 //! dispatch selects among overloads over values that have already landed, and a reader can tell
 //! locally whether a group runs.

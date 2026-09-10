@@ -17,10 +17,11 @@ use crate::machine::core::bindings::WriteOp;
 use crate::machine::execute::RunWriter;
 use crate::machine::execute::StepAllocator;
 use crate::machine::model::types::TypeRegistry;
-use crate::machine::model::{ExpressionPart, RunRegistries, WorkingPart};
+use crate::machine::model::{RunRegistries, WorkingPart};
 use crate::machine::{Installer, LexicalFrame, Scope};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::memory::{FrameStorage, ProgramBrand};
+use crate::parse::ExpressionPart;
 use crate::source::Spanned;
 
 use super::super::ambient::AmbientContext;

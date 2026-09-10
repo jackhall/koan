@@ -2,7 +2,9 @@
 //! a `Body` (an action `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{WorkingExpression, WorkingPart};
+
+use crate::parse::ExpressionPart;
 use crate::source::{SourceRef, Spanned};
 
 use crate::machine::core::kfunction::action::BoundArg;
@@ -11,13 +13,13 @@ use crate::machine::model::DeliveredCarried;
 use crate::machine::model::NamedPairs;
 #[cfg(test)]
 use crate::machine::model::SignatureDraft;
-use crate::machine::model::SlotLayout;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
 use crate::machine::model::{ExpressionSignature, Record, SignatureElement, shape_type_of};
 use crate::machine::model::{Unifier, UnifyFailure, Variance, admits_with};
 use crate::memory::BumpVec;
 use crate::memory::{Delivered, Opened, RegionHandleFamily, Sealed};
 use crate::memory::{FoldingBrand, KoanStorageProfile, RegionBrand};
+use crate::parse::SlotLayout;
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
 /// `machine::execute`'s `run_action`.
@@ -28,7 +30,8 @@ pub mod exec;
 pub mod pick;
 
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{Symbol, render_label};
+use crate::machine::model::render_label;
+use crate::parse::Symbol;
 pub use action::ActionFn;
 pub use body::Body;
 pub use pick::WrapIndices;
@@ -196,7 +199,7 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         return_type: ReturnType<'a>,
         elements: &[SignatureElement],
-        quantifiers: &[crate::machine::model::TypeSymbol],
+        quantifiers: &[crate::parse::TypeSymbol],
         body: Body<'a>,
         registries: &RunRegistries,
     ) -> DeliveredFunction {

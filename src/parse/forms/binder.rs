@@ -386,7 +386,7 @@ impl BinderFacts {
 ///
 /// A variant change is the whole of it, and everything downstream follows by construction: the
 /// statement's untyped key is unchanged (both variants are slots), the form's
-/// [`lazy_slots`](crate::machine::model::key_spec::Form::lazy_slots) already stamp `TYPE_EXPR` at
+/// [`lazy_slots`](crate::parse::forms::Form::lazy_slots) already stamp `TYPE_EXPR` at
 /// each masked index so the part is captured raw instead of staged, and the return/operand slot's
 /// carrier union already lists `SIGILED_TYPE_EXPR`. The two spellings are the same part by the time
 /// anything semantic looks at them, so parity is exact.

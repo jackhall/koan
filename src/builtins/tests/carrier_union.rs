@@ -8,12 +8,13 @@ use crate::builtins::test_support::{TestRun, lookup_binding, marker};
 use crate::builtins::{arg, kw, register_builtin, sig};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::model::Carried;
-use crate::machine::model::{BinderSymbol, KObject, KType, RunRegistries};
+use crate::machine::model::{KObject, KType, RunRegistries};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::BinderSymbol;
 use crate::static_name;
 
-static SLOT: crate::machine::model::StaticName<crate::machine::model::ValueSymbol> =
-    static_name!(crate::machine::model::ValueSymbol, "repr");
+static SLOT: crate::parse::StaticName<crate::parse::ValueSymbol> =
+    static_name!(crate::parse::ValueSymbol, "repr");
 
 /// The workhorse union every carrier spelling of a type slot registers as: disjoint members, no
 /// `KExpression`, so the door takes it.

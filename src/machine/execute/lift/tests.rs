@@ -22,7 +22,6 @@ use crate::memory::ScopeId;
 /// operand's handle family, named for the merge turbofish.
 type DestHandleFamily = RegionHandleFamily;
 use crate::builtins::test_support::type_token;
-use crate::machine::model::BinderSymbol;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::Held;
@@ -33,6 +32,7 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
 use crate::memory::{Delivered, FoldedPlacement, RegionHandle, Sealed, reattachable};
+use crate::parse::BinderSymbol;
 use std::rc::Rc;
 
 /// A `KFunction` allocated into `home`'s region (its captured scope lives there), for the
@@ -353,7 +353,7 @@ fn type_recursive_member_relocates_and_navigates() {
                     ..
                 } => match types.node(repr) {
                     TypeNode::Record { fields } => assert_eq!(
-                        fields.get(crate::machine::model::Symbol::of("children")),
+                        fields.get(crate::parse::Symbol::of("children")),
                         Some(&types.list(tree)),
                         "the relocated Tree's children field self-references the sealed Tree member",
                     ),
@@ -532,7 +532,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
             .iter()
             .map(|h| match h.object() {
                 KObject::Record(substrate, _) => match substrate
-                    .field(crate::machine::model::Symbol::of("acc"))
+                    .field(crate::parse::Symbol::of("acc"))
                     .map(|h| h.object())
                 {
                     Some(KObject::Number(n)) => *n,
@@ -593,7 +593,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
             .iter()
             .map(|h| match h.object() {
                 KObject::Record(substrate, _) => match substrate
-                    .field(crate::machine::model::Symbol::of("f"))
+                    .field(crate::parse::Symbol::of("f"))
                     .map(|h| h.object())
                 {
                     Some(KObject::KFunction(f)) => f.captured_scope().id,
@@ -644,7 +644,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             let obj = alloc_home_closure_record(&producer, types);
             expected_ids.push(match obj {
                 KObject::Record(substrate, _) => match substrate
-                    .field(crate::machine::model::Symbol::of("f"))
+                    .field(crate::parse::Symbol::of("f"))
                     .map(|h| h.object())
                 {
                     Some(KObject::KFunction(f)) => f.captured_scope().id,
@@ -682,7 +682,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             // each pinned producer among it — alive across it.
             envelope.open_ref(|carried| match carried.object() {
                 KObject::Record(substrate, _) => match substrate
-                    .field(crate::machine::model::Symbol::of("f"))
+                    .field(crate::parse::Symbol::of("f"))
                     .map(|h| h.object())
                 {
                     Some(KObject::KFunction(f)) => f.captured_scope().id,
@@ -769,12 +769,11 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
         KObject::Record(substrate, _) => {
             // Read through the name index twice over: the name-order walk, and a by-name
             // lookup per field — the binary search over the sorted name slice.
-            let walked: Vec<crate::machine::model::Symbol> =
-                substrate.fields().map(|(n, _)| n).collect();
+            let walked: Vec<crate::parse::Symbol> = substrate.fields().map(|(n, _)| n).collect();
             let mut sorted = NAMES
                 .iter()
                 .chain(std::iter::once(&TABLE))
-                .map(|n| crate::machine::model::Symbol::of(n))
+                .map(|n| crate::parse::Symbol::of(n))
                 .collect::<Vec<_>>();
             sorted.sort();
             assert_eq!(
@@ -786,7 +785,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
             // table, then look every key back up — the hash and the byte-wise compare both
             // read key slices the relocation re-bumped.
             match substrate
-                .field(crate::machine::model::Symbol::of(TABLE))
+                .field(crate::parse::Symbol::of(TABLE))
                 .map(|h| h.object())
             {
                 Some(KObject::Dict(table, _)) => {
@@ -811,7 +810,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
                 .iter()
                 .map(|name| {
                     match substrate
-                        .field(crate::machine::model::Symbol::of(name))
+                        .field(crate::parse::Symbol::of(name))
                         .map(|h| h.object())
                     {
                         Some(KObject::Number(n)) => ((*name).to_string(), *n),
@@ -1305,14 +1304,14 @@ fn a_mixed_run_retains_exactly_the_producers_its_own_cells_still_borrow() {
         run.iter()
             .map(|held| match held.object() {
                 KObject::Record(substrate, _) => match substrate
-                    .field(crate::machine::model::Symbol::of("f"))
+                    .field(crate::parse::Symbol::of("f"))
                     .map(|h| h.object())
                 {
                     Some(KObject::KFunction(function)) => {
                         format!("closure:{:?}", function.captured_scope().id)
                     }
                     _ => match substrate
-                        .field(crate::machine::model::Symbol::of("acc"))
+                        .field(crate::parse::Symbol::of("acc"))
                         .map(|h| h.object())
                     {
                         Some(KObject::Number(n)) => format!("plain:{n}"),
@@ -1494,7 +1493,7 @@ fn closure_record_cell_run<'run>(
 fn captured_scope_id(object: &KObject<'_>, registries: &RunRegistries) -> ScopeId {
     match object {
         KObject::Record(substrate, _) => match substrate
-            .field(crate::machine::model::Symbol::of("f"))
+            .field(crate::parse::Symbol::of("f"))
             .map(|h| h.object())
         {
             Some(KObject::KFunction(function)) => function.captured_scope().id,

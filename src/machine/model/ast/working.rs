@@ -12,18 +12,18 @@
 //! reach the value channel at all — not by audit, but because no constructor takes one.
 
 use crate::machine::AdoptSeam;
-use crate::machine::model::KeyElement;
 use crate::machine::model::SplicedCell;
-use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner};
 use crate::machine::model::read_resting;
 use crate::machine::model::{Carried, Held};
 use crate::machine::model::{KObject, RunRegistries};
 use crate::memory::RegionBrand;
+use crate::parse::KeyElement;
+use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner};
 use crate::source::{FileId, SourceRef, Span, Spanned};
 
 use super::shape::{FieldSlot, Part, PartSummary, part_summary};
-use crate::machine::model::StoredBinderKey;
-use crate::machine::model::lazy_slots::LazyKinds;
+use crate::parse::LazyKinds;
+use crate::parse::StoredBinderKey;
 use crate::parse::ast::shape::{DispatchShape, NodeCache, PartClass, stored_untyped_key};
 use crate::parse::ast::{ExpressionPart, KExpression, RunIter};
 
@@ -522,7 +522,7 @@ impl<'a> WorkingExpression<'a> {
 
     /// The kinds of part that stay raw at slot `index` — the seal-time lazy-slot stamp, empty at
     /// every slot of every form that has none. See
-    /// [`Form::lazy_slots`](crate::machine::model::key_spec::Form::lazy_slots).
+    /// [`Form::lazy_slots`](crate::parse::forms::Form::lazy_slots).
     pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
         self.cache.lazy_kinds_at(index)
     }

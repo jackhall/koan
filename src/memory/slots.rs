@@ -1,7 +1,7 @@
 //! The **slot array**: a fixed run of three-state binding cells in one bump allocation, addressed
 //! by index rather than by key. The layout-addressed counterpart of [`BumpBackedMap`], for a table
 //! whose key set is fixed before its first write — a per-call frame's value bindings, sized by the
-//! body's own [`SlotLayout`](crate::machine::model::SlotLayout).
+//! body's own [`SlotLayout`](crate::parse::SlotLayout).
 //!
 //! A cell is [`SlotState`]: `Empty`, `Claimed` on the in-flight binder's producer, or `Bound` to a
 //! payload. One cell answers both of a name's questions — "is it bound?" and "is a binder for it in

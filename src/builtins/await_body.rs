@@ -6,8 +6,8 @@
 //! [`resolve_or_await`](super::resolve_or_await).
 
 use crate::machine::Scope;
-use crate::machine::model::KExpression;
 use crate::machine::{Action, AwaitContinue, BlockRequest, FinishCtx};
+use crate::parse::KExpression;
 
 /// Dispatch `body` against `child` (one sub-slot per top-level statement, per
 /// [`BlockRequest::InScope`]), then run `finish`. The child closes first: every bind into it resolved

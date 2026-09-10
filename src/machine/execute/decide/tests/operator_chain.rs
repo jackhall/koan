@@ -27,7 +27,7 @@ fn register_pairwise_fixture<'a>(
     let record = scope.birth_operator_group(
         &[probe_symbol("%")],
         ReductionMode::Pairwise {
-            combiner: crate::machine::model::KeywordSymbol::declared(
+            combiner: crate::parse::KeywordSymbol::declared(
                 combiner,
                 &test_run.registries().labels,
             )

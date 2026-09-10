@@ -2,13 +2,14 @@
 
 use crate::machine::ProducerId;
 use crate::machine::model::KType;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::{Argument, SignatureElement};
-use crate::machine::model::{BinderSymbol, RunRegistries, Symbol};
 use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
-use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{MACHINE_BINDERS, SignaturePosition, SignatureScan};
 use crate::machine::{KError, KErrorKind};
 use crate::memory::{BumpAllocator, BumpVec};
+use crate::parse::{BinderSymbol, Symbol};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface

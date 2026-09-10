@@ -11,10 +11,11 @@ use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, DispatchOutcome, LexicalFrame};
 use crate::memory::RegionBrand;
 use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
+use crate::parse::{ExpressionPart, KLiteral};
 use crate::source::Spanned;
 
 /// Freeze a run of raw AST parts as the working node a dispatch entry receives — the shape
@@ -40,13 +41,13 @@ fn two_slot_sig<'a>(a: KType, b: KType) -> SignatureDraft<'a> {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("a")
+                crate::parse::BinderSymbol::classify("a")
                     .expect("a test fixture parameter is a value token"),
                 a,
             )),
             SignatureElement::Keyword(probe_symbol("OP")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("b")
+                crate::parse::BinderSymbol::classify("b")
                     .expect("a test fixture parameter is a value token"),
                 b,
             )),
@@ -224,7 +225,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     let registries = RunRegistries::new();
     use crate::builtins::test_support::key_keyword;
     use crate::machine::ProducerId;
-    use crate::machine::model::{KeyElement, UntypedKey};
+    use crate::parse::{KeyElement, UntypedKey};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let bucket_single: UntypedKey = vec![key_keyword("MAKESET"), KeyElement::Slot];
@@ -297,7 +298,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("MARK")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::NUMBER,
             )),
@@ -377,9 +378,10 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     );
     let expr = working(region.brand(), vec![identifier_part("fwd")]);
     let bare_outcomes = vec![Some(Resolution::Unbound(
-        crate::machine::model::labels::BinderSymbol::Value(
-            crate::builtins::test_support::value_name("fwd", &registries),
-        ),
+        crate::parse::labels::BinderSymbol::Value(crate::builtins::test_support::value_name(
+            "fwd",
+            &registries,
+        )),
     ))];
     // inner_num was registered at `inner`'s BUILTIN index (0); root the chain on `inner`
     // one past it. `outer` is never named on this chain, so `outer_id` stays visible
@@ -425,7 +427,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("PICK")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::NUMBER,
             )),
@@ -488,7 +490,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("PICK")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::STR,
             )),
@@ -549,7 +551,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let registries = RunRegistries::new();
     use crate::builtins::test_support::key_keyword;
     use crate::machine::ProducerId;
-    use crate::machine::model::{KeyElement, UntypedKey};
+    use crate::parse::{KeyElement, UntypedKey};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let bucket: UntypedKey = vec![key_keyword("PICK"), KeyElement::Slot];
@@ -661,7 +663,7 @@ fn parked_bare_name_parks_before_any_pick() {
 fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
     use crate::machine::ProducerId;
     use crate::machine::execute::Resolution;
-    use crate::machine::model::KExpression;
+    use crate::parse::KExpression;
     let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);

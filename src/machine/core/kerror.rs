@@ -3,17 +3,17 @@ use std::fmt;
 use crate::machine::model::KObject;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, CarriedFamily};
-use crate::machine::model::{StaticName, TypeSymbol};
 use crate::memory::RegionHandleFamily;
+use crate::parse::{StaticName, TypeSymbol};
 use crate::source::{self, FileId, SourceLoc, SourceRef, Span};
 
 use super::Scope;
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::close_inference::DynamicNameForm;
-use crate::machine::model::labels::{BinderSymbol, ValueSymbol};
 use crate::memory::KoanStorageProfile;
 use crate::memory::{FoldingBrand, RegionBrand, SubstrateDoor};
+use crate::parse::{BinderSymbol, ValueSymbol};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.

@@ -18,9 +18,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::test_support::{SharedBuf, TestRun, lookup_binding, lookup_type};
-use koan::machine::model::{KObject, KeywordSymbol, SignatureElement, TypeNode};
+use koan::machine::model::{KObject, SignatureElement, TypeNode};
 use koan::machine::{KFunction, Scope};
 use koan::memory::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
+use koan::parse::KeywordSymbol;
 
 /// Run `src` to completion and hand back the whole run — the seeded scope the assertions
 /// read bindings from, plus the run frame's registry type names render against.

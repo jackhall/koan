@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::labels::Symbol;
+use crate::parse::ExpressionPart;
+use crate::parse::Symbol;
 
 /// Consume-by-name view over a named-argument list. Callers `take(name)` for each
 /// declared slot; leftover names are dropped (call-by-name width drop). Built from a record
@@ -52,7 +52,7 @@ impl<'a> NamedPairs<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::model::ast::KLiteral;
+    use crate::parse::KLiteral;
 
     fn num(n: f64) -> ExpressionPart<'static> {
         ExpressionPart::Literal(KLiteral::Number(n))

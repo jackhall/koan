@@ -15,8 +15,8 @@
 //!
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 
-use crate::machine::model::labels::{StaticName, Symbol, TypeSymbol};
 use crate::machine::model::registries::RunRegistries;
+use crate::parse::{StaticName, Symbol, TypeSymbol};
 
 use super::kkind::KKind;
 use super::node::TypeNode;
@@ -513,7 +513,7 @@ pub fn render_label(symbol: Symbol, registries: &RunRegistries) -> String {
 pub fn display_label(
     symbol: Symbol,
     registries: &RunRegistries,
-) -> crate::machine::model::labels::LabelDisplay<'_> {
+) -> crate::parse::labels::LabelDisplay<'_> {
     registries.labels.display(symbol)
 }
 

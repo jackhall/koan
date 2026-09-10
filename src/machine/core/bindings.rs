@@ -32,7 +32,7 @@
 //! walks O(scopes) rather than O(entries). [`bump_table`] carries the compile-time proof that no
 //! entry brings drop glue with it; the write verbs re-home the text they store through the brand
 //! [`Bindings`] holds. The name-keyed structures key by a `Copy`
-//! [`Symbol`](crate::machine::model::Symbol) digest under the identity hasher, so a name lookup is a
+//! [`Symbol`](crate::parse::Symbol) digest under the identity hasher, so a name lookup is a
 //! `u128` compare rather than a byte-wise one and a key re-homes nothing at all.
 //!
 //! Every entry carries a [`BindingIndex`] naming its installing statement's lexical
@@ -68,25 +68,23 @@ use crate::machine::ProducerId;
 use crate::machine::core::StatementId;
 use crate::machine::core::seals::{GroupSeal, OverloadSeal};
 use crate::machine::core::{DeliveredFunction, SealedFunction};
-#[cfg(test)]
-use crate::machine::model::BindKind;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DeliveredCarried;
-use crate::machine::model::SlotLayout;
+use crate::machine::model::KType;
 use crate::machine::model::object_copy_cost;
-use crate::machine::model::{
-    BinderSymbol, IdentityBuildHasher, KeywordSymbol, RunRegistries, TypeSymbol, ValueSymbol,
-    render_label,
-};
 use crate::machine::model::{DeliveredOperatorGroup, SealedOperatorGroup};
-use crate::machine::model::{
-    DispatchTokenElement, KeyElement, render_untyped_key, summarize_dispatch,
-};
-use crate::machine::model::{KType, UntypedKey};
+use crate::machine::model::{DispatchTokenElement, render_untyped_key, summarize_dispatch};
+use crate::machine::model::{RunRegistries, render_label};
 use crate::memory::BumpBackedMap;
 use crate::memory::RegionBrand;
 use crate::memory::Sealed;
 use crate::memory::{BumpVec, bump_table, reattachable};
+#[cfg(test)]
+use crate::parse::BindKind;
+use crate::parse::KeyElement;
+use crate::parse::SlotLayout;
+use crate::parse::UntypedKey;
+use crate::parse::{BinderSymbol, IdentityBuildHasher, KeywordSymbol, TypeSymbol, ValueSymbol};
 
 use super::kerror::{KError, KErrorKind};
 

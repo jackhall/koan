@@ -1,5 +1,5 @@
 //! Runtime contract of the parse-static `#(...)` capture: an
-//! [`ExpressionPart::QuotedExpression`](crate::machine::model::ExpressionPart::QuotedExpression)
+//! [`ExpressionPart::QuotedExpression`](crate::parse::ExpressionPart::QuotedExpression)
 //! is a slot that behaves like a literal — a bare one rides the `LiteralPassThrough` lane to a
 //! `KObject::KExpression`, an argument one binds that value without evaluating the body, and `$`
 //! dispatches it back.

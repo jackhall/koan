@@ -1,7 +1,7 @@
 use super::{WorkingExpression, WorkingPart};
 use crate::builtins::test_support::{parse_one, probe_symbol};
-use crate::machine::model::ast::ExpressionPart;
 use crate::memory::program_storage;
+use crate::parse::ExpressionPart;
 use crate::source::Spanned;
 
 /// The splice door inherits the structural cache instead of rebuilding it: the bucket key comes
@@ -14,14 +14,9 @@ fn a_resplice_inherits_the_key_run_and_the_operator_probe() {
     let brand = program.brand().region();
     let chain = WorkingExpression::from_ast(
         brand,
-        parse_one(
-            &program,
-            &crate::machine::model::LabelInterner::new(),
-            "a + b * c",
-        ),
+        parse_one(&program, &crate::parse::LabelInterner::new(), "a + b * c"),
     );
-    let probe =
-        crate::machine::model::KeywordSymbol::of_run(&[probe_symbol("*"), probe_symbol("+")]);
+    let probe = crate::parse::KeywordSymbol::of_run(&[probe_symbol("*"), probe_symbol("+")]);
     assert_eq!(chain.operator_probe(), Some(probe));
 
     // The splice shape: every operand slot gives way to a staging hole, every keyword position
@@ -55,11 +50,7 @@ fn a_resplice_inherits_the_type_sigil_stamp() {
     let brand = program.brand().region();
     let attr = WorkingExpression::from_ast(
         brand,
-        parse_one(
-            &program,
-            &crate::machine::model::LabelInterner::new(),
-            "Point.x",
-        ),
+        parse_one(&program, &crate::parse::LabelInterner::new(), "Point.x"),
     );
     assert!(!attr.under_type_sigil(), "a parsed node carries no stamp");
 

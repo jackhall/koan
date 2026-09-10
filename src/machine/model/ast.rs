@@ -11,6 +11,7 @@
 use crate::machine::model::Held;
 use crate::machine::model::{KObject, Parseable, RunRegistries};
 use crate::memory::RegionBrand;
+use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, PartClass};
 use crate::parse::labels::BinderSymbol;
 
 mod shape;
@@ -18,14 +19,6 @@ pub mod working;
 
 pub use shape::{FieldSlot, Part, PartSummary, part_summary};
 pub use working::{WorkingExpression, WorkingPart, WorkingSummary};
-
-// Temporary: the syntax half's names, still reachable at their old path while the tree's imports
-// are swept over to `crate::parse`.
-pub use crate::parse::ast::{
-    AstPartSummary, DispatchShape, ExpressionSummary, KeyElement, NodeCache, ProgramExpression,
-    ProgramNode, UntypedKey, classify_dispatch_shape, operator_probe_for, stored_untyped_key,
-};
-pub use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, PartClass};
 
 #[cfg(test)]
 mod tests;

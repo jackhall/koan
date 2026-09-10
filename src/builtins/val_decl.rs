@@ -71,7 +71,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 /// the terminal.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a, '_>,
-    name: crate::machine::model::ValueSymbol,
+    name: crate::parse::ValueSymbol,
     declared_kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;

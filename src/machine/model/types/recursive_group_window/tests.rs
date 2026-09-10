@@ -241,9 +241,7 @@ fn sealed_schema_is_absolute_and_cyclic() {
         _ => panic!("expected a record repr"),
     };
     assert_eq!(
-        fields
-            .get(crate::machine::model::Symbol::of("tail"))
-            .copied(),
+        fields.get(crate::parse::Symbol::of("tail")).copied(),
         Some(chain),
         "the self-reference seals to the member's own absolute handle",
     );

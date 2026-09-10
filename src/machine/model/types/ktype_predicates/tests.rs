@@ -1,15 +1,16 @@
 use super::*;
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{spliced_part, type_name, type_token, value_name};
-use crate::machine::model::BinderSymbol;
 use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeMemberMap;
-use crate::machine::model::ast::{ExpressionPart, WorkingPart};
+use crate::machine::model::ast::WorkingPart;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::memory::SubstrateDoor;
+use crate::parse::BinderSymbol;
+use crate::parse::ExpressionPart;
 
 /// Mint the zero-dep fold door a `Tagged`/`Wrapped` test value needs, over a fresh root region, as
 /// two `let` bindings in the caller's own scope (mirrors the `kobject` test macro). `forge_for_test`
@@ -1593,7 +1594,7 @@ fn a_container_slot_type_carries_its_contents() {
 fn a_keyword_reports_no_slot_type() {
     let registries = RunRegistries::new();
     let keyword = ExpressionPart::Keyword(
-        crate::machine::model::KeywordSymbol::declared("PRINT", &registries.labels)
+        crate::parse::KeywordSymbol::declared("PRINT", &registries.labels)
             .expect("a fixture keyword"),
     );
     assert!(KType::slot_ktype(&keyword, &registries.types).is_none());
@@ -1998,9 +1999,9 @@ fn quantifier_names_are_render_only_but_arity_is_identity() {
     let types = &registries.types;
     let pure = shape_keyword("PURE", &registries);
     let build = |names: Vec<&str>| {
-        let names: Vec<crate::machine::model::TypeSymbol> = names
+        let names: Vec<crate::parse::TypeSymbol> = names
             .into_iter()
-            .map(|n| crate::machine::model::TypeSymbol::classify(n).expect("a Type token"))
+            .map(|n| crate::parse::TypeSymbol::classify(n).expect("a Type token"))
             .collect();
         types.shape_type(
             &names,
@@ -2014,8 +2015,8 @@ fn quantifier_names_are_render_only_but_arity_is_identity() {
     assert_eq!(build(vec!["Elt"]), build(vec!["Item"]));
     let two = types.shape_type(
         &[
-            crate::machine::model::TypeSymbol::classify("Elt").expect("a Type token"),
-            crate::machine::model::TypeSymbol::classify("Res").expect("a Type token"),
+            crate::parse::TypeSymbol::classify("Elt").expect("a Type token"),
+            crate::parse::TypeSymbol::classify("Res").expect("a Type token"),
         ],
         &[
             DispatchTokenElement::Keyword(pure),
@@ -2034,7 +2035,7 @@ fn a_monomorphic_shape_satisfies_a_quantified_declaration_at_any() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let pure = shape_keyword("PURE", &registries);
-    let elt = crate::machine::model::TypeSymbol::classify("Elt").expect("a Type token");
+    let elt = crate::parse::TypeSymbol::classify("Elt").expect("a Type token");
     let declared = types.shape_type(
         &[elt],
         &[
@@ -2147,7 +2148,7 @@ fn a_declared_type_with_no_quantifier_is_the_ordinary_relation() {
 }
 
 /// A keyword symbol for the shape fixtures above, minted the way a registration mints one.
-fn shape_keyword(text: &str, registries: &RunRegistries) -> crate::machine::model::KeywordSymbol {
-    crate::machine::model::KeywordSymbol::declared(text, &registries.labels)
+fn shape_keyword(text: &str, registries: &RunRegistries) -> crate::parse::KeywordSymbol {
+    crate::parse::KeywordSymbol::declared(text, &registries.labels)
         .expect("a fixture keyword classifies keyword-class")
 }

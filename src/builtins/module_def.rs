@@ -10,15 +10,15 @@ use crate::machine::BindingIndex;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::core::bindings::WriteOp;
-use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::SigSchema;
-use crate::machine::model::ValueSymbol;
 use crate::machine::model::announce_type_members;
 use crate::machine::model::{Module, ModuleDraft};
 use crate::machine::{Action, BodyCtx};
 use crate::machine::{KError, KErrorKind};
 use crate::machine::{NameLookup, Scope};
+use crate::parse::KExpression;
+use crate::parse::ValueSymbol;
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;

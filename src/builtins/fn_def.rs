@@ -8,9 +8,10 @@ use crate::machine::WriteGate;
 use crate::machine::model::Elaborator;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
-use crate::machine::model::{Argument, BinderSymbol, KType, SignatureElement, Symbol, ValueSymbol};
+use crate::machine::model::{Argument, KType, SignatureElement};
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::memory::BumpVec;
+use crate::parse::{BinderSymbol, Symbol, ValueSymbol};
 
 use super::{arg, arg_labeled, kw, sig};
 
@@ -73,7 +74,7 @@ pub(crate) fn build_fn_like<'a>(
     // A bodyless head has no body slot to read; the empty expression stands in for one, and the
     // bodyless leg of the finalize never looks at it.
     let body_expr = match kind {
-        FnKind::Shape { .. } => crate::machine::model::KExpression::new(ctx.scope.brand(), &[]),
+        FnKind::Shape { .. } => crate::parse::KExpression::new(ctx.scope.brand(), &[]),
         _ => crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body)),
     };
     let mut elaborator = Elaborator::new(quantification.scope).with_chain(ctx.chain.clone());
@@ -368,7 +369,7 @@ pub fn body_record_schema<'a>(
             inputs.prebuilt_elements = Some(elements);
             defer(
                 ctx.scope,
-                crate::machine::model::KExpression::new(ctx.scope.brand(), &[]),
+                crate::parse::KExpression::new(ctx.scope.brand(), &[]),
                 inputs,
                 body_expr,
                 FnSurface {

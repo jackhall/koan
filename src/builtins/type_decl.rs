@@ -21,10 +21,10 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KType;
 use crate::machine::model::TypeNode;
-use crate::machine::model::TypeSymbol;
-use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KeywordSymbol, StaticName};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::parse::TypeSymbol;
+use crate::parse::{ExpressionPart, KExpression};
+use crate::parse::{KeywordSymbol, StaticName};
 
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
@@ -46,7 +46,7 @@ fn not_in_sig_body() -> KError {
 /// frame's registry, so the handle names the same type in every region.
 fn bind_abstract_member<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
-    name: crate::machine::model::TypeSymbol,
+    name: crate::parse::TypeSymbol,
     kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;

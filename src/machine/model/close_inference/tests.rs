@@ -3,9 +3,10 @@
 
 use super::{CLOSE_RULES, DynamicNameForm, FormRule, infer_close_captures};
 use crate::builtins::test_support::TestRun;
-use crate::machine::model::key_spec::{FormId, KeyElementSpec, key_matches, render_key};
-use crate::machine::model::{UntypedKey, render_label};
+use crate::machine::model::render_label;
 use crate::memory::{ProgramStorage, program_storage, run_root_storage};
+use crate::parse::UntypedKey;
+use crate::parse::forms::{FormId, KeyElementSpec, key_matches, render_key};
 
 // ---------- rule ⟺ registration ----------
 
@@ -45,9 +46,9 @@ fn every_close_rule_names_a_live_builtin_bucket() {
     }
 }
 
-/// The [`FORMS`](crate::machine::model::key_spec::FORMS) entry a rule tags.
-fn form_of(id: FormId) -> &'static crate::machine::model::key_spec::Form {
-    crate::machine::model::key_spec::FORMS
+/// The [`FORMS`](crate::parse::forms::FORMS) entry a rule tags.
+fn form_of(id: FormId) -> &'static crate::parse::forms::Form {
+    crate::parse::forms::FORMS
         .iter()
         .find(|form| form.id == id)
         .expect("every tag names a table entry")

@@ -42,8 +42,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::machine::model::labels::{Symbol, TypeSymbol};
 use crate::memory::ScopeId;
+use crate::parse::{Symbol, TypeSymbol};
 
 use super::kkind::KKind;
 use super::ktype::KType;

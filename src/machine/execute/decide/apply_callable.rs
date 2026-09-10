@@ -11,12 +11,13 @@ use crate::machine::core::DepPlacement;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::location_from_expr;
 use crate::machine::model::Carried;
-use crate::machine::model::labels::{BinderSymbol, Symbol, TypeSymbol};
 use crate::machine::model::render_label;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::model::{Record, TypeMemberMap, constructor_param_names};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind};
+use crate::parse::ExpressionPart;
+use crate::parse::{BinderSymbol, Symbol, TypeSymbol};
 use crate::scheduler::Deps;
 use crate::source::Spanned;
 

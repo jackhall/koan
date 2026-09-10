@@ -19,14 +19,14 @@ use std::collections::HashMap;
 
 use crate::machine::core::{Body, KFunction, Scope, ViewMembers};
 
-use crate::machine::model::BinderSymbol;
-use crate::machine::model::labels::Symbol;
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::{
     Argument, CoercionTables, DispatchTokenElement, KType, Record, ReturnType, SigSchema,
     SignatureElement, TypeNode, TypeRegistry,
 };
 use crate::memory::SubstrateDoor;
+use crate::parse::BinderSymbol;
+use crate::parse::Symbol;
 
 use super::{KKey, KObject, Module, ModuleDraft};
 use crate::machine::model::Held;
@@ -329,7 +329,7 @@ fn coerce_module<'b>(
     // rewrite it, since a nested binder shadows by name. Nothing is minted — a nested view's
     // *enclosing* abstract identities are the outer view's mints, arriving through the
     // substitution — so the plan closure ignores its nonce.
-    let mut view_types: HashMap<crate::machine::model::labels::TypeSymbol, KType> = nested
+    let mut view_types: HashMap<crate::parse::labels::TypeSymbol, KType> = nested
         .abstract_members
         .keys()
         .filter_map(|name| m.type_members.get(name).map(|kt| (*name, *kt)))

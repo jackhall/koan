@@ -1,13 +1,11 @@
 use crate::builtins::test_support::{kw_part, probe_symbol, type_name, type_token};
 use crate::machine::model::Held;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::ast::{
-    DispatchShape, ExpressionPart, KExpression, KLiteral, classify_dispatch_shape,
-};
-use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::memory::{ProgramBrand, program_storage};
+use crate::parse::LabelInterner;
+use crate::parse::{DispatchShape, ExpressionPart, KExpression, KLiteral, classify_dispatch_shape};
 use crate::source::Spanned;
 
 fn kw(s: &str) -> ExpressionPart<'_> {
@@ -17,19 +15,19 @@ fn kw(s: &str) -> ExpressionPart<'_> {
 /// `summarize` resolves it rather than reaching the missing-label placeholder.
 fn declared_kw<'a>(s: &str, labels: &LabelInterner) -> ExpressionPart<'a> {
     ExpressionPart::Keyword(
-        crate::machine::model::KeywordSymbol::declared(s, labels)
+        crate::parse::KeywordSymbol::declared(s, labels)
             .expect("a test fixture keyword is keyword-class"),
     )
 }
 /// The probe key a chain over `glyphs` computes — the run digest, minted the way
 /// `operator_probe_for` mints it.
-fn operator_probe_of(glyphs: &[&str]) -> crate::machine::model::KeywordSymbol {
+fn operator_probe_of(glyphs: &[&str]) -> crate::parse::KeywordSymbol {
     let members: Vec<_> = glyphs.iter().map(|glyph| probe_symbol(glyph)).collect();
-    crate::machine::model::KeywordSymbol::of_run(&members)
+    crate::parse::KeywordSymbol::of_run(&members)
 }
 fn ident<'a>(s: &str, labels: &LabelInterner) -> ExpressionPart<'a> {
     ExpressionPart::Identifier(
-        crate::machine::model::ValueSymbol::declared(s, labels)
+        crate::parse::ValueSymbol::declared(s, labels)
             .expect("a test fixture identifier is a value token"),
     )
 }
@@ -479,19 +477,19 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("x")
+                crate::parse::BinderSymbol::classify("x")
                     .expect("a test fixture parameter is a value token"),
                 KType::ANY,
             )),
             SignatureElement::Keyword(probe_symbol("+")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("y")
+                crate::parse::BinderSymbol::classify("y")
                     .expect("a test fixture parameter is a value token"),
                 KType::ANY,
             )),
             SignatureElement::Keyword(probe_symbol("+")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("z")
+                crate::parse::BinderSymbol::classify("z")
                     .expect("a test fixture parameter is a value token"),
                 KType::ANY,
             )),
@@ -678,12 +676,12 @@ fn resolve_for_captures_through_a_union_carrier_member() {
     let type_part = ExpressionPart::Type(type_name("Meters", &registries));
     assert!(matches!(
         type_part.resolve_for(&slot, scope, types),
-        Held::Name(crate::machine::model::BinderSymbol::Type(_)),
+        Held::Name(crate::parse::BinderSymbol::Type(_)),
     ));
     let value_part = ident("width", &registries.labels);
     assert!(matches!(
         value_part.resolve_for(&slot, scope, types),
-        Held::Name(crate::machine::model::BinderSymbol::Value(_)),
+        Held::Name(crate::parse::BinderSymbol::Value(_)),
     ));
 }
 

@@ -12,7 +12,6 @@ use crate::machine::core::BindingsReferenceFamily;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::{DeliveredFunction, OpenedFunction, SealedFunction};
-use crate::machine::model::KeywordSymbol;
 use crate::machine::model::ModuleRefFamily;
 use crate::machine::model::product_reaches_region;
 use crate::machine::model::{Carried, CarriedFamily};
@@ -30,6 +29,7 @@ use crate::memory::{
     FoldingBrand, FrameCoverage, FrameReach, KoanRegion, KoanRegionExt, KoanStorageProfile,
     RegionBrand,
 };
+use crate::parse::KeywordSymbol;
 
 // The tests here pin the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy` build
 // rebuilds the record instead, so they cannot hold there. The equivalence battery proves

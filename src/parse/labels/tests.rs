@@ -1,5 +1,5 @@
 use super::*;
-use crate::machine::model::BindKind;
+use crate::parse::BindKind;
 
 #[test]
 fn equal_text_yields_equal_symbols() {

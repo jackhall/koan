@@ -41,10 +41,10 @@ fn require_proper_type(
 mod action_bodies {
     use super::SLOTS;
     use super::require_proper_type;
-    use crate::machine::model::BinderSymbol;
     use crate::machine::model::TypeNode;
     use crate::machine::model::constructor_param_names;
     use crate::machine::{Action, BodyCtx, require_ktype};
+    use crate::parse::BinderSymbol;
 
     use crate::machine::model::Record;
     use crate::machine::{KError, KErrorKind};
@@ -513,7 +513,7 @@ mod tests {
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
-                    params.get(crate::machine::model::Symbol::of("xs")).copied(),
+                    params.get(crate::parse::Symbol::of("xs")).copied(),
                     Some(types.list(KType::NUMBER)),
                     "the sigil param must lower to LIST OF Number",
                 );
@@ -616,7 +616,7 @@ mod tests {
         );
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.
         assert!(
-            matches!(types.node(expected), TypeNode::KFunction { params, .. } if params.get(crate::machine::model::Symbol::of("Ty")).is_some()),
+            matches!(types.node(expected), TypeNode::KFunction { params, .. } if params.get(crate::parse::Symbol::of("Ty")).is_some()),
         );
         assert_round_trips(&mut test_run, expected);
     }
@@ -682,7 +682,7 @@ mod tests {
         match types.node(result) {
             TypeNode::Record { fields: record } => {
                 let field = record
-                    .get(crate::machine::model::Symbol::of("x"))
+                    .get(crate::parse::Symbol::of("x"))
                     .expect("record must have field x");
                 assert_eq!(
                     field.name(test_run.registries()),
@@ -714,7 +714,7 @@ mod tests {
             TypeNode::Record { fields } => assert!(
                 fields
                     .iter()
-                    .all(|(key, _)| matches!(key, crate::machine::model::BinderSymbol::Type(_))),
+                    .all(|(key, _)| matches!(key, crate::parse::BinderSymbol::Type(_))),
                 "a capitalized field name must key the record as a Type symbol",
             ),
             _ => panic!("expected a Record, got {result:?}"),
@@ -736,7 +736,7 @@ mod tests {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
                     params
-                        .get(crate::machine::model::Symbol::of("x"))
+                        .get(crate::parse::Symbol::of("x"))
                         .map(|kt| kt.name(test_run.registries())),
                     Some("Wrapped".to_string()),
                     "the SetMember param must survive the sync compose",
@@ -761,7 +761,7 @@ mod tests {
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
-                    params.get(crate::machine::model::Symbol::of("x")).copied(),
+                    params.get(crate::parse::Symbol::of("x")).copied(),
                     Some(KType::NUMBER),
                     "the region-free param must be Number",
                 );

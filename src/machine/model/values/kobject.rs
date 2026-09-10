@@ -3,8 +3,6 @@ use std::rc::Weak;
 
 use crate::machine::core::KFunction;
 use crate::machine::core::{Scope, consolidate_object};
-use crate::machine::model::ast::{KExpression, ProgramExpression};
-use crate::machine::model::labels::{BinderSymbol, Symbol};
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::display_label;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
@@ -13,6 +11,8 @@ use crate::memory::{
     FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, RegionBrand,
     SubstrateDoor,
 };
+use crate::parse::{BinderSymbol, Symbol};
+use crate::parse::{KExpression, ProgramExpression};
 use smallvec::SmallVec;
 
 use super::cell::DeliveredCarried;
@@ -956,7 +956,7 @@ impl<'a> RegionBrand<'a> {
     /// [`alloc_scalar`](Self::alloc_scalar) cannot take, since `KObject<'a>` is invariant and raw
     /// AST has no `'static` rebuild. The
     /// signature is the enforcement: the parameter is a
-    /// [`ProgramExpression`](crate::machine::model::ast::ProgramExpression), so the node's parts run
+    /// [`ProgramExpression`](crate::parse::ProgramExpression), so the node's parts run
     /// is program-storage hosted by type, and the cell the door bumps here borrows nothing a seal
     /// would have to pin.
     ///

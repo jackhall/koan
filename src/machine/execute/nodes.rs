@@ -7,9 +7,10 @@ use crate::machine::LexicalFrame;
 use crate::machine::core::CallFrame;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{ScopeRefFamily, StatementId, assemble_body_chain};
-use crate::machine::model::ast::{DispatchShape, KExpression, WorkingExpression};
+use crate::machine::model::ast::WorkingExpression;
 use crate::memory::ScopeId;
 use crate::memory::SealedExtern;
+use crate::parse::{DispatchShape, KExpression};
 use crate::scheduler::EdgeId;
 use crate::source::{FileId, Span};
 

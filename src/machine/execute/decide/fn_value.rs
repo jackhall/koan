@@ -12,8 +12,9 @@
 
 use crate::machine::ProducerId;
 use crate::machine::model::DeliveredCarried;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
+use crate::parse::ExpressionPart;
 
 use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::DecideCtx;

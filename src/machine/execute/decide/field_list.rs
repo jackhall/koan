@@ -42,7 +42,7 @@ use super::super::outcome::{Await, Outcome, StepDeps, dep_error_frame};
 use super::SubDispatch;
 use super::ctx::DecideCtx;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{BinderSymbol, TypeSymbol};
+use crate::parse::{BinderSymbol, TypeSymbol};
 
 /// `Action`-path finalize, returning a witnessed carrier beside the binding writes the declarator
 /// decided; the pair lifts straight into

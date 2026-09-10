@@ -18,9 +18,10 @@ use std::rc::Rc;
 use crate::machine::ProducerId;
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
-use crate::machine::model::{ExpressionPart, KType, RunRegistries};
+use crate::machine::model::{KType, RunRegistries};
 use crate::machine::{LexicalFrame, NameLookup, Scope};
+use crate::parse::ExpressionPart;
+use crate::parse::{BinderSymbol, TypeSymbol};
 
 use crate::machine::model::Carried;
 

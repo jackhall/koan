@@ -114,7 +114,7 @@ fn a_claimed_scope_is_not_copy_ready() {
     scope
         .bindings()
         .install_placeholder(
-            crate::machine::model::BinderSymbol::Value(value_name("pending", &registries)),
+            crate::parse::BinderSymbol::Value(value_name("pending", &registries)),
             ProducerId::for_test(3),
             BindingIndex::value(1),
             &registries,

@@ -5,12 +5,13 @@ use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, marker, run_root_bare};
 use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::machine::core::Scope;
-use crate::machine::model::KLiteral;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureDraft};
+use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft};
 use crate::machine::model::{KKind, KObject};
 use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
+use crate::parse::KExpression;
+use crate::parse::KLiteral;
 
 fn body_any<'a>(ctx: &super::action::BodyCtx<'_, 'a, '_>) -> super::action::Action<'a> {
     super::action::Action::done_resident(
@@ -66,7 +67,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("OP")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::NUMBER,
             )),
@@ -110,12 +111,12 @@ fn classify_excludes_literal_name_slots_from_wrap() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("verb")
+                crate::parse::BinderSymbol::classify("verb")
                     .expect("a test fixture parameter is a value token"),
                 KType::IDENTIFIER,
             )),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("args")
+                crate::parse::BinderSymbol::classify("args")
                     .expect("a test fixture parameter is a value token"),
                 KType::KEXPRESSION,
             )),
@@ -201,7 +202,7 @@ fn classify_wraps_a_type_token_in_a_propertype_slot() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("OP")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::of_kind(KKind::ProperType),
             )),
@@ -246,7 +247,7 @@ fn function_value_ktype_projects_kfunction() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("CALL")),
             SignatureElement::Argument(crate::machine::model::Argument::new(
-                crate::machine::model::BinderSymbol::classify("x")
+                crate::parse::BinderSymbol::classify("x")
                     .expect("a test fixture parameter is a value token"),
                 KType::NUMBER,
             )),
@@ -278,7 +279,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("OP")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::ANY,
             )),
@@ -328,7 +329,7 @@ fn classify_excludes_a_bare_token_at_a_union_carrier_slot() {
                 elements: vec![
                     SignatureElement::Keyword(probe_symbol(keyword)),
                     SignatureElement::Argument(Argument::new(
-                        crate::machine::model::BinderSymbol::classify("v")
+                        crate::parse::BinderSymbol::classify("v")
                             .expect("a test fixture parameter is a value token"),
                         ktype,
                     )),
@@ -406,8 +407,7 @@ fn a_user_callable_carries_its_merged_frame_layout() {
         .value()
         .slot_layout();
 
-    let value =
-        |text: &str| crate::machine::model::ValueSymbol::classify(text).expect("a value token");
+    let value = |text: &str| crate::parse::ValueSymbol::classify(text).expect("a value token");
     let mut expected = vec![(value("p"), 0), (value("zz"), 1), (value("aa"), 2)];
     expected.sort();
     assert_eq!(

@@ -23,9 +23,9 @@
 //! one implementation each.
 
 use crate::machine::ProducerId;
-use crate::machine::model::SlotLayout;
-use crate::machine::model::{IdentityBuildHasher, ValueSymbol};
 use crate::memory::{BumpBackedMap, RegionBrand, SlotArray, SlotConflict, SlotState, bump_table};
+use crate::parse::SlotLayout;
+use crate::parse::{IdentityBuildHasher, ValueSymbol};
 
 use super::{BindingIndex, Claim, NameLookup, SealedValue};
 

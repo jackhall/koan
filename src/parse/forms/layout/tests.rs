@@ -2,11 +2,12 @@
 //! signature's parameters does to it.
 
 use super::SlotLayout;
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::{KType, LabelInterner, TypeSymbol, ValueSymbol};
+use crate::machine::model::KType;
 use crate::memory::{ProgramBrand, program_storage};
+use crate::parse::KExpression;
 use crate::parse::labels::BinderSymbol;
 use crate::parse::parse;
+use crate::parse::{LabelInterner, TypeSymbol, ValueSymbol};
 
 /// The lone statement `src` parses to — the body a layout is read off.
 fn body<'a>(brand: ProgramBrand<'a>, src: &str) -> KExpression<'a> {

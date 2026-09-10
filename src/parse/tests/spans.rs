@@ -2,8 +2,8 @@
 //! into the original source.
 
 use crate::builtins::test_support::probe_symbol;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::memory::{ProgramBrand, program_storage};
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::{parse, parse_with_path};
 use crate::source::{self, SourceFile, Span, Spanned};
 
@@ -16,7 +16,7 @@ fn s(start: u32, end: u32) -> Span {
 }
 
 fn top<'a>(brand: ProgramBrand<'a>, src: &str) -> Vec<KExpression<'a>> {
-    parse(brand, &crate::machine::model::LabelInterner::new(), src).expect("parse")
+    parse(brand, &crate::parse::LabelInterner::new(), src).expect("parse")
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
     let program = program_storage();
     let exprs = parse_with_path(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &crate::parse::LabelInterner::new(),
         src,
         "lib.koan",
     )

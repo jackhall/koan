@@ -8,10 +8,10 @@ use crate::machine::model::Held;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeMemberMap;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KKind, KType, Record, RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::{KKey, KObject, ValueEqualityError};
 use crate::memory::program_storage;
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::source::Spanned;
 
 fn num<'a>(n: f64) -> KObject<'a> {

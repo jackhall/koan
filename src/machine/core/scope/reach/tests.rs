@@ -14,11 +14,11 @@ use crate::machine::model::Held;
 use crate::machine::model::RecordSubstrate;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
-use crate::machine::model::Symbol;
 use crate::machine::model::{ReturnType, SignatureDraft, SignatureElement, TypeRegistry};
 use crate::machine::{Body, KFunction};
 use crate::memory::{Delivered, FoldedPlacement, Sealed};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::Symbol;
 
 /// A `KFunction` whose captured scope lives in `home`'s region, allocated into `home`'s region — a
 /// borrow leaf pointing at `home`, the shape a closure capturing its own defining frame takes.

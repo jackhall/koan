@@ -6,8 +6,8 @@
 //! binder positions drives off this iterator, so the stride is defined once no matter how many
 //! questions are asked of it.
 
-use crate::machine::model::ExpressionPart;
-use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, WILDCARD};
+use crate::parse::ExpressionPart;
+use crate::parse::{BinderSymbol, KeywordSymbol, WILDCARD};
 use crate::source::Spanned;
 
 /// One position in a signature parts run, as [`SignatureScan`] reads it.

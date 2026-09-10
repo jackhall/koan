@@ -17,10 +17,11 @@ use super::signature::{DispatchTokenElement, ExpressionSignature, SignatureEleme
 use super::type_digest::{TypeDigest, empty_schema_digest};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::SplicedCell;
-use crate::machine::model::ast::{ExpressionPart, KLiteral, WorkingPart};
+use crate::machine::model::ast::WorkingPart;
 use crate::machine::model::read_resting;
 use crate::machine::model::values::KObject;
 use crate::machine::model::{Carried, Held};
+use crate::parse::{ExpressionPart, KLiteral};
 use smallvec::SmallVec;
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
@@ -63,7 +64,7 @@ pub enum CaptureShape {
 }
 
 /// A set of [`CaptureShape`]s, modeled on
-/// [`LazyKinds`](crate::machine::model::lazy_slots::LazyKinds).
+/// [`LazyKinds`](crate::parse::forms::lazy::LazyKinds).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct CaptureShapes(u8);
 
@@ -155,7 +156,7 @@ pub fn capture_footprint(kt: KType) -> CaptureShapes {
 ///
 /// 1. No `KExpression` member. A `(…)` group is *the* eager sub-expression shape, so a
 ///    CODE-capturing union member would make the seal-time raw-kind derivation
-///    ([`Form::lazy_slots`](crate::machine::model::key_spec::Form::lazy_slots)) and the group's
+///    ([`Form::lazy_slots`](crate::parse::forms::Form::lazy_slots)) and the group's
 ///    staging ambiguous.
 /// 2. Pairwise capture-footprint disjointness across *all* members, so at most one member ever
 ///    claims a part shape.

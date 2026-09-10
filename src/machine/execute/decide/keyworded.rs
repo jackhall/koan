@@ -4,11 +4,10 @@
 use crate::machine::ProducerId;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::location_from_expr;
-use crate::machine::model::labels::BinderSymbol;
-use crate::machine::model::{
-    ExpressionPart, WorkingExpression, WorkingPart, diagnose_miss, type_name_miss,
-};
+use crate::machine::model::{WorkingExpression, WorkingPart, diagnose_miss, type_name_miss};
 use crate::machine::{DispatchOutcome, KError, KErrorKind};
+use crate::parse::BinderSymbol;
+use crate::parse::ExpressionPart;
 use crate::source::Spanned;
 
 use super::super::nodes::WorkLabel;

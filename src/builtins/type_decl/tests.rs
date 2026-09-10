@@ -2,7 +2,6 @@ use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, lookup_module, parse_one, type_name, value_name};
 use crate::machine::ScopeId;
-use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
@@ -10,6 +9,7 @@ use crate::machine::model::{
     KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeNode, constructor_param_names,
 };
 use crate::memory::{ProgramStorage, program_storage, run_root_storage};
+use crate::parse::ExpressionPart;
 
 /// Resolve a SIG-declared type member's stored `KType` out of the signature's schema —
 /// abstract members (`TYPE`) and manifest members (`LET`) both live there, classified by
@@ -151,9 +151,9 @@ fn hk_duplicate_parameter_name_errors() {
 /// The parenthesized `(Param... AS Name)` group inside a parsed `TYPE` declaration.
 fn hk_decl_body<'a>(
     program: &'a ProgramStorage,
-    labels: &crate::machine::model::LabelInterner,
+    labels: &crate::parse::LabelInterner,
     source: &str,
-) -> crate::machine::model::KExpression<'a> {
+) -> crate::parse::KExpression<'a> {
     let expr = parse_one(program, labels, source);
     match expr.parts.get(1).expect("TYPE decl part").value {
         ExpressionPart::Expression(inner) => *inner,
@@ -364,7 +364,7 @@ fn fn_return_type_constructor_apply_root_scope() {
 /// SIG decl-scope's `bindings.types["Wrap"]` entry.
 #[test]
 fn monad_signature_smoke() {
-    use crate::machine::model::Symbol;
+    use crate::parse::Symbol;
     use crate::parse::parse;
     let program = program_storage();
     let region = run_root_storage();

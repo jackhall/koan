@@ -12,9 +12,9 @@
 //!
 //! See [design/label-interning.md](../../../design/label-interning.md).
 
-use super::labels::LabelInterner;
 use super::types::{TypeRegistry, display_label};
 use crate::machine::model::{Carried, Held};
+use crate::parse::labels::LabelInterner;
 
 /// See the module-level documentation.
 pub struct RunRegistries {

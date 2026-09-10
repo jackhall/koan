@@ -1,6 +1,6 @@
 //! `OP #(<sym>) OVER <Operand> = (<body>)` — declare a chainable operator in the enclosing
 //! scope. The symbol is **quoted**: `#(+)` is a parse-static
-//! [`QuotedExpression`](crate::machine::model::ExpressionPart::QuotedExpression) part, so it
+//! [`QuotedExpression`](crate::parse::ExpressionPart::QuotedExpression) part, so it
 //! rides an ordinary `:KExpression` slot and `OP` keeps a fixed untyped key — the dispatch
 //! classifier knows nothing about operator declarations.
 //!
@@ -36,8 +36,6 @@ use crate::machine::StepCarried;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{WriteOp, powerset_probes};
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
-use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KKind, KType};
 use crate::machine::model::{OperatorGroup, ReductionMode, binary_key, unary_key};
 use crate::machine::model::{SignatureDraft, SignatureElement};
@@ -48,6 +46,8 @@ use crate::machine::{
 use crate::machine::{Body, KError, KErrorKind, Scope};
 use crate::memory::ProgramBrand;
 use crate::memory::Witnessed;
+use crate::parse::{ExpressionPart, KExpression};
+use crate::parse::{KeywordSymbol, LabelInterner, TypeSymbol};
 use crate::source::Spanned;
 
 use super::fn_def::return_type::{
@@ -80,11 +80,11 @@ enum OpKind {
 use crate::machine::BoundArgs;
 use crate::machine::model::MACHINE_BINDERS;
 use crate::machine::model::ReturnType;
-pub(super) use crate::machine::model::symbol_from_parts;
-use crate::machine::model::symbol_from_quote_body;
-use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::model::{shape_type_of, untyped_key_of};
 use crate::machine::{GroupSeal, OverloadSeal};
+pub(super) use crate::parse::symbol_from_parts;
+use crate::parse::symbol_from_quote_body;
+use crate::parse::{StaticName, ValueSymbol};
 
 // This builtin's slot spellings, minted once and read back by symbol. The names an `OP` body
 // binds its operands under are not among them: they are machine-fixed binders, declared once in
@@ -209,7 +209,7 @@ fn resolve_capture<'a>(
 fn build<'a>(
     ctx: &BodyCtx<'_, 'a, '_>,
     kind: OpKind,
-    bound_name: Option<crate::machine::model::ValueSymbol>,
+    bound_name: Option<crate::parse::ValueSymbol>,
 ) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(
         ctx.args,
@@ -385,7 +385,7 @@ struct OpPlan<'program: 'a, 'a> {
     program: ProgramBrand<'program>,
     /// `Some` for the combined `LET <name> = OP …` statement, which also binds the operator's
     /// primary function under that value name — one declaration reaching both install channels.
-    bound_name: Option<crate::machine::model::ValueSymbol>,
+    bound_name: Option<crate::parse::ValueSymbol>,
 }
 
 /// What an [`OpPlan::finalize`] hands back: the operator's own witnessed carrier, and the

@@ -12,11 +12,10 @@ use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::Carried;
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::ast::{
-    ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart, part_summary,
-};
-use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
+use crate::machine::model::ast::{FieldSlot, Part, WorkingExpression, WorkingPart, part_summary};
 use crate::machine::model::pair_list::{FieldNameKind, parse_pair_list, parse_type_tag_names};
+use crate::parse::{BinderSymbol, TypeSymbol};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 use std::collections::HashSet;
 
@@ -380,7 +379,7 @@ fn window_member_projection<'a, 'p>(
                 value: ExpressionPart::Type(tag),
                 ..
             },
-        ] if *kw == crate::machine::model::key_spec::KEYWORDS.attr.symbol() => Some((head, tag)),
+        ] if *kw == crate::parse::forms::KEYWORDS.attr.symbol() => Some((head, tag)),
         _ => None,
     }
 }

@@ -15,11 +15,11 @@ use crate::machine::core::CallFrame;
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::model::Carried;
 use crate::machine::model::Scalar;
-use crate::machine::model::Symbol;
 use crate::machine::model::{KObject, RunRegistries};
 use crate::machine::model::{KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::memory::{Delivered, Sealed};
 use crate::memory::{FrameCoverage, FrameStorage, program_storage, run_root_storage};
+use crate::parse::Symbol;
 
 /// Build a scalar carrier residing in `producer`'s region whose borrows reach that region exactly
 /// when `borrows_into_home` — the exact carrier a resident-value read hands to finalize. The

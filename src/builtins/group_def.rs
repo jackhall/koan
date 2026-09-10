@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Both quoted slots — the members' `#(<sym>)` and the pairwise `#(<combiner>)` — are parse-static
-//! [`QuotedExpression`](crate::machine::model::ExpressionPart::QuotedExpression) parts, so they
+//! [`QuotedExpression`](crate::parse::ExpressionPart::QuotedExpression) parts, so they
 //! ride ordinary `:KExpression` slots and every `GROUP` overload keeps a *fixed* untyped key. An
 //! unquoted symbol would be a `Keyword` part, which lands in the expression's untyped key and so
 //! would key a different bucket per operator — no fixed overload could match it.
@@ -39,20 +39,20 @@
 use crate::machine::WriteGate;
 
 use crate::machine::body_statement_refs;
-use crate::machine::model::KExpression;
 use crate::machine::model::KType;
-use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{FoldDirection, ReductionMode};
-use crate::machine::model::{OpArity, op_declaration_arity};
 use crate::machine::{Action, BodyCtx, require_identifier_name, require_kexpression};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::parse::KExpression;
+use crate::parse::KeywordSymbol;
+use crate::parse::{OpArity, op_declaration_arity};
 
 use super::op_def::{symbol_from_parts, symbol_from_slot};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::ValueSymbol;
 use crate::machine::model::display_label;
 use crate::memory::{BumpAllocator, BumpVec};
+use crate::parse::ValueSymbol;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { body, combiner, name } }

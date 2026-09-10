@@ -17,13 +17,13 @@ use crate::machine::core::bindings::WriteOp;
 use crate::machine::execute::deps_on;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::KExpression;
 use crate::machine::model::KType;
-use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{Elaborator, ReturnType};
 use crate::machine::model::{SignatureElement, shape_type_of};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 use crate::memory::{BumpAllocator, BumpVec, Witnessed};
+use crate::parse::KExpression;
+use crate::parse::TypeSymbol;
 
 use super::return_type::{
     ReturnTypeCapture, ReturnTypeState, make_capture, resolve_capture_at_finish,
@@ -55,7 +55,7 @@ type FinalizedFn<'a> = (Witnessed<CarriedFamily>, [Option<WriteOp<'a>>; 2]);
 #[derive(Clone, Copy)]
 pub(crate) enum FnKind {
     Function {
-        bound_name: Option<crate::machine::model::ValueSymbol>,
+        bound_name: Option<crate::parse::ValueSymbol>,
     },
     Anonymous,
     Shape {

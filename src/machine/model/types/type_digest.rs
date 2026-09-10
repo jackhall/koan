@@ -25,9 +25,9 @@
 //! concatenation is unambiguous, and every child digest / `ScopeId` / integer is fed
 //! little-endian.
 
-use crate::machine::model::labels::{Symbol, TypeSymbol};
 use crate::machine::model::{FoldDirection, ReductionMode};
 use crate::memory::ScopeId;
+use crate::parse::{Symbol, TypeSymbol};
 
 use super::kkind::KKind;
 use super::ktype::KType;

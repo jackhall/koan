@@ -12,8 +12,9 @@ use crate::machine::core::LexicalFrame;
 use crate::machine::core::bindings::NameLookup;
 #[cfg(test)]
 use crate::machine::model::KObject;
+use crate::machine::model::KType;
 use crate::machine::model::{DeliveredCarried, DeliveredOperatorGroup};
-use crate::machine::model::{KType, KeywordSymbol, TypeSymbol, ValueSymbol};
+use crate::parse::{KeywordSymbol, TypeSymbol, ValueSymbol};
 
 /// Which tier of the chain a resolution landed in — the one distinction inferred capture turns on.
 ///
@@ -57,7 +58,7 @@ impl<'a> Scope<'a> {
     /// user FN whose untyped signature key collides with a builtin is a
     /// `Rebind`; it must never merge into the builtin bucket. The consult reads the
     /// root directly.
-    pub(crate) fn shadows_builtin_function(&self, key: &crate::machine::model::UntypedKey) -> bool {
+    pub(crate) fn shadows_builtin_function(&self, key: &crate::parse::UntypedKey) -> bool {
         self.root_scope().bindings().has_builtin_function(key)
     }
 
@@ -277,7 +278,7 @@ impl<'a> Scope<'a> {
     /// `chain = None` is the test/builtin-registration unfiltered mode.
     ///
     /// `probe` is the chain's cached probe symbol
-    /// ([`KExpression::operator_probe`](crate::machine::model::ast::KExpression::operator_probe)),
+    /// ([`KExpression::operator_probe`](crate::parse::KExpression::operator_probe)),
     /// minted once at construction — the walk compares symbol bits and hashes no text per call.
     pub fn resolve_operator_group_delivered(
         &self,

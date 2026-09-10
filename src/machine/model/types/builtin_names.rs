@@ -7,7 +7,7 @@
 
 use super::kkind::KKind;
 use super::ktype::KType;
-use crate::machine::model::labels::{StaticName, TypeSymbol};
+use crate::parse::{StaticName, TypeSymbol};
 
 pub static NUMBER: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Number");
 pub static STR: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Str");

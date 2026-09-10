@@ -9,15 +9,17 @@
 //! reference a per-call parameter (`-> er`, `-> er.Carrier`) survive FN-definition without
 //! sub-dispatching against the outer scope.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, WorkingPart};
+use crate::machine::model::ast::WorkingPart;
+
 use crate::memory::RegionBrand;
+use crate::parse::{ExpressionPart, KExpression};
 
 use super::ktype::{KType, display_label};
 use super::node::TypeNode;
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
 use crate::parse::ast::{KeyElement, UntypedKey};
+use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
 
 /// The definition-time identity of a signature for bucket dedupe: element shape plus the
 /// per-slot argument type. Two signatures are indistinguishable at dispatch iff their tokens

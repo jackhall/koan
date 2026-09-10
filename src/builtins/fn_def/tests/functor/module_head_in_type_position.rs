@@ -165,7 +165,7 @@ fn module_name_in_a_slot_is_a_parse_error() {
     let program = program_storage();
     let error = crate::parse::parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &crate::parse::LabelInterner::new(),
         "EXPR (TAKE_ORD x :int_ord) -> Number = (1)",
     )
     .expect_err("a value token after `:` must not parse");

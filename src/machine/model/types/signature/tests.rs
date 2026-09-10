@@ -16,7 +16,7 @@ fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
         brand,
         ReturnType::Resolved(KType::ANY),
         &[SignatureElement::Argument(Argument::new(
-            crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+            crate::parse::BinderSymbol::classify("v").expect("value token"),
             kt,
         ))],
         &[],
@@ -28,13 +28,11 @@ fn expr_with_keyword<'a>(
     kw: &str,
     registries: &RunRegistries,
 ) -> KExpression<'a> {
-    let symbol = crate::machine::model::KeywordSymbol::declared(kw, &registries.labels)
+    let symbol = crate::parse::KeywordSymbol::declared(kw, &registries.labels)
         .expect("a test fixture keyword is keyword-class");
     KExpression::new(
         brand,
-        &[Spanned::bare(
-            crate::machine::model::ExpressionPart::Keyword(symbol),
-        )],
+        &[Spanned::bare(crate::parse::ExpressionPart::Keyword(symbol))],
     )
 }
 
@@ -120,7 +118,7 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
     let mismatched = KExpression::new(
         brand,
         &[Spanned::bare(ExpressionPart::Literal(
-            crate::machine::model::ast::KLiteral::Number(1.0),
+            crate::parse::KLiteral::Number(1.0),
         ))],
     );
     assert!(!sig.matches(&mismatched, types));
@@ -176,7 +174,7 @@ fn sig_with<'a>(
         brand,
         ret,
         &[SignatureElement::Argument(Argument::new(
-            crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+            crate::parse::BinderSymbol::classify("v").expect("value token"),
             slot,
         ))],
         &[],
@@ -215,7 +213,7 @@ fn indistinguishable_splits_on_argument_type_and_keywords() {
     let text = sig_with(brand, ReturnType::Resolved(KType::ANY), KType::STR);
     assert!(!num.indistinguishable_from(&text));
 
-    let labels = crate::machine::model::LabelInterner::new();
+    let labels = crate::parse::LabelInterner::new();
     let kw = |token: &'static str| {
         ExpressionSignature::mint(
             brand,
@@ -261,7 +259,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
         let mut elements = vec![SignatureElement::Keyword(probe_symbol(keyword))];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+                crate::parse::BinderSymbol::classify("v").expect("value token"),
                 *kt,
             ))
         }));
@@ -279,7 +277,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
             brand,
             ReturnType::Resolved(KType::BOOL),
             &[SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("other").expect("value token"),
+                crate::parse::BinderSymbol::classify("other").expect("value token"),
                 KType::NUMBER,
             ))],
             &[],
@@ -344,7 +342,7 @@ fn a_bumped_dispatch_token_matches_what_its_owned_form_does() {
         let mut elements = vec![SignatureElement::Keyword(probe_symbol(keyword))];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+                crate::parse::BinderSymbol::classify("v").expect("value token"),
                 *kt,
             ))
         }));
@@ -383,12 +381,12 @@ fn a_dispatch_token_renders_its_keywords_and_slot_types() {
         slots: &[KType],
         registries: &RunRegistries,
     ) -> ExpressionSignature<'a> {
-        let symbol = crate::machine::model::KeywordSymbol::declared(keyword, &registries.labels)
+        let symbol = crate::parse::KeywordSymbol::declared(keyword, &registries.labels)
             .expect("a test fixture keyword is keyword-class");
         let mut elements = vec![SignatureElement::Keyword(symbol)];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+                crate::parse::BinderSymbol::classify("v").expect("value token"),
                 *kt,
             ))
         }));
@@ -437,11 +435,11 @@ fn shape_specificity_agrees_with_the_live_signature_verdict() {
             &[
                 SignatureElement::keyword("PURE", labels),
                 SignatureElement::Argument(Argument::new(
-                    crate::machine::model::BinderSymbol::classify("x").expect("value token"),
+                    crate::parse::BinderSymbol::classify("x").expect("value token"),
                     x,
                 )),
                 SignatureElement::Argument(Argument::new(
-                    crate::machine::model::BinderSymbol::classify("y").expect("value token"),
+                    crate::parse::BinderSymbol::classify("y").expect("value token"),
                     y,
                 )),
             ],
@@ -485,7 +483,7 @@ fn shape_specificity_agrees_with_the_live_signature_verdict() {
 #[test]
 fn shape_specificity_of_two_slotless_shapes_is_equal() {
     let registries = RunRegistries::new();
-    let keyword = crate::machine::model::KeywordSymbol::declared("NOW", &registries.labels)
+    let keyword = crate::parse::KeywordSymbol::declared("NOW", &registries.labels)
         .expect("a fixture keyword classifies keyword-class");
     let slotless = registries.types.shape_type(
         &[],

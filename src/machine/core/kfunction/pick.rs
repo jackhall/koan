@@ -6,7 +6,8 @@
 
 use crate::machine::model::types::carried_channel_ktype;
 use crate::machine::model::{Argument, KType, SignatureElement, TypeRegistry};
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{WorkingExpression, WorkingPart};
+use crate::parse::ExpressionPart;
 
 use super::KFunction;
 use crate::machine::model::RunRegistries;

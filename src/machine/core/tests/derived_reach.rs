@@ -7,11 +7,10 @@ use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::{TestRun, operator_run, run_root_bare};
 use crate::machine::core::BindingIndex;
 use crate::machine::core::kfunction::{Body, KFunction};
-use crate::machine::model::{
-    Argument, KType, ReturnType, SignatureDraft, SignatureElement, UntypedKey,
-};
+use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::memory::Global;
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::UntypedKey;
 
 use super::body_no_op;
 
@@ -27,7 +26,7 @@ fn key(elements: Vec<SignatureElement>) -> UntypedKey {
 
 fn slot(name: &str) -> SignatureElement {
     SignatureElement::Argument(Argument::new(
-        crate::machine::model::BinderSymbol::classify(name)
+        crate::parse::BinderSymbol::classify(name)
             .expect("a test fixture parameter is a value token"),
         KType::NUMBER,
     ))

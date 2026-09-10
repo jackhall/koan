@@ -3,17 +3,18 @@ use std::mem::ManuallyDrop;
 use std::rc::{Rc, Weak};
 
 use crate::machine::model::DeliveredOperatorGroup;
+use crate::machine::model::KType;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
-use crate::machine::model::{IdentityBuildHasher, KType, TypeSymbol, ValueSymbol};
 use crate::machine::model::{OperatorGroup, ReductionMode};
-use crate::machine::model::{SlotLayout, SlotLayoutRefFamily};
 use crate::machine::{KError, WriteGate};
 use crate::memory::{
     And, BumpBackedMap, BumpVec, Frame, FrameStorage, KoanRegion, ReferenceFamily, RegionBrand,
     RegionHandle, ScopeId, SealedExtern, bump_table, reattachable,
 };
+use crate::parse::KeywordSymbol;
+use crate::parse::{IdentityBuildHasher, TypeSymbol, ValueSymbol};
+use crate::parse::{SlotLayout, SlotLayoutRefFamily};
 
 use super::bindings::{Bindings, BindingsReferenceFamily};
 

@@ -4,12 +4,12 @@
 use std::collections::HashSet;
 
 use crate::builtins::test_support::{identifier_part, kw_part};
-use crate::machine::model::UntypedKey;
-use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
 use crate::memory::{ProgramBrand, RegionBrand, program_storage};
+use crate::parse::UntypedKey;
 use crate::parse::forms::binder::{BinderFacts, BinderSurface, StoredBinderKey};
 use crate::parse::forms::{FORMS, Form, KeyElementSpec, key_matches, render_key};
 use crate::parse::parse;
+use crate::parse::{DispatchShape, ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 // ---------- spec ⟺ registration consistency ----------
@@ -211,7 +211,7 @@ fn every_masked_index_is_a_raw_type_expression_slot() {
 /// The lone top-level statement `src` parses to, with its cache filled, built into `brand`'s
 /// region.
 fn parse_one<'a>(brand: ProgramBrand<'a>, src: &str) -> KExpression<'a> {
-    parse(brand, &crate::machine::model::LabelInterner::new(), src)
+    parse(brand, &crate::parse::LabelInterner::new(), src)
         .expect("parse")
         .into_iter()
         .next()
@@ -220,7 +220,7 @@ fn parse_one<'a>(brand: ProgramBrand<'a>, src: &str) -> KExpression<'a> {
 
 /// The declared name's symbol bits, whichever channel carries it — a binder's identity, and the
 /// one currency both arms share.
-fn name_of(key: StoredBinderKey<'_>) -> Option<crate::machine::model::Symbol> {
+fn name_of(key: StoredBinderKey<'_>) -> Option<crate::parse::Symbol> {
     key.name.map(|name| name.symbol())
 }
 
@@ -243,7 +243,7 @@ fn redundant_parens_pass_through() {
     };
     assert_eq!(
         name_of(child.binder_plan().expect("the child is the binder")),
-        Some(crate::machine::model::Symbol::of("x")),
+        Some(crate::parse::Symbol::of("x")),
     );
     assert!(
         wrapped.binder_plan().is_none(),
@@ -268,7 +268,7 @@ fn a_statements_plan_is_its_own_spine() {
         let key = stmt.binder_plan().expect("a LET is a binder");
         assert_eq!(
             name_of(key),
-            Some(crate::machine::model::Symbol::of(
+            Some(crate::parse::Symbol::of(
                 source.split_whitespace().nth(1).unwrap()
             )),
             "{source}",
@@ -318,7 +318,7 @@ fn name_slot_agrees_with_the_extractors() {
     let ExpressionPart::Identifier(val_name) = val.parts[1].value else {
         panic!("VAL's name slot holds an identifier part");
     };
-    assert_eq!(val_name.symbol(), crate::machine::model::Symbol::of("x"));
+    assert_eq!(val_name.symbol(), crate::parse::Symbol::of("x"));
     for source in [
         "EXPR (TRIPLE n :Number) -> Number = (n * 3)",
         "OP #(⊗) OVER Number = (left * right)",
@@ -361,7 +361,7 @@ fn combined_forms_install_both_channels() {
         let key = stmt.binder_plan().expect("a combined form is a binder");
         assert_eq!(
             name_of(key),
-            Some(crate::machine::model::Symbol::of(
+            Some(crate::parse::Symbol::of(
                 source.split_whitespace().nth(1).unwrap()
             )),
             "{source}",

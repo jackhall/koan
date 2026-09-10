@@ -14,7 +14,9 @@
 //! context for free — so the body reads `(name, Held::Type)` entries directly: no lazy
 //! binding slot, no `AwaitDeps`.
 
-use crate::machine::model::{KObject, KType, TypeNode, TypeSymbol};
+use crate::machine::model::{KObject, KType, TypeNode};
+
+use crate::parse::TypeSymbol;
 
 use crate::machine::model::Held;
 use crate::machine::model::{display_label, render_label};

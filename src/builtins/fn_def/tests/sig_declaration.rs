@@ -5,8 +5,9 @@
 //! outside one, and a keyword-free head is no shape at all.
 
 use crate::builtins::test_support::{TestRun, key_keyword, key_keyword_symbol, type_name};
-use crate::machine::model::{KType, KeyElement, SigSchema, TypeNode, UntypedKey};
+use crate::machine::model::{KType, SigSchema, TypeNode};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::{KeyElement, UntypedKey};
 
 /// The stored schema of the signature `name` binds in `scope`.
 fn sig_schema(

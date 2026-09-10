@@ -19,19 +19,20 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::core::ViewMembers;
 use crate::machine::model::KType;
+use crate::machine::model::TypeMemberMap;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
     KKind, MemberCoercion, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode,
     canonical_overloads, sig_subtype, substitute_sig_members,
 };
 use crate::machine::model::{KObject, Module, ModuleDraft};
-use crate::machine::model::{TypeMemberMap, TypeSymbol, ValueSymbol};
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
+use crate::parse::{TypeSymbol, ValueSymbol};
 
 use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::StaticName;
+use crate::parse::StaticName;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { m, s } }

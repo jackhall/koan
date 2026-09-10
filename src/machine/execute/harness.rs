@@ -26,14 +26,13 @@ use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::{BlockEntry, BlockRequest, DepPlacement, FramePlacement};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DeliveredCarried;
-use crate::machine::model::{
-    ExpressionPart, KExpression, LabelInterner, PartClass, WorkingExpression, WorkingPart,
-};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, Installer, KError, KErrorKind, LexicalFrame, NodeId, Scope};
 use crate::memory::KoanStorageProfile;
 use crate::memory::{BumpAllocator, BumpVec, SealedExtern, Within, erase_to_static};
 use crate::memory::{FrameCoverage, ScopeId};
 use crate::memory::{ProgramBrand, RegionBrand};
+use crate::parse::{ExpressionPart, KExpression, LabelInterner, PartClass};
 use crate::scheduler::{
     Anchor, Dep, Deps, DrainDeadlock, EdgeId, InstalledEdge, Scheduler, Step, StepVerdict, Workload,
 };
@@ -932,7 +931,7 @@ fn duplicate_declarations(
     statements: &[WorkingExpression<'_>],
     registries: &crate::machine::model::RunRegistries,
 ) -> HashMap<usize, KError> {
-    let mut declared: HashMap<crate::machine::model::Symbol, usize> = HashMap::new();
+    let mut declared: HashMap<crate::parse::Symbol, usize> = HashMap::new();
     let mut rejected: HashMap<usize, KError> = HashMap::new();
     for (position, statement) in statements.iter().enumerate() {
         let Some(name) = statement_binder_plan(statement).and_then(|plan| plan.name) else {

@@ -16,10 +16,10 @@ mod splice_walk;
 mod statement_binder_install;
 
 use crate::builtins::test_support::kw_part;
-use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::memory::ProgramStorage;
 use crate::parse::parse;
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::source::Spanned;
 
 /// Parse `src` into the shape
@@ -27,7 +27,7 @@ use crate::source::Spanned;
 /// [`enter_block`](crate::machine::execute::KoanRuntime::enter_block) take.
 pub(super) fn working_all<'a>(
     program: &'a ProgramStorage,
-    labels: &crate::machine::model::LabelInterner,
+    labels: &crate::parse::LabelInterner,
     src: &str,
 ) -> Vec<WorkingExpression<'a>> {
     let brand = program.brand();
@@ -53,7 +53,7 @@ pub(super) fn watch_all(
 /// [`working_all`] for a source expected to hold exactly one statement.
 pub(super) fn working_one<'a>(
     program: &'a ProgramStorage,
-    labels: &crate::machine::model::LabelInterner,
+    labels: &crate::parse::LabelInterner,
     src: &str,
 ) -> WorkingExpression<'a> {
     let mut all = working_all(program, labels, src);
@@ -83,7 +83,7 @@ pub(super) fn keyword_expr<'a>(program: &'a ProgramStorage, name: &str) -> Worki
 /// submission installs from.
 pub(super) fn let_ast<'a>(
     program: &'a ProgramStorage,
-    labels: &crate::machine::model::LabelInterner,
+    labels: &crate::parse::LabelInterner,
     name: &str,
     value: f64,
 ) -> KExpression<'a> {
@@ -93,7 +93,7 @@ pub(super) fn let_ast<'a>(
         &[
             Spanned::bare(kw_part("LET")),
             Spanned::bare(ExpressionPart::Identifier(
-                crate::machine::model::ValueSymbol::declared(name, labels)
+                crate::parse::ValueSymbol::declared(name, labels)
                     .expect("a test fixture identifier is a value token"),
             )),
             Spanned::bare(kw_part("=")),
@@ -104,7 +104,7 @@ pub(super) fn let_ast<'a>(
 
 pub(super) fn let_expr<'a>(
     program: &'a ProgramStorage,
-    labels: &crate::machine::model::LabelInterner,
+    labels: &crate::parse::LabelInterner,
     name: &str,
     value: f64,
 ) -> WorkingExpression<'a> {

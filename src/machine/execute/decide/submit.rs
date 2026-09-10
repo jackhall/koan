@@ -11,9 +11,10 @@
 //! [`SubmitContext::SubDispatch`] binder is rejected with [`KErrorKind::NestedBinder`].
 
 use crate::machine::ProducerId;
-use crate::machine::model::StoredBinderKey;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope, WriteGate};
+use crate::parse::ExpressionPart;
+use crate::parse::StoredBinderKey;
 
 use super::super::harness::{Host, KoanWorkload};
 use super::super::nodes::{NodeScope, SlotFrame, WorkLabel};

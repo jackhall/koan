@@ -25,17 +25,18 @@ use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::{
     DeclWindow, FieldListContext, FieldNameKind, Record, RecursiveGroupWindow, RelativeSchema,
-    SealOutcome, TypeMemberMap, TypeSymbol, declarator_window, finalize_nominal_member,
+    SealOutcome, TypeMemberMap, declarator_window, finalize_nominal_member,
 };
-use crate::machine::model::{ExpressionPart, KExpression, ProgramExpression};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 use crate::machine::{StepCarried, seal_type_identity};
+use crate::parse::TypeSymbol;
+use crate::parse::{ExpressionPart, KExpression, ProgramExpression};
 use crate::source::Spanned;
 
 use super::{arg, arg_labeled, kw, sig};
-use crate::machine::model::BinderSymbol;
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
+use crate::parse::BinderSymbol;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { decl, name, repr } }
@@ -389,11 +390,7 @@ mod tests {
         scope: &Scope<'_>,
         types: &TypeRegistry,
         name: &str,
-    ) -> (
-        usize,
-        KType,
-        Vec<(crate::machine::model::BinderSymbol, KType)>,
-    ) {
+    ) -> (usize, KType, Vec<(crate::parse::BinderSymbol, KType)>) {
         let handle = lookup_type(scope, name)
             .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
         match types.node(handle) {
@@ -698,7 +695,7 @@ mod tests {
         assert_eq!(
             fields,
             vec![(
-                crate::machine::model::BinderSymbol::Type(type_name("Ty", test_run.registries())),
+                crate::parse::BinderSymbol::Type(type_name("Ty", test_run.registries())),
                 KType::of_kind(KKind::Signature),
             )],
         );
@@ -724,7 +721,7 @@ mod tests {
         assert_eq!(
             fields
                 .iter()
-                .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("value"))
+                .find(|(f, _)| f.symbol() == crate::parse::Symbol::of("value"))
                 .map(|(_, t)| *t),
             Some(KType::NUMBER),
             "value stays a builtin leaf",
@@ -732,7 +729,7 @@ mod tests {
         assert_eq!(
             fields
                 .iter()
-                .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("next"))
+                .find(|(f, _)| f.symbol() == crate::parse::Symbol::of("next"))
                 .map(|(_, t)| *t),
             Some(node_handle),
             "next seals to the member's own handle (a self-reference)",
@@ -765,7 +762,7 @@ mod tests {
         assert_eq!(
             fields
                 .iter()
-                .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("children"))
+                .find(|(f, _)| f.symbol() == crate::parse::Symbol::of("children"))
                 .map(|(_, t)| *t),
             Some(types.list(tree_handle)),
             "children seals its self-reference to List of the member's own handle",
@@ -794,12 +791,12 @@ mod tests {
         let (_, outer_handle, fields) = record_fields(scope, types, "Outer");
         let inner_ty = fields
             .iter()
-            .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("inner"))
+            .find(|(f, _)| f.symbol() == crate::parse::Symbol::of("inner"))
             .map(|(_, t)| *t)
             .expect("inner field present");
         match types.node(inner_ty) {
             TypeNode::Record { fields: rec } => assert_eq!(
-                rec.get(crate::machine::model::Symbol::of("owner")).copied(),
+                rec.get(crate::parse::Symbol::of("owner")).copied(),
                 Some(outer_handle),
                 "the nested record's `owner` threads to the outer member's own handle",
             ),
@@ -834,7 +831,7 @@ mod tests {
         );
         let kids_ty = fields
             .iter()
-            .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("kids"))
+            .find(|(f, _)| f.symbol() == crate::parse::Symbol::of("kids"))
             .map(|(_, t)| *t)
             .expect("kids field present");
         let element = match types.node(kids_ty) {
@@ -843,7 +840,7 @@ mod tests {
         };
         match types.node(element) {
             TypeNode::Record { fields: rec } => assert_eq!(
-                rec.get(crate::machine::model::Symbol::of("next")).copied(),
+                rec.get(crate::parse::Symbol::of("next")).copied(),
                 Some(tree_handle),
                 "the sigil-nested record's `next` threads to the outer member's own handle",
             ),
@@ -1267,10 +1264,7 @@ mod tests {
                     TypeNode::ConstructorApply { arguments, .. } => {
                         assert_eq!(arguments.len(), 1);
                         // The stamped arg keeps the Distance identity (a NewType SetMember).
-                        match arguments
-                            .get(crate::machine::model::Symbol::of("Type"))
-                            .copied()
-                        {
+                        match arguments.get(crate::parse::Symbol::of("Type")).copied() {
                             Some(arg) => {
                                 let (name, kind) = member_of(test_run.registries(), arg);
                                 assert_eq!(name, "Distance");

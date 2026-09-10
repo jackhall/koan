@@ -6,9 +6,10 @@ use crate::machine::execute::Resolution;
 use crate::machine::execute::decide::resolve::resolve_name;
 use crate::machine::model::Carried;
 use crate::machine::model::Scalar;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KObject, KType};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
+use crate::parse::ExpressionPart;
 use crate::source::Spanned;
 
 #[test]
@@ -99,10 +100,7 @@ fn resolve_name_unbound() {
     match resolve_name(scope, &part, None, test_run.registries()) {
         Resolution::Unbound(name) => assert_eq!(
             name,
-            crate::machine::model::labels::BinderSymbol::Value(value_name(
-                "missing",
-                test_run.registries()
-            ))
+            crate::parse::labels::BinderSymbol::Value(value_name("missing", test_run.registries()))
         ),
         _ => panic!("expected Resolution::Unbound"),
     }

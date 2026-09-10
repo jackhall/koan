@@ -28,8 +28,8 @@ use crate::memory::BumpVec;
 crate::slots! { SLOTS { left, members, right } }
 
 /// The union operator's glyph, spelled in Rust source and so declared once.
-static UNION_OPERATOR: crate::machine::model::StaticName<crate::machine::model::KeywordSymbol> =
-    crate::static_name!(crate::machine::model::KeywordSymbol, "|");
+static UNION_OPERATOR: crate::parse::StaticName<crate::parse::KeywordSymbol> =
+    crate::static_name!(crate::parse::KeywordSymbol, "|");
 
 const MEMBERS_SLOT: &str = "`|` members";
 

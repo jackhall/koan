@@ -29,8 +29,8 @@
 
 use std::cell::Cell;
 
-use crate::machine::model::labels::{Symbol, TypeSymbol};
 use crate::memory::RegionBrand;
+use crate::parse::{Symbol, TypeSymbol};
 
 use super::kkind::KKind;
 use super::ktype::KType;

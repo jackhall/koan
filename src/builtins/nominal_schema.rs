@@ -10,7 +10,6 @@
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::DeclWindow;
 use crate::machine::model::KType;
-use crate::machine::model::{BinderSymbol, TypeSymbol};
 use crate::machine::model::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
     parse_typed_field_list_via_elaborator,
@@ -18,6 +17,7 @@ use crate::machine::model::{
 use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{DeclarationSite, KError, TraceFrame};
 use crate::machine::{FieldListDeferral, StepCarried};
+use crate::parse::{BinderSymbol, TypeSymbol};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier and the `types` write that
 /// installs its identity; shared by the synchronous and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
@@ -42,7 +42,7 @@ pub(crate) fn nominal_schema_action<'a>(
     ctx: &BodyCtx<'_, 'a, '_>,
     name: TypeSymbol,
     window: DeclWindow<'a>,
-    schema_expr: crate::machine::model::KExpression<'a>,
+    schema_expr: crate::parse::KExpression<'a>,
     context: FieldListContext,
     name_kind: FieldNameKind,
     error_frame: TraceFrame,

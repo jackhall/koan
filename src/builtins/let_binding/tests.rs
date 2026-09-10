@@ -7,11 +7,11 @@ fn binder_name_extracts_let_name() {
     use crate::builtins::test_support::parse_one;
     use crate::memory::program_storage;
     let program = program_storage();
-    let labels = crate::machine::model::LabelInterner::new();
+    let labels = crate::parse::LabelInterner::new();
     let expr = parse_one(&program, &labels, "LET hello = 1");
     let name = crate::parse::forms::binder::identifier_part_binder_name(&expr)
         .expect("`LET hello = 1` names a binder");
-    assert_eq!(name.bind_kind(), crate::machine::model::BindKind::Value);
+    assert_eq!(name.bind_kind(), crate::parse::BindKind::Value);
     assert_eq!(labels.render(name.symbol()), "hello");
 }
 

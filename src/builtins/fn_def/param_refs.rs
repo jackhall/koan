@@ -6,8 +6,8 @@
 //! `ReturnType::Deferred(_)` that re-elaborates per call against the dispatch-boundary
 //! scope.
 
-use crate::machine::model::labels::TypeSymbol;
-use crate::machine::model::{ExpressionPart, KExpression, Symbol};
+use crate::parse::TypeSymbol;
+use crate::parse::{ExpressionPart, KExpression, Symbol};
 
 pub(super) fn type_expr_references_any(te: TypeSymbol, param_names: &[Symbol]) -> bool {
     // A parameter name is a reference, not a declaration, so it probes by bare symbol bits.

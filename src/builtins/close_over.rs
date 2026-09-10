@@ -79,15 +79,15 @@ use crate::machine::model::DeliveredOperatorGroup;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::infer_close_captures;
-use crate::machine::model::{
-    ExpressionPart, KExpression, KObject, KType, KeyElement, KeywordSymbol, TypeSymbol,
-    ValueSymbol, WILDCARD, render_label, render_untyped_key,
-};
+use crate::machine::model::{KObject, KType, render_label, render_untyped_key};
 use crate::machine::{Action, AwaitContinue, WriteGate};
 use crate::machine::{BindingIndex, DeclarationSite};
 use crate::machine::{HitTier, KError, KErrorKind, LexicalFrame, NameLookup, ProducerId};
 use crate::machine::{fresh_cart_tail, seed};
 use crate::memory::{BumpAllocator, BumpVec};
+use crate::parse::{
+    ExpressionPart, KExpression, KeyElement, KeywordSymbol, TypeSymbol, ValueSymbol, WILDCARD,
+};
 
 use super::{arg, kw, sig};
 
@@ -502,10 +502,7 @@ fn resolve_type_capture<'a>(
 }
 
 /// The one `UnboundName` spelling both channels and both forms report through.
-fn unbound(
-    name: impl crate::machine::model::ClassifiedSymbol,
-    registries: &RunRegistries,
-) -> KError {
+fn unbound(name: impl crate::parse::ClassifiedSymbol, registries: &RunRegistries) -> KError {
     KError::new(KErrorKind::UnboundName(render_label(
         name.symbol(),
         registries,

@@ -11,23 +11,24 @@ use crate::machine::core::Scope;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DeliveredCarried;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KObject, Record};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind};
 use crate::memory::KoanRegion;
 use crate::memory::{
     BumpAllocator, BumpVec, Delivered, RegionHandle, RegionHandleFamily, reattachable,
 };
 use crate::memory::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand};
+use crate::parse::ExpressionPart;
 use crate::source::Spanned;
 
 use super::super::StepCarried;
 use super::super::outcome::DepTerminal;
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
-use crate::machine::model::BinderSymbol;
 use crate::machine::model::RunRegistries;
+use crate::parse::BinderSymbol;
 use crate::scheduler::Deps;
 
 /// Which construction shape the resolved value subs feed. The carried `KType` is the sealed

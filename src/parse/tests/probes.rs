@@ -7,9 +7,9 @@
 
 use super::super::parse;
 use crate::machine::core::bindings::powerset_probes;
-use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::{KeywordSymbol, LabelInterner};
 use crate::memory::program_storage;
+use crate::parse::ExpressionPart;
+use crate::parse::{KeywordSymbol, LabelInterner};
 
 /// The symbols of a set of glyphs, interned so a probe built from them renders.
 fn members(glyphs: &[&str], labels: &LabelInterner) -> Vec<KeywordSymbol> {

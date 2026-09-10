@@ -25,9 +25,9 @@ use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::seals::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{
-    KType, KeywordSymbol, LabelInterner, ReductionMode, RunRegistries, TypeSymbol, ValueSymbol,
-    render_label, render_untyped_key,
+    KType, ReductionMode, RunRegistries, render_label, render_untyped_key,
 };
+use crate::parse::{KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
 /// present name is a `Rebind`), `UpsertEqual` admits a re-entry of the *same* declaration — the

@@ -4,9 +4,10 @@
 
 use super::*;
 use crate::builtins::test_support::{type_token, value_name};
-use crate::machine::model::labels::BinderSymbol;
-use crate::machine::model::{Argument, KLiteral, RunRegistries};
+use crate::machine::model::{Argument, RunRegistries};
 use crate::memory::{FrameStorageExt, program_storage, run_root_storage};
+use crate::parse::BinderSymbol;
+use crate::parse::KLiteral;
 
 /// The workhorse union: every carrier spelling of a type slot plus the value-name token.
 fn carrier_union(registries: &RunRegistries) -> KType {
@@ -190,7 +191,7 @@ fn relaxed_admission_leans_on_a_parked_name_at_a_union_slot() {
     let part = ExpressionPart::Identifier(value_name("width", &registries));
     let expr = WorkingExpression::from_ast(
         brand,
-        crate::machine::model::KExpression::new(brand, &[crate::source::Spanned::bare(part)]),
+        crate::parse::KExpression::new(brand, &[crate::source::Spanned::bare(part)]),
     );
     // No `Identifier` member, so the bare name must resolve — and its producer has yet to land.
     let slot = registries

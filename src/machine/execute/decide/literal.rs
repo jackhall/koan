@@ -6,12 +6,13 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::SplicedCell;
 use crate::machine::model::{Carried, Held};
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KKey, KObject, TypeRegistry};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
 use crate::memory::KoanRegion;
 use crate::memory::{BumpAllocator, BumpVec, Delivered, RegionHandle, reattachable};
 use crate::memory::{FoldingBrand, KoanRegionExt, KoanStorageProfile, RegionBrand, SubstrateDoor};
+use crate::parse::ExpressionPart;
 use crate::source::Spanned;
 
 use super::super::StepCarried;
@@ -23,9 +24,9 @@ use super::ctx::{DecideCtx, current_dest_frame, with_current_node_scope};
 use super::resolve::{Resolution, resolve_name};
 use super::stage_eager_part;
 use crate::machine::Scope;
-use crate::machine::model::BinderSymbol;
 use crate::machine::model::RunRegistries;
 use crate::memory::RegionHandleFamily;
+use crate::parse::BinderSymbol;
 use crate::scheduler::{Deps, Scheduler};
 
 /// Build-time product family for an aggregate relocation. Layout-invariant in `'r`: a thin region

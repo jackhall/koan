@@ -32,16 +32,17 @@ use crate::machine::WriteGate;
 use crate::machine::model::Carried;
 use crate::machine::model::KKind;
 use crate::machine::model::PartedCell;
-use crate::machine::model::{BinderSymbol, Module, NodeSchema, TypeSymbol};
 use crate::machine::model::{CarriedFamily, Held};
 use crate::machine::model::{KObject, KType, TypeNode};
+use crate::machine::model::{Module, NodeSchema};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
+use crate::parse::{BinderSymbol, TypeSymbol};
 
 use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
+use crate::parse::Symbol;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { field, s } }

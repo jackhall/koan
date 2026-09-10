@@ -244,11 +244,8 @@ fn slotted_frame_reads_its_layout_after_the_defining_shell_drops() {
     let outer = test_run.scope.open_frame();
     let inner = outer.with_resident(|defining| {
         // The layout lives in the defining frame's own region, exactly as a callable's does.
-        let layout = crate::machine::model::SlotLayout::single(
-            defining.brand(),
-            value_name("k", registries),
-            0,
-        );
+        let layout =
+            crate::parse::SlotLayout::single(defining.brand(), value_name("k", registries), 0);
         defining.open_frame_slotted(layout)
     });
     drop(outer);
@@ -1105,7 +1102,7 @@ fn region_death_frees_every_drop_free_family() {
                 elements: vec![
                     SignatureElement::Keyword(probe_symbol(&format!("TAKE_{i}"))),
                     SignatureElement::Argument(Argument::new(
-                        crate::machine::model::BinderSymbol::classify(&format!("operand_{i}"))
+                        crate::parse::BinderSymbol::classify(&format!("operand_{i}"))
                             .expect("a test fixture parameter is a value token"),
                         KType::NUMBER,
                     )),
@@ -1227,7 +1224,7 @@ fn region_death_frees_every_drop_free_family() {
 /// migrated into region storage, both maps leak here.
 #[test]
 fn run_registries_free_with_the_run_frame() {
-    use crate::machine::model::Symbol;
+    use crate::parse::Symbol;
     let program = program_storage();
     let root = run_root_storage();
 

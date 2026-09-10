@@ -60,13 +60,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 /// costs the frame no allocation on the value channel.
 fn eval_layout<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
-    inner: &crate::machine::model::KExpression<'a>,
-) -> &'a crate::machine::model::SlotLayout<'a> {
+    inner: &crate::parse::KExpression<'a>,
+) -> &'a crate::parse::SlotLayout<'a> {
     match inner.statement_binder_plan().and_then(|plan| plan.name) {
-        Some(crate::machine::model::BinderSymbol::Value(name)) => {
-            crate::machine::model::SlotLayout::single(ctx.scope.brand(), name, ctx.bind_index().idx)
+        Some(crate::parse::BinderSymbol::Value(name)) => {
+            crate::parse::SlotLayout::single(ctx.scope.brand(), name, ctx.bind_index().idx)
         }
-        _ => crate::machine::model::SlotLayout::EMPTY,
+        _ => crate::parse::SlotLayout::EMPTY,
     }
 }
 

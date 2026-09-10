@@ -294,7 +294,7 @@ impl<'a> NodeCache<'a> {
         self.operator_probe
     }
 
-    /// The [`FORMS`](crate::machine::model::key_spec::FORMS) entry this node's bucket key matches,
+    /// The [`FORMS`](crate::parse::forms::FORMS) entry this node's bucket key matches,
     /// `None` for every user-defined bucket.
     pub fn form(&self) -> Option<&'static Form> {
         self.form

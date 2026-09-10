@@ -17,12 +17,13 @@ use crate::machine::execute::decide::{
 use crate::machine::model::Carried;
 use crate::machine::model::Held;
 use crate::machine::model::Scalar;
+use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::model::{KObject, TypeNode};
-use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{BindingIndex, KFunction, Scope};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::KExpression;
+use crate::parse::{StaticName, ValueSymbol};
 
 /// Cross a parsed node into the scheduler against `scope`'s region.
 fn working<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> WorkingExpression<'run> {
@@ -93,7 +94,7 @@ fn bind_identity_fn<'run>(
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Argument(Argument::new(
-            crate::machine::model::BinderSymbol::Value(registries.labels.record(&N)),
+            crate::parse::BinderSymbol::Value(registries.labels.record(&N)),
             KType::NUMBER,
         ))],
     };
@@ -433,10 +434,10 @@ fn fast_lane_on_newtype_record_type_constructs() {
             match inner.payload() {
                 KObject::Record(substrate, _) => {
                     assert!(
-                        matches!(substrate.field(crate::machine::model::Symbol::of("x")), Some(Held::Object(KObject::Number(n))) if *n == 3.0)
+                        matches!(substrate.field(crate::parse::Symbol::of("x")), Some(Held::Object(KObject::Number(n))) if *n == 3.0)
                     );
                     assert!(
-                        matches!(substrate.field(crate::machine::model::Symbol::of("y")), Some(Held::Object(KObject::Number(n))) if *n == 4.0)
+                        matches!(substrate.field(crate::parse::Symbol::of("y")), Some(Held::Object(KObject::Number(n))) if *n == 4.0)
                     );
                 }
                 other => panic!("expected record inner, got {:?}", other.ktype()),
@@ -647,7 +648,7 @@ fn classifier_struct_construct_routes_to_type_call() {
     let program = program_storage();
     let expr = parse_one(
         &program,
-        &crate::machine::model::LabelInterner::new(),
+        &crate::parse::LabelInterner::new(),
         "MyStruct {x = 1, y = 2}",
     );
     assert!(
@@ -665,7 +666,7 @@ fn classifier_nested_body_construct_routes_to_type_call() {
     let program = program_storage();
     let expr = parse_one(
         &program,
-        &crate::machine::model::LabelInterner::new(),
+        &crate::parse::LabelInterner::new(),
         "Wrap (Inner 42)",
     );
     assert!(
@@ -680,11 +681,7 @@ fn classifier_nested_body_construct_routes_to_type_call() {
 fn classifier_newtype_construct_routes_to_type_call() {
     use crate::machine::execute::decide::DispatchShape;
     let program = program_storage();
-    let expr = parse_one(
-        &program,
-        &crate::machine::model::LabelInterner::new(),
-        "Bar (x)",
-    );
+    let expr = parse_one(&program, &crate::parse::LabelInterner::new(), "Bar (x)");
     assert!(
         matches!(expr.shape(), DispatchShape::TypeCall),
         "expected TypeCall for `Bar (x)`",
@@ -700,7 +697,7 @@ fn classifier_legacy_positional_collapses_to_type_call() {
     let program = program_storage();
     let expr = parse_one(
         &program,
-        &crate::machine::model::LabelInterner::new(),
+        &crate::parse::LabelInterner::new(),
         "(List Number)",
     );
     assert!(
@@ -831,11 +828,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
 fn classifier_operator_chain_routes_to_operator_chain() {
     use crate::machine::execute::decide::DispatchShape;
     let program = program_storage();
-    let expr = parse_one(
-        &program,
-        &crate::machine::model::LabelInterner::new(),
-        "a + b + c",
-    );
+    let expr = parse_one(&program, &crate::parse::LabelInterner::new(), "a + b + c");
     assert_eq!(
         expr.shape(),
         DispatchShape::OperatorChain,
@@ -843,9 +836,7 @@ fn classifier_operator_chain_routes_to_operator_chain() {
     );
     assert_eq!(
         expr.operator_probe(),
-        Some(crate::machine::model::KeywordSymbol::of_run(&[
-            probe_symbol("+")
-        ]))
+        Some(crate::parse::KeywordSymbol::of_run(&[probe_symbol("+")]))
     );
 }
 
@@ -855,11 +846,7 @@ fn classifier_operator_chain_routes_to_operator_chain() {
 fn classifier_single_operator_stays_keyworded() {
     use crate::machine::execute::decide::DispatchShape;
     let program = program_storage();
-    let expr = parse_one(
-        &program,
-        &crate::machine::model::LabelInterner::new(),
-        "a + b",
-    );
+    let expr = parse_one(&program, &crate::parse::LabelInterner::new(), "a + b");
     assert_eq!(
         expr.shape(),
         DispatchShape::Keyworded,

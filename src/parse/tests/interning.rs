@@ -6,9 +6,9 @@
 //! it is minted.
 
 use super::super::parse;
-use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::{KeywordSymbol, LabelInterner};
 use crate::memory::program_storage;
+use crate::parse::ExpressionPart;
+use crate::parse::{KeywordSymbol, LabelInterner};
 
 /// Both keyword spellings — alphabetic tokens and pure-symbol operator glyphs — resolve back out
 /// of the interner the parse was handed.
@@ -75,7 +75,7 @@ fn a_parse_records_each_spelling_once() {
     parse(program.brand(), &labels, "IF flag THEN flag").expect("parse should succeed");
     assert_eq!(
         labels
-            .resolve(crate::machine::model::labels::Symbol::of("flag"))
+            .resolve(crate::parse::labels::Symbol::of("flag"))
             .as_deref(),
         Some("flag")
     );

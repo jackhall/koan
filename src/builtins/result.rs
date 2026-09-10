@@ -15,7 +15,8 @@ use crate::machine::WriteGate;
 
 use crate::machine::Scope;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema, StaticName, TypeSymbol};
+use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema};
+use crate::parse::{StaticName, TypeSymbol};
 
 /// The family's own name and its two variant names — the three labels of the `Result` shape, each
 /// fixed in Rust source, so each is minted once for the process and recorded into a run's interner

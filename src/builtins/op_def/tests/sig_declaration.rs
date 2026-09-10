@@ -6,10 +6,9 @@
 
 use crate::builtins::test_support::{TestRun, key_keyword, lookup_type};
 use crate::machine::KErrorKind;
-use crate::machine::model::{
-    DeclaredGroup, KType, KeyElement, KeywordSymbol, ReductionMode, SigSchema, TypeNode, UntypedKey,
-};
+use crate::machine::model::{DeclaredGroup, KType, ReductionMode, SigSchema, TypeNode};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::{KeyElement, KeywordSymbol, UntypedKey};
 
 /// The stored schema of the signature `name` binds in `scope`.
 fn sig_schema(

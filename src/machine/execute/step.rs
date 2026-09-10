@@ -20,13 +20,13 @@ use std::rc::Rc;
 use crate::machine::core::Scope;
 #[cfg(any(test, feature = "region-audit"))]
 use crate::machine::execute::reach_audit;
-use crate::machine::model::ast::ProgramExpression;
 use crate::machine::model::{Carried, CarriedFamily, DeliveredCarried};
 use crate::machine::model::{KObject, KType, Scalar};
 use crate::memory::{
     Delivered, DropFree, FoldingBrand, FrameStorage, KoanStorageProfile, Reattachable, RegionBrand,
     StepContext, Unhosted, Witnessed, run_root_storage,
 };
+use crate::parse::ProgramExpression;
 
 /// A value carrier confined to the scheduler step that built it, so it cannot be stored past that
 /// step.

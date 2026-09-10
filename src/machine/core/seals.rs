@@ -5,7 +5,9 @@
 use crate::machine::core::{DeliveredFunction, SealedFunction};
 use crate::machine::model::{DeliveredOperatorGroup, SealedOperatorGroup};
 
-use crate::machine::model::{DispatchToken, KeywordSymbol, OperatorGroup, UntypedKey};
+use crate::machine::model::{DispatchToken, OperatorGroup};
+
+use crate::parse::{KeywordSymbol, UntypedKey};
 
 use super::scope::Scope;
 

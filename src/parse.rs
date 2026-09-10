@@ -36,13 +36,22 @@ use crate::source::{self, CurrentFileGuard, FileId, SourceFile};
 
 pub use ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, NodeCache, PartClass,
-    ProgramExpression, ProgramNode, UntypedKey,
+    ProgramExpression, ProgramNode, UntypedKey, classify_dispatch_shape,
 };
+pub use forms::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinderKey};
+pub use forms::lazy::LazyKinds;
 pub use labels::{
     BindKind, BinderSymbol, ClassifiedSymbol, IdentityBuildHasher, IdentityHasher, KeywordSymbol,
     LabelInterner, StaticName, Symbol, TypeSymbol, ValueSymbol, WILDCARD, is_keyword_token,
     is_type_name, snake_case_identifier, wrong_binder_class,
 };
+
+pub(crate) use forms::binder::{
+    OpArity, op_declaration_arity, symbol_from_parts, symbol_from_quote_body,
+};
+pub(crate) use forms::layout::{SlotLayout, SlotLayoutRefFamily};
+#[cfg(feature = "alloc-count")]
+pub use labels::symbols_minted;
 
 #[cfg(test)]
 mod tests;

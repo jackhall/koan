@@ -11,7 +11,7 @@ use crate::machine::execute::KoanRuntime;
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
 use super::working;
 use crate::builtins::test_support::{TestRun, kw_part, value_name};
@@ -61,7 +61,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("MARK")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::NUMBER,
             )),
@@ -84,7 +84,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("MARK")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::ANY,
             )),
@@ -195,7 +195,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
             // uppercased bucket a call computes.
             SignatureElement::keyword("foo", &registries.labels),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::NUMBER,
             )),

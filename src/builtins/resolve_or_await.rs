@@ -39,7 +39,7 @@ fn non_type_result_error(slot: &str, got_kind: String) -> KError {
 /// Classify a plain type-table lookup (`Scope::resolve_type_with_chain`).
 pub(crate) fn classify_name_lookup(
     lookup: Option<NameLookup<KType>>,
-    name: crate::machine::model::TypeSymbol,
+    name: crate::parse::TypeSymbol,
 ) -> TypeResolution<KType> {
     match lookup {
         Some(NameLookup::Bound(kt)) => TypeResolution::Done(kt),

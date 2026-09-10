@@ -27,8 +27,8 @@ use std::collections::HashMap;
 use imbl::shared_ptr::RcK;
 use smallvec::SmallVec;
 
-use crate::machine::model::labels::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
 use crate::machine::model::{Carried, Held};
+use crate::parse::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
 
 use super::kkind::KKind;
 use super::ktype::KType;

@@ -48,7 +48,7 @@ impl ProgramStorage {
 /// channel borrows a region a holder can outlive, and so does the expression door's own claim that
 /// the cell it bumps names no producer region ([`RegionBrand::alloc_expression`]). All three cite
 /// one type rather than a flow: the channel admits only a
-/// [`ProgramExpression`](crate::machine::model::ast::ProgramExpression), which this brand's doors
+/// [`ProgramExpression`](crate::parse::ProgramExpression), which this brand's doors
 /// alone mint. A node built at an ordinary [`RegionBrand`] carries no such marker, so the channel
 /// is closed to it by type — a runtime-synthesized node dispatches in place instead, and a site
 /// that needs one as a value takes this brand (`op_def`'s bridge body) or threads the proof out of

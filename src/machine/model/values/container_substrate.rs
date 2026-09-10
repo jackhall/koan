@@ -15,9 +15,9 @@
 //! fold a door re-runs. See
 //! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
 
-use crate::machine::model::labels::Symbol;
 use crate::machine::model::{Held, KKey, KObject};
 use crate::memory::{BumpBackedMap, CellRef, FoldingBrand, FrameReach, Opened, Sectioned};
+use crate::parse::Symbol;
 
 /// The sectioned cell storage every container substrate holds: [`Held`] cells anchored to the
 /// container's own region `'a`, partitioned into runs.

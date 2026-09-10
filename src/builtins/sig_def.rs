@@ -71,7 +71,7 @@ fn check_pairwise_combiners(
     let groups = decl_scope.sig_operator_groups();
     // The keyworded read is a deep copy of every declared bucket, so it is taken only once a
     // pairwise group is known to be there — which most signatures never have.
-    let combiners: Vec<crate::machine::model::KeywordSymbol> = groups
+    let combiners: Vec<crate::parse::KeywordSymbol> = groups
         .iter()
         .filter_map(|group| match group.mode {
             ReductionMode::Pairwise { combiner, .. } => Some(combiner),
@@ -127,7 +127,7 @@ mod tests {
         let program = program_storage();
         let expr = parse_one(
             &program,
-            &crate::machine::model::LabelInterner::new(),
+            &crate::parse::LabelInterner::new(),
             "SIG Ordered = (VAL x :Number)",
         );
         let name = expr.binder_name_from_type_part();

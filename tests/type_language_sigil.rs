@@ -17,10 +17,9 @@ use std::rc::Rc;
 
 use koan::builtins::test_support::{TestRun, lookup_binding, lookup_type};
 use koan::machine::Scope;
-use koan::machine::model::{
-    KKind, KObject, KType, NodeSchema, Symbol, TypeNode, TypeRegistry, ValueSymbol,
-};
+use koan::machine::model::{KKind, KObject, KType, NodeSchema, TypeNode, TypeRegistry};
 use koan::memory::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
+use koan::parse::{Symbol, ValueSymbol};
 
 /// Run `src` to completion and hand back the whole run — the seeded scope tests assert
 /// bindings on, plus the run frame's registry that type names render against.
@@ -274,7 +273,7 @@ fn union_field_accepts_keyworded_map_sigil() {
                     name,
                     schema: NodeSchema::NewType(repr),
                     ..
-                } if name.symbol() == koan::machine::model::Symbol::of("Some") => Some(repr),
+                } if name.symbol() == koan::parse::Symbol::of("Some") => Some(repr),
                 _ => None,
             })
             .expect("Some variant must project a NewType repr"),

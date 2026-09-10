@@ -23,7 +23,7 @@ fn result_members(scope: &Scope<'_>, registries: &RunRegistries) -> (KType, KTyp
     let union = scope
         .resolve_type(crate::builtins::result::RESULT.symbol())
         .expect("Result must be registered before CATCH");
-    let member = |name: crate::machine::model::TypeSymbol| {
+    let member = |name: crate::parse::TypeSymbol| {
         registries
             .types
             .union_member_named(union, name.symbol())

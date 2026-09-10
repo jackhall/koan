@@ -1,9 +1,9 @@
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{TestRun, binds_module, type_name, value_name};
-use crate::machine::model::Symbol;
 use crate::machine::model::{KType, SigSchema, TypeNode, TypeRegistry};
 use crate::machine::{KErrorKind, ScopeId};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::Symbol;
 
 /// The stored schema of the signature `name` binds in `scope`.
 fn sig_schema(scope: &crate::machine::Scope<'_>, types: &TypeRegistry, name: &str) -> SigSchema {

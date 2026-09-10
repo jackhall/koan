@@ -2,7 +2,7 @@
 //! reduce the run by the group's declared mode.
 //!
 //! Recognition is structural and parse-cached (see
-//! [`crate::machine::model::ast::classify_dispatch_shape`]); this arm resolves the
+//! [`crate::parse::classify_dispatch_shape`]); this arm resolves the
 //! chain's cached operator probe against the per-scope operator registry, walked
 //! through the scope chain (innermost visible wins; see
 //! [the lookup protocol](../../../../design/typing/lookup-protocol.md)).
@@ -18,12 +18,14 @@
 
 use crate::machine::core::Scope;
 use crate::machine::core::location_from_expr;
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
-use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
-use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionMode};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, ProducerId};
 use crate::memory::RegionBrand;
 use crate::memory::{BumpAllocator, BumpVec};
+use crate::parse::KeyElement;
+use crate::parse::{ExpressionPart, PartClass};
+use crate::parse::{KeywordSymbol, LabelInterner};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
 

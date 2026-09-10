@@ -20,9 +20,6 @@ use crate::machine::core::SealedFunction;
 use crate::machine::core::StatementId;
 #[cfg(test)]
 use crate::machine::model::Carried;
-#[cfg(test)]
-use crate::machine::model::ExpressionPart;
-use crate::machine::model::KExpression;
 use crate::machine::model::KObject;
 #[cfg(test)]
 use crate::machine::model::Module;
@@ -37,6 +34,9 @@ use crate::memory::FrameStorage;
 use crate::memory::{ProgramBrand, ProgramStorage, RegionBrand};
 #[cfg(test)]
 use crate::memory::{RegionHandle, Sealed};
+#[cfg(test)]
+use crate::parse::ExpressionPart;
+use crate::parse::KExpression;
 use crate::parse::parse;
 use crate::scheduler::{EdgeId, NodeId};
 
@@ -61,8 +61,8 @@ pub(crate) fn mock_declaration_site(index: usize) -> DeclarationSite {
 pub(crate) fn value_name(
     text: &str,
     registries: &crate::machine::model::RunRegistries,
-) -> crate::machine::model::ValueSymbol {
-    crate::machine::model::ValueSymbol::declared(text, &registries.labels)
+) -> crate::parse::ValueSymbol {
+    crate::parse::ValueSymbol::declared(text, &registries.labels)
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a value token"))
 }
 
@@ -71,8 +71,8 @@ pub(crate) fn value_name(
 pub(crate) fn type_name(
     text: &str,
     registries: &crate::machine::model::RunRegistries,
-) -> crate::machine::model::TypeSymbol {
-    crate::machine::model::TypeSymbol::declared(text, &registries.labels)
+) -> crate::parse::TypeSymbol {
+    crate::parse::TypeSymbol::declared(text, &registries.labels)
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a Type token"))
 }
 
@@ -81,8 +81,8 @@ pub(crate) fn type_name(
 /// symbol identity rather than on rendered text. Production has no bare `TypeSymbol` probe — a
 /// Type token is minted at the parse that classifies it.
 #[cfg(test)]
-pub(crate) fn type_token(text: &str) -> crate::machine::model::TypeSymbol {
-    crate::machine::model::TypeSymbol::classify(text)
+pub(crate) fn type_token(text: &str) -> crate::parse::TypeSymbol {
+    crate::parse::TypeSymbol::classify(text)
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a Type token"))
 }
 
@@ -91,16 +91,16 @@ pub(crate) fn type_token(text: &str) -> crate::machine::model::TypeSymbol {
 pub(crate) fn binder_name(
     text: &str,
     registries: &crate::machine::model::RunRegistries,
-) -> crate::machine::model::BinderSymbol {
-    crate::machine::model::BinderSymbol::declared(text, &registries.labels)
+) -> crate::parse::BinderSymbol {
+    crate::parse::BinderSymbol::declared(text, &registries.labels)
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a bindable token"))
 }
 
 /// [`binder_name`] without the interner — [`type_token`]'s bindable-class twin, for a fixture
 /// that keys a record or a signature by symbol identity and never renders the name.
 #[cfg(test)]
-pub(crate) fn binder_token(text: &str) -> crate::machine::model::BinderSymbol {
-    crate::machine::model::BinderSymbol::classify(text)
+pub(crate) fn binder_token(text: &str) -> crate::parse::BinderSymbol {
+    crate::parse::BinderSymbol::classify(text)
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a bindable token"))
 }
 
@@ -265,7 +265,7 @@ pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<
 #[cfg(test)]
 pub(crate) fn parse_one<'a>(
     program: &'a ProgramStorage,
-    labels: &crate::machine::model::LabelInterner,
+    labels: &crate::parse::LabelInterner,
     src: &str,
 ) -> KExpression<'a> {
     let mut exprs = parse(program.brand(), labels, src).expect("parse should succeed");
@@ -516,12 +516,12 @@ impl<'a> TestRun<'a> {
 /// non-Type-token spelling names nothing on this channel and answers `None`, which is the
 /// disposition the `types` table would have given it anyway.
 pub fn lookup_type(scope: &Scope<'_>, name: &str) -> Option<crate::machine::model::KType> {
-    scope.resolve_type(crate::machine::model::TypeSymbol::classify(name)?)
+    scope.resolve_type(crate::parse::TypeSymbol::classify(name)?)
 }
 
 pub fn lookup_binding<'a>(scope: &Scope<'a>, name: &str) -> Option<&'a KObject<'a>> {
     scope
-        .resolve_value_delivered(crate::machine::model::ValueSymbol::classify(name)?, None)
+        .resolve_value_delivered(crate::parse::ValueSymbol::classify(name)?, None)
         .and_then(NameLookup::bound)
         .map(|delivered| {
             scope
@@ -579,7 +579,7 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
 fn first_keyword_of(
     scope: &Scope<'_>,
     sealed: &SealedFunction,
-) -> Option<crate::machine::model::labels::KeywordSymbol> {
+) -> Option<crate::parse::labels::KeywordSymbol> {
     scope.read_function(sealed, |f| {
         f.signature.elements().iter().find_map(|e| match e {
             SignatureElement::Keyword(symbol) => Some(*symbol),
@@ -608,8 +608,7 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
 #[cfg(test)]
 pub(crate) fn kw_part<'a>(text: &str) -> ExpressionPart<'a> {
     ExpressionPart::Keyword(
-        crate::machine::model::KeywordSymbol::of(text)
-            .expect("a test fixture keyword is keyword-class"),
+        crate::parse::KeywordSymbol::of(text).expect("a test fixture keyword is keyword-class"),
     )
 }
 
@@ -620,15 +619,15 @@ pub(crate) fn kw_part<'a>(text: &str) -> ExpressionPart<'a> {
 #[cfg(test)]
 pub(crate) fn identifier_part<'a>(text: &str) -> ExpressionPart<'a> {
     ExpressionPart::Identifier(
-        crate::machine::model::ValueSymbol::classify(text)
+        crate::parse::ValueSymbol::classify(text)
             .expect("a test fixture identifier is a value token"),
     )
 }
 
 /// The operator-probe symbol for a probe key a test spells out (`"+"`, `"* +"`).
 #[cfg(test)]
-pub(crate) fn probe_symbol(text: &str) -> crate::machine::model::labels::KeywordSymbol {
-    crate::machine::model::labels::KeywordSymbol::of(text)
+pub(crate) fn probe_symbol(text: &str) -> crate::parse::labels::KeywordSymbol {
+    crate::parse::labels::KeywordSymbol::of(text)
         .expect("a test fixture operator probe is keyword-class")
 }
 
@@ -641,29 +640,28 @@ pub(crate) fn probe_symbol(text: &str) -> crate::machine::model::labels::Keyword
 pub(crate) fn operator_run(
     glyphs: &[&str],
     registries: &crate::machine::model::RunRegistries,
-) -> crate::machine::model::labels::KeywordSymbol {
+) -> crate::parse::labels::KeywordSymbol {
     let members: Vec<_> = glyphs
         .iter()
         .map(|glyph| {
-            crate::machine::model::labels::KeywordSymbol::declared(glyph, &registries.labels)
+            crate::parse::labels::KeywordSymbol::declared(glyph, &registries.labels)
                 .unwrap_or_else(|| panic!("test fixture glyph `{glyph}` is not keyword-class"))
         })
         .collect();
-    crate::machine::model::labels::KeywordSymbol::declared_run(&members, &registries.labels)
+    crate::parse::labels::KeywordSymbol::declared_run(&members, &registries.labels)
 }
 
 /// A keyword bucket-key element from its spelling, for a key a test spells out by hand.
 #[cfg(test)]
-pub(crate) fn key_keyword(text: &str) -> crate::machine::model::KeyElement {
-    crate::machine::model::KeyElement::Keyword(key_keyword_symbol(text))
+pub(crate) fn key_keyword(text: &str) -> crate::parse::KeyElement {
+    crate::parse::KeyElement::Keyword(key_keyword_symbol(text))
 }
 
 /// The classified symbol behind [`key_keyword`], for a test that spells out a shape's element run
 /// rather than its untyped key.
 #[cfg(test)]
-pub(crate) fn key_keyword_symbol(text: &str) -> crate::machine::model::KeywordSymbol {
-    crate::machine::model::labels::KeywordSymbol::of(text)
-        .expect("a test fixture keyword is keyword-class")
+pub(crate) fn key_keyword_symbol(text: &str) -> crate::parse::KeywordSymbol {
+    crate::parse::labels::KeywordSymbol::of(text).expect("a test fixture keyword is keyword-class")
 }
 
 /// Allocate a labeled marker object on `scope`'s region. Dispatch tests register builtins
@@ -704,7 +702,7 @@ pub(crate) fn one_slot_sig<'a>(name: &'a str, kt: KType) -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Argument(Argument::new(
-            crate::machine::model::BinderSymbol::classify(name)
+            crate::parse::BinderSymbol::classify(name)
                 .expect("a test fixture parameter is a value token"),
             kt,
         ))],

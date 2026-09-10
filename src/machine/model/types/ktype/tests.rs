@@ -377,11 +377,10 @@ fn debug_prints_the_digest_in_hex() {
 #[test]
 fn render_label_marks_a_symbol_the_run_never_interned() {
     let registries = RunRegistries::new();
-    let declared = crate::machine::model::KeywordSymbol::declared("TAKE", &registries.labels)
+    let declared = crate::parse::KeywordSymbol::declared("TAKE", &registries.labels)
         .expect("`TAKE` is keyword-class");
     assert_eq!(render_label(declared.symbol(), &registries), "TAKE");
 
-    let unrecorded =
-        crate::machine::model::KeywordSymbol::of("DROP").expect("`DROP` is keyword-class");
+    let unrecorded = crate::parse::KeywordSymbol::of("DROP").expect("`DROP` is keyword-class");
     assert_eq!(render_label(unrecorded.symbol(), &registries), "<label>");
 }

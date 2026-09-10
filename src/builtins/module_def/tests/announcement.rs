@@ -6,9 +6,10 @@ use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{TestRun, lookup_module, type_name, type_token, value_name};
 use crate::machine::model::render_label;
 use crate::machine::model::{AnnouncedData, NodeSchema, TypeDigest, TypeNode, TypeRegistry};
-use crate::machine::model::{KExpression, KObject, KType};
+use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, Scope};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::KExpression;
 
 /// `(scc-digest, scc-size, field-types)` of a sealed record-repr newtype member, read off its
 /// `SetMember` identity. The SCC digest and component size witness which members sealed together;
@@ -17,11 +18,7 @@ fn member_scc_and_fields(
     scope: &Scope<'_>,
     types: &TypeRegistry,
     name: &str,
-) -> (
-    TypeDigest,
-    usize,
-    Vec<(crate::machine::model::BinderSymbol, KType)>,
-) {
+) -> (TypeDigest, usize, Vec<(crate::parse::BinderSymbol, KType)>) {
     let handle = crate::builtins::test_support::lookup_type(scope, name)
         .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
     match types.node(handle) {
@@ -174,9 +171,9 @@ fn only_top_level_statements_announce() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let top_level = test_run.parse_one("MODULE t = (\n  NEWTYPE Boxed = Number\n  LET n = 1\n)");
-    fn body<'a>(statement: &crate::machine::model::KExpression<'a>) -> KExpression<'a> {
+    fn body<'a>(statement: &crate::parse::KExpression<'a>) -> KExpression<'a> {
         match statement.parts.last().expect("a body slot").value {
-            crate::machine::model::ExpressionPart::Expression(body) => *body,
+            crate::parse::ExpressionPart::Expression(body) => *body,
             other => panic!("expected a body slot, got {other:?}"),
         }
     }

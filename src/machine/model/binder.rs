@@ -72,7 +72,7 @@ pub(crate) enum TypeDeclarationSurface {
 /// What `expression` announces to its module body's declaration window, or `None` if it announces
 /// nothing.
 ///
-/// Recognition is by the node's cached [`FORMS`](crate::machine::model::key_spec::FORMS) entry —
+/// Recognition is by the node's cached [`FORMS`](crate::parse::forms::FORMS) entry —
 /// a full bucket key, every keyword pinned in position — so a user overload that merely shares a
 /// head keyword announces nothing, and the constructor-family key `NEWTYPE <decl>` is excluded
 /// structurally rather than by inspecting what its extractor would return. Only a statement at the

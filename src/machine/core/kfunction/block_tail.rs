@@ -16,9 +16,10 @@ use crate::machine::Scope;
 use crate::machine::core::CallFrame;
 use crate::machine::core::bindings::WriteGate;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression};
+use crate::machine::model::WorkingExpression;
 use crate::machine::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::memory::RegionBrand;
+use crate::parse::{ExpressionPart, KExpression};
 
 /// How the body maps onto the tail.
 pub(crate) enum BlockBody<'a> {

@@ -33,7 +33,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
 /// // A bare `KExpression`, whatever brand built it, is not a `ProgramExpression`.
-/// let node = koan::machine::model::ast::KExpression::new(program.region(), &[]);
+/// let node = koan::parse::KExpression::new(program.region(), &[]);
 /// let _cell = koan::machine::model::KObject::KExpression(node);
 /// ```
 ///
@@ -42,7 +42,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// ```compile_fail
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
-/// let node = koan::machine::model::ast::KExpression::new(program.region(), &[]);
+/// let node = koan::parse::KExpression::new(program.region(), &[]);
 /// let _marked = koan::machine::model::ast::program::ProgramExpression(node);
 /// ```
 ///

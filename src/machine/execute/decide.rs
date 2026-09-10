@@ -15,10 +15,11 @@ use crate::machine::core::{
 };
 use crate::machine::model::Carried;
 use crate::machine::model::DeliveredCarried;
-use crate::machine::model::lazy_slots::LazyKinds;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
 use crate::memory::RegionBrand;
+use crate::parse::ExpressionPart;
+use crate::parse::LazyKinds;
 use crate::source::Spanned;
 use std::rc::Rc;
 
@@ -73,7 +74,7 @@ pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_
 /// Shape classification is pure-structural and cached on the node at parse time; re-exported so
 /// decide-internal call sites and tests keep the `decide::` path.
 #[allow(unused_imports)]
-pub(crate) use crate::machine::model::{DispatchShape, classify_dispatch_shape};
+pub(crate) use crate::parse::{DispatchShape, classify_dispatch_shape};
 
 /// The staged form of one eager part shape. Adding a variant forces a [`stage_eager_part`] arm via
 /// match exhaustiveness.

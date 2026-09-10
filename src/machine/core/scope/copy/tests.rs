@@ -20,9 +20,10 @@ use crate::machine::core::bindings::{BindingIndex, WriteGate};
 use crate::machine::core::kfunction::Body;
 use crate::machine::core::seals::GroupSeal;
 use crate::machine::core::tests::{body_no_op, unit_signature};
-use crate::machine::model::{KeywordSymbol, OperatorGroup, ReductionMode, RunRegistries};
+use crate::machine::model::{OperatorGroup, ReductionMode, RunRegistries};
 use crate::memory::FoldedPlacement;
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::KeywordSymbol;
 
 /// Bind `name` in `scope` to a fresh closure capturing `scope` itself, and hand the callable back.
 /// The shape every case here is built from: a binding whose value's captured scope is the very
@@ -459,7 +460,7 @@ fn a_slotted_scope_copies_to_a_slotted_scope() {
     .into_iter()
     .next()
     .expect("one statement");
-    let layout = crate::machine::model::SlotLayout::of_body(program.brand().region(), &body);
+    let layout = crate::parse::SlotLayout::of_body(program.brand().region(), &body);
     let frame: Rc<CallFrame> = test_run.scope.open_frame_slotted(layout);
 
     frame.with_resident(|source| {

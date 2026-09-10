@@ -29,13 +29,14 @@ use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::Carried;
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::DeliveredOperatorGroup;
-use crate::machine::model::KeyElement;
-use crate::machine::model::KeywordSymbol;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{
-    BinderSymbol, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol, coerce_function_cell,
-    render_keyworded_head, render_label, select_keyworded_satisfier, shape_key_is,
+    KObject, KType, ReductionMode, coerce_function_cell, render_keyworded_head, render_label,
+    select_keyworded_satisfier, shape_key_is,
 };
+use crate::parse::KeyElement;
+use crate::parse::KeywordSymbol;
+use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
 
 /// What an ascription decides about a view's members once the newborn view scope's id — the
 /// generativity nonce every per-call mint folds in — is known. Handed to
@@ -50,13 +51,13 @@ pub(crate) struct ViewMembers {
     /// this does not name is absent from the view, which is what makes an ascription a narrowing:
     /// width lives in the *matching* relation, never in the view the match produces.
     pub(crate) declared_values:
-        std::collections::HashSet<ValueSymbol, crate::machine::model::IdentityBuildHasher>,
+        std::collections::HashSet<ValueSymbol, crate::parse::IdentityBuildHasher>,
     /// SIG value-slot name → the slot's **declared** type, for every member whose value has to be
     /// rewritten as the replay installs it. The declared type is the coercion walk's root; a slot
     /// whose two substitutions agree is absent, and its member replays verbatim. A subset of
     /// `declared_values`.
     pub(crate) coerced_slots:
-        std::collections::HashMap<ValueSymbol, KType, crate::machine::model::IdentityBuildHasher>,
+        std::collections::HashMap<ValueSymbol, KType, crate::parse::IdentityBuildHasher>,
     /// The signature's declared keyworded members — the replay's dispatch-surface plan, each an
     /// expression shape whose own key names the bucket it draws from. A bucket no member keys is
     /// absent from the view; a bucket some member keys publishes one entry per declared member, at

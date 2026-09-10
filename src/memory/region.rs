@@ -32,7 +32,7 @@ use super::substrate::{
 /// structurally absent. See
 /// [value-substrates.md § Untyped arenas](../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
 ///
-/// A [`TypeSymbol`](crate::machine::model::TypeSymbol) and a
+/// A [`TypeSymbol`](crate::parse::TypeSymbol) and a
 /// [`KType`](crate::machine::model::KType) need no storage at
 /// all: both are lifetime-free `Copy` handles — a name's hash digest and an interned registry
 /// index — so the type channel's carriers hold them by value.

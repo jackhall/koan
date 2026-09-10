@@ -7,7 +7,7 @@
 //! Keys are [`BinderSymbol`]s, never text: a field name is a fixed-width content digest carried
 //! alongside the binding class its own parse established, so a lookup is a `u128` compare and no
 //! field name is ever copied or re-classified. Rendering resolves the text back through the run's
-//! label interner ([`LabelInterner`](crate::machine::model::LabelInterner)).
+//! label interner ([`LabelInterner`](crate::parse::LabelInterner)).
 //!
 //! Identity is the key's [`Symbol`] bits alone — equality, hashing and the type digest all read
 //! `key.symbol()` and never the variant tag, so a schema's class rides past the intern boundary
@@ -41,7 +41,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use crate::machine::model::labels::{BinderSymbol, Symbol};
+use crate::parse::{BinderSymbol, Symbol};
 
 /// See the module-level documentation for the invariants.
 #[derive(Clone, Debug, Default)]

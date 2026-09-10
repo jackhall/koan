@@ -5,21 +5,22 @@ use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use crate::machine::DepTerminal;
 use crate::machine::LexicalFrame;
 use crate::machine::ProducerId;
-use crate::machine::model::KExpression;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::labels::TypeSymbol;
-use crate::machine::model::{BinderSymbol, ExpressionPart};
 use crate::machine::model::{DeferredReturn, ReturnType};
-use crate::machine::model::{KObject, KType, Symbol};
+use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::memory::RegionBrand;
+use crate::parse::KExpression;
+use crate::parse::Symbol;
+use crate::parse::TypeSymbol;
+use crate::parse::{BinderSymbol, ExpressionPart};
 use crate::source::Spanned;
 use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{StaticName, ValueSymbol};
+use crate::parse::{StaticName, ValueSymbol};
 
 /// The carrier union a deferral type slot takes, spelling the whole dimension once so the operand ×
 /// result matrix is one registration per surface rather than a cartesian product. Every member is

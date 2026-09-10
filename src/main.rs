@@ -108,7 +108,7 @@ fn report_region_audits() {
 #[cfg(feature = "alloc-count")]
 fn report_allocations() {
     let total = counting_alloc::allocations();
-    let minted = koan::machine::model::symbols_minted();
+    let minted = koan::parse::symbols_minted();
     eprintln!("allocations: {total}");
     eprintln!("symbols_minted: {minted}");
 }

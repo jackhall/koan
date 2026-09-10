@@ -4,10 +4,11 @@
 use std::collections::BTreeMap;
 
 use crate::builtins::test_support::TestRun;
-use crate::machine::model::key_spec::{FORMS, Form, key_matches, render_key};
-use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry, UntypedKey};
+use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::UntypedKey;
 use crate::parse::forms::lazy::LazyKinds;
+use crate::parse::forms::{FORMS, Form, key_matches, render_key};
 use crate::parse::parse;
 
 /// The kind an exact raw-capture slot type stands for; `None` for a slot type that captures
@@ -76,7 +77,7 @@ fn lazy_forms() -> impl Iterator<Item = &'static Form> {
 
 /// The entry `key` matches, or `None`.
 fn form_for_key(key: &UntypedKey) -> Option<&'static Form> {
-    crate::machine::model::key_spec::form_for(key.iter().copied())
+    crate::parse::forms::form_for(key.iter().copied())
 }
 
 /// Every live builtin bucket with a raw-capture slot has a table entry declaring exactly those
@@ -175,7 +176,7 @@ fn the_kind_derivation_distributes_over_union_members() {
 fn stamped_slots(source: &str) -> Vec<(usize, LazyKinds)> {
     let program = program_storage();
     let brand = program.brand();
-    let statement = parse(brand, &crate::machine::model::LabelInterner::new(), source)
+    let statement = parse(brand, &crate::parse::LabelInterner::new(), source)
         .expect("the snippet parses")
         .into_iter()
         .next()

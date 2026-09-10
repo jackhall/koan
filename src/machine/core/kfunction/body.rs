@@ -2,7 +2,7 @@
 //! body-statement splitters, and the `Body` enum (an action `fn` pointer vs a captured
 //! user-defined `KExpression`).
 
-use crate::machine::model::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 use crate::machine::model::KType;
@@ -196,7 +196,7 @@ mod tests {
             "FOO (a)",
             "FOO ((a) (b) (c))",
         ] {
-            let body = parse(brand, &crate::machine::model::LabelInterner::new(), src)
+            let body = parse(brand, &crate::parse::LabelInterner::new(), src)
                 .expect("parse")
                 .into_iter()
                 .next()

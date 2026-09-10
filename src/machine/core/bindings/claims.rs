@@ -38,12 +38,12 @@ use crate::memory::AllocVec;
 use crate::memory::Allocator;
 
 use crate::machine::ProducerId;
-use crate::machine::model::KeyElement;
-#[cfg(test)]
-use crate::machine::model::UntypedKey;
-use crate::machine::model::{IdentityBuildHasher, TypeSymbol, ValueSymbol};
 use crate::memory::RegionBrand;
 use crate::memory::{BumpBackedMap, BumpVec};
+use crate::parse::KeyElement;
+#[cfg(test)]
+use crate::parse::UntypedKey;
+use crate::parse::{IdentityBuildHasher, TypeSymbol, ValueSymbol};
 
 use super::{BindingIndex, Bindings};
 use crate::memory::bump_table;

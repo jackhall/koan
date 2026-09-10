@@ -6,7 +6,7 @@
 //!
 //! See [type-language via dispatch](../../../../design/typing/type-language-via-dispatch.md).
 
-use crate::machine::model::labels::{LabelInterner, StaticName, TypeSymbol};
+use crate::parse::{LabelInterner, StaticName, TypeSymbol};
 
 /// Shallow kind of a type, used to admit a type value into a type-accepting slot. The kinds
 /// form one subsumption lattice:

@@ -25,9 +25,9 @@
 
 use crate::machine::ProducerId;
 use crate::machine::core::{LexicalFrame, Scope};
-use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{KType, RunRegistries, TypeNode, TypeRegistry, TypeResolution};
 use crate::memory::ScopeId;
+use crate::parse::TypeSymbol;
 
 impl<'step> Scope<'step> {
     /// Elaborates against `self` and admits the result only when `FinalizeGate` passes it. The
@@ -86,7 +86,7 @@ impl FinalizeGate<'_, '_> {
     fn declared_source(
         &self,
         scope_id: ScopeId,
-        name: crate::machine::model::TypeSymbol,
+        name: crate::parse::TypeSymbol,
     ) -> Option<ProducerId> {
         let owner = self.scope.ancestors().find(|s| s.id == scope_id)?;
         owner.bindings().type_placeholder_producer(name)
@@ -97,7 +97,7 @@ impl FinalizeGate<'_, '_> {
 /// identified by its declaring scope id.
 struct UserTypeRef {
     scope_id: ScopeId,
-    name: crate::machine::model::TypeSymbol,
+    name: crate::parse::TypeSymbol,
 }
 
 /// Visits every top-level [`UserTypeRef`] in `kt` in pre-order, calling `found` on each. The walk

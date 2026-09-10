@@ -9,8 +9,9 @@ use super::super::*;
 use crate::builtins::test_support::{binder_name, value_name};
 use crate::machine::ProducerId;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{Carried, KObject, Scalar, SlotLayout, ValueSymbol};
+use crate::machine::model::{Carried, KObject, Scalar};
 use crate::memory::{FrameStorageExt, RegionBrand, Sealed, run_root_storage};
+use crate::parse::{SlotLayout, ValueSymbol};
 
 /// A three-binder body: `a` at position 1, `b` at 2, `c` at 3 — the positions statements `0..3` of
 /// a block submit at. Spelled as source so the layout comes off the same statement reader a real

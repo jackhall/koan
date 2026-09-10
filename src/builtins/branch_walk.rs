@@ -20,9 +20,9 @@
 //!
 //! [`resolve_arm_contract`] builds the `-> :T` return contract every arm enforces on its result.
 
-use crate::machine::model::{BinderSymbol, ExpressionPart, KExpression, KLiteral};
-use crate::machine::model::{KeywordSymbol, Symbol, TypeSymbol, WILDCARD};
 use crate::machine::model::{TypeNode, TypeResolution, most_specific_ktype};
+use crate::parse::{BinderSymbol, ExpressionPart, KExpression, KLiteral};
+use crate::parse::{KeywordSymbol, Symbol, TypeSymbol, WILDCARD};
 
 use crate::machine::LexicalFrame;
 use crate::machine::ReturnContract;
@@ -40,8 +40,7 @@ crate::slots! { SLOTS { return_type } }
 /// The branch separator token, declared once here so the arms are recognized by a symbol
 /// compare against a memoized name rather than a spelling. The scrutinee binder every arm
 /// installs is [`MACHINE_BINDERS.arm`](crate::machine::model::MACHINE_BINDERS).
-static ARROW: crate::machine::model::StaticName<KeywordSymbol> =
-    crate::static_name!(KeywordSymbol, "->");
+static ARROW: crate::parse::StaticName<KeywordSymbol> = crate::static_name!(KeywordSymbol, "->");
 
 /// Read the MATCH / TRY `-> :T` slot from `ctx.args` into the [`ReturnContract::Arm`] both `MATCH`
 /// and `TRY` arms are checked against.
@@ -59,7 +58,7 @@ pub(crate) fn resolve_arm_contract<'a>(
 /// ([`arg_labeled`](crate::builtins)). `role` names the slot in the missing-argument error.
 pub(crate) fn read_type_slot(
     ctx: &crate::machine::BodyCtx<'_, '_, '_>,
-    slot: &crate::machine::model::StaticName<crate::machine::model::ValueSymbol>,
+    slot: &crate::parse::StaticName<crate::parse::ValueSymbol>,
     role: &'static str,
 ) -> Result<KType, KError> {
     ctx.args

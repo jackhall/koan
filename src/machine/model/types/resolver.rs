@@ -23,7 +23,7 @@ use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
 use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::TypeSymbol;
+use crate::parse::TypeSymbol;
 
 use super::declaration_window::{DeclWindow, WindowView};
 use super::kkind::KKind;

@@ -5,7 +5,7 @@
 
 use super::builtin_names::builtin_types;
 use super::ktype::KType;
-use crate::machine::model::labels::TypeSymbol;
+use crate::parse::TypeSymbol;
 
 impl KType {
     /// Look up a `KType` by the name a user can write in source (e.g. `Number`, `List`). Every

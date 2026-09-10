@@ -39,7 +39,7 @@ use super::super::types::{
     sig_subtype,
 };
 use crate::machine::model::RunRegistries;
-use crate::machine::model::TypeSymbol;
+use crate::parse::TypeSymbol;
 use crate::parse::labels::IdentityBuildHasher;
 
 /// The owned members a module is assembled from — gathered by a construction site before the value

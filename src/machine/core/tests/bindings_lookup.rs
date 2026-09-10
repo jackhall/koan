@@ -199,7 +199,7 @@ fn lookup_function_filters_per_overload_visibility() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("BAR")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::NUMBER,
             )),
@@ -210,7 +210,7 @@ fn lookup_function_filters_per_overload_visibility() {
         elements: vec![
             SignatureElement::Keyword(probe_symbol("BAR")),
             SignatureElement::Argument(Argument::new(
-                crate::machine::model::BinderSymbol::classify("v")
+                crate::parse::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 KType::STR,
             )),

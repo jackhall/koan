@@ -26,9 +26,10 @@ use crate::machine::core::{
 };
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::{CoercionTables, DeclaredSlots, KType, declared_return};
-use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
 use crate::memory::BumpVec;
+use crate::parse::{ExpressionPart, KExpression};
 
 /// Fold a resolved call into a [`Outcome::Continue`] — the dispatcher's one invoke entry, routing on
 /// the picked body:

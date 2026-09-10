@@ -5,17 +5,18 @@ use crate::machine::FinishCtx;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
+use crate::machine::model::TypeNode;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeclWindow, RecursiveGroupWindow};
 use crate::machine::model::{FieldNameKind, pair_list_names, seal_writes};
-use crate::machine::model::{Symbol, TypeNode};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 use crate::machine::{StepCarried, seal_type_identity};
+use crate::parse::Symbol;
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{BinderSymbol, TypeSymbol};
 use crate::machine::model::{display_label, render_label};
+use crate::parse::{BinderSymbol, TypeSymbol};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, schema } }
@@ -345,7 +346,7 @@ mod tests {
                 schema,
                 ..
             } = types.node(member)
-                && member_name.symbol() == crate::machine::model::Symbol::of(variant)
+                && member_name.symbol() == crate::parse::Symbol::of(variant)
             {
                 return match schema {
                     NodeSchema::NewType(repr) => repr,
@@ -361,7 +362,7 @@ mod tests {
         let program = program_storage();
         let expr = parse_one(
             &program,
-            &crate::machine::model::LabelInterner::new(),
+            &crate::parse::LabelInterner::new(),
             "UNION Maybe = (Some :Number, None :Null)",
         );
         let name = expr.binder_name_from_type_part();

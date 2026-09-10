@@ -7,9 +7,9 @@ use std::collections::HashSet;
 use super::MISS_DIAGNOSTICS;
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
-use crate::machine::model::UntypedKey;
-use crate::machine::model::key_spec::{FORMS, Form, FormId, key_matches, render_key};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::UntypedKey;
+use crate::parse::forms::{FORMS, Form, FormId, key_matches, render_key};
 
 /// Every bucket key the seeded root registers a callable under.
 fn live_buckets() -> HashSet<UntypedKey> {

@@ -19,8 +19,8 @@
 //! design note.
 
 use crate::machine::model::Held;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KType, TypeRegistry};
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
 use super::KObject;
 use crate::machine::model::RunRegistries;

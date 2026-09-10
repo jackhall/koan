@@ -6,7 +6,7 @@ use crate::machine::model::{Argument, KObject, KType, SignatureElement};
 use crate::memory::{program_storage, run_root_storage};
 
 use super::capture_program_output;
-use crate::machine::model::Symbol;
+use crate::parse::Symbol;
 
 #[test]
 fn fn_typed_param_records_ktype_on_signature() {

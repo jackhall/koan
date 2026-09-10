@@ -31,7 +31,7 @@ use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
-use crate::machine::model::{KeywordSymbol, StaticName, ValueSymbol};
+use crate::parse::{KeywordSymbol, StaticName, ValueSymbol};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { left, right } }

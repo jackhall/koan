@@ -8,7 +8,8 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{BindKind, BinderSymbol, display_label, snake_case_identifier};
+use crate::machine::model::display_label;
+use crate::parse::{BindKind, BinderSymbol, snake_case_identifier};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, value } }
@@ -197,7 +198,7 @@ fn capitalize_identifier(name: &str) -> Option<String> {
     let mut out = String::with_capacity(name.len());
     out.push(first.to_ascii_uppercase());
     out.extend(chars);
-    crate::machine::model::labels::is_type_name(&out).then_some(out)
+    crate::parse::labels::is_type_name(&out).then_some(out)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {

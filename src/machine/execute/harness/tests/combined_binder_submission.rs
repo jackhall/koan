@@ -7,8 +7,8 @@
 use super::working_one;
 use crate::builtins::test_support::key_keyword;
 use crate::builtins::test_support::{TestRun, value_name};
-use crate::machine::model::KeyElement;
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::KeyElement;
 
 #[test]
 fn combined_form_installs_both_channels_at_submission() {

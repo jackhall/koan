@@ -11,8 +11,8 @@
 
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{FieldSlot, Part, part_summary};
-use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::machine::{KError, KErrorKind};
+use crate::parse::{BinderSymbol, TypeSymbol};
 use crate::source::Spanned;
 
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
@@ -131,9 +131,9 @@ pub fn parse_type_tag_names<'a, P: Part<'a>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::model::ast::{ExpressionPart, KExpression};
-    use crate::machine::model::labels::{LabelInterner, ValueSymbol};
     use crate::memory::{RegionBrand, program_storage};
+    use crate::parse::{ExpressionPart, KExpression};
+    use crate::parse::{LabelInterner, ValueSymbol};
     use crate::source::Spanned;
 
     /// `[name, slot]` parts where the name rides as a `Type` token (e.g. a capitalized

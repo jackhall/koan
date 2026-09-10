@@ -20,15 +20,14 @@ use crate::machine::core::{BindingIndex, DeclarationSite, KError};
 
 use crate::machine::core::CallFrame;
 use crate::machine::model::Carried;
-use crate::machine::model::KExpression;
 use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution, Unifier};
+use crate::parse::KExpression;
 use smallvec::SmallVec;
 
 use super::KFunction;
 use super::body::{Body, LeadingStatements, split_leading_tail};
-use crate::machine::model::{
-    BindKind, BinderSymbol, RunRegistries, TypeSymbol, render_label, wrong_binder_class,
-};
+use crate::machine::model::{RunRegistries, render_label};
+use crate::parse::{BindKind, BinderSymbol, TypeSymbol, wrong_binder_class};
 
 /// A body's execution context: the per-call `region` it runs in. Owned (an `Rc`), so it carries no
 /// lifetime; the body re-projects its scope from the region on demand.

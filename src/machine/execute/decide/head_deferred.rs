@@ -13,8 +13,9 @@
 use crate::machine::core::DepPlacement;
 use crate::machine::core::location_from_expr;
 use crate::machine::model::Carried;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind};
+use crate::parse::ExpressionPart;
 use crate::source::Spanned;
 
 use super::super::outcome::DepTerminal;

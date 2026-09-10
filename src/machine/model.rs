@@ -1,11 +1,5 @@
 pub mod ast;
 pub(crate) mod binder;
-
-// Temporary: the parser's vocabulary, still reachable at its old paths while the tree's imports are
-// swept over to `crate::parse`.
-pub(crate) use crate::parse::forms as key_spec;
-pub(crate) use crate::parse::forms::lazy as lazy_slots;
-pub(crate) use crate::parse::labels;
 pub(crate) mod close_inference;
 pub(crate) mod miss_diagnostics;
 pub mod operators;
@@ -14,15 +8,6 @@ pub(crate) mod registries;
 pub(crate) mod types;
 pub(crate) mod values;
 
-pub use crate::parse::ast::{KeyElement, UntypedKey};
-pub(crate) use crate::parse::labels::IdentityBuildHasher;
-pub use crate::parse::labels::is_keyword_token;
-#[cfg(feature = "alloc-count")]
-pub use crate::parse::labels::symbols_minted;
-pub use crate::parse::labels::{
-    BinderSymbol, ClassifiedSymbol, KeywordSymbol, LabelInterner, StaticName, Symbol, TypeSymbol,
-    ValueSymbol, WILDCARD, is_type_name, snake_case_identifier, wrong_binder_class,
-};
 pub use operators::{
     DeliveredOperatorGroup, FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode,
     SealedOperatorGroup, binary_key, unary_key,
@@ -53,16 +38,6 @@ pub(crate) use values::{
     product_reaches_region, read_resting,
 };
 
-pub(crate) use crate::parse::ast::{
-    DispatchShape, ExpressionPart, KExpression, KLiteral, PartClass, ProgramExpression,
-    ProgramNode, classify_dispatch_shape,
-};
-pub use crate::parse::forms::binder::{BinderBucketFn, BinderNameFn, BinderSurface};
-pub(crate) use crate::parse::forms::binder::{
-    OpArity, StoredBinderKey, op_declaration_arity, symbol_from_parts, symbol_from_quote_body,
-};
-pub(crate) use crate::parse::forms::layout::{SlotLayout, SlotLayoutRefFamily};
-pub use crate::parse::labels::BindKind;
 pub(crate) use ast::{WorkingExpression, WorkingPart};
 pub(crate) use binder::MACHINE_BINDERS;
 pub(crate) use binder::announce_type_members;

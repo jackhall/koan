@@ -1,10 +1,10 @@
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{
-    Argument, BinderSymbol, KType, ReturnType, SignatureDraft, SignatureElement, StaticName,
-    ValueSymbol, carrier_union_error,
+    Argument, KType, ReturnType, SignatureDraft, SignatureElement, carrier_union_error,
 };
 use crate::machine::{BindingIndex, Scope, WriteGate};
 use crate::machine::{Body, KFunction};
+use crate::parse::{BinderSymbol, StaticName, ValueSymbol};
 
 pub(crate) mod arithmetic;
 mod ascribe;

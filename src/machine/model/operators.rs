@@ -28,8 +28,8 @@
 
 use crate::memory::RegionBrand;
 
-use super::labels::KeywordSymbol;
 use crate::parse::ast::{KeyElement, UntypedKey};
+use crate::parse::labels::KeywordSymbol;
 
 /// Which way a fold nests a run of more than two operands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

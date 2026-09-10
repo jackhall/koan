@@ -15,7 +15,8 @@ use std::rc::Rc;
 
 use crate::machine::core::CallFrame;
 use crate::machine::core::Scope;
-use crate::machine::model::{LabelInterner, RunRegistries};
+use crate::machine::model::RunRegistries;
+use crate::parse::LabelInterner;
 
 /// **The run's output sink** — where `PRINT` writes. One per run, held by the [`RunFrame`] beside
 /// the run's [`RunRegistries`] and reached the same way: through the execution context, never off a

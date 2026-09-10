@@ -10,17 +10,18 @@
 //!
 //! Recognition is by the [`FormId`] the node resolved at construction — a full untyped bucket key,
 //! sound because builtin buckets are unshadowable, so a node whose key matches a
-//! [`FORMS`](crate::machine::model::key_spec::FORMS) entry can only ever resolve to that builtin's
+//! [`FORMS`](crate::parse::forms::FORMS) entry can only ever resolve to that builtin's
 //! overloads. A form whose key has *no* registration at all — the missing-result `UNARY OP` forms,
 //! whose only shape is the mistake — carries that argument itself: its entry is marked
-//! [`reserved`](crate::machine::model::key_spec::Form::reserved), and the overload write door
+//! [`reserved`](crate::parse::forms::Form::reserved), and the overload write door
 //! refuses a user registration under a reserved key, so the shape stays unshadowable and the
 //! diagnosis stays sound.
 
-use crate::machine::model::key_spec::{FormId, form_for};
-use crate::machine::model::labels::snake_case_identifier;
 use crate::machine::model::registries::RunRegistries;
-use crate::machine::model::{ExpressionPart, UntypedKey, WorkingExpression, render_label};
+use crate::machine::model::{WorkingExpression, render_label};
+use crate::parse::forms::{FormId, form_for};
+use crate::parse::snake_case_identifier;
+use crate::parse::{ExpressionPart, UntypedKey};
 
 /// The targeted message a miss under one form earns, when the parts confirm the mistake the entry
 /// names (the name slot really is a Type token, say); `None` leaves the generic dispatch-miss reason
@@ -78,7 +79,7 @@ fn identifier_at(
 }
 
 /// The operator glyph the declaration quotes — the first `#(…)` part of the run, read exactly as
-/// [`symbol_from_parts`](crate::machine::model::symbol_from_parts) reads it off a statement.
+/// [`symbol_from_parts`](crate::parse::symbol_from_parts) reads it off a statement.
 fn quoted_symbol(expr: &WorkingExpression<'_>, registries: &RunRegistries) -> Option<String> {
     let quoted = expr
         .parts

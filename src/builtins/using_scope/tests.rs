@@ -488,7 +488,7 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
 
     let delivered = window
         .resolve_value_delivered(
-            crate::machine::model::ValueSymbol::classify("rec").expect("`rec` is a value token"),
+            crate::parse::ValueSymbol::classify("rec").expect("`rec` is a value token"),
             None,
         )
         .expect("rec is bound in the module scope, surfaced through the transparent window")

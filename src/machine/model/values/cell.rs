@@ -8,7 +8,7 @@
 //! `UnresolvedType` arm).
 //!
 //! `UnresolvedType` carries the token's [`TypeSymbol`] verbatim: no type handle ever denotes an
-//! unresolved name. [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
+//! unresolved name. [`ExpressionPart::resolve_for`](crate::parse::ExpressionPart::resolve_for)
 //! mints it for a bare user name, and the park-capable
 //! [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier)
 //! consumes it.
@@ -27,10 +27,10 @@
 //! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
 use crate::machine::model::KObject;
-use crate::machine::model::ast::ProgramNode;
-use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::machine::model::types::KType;
 use crate::memory::{Delivered, FoldingBrand, Sealed, reattachable};
+use crate::parse::ProgramNode;
+use crate::parse::{BinderSymbol, TypeSymbol};
 
 /// Three-arm value currency. `Copy` — the object arms wrap `&'a` references and the `Type` arm a
 /// `Copy` [`KType`] handle, so it threads through node results and the lift path without clones.

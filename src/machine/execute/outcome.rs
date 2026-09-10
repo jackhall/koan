@@ -21,10 +21,11 @@ use crate::machine::core::{
 #[cfg(test)]
 use crate::machine::model::Carried;
 use crate::machine::model::DeliveredCarried;
-use crate::machine::model::{KExpression, WorkingExpression};
+use crate::machine::model::WorkingExpression;
 use crate::machine::model::{KType, RunRegistries};
 use crate::memory::ScopeId;
 use crate::memory::{FrameStorageExt, RegionBrand};
+use crate::parse::KExpression;
 use crate::source::SourceRef;
 
 #[cfg(test)]

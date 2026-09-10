@@ -15,7 +15,6 @@ use crate::machine::core::{LexicalFrame, Scope};
 use crate::machine::execute::RunWriter;
 use crate::machine::execute::StepAllocator;
 use crate::machine::execute::StepCarried;
-use crate::machine::model::BinderSymbol;
 #[cfg(test)]
 use crate::machine::model::Carried;
 use crate::machine::model::DeliveredCarried;
@@ -24,15 +23,16 @@ use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::SplicedCell;
-use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::WorkingExpression;
-use crate::machine::model::labels::TypeSymbol;
-use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{BindingIndex, DeclarationSite, Installer, KError, KErrorKind};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::memory::{ProgramBrand, RegionBrand};
+use crate::parse::BinderSymbol;
+use crate::parse::Symbol;
+use crate::parse::TypeSymbol;
+use crate::parse::{ExpressionPart, KExpression};
+use crate::parse::{StaticName, ValueSymbol};
 use crate::scheduler::Deps;
 use crate::source::SourceRef;
 
@@ -157,7 +157,7 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
     pub fn record_type(
         &self,
         name: &StaticName<ValueSymbol>,
-    ) -> Option<crate::machine::model::ast::ProgramNode<'a>> {
+    ) -> Option<crate::parse::ProgramNode<'a>> {
         match self.held(name) {
             Some(Held::RecordType(e)) => Some(*e),
             _ => None,

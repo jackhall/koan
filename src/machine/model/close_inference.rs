@@ -7,7 +7,7 @@
 //! uses rather than restating it:
 //!
 //! - which slots hold raw code — [`KExpression::lazy_kinds_at`], the seal-time
-//!   [`Form::lazy_slots`](crate::machine::model::key_spec::Form::lazy_slots) stamp;
+//!   [`Form::lazy_slots`](crate::parse::forms::Form::lazy_slots) stamp;
 //! - what a statement declares — [`KExpression::statement_binder_plan`];
 //! - which position of a declaration form is the declared name — [`KExpression::binder_name_slot`];
 //! - which surfaces are nominal declarations — [`announced_type_declaration`];
@@ -28,14 +28,14 @@ use crate::machine::core::body_statement_refs;
 use crate::machine::model::binder::{
     TypeDeclarationSurface, announced_type_declaration, union_schema,
 };
-use crate::machine::model::key_spec::FormId;
-use crate::machine::model::labels::{BinderSymbol, TypeSymbol, ValueSymbol};
-use crate::machine::model::lazy_slots::LazyKinds;
 use crate::machine::model::{
-    ExpressionPart, KExpression, MACHINE_BINDERS, RunRegistries, SignaturePosition, SignatureScan,
-    announce_type_members,
+    MACHINE_BINDERS, RunRegistries, SignaturePosition, SignatureScan, announce_type_members,
 };
 use crate::memory::{BumpAllocator, BumpVec};
+use crate::parse::LazyKinds;
+use crate::parse::forms::FormId;
+use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::source::{FileId, Span};
 
 /// What the block's free identifiers came to. Every buffer is the caller's arena — the step scratch
@@ -155,7 +155,7 @@ enum FormRule {
 }
 
 /// The rules the walk reads a recognized form's slots by, tagged with the form's
-/// [`FormId`]. Every key lives in [`FORMS`](crate::machine::model::key_spec::FORMS); an entry here
+/// [`FormId`]. Every key lives in [`FORMS`](crate::parse::forms::FORMS); an entry here
 /// names only what the sourced readers do not.
 ///
 /// The nominal declarations (`NEWTYPE <name> = <repr>`, `UNION <name> = <schema>`) are absent on

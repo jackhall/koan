@@ -8,11 +8,11 @@ use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Module;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
 use crate::machine::model::TypeNode;
 use crate::machine::model::{ReductionMode, render_label};
 use crate::machine::{KErrorKind, Scope};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::Symbol;
 
 fn module_named<'a>(
     scope: &'a Scope<'a>,
@@ -431,8 +431,7 @@ fn a_pairwise_group_reaches_the_self_sig_with_its_combiner() {
     assert_eq!(
         records[0].1,
         ReductionMode::Pairwise {
-            combiner: crate::machine::model::KeywordSymbol::of("BOTH")
-                .expect("`BOTH` is keyword-class"),
+            combiner: crate::parse::KeywordSymbol::of("BOTH").expect("`BOTH` is keyword-class"),
             direction: crate::machine::model::FoldDirection::Left,
         },
     );

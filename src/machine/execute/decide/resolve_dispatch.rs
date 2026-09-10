@@ -17,11 +17,12 @@ use crate::machine::ProducerId;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::WrapIndices;
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
-use crate::machine::model::KeyElement;
-use crate::machine::model::labels::BinderSymbol;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::memory::{BumpAllocator, BumpVec};
+use crate::parse::BinderSymbol;
+use crate::parse::ExpressionPart;
+use crate::parse::KeyElement;
 use crate::source::Spanned;
 
 use super::resolve::Resolution;
