@@ -74,11 +74,15 @@ positions against. The `declare_n10` / `declare_n100` shapes in
   delete the residual name-channel claim store entirely, but the `DeclarationSite` installer
   identity and the announced-window interaction need their own check. Left keyed here; a
   follow-up item if the residual store proves to be the next measured term.
-- *The `Scope` interface — decided, and owned here.* `memory::frame` names `Scope` concretely
-  ([frame.rs](../../src/memory/frame.rs)), which is the one back-edge the `memory` module keeps
-  into the rest of Koan. The trait that lets a lightweight per-call scope and the lexical scope
-  both fill that slot is written here, with the second implementation — not in the region module,
-  which has only one implementor to generalize over.
+- *A second scope type — decided, there is none.* Every per-call scope keeps `functions`, `operators`, `types`,
+  `outer`, `root`, `id`, `kind` and `closed`; only the value channel changes representation. So
+  there is one `Scope`, the slotted-or-keyed choice is a storage variant inside `Bindings`, and
+  no scope trait exists at the frame level: the frame shell is family-generic per
+  [memory-scope-seam.md](../refactor/memory-scope-seam.md) and never names a scope.
+- *Where the slot array lives — decided.* The array — `Empty | Claimed(P) | Bound(V)` with its
+  occupancy mask and layout-indexed read — is a payload-generic storage shape in `memory` beside
+  `BumpBackedMap`; `core::bindings` instantiates it with `SealedValue` and `ProducerId`. The
+  layout is lexical and stays on the body node in `model`.
 - *Slot payload versus the cellgraph carrier — open.* Today a bound entry is a `SealedValue`: the
   value fused to the exact reach description minted for it, stored beside the value
   ([`DataEntry`](../../src/machine/core/bindings.rs)). Under the substrate `workgraph` is being
@@ -183,6 +187,8 @@ not re-opened from scratch:
 Ordering is soft: this item can ship on today's `workgraph` substrate with the `SealedValue`
 payload, at the cost of the payload rewrite the open direction above names when adoption lands.
 
-**Requires:** none — the readers it sources are shipped.
+**Requires:**
+
+- [Seam `Scope` between `memory` and `core`](../refactor/memory-scope-seam.md)
 
 **Unblocks:** none tracked yet.
