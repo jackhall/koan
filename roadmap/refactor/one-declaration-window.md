@@ -65,3 +65,5 @@ require two types.
 
 - [Seal as a value-bearing producer](seal-as-producer.md) — the seal terminal carries the one
   window type.
+- [Definitions park on free names](../foundation/definitions-park-on-free-names.md) — the
+  window co-declared value definitions announce through.

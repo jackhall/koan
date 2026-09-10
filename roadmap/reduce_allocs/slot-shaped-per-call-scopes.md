@@ -19,30 +19,38 @@ split in the `bindings.rs` module doc exists because a claim and a binding are t
 keyed on one name; and the copy engine flattens every copied entry's position to
 `BindingIndex::value(0)` and re-inserts by name
 ([copy.rs](../../src/machine/core/scope/copy.rs)), since a copy has no layout to preserve
-positions against. The `declare_n10` / `declare_n100` shapes in
-[observe/alloc.txt](../../observe/alloc.txt) hold the per-declared-name term this owns.
+positions against. The `wide_n*` / `deep_n*` shapes in
+[observe/alloc.txt](../../observe/alloc.txt), whose every step opens a per-call frame with a
+dozen-odd `LET`s, hold the per-step and per-live-frame terms this owns.
 
 **Acceptance criteria.**
 
-- A lexical body whose value-binding set is static carries an immutable **layout** — `ValueSymbol
-  → slot`, slot count, and each slot's lexical statement position — computed once and homed on
-  the body node, per the no-global-runtime-state rule (no run-rooted registry).
+- A lexical body carries an immutable **layout** — its value binders as a symbol-sorted run of
+  `(ValueSymbol, lexical position)`, slot index being position in that run — computed at parse
+  and homed on the body node; a callable carries the merged parameter-plus-body layout, built
+  once at definition beside its signature and referenced by every activation. Slot order is
+  symbol order, never signature order, so `FN` and `EXPR` cannot disagree on it. No run-rooted
+  registry, per the no-global-runtime-state rule.
 - A per-call scope's value bindings are one bump allocation in the frame's region sized by the
-  layout, holding one slot state per layout slot; `Bindings::new` builds no `data` map for such a
-  scope, and the allocation-baseline `declare_*` shapes rebaseline downward accordingly.
-- A slot is `Empty`, `Claimed` on the in-flight binder's `ProducerId`, or `Bound`, so the value
-  channel of the claim store is the slot array: a value-name lookup is one slot read answering
-  `Bound` / `Parked` / miss, and the copy-readiness gate's "no claims" half is a counter or mask
-  read over the array with no store probe.
+  layout, holding one slot state per layout slot; a slotted scope builds no `data` map, and the
+  allocation-baseline `wide_step` and `deep_frame` terms rebaseline downward accordingly
+  (`declare_*` never opens a per-call frame and holds flat).
+- A slot is `Empty`, `Claimed` on the in-flight binder's `ProducerId`, or `Bound`, and the value
+  store owns value-name claims in **both** its variants — the keyed map's entry is the same
+  three-state cell — so the claim store holds bucket and type-name claims only, keyed by their
+  own symbol classes. A value-name lookup is one cell read answering `Bound` / `Parked` / miss,
+  and the copy-readiness gate's "no claims" half is an O(1) counter read with no store probe.
 - Slot contents stay drop-free and `Copy`-cheap to read out; the `needs_drop` assert on
   `Bindings` holds unchanged, and frame death remains O(scopes).
 - The positional visibility rule is unchanged: a slot at layout position `i` is visible to a
   reader at cutoff `c` iff `i < c`, with the cutoff still read off the generative `LexicalFrame`
   chain — a static block-id cutoff is not admitted, per the counterexample recorded in
   [frame-recycling.md](frame-recycling.md).
-- The copy engine fills a copied per-call scope by an in-order slot walk sharing the source's
-  layout verbatim; the `BindingIndex::value(0)` flattening and its justification prose in
-  `fill_scope` are gone, and no copied binding is re-inserted by name.
+- The copy engine fills a copied slotted scope by an in-order slot walk over the source's layout
+  (re-homed at the destination as the signature is), and every copied entry on every channel —
+  value, bucket, operator — keeps its source lexical position; the `BindingIndex::value(0)`
+  flattening and its justification prose in `fill_scope` are gone, and no copied binding is
+  re-inserted by name.
 - Scopes outside the item's scope — the run root, module bodies, `SIG` declaration scopes,
   `USING … SCOPE` borrowed windows — keep their keyed tables, and a name read that crosses from a
   slotted frame into a keyed ancestor resolves through the existing façade with no second lookup
@@ -62,14 +70,24 @@ positions against. The `declare_n10` / `declare_n100` shapes in
   or one whose statements bind through a surface the binder plan does not enumerate — takes no
   layout and keeps the keyed `data` map. The keyed form is the fallback, not a second slotted
   variant with an overflow table.
-- *Layout source — decided.* Derived from the same readers `CLOSE` inference sources
-  (`statement_binder_plan`, `binder_name_slot`, `MACHINE_BINDERS`, the FN signature stride), so a
-  layout and the inferred-capture walk cannot disagree on what a body binds. A second static
+- *Layout source — decided.* The body half is derived from the same reader `CLOSE` inference
+  sources (`statement_binder_plan` over the block's statements), so a layout and the
+  inferred-capture walk cannot disagree on what a body binds; the parameter half is the
+  signature's own `params()` run, merged in at the callable's birth (`KFunction::alloc_captured`)
+  where the bind loop already reads it, so the layout and the bind cannot drift. A second static
   binder enumeration is not admitted.
-- *Layout lifetime — open.* (a) bumped into the program-lived AST region beside the body node;
-  (b) a heap `Rc` on the body node. Either satisfies no-global-state; (a) matches how a node's
-  parts and structural cache are already bumped together at parse
-  ([parse/lower.rs](../../src/parse/lower.rs)). Recommended: (a).
+- *Layout lifetime — decided.* The body layout is bumped into the node's own region at parse,
+  beside its binder plan ([ast.rs](../../src/machine/model/ast.rs) `seal`); the merged callable
+  layout is bumped beside the signature at birth and rebuilt by the environment copy exactly as
+  the signature is re-minted. No heap `Rc`.
+- *Two cells, not one — decided.* `Bindings` splits into a value cell (the keyed-or-slotted
+  store, owning its claims) and a keyed cell (`types`, `functions`, `operators`, the bucket /
+  type-name claim store). No verb borrows both; the shared-`Symbol` claim map and its
+  disjoint-text argument go away.
+- *Definitions parking on free names — deferred.* A function definition still does not park on
+  in-flight placeholders its body names; that is
+  [definitions-park-on-free-names.md](../foundation/definitions-park-on-free-names.md), which this
+  item unblocks, and nothing in this item's frame shape depends on it either way.
 - *Types channel — deferred.* `types` could be slotted by the same lexical argument, which would
   delete the residual name-channel claim store entirely, but the `DeclarationSite` installer
   identity and the announced-window interaction need their own check. Left keyed here; a
@@ -83,16 +101,15 @@ positions against. The `declare_n10` / `declare_n100` shapes in
   occupancy mask and layout-indexed read — is a payload-generic storage shape in `memory` beside
   `BumpBackedMap`; `core::bindings` instantiates it with `SealedValue` and `ProducerId`. The
   layout is lexical and stays on the body node in `model`.
-- *Slot payload versus the cellgraph carrier — open.* Today a bound entry is a `SealedValue`: the
-  value fused to the exact reach description minted for it, stored beside the value
-  ([`DataEntry`](../../src/machine/core/bindings.rs)). Under the substrate `workgraph` is being
-  rebuilt over ([adopt-cellgraph.md](../../workgraph/roadmap/adopt-cellgraph.md)) that fusion is
-  not a legal habitat: a mask may live only in the home cell's reach table, and an at-rest value is
-  a `Dormant` carrier naming its reach-table entry by a private key
+- *Slot payload versus the cellgraph carrier — decided.* The array is generic in its payload and
+  `core::bindings` instantiates it with today's at-rest carrier, `SealedValue` — the value fused
+  to its exact reach ([`DataEntry`](../../src/machine/core/bindings.rs)). Under the substrate
+  `workgraph` is being rebuilt over ([adopt-cellgraph.md](../../workgraph/roadmap/adopt-cellgraph.md))
+  that fusion is not a legal habitat — an at-rest value is a `Dormant` carrier naming its
+  reach-table entry
   ([liveness-matrix.md § Why masks cannot go stale](../../cellgraph/design/liveness-matrix.md#why-masks-cannot-go-stale),
-  [dormant.rs](../../cellgraph/src/dormant.rs)). Either the slot's `Bound` payload is defined as
-  "the substrate's at-rest carrier" from the start, so adoption changes its type and not the
-  array, or it ships as `SealedValue` and adoption rewrites it. Recommended: the former.
+  [dormant.rs](../../cellgraph/src/dormant.rs)) — so adoption changes the one type argument and
+  not the array.
 
 ## Index-linked chains
 
@@ -190,4 +207,6 @@ payload, at the cost of the payload rewrite the open direction above names when 
 **Requires:** none — the family-generic frame shell it builds on is shipped
 ([frame.rs](../../src/memory/frame.rs)).
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Definitions park on free names](../foundation/definitions-park-on-free-names.md) — a frame's static binding set is what a definition's wait is measured against.
