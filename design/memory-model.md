@@ -180,7 +180,9 @@ The scope-pointer case — `CallFrame`, `Module`, `Signature`, `KFunction`, and 
 own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — holds that
 scope **outright** as a plain `&'a Scope<'a>` (a thin pointer, layout-invariant in `'a`), centralized
 through the [`ScopeRefFamily`](../src/machine/core/scope.rs) reattach family declared beside
-`Scope` itself, with no scope-specialized re-anchor helper — the
+`Scope` itself (the library's `ReferenceFamily` over `Scope`, named rather than redeclared, which is
+what lets the frame shell be generic over the payload family it seats), with no scope-specialized
+re-anchor helper — the
 embedded pointer re-anchors with the holder's own whole-value retype.
 
 No holder is erased on the way in, so every embedded scope reference is already at the region's
@@ -198,16 +200,24 @@ At construction the scope reference is coupled at its target lifetime with no sc
 re-anchor verb. A same-region child stores its already-`'a` parent by plain coercion — the
 constructors take `&'a Scope<'a>`. A per-call child, whose lexical parent / root is longer-lived,
 builds through the externally-witnessed construction door
-[`Scope::open_frame`](../src/machine/core/scope.rs): it mints the fresh region, brands it and the
+[`Frame::open_under`](../src/memory/frame.rs): it mints the fresh region, brands it and the
 foreign parent at one `for<'b>` (the `zip`-combined [`SealedExtern::open`](../workgraph/src/witnessed.rs) the
-run-loop step also rests on), builds the real invariant `Scope<'b>` coupling them through a private
-`Scope` constructor, and hands [`CallFrame::around`](../src/memory/frame.rs) the finished
-`(storage, envelope)` pair — so the per-call child is built at real (non-`'static`) lifetimes with
-no construction-time fabrication and no re-anchor outside the witnessed substrate. The door lives on
-`Scope`, which owns what a scope is; [`Scope::adopt_as_run_frame`](../src/machine/core/scope.rs) is
-the run-root spelling of the same coupling, over an already-built root rather than a fresh child.
+run-loop step also rests on), calls the caller's construction closure to build the real invariant
+resident coupling them, and wraps the finished `(storage, envelope)` pair — so the per-call child is
+built at real (non-`'static`) lifetimes with no construction-time fabrication and no re-anchor
+outside the witnessed substrate. The door is generic over the family it seats and names no Koan
+type; [`Scope::open_frame`](../src/machine/core/scope.rs) is the Koan-side caller that passes its
+own brand, itself as `outer`, and the private `Scope` constructor as the closure — the split that
+keeps `memory` from knowing what a scope is while `Scope` still owns what a scope is.
+[`Frame::adopting`](../src/memory/frame.rs), behind
+[`Scope::adopt_as_run_frame`](../src/machine/core/scope.rs), is the run-root spelling of the same
+coupling, over an already-built root rather than a fresh child; it derives the storage from the
+root's own brand rather than taking it. `Frame`'s own wrap constructor is private, so those two
+doors are the only way a storage and a resident are paired.
 
-`CallFrame` holds that pair as one [`Delivered<ScopeRefFamily>`](../src/memory/substrate.rs) envelope:
+`CallFrame` — Koan's instantiation
+[`Frame<ScopeRefFamily>`](../src/machine/core/scope.rs) of that generic shell — holds the pair as one
+[`Delivered<ScopeRefFamily>`](../src/memory/substrate.rs) envelope:
 the frame storage is the envelope's retained host and the child scope its member-less resident
 carrier, so the storage-pins-the-scope co-location is a construction invariant of the envelope rather
 than a field-order convention. A scheduler slot's `NodeScope::YokedChild` (a cart-ancestor block
@@ -215,8 +225,8 @@ scope evicted off the lifetime-free node) rides the substrate's externally-witne
 [`SealedExtern<ScopeRefFamily>`](../workgraph/src/witnessed.rs) carrier instead — a `&'static Scope`
 erased once on the store side through the safe `erase_to_static::<ScopeRefFamily>` (forgetting a
 reference's lifetime for storage cannot fabricate one), which is also what the frame re-seals to
-(`CallFrame::scope_sealed`) when a step wants the scope in its brand-wide `zip`. Both are read
-through a **rank-2** `open` (the frame's `with_scope`, routing [`Delivered::open`](../workgraph/src/witnessed/delivered.rs)):
+(`CallFrame::resident_sealed`) when a step wants the scope in its brand-wide `zip`. Both are read
+through a **rank-2** `open` (the frame's `with_resident`, routing [`Delivered::open`](../workgraph/src/witnessed/delivered.rs)):
 the scope opens at a `for<'b>` brand against the frame / cart `Rc`, so the
 fabricated lifetime cannot escape the window and no scope borrow rides up a `&mut self` path.
 [`SealedExtern::open`](../workgraph/src/witnessed.rs) (plus its consuming externally-witnessed twin) is the
@@ -344,7 +354,7 @@ and eternal rules instead
 
 The per-call frame's seed binds (`KFunction::invoke` params, the deferred-return-type
 elaboration) open the child scope at a `for<'b>` brand through
-[`CallFrame::with_scope`](../src/memory/frame.rs) and **relocate** their caller value into the
+[`CallFrame::with_resident`](../src/memory/frame.rs) and **relocate** their caller value into the
 opened scope's own region through the substrate before binding it — the param-bind via
 [`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs) (which relocates the value into the
 frame region at a fold brand, the fold's composition minting and retaining what the copy still
@@ -381,8 +391,8 @@ while the escapee keeps its region snapshot alive (see
 [tail-call-optimization.md](tail-call-optimization.md)). Two
 invariants make the ownership unit coherent:
 
-- **Heap-pinning via `Rc`.** `Scope::open_frame` builds the region inside its own
-  `Rc<FrameStorage>` and `CallFrame::around` only ever exposes the frame as `Rc<CallFrame>`, so the
+- **Heap-pinning via `Rc`.** `Frame::open_under` builds the region inside its own
+  `Rc<FrameStorage>` and hands the shell back only as an `Rc<CallFrame>`, so the
   inner region's heap address is stable for the storage Rc's life and the envelope's erased child
   scope (a `&'static Scope` into `region.scopes`) stays valid alongside it. Accessors re-attach lifetimes
   anchored to `&self`. A tail reset installs a *fresh* `FrameStorage`, so the region
@@ -466,7 +476,8 @@ taken at a `for<'b>` lifetime no ambient borrow inhabits. A `KObject` embedding 
   [`bump`](../workgraph/src/witnessed.rs) door: a `KObject`, a `Held` cell, a `Module` and a
   `ContainerSubstrate` are all `Copy`, so the cell lands in the destination's bump and the brand's
   `'a` — the fold's own — is what discharges the residence obligation at compile time.
-- **born** ([`Scope::open_frame`](../src/machine/core/scope.rs),
+- **born** ([`Frame::open_under`](../src/memory/frame.rs), behind
+  [`Scope::open_frame`](../src/machine/core/scope.rs);
   [`Scope::alloc_child_transparent`](../src/machine/core/scope.rs)) — the same rank-2 argument for
   the two stores that embed an operand living in *another* region, which no destination brand can
   derive: the per-call frame child's foreign lexical parent, and the transparent `USING` window's
@@ -564,7 +575,8 @@ the three can exist outside the act that stores it. The frame-child door
 parent — genuinely lives in another region: it crosses the brand as a `SealedExtern` re-anchored to
 the same `'b`, pinned by the frame's own `Rc<FrameStorage>`. That pin is borrowed for the destination
 region's `'a`, so the witness contract covers the stored reference's whole life rather than the call,
-and the parent-liveness chain stays typed by the `FrameStorage` pin `open_frame` derives.
+and the parent-liveness chain stays typed by the `FrameStorage` pin `Frame::open_under` derives off
+the parent's own brand.
 
 Where a seam still has to *ask* where a composite lives — the copy-versus-pin decision's
 home-crossing test — it reads the answer off the value:
@@ -583,7 +595,7 @@ as `NodeScope::YokedChild`, a [`SealedExtern<ScopeRefFamily>`](../workgraph/src/
 witnessed by the slot's cart `Rc`.
 Both arms ride a grouped `NodePayload` (scope handle + lexical chain) *inside* the slot's memory anchor
 (`SlotFrame`), which wraps the per-call cart the scheduler holds. The
-slot-storage scope handle and the seed-side `with_scope` re-anchor are documented in
+slot-storage scope handle and the seed-side `with_resident` re-anchor are documented in
 [per-call-region/scope-handles.md § Slot-table scope handle](per-call-region/scope-handles.md#slot-table-scope-handle).
 
 ### Debug region audits
@@ -787,9 +799,6 @@ party's death schedule reaches into another's subtree.
   — a per-call frame's value bindings as a slot array over a per-body layout
   in place of the per-activation `data` map and the value half of the claim
   store.
-- [Seam `Scope` between `memory` and `core`](../roadmap/refactor/memory-scope-seam.md)
-  — a family-generic frame shell, `ScopeId` and the residence derivations in
-  `memory`, so the module imports nothing back.
 - [Tightness-audit coverage](../roadmap/compile_safety/tightness-audit-coverage.md)
   — the two blind spots named under [§ Debug region audits](#debug-region-audits):
   the uninstrumented relocation verbs, and the address walk's stop at a captured

@@ -152,8 +152,9 @@ src/
 ├── memory.rs            pub mod memory — where a value lives and how long: Koan's instantiation of workgraph's region substrate, and every substrate name Koan spells
 ├── memory/
 │   ├── substrate.rs        the crate's only import of workgraph::witnessed / hashbrown / allocator_api2 — one Koan-bound alias per library generic (Delivered / Sealed / Opened / Witnessed / Retained / RegionHandle / FoldedPlacement / Sectioned / StepContext …), plus a verbatim re-export of the names that take no Koan parameter
-│   ├── region.rs           KoanStorageProfile, KoanRegion (= Region<KoanStorageProfile>), FrameStorage (the per-call region owner), the RegionBrand / FoldingBrand / SubstrateDoor allocation veneer, run_root_storage and the bump-backed table constructor
-│   ├── frame.rs            CallFrame — the per-call region shell (envelope + storage) — plus FrameReach / FrameCoverage, the reach-evidence aliases
+│   ├── region.rs           KoanStorageProfile, KoanRegion (= Region<KoanStorageProfile>), FrameStorage (the per-call region owner), the RegionBrand / FoldingBrand / SubstrateDoor allocation veneer with the residence derivations off a brand (region_owner / frame / parent_frame_pin), run_root_storage and the bump-backed table constructor
+│   ├── frame.rs            Frame<F> — the per-call region shell (envelope + storage), generic over the resident family it seats, with the two doors (open_under / adopting) that are the only way a storage and a resident get paired — plus FrameReach / FrameCoverage, the reach-evidence aliases
+│   ├── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
 │   └── program.rs          ProgramStorage / ProgramBrand — the eternal-tier region program text and its parsed AST are bumped into, above the run root
 ├── parse.rs             pub mod parse; …
 ├── parse/
@@ -242,14 +243,13 @@ src/
     │   │   ├── ops.rs     WriteOp / TypeWritePolicy — a binding-table write as outcome data, and the single apply interpreter the run loop drives
     │   │   └── gate.rs    WriteGate — the zero-sized capability every table write verb requires, minted only inside crate::machine (run loop + unpublished-scope construction door)
     │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors, with the caught record's field labels as one StaticName<ValueSymbol> group
-    │   ├── scope.rs       Scope — lexical environment: the bump-resident struct, the ScopeRefFamily / RegionScopeFamily reattach families a region-stored &Scope erases through, the frame doors (open_frame / adopt_as_run_frame), its allocators (alloc_run_root / alloc_child_under / … , bumped at 'a; alloc_child_transparent through the crossing born door) with their private constructors, and small accessors (children below)
+    │   ├── scope.rs       Scope — lexical environment: the bump-resident struct, the ScopeRefFamily / RegionScopeFamily reattach families a region-stored &Scope erases through, CallFrame (= Frame<ScopeRefFamily>) and its scope_id read, the frame doors (open_frame / adopt_as_run_frame, thin callers of memory's Frame::open_under / Frame::adopting), its allocators (alloc_run_root / alloc_child_under / … , bumped at 'a; alloc_child_transparent through the crossing born door) with their private constructors, and small accessors (children below)
     │   ├── scope/
     │   │   ├── resolve.rs     name-resolution ladders — value / type / operator-group lookup, walk_chain / resolve_builtin_first, visibility cutoff, builtin-shadow consults
     │   │   ├── registry.rs    write doors — the seal_* construction halves of the value binds, the submission-channel placeholder installs, the owns-its-bindings write-target guard, and the *_direct writes for unpublished scopes
     │   │   ├── reach.rs       reach / carrier derivation — resident value / type carriers, envelope sealing, copy-free / copying adoption, and the module store folds
     │   │   └── copy.rs        the environment copy behind the Consolidate verb — rebuilds a callable's per-call captured chain at the destination region, memoized per source scope so cycles terminate and siblings share
     │   ├── seals.rs       OverloadSeal / GroupSeal — the registration bundles a dispatch or operator write takes, computed at seal time so no write verb opens a carrier
-    │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types
     │   ├── statement_id.rs  StatementId — counter-minted, never-recycled identity of one submitted statement; what a binding entry's Installer names, so declaration identity borrows nothing from the scheduler
     │   ├── lexical_frame.rs  LexicalFrame — immutable cactus-chain (scope_id, index, parent) attached to every dispatched node
     │   ├── kfunction.rs   KFunction, Body — body shapes plus the dispatch-to-execute bridge

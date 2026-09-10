@@ -330,13 +330,13 @@ nothing branded crosses the step boundary.
   bundle filters out anyway.
 - **Frame-side reads** fold onto `open` the same way: a frame's own child scope
   opens at a `for<'b>` brand through
-  [`CallFrame::with_scope`](../src/memory/frame.rs) — the `&mut self` submit /
+  [`CallFrame::with_resident`](../src/memory/frame.rs) — the `&mut self` submit /
   classify paths reach it through `with_node_scope` / `with_current_node_scope`,
   copying out a scalar (an id, a region) where they need no live scope — so no
   `&Scope` rides up a `&mut self` path.
 - **Seed-side binds** fold onto `open` too: the user-fn param-bind and the
   deferred-return-type elaboration each open the child scope at the brand through
-  `CallFrame::with_scope` and **relocate** their caller-`'a` value into the opened
+  `CallFrame::with_resident` and **relocate** their caller-`'a` value into the opened
   scope's own region through the substrate
   ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs), which relocates
   the value into the frame region at a fold brand, the composition minting and
@@ -358,9 +358,11 @@ directly. With every frame-side and seed-side read on `open`, the access surface
 The construction-time scope re-anchor closes the same way: a same-region child
 stores its already-`'a` parent by plain coercion, and the per-call frame child
 builds through the externally-witnessed construction door
-[`Scope::open_frame`](../src/machine/core/scope.rs), which brands the
-fresh region and the foreign parent at one `for<'b>` and hands the finished
-pair to `CallFrame::around`. No scope re-anchor survives outside the witnessed substrate.
+[`Frame::open_under`](../src/memory/frame.rs) — reached from
+[`Scope::open_frame`](../src/machine/core/scope.rs), which hands it the parent brand and the
+`Scope` constructor — which brands the fresh region and the foreign parent at one `for<'b>` and
+wraps the finished pair behind the shell's own private constructor. No scope re-anchor survives
+outside the witnessed substrate.
 
 ## Storage choice, per node
 

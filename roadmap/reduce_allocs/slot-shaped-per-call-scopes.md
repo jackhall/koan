@@ -77,8 +77,8 @@ positions against. The `declare_n10` / `declare_n100` shapes in
 - *A second scope type — decided, there is none.* Every per-call scope keeps `functions`, `operators`, `types`,
   `outer`, `root`, `id`, `kind` and `closed`; only the value channel changes representation. So
   there is one `Scope`, the slotted-or-keyed choice is a storage variant inside `Bindings`, and
-  no scope trait exists at the frame level: the frame shell is family-generic per
-  [memory-scope-seam.md](../refactor/memory-scope-seam.md) and never names a scope.
+  no scope trait exists at the frame level: the frame shell is family-generic
+  ([frame.rs](../../src/memory/frame.rs)) and never names a scope.
 - *Where the slot array lives — decided.* The array — `Empty | Claimed(P) | Bound(V)` with its
   occupancy mask and layout-indexed read — is a payload-generic storage shape in `memory` beside
   `BumpBackedMap`; `core::bindings` instantiates it with `SealedValue` and `ProducerId`. The
@@ -187,8 +187,7 @@ not re-opened from scratch:
 Ordering is soft: this item can ship on today's `workgraph` substrate with the `SealedValue`
 payload, at the cost of the payload rewrite the open direction above names when adoption lands.
 
-**Requires:**
-
-- [Seam `Scope` between `memory` and `core`](../refactor/memory-scope-seam.md)
+**Requires:** none — the family-generic frame shell it builds on is shipped
+([frame.rs](../../src/memory/frame.rs)).
 
 **Unblocks:** none tracked yet.

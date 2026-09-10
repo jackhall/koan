@@ -25,10 +25,12 @@ from the slot's live frame at read, never re-anchored at a free `'run`:
   own scope, so it needs a stored carrier.
 
 For a run-scope submission, [`resolve_node_scope`](../../src/machine/execute/harness.rs) decides
-the arm in order: a pointer test (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot
+the arm in order: an identity test against the cart's own resident (`scopes_eq`, read inside the
+cart's `with_resident` open) routes a frame's-own-child slot
 to `Yoked`; the cart's own pin claim over `scope`'s region
-([`CallFrame::pins_storage_region`](../../src/memory/frame.rs), a `pins_region` walk of the
-`FrameStorage.outer` chain — the pin that actually holds, not the lexical scope graph, and trivially
+([`CallFrame::hosts`](../../src/memory/frame.rs), asked of the scope's own `RegionBrand` — a
+`pins_region` walk of the
+`FrameStorage.outer` chain, the pin that actually holds, not the lexical scope graph, and trivially
 satisfied for an eternal-tier region no frame has to pin) routes such a
 block scope to `YokedChild`, erasing the borrow through `SealedExtern::<ScopeRefFamily>::erase`; the
 frameless top-level run root routes to `Yoked` via the `run_frame` cart that adopts it (the slot's
@@ -43,7 +45,7 @@ The read boundary hands a slot's scope to a closure on demand, not as a stored f
 a `YokedChild` slot opens its stored `&'static Scope` carrier through `SealedExtern::open` (witnessed
 by the frame `Rc`, sound because the cart pins the ancestor region; the open carries no `unsafe` of
 its own); a `Yoked` slot re-reads from the live `active_frame` cart via
-[`CallFrame::with_scope`](../../src/memory/frame.rs), the same rank-2 `open`. Because the
+[`CallFrame::with_resident`](../../src/memory/frame.rs), the same rank-2 `open`. Because the
 `&Scope<'b>` is confined to the closure, storing it past the frame is a compile error rather than a
 fabrication; `Scope<'a>` invariance rides structurally on the returned `Scope`, so the brand needs no
 separate struct. Bodies / finishes / the dispatch engine no longer thread a `scope` parameter — they
@@ -61,7 +63,7 @@ sink, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 
 [`run_user_fn`](../../src/machine/core/kfunction/exec.rs) binds its parameters — values whose type
 carries the caller's `'a`, deep-cloned into the frame region — inside
-[`CallFrame::with_scope`](../../src/memory/frame.rs), which opens the child scope at a
+[`CallFrame::with_resident`](../../src/memory/frame.rs), which opens the child scope at a
 `for<'b>` brand. The MATCH / TRY arm seed binds `it` the same way but needs no open: its block is a
 bump-allocated overlay child of the call-site scope, already at the caller's own `'a`, so the seed
 takes it directly. Each value arrives as a **delivery envelope**, which is the whole route:
@@ -76,7 +78,7 @@ gets here, so there is one seed tier rather than two. The envelope is also the *
 currency: `run_user_fn` takes one record of envelopes keyed by parameter name — not a record of
 values beside a record of envelopes — so an argument that reaches the bind without one is not a
 state the signature can express, and the bind's own relocation is the only copy an argument takes on
-its way in. The deferred-return-type elaboration takes the same `with_scope` read
+its way in. The deferred-return-type elaboration takes the same `with_resident` read
 and re-homes its elaborated `KType` into the captured-scope region inside the open. The whole
 re-anchor carries no `unsafe` of its own — only the substrate's single retype.
 Arm and body statements then dispatch through the framed scheduler write primitives

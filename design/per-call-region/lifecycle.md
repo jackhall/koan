@@ -25,8 +25,9 @@ allocation can close a region↔value cycle, so the allocation engine carries no
 
 `FrameStorage` itself carries `outer: Option<Rc<FrameStorage>>`, which chains the parent per-call
 frame's storage when a builtin-built frame's child scope's `outer` points into per-call memory (MATCH
-/ TRY / EVAL). The pin is derived inside `Scope::open_frame` from the parent scope's own region owner
-([`Scope::parent_frame_pin`](../../src/machine/core/scope.rs)), never passed by the builtin. This is
+/ TRY / EVAL). The pin is derived inside [`Frame::open_under`](../../src/memory/frame.rs) from the
+parent scope's own region owner
+([`RegionBrand::parent_frame_pin`](../../src/memory/region.rs)), never passed by the builtin. This is
 distinct from escaping-value liveness: `outer` keeps a region alive for an *outer-scope lookup* the
 new frame's child scope performs at run time.
 

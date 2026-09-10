@@ -109,9 +109,9 @@ impl<'a> RegionBrand<'a> {
     /// step-scoped callers should route through `DecideCtx::dest_frame` or a finish's
     /// `ctx.frame()` instead of upgrading directly.
     pub(crate) fn frame(self) -> Rc<FrameStorage> {
-        self.region_owner().upgrade().expect(
-            "a scope's region owner is held while the scope can run: its cart (or a cart ancestor) for the step, the run storage for the run root",
-        )
+        self.region_owner()
+            .upgrade()
+            .expect("a live region brand implies a live region owner")
     }
 
     /// The storage pin a **child frame** chains when its own resident borrows into this brand's
@@ -128,9 +128,10 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// Whether this brand's region sits at the **eternal tier** — the run root, whose region
-    /// outlives every per-call frame. The tier read [`Self::parent_frame_pin`] declines to chain on
-    /// and [`Frame::hosts`](super::frame::Frame::hosts) answers `true` for without consulting any
-    /// pin chain, so both spell the rule through one derivation.
+    /// outlives every per-call frame. The same tier rule [`Self::parent_frame_pin`] declines to
+    /// chain on, read from a brand instead of from an owner already in hand, so
+    /// [`Frame::hosts`](super::frame::Frame::hosts) can answer `true` without consulting any pin
+    /// chain and without upgrading a `Weak` of its own.
     pub(crate) fn is_eternal(self) -> bool {
         self.frame().is_eternal()
     }

@@ -142,9 +142,9 @@ cross-region reference arise, each with its own pin:
   the carrier being the only way to hold a cross-region value borrow.
 - **An incarnation's own scope chain reaching into an enclosing frame's region** (a
   MATCH/TRY arm, or a called closure whose captured definition scope lives in a
-  per-call frame) holds it through the frame's `outer` `Rc` chain: `Scope::open_frame`
-  derives the pin from the parent scope's own region owner
-  ([`Scope::parent_frame_pin`](../src/machine/core/scope.rs)), so the captured
+  per-call frame) holds it through the frame's `outer` `Rc` chain:
+  [`Frame::open_under`](../src/memory/frame.rs) derives the pin from the parent scope's own region
+  owner ([`RegionBrand::parent_frame_pin`](../src/memory/region.rs)), so the captured
   region is retained for the frame's life. A fresh-tail cart is **no exception** — its
   `outer` is the callee closure's captured scope, chained exactly as a non-tail call
   chains its parent, so a closure capturing a per-call frame survives the hop that

@@ -73,7 +73,7 @@ Three reshapes:
 - **`AssembleBody { body_index }`** — an FN-body invoke (a `Function` or `PerCall`
   contract). [`assemble_body_chain`](../../src/machine/core/lexical_frame.rs)
   assembles the chain from the body scope's lexical `outer` walk, read through
-  `CallFrame::with_scope` against the body frame, so depth tracks source-level
+  `CallFrame::with_resident` against the body frame, so depth tracks source-level
   nesting rather than call depth and a recursive tail chain's stored chain does
   not grow per hop. Any suffix the call-site chain already spells the same way
   is shared by `Rc` rather than re-minted — pointer equality against the
@@ -98,9 +98,9 @@ property. The frame-chain `Rc` on `FrameStorage` (`outer:
 Option<Rc<FrameStorage>>`) keeps the parent frame's storage alive
 whenever the child's `outer` points into per-call memory.
 
-That pin is **derived**, not threaded by the caller. `Scope::open_frame`
-reads it off the parent scope via
-[`Scope::parent_frame_pin`](../../src/machine/core/scope.rs): the parent
+That pin is **derived**, not threaded by the caller. The frame door
+[`Frame::open_under`](../../src/memory/frame.rs) reads it off the parent's own allocation brand via
+[`RegionBrand::parent_frame_pin`](../../src/memory/region.rs): the parent
 scope's own region owner — read off its region's host back-link — when the
 parent lives in a per-call region, or
 no pin when it lives in the run-root region (which outlives the run — a
