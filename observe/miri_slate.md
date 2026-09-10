@@ -148,7 +148,7 @@ only shapes
 whose discipline lives in koan's own `src/` — its doors, seams, and scheduler-driving programs.
 
 **`CallFrame` lifetime erasure** ([src/memory/frame.rs](../src/memory/frame.rs)) — the
-child-scope `Option<SealedExtern<ScopeRefFamily>>` opened at a `for<'b>` brand via `CallFrame::with_scope`
+child-scope `Option<SealedExtern<ScopeRefFamily>>` opened at a `for<'b>` brand via `CallFrame::with_resident`
 (`SealedExtern::open`, the frame's own storage `Rc` as the pin). The `Rc<CallFrame>` chain that keeps
 per-call regions pinned across re-borrow is pinned library-side
 (`the_born_with_door_accepts_the_childs_own_host_as_the_pin`, which stores a crossing operand under
@@ -168,10 +168,10 @@ frame brand (`Scope::alloc_child_under`, a plain `BumpAllocator::in_place` at th
 comes back co-located, stays readable while its own brand appends to the same region, and still
 names its parent — the shape every same-region `Scope` store now takes, with no erasure in it. It carries the
 sibling-alloc claim in the same run: the opened child's re-borrow still names the frame's region
-while a sibling pointer allocates into it, so `with_scope`'s `&Scope` and `brand().alloc(…)` are
+while a sibling pointer allocates into it, so `with_resident`'s `&Scope` and `brand().alloc(…)` are
 pinned coexisting there rather than by a test of their own.
 
-- `with_scope_relocates_seed_value_into_brand`
+- `with_resident_relocates_seed_value_into_brand`
 - `born_child_scope_survives_subsequent_alloc_in_its_own_region`
 
 **`CLOSE OVER`'s seeded block region** ([src/builtins/close_over.rs](../src/builtins/close_over.rs))
@@ -451,7 +451,7 @@ framed TCO replace are all exercised together.
 - `try_inside_tco_position_preserves_frame_chain`
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/memory/frame.rs](../src/memory/frame.rs)) — the
-seed bind routed through `CallFrame::with_scope`: the deep-cloned argument record is relocated into the
+seed bind routed through `CallFrame::with_resident`: the deep-cloned argument record is relocated into the
 opened child scope's own region through the substrate (rebuilt at the destination brand, which is
 where the caller lifetime is dropped) and each parameter bound, while the scope rides the `for<'b>`
 brand the open confines. Witnessed by the `Rc<CallFrame>`
@@ -709,9 +709,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-09: 1505s — 34 tests, 0 leaks, 0 UB
 - 2026-09-09: 1282s — 34 tests, 0 leaks, 0 UB
 - 2026-09-09: 1267s — 34 tests, 0 leaks, 0 UB
 - 2026-09-08: 1831s — 34 tests, 0 leaks, 0 UB
 - 2026-09-06: 956s — 34 tests, 0 leaks, 0 UB
-- 2026-09-04: 965s — 34 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
