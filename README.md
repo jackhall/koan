@@ -59,9 +59,9 @@ source ──▶ parse ──▶ dispatch ──▶ execute
         KExpression  DispatchOutcome  KObject
 ```
 
-`parse`, `builtins`, and `machine` are sibling crate-top modules; `machine` owns dispatch and execute. [src/main.rs](src/main.rs) reads the source and hands it to `interpret_with_writer_path`, which stands up the scope pair, seeds the builtins, and drains the scheduler.
+`memory`, `parse`, `builtins`, and `machine` are sibling crate-top modules; `machine` owns dispatch and execute. [src/main.rs](src/main.rs) reads the source and hands it to `interpret_with_writer_path`, which stands up the scope pair, seeds the builtins, and drains the scheduler.
 
-### parse — text → `KExpression` tree
+### parse — text → `KExpression` tree, and the vocabulary it produces
 
 Entry point: `parse` in [src/parse.rs](src/parse.rs). It runs in two phases, splitting layout from vocabulary:
 
@@ -73,13 +73,15 @@ Two files serve the lowering:
 - [atom.rs](src/parse/atom.rs) — classify one atom: split it on its colons (`x:Number` is the word `x` and the type `Number`) and tag each piece as a literal, keyword (pure-symbol like `=`, `->`, `:|`, or alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`), type name (uppercase-leading with at least one lowercase — `Number`, `KFunction`, `Ordered`), identifier, or compound (member access, suffix operators).
 - [operators.rs](src/parse/operators.rs) — table of compound-atom operators (`.`, `?`); add a row to extend.
 
-The output is one [`KExpression`](src/machine/model/ast.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
+The output is one [`KExpression`](src/parse/ast.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
+
+`parse` owns what it produces, not just the walk that produces it: [labels.rs](src/parse/labels.rs) mints and interns every symbol, [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [forms.rs](src/parse/forms.rs) holds `FORMS` — the one table spelling every builtin form's bucket key, tagged by a `FormId`, carrying the binder facts, the lazy slots and the reserved bit each form's readers ask for. A node probes that table once; the close-inference rules and the miss diagnostics name a form by its tag rather than respelling its key.
 
 `KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [design/expressions-and-parsing.md](design/expressions-and-parsing.md).
 
 ### dispatch — `KExpression` → `DispatchOutcome` against a `Scope`
 
-A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/decide/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`DispatchOutcome`](src/machine/execute/decide/resolve_dispatch.rs) — `Resolved` (a unique pick, plus the bare-name slots to auto-wrap), `Ambiguous(n)` (strict-mode tie), `ParkOnProducers` (wait on a still-finalizing earlier binder), `UnboundName`, or `Unmatched` (a real dispatch failure, carrying a forgotten-quote hint when one applies). Every eager-shaped child is submitted before this runs — which slots stay raw is stamped on the node at seal from [lazy_slots.rs](src/parse/forms.rs) — so dispatch selects over landed values. [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
+A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/decide/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`DispatchOutcome`](src/machine/execute/decide/resolve_dispatch.rs) — `Resolved` (a unique pick, plus the bare-name slots to auto-wrap), `Ambiguous(n)` (strict-mode tie), `ParkOnProducers` (wait on a still-finalizing earlier binder), `UnboundName`, or `Unmatched` (a real dispatch failure, carrying a forgotten-quote hint when one applies). Every eager-shaped child is submitted before this runs — which slots stay raw is the `lazy_slots` stamp of the node's cached [`FORMS`](src/parse/forms.rs) entry — so dispatch selects over landed values. [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
 
 Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, function references); the cross-cutting `Parseable` trait lives in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
 
@@ -93,14 +95,19 @@ The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/READ
 
 ## Source layout
 
-The crate splits into three top-level modules: [parse](src/parse.rs) (text →
-`KExpression`), [builtins/](src/builtins) (the K-language standard library, one
-file per builtin), and [machine/](src/machine) (the execution engine that
-consumes a `KExpression`). `machine` further
+The crate splits into four top-level modules: [memory/](src/memory) (where a
+value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus the
+symbol, AST and form-table vocabulary that output is written in),
+[builtins/](src/builtins) (the K-language standard library, one file per
+builtin), and [machine/](src/machine) (the execution engine that consumes a
+`KExpression`). `parse` splits into [ast/](src/parse/ast.rs) (the syntax types,
+the node cache and the eternal-tier program marker),
+[labels.rs](src/parse/labels.rs) (`Symbol`, the content-digest handle every
+syntactic label travels as, beside its interner) and
+[forms/](src/parse/forms.rs) (`FORMS` and the binder / lazy-slot / slot-layout
+facts riding its entries). `machine` further
 splits into [model/](src/machine/model) (the value/type vocabulary —
-[ast.rs](src/machine/model/ast.rs) for the parsed-expression types,
-[labels.rs](src/parse/labels.rs) for `Symbol`, the content-digest handle
-every syntactic label travels as,
+[ast.rs](src/machine/model/ast.rs) for what the machine *does* with a parsed node,
 [types/](src/machine/model/types) for `KType`/`KKind`/signatures/traits, and
 [values/](src/machine/model/values) for `KObject`/`Carried`/`KKey`/`Module`),
 [core/](src/machine/core) (allocation, `Scope`, `KError`, plus the
@@ -157,12 +164,22 @@ src/
 │   ├── slots.rs            SlotState / SlotArray — the layout-addressed counterpart of the bump-backed map: a fixed run of Empty | Claimed(P) | Bound(V) cells in one bump allocation, beside the live-claim counter that makes "nothing in flight" an O(1) read
 │   ├── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
 │   └── program.rs          ProgramStorage / ProgramBrand — the eternal-tier region program text and its parsed AST are bumped into, above the run root
-├── parse.rs             pub mod parse; …
+├── parse.rs             pub mod parse — the parser and what it produces: the label vocabulary, the syntax AST, and the form table
 ├── parse/
 │   ├── lower.rs            layout tree → KExpressions: sigils, the redundant-wrapper peel, adjacency, spans
 │   ├── atom.rs             classify one atom — the colon split, compound-operator desugaring
 │   ├── brace.rs            DictFrame state machine for `{k: v}` / `{x = 1}` pairing
-│   └── operators.rs        operator registry
+│   ├── operators.rs        operator registry
+│   ├── labels.rs           Symbol — a label's 128-bit content digest — plus LabelInterner (the run's digest→text side table, read only when rendering), the four classified symbol wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses
+│   ├── ast.rs              the syntax AST: KLiteral / ExpressionPart / KExpression — Copy handles over bumped slices, with a Type part carrying only its TypeSymbol
+│   ├── ast/
+│   │   ├── shape.rs        PartClass / DispatchShape / KeyElement / UntypedKey + NodeCache, the one structural cache both node families carry (stored key, shape, operator probe, FORMS entry, binder plan) and the readers that fill it
+│   │   └── program.rs      ProgramExpression / ProgramNode — the eternal-tier marker that makes "this node's parts run is hosted in program storage" a type
+│   ├── forms.rs            FORMS — every builtin form's full bucket key spelled once, tagged by FormId, carrying its binder facts, its lazy slots and its reserved bit; KEYWORDS, the one key matcher, and the single table probe
+│   └── forms/
+│       ├── binder.rs       BinderFacts and the structural extractors: which name and bucket key(s) a binder form declares, read off the node's cached entry
+│       ├── lazy.rs         LazyKinds — which part kinds a slot captures raw instead of evaluating
+│       └── layout.rs       SlotLayout — a body's value binders as a symbol-sorted run, computed where the shape is lexically fixed
 ├── builtins.rs          register_builtin, unseeded_scopes(), seed_builtins()
 ├── builtins/            one file per builtin (body + register paired)
 │   ├── let_binding.rs
@@ -203,13 +220,15 @@ src/
 └── machine/
     ├── model.rs            re-exports from model::types and model::values
     ├── model/
-    │   ├── ast.rs                 raw parsed AST (KExpression, ExpressionPart, KLiteral) — Copy handles over bumped slices, with a Type part carrying only its TypeSymbol
+    │   ├── ast.rs                 what the machine does with a parsed node: literal lowering, part resolution to a cell, impl Parseable — inherent impls on parse's syntax types
     │   ├── ast/
-    │   │   ├── shape.rs           Part / PartClass / FieldSlot + the structural readers both part families share (classify_dispatch_shape, the bucket key, the operator probe)
+    │   │   ├── shape.rs           Part / FieldSlot / PartSummary — the field-list part view both expression families answer in
     │   │   └── working.rs         WorkingExpression / WorkingPart — the scheduler's own node, the only one that can hold a spliced sub-result
+    │   ├── binder.rs              what a binder *does* with what parse read: the scope install, the refusal rendering, MACHINE_BINDERS and the module-body announcement scan
+    │   ├── close_inference.rs     CLOSE_RULES — per-FormId capture rules for the implicit-close walk, probed off the node's cached form
+    │   ├── miss_diagnostics.rs    MISS_DIAGNOSTICS — per-FormId renderers for a keyword spine that dispatched to nothing, plus the reserved-key check the overload write door reads
     │   ├── pair_list.rs           `<name> <slot>` pair lists over a built parts run: parse_pair_list (classified names + slots) and parse_type_tag_names (the variant-tag pre-scan)
     │   ├── operators.rs           OperatorGroup registry record — chainable-operator precedence/associativity
-    │   ├── labels.rs              Symbol — a label's 128-bit content digest, and LabelInterner, the run's digest→text side table read only when rendering
     │   ├── registries.rs          RunRegistries — the run frame's owned bundle of run-lifetime lookup state (the TypeRegistry beside the LabelInterner)
     │   ├── types.rs
     │   ├── types/
@@ -224,7 +243,7 @@ src/
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking (no cache tier; interning already makes a re-elaborated form yield the same handle)
     │   │   ├── recursive_group_window.rs   RecursiveGroupWindow — the pre-seal group window and the SCC seal that interns its members
     │   │   ├── sig_schema.rs      SigSchema + sig_subtype — a signature type's owned schema and the subtyping relation
-    │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
+    │   │   ├── signature.rs       ExpressionSignature, Specificity — dispatch shape + tie-breaker
     │   │   ├── ktraits.rs         Parseable / Serializable
     │   │   └── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
     │   ├── values.rs

@@ -36,7 +36,9 @@ consulted only when a label is rendered. No per-record, per-call, or per-node ow
 
 A symbol is its own lookup key, exactly as a `KType` handle is its digest
 ([type-identity.md](typing/type-identity.md)). The two share one digest vocabulary:
-128-bit truncated BLAKE3, identity-hashed in any map keyed by them, with the same
+128-bit truncated BLAKE3, identity-hashed in any map keyed by them
+([`IdentityHasher`](../src/parse/labels.rs), which passes the low 64 bits of a digest
+straight through rather than re-hashing them), with the same
 collision footing — an accidental collision is less likely than a hardware fault,
 so symbol equality is label equality with no repair path.
 
@@ -311,7 +313,7 @@ because the two classes name disjoint text.
 
 A dispatch bucket key is the one composite in that table: not a single label but a run of
 positions, a keyword's `KeywordSymbol` where the shape fixes a token and `Slot` where it
-takes an argument ([`KeyElement`](../src/machine/model/types/signature.rs)). The element is
+takes an argument ([`KeyElement`](../src/parse/ast/shape.rs)). The element is
 `Copy` and lifetime-free, so the run a caller owns and the run a scope bumped into its region
 are the same type — one derived `Hash`, and a key re-homes by copying `u128`s rather than
 keyword bytes. Rendering such a key names each keyword by resolving its symbol, on the same
@@ -350,10 +352,11 @@ The **keyword** vocabulary converts at the **parse boundary**. Where the parser 
 atom as keyword-class ([atom.rs](../src/parse/atom.rs)) it mints the token's
 `KeywordSymbol` and interns it in the same step, and the part carries that symbol alone —
 `ExpressionPart::Keyword(KeywordSymbol)`, no spelling beside it
-([ast.rs](../src/machine/model/ast.rs)). Nothing downstream re-hashes: a node's bucket key, a
+([ast.rs](../src/parse/ast.rs)). Nothing downstream re-hashes: a node's bucket key, a
 signature element, an operator chain's cached registry probe and every keyword comparison read
 the symbol the parse already minted, and the fixed tokens the machine itself compares against
-(`AS`, `->`, `_`, the binder's key specs, the reserved operator names) are `StaticName` memos
+(`AS`, `->`, `_`, the [form table](../src/parse/forms.rs)'s keys, the reserved operator names)
+are `StaticName` memos
 minted once per process. That placement is not convenience — `Symbol::of` is a BLAKE3 hash, and
 a keyword sits on the hot dispatch probe path, where paying one per keyword per call is exactly
 the cost a parse-time cache exists to remove.

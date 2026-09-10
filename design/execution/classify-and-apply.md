@@ -32,8 +32,8 @@ lazy-slot stamp does not keep raw is submitted as its own sub-`Dispatch`
 [`keyworded::initial`](../../src/machine/execute/decide/keyworded.rs) once they
 have spliced back in, where the spliced run stages nothing further and falls
 through to Step 1. Which slots stay raw is a fact of the node's bucket key,
-stamped at `KExpression::seal` from the static table in
-[`lazy_slots.rs`](../../src/parse/forms.rs) and read off the node
+carried by the [`FORMS`](../../src/parse/forms.rs) entry the node resolved at
+construction and read off its cache
 — see [expressions-and-parsing.md § Lazy
 slots](../expressions-and-parsing.md#lazy-slots). Only the fixed builtin forms
 have such slots, so every argument of a user-defined shape has evaluated by
@@ -66,8 +66,8 @@ producers behind every `Parked` cache entry (`ParkOnProducers`), so
 admission always decides against landed facts and no pick commits ahead of
 a value it depends on. Exempt from that pre-scan are the slots a binder
 form's own machinery resolves — the declared-name position and the form's
-`Type`-token operands, both read off the expression's cached spec-table
-facts (see [typing/elaboration.md § Strict admission
+`Type`-token operands, both read off the expression's cached form
+entry (see [typing/elaboration.md § Strict admission
 rules](../typing/elaboration.md#strict-admission-rules)).
 
 Admission is strict-only: [`signature_admits_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
@@ -257,7 +257,7 @@ The rails the dispatch driver feeds:
   binder install and the position
   rule](name-placeholders.md#submission-time-binder-install-and-the-position-rule)
   below). Binder-ness itself is a static fact of the *expression* — its bucket
-  key either matches a `BINDER_SPECS` entry or it doesn't — so the pick
+  key either matches a binder-carrying `FORMS` entry or it doesn't — so the pick
   consults no per-function flag: `classify_for_pick` excludes every
   literal-name slot (`:Identifier` / `NameToken` / `TypeNameToken`) from
   `wrap_indices`
@@ -268,7 +268,7 @@ The rails the dispatch driver feeds:
   it. The exemption is the one shared
   [`park_exempt_slot`](../../src/machine/model/ast/working.rs) predicate, read
   identically by the park scan, strict admission and this classification, off
-  the expression's cached spec-table facts.
+  the expression's cached form entry.
 - **Staging arms** (Step 0). `Expression` parts sub-Dispatch;
   `SigiledTypeExpr` and `RecordType` parts wrap into a single-part
   `WorkingExpression` and sub-Dispatch (the sub-Dispatch enters

@@ -76,7 +76,7 @@ to the reference (see
 [Overload bucket visibility filter](#overload-bucket-visibility-filter)).
 The pre-scan's exemptions — a binder form's declared-name position and
 its `Type`-token operands, both read off the expression's cached
-spec-table facts — are covered in
+form entry — are covered in
 [elaboration.md § Strict admission rules](../elaboration.md#strict-admission-rules).
 
 An `Unbound` cache outcome rejects at every typed value slot (a name that

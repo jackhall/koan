@@ -115,7 +115,7 @@ atom followed by a group, which is exactly the application koan means by them.
 
 ## `KExpression` shape
 
-Output is one [`KExpression`](../src/machine/model/ast.rs) per top-level line:
+Output is one [`KExpression`](../src/parse/ast.rs) per top-level line:
 an ordered sequence of `ExpressionPart`s — `Keyword`, `Identifier`, `Type`,
 nested `Expression`, `SigiledTypeExpr`, `ListLiteral`, `DictLiteral`, or typed
 `Literal`.
@@ -149,17 +149,30 @@ unevaluated expression as a value, pass it around, and evaluate it on demand.
 
 ### Structural cache and dispatch shape
 
-As its parts run is frozen, [`KExpression`](../src/machine/model/ast.rs)
-fills a structural cache: the `untyped_key` (the bucket key dispatch matches on),
-the `DispatchShape`, an optional operator probe, and the binder cache —
-`binder_plan`: is this node itself a binder, and which name and bucket key(s) it
-installs into the enclosing scope, per the position rule in
-[execution/name-placeholders.md](execution/name-placeholders.md). The plan covers
-this node's own spine only; nothing a slot contains joins it. All of it is a
-pure function of expression structure — no scope, no types — so it is computed
-once and read by the dispatch driver on every call of the enclosing function
-rather than re-derived per call. The plan is read once, at statement submission,
-before any splice. The cache is filled at one private construction chokepoint,
+As its parts run is frozen, [`KExpression`](../src/parse/ast.rs) fills a
+[`NodeCache`](../src/parse/ast/shape.rs) — the one structural cache both
+expression families carry, holding five facts:
+
+- the **stored bucket key**, the run of [`KeyElement`](../src/parse/ast/shape.rs)s
+  dispatch matches on, bumped into the node's own region;
+- the **`DispatchShape`**, classified from that key plus the head part's class;
+- an optional **operator probe**, `Some` only for an `OperatorChain`;
+- the **[`FORMS`](../src/parse/forms.rs) entry** the key matches, or `None` for
+  every user-defined bucket — the one table probe in the tree, from which every
+  later form question is answered by tag rather than by re-walking the key: which
+  slots stay raw ([Lazy slots](#lazy-slots)), which position carries a binder's
+  declared name, whether the shape is reserved, which close-inference rule and
+  which miss diagnostic apply;
+- the **binder plan** — is this node itself a binder, and which name and bucket
+  key(s) it installs into the enclosing scope, per the position rule in
+  [execution/name-placeholders.md](execution/name-placeholders.md).
+
+The plan covers this node's own spine only; nothing a slot contains joins it. All
+of it is a pure function of expression structure — no scope, no types — so it is
+computed once and read by the dispatch driver on every call of the enclosing
+function rather than re-derived per call. The plan is read once, at statement
+submission, before any splice; it is filled by the AST node's seal alone, since a
+binder is always parsed syntax. The cache is filled at one private construction chokepoint,
 which derives it from a parts run already resident in the node's region — so a
 node cannot exist with a stale or unfilled cache, and nothing mutates a part run
 afterwards. The public doors — `KExpression::{new, build, nested}` and the
@@ -180,7 +193,7 @@ The parser's output type and the type the scheduler dispatches are **two concret
 structs**, and the split is what keeps a resolved sub-result out of the value
 channel:
 
-- [`KExpression`](../src/machine/model/ast.rs) is raw, unevaluated syntax — parser
+- [`KExpression`](../src/parse/ast.rs) is raw, unevaluated syntax — parser
   output, an `FN` body, a quote body, a `:KExpression` / `:SigiledTypeExpr` /
   `:RecordType` slot capture, a MATCH arm body. Its parts run and every string in
   it borrow the eternal-tier program storage that parsed them, so the node is
@@ -202,11 +215,14 @@ a structural fact ([value-substrates.md § Value-channel
 AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
 
 Crossing runs one way, through `WorkingExpression::from_ast(brand, ast)`: the
-parts run is wrapped as `Ast` parts and the cache copied, which is a slice copy
-rather than a rebuild. Both families answer the shared structural readers —
-shape classification, the bucket key, the operator probe, the field-list slot
-view — through the [`Part`](../src/machine/model/ast/shape.rs) trait, so those
-readers are written once and instantiated for each.
+parts run is wrapped as `Ast` parts and the cache copied, which is a pointer copy
+rather than a rebuild. The structural readers are written once and shared two
+ways: shape classification, the bucket key, the operator probe and the form probe
+live on the `NodeCache` both families embed, and read a stored key plus the head
+part's class rather than a parts run, so no reader is generic over a part; the
+field-list slot view stays on the
+[`Part`](../src/machine/model/ast/shape.rs) trait, which `ExpressionPart` and
+`WorkingPart` each implement.
 
 `DispatchShape` partitions expressions into the bare-name and single-part
 fast lanes, the head-position call shapes, `Keyworded`, `OperatorChain`, and the
@@ -313,7 +329,7 @@ other, so it takes the call arm — see
 
 The `:(...)` glued-right sigil opens a *parse-context marker* group. The
 parser collects the inner tokens into a regular `KExpression` and wraps it as
-[`ExpressionPart::SigiledTypeExpr(&KExpression)`](../src/machine/model/ast.rs)
+[`ExpressionPart::SigiledTypeExpr(&KExpression)`](../src/parse/ast.rs)
 — no inner-shape recognition runs at parse time. Shape decisions
 (keyworded `:(LIST OF Number)`, nominal construction `:(MyStruct {x = 1})`,
 etc.) are the dispatcher's responsibility: the
@@ -324,7 +340,7 @@ of the wrapped expression.
 
 Two spellings of the sigil exist and mean the same thing. `:(...)` takes a type
 expression; `:{...}` takes a record type, an
-[`ExpressionPart::RecordType`](../src/machine/model/ast.rs) the elaborator folds
+[`ExpressionPart::RecordType`](../src/parse/ast.rs) the elaborator folds
 straight to a record `KType`. Both require the `:` to be glued to its group, and
 a `:` glued to a name (`x:Number`, `:Number`) is the annotation form — the atom
 splits on the colon and the name after it must be a type name. A `:` that is
@@ -358,12 +374,12 @@ of execute makes them ready before the parent runs. See
 ## Lazy slots
 
 Only the fixed builtin forms opt out of eager evaluation, and which of their
-slots are lazy is a parse-static fact: `KExpression::seal` stamps the node's
-lazy slots from the [`LAZY_SLOT_SPECS`](../src/parse/forms.rs)
-table, keyed by the unshadowable builtin keys — the same probe pattern that
-fills `binder_plan`, written in the bucket-key vocabulary every spec table
-shares ([key_spec.rs](../src/parse/forms.rs)) — and the scheduler
-reads the stamp to know which children not to submit. Dispatch never decides
+slots are lazy is a parse-static fact: the node's
+[`NodeCache`](../src/parse/ast/shape.rs) resolves its
+[`FORMS`](../src/parse/forms.rs) entry at construction, and that entry's
+`lazy_slots` stamp says which slots stay raw. Builtin keys are unshadowable, so
+matching one is sound; the scheduler reads `lazy_kinds_at(index)` off the cached
+entry to know which children not to submit. Dispatch never decides
 evaluation — by the time an expression dispatches, every child the stamp
 left eager has already evaluated. The builtin receives the unevaluated
 `KExpression` in each stamped slot and emits a fresh `Dispatch` for the
@@ -379,8 +395,8 @@ sub-dispatch at the same index across its overloads: `NEWTYPE <name> =
 <repr>` captures a `:(…)` type expression or a `:{…}` record type raw while a
 bare `(…)` in that position evaluates. Index `i` of bucket `k` carries kind
 `K` exactly when some builtin overload registered under `k` types slot `i`
-with `K`'s raw-capture slot type, and a spec⟺registration consistency test
-pins the table to the live signatures in both directions.
+with `K`'s raw-capture slot type, and a table⟺registration consistency test
+pins `FORMS` to the live signatures in both directions.
 
 User signatures have no lazy slots: a `:KExpression` parameter on a user definition is
 an ordinary eager value parameter, satisfied by a `#(…)` literal or any
@@ -438,7 +454,7 @@ A sigil is an atom that is exactly `#` or `$` and is glued to the group after it
 — which is all the layout tree has to record for the lowering to recognize one.
 
 Quoting is **parse-static**: `#(...)` folds its body into an
-[`ExpressionPart::QuotedExpression`](../src/machine/model/ast.rs)
+[`ExpressionPart::QuotedExpression`](../src/parse/ast.rs)
 — a part that is a slot for dispatch purposes and behaves like a literal, resolving
 to the `KObject::KExpression` value of the captured body. There is no quoting
 operation at run time and the body never dispatches.

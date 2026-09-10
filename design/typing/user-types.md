@@ -365,8 +365,8 @@ property: the program's own top level announces nothing, so a top-level cycle ta
 the module wrapper and is otherwise an ordinary forward-reference miss.
 
 **What announces.** A statement announces iff its own parse-time binder key matches
-the `NEWTYPE <Name> = _` or `UNION <Name> = _` spec in
-[`BINDER_SPECS`](../../src/machine/model/binder.rs) — the *full* bucket key, every
+the `NEWTYPE <Name> = _` or `UNION <Name> = _` entry of
+[`FORMS`](../../src/parse/forms.rs) — the *full* bucket key, every
 keyword pinned in position, so a user overload that merely shares a head keyword
 announces nothing and the constructor-family key `NEWTYPE (<Type> AS <Name>)` is
 excluded structurally. The boundary is the body's top-level statement split, the same

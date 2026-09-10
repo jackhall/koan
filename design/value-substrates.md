@@ -119,7 +119,7 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   `KKey::String` dict key. A wrap carrier's discriminant is not a string at all: it is
   the interned [`KType`](typing/ktype/README.md) identity handle, fixed-width `Copy` data
   pointing into no region ([label-interning.md](label-interning.md)).
-  [`KExpression`](../src/machine/model/ast.rs) is a `Copy` handle whose parts run
+  [`KExpression`](../src/parse/ast.rs) is a `Copy` handle whose parts run
   is a bumped slice of `Copy` parts
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
 
@@ -549,7 +549,7 @@ keys it removes. Every success path overwrites its claim where it sits, so a
 table's peak occupancy is its final binding count plus that error tail.
 
 Expression parts are not in it either, for the same reason. Both node families —
-the raw AST [`KExpression`](../src/machine/model/ast.rs) and the scheduler's
+the raw AST [`KExpression`](../src/parse/ast.rs) and the scheduler's
 [`WorkingExpression`](../src/machine/model/ast/working.rs) — are `Copy` handles
 over bumped slices of `Copy` parts, so no expression slot carries `Drop` glue and
 region death for a spliced node's part storage is chunk deallocation. Their
@@ -595,7 +595,7 @@ doors' *products* that are covariant: a `ProgramExpression<'program>` coerces
 into a `KObject<'step>` cell and a `KExpression` into step borrows.
 `KObject::KExpression` takes a
 `ProgramExpression`, and the four expression-holding
-[`ExpressionPart`](../src/machine/model/ast.rs) arms (`Expression`,
+[`ExpressionPart`](../src/parse/ast.rs) arms (`Expression`,
 `SigiledTypeExpr`, `RecordType`, `QuotedExpression`) — the only conduits from the
 AST into the value channel — hold a `ProgramNode`, so each door compiles its
 proof out of the arm it matched. A node built at a per-call brand cannot be

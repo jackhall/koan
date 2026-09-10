@@ -300,9 +300,8 @@ The inference domain is the walked region of the block, and its frontiers are:
 Outside those excluded regions the walk is exact: only the fixed builtin forms
 have lazy slots, so every remaining group in the domain evaluates in the block's
 chain and structural freeness coincides with resolution. Those forms are
-recognized by full untyped bucket key, sound for the same reason
-[`BINDER_SPECS`](../src/machine/model/binder.rs) and
-[`LAZY_SLOT_SPECS`](../src/parse/forms.rs) are: builtin buckets are
+recognized by full untyped bucket key, sound for the same reason the
+[`FORMS`](../src/parse/forms.rs) table is: builtin buckets are
 unshadowable, so a matching node can only ever resolve to that builtin's
 overloads.
 

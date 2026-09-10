@@ -207,7 +207,8 @@ impl<'a> ExpressionPart<'a> {
     /// [`write_summary`](Self::write_summary) as a `Display` view — what a `format!` argument
     /// naming a part uses.
     ///
-    /// Its own view rather than the generic [`PartSummary`], which resolves through the whole run
+    /// Its own view rather than the generic
+    /// [`PartSummary`](crate::machine::model::ast::PartSummary), which resolves through the whole run
     /// bundle: parse renders a part here — a record literal's field-name error names the token it
     /// rejected — while still filling the interner a run frame has yet to adopt.
     pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> AstPartSummary<'x, 'a> {
@@ -330,7 +331,7 @@ impl<'a> KExpression<'a> {
         // `KExpression` is copied on every part walk.
         let plan = binder_plan_for(brand, cache.form(), &expression)
             .map(|key| brand.allocator().value(key));
-        expression.cache = cache.with_binder_plan(plan);
+        expression.cache = cache.declaring(plan);
         // The value binders this node would open a frame over, read off the same statement plans
         // the claim stamp and the `CLOSE` capture walk read. Filled for every node — a node is a
         // body only where a callable names it as one, and the read is a walk of plans already
@@ -406,7 +407,7 @@ impl<'a> KExpression<'a> {
     }
 
     /// The declared-name position of the binder form this node's bucket key matches
-    /// ([`BinderFacts::name_slot`](crate::machine::model::binder::BinderFacts::name_slot)); `None`
+    /// ([`BinderFacts::name_slot`](crate::parse::forms::binder::BinderFacts::name_slot)); `None`
     /// when the node is not a binder form, or the form's spine carries no declared name (`FN`,
     /// `OP`).
     pub fn binder_name_slot(&self) -> Option<usize> {

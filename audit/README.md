@@ -141,7 +141,7 @@ A row carries two readings of every shape, in the column order its header names:
 - **allocations** — the whole-program total, from a debug build with `--features alloc-count`:
   interpreter startup, parse, and the run.
 - **symbols** — the run's `symbols_minted` total: every `Symbol::of` and `KeywordSymbol::of_run`
-  that reached the BLAKE3 funnel, counted where the two meet (`machine::model::labels`). It is
+  that reached the BLAKE3 funnel, counted where the two meet (`parse::labels`). It is
   the second reading of the same run, and it exists because hashing takes no allocation — a mint
   removed from a per-call path moves nothing in the allocations column, so without this one the
   declaration shape's saving would be unmeasurable.

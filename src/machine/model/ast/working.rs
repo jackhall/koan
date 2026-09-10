@@ -316,8 +316,10 @@ impl<'a> WorkingPart<'a> {
 ///
 /// Carries the same [`NodeCache`] a [`KExpression`] does — copied over verbatim when the node is
 /// made from one, since the cache is invariant under splice, and computed outright for a node the
-/// scheduler synthesized — except the binder plan, which is copied over and never computed here: a
-/// binder is always parsed AST, so a synthesized node carries `None` and installs nothing.
+/// scheduler synthesized — except the declaration half (the declared-name position and the install
+/// plan), which is copied over and never computed here: a binder is always parsed AST, so a
+/// synthesized node declares no name and installs nothing even when its own keyword spine happens
+/// to spell a binder form's key.
 ///
 /// One fact here is not structural: [`under_type_sigil`](Self::under_type_sigil), the type-context
 /// stamp the `:(…)` handler sets on the body it re-dispatches. It rides beside the cache because it
@@ -500,7 +502,7 @@ impl<'a> WorkingExpression<'a> {
     }
 
     /// Cached dispatch shape (see
-    /// [`classify_dispatch_shape`](super::shape::classify_dispatch_shape)).
+    /// [`classify_dispatch_shape`](crate::parse::ast::shape::classify_dispatch_shape)).
     pub fn shape(&self) -> DispatchShape {
         self.cache.shape()
     }
@@ -524,8 +526,10 @@ impl<'a> WorkingExpression<'a> {
         self.cache.lazy_kinds_at(index)
     }
 
-    /// The declared-name position of the binder form this node matches — see
-    /// [`KExpression::binder_name_slot`]. `None` for a node the scheduler synthesized.
+    /// The declared-name position of the binder form this node's bucket key matches — see
+    /// [`KExpression::binder_name_slot`]. It is read off the cached form, so a synthesized node
+    /// whose key happens to match a binder form answers like a parsed one; what stays `None` for a
+    /// synthesized node is the binder *plan*, which is what installs.
     pub fn binder_name_slot(&self) -> Option<usize> {
         self.cache.binder_name_slot()
     }

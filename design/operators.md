@@ -14,7 +14,7 @@ lead keyword. What buys that is the quote.
 ## The symbol is quoted
 
 An operator symbol arrives as a `#(...)` quote — a parse-static
-[`QuotedExpression`](../src/machine/model/ast.rs) part, captured by the parser as
+[`QuotedExpression`](../src/parse/ast.rs) part, captured by the parser as
 data. A quote is a *slot* for dispatch purposes, so every `OP` / `GROUP` overload
 keeps a **fixed** untyped key and matches whatever symbol it is handed:
 
@@ -191,7 +191,7 @@ with — is a **symbol-run digest**: the run's member `KeywordSymbol`s sorted by
 symbol bits, deduped, and their digests hashed through
 [`KeywordSymbol::of_run`](../src/parse/labels.rs). Both sides mint through
 that one constructor — the chain's probe from `operator_probe_for`
-([shape.rs](../src/machine/model/ast/shape.rs)) as the parse freezes the node, the
+([shape.rs](../src/parse/ast/shape.rs)) as the parse freezes the node, the
 powerset from `declared_run` at registration
 ([ops.rs](../src/machine/core/bindings/ops.rs)) — so a registered key and a real
 chain's probe agree by construction rather than by two renderings matching, and no

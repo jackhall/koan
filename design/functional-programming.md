@@ -20,7 +20,7 @@ expression shape's surface form is:
 EXPR (<signature>) -> ReturnType = (<body>)
 ```
 
-The signature is itself a [`KExpression`](../src/machine/model/ast.rs) mixing
+The signature is itself a [`KExpression`](../src/parse/ast.rs) mixing
 fixed `Keyword` tokens and `name: Type` parameter triples. The triple form is
 required — a bare identifier without `: Type` is a parse error; use `: Any` to
 opt out of type-checking for a slot. Keyword tokens are part of the dispatch

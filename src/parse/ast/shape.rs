@@ -243,6 +243,11 @@ pub struct NodeCache<'a> {
     shape: DispatchShape,
     operator_probe: Option<KeywordSymbol>,
     form: Option<&'static Form>,
+    /// The form this node declares under — `Some` only once the AST seal has run, so the binder
+    /// facts of a coincidental key match on a synthesized run are never read. See [`declaring`].
+    ///
+    /// [`declaring`]: Self::declaring
+    declared: Option<&'static Form>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
 }
 
@@ -256,14 +261,23 @@ impl<'a> NodeCache<'a> {
             shape,
             operator_probe: operator_probe_for(key, shape),
             form: form_for(key.iter().copied()),
+            declared: None,
             binder_plan: None,
         }
     }
 
-    /// This cache with the binder plan filled — the second half of the AST node's seal, once the
-    /// node the extractors read is standing.
-    pub fn with_binder_plan(self, binder_plan: Option<&'a StoredBinderKey<'a>>) -> Self {
+    /// This cache read as a declaration — the second half of the AST node's seal, once the node the
+    /// extractors read is standing: the matched form's binder facts and the plan they produced.
+    ///
+    /// Only a parsed node passes through here, which is what keeps a *synthesized* run from
+    /// declaring anything. A synthesis writes its own keyword spine — a unary chain reduction emits
+    /// `<operator> <operands>`, the shape `TYPE _` and `NEWTYPE _` also spell — so its key can match
+    /// a binder form by coincidence. Such a node is not that declaration, so it reports no declared
+    /// name and installs nothing, while still reading the form for its lazy slots, which are a fact
+    /// about the key alone.
+    pub fn declaring(self, binder_plan: Option<&'a StoredBinderKey<'a>>) -> Self {
         NodeCache {
+            declared: self.form,
             binder_plan,
             ..self
         }
@@ -312,11 +326,11 @@ impl<'a> NodeCache<'a> {
     }
 
     /// The declared-name position of the binder form this node's bucket key matches
-    /// ([`BinderFacts::name_slot`](crate::machine::model::binder::BinderFacts::name_slot)); `None`
+    /// ([`BinderFacts::name_slot`](crate::parse::forms::binder::BinderFacts::name_slot)); `None`
     /// when the node matches no form, the form installs no binder, or its spine carries no declared
     /// name (`FN`, `OP`).
     pub fn binder_name_slot(&self) -> Option<usize> {
-        self.form?.binder?.name_slot
+        self.declared?.binder?.name_slot
     }
 
     /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates.

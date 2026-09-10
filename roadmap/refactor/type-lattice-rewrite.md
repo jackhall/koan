@@ -75,13 +75,12 @@ law, so a rewrite of any walk has no oracle beyond the shapes someone thought to
 
 ## Dependencies
 
-Third of the three-step reshuffle: `memory`, then the parse consolidation, then this. It subsumes
+Third and last of the three-step reshuffle: `memory` and the `parse` consolidation both shipped, so
+the lattice core already imports its labels from [`parse`](../../src/parse/labels.rs) and has no
+edge left into `machine::model` to remove. It subsumes
 [one structural walk](type-structure-combinator.md) and [substitute, then ask](substitution-walk-collapse.md):
 their acceptance criteria are met by the rewritten core, so they retire with it.
 
-**Requires:**
-
-- [Consolidate `parse`](consolidate-parse.md) — the core imports labels from `parse`, which is what
-  leaves it with no edge into `machine::model`.
+**Requires:** none — both prerequisites shipped.
 
 **Unblocks:** none tracked yet.

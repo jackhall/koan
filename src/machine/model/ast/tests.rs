@@ -3,9 +3,11 @@ use crate::machine::model::Held;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::memory::{ProgramBrand, program_storage};
-use crate::parse::LabelInterner;
-use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::forms::FormId;
+use crate::parse::forms::lazy::LazyKinds;
+use crate::parse::{ExpressionPart, KExpression, KLiteral, KeywordSymbol, LabelInterner};
 use crate::source::Spanned;
 
 fn kw(s: &str) -> ExpressionPart<'_> {
@@ -231,4 +233,50 @@ fn resolve_for_lowers_a_type_token_through_a_kind_member() {
         ExpressionPart::Type(type_name("MyType", &registries)).resolve_for(&slot, scope, types),
         Held::UnresolvedType(_)
     ));
+}
+
+/// A synthesized run declares nothing, even when the spine the synthesis writes happens to spell a
+/// binder form's key. A unary chain reduction emits `<operator> <operands>` — the two-element
+/// keyword-led shape `TYPE _` and `NEWTYPE _` also spell — so a chain whose operator is quoted as
+/// `TYPE` reduces to a node whose bucket key matches that declaration. The node is not that
+/// declaration: it reports no declared-name position, so the park-exemption rail keyed on it does
+/// not treat its operand list as a declaration slot.
+///
+/// The lazy stamp is the other half of the same read and is deliberately *not* withheld: which
+/// slots stay raw is a fact about the bucket key, which a synthesized run carries as plainly as a
+/// parsed one.
+#[test]
+fn a_synthesized_run_spelling_a_binder_key_declares_nothing() {
+    let program = program_storage();
+    let brand = program.brand();
+    let region = brand.region();
+    let labels = LabelInterner::new();
+
+    let operands = ExpressionPart::ListLiteral(
+        region
+            .allocator()
+            .slice(&[ExpressionPart::Literal(KLiteral::Number(1.0))]),
+    );
+    let synthesized = WorkingExpression::new(
+        region,
+        &[
+            Spanned::bare(WorkingPart::Ast(ExpressionPart::Keyword(
+                KeywordSymbol::declared("TYPE", &labels).expect("TYPE is a keyword token"),
+            ))),
+            Spanned::bare(WorkingPart::Ast(operands)),
+        ],
+    );
+
+    assert_eq!(
+        synthesized.cache().form().map(|form| form.id),
+        Some(FormId::TypeDeclaration),
+        "the synthesized key really does match the declaration form",
+    );
+    assert_eq!(synthesized.binder_name_slot(), None);
+    assert!(synthesized.binder_plan().is_none());
+    assert_eq!(
+        synthesized.lazy_kinds_at(1),
+        LazyKinds::CODE,
+        "the lazy stamp is a fact about the key and rides every door",
+    );
 }

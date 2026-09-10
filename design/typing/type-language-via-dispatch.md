@@ -53,10 +53,11 @@ parenthesized constructor forms are spelled bare too: **inside a binder form's t
 `(…)` ≡ `:(…)`.** `EXPR (WRAP s :Str) -> (LIST OF Str) = ([s])` and
 `OP #(++) OVER (LIST OF Str) = (…)` are the same declarations as their sigiled twins.
 
-The equivalence is minted at parse, and its scope is exactly the masked slots. Each entry of
-[`BINDER_SPECS`](../../src/machine/model/binder.rs) carries a `type_slots` mask — the parts-run
-positions its form reads as a type expression — and
-[`admit_bare_type_slots`](../../src/machine/model/binder.rs), called as each expression run
+The equivalence is minted at parse, and its scope is exactly the masked slots. The
+[`BinderFacts`](../../src/parse/forms/binder.rs) riding a
+[`FORMS`](../../src/parse/forms.rs) entry carry a `type_slots` mask — the parts-run
+positions that form reads as a type expression — and
+[`admit_bare_type_slots`](../../src/parse/forms/binder.rs), called as each expression run
 closes ([`lower_body`](../../src/parse/lower.rs)), rewrites a plain
 `Expression` part at each masked index to `SigiledTypeExpr`. Same `KExpression` payload, new
 parse-context marker; any other part kind there (a `Type` token, a `:(…)`, a `:{…}`, an
@@ -68,7 +69,7 @@ its sigiled spelling.
 
 Everything downstream follows by construction, which is why parity is exact rather than
 maintained: the statement's untyped bucket key is unchanged (both variants are slots), the
-form's [`LAZY_SLOT_SPECS`](../../src/parse/forms.rs) entry already stamps the index
+form's [`FORMS`](../../src/parse/forms.rs) entry already stamps the index
 raw so the part is captured rather than staged as an eager sub-dispatch, and the slot's carrier
 union already lists `SigiledTypeExpr`. The two spellings are the *same part* by the time
 anything semantic looks at them. The one visible consequence is cosmetic: a diagnostic that
@@ -393,9 +394,10 @@ name binding and ride the name-keyed placeholder channel. A bare `EXPR` / `OP` r
 bucket and rides the bucket-keyed channel instead; the combined
 `LET <name> = FN EXPR …` statement (and its `OP` twin) rides both from one binder. Which forms are
 binders — and the name and buckets each declares — is read parse-statically from
-the static [`BINDER_SPECS`](../../src/machine/model/binder.rs) table; the two
+the [`BinderFacts`](../../src/parse/forms/binder.rs) riding the node's cached
+[`FORMS`](../../src/parse/forms.rs) entry; the two
 channels are the two fields of one
-[`StoredBinderKey`](../../src/machine/model/binder.rs) record, an optional name
+[`StoredBinderKey`](../../src/parse/forms/binder.rs) record, an optional name
 and up to two bucket keys.
 
 The bucket-keyed channel admits *sibling* overloads under one head

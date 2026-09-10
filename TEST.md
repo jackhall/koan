@@ -26,6 +26,39 @@ nearest module's `tests` block.
 CI runs `cargo build --verbose && cargo test --verbose` on push and PR against
 `master` (see [.github/workflows/rust.yml](.github/workflows/rust.yml)).
 
+### Parser property suites
+
+The parser's laws are stated as [proptest](https://docs.rs/proptest) properties
+rather than pinned one input at a time, at 64 cases each. A pin that fixes a
+diagnostic message or a surface rule is *not* rewritten as a property and stays
+beside its sibling unit tests. Seven files hold the thirty properties:
+
+- [`src/parse/tests/properties.rs`](src/parse/tests/properties.rs) — the ten
+  end-to-end laws, over a generated expression tree, a tape of random bytes that
+  chooses the layout it renders under (spacing, indented child lines, ignorable
+  commas, redundant `(…)` wrappers), and an oracle that writes the same tree in
+  the harness's `describe` notation: round-trip, the redundant-wrapper peel, token
+  classification, spans, container arity, separator insensitivity, symbol minting,
+  the operator-chain probe digest, type-sigil idempotence and compound-atom
+  desugaring. Its keyword pool is deliberately disjoint from the keywords
+  [`FORMS`](src/parse/forms.rs) spells, so no generated run matches a builtin form.
+- [`src/parse/ast/tests.rs`](src/parse/ast/tests.rs) — node laws: the dispatch
+  shape as a function of the key and the head class, the cache agreeing with a
+  recompute and riding a copy and a resplice, a node key matching the signature key
+  of the same pattern, the summary rendering, and structural equality.
+- [`src/parse/labels/tests.rs`](src/parse/labels/tests.rs) — interning laws, beside
+  the four fixed-name pins described under [Symbol mints](#symbol-mints).
+- [`src/parse/forms/tests/`](src/parse/forms/tests.rs) — the form table, split four
+  ways: static table-shape walks including the `FormId`-equals-index pin
+  (`table.rs`), the caching and binder-plan laws (`binder.rs`), the lazy-kind
+  derivation law (`lazy.rs`), and the table⟺registration law pinning every `FORMS`
+  key against the live builtin registration set, which is derived once, here
+  (`registration.rs`).
+- [`src/parse/forms/layout/tests.rs`](src/parse/forms/layout/tests.rs) — slot-layout
+  laws: symbol order, the lexical position beside each entry, parameter merge.
+- [`src/machine/model/close_inference/tests.rs`](src/machine/model/close_inference/tests.rs)
+  — the capture-inference laws, per close rule.
+
 ## Tutorial snippets
 
 Every runnable code block in [`tutorial/`](tutorial/README.md) is checked against

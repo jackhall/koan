@@ -10,8 +10,9 @@
 //! the node struct itself at any brand ([`ProgramExpression::rehost`]) is sound.
 //!
 //! The marker is consumed only where the claim is used. The dispatch channel — `sub_dispatches`,
-//! [`WorkingExpression`](super::WorkingExpression), the classifier, the structural cache — keeps
-//! carrying bare [`KExpression`], so nothing here goes viral and there is no erase point to audit.
+//! [`WorkingExpression`](crate::machine::model::WorkingExpression), the classifier, the structural
+//! cache — keeps carrying bare [`KExpression`], so nothing here goes viral and there is no erase
+//! point to audit.
 
 use std::ops::Deref;
 

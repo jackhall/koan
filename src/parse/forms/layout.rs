@@ -4,7 +4,8 @@
 //! A per-call frame's value bindings are addressed by *slot* — a position in this run — rather than
 //! by hash probe, so an activation allocates one sized array instead of building a table from
 //! nothing ([`SlotArray`](crate::memory::SlotArray)). Two halves meet here and neither is a second
-//! enumeration of the other: the body half is read off the same [`statement_binder_plan`] the
+//! enumeration of the other: the body half is read off the same
+//! [`statement_binder_plan`](crate::parse::ast::KExpression::statement_binder_plan) the
 //! `CLOSE` capture walk and the dispatch-time claim stamp read
 //! ([`of_body`](SlotLayout::of_body)), and the parameter half is the signature's own `params()` run,
 //! merged in where a callable is born ([`for_function`](SlotLayout::for_function)).

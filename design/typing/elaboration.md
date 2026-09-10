@@ -128,9 +128,10 @@ resolves directly.
 ## Layers
 
 The parser's bare type-leaf carrier is
-[`TypeName`](../../src/machine/model/ast.rs), a thin newtype over the source
-name (`Deref`s to `str`, derives eq/hash by string). The pipeline from a
-`TypeName` to a fully-elaborated `&'a KType` runs through five layers, each with
+[`ExpressionPart::Type(TypeSymbol)`](../../src/parse/ast.rs) — the interned
+content digest of the source name and nothing else
+([label-interning.md](../label-interning.md)). The pipeline from that token to a
+fully-elaborated `&'a KType` runs through five layers, each with
 a distinct source-file home. Other typing docs that touch a single layer
 cross-link this section rather than restating its slice.
 
@@ -412,9 +413,9 @@ surface-name carrier variant inside `KType` itself.
 per-dispatch-poll `bare_outcomes` cache and parks on the producers behind every `Parked`
 bare-name part — so admission always decides against landed facts, and which overload wins
 never depends on drain order. Two slot kinds are exempt, both owned by a binder form's own
-machinery and both statically known from the expression's cached spec-table facts
-([`KExpression::binder_name_slot`](../../src/machine/model/ast.rs), off
-[`BinderSpec::name_slot`](../../src/machine/model/binder.rs)):
+machinery and both statically known from the expression's cached form entry
+([`KExpression::binder_name_slot`](../../src/parse/ast.rs), off
+[`BinderFacts::name_slot`](../../src/parse/forms/binder.rs)):
 
 - the **declared-name position** — the slot owns the name (`x` in `LET x = …`), so an inner
   shadowing binder must not wait on a same-named outer binder still in flight (its own claim

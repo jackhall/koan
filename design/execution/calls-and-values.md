@@ -174,7 +174,7 @@ statements as dispatch nodes:
   ([`Host::apply`](../../src/machine/execute/harness.rs)), which splits
   via `split_working_body` and submits each statement through `enter_block`. The
   scheduler itself never inspects AST shape:
-  [`KExpression::is_statement_block`](../../src/machine/model/ast.rs) is the single
+  [`KExpression::is_statement_block`](../../src/parse/ast.rs) is the single
   source of truth for the all-`Expression` cutoff, and every splitter consults it.
 - FN, MATCH-arm, and TRY-arm bodies split under that same rule, through
   [`split_leading_tail`](../../src/machine/core/kfunction/body.rs): the body's
