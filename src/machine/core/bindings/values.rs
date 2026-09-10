@@ -41,7 +41,7 @@ use super::{BindingIndex, Claim, NameLookup, SealedValue};
 /// and entry death are the same schedule — the entry is `Copy`-cheap to read out and carries no
 /// `Drop`. Fusing value and reach in the seal keeps the write door from ever pairing a value with a
 /// reach derived for a different value.
-pub(crate) struct DataEntry<'a> {
+pub(super) struct DataEntry<'a> {
     pub(super) index: BindingIndex,
     pub(super) sealed: SealedValue<'a>,
 }
@@ -51,6 +51,28 @@ pub(crate) struct DataEntry<'a> {
 type KeyedCell<'a> = SlotState<DataEntry<'a>, Claim>;
 
 const _: () = assert!(!std::mem::needs_drop::<KeyedCell<'static>>());
+
+/// Where a bound entry sits in the store that holds it, in the form a **copy** of that store
+/// addresses it by. A slotted scope copies to a slotted one over the same slot order — the layout
+/// travels with it — so its entries copy by slot, in order, with no name resolved at the
+/// destination; a keyed one copies by name, at the position stored beside the entry.
+#[derive(Clone, Copy)]
+pub(crate) enum ValueAddress {
+    /// A name-addressed cell, at the lexical position stored beside it.
+    Keyed(BindingIndex),
+    /// Slot `slot` of the store's layout, at the position that layout pairs with it.
+    Slot { slot: usize, index: BindingIndex },
+}
+
+impl ValueAddress {
+    /// The entry's lexical position — what the `idx < cutoff` visibility rule reads, whichever
+    /// representation holds it.
+    pub(crate) fn index(self) -> BindingIndex {
+        match self {
+            ValueAddress::Keyed(index) | ValueAddress::Slot { index, .. } => index,
+        }
+    }
+}
 
 /// A write refused because the name is already spoken for — a committed binding, or a claim naming
 /// a different binder. The caller renders the `Rebind` diagnostic, since only it holds the
@@ -143,6 +165,7 @@ impl<'a> ValueStore<'a> {
     }
 
     /// Whether a **committed** binding stands on `name`, at any position.
+    #[cfg(test)]
     pub(super) fn is_bound(&self, name: ValueSymbol) -> bool {
         match self {
             ValueStore::Keyed { cells, .. } => {
@@ -261,30 +284,60 @@ impl<'a> ValueStore<'a> {
         }
     }
 
-    /// Every committed binding, as `(name, position, carrier)`. Visibility is the caller's.
+    /// Every committed binding, as `(name, address, carrier)` — the slotted arm **in slot order**,
+    /// which is what lets a copy fill its own array positionally. Visibility is the caller's.
     pub(super) fn for_each_bound(
         &self,
-        mut f: impl FnMut(ValueSymbol, BindingIndex, &SealedValue<'a>),
+        mut f: impl FnMut(ValueSymbol, ValueAddress, &SealedValue<'a>),
     ) {
         match self {
             ValueStore::Keyed { cells, .. } => {
                 for (name, cell) in cells.iter() {
                     if let SlotState::Bound(entry) = cell {
-                        f(*name, entry.index, &entry.sealed);
+                        f(*name, ValueAddress::Keyed(entry.index), &entry.sealed);
                     }
                 }
             }
             ValueStore::Slotted { layout, cells } => {
                 for (slot, cell) in cells.iter() {
                     if let SlotState::Bound(sealed) = cell {
+                        let index = BindingIndex::value(layout.position(slot));
                         f(
                             layout.name(slot),
-                            BindingIndex::value(layout.position(slot)),
+                            ValueAddress::Slot { slot, index },
                             sealed,
                         );
                     }
                 }
             }
+        }
+    }
+
+    /// The environment copy's write: place a rebuilt binding at the address its source sat at. A
+    /// slotted destination writes the slot directly — the layout it re-homed from the source pairs
+    /// that slot with the same name and the same position, so nothing is resolved here.
+    pub(super) fn insert_copied(
+        &mut self,
+        name: ValueSymbol,
+        at: ValueAddress,
+        sealed: SealedValue<'a>,
+    ) {
+        match (self, at) {
+            (ValueStore::Keyed { cells, .. }, ValueAddress::Keyed(index)) => {
+                debug_assert!(
+                    !cells.contains_key(&name),
+                    "an environment copy fills an empty table, one entry per source name",
+                );
+                cells.insert(name, SlotState::Bound(DataEntry { index, sealed }));
+            }
+            (ValueStore::Slotted { layout, cells }, ValueAddress::Slot { slot, index }) => {
+                debug_assert_eq!(layout.name(slot), name);
+                debug_assert_eq!(layout.position(slot), index.idx);
+                cells
+                    .bind(slot, sealed)
+                    .unwrap_or_else(|_| panic!("an environment copy fills an empty slot array"));
+            }
+            _ => unreachable!("a copied scope takes its source's own representation"),
         }
     }
 

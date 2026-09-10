@@ -101,6 +101,7 @@ pub(crate) use claims::ClaimStore;
 use claims::NameClaim;
 pub use gate::WriteGate;
 pub(crate) use ops::{TypeWritePolicy, WriteOp, powerset_probes};
+pub(crate) use values::ValueAddress;
 use values::ValueStore;
 
 /// A value binding's dormant carrier: the bound value fused to the exact reach description minted
@@ -168,7 +169,7 @@ pub(crate) struct FunctionBucketEntry<'a> {
 /// data the upsert decides identity on — all of it computed at seal time
 /// ([`GroupSeal`]), where the record was open, so the write verb opens nothing.
 ///
-/// The same shape [`DataEntry`] and [`FunctionBucketEntry`] take, and for the same reason: the
+/// The same shape a value entry ([`values`]) and [`FunctionBucketEntry`] take, and for the same reason: the
 /// entry owns nothing of the record. The record lives in the declaring scope's region bump and the
 /// regions its reach names are held by that region's union bundle, so the entry carries no `Drop`
 /// over it and dies with the region that hosts what it names — a group whose declaring region has
@@ -237,7 +238,7 @@ pub struct FunctionLookup<'a, A: Allocator = Global> {
 pub(crate) struct VisibleBindings<A: Allocator> {
     /// Visible value bindings. The capture walk keeps the modules among them and drops the rest —
     /// plain data reaches the block only by explicit capture.
-    pub(crate) data: AllocVec<(ValueSymbol, BindingIndex, DeliveredCarried), A>,
+    pub(crate) data: AllocVec<(ValueSymbol, ValueAddress, DeliveredCarried), A>,
     /// Every visible finalized overload, across all of this scope's buckets. The bucket key and the
     /// dispatch token are re-derived from each callable's own signature at the destination, so the
     /// envelope is the whole entry.
@@ -758,7 +759,7 @@ impl<'a> Bindings<'a> {
         let mut bound = Vec::new();
         self.values
             .borrow()
-            .for_each_bound(|name, _, sealed| bound.push((name, sealed.duplicate())));
+            .for_each_bound(|name, _at, sealed| bound.push((name, sealed.duplicate())));
         bound
     }
 
@@ -837,9 +838,9 @@ impl<'a> Bindings<'a> {
         let mut claims: AllocVec<ProducerId, A> = AllocVec::new_in(alloc);
         {
             let values = self.values.borrow();
-            values.for_each_bound(|name, index, sealed| {
-                if Self::visible(index, cutoff) {
-                    data.push((name, index, self.brand.lift_resident(sealed.duplicate())));
+            values.for_each_bound(|name, at, sealed| {
+                if Self::visible(at.index(), cutoff) {
+                    data.push((name, at, self.brand.lift_resident(sealed.duplicate())));
                 }
             });
             values.for_each_visible_claim(cutoff, |producer| {
@@ -1218,8 +1219,8 @@ impl<'a> Bindings<'a> {
         // already outlive it (a bulk install is same-run re-entrant ascription). The names are
         // `Copy` digests and borrow nothing at all, so nothing is cloned to release the borrow.
         let mut data: Vec<(ValueSymbol, BindingIndex, SealedValue<'a>)> = Vec::new();
-        src.values.borrow().for_each_bound(|name, index, sealed| {
-            data.push((name, index, sealed.duplicate()));
+        src.values.borrow().for_each_bound(|name, at, sealed| {
+            data.push((name, at.index(), sealed.duplicate()));
         });
         for (name, index, sealed) in data {
             if let Some(sealed) = install(name, sealed) {
@@ -1339,9 +1340,9 @@ impl<'a> Bindings<'a> {
     }
 
     /// The environment copy's value-channel write: install a rebuilt binding into a freshly built
-    /// copied scope. A slotted destination resolves `name` through the layout it re-homed from the
-    /// source, so the entry lands in the slot its source sat in and at the source's own lexical
-    /// position. Deliberately **registry-free**, which is what lets it run from inside a relocation
+    /// copied scope, at the address its source sat at ([`ValueAddress`]) — a slot for a slotted
+    /// destination, a name-and-position pair for a keyed one, so no copied binding is resolved by
+    /// name into an array the source already ordered. Deliberately **registry-free**, which is what lets it run from inside a relocation
     /// fold: the only thing `write_value` needs registries for is rendering a `Rebind`, and a copy
     /// fills an empty table with one entry per source name, so a collision is a construction bug
     /// rather than a program error. It is asserted here rather than reported.
@@ -1351,7 +1352,7 @@ impl<'a> Bindings<'a> {
     pub(crate) fn insert_copied_value(
         &self,
         name: ValueSymbol,
-        index: BindingIndex,
+        at: ValueAddress,
         sealed: SealedValue<'a>,
     ) {
         let weight = sealed
@@ -1359,14 +1360,7 @@ impl<'a> Bindings<'a> {
             .value()
             .as_object()
             .map_or(0, object_copy_cost);
-        let mut values = self.values.borrow_mut();
-        debug_assert!(
-            !values.is_bound(name),
-            "an environment copy fills an empty table, one entry per source name",
-        );
-        values
-            .bind(name, index, sealed)
-            .unwrap_or_else(|_| panic!("an environment copy fills an empty table"));
+        self.values.borrow_mut().insert_copied(name, at, sealed);
         self.copy_cost
             .set(self.copy_cost.get().saturating_add(weight));
     }

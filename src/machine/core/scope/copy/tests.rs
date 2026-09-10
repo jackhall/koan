@@ -438,3 +438,134 @@ fn copied_cost_without_operators<'a>(outer: &'a Scope<'a>, registries: &RunRegis
         copied_cost(consolidated(top, door_over(source)))
     })
 }
+
+// ---------- positions and slots ----------
+
+/// **A slotted source copies to a slotted destination over the same slot order.** The copy re-homes
+/// the source's layout at the destination the way it re-mints a signature, so the fill addresses
+/// each name through the copy's own plain data and the two scopes agree on which slot a name is.
+#[test]
+fn a_slotted_scope_copies_to_a_slotted_scope() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let registries = RunRegistries::new();
+    let body = crate::parse::parse(
+        program.brand(),
+        &registries.labels,
+        "((LET a = 1) (LET f = 2))",
+    )
+    .expect("parse")
+    .into_iter()
+    .next()
+    .expect("one statement");
+    let layout = crate::machine::model::SlotLayout::of_body(program.brand().region(), &body);
+    let frame: Rc<CallFrame> = test_run.scope.open_frame_slotted(layout);
+
+    frame.with_resident(|source| {
+        assert_eq!(
+            source.bindings().layout().map(|l| l.len()),
+            Some(2),
+            "the frame is slotted by the body's own layout",
+        );
+        let top = bind_self_capturing(source, "f", 2, &registries);
+        source.close();
+
+        let copied_scope = consolidated(top, door_over(source)).captured_scope();
+        let copied = copied_scope
+            .bindings()
+            .layout()
+            .expect("a slotted source copies to a slotted destination");
+        assert!(
+            !std::ptr::eq(copied, layout),
+            "the destination's layout is re-homed, not the source's borrowed",
+        );
+        assert_eq!(
+            copied.iter().collect::<Vec<_>>(),
+            layout.iter().collect::<Vec<_>>(),
+            "the same names in the same slots at the same positions",
+        );
+        assert_eq!(
+            bound_captured_address(copied_scope, "f", &registries),
+            scope_address(copied_scope),
+            "and the copied binding lands in its own slot, capturing the copy",
+        );
+    });
+}
+
+/// **Every copied entry keeps its source lexical position, on all three channels.** The engine used
+/// to flatten each one to index 0 on the argument that a copy's fresh id is named by no chain; a
+/// slotted destination has to place a value at the slot its layout pairs with that position, so the
+/// position travels — and it travels for the bucket and operator channels beside it rather than for
+/// the value channel alone.
+#[test]
+fn copied_entries_keep_their_source_positions() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let registries = RunRegistries::new();
+    let frame: Rc<CallFrame> = test_run.scope.open_frame();
+
+    frame.with_resident(|source| {
+        // A value at 4, an overload at 5, an operator group at 6 — three positions no copy could
+        // reproduce by accident.
+        bind_self_capturing(source, "a", 4, &registries);
+        let overload = KFunction::alloc_captured_draft(
+            source,
+            unit_signature(),
+            Body::Builtin(body_no_op),
+            &registries,
+        );
+        source
+            .register_function_direct(
+                &overload,
+                BindingIndex::value(5),
+                &registries,
+                &mut WriteGate::for_test(),
+            )
+            .expect("a fresh bucket registers");
+        let record = source.birth_operator_group(&[probe_symbol("⊕")], ReductionMode::FoldLeft);
+        source
+            .register_operator_group_direct(
+                operator_run(&["⊕"], &registries),
+                GroupSeal::of_delivered(source, &record),
+                BindingIndex::value(6),
+                &registries,
+                &mut WriteGate::for_test(),
+            )
+            .expect("a fresh probe registers");
+
+        let top = bind_self_capturing(source, "top", 7, &registries);
+        source.close();
+
+        let copied_scope = consolidated(top, door_over(source)).captured_scope();
+        let visible = copied_scope
+            .bindings()
+            .visible_for_capture(None, crate::memory::Global);
+        let mut values: Vec<usize> = visible
+            .data
+            .iter()
+            .map(|(_, at, _)| at.index().idx)
+            .collect();
+        values.sort_unstable();
+        assert_eq!(values, vec![4, 7], "the value entries keep their positions");
+        assert_eq!(
+            visible
+                .functions
+                .iter()
+                .map(|(index, _)| index.idx)
+                .collect::<Vec<_>>(),
+            vec![5],
+            "the copied overload keeps its position",
+        );
+        assert_eq!(
+            visible
+                .operators
+                .iter()
+                .map(|(_, index, _)| index.idx)
+                .collect::<Vec<_>>(),
+            vec![6],
+            "the copied operator entry keeps its position",
+        );
+    });
+}

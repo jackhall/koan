@@ -360,3 +360,61 @@ fn classify_excludes_a_bare_token_at_a_union_carrier_slot() {
     assert!(classify("OWNS").is_empty());
     assert_eq!(classify("WRAPS"), vec![1]);
 }
+
+/// A user-defined callable carries the **merged** layout its frames are sized by: its value
+/// parameters at position 0, its body's own binders at the positions their statements submit at,
+/// all in symbol order. Built once here at definition, so no activation rebuilds it — and read by
+/// `Scope::open_frame_slotted`, whose slot resolution would `expect`-panic on a body binder the
+/// layout missed.
+#[test]
+fn a_user_callable_carries_its_merged_frame_layout() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let registries = RunRegistries::new();
+    let body = crate::parse::parse(
+        program.brand(),
+        &registries.labels,
+        "((LET zz = 1) (LET aa = 2))",
+    )
+    .expect("parse")
+    .into_iter()
+    .next()
+    .expect("one statement");
+
+    let draft = SignatureDraft {
+        return_type: ReturnType::Resolved(KType::ANY),
+        elements: vec![
+            crate::machine::model::SignatureElement::Keyword(probe_symbol("CALL")),
+            crate::machine::model::SignatureElement::Argument(Argument {
+                name: crate::builtins::test_support::binder_name("p", &registries),
+                ktype: KType::ANY,
+                role: None,
+            }),
+        ],
+    };
+    let cell = KFunction::alloc_captured_draft(
+        test_run.scope,
+        draft,
+        Body::UserDefined(body),
+        &registries,
+    );
+    let resident = cell.rest_into(test_run.scope.brand().handle());
+    let layout = test_run
+        .scope
+        .open_function(&resident)
+        .value()
+        .slot_layout();
+
+    let value =
+        |text: &str| crate::machine::model::ValueSymbol::classify(text).expect("a value token");
+    let mut expected = vec![(value("p"), 0), (value("zz"), 1), (value("aa"), 2)];
+    expected.sort();
+    assert_eq!(
+        layout
+            .iter()
+            .map(|(_, name, at)| (name, at))
+            .collect::<Vec<_>>(),
+        expected,
+    );
+}

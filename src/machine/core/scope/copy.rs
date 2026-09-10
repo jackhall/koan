@@ -207,9 +207,9 @@ fn copy_chain<'b>(
 /// gate), so no visibility cutoff applies: a scope no live call-site chain names reads as complete,
 /// every entry visible to every body that captured it, and copying the table wholesale under a
 /// fresh id reproduces exactly what the source answered. Every copied entry keeps its **source
-/// lexical position**, on all three channels: a slotted destination addresses its array by the
-/// layout it re-homed from the source, which pairs each name with the position its binder wrote at,
-/// and a keyed one records the position beside the entry the way its source did.
+/// lexical position**, on all three channels. A slotted source is walked in slot order and its
+/// entries placed at those same slots — the destination re-homed the source's layout, so the two
+/// agree on which slot a name is and no copied binding is resolved by name at the destination.
 ///
 /// A binding whose value **is** a callable is rebuilt against the copied scope it captured
 /// ([`rebuild_callable`]); that is what makes the recursive-closure and sibling-sharing cases hold.
@@ -248,14 +248,14 @@ fn fill_scope<'b>(
         copied.bindings().insert_copied_type(name, kt, site);
     }
 
-    for (name, index, cell) in visible.data.iter() {
+    for (name, at, cell) in visible.data.iter() {
         let sealed = match callable_anchor(cell, copied, memo) {
             Some(anchor) => copied.store_function_cell(&rebuild_callable(cell, anchor)),
             None => copied
                 .adopt_for_capture(cell, |carried| Ok(carried.object()))
                 .ok()?,
         };
-        copied.bindings().insert_copied_value(*name, *index, sealed);
+        copied.bindings().insert_copied_value(*name, *at, sealed);
     }
 
     for (index, cell) in visible.functions.iter() {

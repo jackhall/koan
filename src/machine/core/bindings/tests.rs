@@ -2,6 +2,8 @@
 //! exclusion that makes the `data`/`types` partition structural (no name in both), and the claim
 //! store a still-finalizing binder stamps beside the binding maps.
 
+mod value_store;
+
 use crate::memory::Global;
 use std::rc::Rc;
 

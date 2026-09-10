@@ -591,12 +591,16 @@ fn close_implicitly<'a>(
                 .into_iter()
                 .map(|(probe, _, group)| (probe, group)),
         );
-        plan.modules
-            .extend(visible.data.into_iter().filter_map(|(name, _, delivered)| {
-                delivered
-                    .open(|carried| matches!(carried.object(), KObject::Module(_)))
-                    .then_some((name, delivered))
-            }));
+        plan.modules.extend(
+            visible
+                .data
+                .into_iter()
+                .filter_map(|(name, _at, delivered)| {
+                    delivered
+                        .open(|carried| matches!(carried.object(), KObject::Module(_)))
+                        .then_some((name, delivered))
+                }),
+        );
     }
 }
 

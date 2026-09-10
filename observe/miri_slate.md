@@ -171,8 +171,17 @@ sibling-alloc claim in the same run: the opened child's re-borrow still names th
 while a sibling pointer allocates into it, so `with_resident`'s `&Scope` and `brand().alloc(…)` are
 pinned coexisting there rather than by a test of their own.
 
+A third test pins the **slotted** door ([`Scope::open_frame_slotted`](../src/machine/core/scope.rs)),
+which crosses a *zipped* operand: the lexical parent and the body's `SlotLayout`, both resident in
+the parent's own region, erased together and re-anchored at the one birth brand. The layout then
+rides the child's binding tables and is read on every bind and lookup for the frame's whole life,
+pinned by nothing but the child frame's `FrameStorage.outer` chain — so the test drops the defining
+frame's shell (the drop a `FreshTail` hop performs on the retiring cart) before binding through the
+layout and reading back. A mis-scoped layout reference is a use-after-free at exactly that read.
+
 - `with_resident_relocates_seed_value_into_brand`
 - `born_child_scope_survives_subsequent_alloc_in_its_own_region`
+- `slotted_frame_reads_its_layout_after_the_defining_shell_drops`
 
 **`CLOSE OVER`'s seeded block region** ([src/builtins/close_over.rs](../src/builtins/close_over.rs))
 — the second caller of the `for<'b>` seed open, and the one that reads the seeded region back
@@ -709,9 +718,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-10: 2280s — 35 tests, 0 leaks, 0 UB
 - 2026-09-09: 1505s — 34 tests, 0 leaks, 0 UB
 - 2026-09-09: 1282s — 34 tests, 0 leaks, 0 UB
 - 2026-09-09: 1267s — 34 tests, 0 leaks, 0 UB
 - 2026-09-08: 1831s — 34 tests, 0 leaks, 0 UB
-- 2026-09-06: 956s — 34 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

@@ -224,6 +224,49 @@ fn call_frame_chained_outer_frame_walkable() {
     });
 }
 
+/// The slotted frame door's **zipped** operand, and the layout's liveness after the shell that
+/// pinned it is gone. `open_frame_slotted` erases two references — the lexical parent and the
+/// layout, both resident in the parent's own region — and re-anchors them together at the birth
+/// brand; the layout then rides the child's binding tables and is read on **every** bind and
+/// lookup for the frame's whole life. Nothing pins it but the child frame's `FrameStorage.outer`
+/// chain, so this is the shape a mis-scoped layout reference dangles at.
+///
+/// Built to mirror the FN invoke exactly: the layout is bumped in an outer per-call region, the
+/// slotted frame opens under that region's scope, and the outer `Rc<CallFrame>` shell is dropped
+/// before the child binds through the layout and reads back — the drop a `FreshTail` hop performs
+/// on the retiring cart.
+#[test]
+fn slotted_frame_reads_its_layout_after_the_defining_shell_drops() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let test_run = TestRun::silent(&program, &region);
+    let registries = test_run.registries();
+    let outer = test_run.scope.open_frame();
+    let inner = outer.with_resident(|defining| {
+        // The layout lives in the defining frame's own region, exactly as a callable's does.
+        let layout = crate::machine::model::SlotLayout::single(
+            defining.brand(),
+            value_name("k", registries),
+            0,
+        );
+        defining.open_frame_slotted(layout)
+    });
+    drop(outer);
+    inner.with_resident(|child| {
+        let value = child.brand().alloc_scalar(Scalar::Number(7.0));
+        child
+            .bind_resident_for_test(
+                value_name("k", registries),
+                value,
+                BindingIndex::BUILTIN,
+                registries,
+                &mut crate::machine::WriteGate::for_test(),
+            )
+            .expect("the layout resolves the name to its slot");
+        assert!(matches!(child.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
+    });
+}
+
 /// Derivation, top-level case: a per-call frame built directly under a **root-region** scope chains
 /// no ancestor pin. `parent_frame_pin` returns `None` for a root-region scope, so the frame's
 /// storage has no `outer` — matching the former hand-passed `outer_frame == None` at top level.
