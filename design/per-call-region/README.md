@@ -1,6 +1,6 @@
 # Per-call region protocol
 
-The contract for [`Rc<CallFrame>`](../../src/memory/region.rs): which
+The contract for [`Rc<CallFrame>`](../../src/memory/frame.rs): which
 [`KObject`](../../src/machine/model/values/kobject.rs) variants carry a
 per-call anchor, how
 [`lift_kobject`](../../src/machine/execute/lift.rs) decides to attach one,
@@ -9,7 +9,7 @@ how the [scheduler](../../src/machine/execute/harness.rs) propagates the
 active frame, how builtin-built frames chain the call-site frame's
 storage through `FrameStorage.outer`, and how the TCO step reuses the
 frame shell over a fresh `FrameStorage`.
-The participants live in `KObject` (carriers), `arena.rs` (allocation
+The participants live in `KObject` (carriers), [`memory/`](../../src/memory.rs) (allocation
 / storage), and `Scheduler` (active-frame plumbing); this page is the
 single named owner so a reader investigating the protocol lands here
 rather than reconstructing it from five docs and ten source files.

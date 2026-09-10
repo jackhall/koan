@@ -117,7 +117,7 @@ eponymous Koan-runtime type: [kobject.rs](src/machine/model/values/kobject.rs) d
 [ktype.rs](src/machine/model/types/ktype.rs) defines `KType`,
 [ktraits.rs](src/machine/model/types/ktraits.rs) holds the `K*`-typed core traits.
 Files without the prefix are infrastructure that don't introduce a single namesake type:
-[arena.rs](src/memory/region.rs) (allocation),
+[region.rs](src/memory/region.rs) (allocation),
 [scope.rs](src/machine/core/scope.rs) (lexical environment),
 [resolve_dispatch.rs](src/machine/execute/decide/resolve_dispatch.rs) (the
 overload-resolution walk returning a `DispatchOutcome`),
@@ -146,8 +146,15 @@ owned bundle of that registry beside the label interner — see
 ```
 src/
 ├── main.rs              CLI entry point — reads source, calls interpret_with_writer_path
-├── lib.rs               library facade — declares `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph
+├── lib.rs               library facade — declares `memory`, `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph, and re-exports workgraph's DAG scheduler as `koan::scheduler`
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally fixed-cost measurements read
+├── source.rs            source-span and provenance carrier for errors
+├── memory.rs            pub mod memory — where a value lives and how long: Koan's instantiation of workgraph's region substrate, and every substrate name Koan spells
+├── memory/
+│   ├── substrate.rs        the crate's only import of workgraph::witnessed / hashbrown / allocator_api2 — one Koan-bound alias per library generic (Delivered / Sealed / Opened / Witnessed / Retained / RegionHandle / FoldedPlacement / Sectioned / StepContext …), plus a verbatim re-export of the names that take no Koan parameter
+│   ├── region.rs           KoanStorageProfile, KoanRegion (= Region<KoanStorageProfile>), FrameStorage (the per-call region owner), the RegionBrand / FoldingBrand / SubstrateDoor allocation veneer, run_root_storage and the bump-backed table constructor
+│   ├── frame.rs            CallFrame — the per-call region shell (envelope + storage) — plus FrameReach / FrameCoverage, the reach-evidence aliases
+│   └── program.rs          ProgramStorage / ProgramBrand — the eternal-tier region program text and its parsed AST are bumped into, above the run root
 ├── parse.rs             pub mod parse; …
 ├── parse/
 │   ├── lower.rs            layout tree → KExpressions: sigils, the redundant-wrapper peel, adjacency, spans
@@ -222,31 +229,26 @@ src/
     │   └── values/
     │       ├── kobject.rs         runtime value type
     │       ├── container_substrate.rs  ContainerSubstrate<'a, C> — the index-generic region-resident substrate (sectioned cells + run union + copy cost), Copy and bump-hosted in every arm; C is RecordLayout (a symbol-sorted &[Symbol] slice), a dict's frozen &BumpBackedMap, or a list/payload marker
-    │       ├── carried.rs         Carried — the scheduler's value currency (Object | Type)
+    │       ├── cell.rs             Held / Carried — the owned and borrowed value cells, with the carrier aliases each travels in (CarriedFamily, DeliveredCarried, SplicedCell)
     │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
     │       ├── named_pairs.rs     shared (name, value) ordered-list helper
-    │       ├── module.rs          Module — first-class module values and their sealed self-sig content
+    │       ├── module.rs          Module — first-class module values, their sealed self-sig content, and the ModuleRefFamily a region-stored &Module erases through
     │       └── coerce.rs          coerce_object_into — the ascription-barrier walk that rebuilds a value under a different binding of a signature's abstract members (an opaque view's members are born coerced)
     ├── core.rs            module surface for core/
     ├── core/
-    │   ├── arena.rs       KoanRegion (= Region<KoanStorageProfile>), RegionBrand, FoldingBrand, KoanRegionExt — the Koan storage substrate and allocation veneer (children below)
-    │   ├── arena/
-    │   │   ├── frame.rs           FrameStorage / FrameSet / CallFrame / RunWriter — per-call allocation frame, run-root storage, the run's output sink, witnessed child-scope construction door
-    │   │   └── step_allocator.rs  StepAllocator — the step-branded construction doors (alloc_carried / alloc_type_* / alloc_object_scalar)
     │   ├── bindings.rs    Bindings façade — four-map (data/types/functions/operators) holding committed bindings only, with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function_stored surface (raw map accessors are #[cfg(test)]); one RefCell over the four maps and the claim store, nothing else interior-mutable
     │   ├── bindings/
     │   │   ├── claims.rs  Claim / ClaimStore — the scope's in-flight binder claims (by_name / by_bucket read paths, by_statement retirement run), sized at the block fan-out
     │   │   ├── ops.rs     WriteOp / TypeWritePolicy — a binding-table write as outcome data, and the single apply interpreter the run loop drives
     │   │   └── gate.rs    WriteGate — the zero-sized capability every table write verb requires, minted only inside crate::machine (run loop + unpublished-scope construction door)
     │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors, with the caught record's field labels as one StaticName<ValueSymbol> group
-    │   ├── scope.rs       Scope — lexical environment: the bump-resident struct, its allocators (alloc_run_root / alloc_child_under / … , bumped at 'a; alloc_child_transparent through the crossing born door) with their private constructors, and small accessors (children below)
+    │   ├── scope.rs       Scope — lexical environment: the bump-resident struct, the ScopeRefFamily / RegionScopeFamily reattach families a region-stored &Scope erases through, the frame doors (open_frame / adopt_as_run_frame), its allocators (alloc_run_root / alloc_child_under / … , bumped at 'a; alloc_child_transparent through the crossing born door) with their private constructors, and small accessors (children below)
     │   ├── scope/
     │   │   ├── resolve.rs     name-resolution ladders — value / type / operator-group lookup, walk_chain / resolve_builtin_first, visibility cutoff, builtin-shadow consults
     │   │   ├── registry.rs    write doors — the seal_* construction halves of the value binds, the submission-channel placeholder installs, the owns-its-bindings write-target guard, and the *_direct writes for unpublished scopes
     │   │   ├── reach.rs       reach / carrier derivation — resident value / type carriers, envelope sealing, copy-free / copying adoption, and the module store folds
     │   │   └── copy.rs        the environment copy behind the Consolidate verb — rebuilds a callable's per-call captured chain at the destination region, memoized per source scope so cycles terminate and siblings share
-    │   ├── ref_carriers.rs  ScopeRefFamily / ModuleRefFamily — the Reattachable families a region-stored &Scope / &Module carrier erases through
-    │   ├── source.rs      source-span and provenance carrier for errors
+    │   ├── seals.rs       OverloadSeal / GroupSeal — the registration bundles a dispatch or operator write takes, computed at seal time so no write verb opens a carrier
     │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types
     │   ├── statement_id.rs  StatementId — counter-minted, never-recycled identity of one submitted statement; what a binding entry's Installer names, so declaration identity borrows nothing from the scheduler
     │   ├── lexical_frame.rs  LexicalFrame — immutable cactus-chain (scope_id, index, parent) attached to every dispatched node
@@ -265,6 +267,8 @@ src/
         ├── producer_id.rs  ProducerId — the opaque park token everything below the drive loop stores, compares, and hands back but cannot open (both conversions pub(in crate::machine::execute)), plus deps_on / extend_deps_on, the single verb pair that spends one
         ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / Park / Forward) + Replacement (a Continue's work coupled to its frame placement; constructor-minted host brand) + Continuation (Ready / Catch) + NodeContinuation (the slot's obligation as data beside a two-tier ContinuationCall: Bumped &dyn Fn / Boxed Box<dyn FnOnce>) + the Await envelope builder (sole finish-carrying-Park constructor) + the erase doors (erase_bumped / erase_boxed) and the generic adapters composed before them (gated / sealed_done / catching / decide_only); AST-free (carries DepRequest as an opaque type)
         ├── ambient.rs     AmbientContext — the per-step ambient state (active frame, run frame, slot payload, declared-return obligation)
+        ├── run_frame.rs   RunFrame — the run's own frame: the CallFrame adopting the run-root scope beside the RunRegistries every step consults and the RunWriter PRINT writes to, all owned outright and dropped at run teardown
+        ├── step.rs        StepCarried / StepAllocator — the step-brand layer: the Done-arm carrier confined to the step that built it, the construction context over that step's destination frame, and the two RegionBrand doors that mint a step-branded product
         ├── decide.rs      classify_dispatch (the decide) + decide_tail + classify_dispatch_shape; submit/ (binder-aware submit_expression chokepoint), literal/ (aggregate-literal lowering), ctx/ (DecideCtx — the scheduler-free step context), resolve/ (Resolution — THE bare-name ladder), exec/ (decide-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_identifier/ submodules
         └── lift.rs        lift_kobject — rebuild values across per-call region boundaries
 ```

@@ -180,7 +180,7 @@ hold any witness state — the pins live one level down, in the library's region
 A composite value's **residence** — every region its borrows reach is covered by the
 destination — is discharged **at construction, by the fold brand**, not by a runtime
 walk. A relocation or bind builds the value inside a `for<'b>` fold closure
-([`FoldingBrand::alloc_object_folded`](../src/memory/region.rs)), where the only
+([`FoldingBrand::alloc_object_folded`](../src/machine/model/values/kobject.rs)), where the only
 inhabitants of `KObject<'b>` are the fold's declared operand views, the brand's own
 allocations, and owned data — all named by the witness the enclosing combinator
 composes. An ambient-lifetime capture is a compile error at the closure signature, so

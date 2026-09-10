@@ -21,8 +21,8 @@ above the substrate.
 
 `KoanRegion` is `Region<KoanStorageProfile>` over ten sub-arenas. The witness is
 the per-call `Rc<FrameStorage>`, whose held `Rc` heap-pins the region for its life.
-[arena.rs](../src/memory/region.rs) holds only that profile
-(`KoanStorageProfile`, `KoanRegion`, `FrameSet`, `CallFrame`) plus a thin
+[region.rs](../src/memory/region.rs) holds only that profile
+(`KoanStorageProfile`, `KoanRegion`, `FrameStorage`) plus a thin
 `RegionBrand` veneer over the library's
 [`RegionHandle`](../workgraph/src/witnessed/region.rs) adding Koan-family-typed
 `alloc_*` wrappers. The veneer carries no capability rule of its own; it allocates
@@ -69,7 +69,7 @@ separate facts make that borrow harmless:
 So the AST-embedding object is **region-pure**, born under the empty
 (foreign-reach-only) set exactly as any region-pure leaf. The quote-capture site
 takes its own door
-([`RegionBrand::alloc_expression`](../src/memory/region.rs), witnessed as
+([`RegionBrand::alloc_expression`](../src/machine/model/values/kobject.rs), witnessed as
 `alloc_expression_witnessed`) rather than the scalar one, for a lifetime reason
 only: `KObject<'a>` is invariant, so a cell holding raw AST has no owned rebuild to
 offer a lifetime-free signature. The door's own signature is the enforcement —
@@ -106,7 +106,7 @@ The value-embedding sites that take a *bare arg* —
 — climb off it the same way: each receives the value it embeds as a delivered
 `Sealed` carrier and folds it into the result's own construction. `attr` / `FROM`
 go through the step context's
-[`alloc_carried_with`](../src/memory/region.rs), which re-projects the value
+[`alloc_carried_with`](../src/machine/execute/step.rs), which re-projects the value
 at the fold brand from the lhs operand's own view (crossed via
 [`BoundArgs::carrier`](../src/machine/core/kfunction/action.rs)), so its reach
 folds in by construction; the Resolved arm goes through the binding scope's own
@@ -330,7 +330,7 @@ nothing branded crosses the step boundary.
   bundle filters out anyway.
 - **Frame-side reads** fold onto `open` the same way: a frame's own child scope
   opens at a `for<'b>` brand through
-  [`CallFrame::with_scope`](../src/memory/region.rs) — the `&mut self` submit /
+  [`CallFrame::with_scope`](../src/memory/frame.rs) — the `&mut self` submit /
   classify paths reach it through `with_node_scope` / `with_current_node_scope`,
   copying out a scalar (an id, a region) where they need no live scope — so no
   `&Scope` rides up a `&mut self` path.
@@ -358,9 +358,9 @@ directly. With every frame-side and seed-side read on `open`, the access surface
 The construction-time scope re-anchor closes the same way: a same-region child
 stores its already-`'a` parent by plain coercion, and the per-call frame child
 builds through the externally-witnessed construction door
-[`build_frame_child_witnessed`](../src/memory/region.rs), which brands the
-fresh region and the foreign parent at one `for<'b>` and erases the child
-witness-less. No scope re-anchor survives outside the witnessed substrate.
+[`Scope::open_frame`](../src/machine/core/scope.rs), which brands the
+fresh region and the foreign parent at one `for<'b>` and hands the finished
+pair to `CallFrame::around`. No scope re-anchor survives outside the witnessed substrate.
 
 ## Storage choice, per node
 

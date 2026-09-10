@@ -53,12 +53,11 @@ table, and its tests use the identity hasher from the type registry.
 
 ## Dependencies
 
-Second of the three-step reshuffle: `memory`, then this, then the type-lattice rewrite.
+Second of the three-step reshuffle: the [`memory`](../../src/memory.rs) module shipped first, so
+the parser already reaches program storage through it; this comes next, then the type-lattice
+rewrite.
 
-**Requires:**
-
-- [A top-level `memory` module](memory-module.md) — the parser's program-storage import must land
-  on `memory` for `parse` to stop importing `machine::core`.
+**Requires:** none — its prerequisite shipped.
 
 **Unblocks:**
 

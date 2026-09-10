@@ -74,6 +74,11 @@ positions against. The `declare_n10` / `declare_n100` shapes in
   delete the residual name-channel claim store entirely, but the `DeclarationSite` installer
   identity and the announced-window interaction need their own check. Left keyed here; a
   follow-up item if the residual store proves to be the next measured term.
+- *The `Scope` interface — decided, and owned here.* `memory::frame` names `Scope` concretely
+  ([frame.rs](../../src/memory/frame.rs)), which is the one back-edge the `memory` module keeps
+  into the rest of Koan. The trait that lets a lightweight per-call scope and the lexical scope
+  both fill that slot is written here, with the second implementation — not in the region module,
+  which has only one implementor to generalize over.
 - *Slot payload versus the cellgraph carrier — open.* Today a bound entry is a `SealedValue`: the
   value fused to the exact reach description minted for it, stored beside the value
   ([`DataEntry`](../../src/machine/core/bindings.rs)). Under the substrate `workgraph` is being

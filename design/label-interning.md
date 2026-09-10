@@ -22,7 +22,7 @@ consulted only when a label is rendered. No per-record, per-call, or per-node ow
   later resolves through.
 - **`RunRegistries`** — the run frame's owned bundle of run-lifetime lookup state:
   the [type registry](typing/type-registry.md) and the label interner. A plain
-  field on the scheduler-owned run `CallFrame` — no `Rc`, no process-global, no
+  field on the scheduler-owned [`RunFrame`](../src/machine/execute/run_frame.rs) — no `Rc`, no process-global, no
   `thread_local!` — reached by reference through the execution context and dropped
   with the run frame. It is minted by `RunRegistries::with_labels` when the run
   frame is established, adopting the interner the parse filled rather than opening
@@ -84,7 +84,7 @@ them, and drops to `key.symbol()` for the substrate in one line; `record_rehomed
 relocates cells already laid out, stays bare-`Symbol` throughout.
 
 The registry's nodes stay lifetime-free: region-bumped slices inside `TypeNode`
-would thread a run-region lifetime through `TypeRegistry`, `CallFrame`, and the
+would thread a run-region lifetime through `TypeRegistry`, `RunFrame`, and the
 ambient context (a self-reference at the harness boundary), which is exactly the
 shape the frame system's witnessed-erasure machinery exists to avoid. Registry
 content is heap-owned; regions host values.

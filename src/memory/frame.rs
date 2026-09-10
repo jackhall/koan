@@ -1,7 +1,8 @@
-//! The per-call allocation frame: the [`FrameReach`] / [`FrameCoverage`] reach-evidence aliases,
-//! the witnessed child-scope construction door, and the [`CallFrame`] shell over a refcounted
-//! [`FrameStorage`] that holds the per-call child [`Scope`]. The region and brand substrate these
-//! build on lives in [`region`](super::region).
+//! The per-call allocation frame: the [`FrameReach`] / [`FrameCoverage`] reach-evidence aliases and
+//! the [`CallFrame`] shell over a refcounted [`FrameStorage`] that holds the per-call child
+//! [`Scope`]. The region and brand substrate these build on lives in [`region`](super::region); the
+//! child scope itself is born by [`Scope::open_frame`](crate::machine::core::Scope::open_frame),
+//! which hands [`CallFrame::around`] the finished pair.
 //!
 //! A frame is a region shell and nothing else. The run's lookup state and output sink belong to the
 //! run, not to a frame that happens to be first, and live in
@@ -44,10 +45,9 @@ pub struct CallFrame {
     /// [`Delivered`] envelope: the storage is the envelope's retained host, the scope its
     /// member-less resident carrier (hosted in that storage's own region), read back through
     /// [`Self::with_scope`] / [`Self::scope_sealed`] under that host pin. Co-ownership by one value
-    /// replaces the former hand-maintained `(storage, scope_carrier)` field pair: the
-    /// storage-pins-the-scope co-location the pair kept by field-order convention is now a
-    /// construction invariant of the envelope, and dropping the sealed carrier never dereferences the
-    /// child pointer, so no drop-order rule is left to hand-maintain.
+    /// makes storage-pins-the-scope a construction invariant of the envelope rather than a
+    /// field-order convention, and dropping the sealed carrier never dereferences the child
+    /// pointer, so the shell carries no drop-order rule to hand-maintain.
     envelope: Delivered<ScopeRefFamily>,
     /// This frame's own [`FrameStorage`] — the owner of the region its child scope lives in, and
     /// the pin every escapee extends ([`Self::storage_rc`]). Held beside the envelope rather than

@@ -1,9 +1,9 @@
 //! [`RunRegistries`] — the run's owned bundle of run-lifetime lookup state: the
 //! [`TypeRegistry`] and the [`LabelInterner`] beside it.
 //!
-//! A plain field on the scheduler-owned run [`CallFrame`](crate::memory::CallFrame) — no
+//! A plain field on the scheduler-owned [`RunFrame`](crate::machine::execute) — no
 //! `Rc`, no process-global, no `thread_local!` — reached by reference through the execution
-//! context and dropped with that frame. It lives on the ordinary heap rather than in region
+//! context and dropped with the run. It lives on the ordinary heap rather than in region
 //! storage: both registries own growing maps that need `Drop`, and regions are Drop-free.
 //!
 //! The reach rule: `&TypeRegistry` is the currency for pure type-structure questions (subtyping,

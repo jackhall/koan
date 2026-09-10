@@ -8,8 +8,8 @@
 //! substrate reaches Koan through this file and [`region`](super::region)'s bump-backed table
 //! constructor, and every other module names a `crate::memory` item. Swapping the substrate is
 //! therefore a rewrite of this file and of
-//! [`machine::execute::step`](crate::machine::execute::step), the one other seam that spells the
-//! library directly.
+//! [`machine::execute::step`](crate::machine::execute::step), the one seam outside `memory` that
+//! spells the region substrate's own brand doors.
 //!
 //! One alias per library generic, and no second alias for the same generic: a site that needs a
 //! parameter an alias does not bind is a design question about the profile, not a variant to add

@@ -18,14 +18,14 @@ KFunction<'a>)` reaches the per-call region that owns its captured
 scope only through that reference, and a `KObject::Module(&'a Module<'a>)` reaches its child
 scope's region
 the same way. None of these carries an owning `Rc<FrameStorage>` on the value. The region such a value
-reaches is kept alive by the value's *holder* — a producer slot's `FrameSet` witness while the value
+reaches is kept alive by the value's *holder* — a producer slot's `FrameCoverage` while the value
 rides the scheduler, and the binding entry's owned pin bundle once the value is bound out of it
 (below) — never by an anchor embedded in the value. Because the in-region value strong-owns no frame, no
 allocation can close a region↔value cycle, so the allocation engine carries no cycle gate.
 
 `FrameStorage` itself carries `outer: Option<Rc<FrameStorage>>`, which chains the parent per-call
 frame's storage when a builtin-built frame's child scope's `outer` points into per-call memory (MATCH
-/ TRY / EVAL). The pin is derived inside `CallFrame::new` from the parent scope's own region owner
+/ TRY / EVAL). The pin is derived inside `Scope::open_frame` from the parent scope's own region owner
 ([`Scope::parent_frame_pin`](../../src/machine/core/scope.rs)), never passed by the builtin. This is
 distinct from escaping-value liveness: `outer` keeps a region alive for an *outer-scope lookup* the
 new frame's child scope performs at run time.
@@ -94,7 +94,7 @@ splice slot and dep value share one lifetime.) The seam is pinned in the Miri sl
 A relocated closure / future / module rides a *bare* borrow into the per-call region that owns its
 defining scope. The copy keeps that borrow verbatim — a closure may reference anything reachable from
 its captured scope, and Koan has no reachability mechanic to compute a copy set, so the source region
-is *kept alive*, not rebuilt. While the value rides a scheduler slot its producer terminal's `FrameSet`
+is *kept alive*, not rebuilt. While the value rides a scheduler slot its producer terminal's `FrameCoverage`
 witness pins that region; once it is relocated out of the scheduler — bound into a persistent scope,
 spliced into a working expr and re-dispatched, or read out as a top-level result — the producer slot
 is gone, so the *consumer* takes over the pin: the binding scope's region union bundle for a bound

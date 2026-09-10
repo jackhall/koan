@@ -186,7 +186,7 @@ cross-link this section rather than restating its slice.
   [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) below for
   the downstream consumers.
 - **Layer 5 — surface-form-survives-bind carrier** in
-  [`carried.rs`](../../src/machine/model/values/cell.rs).
+  [`cell.rs`](../../src/machine/model/values/cell.rs).
   [`Carried::UnresolvedType` / `Held::UnresolvedType`](../../src/machine/model/values/cell.rs)
   preserve the parser-side token's `TypeSymbol` verbatim for bare-leaf type names not in the
   builtin table — so diagnostics resolve the user's identifier exactly as written rather than

@@ -130,7 +130,7 @@ lifetime, so a bound callable is not read out and rebuilt but *relocated*,
 through a nested `transfer_into` whose destination operand pairs the
 destination region's handle with the copied scope the rebuilt callable attaches
 under (`RegionScopeFamily`,
-[ref_carriers.rs](../src/machine/core/scope.rs)). Source callable and
+[scope.rs](../src/machine/core/scope.rs)). Source callable and
 copied scope meet at that nested fold's brand. The consequence for the memo is
 that it can only carry source *addresses* across brands, which is what it is
 keyed by; the consequence for the retention claim is that it stays

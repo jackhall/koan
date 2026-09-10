@@ -182,6 +182,16 @@ question answers without label text. A consumer takes the wider `&RunRegistries`
 only when it renders text or constructs a record, which keeps the label interner off
 the type-system surface entirely.
 
+The direction holds for the value cells too. Asking a [`Held`](../../src/machine/model/values/cell.rs)
+or `Carried` cell for its shallow type tag or its rendering is a *registry* question, not a cell
+method: the answer for the type-channel arms is a lookup here, and the answer for the rendering arms
+is a label lookup. So the doors are
+[`TypeRegistry::ktype_of`](../../src/machine/model/types/registry.rs) / `ktype_of_carried` for the
+tag, and [`RunRegistries::held_summary`](../../src/machine/model/registries.rs) / `carried_summary`
+for the `Display` view, and a cell defines no method that takes a registry at all. The cell files
+therefore name no registry type, and the registry stays the single owner of every question its
+content answers.
+
 ### Reading a node
 
 The registry keeps content and verdicts in two independent `RefCell`s, and the node

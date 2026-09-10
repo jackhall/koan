@@ -228,7 +228,7 @@ its definition site, not the **call** depth — otherwise tail-recursion
 and mutual tail-recursion would grow the chain without bound.
 [`assemble_body_chain`](../../src/machine/core/lexical_frame.rs) walks
 the FN's captured `outer` scope chain (the lexical-definition path
-set up by `CallFrame::new`) and, for each enclosing scope, looks it
+set up by `Scope::open_frame`) and, for each enclosing scope, looks it
 up in the **call-site** chain via `LexicalFrame::index_for`. Hits
 become frames; the result is prepended with the body's own
 `(body_scope.id, body_index)` head — `body_index = 0` for single-

@@ -51,6 +51,45 @@ just enough to read the policy.
 - **Drop-free** — a stored (`'static`) form that owns no heap data: dropping
   it is a no-op, so its bytes can be reclaimed without running any destructor.
 
+## Where the substrate lives
+
+Koan's instantiation of the region engine is one top-level module,
+[`src/memory/`](../src/memory.rs): the storage profile and the allocation brands
+([region.rs](../src/memory/region.rs)), the per-call frame shell
+([frame.rs](../src/memory/frame.rs)), the program-text tier above the run root
+([program.rs](../src/memory/program.rs)), and every substrate name Koan spells
+([substrate.rs](../src/memory/substrate.rs)). `substrate.rs` is the crate's only
+import of `workgraph::witnessed`, `hashbrown` and `allocator_api2`, so swapping
+the engine is a rewrite of that file plus
+[`machine::execute::step`](../src/machine/execute/step.rs), which owns the step
+brand because `StepCarried`'s only exit is confined to `execute`.
+
+**An alias is not an instantiation, and a store is not the storage.** `memory`
+holds one Koan-bound alias per library generic — the names that bind only Koan's
+witness, owner or profile (`Delivered<T>`, `Sealed<'h, T>`, `RegionHandle<'a>`,
+`FoldedPlacement<'b>`, `Sectioned<'a, K>`). A name that binds a *payload* is an
+instantiation of the substrate at that payload and lives in the payload's own
+file: the value cells and their carrier states in
+[`values::cell`](../src/machine/model/values/cell.rs), the callable's in
+[`core::kfunction`](../src/machine/core/kfunction.rs), the operator group's in
+[`model::operators`](../src/machine/model/operators.rs). So does anything shaped
+by what it holds — the [container substrates](../src/machine/model/values/container_substrate.rs)
+and the [rehoming door](../src/machine/model/values/rehomed.rs) are `Held`-cell
+storage, and sit beside the cells. The same rule places the typed allocation
+doors: `memory` exposes one generic `FoldingBrand::alloc_folded<T: Copy>`, and
+each typed spelling (`alloc_object_folded`, `alloc_cell_folded`, `alloc_scalar`,
+`alloc_string`, `alloc_expression`) is an inherent `impl` block written in the
+file that owns the payload. The trade-off is deliberate: substrate spellings are
+no longer readable from one file, and in exchange `memory` names no Koan value
+type at all.
+
+Its one back-edge is `Scope`: [frame.rs](../src/memory/frame.rs) names it to read
+the child a frame's envelope carries. `region.rs`, `program.rs` and
+`substrate.rs` import nothing from the rest of Koan. The scope *interface* that
+would remove even that edge is written with its second implementation
+([slot-shaped per-call scopes](../roadmap/reduce_allocs/slot-shaped-per-call-scopes.md)),
+not here.
+
 ## One ownership regime
 
 Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
@@ -455,7 +494,7 @@ cannot be `Copy`: copying it would fork the state its holders share. It is
 structurally `Drop`-free all the same: every field is `Copy`, a `Cell` of a `Copy`,
 or a bump-backed table whose own vacuous destructor is suppressed. That claim is a
 compile-time assert, not an audited marker — the `reattachable!` declaration in
-[arena.rs](../src/memory/region.rs) carries
+[region.rs](../src/memory/region.rs) carries
 `!needs_drop::<Scope<'static>>()`, and the bump verb that admits it
 ([`BumpAllocator::in_place`](../workgraph/src/witnessed/bump.rs)) restates the same
 assert per store. A field that later brings glue back fails the build at both.

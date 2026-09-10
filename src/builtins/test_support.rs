@@ -122,8 +122,6 @@ pub struct TestRun<'a> {
     /// The runtime holding the run frame. Tests that drive the scheduler directly use it in place
     /// of a `KoanRuntime::new()` of their own.
     pub runtime: KoanRuntime<'a>,
-    /// The run frame, shared out so its registries stay readable after the runtime drops — and
-    /// without borrowing the runtime, which every `run` call needs mutably.
     /// Per-scope statement cursors — the session's own record of how many top-level statements it
     /// has submitted against each scope, which is what numbers the next one. The lexical position
     /// of a statement-at-a-time submission exists only in the submitting session (statement N is

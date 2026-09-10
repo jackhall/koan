@@ -98,7 +98,7 @@ property. The frame-chain `Rc` on `FrameStorage` (`outer:
 Option<Rc<FrameStorage>>`) keeps the parent frame's storage alive
 whenever the child's `outer` points into per-call memory.
 
-That pin is **derived**, not threaded by the caller. `CallFrame::new`
+That pin is **derived**, not threaded by the caller. `Scope::open_frame`
 reads it off the parent scope via
 [`Scope::parent_frame_pin`](../../src/machine/core/scope.rs): the parent
 scope's own region owner — read off its region's host back-link — when the
@@ -107,7 +107,7 @@ no pin when it lives in the run-root region (which outlives the run — a
 root chain plus an escaping value's reach-set pin would close a
 `region → value → frame` cycle). There is no pin parameter for a caller
 to mis-wire. The TCO fresh-tail cart is minted through the **same**
-`CallFrame::new`, with the callee closure's captured definition scope as
+`Scope::open_frame`, with the callee closure's captured definition scope as
 its parent, so it chains that scope's region owner exactly like any other
 frame: a top-level-defined recursive fn captures the run-root scope and
 therefore chains nothing (TCO recursion stays bounded), while a closure

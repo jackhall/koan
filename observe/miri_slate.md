@@ -53,8 +53,8 @@ group just to silence the stale-anchor check.
   and the two `Scope` stores embedding a foreign operand ride `RegionHandle::bump_born_with`, whose
   `for<'b>` brand discharges residence at compile time. Koan-side `src/` production code carries no
   `unsafe` of its own at all.
-- `src/memory/frame.rs` — the per-call frame shell over the region owner, split out of the brand
-  file it used to share. Its groups (CallFrame lifetime erasure, MATCH-variant / TRY-WITH TCO,
+- `src/memory/frame.rs` — the per-call frame shell over the region owner, beside the brand and
+  profile file it builds on. Its groups (CallFrame lifetime erasure, MATCH-variant / TRY-WITH TCO,
   per-call frame re-anchor, NodeStore reinstall) pin the same safe-code frame drop-order and
   reattach disciplines `region.rs`'s entry describes, backed by the branded re-anchor in
   `witnessed.rs`; the file carries no `unsafe` of its own.
