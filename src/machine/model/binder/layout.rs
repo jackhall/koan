@@ -163,8 +163,6 @@ impl<'a> SlotLayout<'a> {
         })
     }
 
-    /// Sort, dedupe first-wins, and bump — the one place a layout is written, so every door above
-    /// ships the same sorted, position-carrying invariant.
     /// Sort, dedupe first-wins, and freeze — the one place a layout is written, so every door above
     /// ships the same sorted, position-carrying invariant. `entries` is staged in `brand`'s own
     /// bump, so the run is sorted where it sits and the frozen copy costs one more bump rather than

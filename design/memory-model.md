@@ -42,9 +42,13 @@ than ownership trees. The structural edges:
   outright. Many sibling scopes can share one outer, so the
   in-degree is unbounded.
 - `Scope.region: &'a KoanRegion` — back-pointer to the owning region.
-- [`Bindings.data`](../src/machine/core/bindings.rs) maps each bound name
-  to a `&'a KObject<'a>`. The pointee may live in this scope's region or in
-  an outer one.
+- [`Bindings`](../src/machine/core/bindings.rs)' value channel maps each bound
+  name to the dormant carrier fusing its value with the exact reach minted for
+  it. A per-call frame addresses that channel by **slot** — a position in the
+  body's own [`SlotLayout`](../src/machine/model/binder/layout.rs), one bump
+  allocation sized at frame birth — and every other scope addresses it by name
+  through a bump-backed map; either way the pointee may live in this scope's
+  region or in an outer one.
 - [`KFunction.captured`](../src/machine/core/kfunction.rs) holds the closure's
   definition scope as a plain `&'a Scope<'a>` — a bumped `KFunction` is never
   erased, so the field is already at the region's `'a`. Multiple
@@ -655,7 +659,7 @@ step brand through one of the `seal_*` construction doors on
 it, seal the two together — and returns the table write it decided as a
 [`WriteOp`](../src/machine/core/bindings/ops.rs) on its
 [`Action`](../src/machine/core/kfunction/action.rs). One variant per channel: `Value`
-(a `data` entry — a value binding, callable by name alone), `Overload` (a
+(a value-channel entry — a value binding, callable by name alone), `Overload` (a
 `FN` / `OP` dispatch-bucket entry, the only door a keyworded expression becomes dispatchable
 through), `Type` (a `types` entry under a
 [`TypeWritePolicy`](../src/machine/core/bindings/ops.rs)), `Group` (one operator-registry probe
@@ -733,6 +737,37 @@ mutated only through `DepGraph`'s atomic-update methods, so the invariant
 (every edge in a producer's `notify` matched by a +1 in `pending` on its
 consumer) is enforced by the surface rather than by convention.
 
+A per-call frame's value bindings cost one sized bump allocation, not a table
+built from nothing. Every body node carries a
+[`SlotLayout`](../src/machine/model/binder/layout.rs) computed where it is
+sealed — its value binders as a symbol-sorted run of `(ValueSymbol, lexical
+position)`, read off the same cached statement binder plans the `CLOSE` capture
+walk and the dispatch-time claim stamp read, so the layout and the binds it
+sizes cannot disagree about what a body binds. A callable merges its
+signature's parameters into that run at position `0`, once at definition beside
+its signature; the environment copy re-mints it at the destination exactly as
+it re-mints the signature, so a copied callable borrows no source region for it.
+Slot order is *symbol* order, never signature or source order, so nothing has to
+be kept in step: a name's slot is a binary search either side of the call.
+
+An activation opens its frame through `open_frame_slotted`, which zips the
+layout beside the lexical parent into one operand so both re-anchor at the birth
+brand, and the child's value channel becomes a
+[`SlotArray`](../src/memory/slots.rs) of `layout.len()` cells in one bump
+allocation — none at all for a body binding no value, which takes the shared
+empty layout. Every other scope — the run root, module and `SIG` bodies, `USING`
+overlays, a `CLOSE OVER` block's captured environment — keeps a name-keyed map,
+and a read crossing from a slotted frame into a keyed ancestor resolves through
+the one per-scope door either representation answers through. A cell is `Empty`,
+`Claimed` on the in-flight binder's producer, or `Bound`, in *both*
+representations, so a value name's whole state is one read and a commit retires
+the claim it satisfies by replacing it. That is why the claim store beside the
+value channel keys only the dispatch buckets and the type names. The cost this
+removes is bump bytes and CPU — a hash-table build per activation, and a hash
+probe per name read per frame — and not global allocations: a bump-backed table
+grows out of the region's own chunk, so it never appeared in an allocation-count
+term.
+
 Transient-node reclamation is delivery itself: a slot reclaims at finalize the
 moment its notify drains, so when a dispatch splice finish has rewritten
 `working_expr.parts` to `WorkingPart::Spliced`, the spliced slots' indices are
@@ -795,10 +830,6 @@ party's death schedule reaches into another's subtree.
 
 ## Open work
 
-- [Slot-shaped per-call scopes](../roadmap/reduce_allocs/slot-shaped-per-call-scopes.md)
-  — a per-call frame's value bindings as a slot array over a per-body layout
-  in place of the per-activation `data` map and the value half of the claim
-  store.
 - [Tightness-audit coverage](../roadmap/compile_safety/tightness-audit-coverage.md)
   — the two blind spots named under [§ Debug region audits](#debug-region-audits):
   the uninstrumented relocation verbs, and the address walk's stop at a captured

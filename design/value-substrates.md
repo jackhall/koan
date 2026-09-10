@@ -85,10 +85,12 @@ type at all.
 
 Its one back-edge is `Scope`: [frame.rs](../src/memory/frame.rs) names it to read
 the child a frame's envelope carries. `region.rs`, `program.rs` and
-`substrate.rs` import nothing from the rest of Koan. The scope *interface* that
-would remove even that edge is written with its second implementation
-([slot-shaped per-call scopes](../roadmap/reduce_allocs/slot-shaped-per-call-scopes.md)),
-not here.
+`substrate.rs` import nothing from the rest of Koan. That back-edge stays: there
+is no scope trait and no second `Scope` type. A per-call frame's value bindings
+change *representation* — a slot array
+([slots.rs](../src/memory/slots.rs)) sized by the body's layout, in place of the
+name-keyed map — but that is a storage variant inside `Bindings`, so the frame
+shell stays family-generic and never names a scope.
 
 ## One ownership regime
 

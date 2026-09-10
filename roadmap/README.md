@@ -56,7 +56,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Frame recycling](reduce_allocs/frame-recycling.md)
-- [Slot-shaped per-call scopes](reduce_allocs/slot-shaped-per-call-scopes.md)
 - [Consolidate `parse`](refactor/consolidate-parse.md)
 - [Source the free-identifier walk's last two rules](refactor/free-identifier-walk-sourcing.md)
 - [One declaration-window representation](refactor/one-declaration-window.md)

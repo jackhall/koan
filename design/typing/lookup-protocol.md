@@ -67,18 +67,21 @@ threads a chain.
 ## Layer 2 — `Bindings` per-scope lookup
 
 [`Bindings`](../../src/machine/core/bindings.rs) owns the per-scope
-maps — `data` (values), `types` (type-name → `&KType`), `functions`
-(registered overloads), `operators` (operator probe → the sealed carrier of a
-region-hosted [`OperatorGroup`](../../src/machine/model/operators.rs)). The four maps hold
-**committed bindings only**; an in-flight binder is an entry of the scope's
+channels — the **value channel**
+([`values.rs`](../../src/machine/core/bindings/values.rs)), plus the name-keyed
+maps `types` (type-name → `&KType`), `functions` (registered overloads) and
+`operators` (operator probe → the sealed carrier of a
+region-hosted [`OperatorGroup`](../../src/machine/model/operators.rs)). The three keyed maps hold
+**committed bindings only**; an in-flight binder there is an entry of the scope's
 separate claim store, so "is it bound?" and "is a binder for it in flight?" are
 one probe each of the structure that answers it
 ([execution/name-placeholders.md § A claim lives in the scope's claim
-store](../execution/name-placeholders.md#a-claim-lives-in-the-scopes-claim-store)),
-and a [`BindKind`](../../src/machine/core/bindings.rs) — `Value` or `Type` —
-picks which table a name-keyed claim eventually commits into. The `data`/`types`
-split is **structural, not conventional**, and the **key types** are what enforce it:
-`data` keys by `ValueSymbol` and `types` by `TypeSymbol`, classified newtypes minted only
+store](../execution/name-placeholders.md#a-claim-lives-in-the-scopes-claim-store)).
+The value channel instead answers both from one three-state cell, and owns its
+own claims. A [`BindKind`](../../src/machine/core/bindings.rs) — `Value` or
+`Type` — picks which channel a name-keyed claim eventually commits into. The
+value/`types` split is **structural, not conventional**, and the **key types** are what enforce it:
+the value channel keys by `ValueSymbol` and `types` by `TypeSymbol`, classified newtypes minted only
 from text of their own token class
 ([label-interning.md § Classified label vocabulary](../label-interning.md#classified-label-vocabulary)).
 The two classify disjoint text, so a name committed to one universe is unrepresentable in

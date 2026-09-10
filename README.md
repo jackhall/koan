@@ -154,6 +154,7 @@ src/
 │   ├── substrate.rs        the crate's only import of workgraph::witnessed / hashbrown / allocator_api2 — one Koan-bound alias per library generic (Delivered / Sealed / Opened / Witnessed / Retained / RegionHandle / FoldedPlacement / Sectioned / StepContext …), plus a verbatim re-export of the names that take no Koan parameter
 │   ├── region.rs           KoanStorageProfile, KoanRegion (= Region<KoanStorageProfile>), FrameStorage (the per-call region owner), the RegionBrand / FoldingBrand / SubstrateDoor allocation veneer with the residence derivations off a brand (region_owner / frame / parent_frame_pin), run_root_storage and the bump-backed table constructor
 │   ├── frame.rs            Frame<F> — the per-call region shell (envelope + storage), generic over the resident family it seats, with the two doors (open_under / adopting) that are the only way a storage and a resident get paired — plus FrameReach / FrameCoverage, the reach-evidence aliases
+│   ├── slots.rs            SlotState / SlotArray — the layout-addressed counterpart of the bump-backed map: a fixed run of Empty | Claimed(P) | Bound(V) cells in one bump allocation, beside the live-claim counter that makes "nothing in flight" an O(1) read
 │   ├── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
 │   └── program.rs          ProgramStorage / ProgramBrand — the eternal-tier region program text and its parsed AST are bumped into, above the run root
 ├── parse.rs             pub mod parse; …
@@ -237,9 +238,10 @@ src/
     │       └── coerce.rs          coerce_object_into — the ascription-barrier walk that rebuilds a value under a different binding of a signature's abstract members (an opaque view's members are born coerced)
     ├── core.rs            module surface for core/
     ├── core/
-    │   ├── bindings.rs    Bindings façade — four-map (data/types/functions/operators) holding committed bindings only, with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function_stored surface (raw map accessors are #[cfg(test)]); one RefCell over the four maps and the claim store, nothing else interior-mutable
+    │   ├── bindings.rs    Bindings façade — two RefCells: the value channel (keyed or slotted, owning its own claims) and the keyed channel beside it (types/functions/operators + the claim store); the firm write_value / write_type / write_operator_group primitives and the visibility-aware lookup_value/lookup_type/lookup_function_stored surface (raw map accessors are #[cfg(test)]); no verb holds both cells, and nothing else is interior-mutable
     │   ├── bindings/
-    │   │   ├── claims.rs  Claim / ClaimStore — the scope's in-flight binder claims (by_name / by_bucket read paths, by_statement retirement run), sized at the block fan-out
+    │   │   ├── values.rs  ValueStore / ValueAddress / DataEntry — the value channel in both representations (a bump-backed map of three-state cells, or a SlotArray sized by the body's SlotLayout), owning this channel's claims so a value name's whole state is one cell read
+│   │   ├── claims.rs  Claim / ClaimStore — the in-flight binder claims of the channels that have no cell of their own (by_type / by_bucket read paths, by_statement retirement run), sized at the block fan-out
     │   │   ├── ops.rs     WriteOp / TypeWritePolicy — a binding-table write as outcome data, and the single apply interpreter the run loop drives
     │   │   └── gate.rs    WriteGate — the zero-sized capability every table write verb requires, minted only inside crate::machine (run loop + unpublished-scope construction door)
     │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors, with the caught record's field labels as one StaticName<ValueSymbol> group

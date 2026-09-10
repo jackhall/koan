@@ -40,8 +40,7 @@
 //! not a detail.
 //!
 //! **Storage shapes here, Koan vocabulary in `core`.** A payload-generic *shape* — [`BumpBackedMap`]
-//! and the tables built over it, the frame shell, the slot array
-//! [slot-shaped-per-call-scopes.md](../roadmap/reduce_allocs/slot-shaped-per-call-scopes.md) adds —
+//! and the tables built over it, the frame shell, the layout-addressed [`SlotArray`] beside them —
 //! belongs here, because what it holds does not enter its definition. The façade that instantiates
 //! one at Koan's own vocabulary stays in [`core::bindings`](crate::machine::core::bindings):
 //! `Bindings`, `BindingIndex`, the claim store and the write gate key on `model::labels` symbols

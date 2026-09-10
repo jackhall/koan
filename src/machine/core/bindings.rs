@@ -31,10 +31,9 @@
 //! carries alike — so dropping a table frees nothing and runs no per-entry glue, and frame death
 //! walks O(scopes) rather than O(entries). [`bump_table`] carries the compile-time proof that no
 //! entry brings drop glue with it; the write verbs re-home the text they store through the brand
-//! [`Bindings`] holds. The name-keyed keyed key by a `Copy` [`Symbol`](crate::machine::model::Symbol)
-//! digest under the identity
-//! hasher, so a name lookup is a `u128` compare rather than a byte-wise one and a key re-homes
-//! nothing at all.
+//! [`Bindings`] holds. The name-keyed structures key by a `Copy`
+//! [`Symbol`](crate::machine::model::Symbol) digest under the identity hasher, so a name lookup is a
+//! `u128` compare rather than a byte-wise one and a key re-homes nothing at all.
 //!
 //! Every entry carries a [`BindingIndex`] naming its installing statement's lexical
 //! position, gated by the strict cutoff `idx < c`, so a forward reference (a
@@ -169,11 +168,11 @@ pub(crate) struct FunctionBucketEntry<'a> {
 /// data the upsert decides identity on — all of it computed at seal time
 /// ([`GroupSeal`]), where the record was open, so the write verb opens nothing.
 ///
-/// The same shape a value entry ([`values`]) and [`FunctionBucketEntry`] take, and for the same reason: the
-/// entry owns nothing of the record. The record lives in the declaring scope's region bump and the
-/// regions its reach names are held by that region's union bundle, so the entry carries no `Drop`
-/// over it and dies with the region that hosts what it names — a group whose declaring region has
-/// died is unreachable rather than kept alive by a stray refcount.
+/// The same shape a value entry ([`values`]) and [`FunctionBucketEntry`] take, and for the same
+/// reason: the entry owns nothing of the record. The record lives in the declaring scope's region
+/// bump and the regions its reach names are held by that region's union bundle, so the entry
+/// carries no `Drop` over it and dies with the region that hosts what it names — a group whose
+/// declaring region has died is unreachable rather than kept alive by a stray refcount.
 pub(crate) struct OperatorEntry<'a> {
     index: BindingIndex,
     /// The registered record's address — the upsert's cheap identity arm.
@@ -425,7 +424,7 @@ fn operator_entry_weight(keyed: &Keyed<'_>, seal: &GroupSeal<'_>) -> u64 {
 /// verb holds both cells**: a write touching each takes them in turn.
 ///
 /// The brand rides beside the cell because a write re-homes the text it stores: a dispatch
-/// bucket's key and an overload's dispatch token all land in the same region the keyed'
+/// bucket's key and an overload's dispatch token all land in the same region the keyed cell's
 /// buckets do, so a table never points at bytes that can die before it.
 /// `Reattachable` family for a **reference** to a [`Bindings`] table — `&'r Bindings<'r>`.
 /// Layout-invariant: the reference is a thin pointer independent of `'r`, whatever the table it
@@ -462,7 +461,7 @@ pub struct Bindings<'a> {
     /// Monotone because a binding is bind-once and an entry never dies before its scope, so the sum
     /// only ever grows and no write has to subtract. A `Cell` for the same reason
     /// [`Scope::closed`](crate::machine::core::Scope) is one: it is a plain `Copy` counter beside
-    /// the keyed, not table state, and reading it takes no `keyed` borrow.
+    /// the two cells, not table state, and reading it borrows neither.
     copy_cost: Cell<u64>,
 }
 
@@ -474,13 +473,13 @@ pub struct Bindings<'a> {
 const _: () = assert!(!std::mem::needs_drop::<Bindings<'static>>());
 
 impl<'a> Bindings<'a> {
-    /// Empty keyed over `brand`'s region, with a **name-addressed** value channel. There is no
+    /// Empty tables over `brand`'s region, with a **name-addressed** value channel. There is no
     /// `Default`: a binding table cannot exist without the region its storage lives in.
     pub fn new(brand: RegionBrand<'a>) -> Self {
         Self::over(brand, ValueStore::keyed(brand))
     }
 
-    /// [`Self::new`] with a **layout-addressed** value channel — a per-call frame's keyed, whose
+    /// [`Self::new`] with a **layout-addressed** value channel — a per-call frame's bindings, whose
     /// value bindings are one bump allocation sized by the body's own layout and whose other three
     /// channels are keyed exactly as every scope's are.
     pub fn slotted(brand: RegionBrand<'a>, layout: &'a SlotLayout<'a>) -> Self {
@@ -818,7 +817,7 @@ impl<'a> Bindings<'a> {
     /// applies, so the block closes over exactly what a statement at that position could have
     /// resolved.
     ///
-    /// Four keyed, one snapshot, because the walk visits each scope once and the four answers are
+    /// Four channels, one snapshot, because the walk visits each scope once and the four answers are
     /// consumed together. `types` is deliberately absent: a nominal type name reaches the block only
     /// as an explicit capture, and a copied registration's dispatch token holds its [`KType`]s by
     /// value, so dispatch inside the block does not depend on the type table travelling.
@@ -834,24 +833,24 @@ impl<'a> Bindings<'a> {
     ) -> VisibleBindings<A> {
         // The value channel is read first and its borrow released before the keyed cell is taken:
         // no verb here holds both.
-        let mut data = AllocVec::new_in(alloc);
         let mut claims: AllocVec<ProducerId, A> = AllocVec::new_in(alloc);
-        {
-            let values = self.values.borrow();
-            values.for_each_bound(|name, at, sealed| {
-                if Self::visible(at.index(), cutoff) {
-                    data.push((name, at, self.brand.lift_resident(sealed.duplicate())));
-                }
-            });
-            values.for_each_visible_claim(cutoff, |producer| {
-                if !claims.contains(&producer) {
-                    claims.push(producer);
-                }
-            });
-        }
-        let keyed = self.keyed.borrow();
+        let values = self.values.borrow();
         // Each buffer takes an upper bound on its own table up front. A bump vector that grows
         // abandons its old bytes as dead scratch until the pop, so the capacity is worth the count.
+        // `claims` is the exception: it is the error tail, empty on every path that finalizes.
+        let mut data = AllocVec::with_capacity_in(values.bound_capacity_hint(), alloc);
+        values.for_each_bound(|name, at, sealed| {
+            if Self::visible(at.index(), cutoff) {
+                data.push((name, at, self.brand.lift_resident(sealed.duplicate())));
+            }
+        });
+        values.for_each_visible_claim(cutoff, |producer| {
+            if !claims.contains(&producer) {
+                claims.push(producer);
+            }
+        });
+        drop(values);
+        let keyed = self.keyed.borrow();
         let overloads = keyed.functions.values().map(|bucket| bucket.len()).sum();
         let mut functions = AllocVec::with_capacity_in(overloads, alloc);
         functions.extend(
@@ -1104,10 +1103,11 @@ impl<'a> Bindings<'a> {
     /// consumer parking on the claim inherits that destination.
     ///
     /// Errors `Rebind` if the claim collides: a committed binding of the name (bindings are
-    /// bind-once), or a standing claim naming a different edge. Idempotent on same-edge re-entry. A `types` entry
-    /// already carrying a bound identity does **not** block: a parallel nominal finalize
-    /// pre-installs the external identity while its binder is still in flight, and that coexistence
-    /// is a bound entry plus a live claim rather than anything either structure represents.
+    /// bind-once), or a standing claim naming a different edge. Idempotent on same-edge re-entry. A
+    /// `types` entry already carrying a bound identity does **not** block: a parallel nominal
+    /// finalize pre-installs the external identity while its binder is still in flight, and that
+    /// coexistence is a bound entry plus a live claim rather than anything either structure
+    /// represents.
     ///
     /// The eventual [`Self::write_value`] / [`Self::write_type`] call must carry the
     /// same `index` so the consumer's visibility test stays consistent across
@@ -1342,10 +1342,11 @@ impl<'a> Bindings<'a> {
     /// The environment copy's value-channel write: install a rebuilt binding into a freshly built
     /// copied scope, at the address its source sat at ([`ValueAddress`]) — a slot for a slotted
     /// destination, a name-and-position pair for a keyed one, so no copied binding is resolved by
-    /// name into an array the source already ordered. Deliberately **registry-free**, which is what lets it run from inside a relocation
-    /// fold: the only thing `write_value` needs registries for is rendering a `Rebind`, and a copy
-    /// fills an empty table with one entry per source name, so a collision is a construction bug
-    /// rather than a program error. It is asserted here rather than reported.
+    /// name into an array the source already ordered. Deliberately **registry-free**, which is what
+    /// lets it run from inside a relocation fold: the only thing `write_value` needs registries for
+    /// is rendering a `Rebind`, and a copy fills an empty table with one entry per source name, so
+    /// a collision is a construction bug rather than a program error. It is asserted here rather
+    /// than reported.
     ///
     /// The cost memo is bumped exactly as an ordinary bind bumps it, so a copied scope prices its
     /// own re-consolidation on the same terms the source did.
@@ -1474,7 +1475,7 @@ impl<'a> Bindings<'a> {
     ///
     /// Keyed on the one address the retiring slot knows about itself. It is an array index and a
     /// zero test on the success path, and at most three direct removals otherwise — nothing is
-    /// searched in either direction, not the binding keyed by producer and not the store by name.
+    /// searched in either direction, not the binding tables by producer and not the store by name.
     ///
     /// Strands bump bytes: a removed bucket key's stored run is abandoned rather than freed. Name
     /// claims key by a `Copy` digest and strand nothing. Bounded by the binders that fail, so a

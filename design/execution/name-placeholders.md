@@ -50,23 +50,29 @@ consistency test.
 
 ### A claim lives in the scope's claim store
 
-A claim is not a table entry. The
-[`Bindings`](../../src/machine/core/bindings.rs) façade on `Scope` holds the four
-binding maps — `data`, `types`, `functions`, `operators` — beside a **claim
-store** that holds nothing else: the in-flight binders of the one block that
-binds into this scope. The binding maps therefore carry committed bindings only,
-and each slot type states its own table's exclusivity rule with no in-flight arm
-to admit.
+A claim on the **keyed** channels is not a table entry. The
+[`Bindings`](../../src/machine/core/bindings.rs) façade on `Scope` holds the
+name-keyed maps — `types`, `functions`, `operators` — beside a **claim store**
+that holds nothing else: the in-flight binders of the one block that binds into
+this scope. Those maps therefore carry committed bindings only, and each slot
+type states its own table's exclusivity rule with no in-flight arm to admit.
+
+The **value** channel is the exception, and it is the reason the store holds only
+two channels. A value name's whole state rides one three-state cell in the value
+store ([`values.rs`](../../src/machine/core/bindings/values.rs)) — `Empty`,
+`Claimed(ProducerId)`, or `Bound` — in both of that channel's representations
+(the name-keyed map and the layout-addressed slot array a per-call frame takes).
+A commit *replaces* the claim it satisfies rather than removing an entry from a
+second structure, so a value lookup is one cell read that answers bound, parked,
+or miss, and the two can never disagree.
 
 The store ([`claims.rs`](../../src/machine/core/bindings/claims.rs)) has three
 parts, each answering one question. A `Claim` is the pair (`ProducerId`,
 `BindingIndex`) throughout:
 
-- `by_name` — the name's label [`Symbol`](../../src/machine/model/labels.rs) → `Claim`.
-  The name channel's read path, and a name admits at most one claim. One map covers value
-  and type claims alike — a claim is stamped before its producer's kind has settled — and
-  it stays sound because the two bindable token classes name disjoint text
-  ([label-interning.md § Classified label vocabulary](../label-interning.md#classified-label-vocabulary)).
+- `by_type` — [`TypeSymbol`](../../src/machine/model/labels.rs) → `Claim`, the
+  same vocabulary the `types` map it answers beside is keyed by. The type-name
+  channel's read path, and a name admits at most one claim.
 - `by_bucket` — bucket key → a **run** of `Claim`, in install order. The bucket
   channel's read path. The value is a run and not a single claim because sibling
   binders legitimately share one bucket key, each claiming at its own
@@ -120,18 +126,21 @@ matching spec's name extractor pulls structurally out of the expression's parts.
 The
 claim stamps the binder slot's own `ProducerId` paired with its
 [`BindingIndex { idx }`](../../src/machine/core/bindings.rs) — the lexical
-statement index — into `by_name`, gated by the strict `idx < cutoff` rule like
-every other binder. The same visibility predicate therefore gates a claim and the
-binding it becomes.
+statement index — where that channel's state lives: a type name into `by_type`, a
+value name into its own cell in the value store. Either way the claim is gated by
+the strict `idx < cutoff` rule like every other binder, so the same visibility
+predicate gates a claim and the binding it becomes. A value claim leaves the
+store only its *name*, recorded in the statement's `by_statement` slot, which is
+how a retiring statement finds the cell to clear.
 
-The two name-side channels differ only in which table a commit lands in, and the
-store does not distinguish them. Bound-and-claimed coexistence needs no
-representation: on the type side a nominal's seal pre-installs the name's
+Bound-and-claimed coexistence needs a representation on the type side and none on
+the value side. On the type side a nominal's seal pre-installs the name's
 external identity into `types` while its producer is still in flight, and the
-finalize gate must still park the type-identifier memo on that producer. That is
-simply `types[name]` bound *and* a live `by_name` entry — two structures, each
+finalize gate must still park the type-identifier memo on that producer: that is
+simply `types[name]` bound *and* a live `by_type` entry — two structures, each
 answering its own question, so a consumer that can read the identity reads it
-while the memo still finds the producer.
+while the memo still finds the producer. On the value side the two states are
+exclusive by construction, since one cell holds both.
 
 *Bucket-keyed binders* (`FN`, `OP`) fill the **bucket channel** — every
 inner-call bucket key a call to the to-be-registered overloads would compute. A
@@ -350,9 +359,10 @@ into the enclosing scope, read at construction from the
 [`BINDER_SPECS`](../../src/machine/model/binder.rs) table and `None` for a node
 that is not a binder. The dispatch-layer submission chokepoint
 [`KoanRuntime::submit_expression`](../../src/machine/execute/decide/submit.rs)
-reads that plan **once**, for a statement submission, and stamps its claims — a
-`by_name` entry for the name channel, and a `by_bucket` entry per bucket key,
-recorded together in that statement's `by_statement` slot — on the dispatching
+reads that plan **once**, for a statement submission, and stamps its claims — the
+name channel's claim where that name's state lives (`by_type`, or the value
+store's own cell), and a `by_bucket` entry per bucket key, all recorded together
+in that statement's `by_statement` slot — on the dispatching
 scope, at `BindingIndex::value(chain.index)` and before the slot is ever popped
 from the work queues. Each channel gets its **own** edge, wired from the freshly
 allocated slot toward the dispatching scope's region: the submission holds that

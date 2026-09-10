@@ -17,6 +17,11 @@ use crate::memory::{FrameStorageExt, RegionBrand, Sealed, run_root_storage};
 /// body's does.
 const BODY: &str = "((LET c = 1) (LET a = 2) (LET b = 3))";
 
+/// A body that binds one name twice: `a` at position 1 and again at 2, `b` at 3. The layout folds
+/// the repeat onto one slot carrying the *first* binder's position, which is what makes the second
+/// `LET` a rebind rather than a second cell.
+const REBOUND_BODY: &str = "((LET a = 1) (LET a = 2) (LET b = 3))";
+
 fn names(registries: &RunRegistries) -> [ValueSymbol; 3] {
     [
         value_name("a", registries),
@@ -25,20 +30,40 @@ fn names(registries: &RunRegistries) -> [ValueSymbol; 3] {
     ]
 }
 
+/// [`REBOUND_BODY`]'s layout, two slots wide for its three binders.
+fn rebound_layout<'p>(
+    program: crate::memory::ProgramBrand<'p>,
+    registries: &RunRegistries,
+) -> &'p SlotLayout<'p> {
+    let layout = layout_of(program, registries, REBOUND_BODY);
+    assert_eq!(layout.len(), 2, "the repeated name folds onto one slot");
+    layout
+}
+
 /// [`BODY`]'s layout, homed in program storage — where a real body's is, and outliving every frame
 /// region a test opens under it.
 fn body_layout<'p>(
     program: crate::memory::ProgramBrand<'p>,
     registries: &RunRegistries,
 ) -> &'p SlotLayout<'p> {
-    let body = crate::parse::parse(program, &registries.labels, BODY)
+    let layout = layout_of(program, registries, BODY);
+    assert_eq!(layout.len(), 3, "the fixture body binds three names");
+    layout
+}
+
+/// The layout a parsed `source` body publishes, off the same statement reader a real body's comes
+/// from.
+fn layout_of<'p>(
+    program: crate::memory::ProgramBrand<'p>,
+    registries: &RunRegistries,
+    source: &str,
+) -> &'p SlotLayout<'p> {
+    let body = crate::parse::parse(program, &registries.labels, source)
         .expect("parse")
         .into_iter()
         .next()
         .expect("one statement");
-    let layout = SlotLayout::of_body(program.region(), &body);
-    assert_eq!(layout.len(), 3, "the fixture body binds three names");
-    layout
+    SlotLayout::of_body(program.region(), &body)
 }
 
 /// The two stores under test, each over its own region: the keyed one, and a slotted one sized by
@@ -356,4 +381,63 @@ fn only_a_slotted_store_publishes_a_layout() {
     // The `Rc` keeps the storage alive for the borrow above, and states which region the tables
     // sit in.
     drop(Rc::clone(&storage));
+}
+
+/// A name bound twice in one body is a diagnosable rebind, not a crash — and the second binder
+/// submits at its *own* chain index, one past the slot's. Both representations answer alike: the
+/// keyed one finds a committed cell, the slotted one finds the first binder's slot already bound.
+#[test]
+fn a_second_binder_of_one_name_rebinds_at_its_own_index() {
+    let program = crate::memory::program_storage();
+    let registries = RunRegistries::new();
+    both(
+        rebound_layout(program.brand(), &registries),
+        |bindings, region| {
+            let [a, ..] = names(&registries);
+            bindings
+                .write_value(
+                    a,
+                    BindingIndex::value(1),
+                    number(region, 1.0),
+                    &registries,
+                    &mut gate(),
+                )
+                .expect("the first binder commits");
+
+            assert!(
+                bindings
+                    .write_value(
+                        a,
+                        BindingIndex::value(2),
+                        number(region, 2.0),
+                        &registries,
+                        &mut gate(),
+                    )
+                    .is_err(),
+                "the second binder of the name rebinds",
+            );
+            assert!(
+                bindings
+                    .install_placeholder(
+                        binder_name("a", &registries),
+                        ProducerId::for_test(11),
+                        BindingIndex::value(2),
+                        &registries,
+                        &mut gate(),
+                    )
+                    .is_err(),
+                "and so does its dispatch-time claim",
+            );
+
+            // The first binder's value stands, at the first binder's position: invisible to a
+            // reader cut off at 1, visible at 2.
+            assert!(bindings.lookup_value(a, Some(1)).is_none());
+            assert!(matches!(
+                bindings.lookup_value(a, Some(2)),
+                Some(NameLookup::Bound(_))
+            ));
+            assert_eq!(bindings.bound_value_count(), 1);
+            assert!(bindings.has_no_claims(), "the collisions stamped nothing");
+        },
+    );
 }

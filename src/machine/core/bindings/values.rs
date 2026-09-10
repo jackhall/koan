@@ -200,11 +200,10 @@ impl<'a> ValueStore<'a> {
                 let slot = layout
                     .slot_of(name)
                     .expect("a slotted frame's binders and its layout share one statement reader");
-                debug_assert_eq!(
-                    layout.position(slot),
-                    index.idx,
-                    "the layout's position and the submitting statement's chain index are the \
-                     same lexical fact",
+                debug_assert!(
+                    layout.position(slot) <= index.idx,
+                    "a slot's position is its *first* binder's, so a later binder of the same \
+                     name submits at or after it",
                 );
                 cells
                     .claim(slot, producer)
@@ -240,11 +239,10 @@ impl<'a> ValueStore<'a> {
                 let slot = layout
                     .slot_of(name)
                     .expect("a slotted frame's binders and its layout share one statement reader");
-                debug_assert_eq!(
-                    layout.position(slot),
-                    index.idx,
-                    "the layout's position and the writing statement's chain index are the same \
-                     lexical fact",
+                debug_assert!(
+                    layout.position(slot) <= index.idx,
+                    "a slot's position is its *first* binder's, so a later writer of the same \
+                     name submits at or after it",
                 );
                 cells.bind(slot, sealed).map_err(|_| Rebind)
             }
@@ -270,7 +268,10 @@ impl<'a> ValueStore<'a> {
                 let Some(slot) = layout.slot_of(name) else {
                     return;
                 };
-                debug_assert_eq!(layout.position(slot), index.idx);
+                debug_assert!(layout.position(slot) <= index.idx);
+                // No ownership test is needed: a later binder of the name collided on the claim
+                // and so left no claim record for its statement, and the store is reached only
+                // through the record its own claim wrote.
                 cells.retire_claim(slot);
             }
         }
@@ -332,6 +333,8 @@ impl<'a> ValueStore<'a> {
             }
             (ValueStore::Slotted { layout, cells }, ValueAddress::Slot { slot, index }) => {
                 debug_assert_eq!(layout.name(slot), name);
+                // Equality, not the bound the binder paths take: the source address was minted as
+                // its own layout's position, and the re-homed layout is that layout.
                 debug_assert_eq!(layout.position(slot), index.idx);
                 cells
                     .bind(slot, sealed)
@@ -367,6 +370,16 @@ impl<'a> ValueStore<'a> {
                     }
                 }
             }
+        }
+    }
+
+    /// An upper bound on the committed names here, in one length read — a keyed store's cell count
+    /// (claimed and retired cells included) or a slotted one's slot count. What a capture snapshot
+    /// sizes its buffer against before it walks.
+    pub(super) fn bound_capacity_hint(&self) -> usize {
+        match self {
+            ValueStore::Keyed { cells, .. } => cells.len(),
+            ValueStore::Slotted { layout, .. } => layout.len(),
         }
     }
 

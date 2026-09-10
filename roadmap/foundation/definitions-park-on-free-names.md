@@ -16,7 +16,7 @@ code today:
   consolidating — a definition can be "done" while its environment is not.
 - Recursion rides on claims rather than on declarations: a self-referencing `LET f = FN … f …` and
   two sibling `EXPR`s that call each other are legal only because the body's read parks at call
-  time on the sibling's claim. The claim store is therefore load-bearing for a language whose data
+  time on the sibling's claim. Claims are therefore load-bearing for a language whose data
   and bindings are immutable, where a definition's environment could in principle be settled before
   the definition commits.
 
@@ -51,20 +51,17 @@ code today:
   installs the dependency edges at submission from the plan alone. Recommended: the finalize park —
   it reuses the existing claim edge and needs no new submission-time machinery.
 - *Value-channel claims after this ships — open.* If no body can read a claimed name at call time,
-  the value channel's claims are consulted only by definitions and by top-level statements; whether
-  the claim store's value channel shrinks to a definition-time structure is decided once the
-  parking is in and measured.
+  a value cell's `Claimed` state is consulted only by definitions and by top-level statements;
+  whether the value store keeps that state per cell, or narrows it to a definition-time structure,
+  is decided once the parking is in and measured.
 
 ## Dependencies
 
-The slotted per-call scope fixes what a frame holds up front; the one-window representation is the
-shape the announcement reuses. Both are prerequisites, not soft ordering.
+The one-window representation is the shape the announcement reuses — a prerequisite, not soft
+ordering.
 
 **Requires:**
 
-- [Slot-shaped per-call scopes](../reduce_allocs/slot-shaped-per-call-scopes.md) — a frame's own
-  binding set is static and owned by the value store before this item touches what a definition
-  waits on.
 - [One declaration-window representation](../refactor/one-declaration-window.md) — the single
   window type co-declared definitions announce through.
 
