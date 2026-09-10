@@ -517,3 +517,6 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,90 +1,15 @@
-//! `type_sigil` parse cases for `parse`.
+//! What a `:` refuses, and the one place a bare `(…)` reads as a type expression anyway.
 //!
 //! See [type-language-via-dispatch](../../../design/typing/type-language-via-dispatch.md).
 //! The parser does no shape-folding inside `:(...)`: every sigil emits
-//! `ExpressionPart::SigiledTypeExpr(inner)` whose inner mirrors the parens contents.
-//! Shape recognition is the dispatcher's job — these tests assert only parser output.
+//! `ExpressionPart::SigiledTypeExpr(inner)` whose inner mirrors the parens contents, and its
+//! idempotence is [`properties`](super::properties)' ninth law.
 //!
-//! One normalization, not a recognition: a sigil whose body is a lone sub-expression re-labels
-//! that node instead of wrapping it, so `:(...)` is idempotent and `:(Point.x)` lands on the very
-//! shape `build_attr` emits for a Type-class tail. The body is still copied through verbatim; only
-//! the redundant layer is dropped.
+//! The flip below is the exception the sigil rules make for a *binder form*: in that form's type
+//! slots a plain `(…)` is rewritten to `SigiledTypeExpr`, so the two spellings are one parts run.
+//! It is keyed on the whole bucket key, so no other run takes it.
 
 use super::tree;
-
-#[test]
-fn type_with_one_param() {
-    assert_eq!(tree(":(List Number)").unwrap(), "[:(T(List) T(Number))]");
-}
-
-#[test]
-fn type_with_two_params() {
-    assert_eq!(
-        tree(":(Dict String Number)").unwrap(),
-        "[:(T(Dict) T(String) T(Number))]"
-    );
-}
-
-#[test]
-fn type_with_two_params_no_comma() {
-    assert_eq!(
-        tree(":(Dict String Number)").unwrap(),
-        tree(":(Dict String Number)").unwrap(),
-    );
-}
-
-#[test]
-fn type_nested_two_levels() {
-    assert_eq!(
-        tree(":(List :(Dict String Number))").unwrap(),
-        "[:(T(List) :(T(Dict) T(String) T(Number)))]"
-    );
-}
-
-#[test]
-fn function_type_unary() {
-    assert_eq!(
-        tree(":(Function (Number) -> Str)").unwrap(),
-        "[:(T(Function) [T(Number)] t(->) T(Str))]"
-    );
-}
-
-#[test]
-fn function_type_nullary() {
-    assert_eq!(
-        tree(":(Function () -> Number)").unwrap(),
-        "[:(T(Function) [] t(->) T(Number))]"
-    );
-}
-
-#[test]
-fn function_type_multi_arg() {
-    assert_eq!(
-        tree(":(Function (Number Bool) -> Number)").unwrap(),
-        "[:(T(Function) [T(Number) T(Bool)] t(->) T(Number))]"
-    );
-}
-
-#[test]
-fn function_type_multi_arg_no_comma() {
-    assert_eq!(
-        tree(":(Function (Number Bool) -> Number)").unwrap(),
-        tree(":(Function (Number Bool) -> Number)").unwrap(),
-    );
-}
-
-#[test]
-fn function_type_arg_nested_parameterized() {
-    assert_eq!(
-        tree(":(Function (:(List Number) Str) -> Bool)").unwrap(),
-        "[:(T(Function) [:(T(List) T(Number)) T(Str)] t(->) T(Bool))]"
-    );
-}
-
-#[test]
-fn lt_after_non_type_with_whitespace_emits_keyword() {
-    assert_eq!(tree("a < b").unwrap(), "[t(a) t(<) t(b)]");
-}
 
 /// An operator is a word like any other, so whitespace is what delimits it: `a<b` is one atom,
 /// and no identifier may hold a `<`.
@@ -93,22 +18,6 @@ fn an_operator_glued_to_its_operands_is_one_invalid_atom() {
     assert!(tree("a<b").is_err());
     assert!(tree("a>b").is_err());
     assert!(tree("a<=b").is_err());
-}
-
-#[test]
-fn gt_lt_outside_type_emit_keywords() {
-    assert_eq!(tree("a > b").unwrap(), "[t(a) t(>) t(b)]");
-    assert_eq!(tree("Number > 0").unwrap(), "[T(Number) t(>) n(0)]");
-    assert_eq!(tree("a -> b").unwrap(), "[t(a) t(->) t(b)]");
-}
-
-#[test]
-fn compound_comparison_operators_are_one_keyword() {
-    // `<=` / `>=` are single pure-symbol keyword tokens (see
-    // `operator_tokens_classify_as_keywords`, `src/parse/atom.rs`), not a comparison glyph
-    // followed by a separate `=`.
-    assert_eq!(tree("a <= b").unwrap(), "[t(a) t(<=) t(b)]");
-    assert_eq!(tree("a >= b").unwrap(), "[t(a) t(>=) t(b)]");
 }
 
 #[test]
@@ -123,97 +32,8 @@ fn unclosed_type_sigil_errors() {
 }
 
 #[test]
-fn comma_outside_type_sigil_unchanged_inside_paren() {
-    assert_eq!(
-        tree("(xs :(List Number), ys :(List Str))").unwrap(),
-        "[[t(xs) :(T(List) T(Number)) t(ys) :(T(List) T(Str))]]",
-    );
-}
-
-// --- Record-type sigil `:{...}` (a first-class `RecordType` part) ---
-
-#[test]
-fn record_type_sigil_one_field() {
-    assert_eq!(tree(":{x :Number}").unwrap(), "[:{t(x) T(Number)}]");
-}
-
-#[test]
-fn record_type_sigil_two_fields() {
-    assert_eq!(
-        tree(":{x :Number, y :Str}").unwrap(),
-        "[:{t(x) T(Number) t(y) T(Str)}]",
-    );
-}
-
-#[test]
-fn record_type_sigil_in_param_slot() {
-    assert_eq!(
-        tree("(r :{x :Number})").unwrap(),
-        "[[t(r) :{t(x) T(Number)}]]",
-    );
-}
-
-#[test]
 fn unclosed_record_type_sigil_errors() {
     assert!(tree(":{x :Number").is_err());
-}
-
-// --- Type-sigil basics ---
-
-#[test]
-fn type_sigil_bare_emits_type_part() {
-    assert_eq!(
-        tree("LET x :Number = 5").unwrap(),
-        "[t(LET) t(x) T(Number) t(=) n(5)]"
-    );
-}
-
-#[test]
-fn type_sigil_parameterized_list() {
-    assert_eq!(
-        tree("LET ns :(List Number)").unwrap(),
-        "[t(LET) t(ns) :(T(List) T(Number))]"
-    );
-}
-
-#[test]
-fn type_sigil_function_nullary() {
-    assert_eq!(
-        tree("LET f :(Function () -> Str)").unwrap(),
-        "[t(LET) t(f) :(T(Function) [] t(->) T(Str))]",
-    );
-}
-
-#[test]
-fn type_sigil_function_unary() {
-    assert_eq!(
-        tree("LET f :(Function (Number) -> Str)").unwrap(),
-        "[t(LET) t(f) :(T(Function) [T(Number)] t(->) T(Str))]",
-    );
-}
-
-#[test]
-fn type_sigil_function_multi_arg() {
-    assert_eq!(
-        tree("LET f :(Function (Number Str) -> Bool)").unwrap(),
-        "[t(LET) t(f) :(T(Function) [T(Number) T(Str)] t(->) T(Bool))]",
-    );
-}
-
-#[test]
-fn type_sigil_nested_dict_of_list() {
-    assert_eq!(
-        tree("LET d :(Dict Str (List Number))").unwrap(),
-        "[t(LET) t(d) :(T(Dict) T(Str) [T(List) T(Number)])]",
-    );
-}
-
-#[test]
-fn type_sigil_let_type_binding_rhs() {
-    assert_eq!(
-        tree("LET t = :(List Number)").unwrap(),
-        "[t(LET) t(t) t(=) :(T(List) T(Number))]",
-    );
 }
 
 #[test]
@@ -227,87 +47,7 @@ fn type_sigil_lone_colon_glued_to_lowercase_errors() {
     assert!(tree("LET x :foo").is_err());
 }
 
-#[test]
-fn type_sigil_empty_parens_parses() {
-    // Parser admits empty `:()`; the dispatcher surfaces the empty-expression error.
-    assert_eq!(tree("LET x :()").unwrap(), "[t(LET) t(x) :()]");
-}
-
-#[test]
-fn type_sigil_bare_type_name_in_parens() {
-    // The redundant-Expression peel does NOT apply inside `:(...)` — sigil is the wrapper.
-    assert_eq!(
-        tree("LET x :(Number)").unwrap(),
-        "[t(LET) t(x) :(T(Number))]"
-    );
-}
-
-#[test]
-fn type_sigil_function_nested_arg_unparameterized() {
-    assert_eq!(
-        tree("LET f :(Function ((List Number)) -> Bool)").unwrap(),
-        "[t(LET) t(f) :(T(Function) [[T(List) T(Number)]] t(->) T(Bool))]",
-    );
-}
-
-#[test]
-fn type_sigil_function_return_parenthesized() {
-    assert_eq!(
-        tree("LET f :(Function (Number) -> (List Str))").unwrap(),
-        "[t(LET) t(f) :(T(Function) [T(Number)] t(->) [T(List) T(Str)])]",
-    );
-}
-
-// --- Sigil-shape normalization: a lone sub-expression is re-labelled, not re-wrapped ---
-
-#[test]
-fn sigil_over_a_value_context_attr_collapses_onto_the_attr_node() {
-    // `Point.x` has an Identifier tail, so `build_attr` leaves it a value-context
-    // `Expression`; the sigil re-labels that one node instead of adding a layer.
-    assert_eq!(tree("Point.x").unwrap(), "[[t(ATTR) T(Point) t(x)]]");
-    assert_eq!(tree(":(Point.x)").unwrap(), "[:(t(ATTR) T(Point) t(x))]");
-}
-
-#[test]
-fn sigil_over_a_type_context_attr_is_the_shape_build_attr_already_emits() {
-    assert_eq!(tree("Maybe.Some").unwrap(), "[:(t(ATTR) T(Maybe) T(Some))]");
-    assert_eq!(
-        tree(":(Maybe.Some)").unwrap(),
-        tree("Maybe.Some").unwrap(),
-        "the explicit sigil and `build_attr`'s Type-class-tail wrap are one shape",
-    );
-}
-
-#[test]
-fn the_sigil_is_idempotent() {
-    assert_eq!(
-        tree(":(:(:(Point.x)))").unwrap(),
-        tree(":(Point.x)").unwrap()
-    );
-    assert_eq!(
-        tree("LET x :(:((Number)))").unwrap(),
-        "[t(LET) t(x) :(T(Number))]"
-    );
-}
-
-#[test]
-fn a_lone_non_expression_part_is_still_wrapped() {
-    // `:(Number)` is a lone `Type` part, not a sub-expression — no collapse applies.
-    assert_eq!(tree(":(Number)").unwrap(), "[:(T(Number))]");
-    assert_eq!(tree(":()").unwrap(), "[:()]");
-}
-
-#[test]
-fn a_multi_part_sigil_body_is_untouched() {
-    assert_eq!(
-        tree(":(LIST OF Number)").unwrap(),
-        "[:(t(LIST) t(OF) T(Number))]"
-    );
-    assert_eq!(
-        tree(":(Maybe.Some 42)").unwrap(),
-        "[:(:(t(ATTR) T(Maybe) T(Some)) n(42))]"
-    );
-}
+// --- The bare parenthesized type spelling, in a binder form's type slots ---
 
 /// The bare parenthesized type spelling: in a binder form's **type slots** the parser rewrites a
 /// plain `(…)` to `SigiledTypeExpr`, so `(LIST OF Str)` ≡ `:(LIST OF Str)` there and everything

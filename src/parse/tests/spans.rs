@@ -1,9 +1,10 @@
-//! Span-population tests. Spans are inclusive-start / exclusive-end byte offsets
-//! into the original source.
+//! The spans a parse synthesizes rather than reads off a token: an operator trigger folded out
+//! of a compound atom, a compound keyword, and the file a span resolves against. That every other
+//! span indexes its own text is [`properties`](super::properties)' fourth law.
 
 use crate::builtins::test_support::probe_symbol;
 use crate::memory::{ProgramBrand, program_storage};
-use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::parse::{parse, parse_with_path};
 use crate::source::{self, SourceFile, Span, Spanned};
 
@@ -17,48 +18,6 @@ fn s(start: u32, end: u32) -> Span {
 
 fn top<'a>(brand: ProgramBrand<'a>, src: &str) -> Vec<KExpression<'a>> {
     parse(brand, &crate::parse::LabelInterner::new(), src).expect("parse")
-}
-
-#[test]
-fn single_line_top_level_expression_carries_full_span() {
-    let program = program_storage();
-    let exprs = top(program.brand(), "foo bar");
-    assert_eq!(exprs.len(), 1);
-    let e = &exprs[0];
-    assert_eq!(span_of(e), Some(s(0, 7)));
-    let part_spans: Vec<_> = e.parts.iter().map(|p| p.span).collect();
-    assert_eq!(part_spans, vec![Some(s(0, 3)), Some(s(4, 7))]);
-}
-
-#[test]
-fn nested_call_carries_inner_span() {
-    let program = program_storage();
-    let exprs = top(program.brand(), "foo (bar baz)");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 13)));
-    assert_eq!(outer.parts[0].span, Some(s(0, 3)));
-    assert_eq!(outer.parts[1].span, Some(s(4, 13)));
-    let Spanned {
-        value: ExpressionPart::Expression(inner),
-        ..
-    } = &outer.parts[1]
-    else {
-        panic!("expected nested Expression part");
-    };
-    assert_eq!(inner.span, Some(s(4, 13)));
-    assert_eq!(inner.parts[0].span, Some(s(5, 8)));
-    assert_eq!(inner.parts[1].span, Some(s(9, 12)));
-}
-
-#[test]
-fn multi_line_top_level_uses_original_byte_offsets() {
-    // Each line is its own layout group and every span indexes the source text directly, so
-    // line 2's parts carry the offsets they have in the file, newline included.
-    let program = program_storage();
-    let exprs = top(program.brand(), "foo\nbar");
-    assert_eq!(exprs.len(), 2);
-    assert_eq!(span_of(&exprs[0]), Some(s(0, 3)));
-    assert_eq!(span_of(&exprs[1]), Some(s(4, 7)));
 }
 
 #[test]
@@ -98,95 +57,6 @@ fn chained_attr_sub_atoms_get_distinct_trigger_spans() {
 }
 
 #[test]
-fn list_literal_wrapper_spans_brackets_inclusive() {
-    let program = program_storage();
-    let exprs = top(program.brand(), "[1 2 3]");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 7)));
-    let part = &outer.parts[0];
-    assert_eq!(part.span, Some(s(0, 7)));
-    assert!(matches!(part.value, ExpressionPart::ListLiteral(_)));
-}
-
-#[test]
-fn dict_literal_wrapper_spans_braces_inclusive() {
-    let program = program_storage();
-    let exprs = top(program.brand(), "{a: 1}");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 6)));
-    let part = &outer.parts[0];
-    assert_eq!(part.span, Some(s(0, 6)));
-    assert!(matches!(part.value, ExpressionPart::DictLiteral(_)));
-}
-
-/// The captured part covers the `#` plus the group; the body keeps the paren span.
-#[test]
-fn quote_part_covers_hash_and_body_keeps_paren_span() {
-    let program = program_storage();
-    let exprs = top(program.brand(), "#(foo)");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 6)));
-    let quoted = &outer.parts[0];
-    assert_eq!(quoted.span, Some(s(0, 6)));
-    let Spanned {
-        value: ExpressionPart::QuotedExpression(body),
-        ..
-    } = quoted
-    else {
-        panic!("expected a QuotedExpression part");
-    };
-    assert_eq!(body.span, Some(s(1, 6)));
-    assert_eq!(body.parts[0].span, Some(s(2, 5)));
-}
-
-#[test]
-fn string_literal_span_includes_quotes() {
-    let program = program_storage();
-    let exprs = top(program.brand(), "'hello'");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 7)));
-    assert_eq!(outer.parts[0].span, Some(s(0, 7)));
-}
-
-#[test]
-fn multi_byte_literal_span_counts_bytes_not_codepoints() {
-    // é is 2 bytes in UTF-8 — closing quote at byte 7, exclusive end 8.
-    let program = program_storage();
-    let exprs = top(program.brand(), "'héllo'");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 8)));
-    assert_eq!(outer.parts[0].span, Some(s(0, 8)));
-}
-
-#[test]
-fn empty_string_literal_span_covers_both_quotes() {
-    let program = program_storage();
-    let exprs = top(program.brand(), "''");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 2)));
-    assert_eq!(outer.parts[0].span, Some(s(0, 2)));
-}
-
-#[test]
-fn peel_redundant_keeps_outermost_span() {
-    // Peel strips the outer wrapper, but the outermost span is restamped on the survivor.
-    let program = program_storage();
-    let exprs = top(program.brand(), "((foo bar))");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 11)));
-}
-
-#[test]
-fn standalone_lt_keyword_has_one_byte_span() {
-    let program = program_storage();
-    let exprs = top(program.brand(), "a < b");
-    let outer = &exprs[0];
-    assert_eq!(outer.parts[0].span, Some(s(0, 1)));
-    assert_eq!(outer.parts[1].span, Some(s(2, 3)));
-    assert_eq!(outer.parts[2].span, Some(s(4, 5)));
-}
-
-#[test]
 fn ascription_compound_keyword_spans_two_bytes() {
     let program = program_storage();
     let exprs = top(program.brand(), "name :| Type");
@@ -195,19 +65,6 @@ fn ascription_compound_keyword_spans_two_bytes() {
     let kw = &outer.parts[1];
     assert!(matches!(kw.value, ExpressionPart::Keyword(symbol) if symbol == probe_symbol(":|")));
     assert_eq!(kw.span, Some(s(5, 7)));
-}
-
-#[test]
-fn type_sigil_paren_wrapper_starts_at_colon() {
-    let program = program_storage();
-    let exprs = top(program.brand(), ":(List Number)");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 14)));
-    assert_eq!(outer.parts[0].span, Some(s(0, 14)));
-    assert!(matches!(
-        outer.parts[0].value,
-        ExpressionPart::SigiledTypeExpr(_)
-    ));
 }
 
 #[test]
@@ -253,32 +110,4 @@ fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
         f.resolve(span.start)
     });
     assert_eq!((line, col), (3, 5));
-}
-
-#[test]
-fn literal_inside_call_preserves_outer_span_and_string_value() {
-    let program = program_storage();
-    let exprs = top(program.brand(), "(say 'hi')");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 10)));
-    let lit_part = &outer.parts[1];
-    assert_eq!(lit_part.span, Some(s(5, 9)));
-    let ExpressionPart::Literal(KLiteral::String(s)) = lit_part.value else {
-        panic!("expected string literal");
-    };
-    assert_eq!(s, "hi");
-}
-
-#[test]
-fn glued_arrow_token_carries_one_span() {
-    // `->` is assembled across two dispatch arms — the `-` opens the token, the glue
-    // arm extends it — and must reach classification as one keyword with one span.
-    let program = program_storage();
-    let exprs = top(program.brand(), "a -> b");
-    let e = &exprs[0];
-    let part_spans: Vec<_> = e.parts.iter().map(|p| p.span).collect();
-    assert_eq!(
-        part_spans,
-        vec![Some(s(0, 1)), Some(s(2, 4)), Some(s(5, 6))]
-    );
 }

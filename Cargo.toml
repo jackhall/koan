@@ -68,3 +68,4 @@ dhat = { version = "0.3.3", optional = true }
 [dev-dependencies]
 workgraph = { path = "workgraph", features = ["test-hooks"] }
 trybuild = "1.0"
+proptest = "1"

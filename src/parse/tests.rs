@@ -3,13 +3,16 @@
 //! Each test parses a source snippet and compares the result against an expected
 //! shape string produced by the local `describe` helper, which renders an
 //! `ExpressionPart` tree as compact `t(...)` / `T(...)` notation.
+//!
+//! [`properties`] states the parser's laws over random trees rendered under random layouts, in
+//! that same notation. The files beside it hold what a law does not state: the diagnostic a
+//! mistake reports, and the surface rules a renderer never writes.
 
 mod basics;
-mod interning;
 mod layout;
 mod list_dict;
 mod literals;
-mod probes;
+mod properties;
 mod spans;
 mod type_sigil;
 mod value_sigil;

@@ -27,9 +27,6 @@ use crate::parse::StoredBinderKey;
 use crate::parse::ast::shape::{DispatchShape, NodeCache, PartClass, stored_untyped_key};
 use crate::parse::ast::{ExpressionPart, KExpression, RunIter};
 
-#[cfg(test)]
-mod tests;
-
 /// One slot of a working expression.
 #[derive(Clone, Copy)]
 pub enum WorkingPart<'a> {

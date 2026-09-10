@@ -1,80 +1,20 @@
-//! Binder-model tests: the table⟺registration consistency pin (the form table matches the live
-//! builtin function table) and the parse-time binder plan each statement caches.
+//! What a parsed statement caches off the form table: the entry it matched, the binder plan its
+//! extractors filled, the declared-name position and the lazy stamp.
 
-use std::collections::HashSet;
+use proptest::prelude::*;
 
-use crate::builtins::test_support::{identifier_part, kw_part};
-use crate::memory::{ProgramBrand, RegionBrand, program_storage};
-use crate::parse::UntypedKey;
-use crate::parse::forms::binder::{BinderFacts, BinderSurface, StoredBinderKey};
-use crate::parse::forms::{FORMS, Form, KeyElementSpec, key_matches, render_key};
-use crate::parse::parse;
-use crate::parse::{DispatchShape, ExpressionPart, KExpression};
+use crate::memory::{ProgramBrand, program_storage};
+use crate::parse::forms::binder::BinderFacts;
+use crate::parse::forms::{FORMS, Form, KeyElementSpec, form_for, render_key};
+use crate::parse::labels::Symbol;
+use crate::parse::{ExpressionPart, KExpression, LabelInterner, parse};
 use crate::source::Spanned;
-
-// ---------- spec ⟺ registration consistency ----------
-
-/// Every bucket key the seeded root registers a callable under.
-fn live_buckets() -> HashSet<UntypedKey> {
-    let program = crate::memory::program_storage();
-    let storage = crate::memory::run_root_storage();
-    let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
-    run.scope
-        .ancestors()
-        .flat_map(|scope| {
-            scope
-                .bindings()
-                .functions()
-                .iter()
-                .map(|(key, _)| key.to_vec())
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
 
 /// Every form the table gives binder facts, with those facts beside it.
 fn binder_forms() -> impl Iterator<Item = (&'static Form, BinderFacts)> {
     FORMS
         .iter()
         .filter_map(|form| form.binder.map(|binder| (form, binder)))
-}
-
-/// Build a bucket-shaped `KExpression` from a form key (keywords verbatim, slots as bare
-/// identifiers) so its cached `DispatchShape` can be inspected.
-fn expression_for_key<'a>(brand: RegionBrand<'a>, form: &Form) -> KExpression<'a> {
-    KExpression::new_from_iter(
-        brand,
-        form.key.iter().map(|element| match element {
-            KeyElementSpec::Keyword(name) => Spanned::bare(kw_part(name.text())),
-            KeyElementSpec::Slot => Spanned::bare(identifier_part("x")),
-        }),
-    )
-}
-
-/// Every binder-bearing form names a bucket the seeded root actually registers, and its key
-/// classifies `Keyworded`. Recomputed independently from the seeded root, so it is not a tautology
-/// against the table: a key whose builtin was renamed, re-shaped, or dropped fails here.
-#[test]
-fn binder_forms_match_live_registration() {
-    let program = program_storage();
-    let brand = program.brand();
-    let live = live_buckets();
-
-    for (form, _) in binder_forms() {
-        assert!(
-            live.iter()
-                .any(|key| key_matches(form.key, key.iter().copied())),
-            "form key {:?} has no registered bucket",
-            render_key(form.key)
-        );
-
-        assert_eq!(
-            expression_for_key(brand.region(), form).shape(),
-            DispatchShape::Keyworded,
-            "form key {:?} does not classify Keyworded",
-            render_key(form.key)
-        );
-    }
 }
 
 /// Every form that installs anything declares at least one channel, and a `names` entry carries the
@@ -103,283 +43,234 @@ fn binder_channels_cover_every_installing_form() {
     );
 }
 
-/// The `OperatorDef` marker agrees with the keys it labels: a binder-bearing form is marked iff its
-/// key names the `OP` declarator keyword. The marker is what `GROUP`'s member scan keys on, so a new
-/// operator surface that forgets it — or a non-operator form that wrongly carries it — fails here
-/// rather than silently changing which body statements a group treats as members.
-#[test]
-fn operator_def_marker_agrees_with_the_keys_it_labels() {
-    for (form, binder) in binder_forms() {
-        let names_op = form
-            .key
-            .iter()
-            .any(|element| matches!(element, KeyElementSpec::Keyword(name) if name.text() == "OP"));
-        assert_eq!(
-            binder.surface == BinderSurface::OperatorDef,
-            names_op,
-            "form key {:?} disagrees with its surface marker",
-            render_key(form.key),
-        );
-    }
+// ---------- the parse-time plan ----------
+
+/// What a declaration's own spine installs, as the surface promises it.
+#[derive(Clone, Copy, Debug)]
+enum Expectation {
+    /// The spine declares nothing at all, so it caches no plan.
+    NoPlan,
+    /// The spine registers bucket keys and declares no name of its own.
+    BucketsOnly,
+    /// The spine declares the statement's fresh name plus exactly this many bucket keys.
+    Named(usize),
 }
 
-// ---------- the type-slot mask ----------
+/// Declaration surfaces spelled the way a program spells them, so the bucket channel a bare form
+/// key cannot exercise is exercised here. `{n}` is the declared name, `{p}` a parameter name and
+/// `{o}` an operator glyph, each filled fresh per case.
+const DECLARATIONS: &[(&str, Expectation)] = &[
+    ("LET {n} = 1", Expectation::Named(0)),
+    // A statement's plan is its own spine: what a slot's child would install is not part of it, so
+    // the namespace a block introduces is legible from its statement keys alone.
+    ("LET {n} = (LET {p} = 3)", Expectation::Named(0)),
+    (
+        "LET {n} = (EXPR (KAPOW {p} :Number) -> Number = ({p}))",
+        Expectation::Named(0),
+    ),
+    // Each combined form fills both channels: the LET value name and the bucket key(s) the
+    // declaration's body registers. `LET … = UNARY OP …` is the two-bucket maximum.
+    (
+        "LET {n} = FN EXPR (KAPOW {p} :Number) -> Number = ({p})",
+        Expectation::Named(1),
+    ),
+    (
+        "LET {n} = OP #({o}) OVER Number = (left + right)",
+        Expectation::Named(1),
+    ),
+    (
+        "LET {n} = OP #({o}) OVER Number -> Bool = (left < right)",
+        Expectation::Named(1),
+    ),
+    (
+        "LET {n} = UNARY OP #({o}) OVER Number -> :(LIST OF Number) = (operands)",
+        Expectation::Named(2),
+    ),
+    (
+        "EXPR (KAPOW {p} :Number) -> Number = ({p})",
+        Expectation::BucketsOnly,
+    ),
+    (
+        "OP #({o}) OVER Number = (left + right)",
+        Expectation::BucketsOnly,
+    ),
+    (
+        "UNARY OP #({o}) OVER Number -> Number = (0 - operands)",
+        Expectation::BucketsOnly,
+    ),
+    // A `VAL` declaration records into the decl scope's collector, and the anonymous `FN :{…}`
+    // signature names no bucket, so neither caches a plan.
+    ("VAL {n} :Number", Expectation::NoPlan),
+    ("FN :{{p} :Number} -> Number = ({p})", Expectation::NoPlan),
+];
 
-/// Every masked index is a slot position of its own key — the flip writes `parts[index]`, so a
-/// keyword position or an index past the run would corrupt the statement.
-#[test]
-fn every_masked_index_names_a_slot_position() {
-    for (form, binder) in binder_forms() {
-        for &index in binder.type_slots {
-            assert!(
-                index < form.key.len(),
-                "form key {:?} masks slot {index} past its run",
-                render_key(form.key)
-            );
-            assert!(
-                matches!(form.key[index], KeyElementSpec::Slot),
-                "form key {:?} masks its keyword position {index}",
-                render_key(form.key)
-            );
-        }
-    }
-}
+/// The operator glyphs a generated declaration draws from — each keyword-class and unclaimed by the
+/// seeded root, so a case registers rather than shadowing.
+const GLYPHS: &[&str] = &["⊕", "⊗", "≺", "⊸", "⊛"];
 
-/// A masked index is a slot the bucket's live registrations really read as a raw type expression:
-/// some overload takes `:(…)` there — either as a member of a raw-carrier union, or as a kind
-/// expectation, which a sigiled type expression sub-dispatches into — and **no** overload types it
-/// `:KExpression`. The second half is what matters — flipping a code slot's `(…)` to
-/// `SigiledTypeExpr` would silently retype a body.
-///
-/// One-directional on purpose: the mask is opt-in, not derived. `NEWTYPE <name> = <repr>` satisfies
-/// the predicate and stays unmasked, because a bare `(…)` there already works by evaluation.
-#[test]
-fn every_masked_index_is_a_raw_type_expression_slot() {
-    use crate::machine::model::{KType, SignatureElement};
-    let program = crate::memory::program_storage();
-    let storage = crate::memory::run_root_storage();
-    let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
-    for (form, binder) in binder_forms() {
-        for &index in binder.type_slots {
-            // Every slot type the seeded root registers at this index of a bucket matching the key.
-            let mut live: Vec<KType> = Vec::new();
-            for scope in run.scope.ancestors() {
-                for (key, bucket) in scope.bindings().functions().iter() {
-                    if !key_matches(form.key, key.iter().copied()) {
-                        continue;
-                    }
-                    for entry in bucket.iter() {
-                        let opened = entry.sealed.open_at();
-                        if let Some(SignatureElement::Argument(argument)) =
-                            opened.value().signature.elements().get(index)
-                        {
-                            live.push(argument.ktype);
-                        }
-                    }
-                }
-            }
-            assert!(
-                !live.is_empty(),
-                "form key {:?} masks slot {index}, which no live registration types",
-                render_key(form.key)
-            );
-            let admits_sigiled = |kt: &KType| {
-                kt.union_has_member(KType::SIGILED_TYPE_EXPR, run.types())
-                    || matches!(
-                        run.types().node(*kt),
-                        crate::machine::model::TypeNode::OfKind(_)
-                    )
-            };
-            assert!(
-                live.iter().any(admits_sigiled),
-                "form key {:?} masks slot {index}, which no registration admits a `:(…)` at",
-                render_key(form.key)
-            );
-            assert!(
-                !live
-                    .iter()
-                    .any(|kt| kt.union_has_member(KType::KEXPRESSION, run.types())),
-                "form key {:?} masks slot {index}, which some registration reads as code",
-                render_key(form.key)
-            );
-        }
-    }
-}
-
-// ---------- per-statement binder plan ----------
-
-/// The lone top-level statement `src` parses to, with its cache filled, built into `brand`'s
-/// region.
-fn parse_one<'a>(brand: ProgramBrand<'a>, src: &str) -> KExpression<'a> {
-    parse(brand, &crate::parse::LabelInterner::new(), src)
-        .expect("parse")
+/// The lone top-level statement `source` parses to, with its cache filled.
+fn parse_one<'a>(brand: ProgramBrand<'a>, source: &str) -> KExpression<'a> {
+    parse(brand, &LabelInterner::new(), source)
+        .expect("the rendered form parses")
         .into_iter()
         .next()
         .expect("one statement")
 }
 
-/// The declared name's symbol bits, whichever channel carries it — a binder's identity, and the
-/// one currency both arms share.
-fn name_of(key: StoredBinderKey<'_>) -> Option<crate::parse::Symbol> {
-    key.name.map(|name| name.symbol())
+/// A form key spelled out: keywords verbatim, each slot filled with `filler`.
+fn render_form(form: &Form, fillers: &[String]) -> String {
+    let mut slot = 0;
+    let mut out = Vec::new();
+    for element in form.key {
+        match element {
+            KeyElementSpec::Keyword(name) => out.push(name.text().to_string()),
+            KeyElementSpec::Slot => {
+                out.push(fillers[slot % fillers.len()].clone());
+                slot += 1;
+            }
+        }
+    }
+    out.join(" ")
 }
 
-/// A redundant single-`Expression` paren wrapper is the same statement, so it carries the child's
-/// plan through, with no aggregation.
-#[test]
-fn redundant_parens_pass_through() {
-    let program = program_storage();
-    let brand = program.brand();
-    let inner = parse_one(brand, "LET x = 1");
-    let wrapped = KExpression::new(
-        brand.region(),
-        &[Spanned::bare(ExpressionPart::Expression(
-            brand.nested_node(inner.parts),
-        ))],
-    );
-    let child = match wrapped.parts[0].value {
-        ExpressionPart::Expression(child) => child,
-        _ => panic!("built a single-Expression wrapper"),
-    };
-    assert_eq!(
-        name_of(child.binder_plan().expect("the child is the binder")),
-        Some(crate::parse::Symbol::of("x")),
-    );
-    assert!(
-        wrapped.binder_plan().is_none(),
-        "the wrapper is not itself a binder; the submission path reads through it",
-    );
-}
-
-/// A statement's plan is its own spine and nothing else: what a slot's child would install is not
-/// part of it, so the namespace a block introduces is legible from its statement keys alone. These
-/// shapes are rejected at submission now (a binder is not a value position) — the point here is
-/// that the parse-time read never reaches into the slot in the first place.
-#[test]
-fn a_statements_plan_is_its_own_spine() {
-    let program = program_storage();
-    let brand = program.brand();
-    for source in [
-        "LET make_set = (EXPR (MAKESET item :Number) -> Number = (item))",
-        "LET z = (LET a = 3)",
-        "LET f = (EXPR (g :Number) -> Number = (LET inner = 1))",
-    ] {
-        let stmt = parse_one(brand, source);
-        let key = stmt.binder_plan().expect("a LET is a binder");
-        assert_eq!(
-            name_of(key),
-            Some(crate::parse::Symbol::of(
-                source.split_whitespace().nth(1).unwrap()
-            )),
-            "{source}",
-        );
-        assert_eq!(
-            key.buckets.map_or(0, |keys| keys.count()),
-            0,
-            "the outer LET declares no bucket of its own: {source}",
-        );
+/// The bare name token at `index`, if the position holds one.
+fn name_token_at(statement: &KExpression<'_>, index: usize) -> Option<Symbol> {
+    match statement.parts.get(index)?.value {
+        ExpressionPart::Identifier(name) => Some(name.symbol()),
+        ExpressionPart::Type(name) => Some(name.symbol()),
+        _ => None,
     }
 }
 
-/// The binder facts' `name_slot` agrees with the name extractors: for every parsed binder form
-/// whose plan carries a name, the token at the cached `binder_name_slot` position IS that name;
-/// `VAL` declares at its slot while installing nothing; the bucket-only forms cache no position.
-#[test]
-fn name_slot_agrees_with_the_extractors() {
-    let program = program_storage();
-    let brand = program.brand();
-    for source in [
-        "LET x = 1",
-        "LET Alias = Number",
-        "MODULE m = (LET a = 1)",
-        "SIG Sx = (VAL zero :Number)",
-        "UNION Ux = (Red | Green)",
-        "NEWTYPE Nx = Number",
-        "TYPE Tx",
-        "LET double = FN EXPR (DOUBLE n :Number) -> Number = (n * 2)",
-        "LET plus = OP #(⊕) OVER Number = (left + right)",
-    ] {
-        let stmt = parse_one(brand, source);
-        let pos = stmt
-            .binder_name_slot()
-            .unwrap_or_else(|| panic!("a name-bearing binder form caches its position: {source}"));
-        let expected = name_of(stmt.binder_plan().expect("each form installs a name"))
-            .expect("each form installs a name");
-        let token = match stmt.parts[pos].value {
-            ExpressionPart::Identifier(v) => v.symbol(),
-            ExpressionPart::Type(t) => t.symbol(),
-            other => panic!("name slot holds a bare name token, got {other:?}: {source}"),
-        };
-        assert_eq!(token, expected, "{source}");
-    }
-    // `VAL` declares at its slot without installing; the bucket-only forms cache no position.
-    let val = parse_one(brand, "VAL x :Number");
-    assert_eq!(val.binder_name_slot(), Some(1));
-    let ExpressionPart::Identifier(val_name) = val.parts[1].value else {
-        panic!("VAL's name slot holds an identifier part");
-    };
-    assert_eq!(val_name.symbol(), crate::parse::Symbol::of("x"));
-    for source in [
-        "EXPR (TRIPLE n :Number) -> Number = (n * 3)",
-        "OP #(⊗) OVER Number = (left * right)",
-        "UNARY OP #(⊖) OVER Number -> Number = (0 - operands)",
-    ] {
-        let stmt = parse_one(brand, source);
-        assert_eq!(stmt.binder_name_slot(), None, "{source}");
-    }
-}
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
 
-/// A `VAL` declaration installs nothing: its binder facts have no channel, so its parse-time plan
-/// is `None`.
-#[test]
-fn val_installs_nothing() {
-    let program = program_storage();
-    let brand = program.brand();
-    let stmt = parse_one(brand, "VAL x :Number");
-    assert!(stmt.binder_plan().is_none());
-}
+    /// A parsed builtin form caches the table entry its key matches, and every fact the node
+    /// answers off that entry is the entry's: the declared-name position is the form's
+    /// `name_slot`, the lazy stamp is the form's, and where the extractors did find a name the
+    /// token at that position **is** that name. A redundant single-`Expression` paren wrapper is
+    /// not itself a binder — the submission path reads through it to the child.
+    ///
+    /// A key the table does not spell caches nothing at all: no entry, no plan, no name position,
+    /// and no lazy stamp, so raw capture stays available to builtin registration alone.
+    #[test]
+    fn a_parsed_form_caches_its_entry_and_a_user_key_caches_nothing(
+        value_fillers in prop::collection::vec("[a-z]{2,4}", 1..4),
+        type_fillers in prop::collection::vec("[A-Z][a-z]{1,3}", 1..4),
+        stranger in prop::collection::vec("[a-z]{2,4}", 1..4),
+        stranger_keyword in "[A-Z]{5,7}",
+    ) {
+        let program = program_storage();
+        let brand = program.brand();
 
-/// Each combined statement form's own plan fills both channels: the LET value name and the bucket
-/// key(s) the declaration's body registers. `LET … = UNARY OP …` is the two-bucket maximum.
-#[test]
-fn combined_forms_install_both_channels() {
-    let program = program_storage();
-    let brand = program.brand();
-    for (source, buckets) in [
-        (
-            "LET double = FN EXPR (DOUBLE n :Number) -> Number = (n * 2)",
-            1usize,
-        ),
-        ("LET plus = OP #(⊕) OVER Number = (left + right)", 1),
-        ("LET near = OP #(≺) OVER Number -> Bool = (left < right)", 1),
-        (
-            "LET collect = UNARY OP #(~) OVER Number -> :(LIST OF Number) = (operands)",
-            2,
-        ),
-    ] {
-        let stmt = parse_one(brand, source);
-        let key = stmt.binder_plan().expect("a combined form is a binder");
-        assert_eq!(
-            name_of(key),
-            Some(crate::parse::Symbol::of(
-                source.split_whitespace().nth(1).unwrap()
-            )),
-            "{source}",
+        for (form, fillers) in FORMS
+            .iter()
+            .flat_map(|form| [(form, &value_fillers), (form, &type_fillers)])
+        {
+            let source = render_form(form, fillers);
+            let statement = parse_one(brand, &source);
+            let cached = statement
+                .cache()
+                .form()
+                .unwrap_or_else(|| panic!("{source}: a spelled form key matches its entry"));
+            prop_assert!(
+                std::ptr::eq(cached, form),
+                "{} parses to the entry {:?}",
+                source,
+                render_key(cached.key),
+            );
+
+            prop_assert_eq!(
+                statement.binder_name_slot(),
+                form.binder.and_then(|binder| binder.name_slot),
+            );
+            for slot in 0..statement.parts.len() {
+                prop_assert_eq!(statement.lazy_kinds_at(slot), form.lazy_kinds_at(slot));
+            }
+            if let Some(name) = statement.binder_plan().and_then(|plan| plan.name) {
+                let at = statement
+                    .binder_name_slot()
+                    .expect("a plan carrying a name comes from a form with a name slot");
+                prop_assert_eq!(name_token_at(&statement, at), Some(name.symbol()), "{}", source);
+            }
+
+            // The redundant wrapper carries the child's plan through, with no aggregation.
+            let wrapped = KExpression::new(
+                brand.region(),
+                &[Spanned::bare(ExpressionPart::Expression(
+                    brand.nested_node(statement.parts),
+                ))],
+            );
+            prop_assert!(wrapped.binder_plan().is_none());
+            let ExpressionPart::Expression(child) = wrapped.parts[0].value else {
+                panic!("built a single-Expression wrapper");
+            };
+            prop_assert_eq!(
+                child.binder_plan().and_then(|plan| plan.name),
+                statement.binder_plan().and_then(|plan| plan.name),
+            );
+        }
+
+        // A run the table does not spell: a long fresh keyword followed by fresh identifiers.
+        let mut run = vec![crate::builtins::test_support::kw_part(&stranger_keyword)];
+        run.extend(
+            stranger
+                .iter()
+                .map(|name| crate::builtins::test_support::identifier_part(name)),
         );
-        assert_eq!(
-            key.buckets.map_or(0, |keys| keys.count()),
-            buckets,
-            "{source}"
+        let user = KExpression::new_from_iter(
+            brand.region(),
+            run.into_iter().map(Spanned::bare),
         );
+        prop_assume!(form_for(user.stored_key().iter().copied()).is_none());
+        prop_assert!(user.cache().form().is_none());
+        prop_assert!(user.binder_plan().is_none());
+        prop_assert!(user.binder_name_slot().is_none());
+        for slot in 0..user.parts.len() {
+            prop_assert!(user.lazy_kinds_at(slot).is_empty());
+        }
     }
-}
 
-/// The anonymous `FN :{…}` signature names no bucket, so a statement carrying it installs only what
-/// its own name channel gives — nothing, for the bare form.
-#[test]
-fn anonymous_fn_installs_nothing() {
-    let program = program_storage();
-    let brand = program.brand();
-    let stmt = parse_one(brand, "FN :{n :Number} -> Number = (n)");
-    assert!(stmt.binder_plan().is_none());
+    /// A declaration's parse-time plan is its own spine and nothing else: the name channel carries
+    /// what the statement itself declares, the bucket channel the keys its declaration body
+    /// registers, and a form that installs through neither caches no plan at all.
+    #[test]
+    fn a_declarations_plan_is_its_own_spine(
+        name in "[a-z]{2,4}",
+        parameter in "[a-z]{2,4}",
+        glyph in 0..GLYPHS.len(),
+    ) {
+        let program = program_storage();
+        let brand = program.brand();
+
+        for &(template, expectation) in DECLARATIONS {
+        let source = template
+            .replace("{n}", &name)
+            .replace("{p}", &parameter)
+            .replace("{o}", GLYPHS[glyph]);
+
+        let statement = parse_one(brand, &source);
+        let plan = statement.binder_plan();
+
+        match expectation {
+            Expectation::NoPlan => prop_assert!(plan.is_none(), "{}", source),
+            Expectation::BucketsOnly => {
+                let plan = plan.unwrap_or_else(|| panic!("{source}: a declaration is a binder"));
+                prop_assert!(plan.name.is_none(), "{}", source);
+                prop_assert!(plan.buckets.is_some_and(|keys| keys.count() > 0), "{}", source);
+                prop_assert_eq!(statement.binder_name_slot(), None, "{}", source);
+            }
+            Expectation::Named(buckets) => {
+                let plan = plan.unwrap_or_else(|| panic!("{source}: a declaration is a binder"));
+                prop_assert_eq!(
+                    plan.name.map(|declared| declared.symbol()),
+                    Some(Symbol::of(&name)),
+                    "{}",
+                    source,
+                );
+                prop_assert_eq!(plan.buckets.map_or(0, |keys| keys.count()), buckets, "{}", source);
+            }
+        }
+        }
+    }
 }

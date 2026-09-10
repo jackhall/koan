@@ -419,58 +419,9 @@ mod tests {
     }
 
     #[test]
-    fn plain_identifier() {
-        assert_eq!(classify("foo").unwrap(), "t(foo)");
-    }
-
-    #[test]
-    fn plain_number() {
-        assert_eq!(classify("42").unwrap(), "n(42)");
-    }
-
-    #[test]
-    fn plain_boolean() {
-        assert_eq!(classify("true").unwrap(), "b(true)");
-    }
-
-    #[test]
-    fn plain_null() {
-        assert_eq!(classify("null").unwrap(), "null");
-    }
-
-    #[test]
-    fn attr_access() {
-        assert_eq!(classify("foo.bar").unwrap(), "[t(ATTR) t(foo) t(bar)]");
-    }
-
-    #[test]
-    fn chained_attr_access() {
-        assert_eq!(
-            classify("foo.bar.baz").unwrap(),
-            "[t(ATTR) [t(ATTR) t(foo) t(bar)] t(baz)]"
-        );
-    }
-
-    #[test]
     fn bang_prefix_does_not_desugar() {
         // `!` is not a compound trigger, so `!foo` is an invalid-character identifier, not `NOT foo`.
         assert!(classify("!foo").is_err());
-    }
-
-    #[test]
-    fn decimal_number_is_literal() {
-        assert_eq!(classify("3.14").unwrap(), "n(3.14)");
-    }
-
-    #[test]
-    fn scientific_number_is_literal() {
-        assert_eq!(classify("1e3").unwrap(), "n(1000)");
-        assert_eq!(classify("-2.5e-2").unwrap(), "n(-0.025)");
-    }
-
-    #[test]
-    fn attr_wins_when_rhs_not_numeric() {
-        assert_eq!(classify("3.foo").unwrap(), "[t(ATTR) n(3) t(foo)]");
     }
 
     #[test]
@@ -493,40 +444,8 @@ mod tests {
     }
 
     #[test]
-    fn suffix_try() {
-        assert_eq!(classify("foo?").unwrap(), "[t(TRY) t(foo)]");
-    }
-
-    #[test]
-    fn chained_suffix() {
-        assert_eq!(classify("foo??").unwrap(), "[t(TRY) [t(TRY) t(foo)]]");
-    }
-
-    #[test]
-    fn suffix_after_attr() {
-        assert_eq!(
-            classify("foo.bar?").unwrap(),
-            "[t(TRY) [t(ATTR) t(foo) t(bar)]]"
-        );
-    }
-
-    #[test]
     fn leading_suffix_errors() {
         assert!(classify("?foo").is_err());
-    }
-
-    #[test]
-    fn keyword_two_uppercase_no_lowercase() {
-        assert_eq!(classify("LET").unwrap(), "t(LET)");
-        assert_eq!(classify("MODULE").unwrap(), "t(MODULE)");
-        assert_eq!(classify("FN").unwrap(), "t(FN)");
-    }
-
-    #[test]
-    fn type_uppercase_first_with_lowercase() {
-        assert_eq!(classify("Number").unwrap(), "T(Number)");
-        assert_eq!(classify("Ordered").unwrap(), "T(Ordered)");
-        assert_eq!(classify("KFunction").unwrap(), "T(KFunction)");
     }
 
     #[test]
@@ -539,45 +458,5 @@ mod tests {
     #[test]
     fn uppercase_with_digits_no_lowercase_is_parse_error() {
         assert!(classify("K9").is_err());
-    }
-
-    #[test]
-    fn pure_symbol_token_is_keyword() {
-        assert_eq!(classify("=").unwrap(), "t(=)");
-        assert_eq!(classify("->").unwrap(), "t(->)");
-    }
-
-    #[test]
-    fn operator_tokens_classify_as_keywords() {
-        // A whitespace-delimited operator token (single- or multi-char) that is not
-        // a builtin compound trigger reaches `classify_atom` and tags as a keyword,
-        // so a post-parse chain detector can recognize it.
-        assert_eq!(classify("+").unwrap(), "t(+)");
-        assert_eq!(classify("|").unwrap(), "t(|)");
-        assert_eq!(classify("-").unwrap(), "t(-)");
-        assert_eq!(classify("*").unwrap(), "t(*)");
-        assert_eq!(classify("<=").unwrap(), "t(<=)");
-        assert_eq!(classify(">>").unwrap(), "t(>>)");
-    }
-
-    #[test]
-    fn attr_trigger_stays_on_builtin_path_inside_operand() {
-        // `b.c` is one whitespace-delimited token; the `.` builtin trigger desugars it
-        // to an ATTR compound so an enclosing `a + b.c` sees `b.c` as one operand rather
-        // than splitting on `.`.
-        assert_eq!(classify("b.c").unwrap(), "[t(ATTR) t(b) t(c)]");
-    }
-
-    #[test]
-    fn ascription_compound_tokens_classify_as_keywords() {
-        use crate::parse::labels::is_keyword_token;
-        assert!(is_keyword_token(":|"));
-        assert!(is_keyword_token(":!"));
-    }
-
-    #[test]
-    fn lowercase_leading_is_identifier() {
-        assert_eq!(classify("foo").unwrap(), "t(foo)");
-        assert_eq!(classify("my_var").unwrap(), "t(my_var)");
     }
 }
