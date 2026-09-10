@@ -13,11 +13,11 @@ use std::rc::Rc;
 
 use crate::machine::ReturnContract;
 use crate::machine::Scope;
+use crate::machine::core::CallFrame;
 use crate::machine::core::bindings::WriteGate;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression};
 use crate::machine::{Action, BlockEntry, FramePlacement, TailContract};
-use crate::memory::CallFrame;
 use crate::memory::RegionBrand;
 
 /// How the body maps onto the tail.
@@ -72,7 +72,7 @@ where
 /// so the capability is the caller's to give, never the builtin's to take.
 ///
 /// The seed's scope parameter is universally quantified: [`fresh_cart_tail`]'s block is reached
-/// only inside its frame's `with_scope` open, at a brand that outlives nothing, so a seed cannot
+/// only inside its frame's `with_resident` open, at a brand that outlives nothing, so a seed cannot
 /// smuggle a value out of the block region it writes into. An overlay seed satisfies the same
 /// bound — its scope is already at the caller's `'a`, which is one instantiation of the
 /// quantifier.
@@ -124,7 +124,7 @@ where
 /// the block's first statement dispatches, and the frame was minted by this call's own builtin, so
 /// nothing has reached its child scope and the construction gate applies structurally rather than
 /// as a claim the caller makes. It is reached under
-/// [`CallFrame::with_scope`](crate::memory::CallFrame::with_scope), whose `for<'b>` brand is what
+/// [`CallFrame::with_resident`](crate::machine::core::CallFrame::with_resident), whose `for<'b>` brand is what
 /// confines the seeded values to the block's own region.
 pub(crate) fn fresh_cart_tail<'a, S>(
     frame: Rc<CallFrame>,
@@ -137,7 +137,9 @@ where
     S: for<'b> FnOnce(&'b Scope<'b>, &RunRegistries, &mut WriteGate),
 {
     if let Some(seed) = seed {
-        frame.with_scope(|scope| seed(scope, registries, &mut WriteGate::for_unpublished_scope()));
+        frame.with_resident(|scope| {
+            seed(scope, registries, &mut WriteGate::for_unpublished_scope())
+        });
     }
     Action::tail_raw(body, frame, contract)
 }

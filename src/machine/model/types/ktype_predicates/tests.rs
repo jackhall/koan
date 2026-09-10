@@ -656,7 +656,7 @@ fn is_more_specific_for_pinned_signature_bound() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let ordered_schema = SigSchema {
-        sig_id: Some(crate::machine::core::ScopeId::SENTINEL),
+        sig_id: Some(crate::memory::ScopeId::SENTINEL),
         abstract_members: TypeMemberMap::default(),
         manifest_members: TypeMemberMap::default(),
         value_slots: [(value_name("a", &registries), KType::NUMBER)]
@@ -666,7 +666,7 @@ fn is_more_specific_for_pinned_signature_bound() {
         operators: Vec::new(),
     };
     let hashed_schema = SigSchema {
-        sig_id: Some(crate::machine::core::ScopeId::SENTINEL),
+        sig_id: Some(crate::memory::ScopeId::SENTINEL),
         abstract_members: TypeMemberMap::default(),
         manifest_members: TypeMemberMap::default(),
         value_slots: [(value_name("b", &registries), KType::NUMBER)]

@@ -574,7 +574,7 @@ fn visibility_chain_none_sees_every_entry() {
         .unwrap();
     // A chain whose `index_for(scope.id) = None` treats the scope as complete:
     // every entry is visible regardless of index.
-    let other_scope_id = crate::machine::core::ScopeId::next();
+    let other_scope_id = crate::memory::ScopeId::next();
     let unrelated: Rc<LexicalFrame> = LexicalFrame::root(other_scope_id, 1);
     assert!(matches!(
         scope.resolve_with_chain("late", Some(&unrelated)),

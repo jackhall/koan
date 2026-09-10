@@ -2,8 +2,8 @@ use super::super::node::TypeNode;
 use super::super::sig_schema::SigSchema;
 use super::*;
 use crate::builtins::test_support::{type_name, value_name};
-use crate::machine::core::ScopeId;
 use crate::machine::model::RunRegistries;
+use crate::memory::ScopeId;
 
 // --- Fixed handles ---
 

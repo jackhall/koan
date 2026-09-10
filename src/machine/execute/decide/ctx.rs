@@ -12,13 +12,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::machine::core::CallFrame;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::execute::RunWriter;
 use crate::machine::execute::StepAllocator;
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, RunRegistries, WorkingPart};
 use crate::machine::{Installer, LexicalFrame, Scope};
-use crate::memory::CallFrame;
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::memory::{FrameStorage, ProgramBrand};
 use crate::source::Spanned;
@@ -29,7 +29,7 @@ use super::super::obligation::{ParkState, ReturnObligation};
 use super::resolve::{Resolution, resolve_name};
 
 /// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot
-/// re-projects from the active cart through [`CallFrame::with_scope`]; a `YokedChild` slot opens its
+/// re-projects from the active cart through [`CallFrame::with_resident`]; a `YokedChild` slot opens its
 /// erased cart-ancestor [`SealedExtern<ScopeRefFamily>`](crate::memory::SealedExtern) carrier at
 /// the same brand, pinned by `frame`. Either way the `&Scope<'b>` is confined to `f`, so no borrow
 /// rides up a `&mut` path.
@@ -41,7 +41,7 @@ pub(in crate::machine::execute) fn with_node_scope<R>(
     let frame = frame.expect("a slot keeps its active cart");
     match node_scope {
         NodeScope::YokedChild(carrier) => carrier.open(frame, f),
-        NodeScope::Yoked => frame.with_scope(f),
+        NodeScope::Yoked => frame.with_resident(f),
     }
 }
 

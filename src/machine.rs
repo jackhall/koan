@@ -5,6 +5,7 @@ pub(crate) mod core;
 pub(crate) mod execute;
 pub mod model;
 
+pub use crate::memory::ScopeId;
 pub use crate::scheduler::NodeId;
 pub(crate) use core::kfunction::Body;
 pub use core::kfunction::KFunction;
@@ -19,7 +20,7 @@ pub(crate) use core::{
     AdoptSeam, BindingIndex, DeclarationSite, HitTier, Installer, LexicalFrame, MemberResolution,
     NameLookup, TraceFrame,
 };
-pub use core::{Bindings, KError, KErrorKind, Scope, ScopeId, WriteGate};
+pub use core::{Bindings, KError, KErrorKind, Scope, WriteGate};
 pub use execute::ProducerId;
 /// The reach-tightness report's reader surface — present only under the `region-audit` gate, which
 /// is also what compiles the audit itself in.

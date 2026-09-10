@@ -14,7 +14,7 @@
 //! for the heap-pinning / drop-order invariants.
 
 use std::hash::BuildHasher;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use super::frame::{FrameCoverage, FrameReach};
 use super::substrate::{
@@ -44,7 +44,7 @@ impl StorageProfile for KoanStorageProfile {
 }
 
 /// Run-lifetime allocator. A [`Region`] carrying the Koan family set; lives for one program
-/// run. The `KoanRegion` references across the tree and the `Rc<CallFrame>` back-edge ride this
+/// run. The `KoanRegion` references across the tree and the `Rc<Frame<_>>` back-edge ride this
 /// alias unchanged.
 pub type KoanRegion = Region<KoanStorageProfile>;
 
@@ -82,6 +82,57 @@ impl<'a> RegionBrand<'a> {
     /// rewraps locally: `RegionBrand(handle)`.
     pub(crate) fn handle(self) -> RegionHandle<'a> {
         self.0
+    }
+
+    /// The [`FrameStorage`] (a cloned `Weak`) that **owns this brand's region** — read off the
+    /// region's own host back-link rather than a copy carried here. A region is born naming its
+    /// owner (`Rc::new_cyclic`), so the derivation is total and no constructor can wire it wrong;
+    /// the link stays `Weak` because the storage owns the region owns its residents, and an `Rc`
+    /// back-edge would leak. Upgrades whenever the region is live.
+    ///
+    /// The residence facts a resident derives — its owner, its live frame, the pin a child frame
+    /// chains — are all this brand's, which is why they live here and not on the lexical record
+    /// that happens to hold one: a wrapper over the brand would carry no invariant the brand lacks.
+    pub(crate) fn region_owner(self) -> Weak<FrameStorage> {
+        self.0.host()
+    }
+
+    /// The `Rc<FrameStorage>` that owns this brand's region — the witness a value built into it is
+    /// `yoke`d under (the object-family construction inversion: a region-resident object is born
+    /// bundled with its frame as its reach). The link is [`Weak`](Self::region_owner) — an
+    /// in-region value holds no owning `Rc` back to its frame — and upgrades for as long as a
+    /// holder of the brand can run: a **producing** scope during its own step (the producing node
+    /// holds the frame); a **consumer/current** scope during a step (the slot's cart — or a cart
+    /// ancestor via the `FrameStorage.outer` chain, for a `YokedChild` overlay scope — is held by
+    /// the step machinery for the whole step); or the **run root** (the run storage is held by the
+    /// interpreter for the whole run). The single owner of this invariant's assertion;
+    /// step-scoped callers should route through `DecideCtx::dest_frame` or a finish's
+    /// `ctx.frame()` instead of upgrading directly.
+    pub(crate) fn frame(self) -> Rc<FrameStorage> {
+        self.region_owner().upgrade().expect(
+            "a scope's region owner is held while the scope can run: its cart (or a cart ancestor) for the step, the run storage for the run root",
+        )
+    }
+
+    /// The storage pin a **child frame** chains when its own resident borrows into this brand's
+    /// region ([`Frame::open_under`](super::frame::Frame::open_under)): this region's owning
+    /// storage — or no pin when that owner is at the eternal tier
+    /// ([`is_eternal`](RegionHost::is_eternal)), whose region outlives everything that could retain
+    /// it and must not be strong-chained (a root chain plus an escaping value's reach-set pin is
+    /// the region↔value `Rc` cycle the frame design excludes). The owner answers its own tier, so
+    /// the two outcomes stay distinct: [`Self::frame`]'s `expect` reports a **dead owner**, which
+    /// is a bug, while `None` reports the eternal-tier **policy**.
+    pub(crate) fn parent_frame_pin(self) -> Option<Rc<FrameStorage>> {
+        let owner = self.frame();
+        (!owner.is_eternal()).then_some(owner)
+    }
+
+    /// Whether this brand's region sits at the **eternal tier** — the run root, whose region
+    /// outlives every per-call frame. The tier read [`Self::parent_frame_pin`] declines to chain on
+    /// and [`Frame::hosts`](super::frame::Frame::hosts) answers `true` for without consulting any
+    /// pin chain, so both spell the rule through one derivation.
+    pub(crate) fn is_eternal(self) -> bool {
+        self.frame().is_eternal()
     }
 
     /// **This brand's region bump as a [`BumpAllocator`]** — the door every byte a value family slot
@@ -172,13 +223,7 @@ impl<'a> RegionBrand<'a> {
         self,
         sealed: Sealed<T>,
     ) -> Delivered<T> {
-        Delivered::lift(
-            Retained::from_sealed(sealed),
-            self.0
-                .host()
-                .upgrade()
-                .expect("a live region brand implies a live region owner"),
-        )
+        Delivered::lift(Retained::from_sealed(sealed), self.frame())
     }
 }
 
@@ -391,11 +436,11 @@ impl KoanRegionExt for KoanRegion {
 }
 
 /// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
-/// set. `RegionHost` lazily mints its region on first allocation — reached by the child `Scope`
-/// [`Scope::open_frame`](crate::machine::core::Scope::open_frame) builds immediately, so a constructed frame's
-/// region is minted by the time anything reads it — and the `outer` link chains the
+/// set. `RegionHost` lazily mints its region on first allocation — reached by the resident
+/// [`Frame::open_under`](super::frame::Frame::open_under) births immediately, so a constructed
+/// frame's region is minted by the time anything reads it — and the `outer` link chains the
 /// lexical-ancestor frames' storage alive. An escaping value (a returned closure, a module frame)
-/// pins *this* — not the [`CallFrame`](super::frame::CallFrame) shell — so a tail hop's shell can
+/// pins *this* — not the [`Frame`](super::frame::Frame) shell — so a tail hop's shell can
 /// drop outright while the escapee's captured environment rides the old `FrameStorage` it still
 /// holds.
 /// The library's raw-region constructor is sealed to `workgraph`, so nothing outside the library
@@ -406,10 +451,9 @@ pub type FrameStorage = RegionHost<KoanStorageProfile>;
 /// The run-root storage: a fresh run region with no `outer` link, stamped at the eternal tier
 /// ([`RegionHost::is_eternal`]) so anything holding it can tell the run region from a per-call one.
 /// Held by `run_program` (and the test harness) so the run-root scope's region has an owning Rc;
-/// [`Scope::adopt_as_run_frame`](crate::machine::core::Scope::adopt_as_run_frame) reuses it as
-/// the run frame's storage,
-/// and the run-root scope reads it back as its region owner through the region's own host
-/// back-link. Public so an integration test can stand one up: it mints nothing itself, only
+/// [`Frame::adopting`](super::frame::Frame::adopting) derives it back off the run-root resident's
+/// brand as the run frame's storage, and the run-root scope reads it as its region owner through
+/// the region's own host back-link. Public so an integration test can stand one up: it mints nothing itself, only
 /// building the library's `RegionHost` shell whose region lazily mints on first allocation.
 pub fn run_root_storage() -> Rc<FrameStorage> {
     RegionHost::fresh_eternal()

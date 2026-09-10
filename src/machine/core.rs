@@ -7,7 +7,6 @@ pub(crate) mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
 mod scope;
-mod scope_id;
 pub(crate) mod seals;
 mod statement_id;
 
@@ -40,7 +39,6 @@ pub(crate) use scope::HitTier;
 pub use scope::Scope;
 pub(crate) use scope::ViewMembers;
 pub(crate) use scope::consolidate_object;
-pub use scope::{RegionScopeFamily, ScopeRefFamily};
-pub use scope_id::ScopeId;
+pub use scope::{CallFrame, RegionScopeFamily, ScopeRefFamily};
 pub(crate) use seals::{GroupSeal, OverloadSeal};
 pub use statement_id::StatementId;

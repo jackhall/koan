@@ -24,9 +24,10 @@
 //! its node records.
 
 use crate::machine::ProducerId;
-use crate::machine::core::{LexicalFrame, Scope, ScopeId};
+use crate::machine::core::{LexicalFrame, Scope};
 use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{KType, RunRegistries, TypeNode, TypeRegistry, TypeResolution};
+use crate::memory::ScopeId;
 
 impl<'step> Scope<'step> {
     /// Elaborates against `self` and admits the result only when `FinalizeGate` passes it. The

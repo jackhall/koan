@@ -8,12 +8,12 @@ use std::rc::Rc;
 use super::*;
 use crate::builtins::test_support::{TestRun, value_name};
 use crate::machine::ProducerId;
+use crate::machine::core::CallFrame;
 use crate::machine::core::bindings::{BindingIndex, WriteGate};
 use crate::machine::model::AnnouncedData;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::object_copy_cost;
 use crate::machine::model::{KObject, RegionEscape, copy_or_pin_callable};
-use crate::memory::CallFrame;
 use crate::memory::{program_storage, run_root_storage};
 
 /// Bind `name` to the number `value` in `scope`, through the construction-time value door.
@@ -205,7 +205,7 @@ fn the_per_call_chain_stops_at_the_eternal_home() {
     );
 
     let frame: Rc<CallFrame> = eternal.open_frame();
-    frame.with_scope(|inner| {
+    frame.with_resident(|inner| {
         let block = inner.alloc_child_under();
         assert_eq!(
             block.per_call_chain().count(),
@@ -228,7 +228,7 @@ fn the_chain_cost_sums_only_the_per_call_portion() {
     bind_number(eternal, "outer", 1.0, &registries);
 
     let frame: Rc<CallFrame> = eternal.open_frame();
-    frame.with_scope(|inner| {
+    frame.with_resident(|inner| {
         bind_number(inner, "inner", 2.0, &registries);
         assert_eq!(
             inner.chain_copy_cost(),
@@ -251,7 +251,7 @@ fn the_callable_chooser_pins_a_foreign_crossing() {
     let test_run = TestRun::silent(&program, &root);
 
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
-    frame.with_scope(|inner| {
+    frame.with_resident(|inner| {
         inner.close();
         assert_eq!(
             copy_or_pin_callable(inner, test_run.scope.region()),
@@ -273,7 +273,7 @@ fn the_callable_chooser_pins_an_unready_chain() {
     let test_run = TestRun::silent(&program, &root);
 
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
-    frame.with_scope(|inner| {
+    frame.with_resident(|inner| {
         let host = inner.region();
         assert_eq!(
             copy_or_pin_callable(inner, host),
@@ -307,7 +307,7 @@ fn the_callable_chooser_pins_a_large_enough_environment() {
     // built before the scope closes and the chooser can be asked.
     let pinned_at = (1usize..40).find(|entries| {
         let frame: Rc<CallFrame> = test_run.scope.open_frame();
-        frame.with_scope(|inner| {
+        frame.with_resident(|inner| {
             for entry in 0..*entries {
                 let text = inner.brand().allocator().text(&"x".repeat(512));
                 let object = KObject::KString(text);
@@ -346,7 +346,7 @@ fn the_callable_chooser_consolidates_a_cheap_environment() {
     let registries = RunRegistries::new();
 
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
-    frame.with_scope(|inner| {
+    frame.with_resident(|inner| {
         // Bulk allocated into the region without being bound: the pin would retain all of it, and
         // the environment's own weight is one scalar.
         let _bulk = inner.brand().allocator().text(&"x".repeat(4096));

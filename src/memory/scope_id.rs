@@ -1,8 +1,10 @@
-//! `ScopeId` — position-independent identity for `Scope` instances.
+//! `ScopeId` — position-independent identity for
+//! [`Scope`](crate::machine::core::Scope) instances.
 //!
-//! Pointer-derived identity couples equality to memory placement, so a relocated
-//! or freed scope would silently break dispatch on user-declared types. A
-//! counter-allocated newtype decouples identity from the pointer.
+//! Pointer-derived identity couples equality to memory placement, so a relocated or freed scope
+//! would silently break dispatch on user-declared types. A counter-allocated newtype decouples
+//! identity from the pointer — which is why the id lives with the memory model rather than with the
+//! lexical record it names: what it buys is independence *from* placement.
 //!
 //! Layout is `(session: u64, idx: u64)`. `session` is minted once per process from
 //! `RandomState`-derived entropy; `idx` is from a global `AtomicU64` counter. The
@@ -10,13 +12,18 @@
 //! probability of 2⁻⁶⁴ — sufficient for non-adversarial use such as a
 //! compile-then-run split where one process serializes a scope graph and another
 //! loads and runs it.
+//!
+//! **The counter is an identity source, not a registry.** It only ever mints: nothing is looked up
+//! against it, no scope is reachable from an id, and the process-wide static holds no run state — so
+//! the statics here are not the global runtime state [`memory`](crate::memory) otherwise keeps out. A
+//! second run in the same process continues the counter and is none the worse for it.
 
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Position-independent identity for a [`Scope`](super::Scope). Equality is by
+/// Position-independent identity for a [`Scope`](crate::machine::core::Scope). Equality is by
 /// the `(session, idx)` pair, minted once at construction time.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScopeId {

@@ -5,9 +5,9 @@
 use super::*;
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{type_name, value_name};
-use crate::machine::core::ScopeId;
 use crate::machine::model::UntypedKey;
 use crate::machine::model::types::{Record, RecursiveGroupWindow, RelativeSchema};
+use crate::memory::ScopeId;
 
 // --- region-free builders -------------------------------------------------------------
 

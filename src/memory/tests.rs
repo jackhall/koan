@@ -13,6 +13,7 @@ use crate::builtins::test_support::{
 };
 use crate::machine::BindingIndex;
 use crate::machine::core::Bindings;
+use crate::machine::core::CallFrame;
 use crate::machine::core::{Action, Body, KFunction};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
@@ -50,21 +51,21 @@ fn pins_region_walks_outer_chain() {
     );
 }
 
-/// `CallFrame::pins_storage_region` reads the **storage** chain, not the lexical scope graph: a frame
+/// `Frame::hosts` reads the **storage** chain, not the lexical scope graph: a frame
 /// pins its own child scope's region, answers `true` for an eternal-tier scope (which needs no pin
 /// at all), and `false` for a scope in an unrelated per-call region.
 #[test]
-fn pins_storage_region_reads_the_storage_chain() {
+fn hosts_reads_the_storage_chain() {
     let root = run_root_storage();
     let run_scope = run_root_bare(&root);
     let frame = run_scope.open_frame();
 
     assert!(
-        frame.with_scope(|child| frame.pins_storage_region(&child.frame())),
+        frame.with_resident(|child| frame.hosts(child.brand())),
         "a frame pins the region its own child scope lives in"
     );
     assert!(
-        frame.pins_storage_region(&run_scope.frame()),
+        frame.hosts(run_scope.brand()),
         "an eternal-tier scope needs no pin, so every frame answers for it"
     );
 
@@ -72,7 +73,7 @@ fn pins_storage_region_reads_the_storage_chain() {
     let unrelated_storage = per_call_storage();
     let unrelated = run_root_bare(&unrelated_storage);
     assert!(
-        !frame.pins_storage_region(&unrelated.frame()),
+        !frame.hosts(unrelated.brand()),
         "a frame does not pin an unrelated per-call region"
     );
 }
@@ -89,22 +90,22 @@ fn single_owner_exposes_its_own_region() {
     assert!(FrameCoverage::empty().is_empty());
 }
 
-/// `with_scope` opens the child scope at a `for<'b>` brand. A scalar copies out; a bind / lookup
+/// `with_resident` opens the child scope at a `for<'b>` brand. A scalar copies out; a bind / lookup
 /// consumed in place stays inside the brand (the value is allocated at the same `'b` via the opened
 /// scope's own region), so nothing branded escapes.
 #[test]
-fn with_scope_opens_child_scope_at_brand() {
+fn with_resident_opens_child_scope_at_brand() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = scope.open_frame();
     // Scalar copy-out: matches `scope_id`.
-    let id = frame.with_scope(|s| s.id);
+    let id = frame.with_resident(|s| s.id);
     assert_eq!(id, frame.scope_id());
     // In-place bind + lookup, all at the brand `'b` (value allocated via the opened scope's region).
     let registries = test_run.registries();
-    frame.with_scope(|s| {
+    frame.with_resident(|s| {
         let v = s.brand().alloc_scalar(Scalar::Number(7.0));
         s.bind_resident_for_test(
             value_name("k", registries),
@@ -120,11 +121,11 @@ fn with_scope_opens_child_scope_at_brand() {
 
 /// The seed-side re-anchor: a caller-lifetime value crossing into the frame brand region as a
 /// delivery envelope, whose bind relocates it there. The user-fn param-bind takes this shape — a
-/// bare caller-`'a` reference cannot cross `with_scope`'s `for<'b>` signature at all, so the
+/// bare caller-`'a` reference cannot cross `with_resident`'s `for<'b>` signature at all, so the
 /// envelope is the whole route. Pins the relocate-into-the-brand-and-bind
 /// aliasing under tree borrows.
 #[test]
-fn with_scope_relocates_seed_value_into_brand() {
+fn with_resident_relocates_seed_value_into_brand() {
     // The caller value is placed in its own, longer-lived region and enveloped there — mirroring the
     // matched `it` / a bound arg.
     let caller_storage = run_root_storage();
@@ -138,7 +139,7 @@ fn with_scope_relocates_seed_value_into_brand() {
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = scope.open_frame();
     let registries = test_run.registries();
-    frame.with_scope(|child| {
+    frame.with_resident(|child| {
         child
             .bind_delivered_direct(
                 value_name("it", registries),
@@ -159,7 +160,7 @@ fn with_scope_relocates_seed_value_into_brand() {
 /// routes is the substrate's, so the shape is exercised end to end with no hand-written pointer
 /// arithmetic anywhere — the re-anchor is the library's single audited retype. The opened child's
 /// own re-borrow rides along: it stays valid — and still names the frame's region — while a sibling
-/// pointer allocates into that same region, so `with_scope`'s `&Scope` and `brand().alloc(…)`
+/// pointer allocates into that same region, so `with_resident`'s `&Scope` and `brand().alloc(…)`
 /// coexisting soundly is pinned by the same run.
 #[test]
 fn born_child_scope_survives_subsequent_alloc_in_its_own_region() {
@@ -169,7 +170,7 @@ fn born_child_scope_survives_subsequent_alloc_in_its_own_region() {
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = scope.open_frame();
     let registries = test_run.registries();
-    frame.with_scope(|child| {
+    frame.with_resident(|child| {
         let _sibling = child.brand().alloc_scalar(Scalar::Number(1.0));
         assert!(std::ptr::eq(child.region(), frame.region()));
         let grandchild = child.alloc_child_under();
@@ -209,9 +210,9 @@ fn call_frame_chained_outer_frame_walkable() {
     let run_scope = run_test_run.scope;
     let outer = run_scope.open_frame();
     // The returned `Rc<CallFrame>` carries no brand lifetime, so it escapes the open.
-    let inner = outer.with_scope(|scope| scope.open_frame());
+    let inner = outer.with_resident(|scope| scope.open_frame());
     drop(outer);
-    inner.with_scope(|inner_child| {
+    inner.with_resident(|inner_child| {
         let outer_scope = inner_child
             .outer()
             .expect("inner's child scope must have an outer");
@@ -247,7 +248,7 @@ fn builtin_frame_under_per_call_parent_chains_region_owner() {
     let run_test_run = TestRun::silent(&program, &region);
     let run_scope = run_test_run.scope;
     let outer = run_scope.open_frame();
-    let inner = outer.with_scope(|outer_child| {
+    let inner = outer.with_resident(|outer_child| {
         // `outer_child` lives in `outer`'s per-call region, so it derives `Some(outer.storage)`.
         assert!(Rc::ptr_eq(
             &outer_child
@@ -280,7 +281,7 @@ fn fresh_tail_hop_over_per_call_captured_scope_pins_it() {
     let run_scope = run_test_run.scope;
     let outer = run_scope.open_frame();
     // The fresh-tail hop's `outer` is the callee's captured scope; here that scope is per-call.
-    let tail = outer.with_scope(|scope| scope.open_frame());
+    let tail = outer.with_resident(|scope| scope.open_frame());
     assert!(Rc::ptr_eq(
         tail.storage_rc()
             .outer()

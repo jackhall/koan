@@ -19,15 +19,15 @@ use super::substrate::RegionHost;
 /// of every pin bundle and reach description with no special case anywhere. It never enters the
 /// frame lifecycle or the scheduler: the wrapped storage is private and [`brand`](ProgramStorage::brand)
 /// is the only capability the type exposes, so nothing outside this module can adopt it into a
-/// `CallFrame` or open a `Scope` in its region.
+/// [`Frame`](super::frame::Frame) or make it a resident's home region.
 pub fn program_storage() -> ProgramStorage {
     ProgramStorage(RegionHost::fresh_eternal())
 }
 
 /// The host whose region an AST borrows. Its own type, not a [`FrameStorage`] alias, because
 /// the property the AST's reach answers rest on is a property of *this host* rather than of the
-/// eternal tier at large: the run root is eternal too, but a `CallFrame` adopts it and a `Scope`
-/// names it, so it can be a `home` and a pin-bundle member. Program storage is neither, and the
+/// eternal tier at large: the run root is eternal too, but a [`Frame`](super::frame::Frame) adopts
+/// it and a resident names it, so it can be a `home` and a pin-bundle member. Program storage is neither, and the
 /// wrapped `Rc` is private, so [`program_storage`] is the type's only constructor.
 pub struct ProgramStorage(Rc<FrameStorage>);
 

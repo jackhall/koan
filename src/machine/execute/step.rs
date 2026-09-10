@@ -297,12 +297,11 @@ pub fn drive_step_allocator(guard: impl for<'b> FnOnce(StepAllocator<'b>)) {
 mod tests {
     use super::*;
     use crate::builtins::test_support::TestRun;
+    use crate::machine::core::CallFrame;
     use crate::machine::model::RecordSubstrate;
     use crate::machine::model::{DeliveredCarried, Held};
     use crate::machine::model::{KObject, Record};
-    use crate::memory::{
-        CallFrame, FoldedPlacement, FrameStorageExt, program_storage, run_root_storage,
-    };
+    use crate::memory::{FoldedPlacement, FrameStorageExt, program_storage, run_root_storage};
 
     /// The legal shape: born a region-pure carrier, then exit through the sole seal door into a
     /// delivery envelope pinned by its own storage.
@@ -337,7 +336,7 @@ mod tests {
 
         // Producer: a plain-data record resident in its own frame's region, born through the fold
         // door — the exact shape FROM's `record` operand arrives as. Allocated through the frame's own
-        // brand (not a transient `with_scope` sub-brand), so the reference escapes at the frame's own
+        // brand (not a transient `with_resident` sub-brand), so the reference escapes at the frame's own
         // lifetime.
         let producer_frame: Rc<CallFrame> = scope.open_frame();
         let owned_cells = crate::memory::FrameCoverage::empty();

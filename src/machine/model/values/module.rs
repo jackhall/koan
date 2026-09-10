@@ -28,7 +28,8 @@
 
 use std::collections::HashMap;
 
-use crate::machine::core::{Scope, ScopeId};
+use crate::machine::core::Scope;
+use crate::memory::ScopeId;
 
 use crate::memory::BumpBackedMap;
 use crate::memory::RegionBrand;

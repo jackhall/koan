@@ -21,11 +21,6 @@ pub(crate) fn edge_delivered<'a>(
     scope: &'a Scope<'a>,
 ) -> Result<DeliveredCarried, KError> {
     let resident = runtime.scheduler().edge_resident_duplicate(edge)?;
-    let coverage = FrameCoverage::of(
-        scope
-            .region_owner()
-            .upgrade()
-            .expect("a live scope reference implies a live region owner"),
-    );
+    let coverage = FrameCoverage::of(scope.frame());
     Ok(scope.lift_spliced(&resident.brand_with(&coverage)))
 }

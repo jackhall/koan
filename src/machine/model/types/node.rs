@@ -10,8 +10,8 @@
 //!
 //! See [design/typing/type-registry.md](../../../../design/typing/type-registry.md).
 
-use crate::machine::core::ScopeId;
 use crate::machine::model::labels::TypeSymbol;
+use crate::memory::ScopeId;
 
 use super::kkind::KKind;
 use super::ktype::KType;

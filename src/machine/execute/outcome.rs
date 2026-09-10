@@ -13,17 +13,18 @@
 //!   outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of the producer an edge names.
 
+use crate::machine::core::CallFrame;
 use crate::machine::core::resolve_location;
 use crate::machine::core::{
-    Action, BlockBody, BlockEntry, FramePlacement, ReturnContract, ScopeId, TailContract,
-    freeze_body,
+    Action, BlockBody, BlockEntry, FramePlacement, ReturnContract, TailContract, freeze_body,
 };
 #[cfg(test)]
 use crate::machine::model::Carried;
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::model::{KType, RunRegistries};
-use crate::memory::{CallFrame, FrameStorageExt, RegionBrand};
+use crate::memory::ScopeId;
+use crate::memory::{FrameStorageExt, RegionBrand};
 use crate::source::SourceRef;
 
 #[cfg(test)]

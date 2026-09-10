@@ -87,10 +87,7 @@ impl<'run> Host<'run> {
             // and its delivery lands where the binding lives. Holding the owner across the install
             // is the wiring-time proof the region is pinned; the slot is allocated before the
             // stamp, so no install can name a terminal producer.
-            let destination = scope
-                .region_owner()
-                .upgrade()
-                .expect("a live scope reference implies a live region owner");
+            let destination = scope.frame();
             // The slot owns every claim it stamped, and releases the edges when it terminalizes.
             // Installing an edge and handing it to the anchor is one act, so the stamp holds no
             // list of its own and no claim can be installed without an owner.

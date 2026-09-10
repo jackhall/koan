@@ -11,13 +11,13 @@ use std::rc::{Rc, Weak};
 use super::NodeFinalize;
 use crate::builtins::test_support::{TestRun, run_root_bare};
 use crate::machine::AdoptSeam;
+use crate::machine::core::CallFrame;
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::model::Carried;
 use crate::machine::model::Scalar;
 use crate::machine::model::Symbol;
 use crate::machine::model::{KObject, RunRegistries};
 use crate::machine::model::{KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::memory::CallFrame;
 use crate::memory::{Delivered, Sealed};
 use crate::memory::{FrameCoverage, FrameStorage, program_storage, run_root_storage};
 
@@ -33,7 +33,7 @@ fn resident_scalar(
     crate::memory::Witnessed<crate::machine::model::CarriedFamily>,
     Weak<FrameStorage>,
 ) {
-    let carrier = producer.with_scope(|child| {
+    let carrier = producer.with_resident(|child| {
         let obj = child.brand().alloc_scalar(Scalar::Number(7.0));
         child
             .seal_reaching(
@@ -428,7 +428,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let scope = test_run.scope;
     let producer = scope.open_frame();
 
-    let (carrier, birth_addr) = producer.with_scope(|child| {
+    let (carrier, birth_addr) = producer.with_resident(|child| {
         let obj = child.brand().alloc_scalar(Scalar::Number(7.0));
         let addr = obj as *const KObject as usize;
         (child.seal_resident(Carried::Object(obj)).unseal(), addr)

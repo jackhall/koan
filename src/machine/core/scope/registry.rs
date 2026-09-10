@@ -582,7 +582,7 @@ impl<'a> Scope<'a> {
         outer: &'a Scope<'a>,
         source: &'a Scope<'a>,
         registries: &RunRegistries,
-        plan: impl FnOnce(crate::machine::core::ScopeId) -> ViewMembers,
+        plan: impl FnOnce(crate::memory::ScopeId) -> ViewMembers,
     ) -> Result<&'a Scope<'a>, KError> {
         let view = outer.alloc_child_under_module(None);
         let members = plan(view.id);

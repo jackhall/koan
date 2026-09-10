@@ -253,7 +253,7 @@ fn sealed_schema_is_absolute_and_cyclic() {
 /// content stay distinct while a nonce-free mint of the same content is content-addressed.
 #[test]
 fn generative_nonce_separates_two_mints() {
-    use crate::machine::core::ScopeId;
+    use crate::memory::ScopeId;
     let registries = RunRegistries::new();
     let types = &registries.types;
     let mint = |nonce: Option<ScopeId>| {

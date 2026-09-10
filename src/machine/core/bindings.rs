@@ -1265,7 +1265,7 @@ impl<'a> Bindings<'a> {
     /// registry and a [`DeclarationSite`] is plain data, so the fresh [`ScopeId`] a copied scope
     /// takes changes no identity here — a nominal's identity is registry state, not scope state.
     ///
-    /// [`ScopeId`]: crate::machine::core::scope_id::ScopeId
+    /// [`ScopeId`]: crate::memory::ScopeId
     pub(crate) fn copied_types(&self) -> Vec<(TypeSymbol, KType, DeclarationSite)> {
         self.tables
             .borrow()

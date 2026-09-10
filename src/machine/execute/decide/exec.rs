@@ -16,6 +16,7 @@ use super::ctx::DecideCtx;
 use std::rc::Rc;
 
 use crate::machine::core::BoundArgs;
+use crate::machine::core::CallFrame;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
@@ -28,7 +29,6 @@ use crate::machine::model::{CoercionTables, DeclaredSlots, KType, declared_retur
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
 use crate::memory::BumpVec;
-use crate::memory::CallFrame;
 
 /// Fold a resolved call into a [`Outcome::Continue`] — the dispatcher's one invoke entry, routing on
 /// the picked body:
@@ -479,7 +479,7 @@ fn run_action_builtin<'step>(
 /// coverage is empty, so a literal argument still pins nothing.
 ///
 /// The envelope is what the bind's `for<'b>` brand admits
-/// ([`CallFrame::with_scope`](crate::memory::CallFrame::with_scope)) — a bare `&'step
+/// ([`CallFrame::with_resident`](crate::machine::core::CallFrame::with_resident)) — a bare `&'step
 /// KObject<'step>` names a lifetime the opened frame scope has no relation to. Keyword parts
 /// contribute nothing. Any other value part is unreachable (the bind sites resolve value parts to
 /// `Spliced`/literal first) and surfaces as a diagnostic rather than a silent mis-bind.

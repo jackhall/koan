@@ -20,9 +20,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::machine::core::CallFrame;
 use crate::machine::core::ScopeRefFamily;
 use crate::machine::core::bindings::{WriteGate, WriteOp};
-use crate::machine::core::{BlockEntry, BlockRequest, DepPlacement, FramePlacement, ScopeId};
+use crate::machine::core::{BlockEntry, BlockRequest, DepPlacement, FramePlacement};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::{
@@ -31,7 +32,7 @@ use crate::machine::model::{
 use crate::machine::{BindingIndex, Installer, KError, KErrorKind, LexicalFrame, NodeId, Scope};
 use crate::memory::KoanStorageProfile;
 use crate::memory::{BumpAllocator, BumpVec, SealedExtern, Within, erase_to_static};
-use crate::memory::{CallFrame, FrameCoverage};
+use crate::memory::{FrameCoverage, ScopeId};
 use crate::memory::{ProgramBrand, RegionBrand};
 use crate::scheduler::{
     Anchor, Dep, Deps, DrainDeadlock, EdgeId, InstalledEdge, Scheduler, Step, StepVerdict, Workload,
@@ -176,10 +177,7 @@ impl<'run> KoanRuntime<'run> {
             .collect();
         // Each root edge names the run frame's region as its destination; holding that owner
         // across the install is the wiring-time proof the region is pinned.
-        let run_owner = root
-            .region_owner()
-            .upgrade()
-            .expect("the run root's region owner is held for the whole run");
+        let run_owner = root.frame();
         let roots: Vec<EdgeId> = self
             .enter_block(root.id, statements, root)
             .into_iter()
@@ -275,10 +273,7 @@ impl<'run> KoanRuntime<'run> {
         producer: NodeId,
         scope: &crate::machine::Scope<'_>,
     ) -> EdgeId {
-        let destination = scope
-            .region_owner()
-            .upgrade()
-            .expect("a live scope reference implies a live region owner");
+        let destination = scope.frame();
         self.sched.install_edge(producer, &destination)
     }
 
@@ -365,7 +360,7 @@ impl<'run> Host<'run> {
         ));
         // The active scope as a carrier; `combined` pins it either way.
         let scope_carrier = match node_scope {
-            NodeScope::Yoked => cart.scope_sealed(),
+            NodeScope::Yoked => cart.resident_sealed(),
             NodeScope::YokedChild(carrier) => carrier,
         };
         // The `Within` token's declared `'scratch: 'b` is what lets two live borrow-checked
@@ -1008,7 +1003,7 @@ impl<'run> Host<'run> {
     /// Decide a run-scope submission's [`NodeScope`] handle — always cart-witnessed, never anchored
     /// at a free `'run`. The witnessing frame is the active cart, else the run frame: its *own*
     /// scope yields [`NodeScope::Yoked`], and a scope whose region it merely pins
-    /// ([`CallFrame::pins_storage_region`]) yields [`NodeScope::YokedChild`] — a block scope
+    /// ([`CallFrame::hosts`](crate::memory::Frame::hosts)) yields [`NodeScope::YokedChild`] — a block scope
     /// allocated in an ancestor region, held by the frame's `FrameStorage.outer` chain, stored
     /// erased and reattached frame-bounded.
     pub(in crate::machine::execute) fn resolve_node_scope<'a>(
@@ -1016,19 +1011,19 @@ impl<'run> Host<'run> {
         scope: &'a Scope<'a>,
     ) -> NodeScope {
         if let Some(f) = self.ambient.active_frame_ref() {
-            if f.with_scope(|fs| scopes_eq(fs, scope)) {
+            if f.with_resident(|fs| scopes_eq(fs, scope)) {
                 return NodeScope::Yoked;
             }
-            if f.pins_storage_region(&scope.frame()) {
+            if f.hosts(scope.brand()) {
                 return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");
         }
         if let Some(rf) = self.ambient.run_frame_ref() {
-            if rf.with_scope(|rs| scopes_eq(rs, scope)) {
+            if rf.with_resident(|rs| scopes_eq(rs, scope)) {
                 return NodeScope::Yoked;
             }
-            if rf.pins_storage_region(&scope.frame()) {
+            if rf.hosts(scope.brand()) {
                 return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
             }
         }
@@ -1138,7 +1133,7 @@ impl<'run> Host<'run> {
             .expect("in-frame dispatch requires an active frame");
         // Re-project the scope from the frame cart at a `for<'b>` brand confined to the
         // `submit_expression` call, so no borrow rides up the `&mut self` path.
-        frame.with_scope(|scope| {
+        frame.with_resident(|scope| {
             self.submit_expression(sched, expr, scope, NodeScope::Yoked, chain, ctx)
         })
     }
@@ -1192,7 +1187,7 @@ impl<'run> Host<'run> {
             .expect("a body block runs inside an active lexical chain");
         // Open the body scope at a `for<'b>` brand: the id copies out and the chain returns as an
         // unbranded `Rc`, so nothing branded escapes the read.
-        let (body_scope_id, parent) = frame.with_scope(|body_scope| {
+        let (body_scope_id, parent) = frame.with_resident(|body_scope| {
             (
                 body_scope.id,
                 crate::machine::core::assemble_body_chain(body_scope, call_site_chain, 0)

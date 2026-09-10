@@ -74,7 +74,7 @@ fn collect_user_type_refs(kt: KType, types: &TypeRegistry) -> Vec<UserTypeRef> {
 fn user_type_refs_yields_nested_declared_slots_in_order() {
     let registries = crate::machine::model::RunRegistries::new();
     let types = &registries.types;
-    let scope_id = crate::machine::core::ScopeId::next();
+    let scope_id = crate::memory::ScopeId::next();
     let abstract_slot = |name: &str| {
         types.intern(TypeNode::AbstractType {
             source: scope_id,
@@ -101,7 +101,7 @@ fn user_type_refs_does_not_recurse_into_a_sealed_member() {
     let registries = crate::machine::model::RunRegistries::new();
     let types = &registries.types;
     let slot = types.intern(TypeNode::AbstractType {
-        source: crate::machine::core::ScopeId::next(),
+        source: crate::memory::ScopeId::next(),
         name: crate::builtins::test_support::type_name("Carrier", &registries),
         param_names: Vec::new(),
         nonce: None,

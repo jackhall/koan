@@ -15,10 +15,10 @@ use std::collections::HashMap;
 
 use super::*;
 use crate::builtins::test_support::type_name;
-use crate::machine::core::ScopeId;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::{KType, Record, TypeNode};
+use crate::memory::ScopeId;
 
 fn record(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
     types.record(Record::from_pairs(

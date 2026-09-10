@@ -18,10 +18,10 @@ use std::rc::Rc;
 
 use crate::machine::core::{BindingIndex, DeclarationSite, KError};
 
+use crate::machine::core::CallFrame;
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution, Unifier};
-use crate::memory::CallFrame;
 use smallvec::SmallVec;
 
 use super::KFunction;
@@ -102,7 +102,7 @@ pub fn run_user_fn<'ast>(
     // brand a bare caller reference cannot cross. A type is owned data, so it crosses by clone and
     // lands in the frame region through the single storage door (`register_type_direct`), pinning
     // nothing. Built at the frame brand so nothing fabricates a free `&'a`.
-    let bind = ctx.region.with_scope(|child| -> Result<(), KError> {
+    let bind = ctx.region.with_resident(|child| -> Result<(), KError> {
         // The frame's own scope: minted for this call and not yet published, so the parameter binds
         // take the construction door rather than riding a step outcome.
         let gate = &mut crate::machine::core::bindings::WriteGate::for_unpublished_scope();
@@ -241,7 +241,7 @@ pub fn run_user_fn<'ast>(
                 // frame brand. The resolved type is a `Copy` handle, so it rides the tail-replace
                 // directly with no re-home.
                 DeferredReturn::Type(type_expr) => {
-                    let resolved = ctx.region.with_scope(|child| {
+                    let resolved = ctx.region.with_resident(|child| {
                         let resolved: Result<KType, KError> =
                             match child.resolve_type_identifier(type_expr, None, registries) {
                                 TypeResolution::Done(kt) => Ok(kt),

@@ -16,7 +16,9 @@
 
 use std::rc::Rc;
 
-use super::{Scope, ScopeId};
+use crate::memory::ScopeId;
+
+use super::Scope;
 
 #[cfg(test)]
 mod tests;

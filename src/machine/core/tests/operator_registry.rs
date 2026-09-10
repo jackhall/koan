@@ -13,10 +13,11 @@
 use std::rc::Rc;
 
 use crate::builtins::test_support::{TestRun, operator_run, probe_symbol, run_root_bare};
+use crate::machine::core::CallFrame;
 use crate::machine::core::{BindingIndex, GroupSeal, Scope};
 use crate::machine::model::DeliveredOperatorGroup;
 use crate::machine::model::{OperatorGroup, ReductionMode, RunRegistries};
-use crate::memory::{CallFrame, program_storage, run_root_storage};
+use crate::memory::{program_storage, run_root_storage};
 
 /// The declaration door a fixture takes: birth the record in `scope`'s own region and rest that
 /// envelope, which is what every registry entry for this declaration then holds a bit-copy of.
@@ -451,7 +452,7 @@ fn resolved_group_survives_the_declaring_frames_shell_drop() {
     let root = test_run.scope;
 
     let declaring: Rc<CallFrame> = root.open_frame();
-    let envelope: DeliveredOperatorGroup = declaring.with_scope(|scope| {
+    let envelope: DeliveredOperatorGroup = declaring.with_resident(|scope| {
         let group = declare(scope, &["≺"], ReductionMode::FoldRight);
         scope
             .register_operator_group_direct(
@@ -465,7 +466,7 @@ fn resolved_group_survives_the_declaring_frames_shell_drop() {
         // The reading chain sits one region further down, so the hit is an ancestor's and the lift
         // happens at the declaring scope.
         let reader: Rc<CallFrame> = scope.open_frame();
-        reader.with_scope(|chain_scope| {
+        reader.with_resident(|chain_scope| {
             chain_scope
                 .resolve_operator_group_delivered(operator_run(&["≺"], test_run.registries()), None)
                 .expect("the declaring frame's registration resolves one region down")
@@ -505,7 +506,7 @@ fn resolved_carrier_reaches_the_declaring_ancestors_region() {
 
     // A per-call frame opens its own region; the group was declared one region up.
     let frame: Rc<CallFrame> = ancestor.open_frame();
-    frame.with_scope(|inner| {
+    frame.with_resident(|inner| {
         assert!(
             !std::ptr::eq(inner.region(), ancestor.region()),
             "the frame child must open its own region for the assertion to say anything",

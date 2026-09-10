@@ -4,10 +4,11 @@ use std::rc::Rc;
 use smallvec::SmallVec;
 
 use crate::machine::LexicalFrame;
+use crate::machine::core::CallFrame;
 use crate::machine::core::ReturnContract;
-use crate::machine::core::{ScopeId, ScopeRefFamily, StatementId, assemble_body_chain};
+use crate::machine::core::{ScopeRefFamily, StatementId, assemble_body_chain};
 use crate::machine::model::ast::{DispatchShape, KExpression, WorkingExpression};
-use crate::memory::CallFrame;
+use crate::memory::ScopeId;
 use crate::memory::SealedExtern;
 use crate::scheduler::EdgeId;
 use crate::source::{FileId, Span};
@@ -216,7 +217,7 @@ impl SlotFrame {
     /// scope takes no further binds and its reach-set seals.
     pub(super) fn close_opened_scope(&self) {
         if self.opened_scope {
-            self.cart.with_scope(|s| s.close());
+            self.cart.with_resident(|s| s.close());
         }
     }
 
@@ -305,7 +306,7 @@ impl ChainOp {
         match self {
             ChainOp::Unchanged => prev_chain,
             ChainOp::AssembleBody { body_index } => {
-                body_frame.with_scope(|s| assemble_body_chain(s, prev_chain, body_index))
+                body_frame.with_resident(|s| assemble_body_chain(s, prev_chain, body_index))
             }
             ChainOp::PushBlock {
                 scope_id,

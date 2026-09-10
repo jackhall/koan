@@ -23,7 +23,7 @@ fn sample_obligation() -> ReturnObligation {
 
 /// A park state carrying both fields, so each test covers the whole ambient slot: the obligation
 /// and the block frame a leading-carrying tail parks with.
-fn sample_park(block_frame: Rc<crate::memory::CallFrame>) -> ParkState {
+fn sample_park(block_frame: Rc<crate::machine::core::CallFrame>) -> ParkState {
     ParkState {
         obligation: Some(sample_obligation()),
         block_frame: Some(block_frame),

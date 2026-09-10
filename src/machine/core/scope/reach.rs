@@ -6,8 +6,6 @@
 //! composition mints and retains the product's reach here, so residence is discharged by the fold
 //! brand's rank-2 signature. Split out of the parent `scope` module.
 
-use std::rc::Rc;
-
 use super::Scope;
 use crate::machine::KError;
 use crate::machine::core::BindingsReferenceFamily;
@@ -29,8 +27,8 @@ use crate::memory::{
     Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, SealedExtern, Witnessed,
 };
 use crate::memory::{
-    FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt,
-    KoanStorageProfile, RegionBrand,
+    FoldingBrand, FrameCoverage, FrameReach, KoanRegion, KoanRegionExt, KoanStorageProfile,
+    RegionBrand,
 };
 
 // The tests here pin the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy` build
@@ -40,18 +38,6 @@ use crate::memory::{
 mod tests;
 
 impl<'a> Scope<'a> {
-    /// The live [`FrameStorage`] owning this scope's region — the pin every read of a resident
-    /// carrier opens under. A live scope reference implies a live owner: the cart, a cart ancestor
-    /// (through the `FrameStorage.outer` chain), or the run storage holds it for as long as the
-    /// scope can run. Stated once here for the whole reach cluster;
-    /// [`Scope::frame`](super::Scope::frame) is the crate-wide twin, which spells the
-    /// same invariant out against the step context.
-    fn home(&self) -> Rc<FrameStorage> {
-        self.region_owner()
-            .upgrade()
-            .expect("a live scope reference implies a live region owner")
-    }
-
     /// Mint `sources` into this scope's own arena, which is the same act that folds the composed
     /// bundle into the **region's** union bundle — the scope-side reach-derivation door, a veneer
     /// over the library's fused
@@ -90,7 +76,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn mint_born_here(&self, borrows_home: bool) -> &'a FrameReach {
         match borrows_home {
             true => {
-                let home = FrameCoverage::of(self.home());
+                let home = FrameCoverage::of(self.frame());
                 self.mint_retained(&[&home])
             }
             false => self.mint_retained(&[]),
@@ -331,7 +317,7 @@ impl<'a> Scope<'a> {
         &self,
         build: impl for<'b> FnOnce(FoldingBrand<'b>) -> KObject<'b>,
     ) -> &'a KObject<'a> {
-        KoanRegion::fold_witnessed::<CarriedFamily>(self.home(), |brand| {
+        KoanRegion::fold_witnessed::<CarriedFamily>(self.frame(), |brand| {
             Carried::Object(brand.alloc_object_folded(build(brand)))
         })
         .adopt_into(self.brand().handle())
@@ -342,7 +328,7 @@ impl<'a> Scope<'a> {
     /// delivery form of [`Self::resident`] over the value channel, pinned by this scope's own home
     /// frame under an empty foreign bundle. The door a producer hands a freshly placed value out
     /// through when its consumer binds at a `for<'b>` brand
-    /// ([`CallFrame::with_scope`](crate::memory::CallFrame::with_scope)): a bare `&'a KObject<'a>`
+    /// ([`CallFrame::with_resident`](crate::machine::core::CallFrame::with_resident)): a bare `&'a KObject<'a>`
     /// cannot cross that signature, while an envelope crosses as the witnessed shortening every
     /// other delivered value takes.
     pub(crate) fn deliver_resident_object(&self, object: &'a KObject<'a>) -> DeliveredCarried {
@@ -726,7 +712,7 @@ impl<'a> Scope<'a> {
     /// `GROUP` body stamps the reborn record into its own [`Module`](super::ScopeKind::Module) kind field,
     /// fixed at allocation, so the birth cannot wait for a `&Scope` to root it on.
     ///
-    /// The owner is the brand's own host region, exactly what [`Self::home`] resolves for a scope
+    /// The owner is the brand's own host region, exactly what [`Scope::frame`] resolves for a scope
     /// living there, so a record born here and a scope allocated at the same brand are same-region
     /// by construction — which is the premise [`Self::adopt_group_record`] states.
     pub(crate) fn birth_operator_group_at(
@@ -734,12 +720,7 @@ impl<'a> Scope<'a> {
         members: &[KeywordSymbol],
         mode: ReductionMode,
     ) -> DeliveredOperatorGroup {
-        let owner = brand
-            .handle()
-            .host()
-            .upgrade()
-            .expect("a live region brand implies a live region owner");
-        KoanRegion::yoke_branded::<OperatorGroupFamily, _>(owner, |brand| {
+        KoanRegion::yoke_branded::<OperatorGroupFamily, _>(brand.frame(), |brand| {
             OperatorGroup::alloc(brand, members, mode)
         })
     }

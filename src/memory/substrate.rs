@@ -24,8 +24,8 @@ use super::region::{FrameStorage, KoanStorageProfile};
 // library's.
 pub use workgraph::witnessed::{
     And, BumpAllocator, BumpBackedMap, BumpVec, Carrier, CellRef, DropFree, HasRegionHandle,
-    PinsRegion, ReachDescription, Reattachable, Region, RegionHost, SealedExtern, StepCoverage,
-    StorageProfile, Within, WitnessRegion, erase_to_static, reattachable,
+    PinsRegion, ReachDescription, Reattachable, ReferenceFamily, Region, RegionHost, SealedExtern,
+    StepCoverage, StorageProfile, Within, WitnessRegion, erase_to_static, reattachable,
 };
 
 /// The custom-allocator `Vec` [`BumpVec`] is an instance of, with the allocator trait and the

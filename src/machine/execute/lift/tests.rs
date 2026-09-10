@@ -14,9 +14,9 @@ use crate::memory::{
 use smallvec::SmallVec;
 
 use crate::machine::Scope;
-use crate::machine::core::ScopeId;
-use crate::memory::CallFrame;
+use crate::machine::core::CallFrame;
 use crate::memory::RegionHandleFamily;
+use crate::memory::ScopeId;
 
 /// Koan's destination-operand family, fixed to the storage profile — the `Delivered::destination`
 /// operand's handle family, named for the merge turbofish.
@@ -199,8 +199,8 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
 /// payload substrate lives in `dest`'s region, not the source's, and the `type_id` rides unchanged.
 #[test]
 fn wrapped_relocation_rebuilds_payload_into_dest() {
-    use crate::machine::core::ScopeId;
     use crate::machine::model::TypeNode;
+    use crate::memory::ScopeId;
     let program = program_storage();
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
@@ -472,7 +472,7 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
 }
 
 /// A `KFunction` allocated into `home`'s region wrapped in a `Record` field, both born through
-/// `home`'s own brand (not a transient `with_scope` sub-brand) so the reference escapes at `home`'s
+/// `home`'s own brand (not a transient `with_resident` sub-brand) so the reference escapes at `home`'s
 /// own lifetime — the shape a list-literal cell born from `({f = (FN …)})` takes.
 fn alloc_home_closure_record<'run>(
     home: &'run Rc<CallFrame>,

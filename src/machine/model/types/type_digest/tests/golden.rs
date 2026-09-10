@@ -13,7 +13,6 @@
 use std::collections::HashMap;
 
 use super::super::{TypeDigest, empty_schema_digest, schema_content_digest};
-use crate::machine::core::ScopeId;
 use crate::machine::model::DispatchTokenElement;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
@@ -21,6 +20,7 @@ use crate::machine::model::TypeSymbol;
 use crate::machine::model::types::{
     KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeMemberMap, TypeNode,
 };
+use crate::memory::ScopeId;
 
 /// A fixture's Type-class name as the [`TypeSymbol`] the schema and node types key by. The pins
 /// here compare digests and never render, so the pure probe constructor is enough.

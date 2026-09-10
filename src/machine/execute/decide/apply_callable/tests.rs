@@ -360,8 +360,8 @@ fn value_type_argument_is_refused() {
 /// family, so an `OfKind` slot expecting a type constructor admits it.
 #[test]
 fn constructor_apply_over_abstract_slot_is_a_type_constructor() {
-    use crate::machine::core::ScopeId;
     use crate::machine::model::KKind;
+    use crate::memory::ScopeId;
     let registries = RunRegistries::new();
     let types = &registries.types;
     let wrap = crate::builtins::test_support::type_name("Wrap", &registries);

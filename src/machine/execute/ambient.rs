@@ -13,8 +13,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::machine::core::CallFrame;
 use crate::machine::model::RunRegistries;
-use crate::memory::CallFrame;
 
 use super::harness::Host;
 use super::nodes::NodePayload;

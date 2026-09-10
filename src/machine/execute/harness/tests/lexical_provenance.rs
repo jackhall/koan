@@ -56,7 +56,7 @@ fn sibling_statements_in_inner_block_share_parent_rc() {
     assert!(chain_a.parent.is_none());
     assert!(chain_b.parent.is_none());
     let parent_chain = chain_a.clone();
-    let inner_scope_id = crate::machine::core::ScopeId::next();
+    let inner_scope_id = crate::memory::ScopeId::next();
     // Push sibling frames directly; `execute` does this via `enter_block`
     // during a slot's run.
     let inner_a = crate::machine::LexicalFrame::push(Some(parent_chain.clone()), inner_scope_id, 0);

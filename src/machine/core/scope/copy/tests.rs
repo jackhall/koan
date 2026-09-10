@@ -14,13 +14,13 @@ use std::rc::Rc;
 use super::*;
 use crate::builtins::test_support::{TestRun, value_name};
 use crate::builtins::test_support::{operator_run, probe_symbol};
+use crate::machine::core::CallFrame;
 use crate::machine::core::bindings::OperatorEntry;
 use crate::machine::core::bindings::{BindingIndex, WriteGate};
 use crate::machine::core::kfunction::Body;
 use crate::machine::core::seals::GroupSeal;
 use crate::machine::core::tests::{body_no_op, unit_signature};
 use crate::machine::model::{KeywordSymbol, OperatorGroup, ReductionMode, RunRegistries};
-use crate::memory::CallFrame;
 use crate::memory::FoldedPlacement;
 use crate::memory::{program_storage, run_root_storage};
 
@@ -96,7 +96,7 @@ fn a_self_capturing_binding_copies_to_one_that_binds_the_copy() {
     let registries = RunRegistries::new();
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
-    frame.with_scope(|source| {
+    frame.with_resident(|source| {
         let top = bind_self_capturing(source, "f", 0, &registries);
         source.close();
 
@@ -126,7 +126,7 @@ fn sibling_bindings_copy_to_closures_over_one_copied_scope() {
     let registries = RunRegistries::new();
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
-    frame.with_scope(|source| {
+    frame.with_resident(|source| {
         bind_self_capturing(source, "a", 0, &registries);
         bind_self_capturing(source, "b", 1, &registries);
         let top = bind_self_capturing(source, "top", 2, &registries);
@@ -164,7 +164,7 @@ fn the_eternal_home_is_referenced_verbatim() {
     let registries = RunRegistries::new();
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
-    frame.with_scope(|source| {
+    frame.with_resident(|source| {
         let top = bind_self_capturing(source, "f", 0, &registries);
         source.close();
         let eternal = source.innermost_eternal_home();
@@ -192,7 +192,7 @@ fn an_open_source_chain_declines() {
     let registries = RunRegistries::new();
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
-    frame.with_scope(|source| {
+    frame.with_resident(|source| {
         let top = bind_self_capturing(source, "f", 0, &registries);
         // Deliberately left open: a further bind is still legal, so a copy could miss one.
         assert!(
@@ -246,7 +246,7 @@ fn an_operator_registration_copies_over_one_reborn_record() {
     let registries = RunRegistries::new();
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
-    frame.with_scope(|source| {
+    frame.with_resident(|source| {
         let (source_address, probes) = register_powerset(source, &registries);
         let top = bind_self_capturing(source, "f", 0, &registries);
         source.close();
@@ -291,7 +291,7 @@ fn a_copied_group_body_shares_one_record_between_its_kind_and_its_table() {
     let registries = RunRegistries::new();
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
-    frame.with_scope(|outer| {
+    frame.with_resident(|outer| {
         let source = Scope::alloc_group_child(
             outer,
             &[probe_symbol("⊕"), probe_symbol("⊗")],
@@ -340,7 +340,7 @@ fn a_copied_table_preserves_the_upsert_decisions() {
     let registries = RunRegistries::new();
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
-    frame.with_scope(|source| {
+    frame.with_resident(|source| {
         let (_, probes) = register_powerset(source, &registries);
         let top = bind_self_capturing(source, "f", 0, &registries);
         source.close();
@@ -390,7 +390,7 @@ fn an_operator_table_prices_its_rebuild() {
     let registries = RunRegistries::new();
     let frame: Rc<CallFrame> = test_run.scope.open_frame();
 
-    frame.with_scope(|source| {
+    frame.with_resident(|source| {
         let before = source.bindings().binding_copy_cost();
         let (_, probes) = register_powerset(source, &registries);
         let charged = source.bindings().binding_copy_cost() - before;
@@ -432,7 +432,7 @@ fn copied_cost(copy: &KFunction<'_>) -> u64 {
 /// binding itself contributes.
 fn copied_cost_without_operators<'a>(outer: &'a Scope<'a>, registries: &RunRegistries) -> u64 {
     let frame: Rc<CallFrame> = outer.open_frame();
-    frame.with_scope(|source| {
+    frame.with_resident(|source| {
         let top = bind_self_capturing(source, "f", 0, registries);
         source.close();
         copied_cost(consolidated(top, door_over(source)))

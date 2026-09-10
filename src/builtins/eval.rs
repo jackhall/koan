@@ -2,8 +2,8 @@ use crate::machine::WriteGate;
 use std::rc::Rc;
 
 use crate::machine::Scope;
+use crate::machine::core::CallFrame;
 use crate::machine::model::KType;
-use crate::memory::CallFrame;
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
