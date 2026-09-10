@@ -20,6 +20,10 @@ pub mod source;
 /// of koan's real API.
 #[doc(hidden)]
 pub mod step_fixture;
+/// The type lattice: the node vocabulary, the interning registry, the identity recipe, the
+/// relations between types and the unifier — a closed algebra over labels and `ScopeId`, with no
+/// value, cell, AST or scope type reachable from it.
+pub mod type_lattice;
 /// The workload-generic DAG scheduler, re-exported from the `workgraph` crate so `machine` and
 /// integration tests keep resolving `koan::scheduler::…` paths unchanged. The carrier substrate
 /// beside it reaches Koan through [`memory`], never from here.

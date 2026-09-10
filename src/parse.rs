@@ -42,8 +42,8 @@ pub use forms::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinde
 pub use forms::lazy::LazyKinds;
 pub use labels::{
     BindKind, BinderSymbol, ClassifiedSymbol, IdentityBuildHasher, IdentityHasher, KeywordSymbol,
-    LabelInterner, StaticName, Symbol, TypeSymbol, ValueSymbol, WILDCARD, is_keyword_token,
-    is_type_name, snake_case_identifier, wrong_binder_class,
+    LabelDisplay, LabelInterner, StaticName, Symbol, TypeSymbol, ValueSymbol, WILDCARD,
+    is_keyword_token, is_type_name, snake_case_identifier, wrong_binder_class,
 };
 
 pub(crate) use forms::binder::{
