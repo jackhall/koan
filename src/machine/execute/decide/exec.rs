@@ -202,8 +202,12 @@ fn enter_user_fn<'step>(
         false => &named_carriers,
     };
     // Chained off the closure's captured (definition) scope, so a closure's captured per-call frame
-    // survives the hop while the caller's cart does not.
-    let frame = function.captured_scope().open_frame();
+    // survives the hop while the caller's cart does not. The frame's value bindings are slotted by
+    // the callee's own layout — parameters plus body binders, fixed at its definition — so the cart
+    // costs one sized bump rather than a table built from nothing.
+    let frame = function
+        .captured_scope()
+        .open_frame_slotted(function.slot_layout());
     let exec_frame = ExecFrame {
         region: Rc::clone(&frame),
     };

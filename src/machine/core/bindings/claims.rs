@@ -1,13 +1,14 @@
 //! The scope's **claim store**: the in-flight binders of the one block that binds into this scope,
-//! and nothing else. A claim is not a table entry — the binding maps beside this hold committed
-//! bindings only, so each of them states its own exclusivity rule with no in-flight arm to admit.
+//! on the two channels whose claims have nowhere else to live. The **value** channel is not one of
+//! them — a value name's three states ride one cell in the value store itself
+//! ([`values`](super::values)), so the only trace a value claim leaves here is the retirement
+//! record below, which names it without holding its state.
 //!
 //! Three parts, each answering exactly one question:
 //!
-//! - [`ClaimStore::name_claim`] reads `by_name` — the name channel's read path, one hash probe on
-//!   the miss that would otherwise raise `UnboundName`. One map covers value and type claims alike,
-//!   keyed by the raw [`Symbol`]: the two bindable classes — value tokens and Type tokens —
-//!   classify disjoint text, so the two channels cannot collide on a key.
+//! - [`ClaimStore::type_claim`] reads `by_type` — the type-name channel's read path, one hash probe
+//!   on the miss that would otherwise raise an unbound-type diagnostic. Keyed by [`TypeSymbol`],
+//!   the same vocabulary the `types` map it answers beside is keyed by.
 //! - [`ClaimStore::bucket_claim`] reads `by_bucket` — the bucket channel's read path, keyed on the
 //!   same full stored run `functions` is, so one key reaches both. A key admits several sibling
 //!   binders, each at its own [`BindingIndex`], so the value is a run and the read returns the
@@ -15,7 +16,9 @@
 //! - `by_statement` is the **retirement** path: a run sized at the block fan-out and indexed by
 //!   `BindingIndex`, each entry naming the at-most-three keys its statement claimed plus a live mask
 //!   over them. It is the only part keyed by something other than what a reader looks up, which is
-//!   what lets a retiring slot find its own claims from the one address it knows about itself.
+//!   what lets a retiring slot find its own claims from the one address it knows about itself. A
+//!   value-name claim is recorded here too — the record is how a retiring statement finds a claim it
+//!   left in the value store, which is a name to forward, not a claim to hold.
 //!
 //! Retirement is therefore an array index and a zero test on the success path — the commit already
 //! removed each claim as it wrote — and at most three direct removals otherwise. Nothing is
@@ -38,7 +41,7 @@ use crate::machine::ProducerId;
 use crate::machine::model::KeyElement;
 #[cfg(test)]
 use crate::machine::model::UntypedKey;
-use crate::machine::model::{IdentityBuildHasher, Symbol};
+use crate::machine::model::{IdentityBuildHasher, TypeSymbol, ValueSymbol};
 use crate::memory::RegionBrand;
 use crate::memory::{BumpBackedMap, BumpVec};
 
@@ -65,13 +68,22 @@ const NAME_BIT: u8 = 1 << 0;
 /// bridge key), which is what keeps the record fixed-size.
 const BUCKET_BITS: [u8; 2] = [1 << 1, 1 << 2];
 
+/// The name one statement claimed, tagged with the channel it resolves in. A `Type` names a claim
+/// this store holds; a `Value` names one the value store holds, and retirement forwards the name
+/// there rather than removing anything here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum NameClaim {
+    Value(ValueSymbol),
+    Type(TypeSymbol),
+}
+
 /// One statement's claims: at most one name and at most two bucket keys, all at one
 /// [`BindingIndex`]. The keys are the ones the read maps are keyed on, so retirement removes them
 /// directly rather than reconstructing them. `live` says which channels are still unretired — a
 /// commit clears its own bit as it writes, so a zero mask is the whole of the success path.
 #[derive(Clone, Copy)]
 struct ClaimRecord<'a> {
-    name: Option<Symbol>,
+    name: Option<NameClaim>,
     buckets: [Option<&'a [KeyElement]>; 2],
     live: u8,
 }
@@ -95,7 +107,7 @@ impl<'a> ClaimRecord<'a> {
 type BucketClaims<'a> = ManuallyDrop<BumpVec<'a, Claim>>;
 
 pub(crate) struct ClaimStore<'a> {
-    by_name: BumpBackedMap<'a, Symbol, Claim, IdentityBuildHasher>,
+    by_type: BumpBackedMap<'a, TypeSymbol, Claim, IdentityBuildHasher>,
     by_bucket: BumpBackedMap<'a, &'a [KeyElement], BucketClaims<'a>>,
     /// Indexed by [`BindingIndex::idx`]. Sized once at the block fan-out; a statement-at-a-time
     /// door builds no store, so a claim arriving through one grows the run to reach its own index.
@@ -109,7 +121,7 @@ impl<'a> ClaimStore<'a> {
     /// An empty store over `brand`'s region — the same bump every binding map's storage lives in.
     pub(super) fn new(brand: RegionBrand<'a>) -> Self {
         ClaimStore {
-            by_name: bump_table(brand),
+            by_type: bump_table(brand),
             by_bucket: bump_table(brand),
             by_statement: BumpVec::new_in(brand.allocator()),
             fanned_out: false,
@@ -150,13 +162,13 @@ impl<'a> ClaimStore<'a> {
     /// ([`Scope::is_copy_ready`](crate::machine::core::Scope)) reads this, and a claim there is
     /// exactly the unfinalized binding that downgrades the copy to a pin.
     pub(super) fn is_empty(&self) -> bool {
-        self.by_name.is_empty() && self.by_bucket.values().all(|claims| claims.is_empty())
+        self.by_type.is_empty() && self.by_bucket.values().all(|claims| claims.is_empty())
     }
 
-    /// The claim standing on `name`, whatever channel it resolves in. Visibility is the caller's:
-    /// the resolution walk filters, and the finalize gate's dependency tracking does not.
-    pub(super) fn name_claim(&self, name: Symbol) -> Option<Claim> {
-        self.by_name.get(&name).copied()
+    /// The claim standing on the type name `name`. Visibility is the caller's: the resolution walk
+    /// filters, and the finalize gate's dependency tracking does not.
+    pub(super) fn type_claim(&self, name: TypeSymbol) -> Option<Claim> {
+        self.by_type.get(&name).copied()
     }
 
     /// The earliest-index visible claim on a bucket key — the sibling most likely to finalize
@@ -175,18 +187,30 @@ impl<'a> ClaimStore<'a> {
             .map(|claim| claim.producer)
     }
 
-    /// Stamp `claim` on `name`. The key is a `Copy` digest, so nothing re-homes. Returns the
-    /// standing claim if one already holds the name — the caller rules on whether that is a
-    /// re-entry of the same producer or a collision.
-    pub(super) fn claim_name(&mut self, name: Symbol, claim: Claim) -> Result<(), Claim> {
-        if let Some(standing) = self.by_name.get(&name).copied() {
+    /// Stamp `claim` on the type name `name`. The key is a `Copy` digest, so nothing re-homes.
+    /// Returns the standing claim if one already holds the name — the caller rules on whether that
+    /// is a re-entry of the same producer or a collision.
+    pub(super) fn claim_type(&mut self, name: TypeSymbol, claim: Claim) -> Result<(), Claim> {
+        if let Some(standing) = self.by_type.get(&name).copied() {
             return Err(standing);
         }
-        self.by_name.insert(name, claim);
-        let record = self.record_mut(claim.index);
+        self.by_type.insert(name, claim);
+        self.note_name(claim.index, NameClaim::Type(name));
+        Ok(())
+    }
+
+    /// Record that the statement at `index` claimed the **value** name `name` — the claim itself
+    /// lives in the value store's own cell, and this is the address a retiring statement finds it
+    /// from. No map here holds it, so nothing is removed when it retires: the name is forwarded.
+    pub(super) fn note_value_claim(&mut self, index: BindingIndex, name: ValueSymbol) {
+        self.note_name(index, NameClaim::Value(name));
+    }
+
+    /// The shared half of both name stamps: mark the statement's name channel live.
+    fn note_name(&mut self, index: BindingIndex, name: NameClaim) {
+        let record = self.record_mut(index);
         record.name = Some(name);
         record.live |= NAME_BIT;
-        Ok(())
     }
 
     /// Stamp `claim` on a bucket key. **Append, never deduplicate**: sibling binders sharing one
@@ -223,8 +247,10 @@ impl<'a> ClaimStore<'a> {
     }
 
     /// Retire the name claim `index` stamped, if it is still standing — the name channel's half of
-    /// "a commit retires its own claim". One hash removal and one bit, with nothing searched.
-    pub(super) fn retire_name(&mut self, name: Symbol, index: BindingIndex) {
+    /// "a commit retires its own claim". One bit, with nothing searched, plus the hash removal a
+    /// type claim needs; a value claim's own cell was already replaced by the commit, so clearing
+    /// the bit is the whole of it.
+    pub(super) fn retire_name(&mut self, name: NameClaim, index: BindingIndex) {
         let standing = match self.by_statement.get_mut(index.idx) {
             Some(record)
                 if record.live & NAME_BIT != 0 && record.name.is_some_and(|held| held == name) =>
@@ -234,8 +260,8 @@ impl<'a> ClaimStore<'a> {
             }
             _ => false,
         };
-        if standing {
-            self.by_name.remove(&name);
+        if let (true, NameClaim::Type(name)) = (standing, name) {
+            self.by_type.remove(&name);
         }
     }
 
@@ -257,21 +283,26 @@ impl<'a> ClaimStore<'a> {
         self.drop_bucket_claim(stored, index);
     }
 
-    /// Retire every claim `index` still holds. A zero mask is the whole of the success path — the
-    /// commit removed each claim as it wrote — and a non-zero one names the at-most-three keys
-    /// still standing, each removed from its read map directly.
-    pub(super) fn retire_statement(&mut self, index: BindingIndex) {
-        let Some(record) = self.by_statement.get(index.idx).copied() else {
-            return;
-        };
+    /// Retire every claim `index` still holds, and hand back the **value** name among them for the
+    /// caller to drop from the value store — the one channel whose state this does not own. A zero
+    /// mask is the whole of the success path (the commit removed each claim as it wrote) and a
+    /// non-zero one names the at-most-three keys still standing, each removed directly.
+    pub(super) fn retire_statement(&mut self, index: BindingIndex) -> Option<ValueSymbol> {
+        let record = self.by_statement.get(index.idx).copied()?;
         if record.live == 0 {
-            return;
+            return None;
         }
-        if record.live & NAME_BIT != 0
-            && let Some(name) = record.name
-            && self.by_name.get(&name).is_some_and(|c| c.index == index)
-        {
-            self.by_name.remove(&name);
+        let mut value_name = None;
+        if record.live & NAME_BIT != 0 {
+            match record.name {
+                Some(NameClaim::Value(name)) => value_name = Some(name),
+                Some(NameClaim::Type(name))
+                    if self.by_type.get(&name).is_some_and(|c| c.index == index) =>
+                {
+                    self.by_type.remove(&name);
+                }
+                Some(NameClaim::Type(_)) | None => {}
+            }
         }
         for (slot, bit) in BUCKET_BITS.iter().enumerate() {
             if record.live & bit != 0
@@ -281,6 +312,7 @@ impl<'a> ClaimStore<'a> {
             }
         }
         self.by_statement[index.idx].live = 0;
+        value_name
     }
 
     /// Drop `index`'s entry from `stored`'s claim run. The emptied run stays keyed: a reader takes
@@ -292,8 +324,9 @@ impl<'a> ClaimStore<'a> {
         }
     }
 
-    /// Every producer behind a claim visible at `cutoff`, deduped — name claims and bucket claims
-    /// alike. The implicit-close scan reads it: a `CLOSE OVER` block copies the registrations and
+    /// Every producer behind a claim visible at `cutoff`, deduped — type-name claims and bucket
+    /// claims alike; the value channel folds its own in beside this. The implicit-close scan reads
+    /// it: a `CLOSE OVER` block copies the registrations and
     /// module bindings standing in the per-call chain, so it must wait on every lexically-earlier
     /// binder still in flight rather than close over whichever ones happened to land first. The
     /// wait is well-founded for the same reason every other claim park is — the exclusive cutoff
@@ -313,7 +346,7 @@ impl<'a> ClaimStore<'a> {
                 producers.push(claim.producer);
             }
         };
-        for claim in self.by_name.values() {
+        for claim in self.by_type.values() {
             push(claim);
         }
         for claims in self.by_bucket.values() {
@@ -324,11 +357,11 @@ impl<'a> ClaimStore<'a> {
         producers
     }
 
-    /// Every standing name claim, as `(name, producer)` — the hygiene probe behind
-    /// [`Bindings::pending_names`].
+    /// Every standing type-name claim, as `(name, claim)` — the type half of the hygiene probe
+    /// behind [`Bindings::pending_names`].
     #[cfg(test)]
-    pub(super) fn name_claims(&self) -> Vec<(Symbol, Claim)> {
-        self.by_name
+    pub(super) fn type_claims(&self) -> Vec<(TypeSymbol, Claim)> {
+        self.by_type
             .iter()
             .map(|(name, claim)| (*name, *claim))
             .collect()

@@ -56,6 +56,7 @@ pub(crate) use ast::{
 pub(crate) use binder::MACHINE_BINDERS;
 pub(crate) use binder::admit_bare_type_slots;
 pub(crate) use binder::announce_type_members;
+pub(crate) use binder::layout::{SlotLayout, SlotLayoutRefFamily};
 pub(crate) use binder::signature::{SignaturePosition, SignatureScan};
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
 pub(crate) use binder::{OpArity, op_declaration_arity};

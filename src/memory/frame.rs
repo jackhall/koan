@@ -221,13 +221,31 @@ impl<K: Reattachable + DropFree> Frame<ReferenceFamily<K>> {
         outer: &'a K::At<'a>,
         child: impl for<'b> FnOnce(&'b K::At<'b>, RegionBrand<'b>) -> K::At<'b>,
     ) -> Rc<Self> {
+        Self::open_under_with::<ReferenceFamily<K>>(
+            parent,
+            SealedExtern::<ReferenceFamily<K>>::erase(outer),
+            child,
+        )
+    }
+
+    /// [`open_under`](Self::open_under) over an arbitrary **operand family**: the door for a
+    /// resident whose birth needs more than the lexical parent — a zipped pair carrying the parent
+    /// beside plain data the child stores, say. `open_under` is its [`ReferenceFamily`] instance,
+    /// so the two share one pin chain, one generative brand and one residence argument.
+    ///
+    /// The operand arrives already erased, which is what lets a caller
+    /// [`zip`](SealedExtern::zip) heterogeneous carriers into one: they re-anchor together at the
+    /// single `'b` the birth brands, exactly as the lone parent reference does.
+    pub(crate) fn open_under_with<'a, Op: Reattachable + DropFree>(
+        parent: RegionBrand<'a>,
+        operand: SealedExtern<Op>,
+        child: impl for<'b> FnOnce(Op::At<'b>, RegionBrand<'b>) -> K::At<'b>,
+    ) -> Rc<Self> {
         let storage = RegionHost::fresh(parent.parent_frame_pin());
         let handle = RegionHandle::from_owner(&*storage);
-        let live = handle.bump_born_with::<K, ReferenceFamily<K>, _>(
-            SealedExtern::<ReferenceFamily<K>>::erase(outer),
-            &storage,
-            |placement, outer_b| child(outer_b, RegionBrand(placement.handle())),
-        );
+        let live = handle.bump_born_with::<K, Op, _>(operand, &storage, |placement, operand_b| {
+            child(operand_b, RegionBrand(placement.handle()))
+        });
         let envelope = handle.deliver_resident::<ReferenceFamily<K>>(live);
         Self::around(storage, envelope)
     }

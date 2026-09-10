@@ -10,6 +10,7 @@
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::model::Held;
+use crate::machine::model::binder::layout::SlotLayout;
 use crate::machine::model::labels::{
     BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol,
 };
@@ -430,6 +431,7 @@ pub struct KExpression<'a> {
     operator_probe: Option<KeywordSymbol>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
     binder_name_slot: Option<usize>,
+    body_layout: &'a SlotLayout<'a>,
     lazy_slots: Option<&'static LazySlotSpec>,
 }
 
@@ -530,6 +532,7 @@ impl<'a> KExpression<'a> {
             operator_probe: cache.operator_probe,
             binder_plan: None,
             binder_name_slot: None,
+            body_layout: SlotLayout::EMPTY,
             lazy_slots: crate::machine::model::lazy_slots::lazy_slot_spec_for(parts),
         };
         // One spec-table probe fills both binder caches. The plan is bumped behind a reference
@@ -541,6 +544,11 @@ impl<'a> KExpression<'a> {
                 crate::machine::model::binder::binder_plan_from_spec(brand, spec, &expression)
                     .map(|key| brand.allocator().value(key));
         }
+        // The value binders this node would open a frame over, read off the same statement plans
+        // the claim stamp and the `CLOSE` capture walk read. Filled for every node — a node is a
+        // body only where a callable names it as one, and the read is a walk of plans already
+        // cached on the statements it wraps.
+        expression.body_layout = SlotLayout::of_body(brand, &expression);
         expression
     }
 
@@ -560,6 +568,14 @@ impl<'a> KExpression<'a> {
         RunIter<I>: ExactSizeIterator,
     {
         brand.allocator().value(Self::new_from_iter(brand, parts))
+    }
+
+    /// The [`SlotLayout`] of this node **as a body**: the value binders its statements declare,
+    /// each at the lexical position its statement submits at. Computed at construction beside the
+    /// binder plan it is read from, and homed in this node's own region — never in a frame's, which
+    /// a spliced-out array could outlive.
+    pub fn body_layout(&self) -> &'a SlotLayout<'a> {
+        self.body_layout
     }
 
     /// This node's own binder plan — `Some` iff this node is itself a binder.

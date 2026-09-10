@@ -313,7 +313,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     // `Bad` is a Type token and `data` keys by `ValueSymbol`, so no key spells it; what the
     // rejection means for the value table is that it stayed empty.
     assert!(
-        scope.bindings().data().is_empty(),
+        scope.bindings().bound_value_count() == 0,
         "SIG with lowercase-LET in body must not bind",
     );
     // Verify the diagnostic shape directly against a synthetic SIG scope — the

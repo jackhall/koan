@@ -56,6 +56,7 @@ pub mod frame;
 pub mod program;
 pub mod region;
 pub mod scope_id;
+mod slots;
 pub mod substrate;
 
 #[cfg(test)]
@@ -68,4 +69,5 @@ pub use region::{
 };
 pub(crate) use region::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, bump_table};
 pub use scope_id::ScopeId;
+pub use slots::{SlotArray, SlotConflict, SlotState};
 pub use substrate::*;

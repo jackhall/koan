@@ -1,17 +1,20 @@
-//! Lexical binding façade: one `RefCell<Tables>` — `types`, `data`, `functions`, `operators`, and
-//! the [`ClaimStore`] beside them — behind validated write paths. The four maps hold **committed
-//! bindings only**; a still-finalizing binder's claim lives in the store ([`claims`]), so a lookup
-//! answers "bound" from its own table's probe and "parked" from the store's, and each table states
-//! its own exclusivity rule with no in-flight arm to admit. `data` and `functions` are
-//! separate surfaces: a `data` entry is a value binding, callable by **name** alone (the
+//! Lexical binding façade: two `RefCell`s — the **value channel** ([`values`], keyed or slotted,
+//! owning its own claims) and the **keyed channel** beside it (`types`, `functions`, `operators`
+//! and the [`ClaimStore`]) — behind validated write paths. On the keyed channel the maps hold
+//! **committed bindings only** and a still-finalizing binder's claim lives in the store
+//! ([`claims`]), so a lookup answers "bound" from its own table's probe and "parked" from the
+//! store's; on the value channel one three-state cell answers both, so a value read is one probe
+//! and no store consult. `data` and `functions` are
+//! separate surfaces: a value binding is callable by **name** alone (the
 //! `FunctionValueCall` lane), while a `functions` bucket holds the keyworded overloads a `FN` /
 //! `OP` registration installs — binding a function *value* publishes no keyworded expression.
 //! Nominal type declarations (NEWTYPE / UNION / SIG) install their identity into `types` only —
-//! there is no value-side carrier; a module is a value and binds into `data`. The `data` and
-//! `types` maps are a structural partition, and the key types are what enforce it: `data` is keyed
-//! by [`ValueSymbol`] and `types` by [`TypeSymbol`], newtypes minted only from text of their own
-//! token class, so a name reaching both maps is unrepresentable rather than rejected. A name that
-//! classifies in neither is rejected where the text is classified — the declaration seams.
+//! there is no value-side carrier; a module is a value and binds into the value channel. The value
+//! channel and `types` are a structural partition, and the key types are what enforce it: the value
+//! channel is keyed by [`ValueSymbol`] and `types` by [`TypeSymbol`], newtypes minted only from
+//! text of their own token class, so a name reaching both is unrepresentable rather than rejected.
+//! A name that classifies in neither is rejected where the text is classified — the declaration
+//! seams.
 //!
 //! Every write verb here takes a [`WriteGate`] — the zero-sized capability whose constructors are
 //! `pub(in crate::machine)`. A builtin body cannot mint one, so it cannot name a write verb: the
@@ -20,14 +23,15 @@
 //! unrepresentable. See [`gate`] for the capability, [`ops`] for the currency, and
 //! [design/memory-model.md](../../../design/memory-model.md).
 //!
-//! There is no borrow order to keep: every verb takes exactly one borrow of the one cell, and a
-//! cross-map write is atomic under it.
+//! There is no borrow order to keep: **no verb holds both cells at once**. A verb touching both
+//! channels — a placeholder install that stamps a cell and records the statement that stamped it —
+//! takes them one after the other, so neither cell is ever borrowed across a call into the other.
 //!
 //! Every table lives in the scope's own **region bump** — bucket arrays and the text an entry
 //! carries alike — so dropping a table frees nothing and runs no per-entry glue, and frame death
 //! walks O(scopes) rather than O(entries). [`bump_table`] carries the compile-time proof that no
 //! entry brings drop glue with it; the write verbs re-home the text they store through the brand
-//! [`Bindings`] holds. The name-keyed tables key by a `Copy` [`Symbol`](crate::machine::model::Symbol)
+//! [`Bindings`] holds. The name-keyed keyed key by a `Copy` [`Symbol`](crate::machine::model::Symbol)
 //! digest under the identity
 //! hasher, so a name lookup is a `u128` compare rather than a byte-wise one and a key re-homes
 //! nothing at all.
@@ -69,6 +73,7 @@ use crate::machine::core::{DeliveredFunction, SealedFunction};
 use crate::machine::model::BindKind;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DeliveredCarried;
+use crate::machine::model::SlotLayout;
 use crate::machine::model::object_copy_cost;
 use crate::machine::model::{
     BinderSymbol, IdentityBuildHasher, KeywordSymbol, RunRegistries, TypeSymbol, ValueSymbol,
@@ -89,11 +94,14 @@ use super::kerror::{KError, KErrorKind};
 mod claims;
 mod gate;
 mod ops;
+mod values;
 
 pub use claims::Claim;
 pub(crate) use claims::ClaimStore;
+use claims::NameClaim;
 pub use gate::WriteGate;
 pub(crate) use ops::{TypeWritePolicy, WriteOp, powerset_probes};
+use values::ValueStore;
 
 /// A value binding's dormant carrier: the bound value fused to the exact reach description minted
 /// for it at bind time. The entry owns no pins — the binding scope's **region** owns the one deduped
@@ -110,10 +118,10 @@ pub type SealedValue<'home> = Sealed<'home, CarriedFamily>;
 /// up on the resolution path ([`crate::machine::model::TypeResolution`] /
 /// the execute-side `Resolution`).
 ///
-/// A `Bound` reads the name's own table; a `Parked` reads the [`ClaimStore`] beside it. The two
-/// live in different structures, each answering its own question, which is why the value side needs
-/// no exclusivity rule spanning them: a value name's claim is removed by the very commit that binds
-/// it.
+/// On the keyed channels a `Bound` reads the name's own table and a `Parked` reads the
+/// [`ClaimStore`] beside it — two structures, each answering its own question. On the value channel
+/// both arms are one cell's three states ([`values`]), so a commit *replaces* the claim it
+/// satisfies and the two can never disagree.
 #[derive(Copy, Clone, Debug)]
 pub enum NameLookup<T> {
     Bound(T),
@@ -136,34 +144,6 @@ impl<T> NameLookup<T> {
         match self {
             NameLookup::Bound(payload) => NameLookup::Bound(f(payload)),
             NameLookup::Parked(edge) => NameLookup::Parked(edge),
-        }
-    }
-}
-
-/// A value binding entry: its lexical [`BindingIndex`] and the dormant [`SealedValue`] carrier
-/// fusing the bound value with the exact reach description minted for it.
-///
-/// The entry owns **nothing**: liveness for every region the value reaches lives in the binding
-/// scope's region-owned union bundle, folded in by the mint that derived the entry's description
-/// ([`Scope::mint_retained`](crate::machine::core::Scope::mint_retained)) and dropped whole at
-/// region death. Bindings are bind-once and an entry never dies before its scope,
-/// so region death and entry death are the same schedule — the entry is `Copy`-cheap to read out
-/// and carries no `Drop`. Fusing value and reach in the seal keeps the write door from ever pairing
-/// a value with a reach derived for a different value.
-pub(crate) struct DataEntry<'a> {
-    index: BindingIndex,
-    sealed: SealedValue<'a>,
-}
-
-impl<'a> DataEntry<'a> {
-    /// A bit-copy of the entry — the dormant seal duplicated (value bit-copy + reference-only
-    /// witness clone, no refcount traffic) beside the `Copy` index. Every read
-    /// hands one of these out so no caller holds the `tables` borrow across a carrier build.
-    /// The one reader is the bulk-install snapshot, which is ascription-only.
-    fn duplicate(&self) -> Self {
-        DataEntry {
-            index: self.index,
-            sealed: self.sealed.duplicate(),
         }
     }
 }
@@ -248,7 +228,7 @@ pub struct FunctionLookup<'a, A: Allocator = Global> {
 
 /// One scope's visible contribution to a `CLOSE OVER` block's implicit close — see
 /// [`Bindings::visible_for_capture`], which is the only producer of one. Every field is a snapshot
-/// taken under a single `tables` borrow and released before the caller re-anchors anything, so no
+/// taken under a single `keyed` borrow and released before the caller re-anchors anything, so no
 /// table borrow is held across a carrier lift.
 /// Lifetime-free: every carrier is already **lifted** into a delivery envelope pinned by the
 /// table's own region owner, so the snapshot survives the borrow it was read under and the caller
@@ -257,13 +237,13 @@ pub struct FunctionLookup<'a, A: Allocator = Global> {
 pub(crate) struct VisibleBindings<A: Allocator> {
     /// Visible value bindings. The capture walk keeps the modules among them and drops the rest —
     /// plain data reaches the block only by explicit capture.
-    pub(crate) data: AllocVec<(ValueSymbol, DeliveredCarried), A>,
+    pub(crate) data: AllocVec<(ValueSymbol, BindingIndex, DeliveredCarried), A>,
     /// Every visible finalized overload, across all of this scope's buckets. The bucket key and the
     /// dispatch token are re-derived from each callable's own signature at the destination, so the
     /// envelope is the whole entry.
-    pub(crate) functions: AllocVec<DeliveredFunction, A>,
+    pub(crate) functions: AllocVec<(BindingIndex, DeliveredFunction), A>,
     /// Visible operator-registry entries, by probe key.
-    pub(crate) operators: AllocVec<(KeywordSymbol, DeliveredOperatorGroup), A>,
+    pub(crate) operators: AllocVec<(KeywordSymbol, BindingIndex, DeliveredOperatorGroup), A>,
     /// The producers behind every visible in-flight claim, name and bucket alike — what the block
     /// build parks on so its close is independent of drain order.
     pub(crate) claims: AllocVec<ProducerId, A>,
@@ -344,19 +324,18 @@ impl DeclarationSite {
     };
 }
 
-/// Every lexical binding of one scope, in one cell, beside the [`ClaimStore`] holding the block's
-/// in-flight binders. The maps carry committed bindings only; a claim is a store entry, so a name's
-/// two questions — "is it bound?" and "is a binder for it in flight?" — are one probe each of the
-/// structure that answers it. `data` and `types` are claimed by name (value/type forward
-/// references) — one claim channel for both, sound because the two key classes name disjoint text;
-/// `functions` by full dispatch bucket key, which keeps `(MAKESET _)` and `(MAKESET _ USING _)`
-/// from colliding.
+/// One scope's **name-keyed** bindings, in one cell, beside the [`ClaimStore`] holding the
+/// in-flight binders of the channels it covers. These maps carry committed bindings only; a claim
+/// is a store entry, so a name's two questions — "is it bound?" and "is a binder for it in flight?"
+/// — are one probe each of the structure that answers it. `types` is claimed by name; `functions`
+/// by full dispatch bucket key, which keeps `(MAKESET _)` and `(MAKESET _ USING _)` from colliding.
+/// The value channel is not here: it owns its bindings and its claims together ([`values`]).
 ///
 /// Every table is a `hashbrown` map over the scope's own region bump ([`BumpBackedMap`]), keyed by
 /// a `Copy` classified symbol or a bumped `&'a [KeyElement]` run, so a table's death frees
 /// nothing and walks no entry — which is what lets frame teardown cost O(scopes) rather than
 /// O(entries). Lookup is the same O(1) hash probe a std map would run.
-struct Tables<'a> {
+struct Keyed<'a> {
     /// Each bound type slot stores its type and its [`DeclarationSite`] — the installing
     /// [`Installer`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
     /// `KType` is a `Copy` handle into the run frame's registry, so an entry carries no reach: a
@@ -365,14 +344,6 @@ struct Tables<'a> {
     /// representation for it — a nominal's seal pre-installs the external identity here while its
     /// binder is still in flight, which is this map bound *and* the store claimed.
     types: BumpBackedMap<'a, TypeSymbol, (KType, DeclarationSite), IdentityBuildHasher>,
-    /// Each bound value slot stores its value fused to its exact reach in one dormant
-    /// [`SealedValue`], plus its lexical [`BindingIndex`]. Reads hand out a bit-copy of the seal
-    /// ([`Bindings::lookup_value`]) and re-anchor the value only under a pin, so a read replays the
-    /// stored claim rather than re-asserting single-frame co-location. Description members are
-    /// `Weak`, and the owning pins live in the region's union bundle rather than here — either a
-    /// strong member or a per-entry `Rc` on the scope's own frame would close a
-    /// `frame → region → scope → bindings → frame` cycle and leak the region.
-    data: BumpBackedMap<'a, ValueSymbol, DataEntry<'a>, IdentityBuildHasher>,
     /// Each sealed bucket slot stores its callable fused to its reach claim in one dormant
     /// [`SealedFunction`], beside the precomputed data the write path dedupes on
     /// ([`FunctionBucketEntry`]). An `FN` registration binds no value, and a value bind writes no
@@ -394,9 +365,9 @@ struct Tables<'a> {
     /// the whole install allocates nothing past its probe keys. Walked through the scope chain:
     /// innermost visible wins.
     operators: BumpBackedMap<'a, KeywordSymbol, OperatorEntry<'a>, IdentityBuildHasher>,
-    /// The in-flight binders of the one block that binds into this scope — see [`claims`]. Inside
-    /// `Tables` rather than beside `Bindings` so it rides the one cell and the one `ManuallyDrop`
-    /// with the maps it answers beside.
+    /// The in-flight binders of the one block that binds into this scope, on the channels this
+    /// cell holds — see [`claims`]. Inside `Keyed` rather than beside `Bindings` so it rides the one
+    /// cell and the one `ManuallyDrop` with the maps it answers beside.
     claims: ClaimStore<'a>,
 }
 
@@ -430,9 +401,9 @@ fn bump_bucket(brand: RegionBrand<'_>) -> Bucket<'_> {
 /// record, so the first key pays for the record and the rest pay only their own entry, which is
 /// exactly what the copy rebuilds. The scan is bounded by that same powerset, so it is bounded by
 /// the group's own (necessarily tiny) member count.
-fn operator_entry_weight(tables: &Tables<'_>, seal: &GroupSeal<'_>) -> u64 {
+fn operator_entry_weight(keyed: &Keyed<'_>, seal: &GroupSeal<'_>) -> u64 {
     let entry = (size_of::<OperatorEntry<'static>>() + seal.declaration.len()) as u64;
-    if tables
+    if keyed
         .operators
         .values()
         .any(|standing| standing.address == seal.address)
@@ -443,15 +414,17 @@ fn operator_entry_weight(tables: &Tables<'_>, seal: &GroupSeal<'_>) -> u64 {
     }
 }
 
-/// One scope's bindings: the four maps under a single [`RefCell`], and nothing else.
+/// One scope's bindings: the value channel and the keyed channel, one [`RefCell`] each.
 ///
-/// One cell rather than one per map: with writes reachable only under a [`WriteGate`], a read can
-/// never overlap a write, so per-map cells bought nothing but a borrow-ordering rule to obey. Every
-/// verb takes exactly one borrow, and a cross-map write — a value insert screened against `types`,
-/// a type insert screened against `data` — is atomic under it.
+/// Two cells rather than one per map or one for all: the value channel changes representation
+/// per scope kind and owns its own claims, so it is the one thing that has to be reachable
+/// independently; the three keyed maps and the store answering beside them share a cell for the
+/// reason they always did — with writes reachable only under a [`WriteGate`], a read can never
+/// overlap a write, so splitting them further would buy nothing but a borrow-ordering rule. **No
+/// verb holds both cells**: a write touching each takes them in turn.
 ///
 /// The brand rides beside the cell because a write re-homes the text it stores: a dispatch
-/// bucket's key and an overload's dispatch token all land in the same region the tables'
+/// bucket's key and an overload's dispatch token all land in the same region the keyed'
 /// buckets do, so a table never points at bytes that can die before it.
 /// `Reattachable` family for a **reference** to a [`Bindings`] table — `&'r Bindings<'r>`.
 /// Layout-invariant: the reference is a thin pointer independent of `'r`, whatever the table it
@@ -465,12 +438,18 @@ reattachable!(BindingsReferenceFamily => &'r Bindings<'r>);
 
 pub struct Bindings<'a> {
     brand: RegionBrand<'a>,
+    /// The value channel: name-addressed for a scope whose binding set is open, layout-addressed
+    /// for a per-call frame whose body enumerates its binders. It holds this channel's claims too,
+    /// so a value name's whole state is one cell read ([`values`]).
+    values: RefCell<ManuallyDrop<ValueStore<'a>>>,
+    /// `types`, `functions`, `operators` and the claim store answering beside them.
+    ///
     /// `ManuallyDrop` for [`Bucket`]'s reason, one level up: a `hashbrown` map has a destructor
     /// whose only act is to hand its bucket array back to the allocator, which for a bump-backed
     /// table is a no-op. Suppressing it is what makes [`Bindings`] contribute **zero** drop glue to
     /// the `Scope` holding it — the assert below is the proof, and it is what a scope skipping its
     /// own destructor rests on.
-    tables: RefCell<ManuallyDrop<Tables<'a>>>,
+    keyed: RefCell<ManuallyDrop<Keyed<'a>>>,
     /// **Monotone** sum of what totally rebuilding this scope's bound values would cost, in the
     /// same [`object_copy_cost`] currency a substrate prices its cells with — bumped by
     /// [`Self::write_value`] as each value bind applies, from the weight the bound value already
@@ -482,7 +461,7 @@ pub struct Bindings<'a> {
     /// Monotone because a binding is bind-once and an entry never dies before its scope, so the sum
     /// only ever grows and no write has to subtract. A `Cell` for the same reason
     /// [`Scope::closed`](crate::machine::core::Scope) is one: it is a plain `Copy` counter beside
-    /// the tables, not table state, and reading it takes no `tables` borrow.
+    /// the keyed, not table state, and reading it takes no `keyed` borrow.
     copy_cost: Cell<u64>,
 }
 
@@ -494,14 +473,27 @@ pub struct Bindings<'a> {
 const _: () = assert!(!std::mem::needs_drop::<Bindings<'static>>());
 
 impl<'a> Bindings<'a> {
-    /// Empty tables over `brand`'s region. There is no `Default`: a binding table cannot exist
-    /// without the region its storage lives in.
+    /// Empty keyed over `brand`'s region, with a **name-addressed** value channel. There is no
+    /// `Default`: a binding table cannot exist without the region its storage lives in.
     pub fn new(brand: RegionBrand<'a>) -> Self {
+        Self::over(brand, ValueStore::keyed(brand))
+    }
+
+    /// [`Self::new`] with a **layout-addressed** value channel — a per-call frame's keyed, whose
+    /// value bindings are one bump allocation sized by the body's own layout and whose other three
+    /// channels are keyed exactly as every scope's are.
+    pub fn slotted(brand: RegionBrand<'a>, layout: &'a SlotLayout<'a>) -> Self {
+        Self::over(brand, ValueStore::slotted(brand, layout))
+    }
+
+    /// The shared construction: the keyed cell, which every scope kind takes identically, beside
+    /// whichever value channel the caller chose.
+    fn over(brand: RegionBrand<'a>, values: ValueStore<'a>) -> Self {
         Self {
             brand,
-            tables: RefCell::new(ManuallyDrop::new(Tables {
+            values: RefCell::new(ManuallyDrop::new(values)),
+            keyed: RefCell::new(ManuallyDrop::new(Keyed {
                 types: bump_table(brand),
-                data: bump_table(brand),
                 functions: bump_table(brand),
                 operators: bump_table(brand),
                 claims: ClaimStore::new(brand),
@@ -510,41 +502,39 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    /// Whether no binder is still in flight into this table — no claim stands on either channel.
-    /// The unfinalized-binding half of the copy engine's readiness gate
+    /// The value channel's [`SlotLayout`], for the representation that has one — what a copied
+    /// scope re-homes to size its own array.
+    pub(crate) fn layout(&self) -> Option<&'a SlotLayout<'a>> {
+        self.values.borrow().layout()
+    }
+
+    /// Whether no binder is still in flight into this table — no claim stands on any channel. Two
+    /// counter reads and a bucket sweep, no probe of either name channel. The unfinalized-binding
+    /// half of the copy engine's readiness gate
     /// ([`Scope::is_copy_ready`](crate::machine::core::Scope)).
     pub(crate) fn has_no_claims(&self) -> bool {
-        self.tables.borrow().claims.is_empty()
+        self.values.borrow().has_no_claims() && self.keyed.borrow().claims.is_empty()
     }
 
     /// What totally rebuilding every value bound here would cost — the monotone memo
     /// [`Self::copy_cost`] accumulated at bind time, read in O(1) with no walk over the table and
-    /// no `tables` borrow.
+    /// no `keyed` borrow.
     pub(crate) fn binding_copy_cost(&self) -> u64 {
         self.copy_cost.get()
     }
 
-    /// Per-scope value-side lookup. One probe of `data[name]`, and on a miss one probe of the claim
-    /// store: a visible binding answers `Bound`, a visible claim answers `Parked` on its edge.
-    /// `cutoff = None` means the scope is off-chain (or unfiltered) — everything is visible. `None`
-    /// return means no visible entry at this scope; the caller keeps walking
-    /// ancestors, and chain exhaustion stays `None` (the terminal unbound
-    /// disposition is materialized on the resolution path, not here).
+    /// Per-scope value-side lookup. **One cell read**: a visible binding answers `Bound`, a visible
+    /// claim answers `Parked` on its edge, and neither consults a second structure — the value
+    /// channel holds both states in one place ([`values`]). `cutoff = None` means the scope is
+    /// off-chain (or unfiltered) — everything is visible. `None` return means no visible entry at
+    /// this scope; the caller keeps walking ancestors, and chain exhaustion stays `None` (the
+    /// terminal unbound disposition is materialized on the resolution path, not here).
     pub fn lookup_value(
         &self,
         name: ValueSymbol,
         cutoff: Option<usize>,
     ) -> Option<NameLookup<SealedValue<'a>>> {
-        let tables = self.tables.borrow();
-        if let Some(entry) = tables.data.get(&name) {
-            return Self::visible(entry.index, cutoff)
-                .then(|| NameLookup::Bound(entry.sealed.duplicate()));
-        }
-        tables
-            .claims
-            .name_claim(name.symbol())
-            .filter(|claim| Self::visible(claim.index, cutoff))
-            .map(|claim| NameLookup::Parked(claim.producer))
+        self.values.borrow().lookup(name, cutoff)
     }
 
     /// Per-scope type-side lookup. The type-language mirror of [`Self::lookup_value`]: one probe of
@@ -558,15 +548,15 @@ impl<'a> Bindings<'a> {
         name: TypeSymbol,
         cutoff: Option<usize>,
     ) -> Option<NameLookup<KType>> {
-        let tables = self.tables.borrow();
-        if let Some((kt, site)) = tables.types.get(&name)
+        let keyed = self.keyed.borrow();
+        if let Some((kt, site)) = keyed.types.get(&name)
             && Self::visible(site.index, cutoff)
         {
             return Some(NameLookup::Bound(*kt));
         }
-        tables
+        keyed
             .claims
-            .name_claim(name.symbol())
+            .type_claim(name)
             .filter(|claim| Self::visible(claim.index, cutoff))
             .map(|claim| NameLookup::Parked(claim.producer))
     }
@@ -583,15 +573,15 @@ impl<'a> Bindings<'a> {
         name: BinderSymbol,
         cutoff: Option<usize>,
     ) -> Option<MemberResolution<'a>> {
-        let tables = self.tables.borrow();
         match name {
-            BinderSymbol::Value(name) => {
-                let entry = tables.data.get(&name)?;
-                Self::visible(entry.index, cutoff)
-                    .then(|| MemberResolution::Value(entry.sealed.duplicate()))
-            }
+            BinderSymbol::Value(name) => self
+                .values
+                .borrow()
+                .bound(name, cutoff)
+                .map(MemberResolution::Value),
             BinderSymbol::Type(name) => {
-                let (kt, site) = tables.types.get(&name)?;
+                let keyed = self.keyed.borrow();
+                let (kt, site) = keyed.types.get(&name)?;
                 Self::visible(site.index, cutoff).then_some(MemberResolution::Type { kt: *kt })
             }
         }
@@ -604,10 +594,10 @@ impl<'a> Bindings<'a> {
     /// the name's external identity into `types`. Visibility-unfiltered: this is dependency
     /// tracking, not consumer-visibility enforcement.
     pub fn type_placeholder_producer(&self, name: TypeSymbol) -> Option<ProducerId> {
-        self.tables
+        self.keyed
             .borrow()
             .claims
-            .name_claim(name.symbol())
+            .type_claim(name)
             .map(|claim| claim.producer)
     }
 
@@ -630,7 +620,7 @@ impl<'a> Bindings<'a> {
     }
 
     /// The bucket channel's **claim** read: the earliest-index visible in-flight binder declaring
-    /// `key`, and nothing else. One hash probe of the store, copying nothing out, so the `tables`
+    /// `key`, and nothing else. One hash probe of the store, copying nothing out, so the `keyed`
     /// borrow is over before the answer is — a `ProducerId` is a plain edge name, unlike the sealed
     /// carriers [`FunctionLookup::overloads`] has to duplicate to let a candidate walk run outside
     /// the borrow. [`Self::lookup_function_probe`] fills its `pending` field from here, and the
@@ -641,7 +631,7 @@ impl<'a> Bindings<'a> {
         key: &[KeyElement],
         cutoff: Option<usize>,
     ) -> Option<ProducerId> {
-        self.tables.borrow().claims.bucket_claim(key, cutoff)
+        self.keyed.borrow().claims.bucket_claim(key, cutoff)
     }
 
     /// The one bucket read. Owned and bumped keys are runs of the same `Copy` element, so both
@@ -660,9 +650,9 @@ impl<'a> Bindings<'a> {
         cutoff: Option<usize>,
         alloc: A,
     ) -> FunctionLookup<'a, A> {
-        let tables = self.tables.borrow();
-        let pending = tables.claims.bucket_claim(key, cutoff);
-        let Some(bucket) = tables.functions.get(key) else {
+        let keyed = self.keyed.borrow();
+        let pending = keyed.claims.bucket_claim(key, cutoff);
+        let Some(bucket) = keyed.functions.get(key) else {
             return FunctionLookup {
                 overloads: AllocVec::new_in(alloc),
                 pending,
@@ -687,8 +677,8 @@ impl<'a> Bindings<'a> {
         probe: KeywordSymbol,
         cutoff: Option<usize>,
     ) -> Option<SealedOperatorGroup<'a>> {
-        let tables = self.tables.borrow();
-        let entry = tables.operators.get(&probe)?;
+        let keyed = self.keyed.borrow();
+        let entry = keyed.operators.get(&probe)?;
         Self::visible(entry.index, cutoff).then(|| entry.sealed.duplicate())
     }
 
@@ -713,8 +703,8 @@ impl<'a> Bindings<'a> {
         registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let mut tables = self.tables.borrow_mut();
-        if let Some(entry) = tables.operators.get(&probe) {
+        let mut keyed = self.keyed.borrow_mut();
+        if let Some(entry) = keyed.operators.get(&probe) {
             if entry.address == seal.address || entry.declaration == seal.declaration {
                 return Ok(());
             }
@@ -724,7 +714,7 @@ impl<'a> Bindings<'a> {
                  chaining mode or member set; one scope declares one chaining mode per operator",
             ))));
         }
-        self.install_operator_entry(&mut tables, probe, seal, index);
+        self.install_operator_entry(&mut keyed, probe, seal, index);
         Ok(())
     }
 
@@ -741,15 +731,15 @@ impl<'a> Bindings<'a> {
     /// site pays nothing beyond an address scan bounded by the group's own powerset.
     fn install_operator_entry(
         &self,
-        tables: &mut Tables<'a>,
+        keyed: &mut Keyed<'a>,
         probe: KeywordSymbol,
         seal: &GroupSeal<'a>,
         index: BindingIndex,
     ) {
-        let weight = operator_entry_weight(tables, seal);
+        let weight = operator_entry_weight(keyed, seal);
         self.copy_cost
             .set(self.copy_cost.get().saturating_add(weight));
-        tables.operators.insert(
+        keyed.operators.insert(
             probe,
             OperatorEntry {
                 index,
@@ -760,22 +750,21 @@ impl<'a> Bindings<'a> {
         );
     }
 
-    /// Snapshot every `(name, dormant carrier)` pair in `data`, ignoring visibility. Each
-    /// seal is a bit-copy; the caller re-anchors what it needs under its own pin. Claims are
-    /// structurally absent — the map holds committed bindings only — so nothing is filtered. For
-    /// chain-gated single-name reads use [`Self::lookup_value`].
+    /// Snapshot every committed `(name, dormant carrier)` pair on the value channel, ignoring
+    /// visibility. Each seal is a bit-copy; the caller re-anchors what it needs under its own pin.
+    /// A claimed cell is not committed, so nothing in flight surfaces here. For chain-gated
+    /// single-name reads use [`Self::lookup_value`].
     pub fn iter_data(&self) -> Vec<(ValueSymbol, SealedValue<'a>)> {
-        self.tables
+        let mut bound = Vec::new();
+        self.values
             .borrow()
-            .data
-            .iter()
-            .map(|(name, entry)| (*name, entry.sealed.duplicate()))
-            .collect()
+            .for_each_bound(|name, _, sealed| bound.push((name, sealed.duplicate())));
+        bound
     }
 
     /// Snapshot every `(name, KType)` pair in `types`, ignoring visibility.
     pub fn iter_types(&self) -> Vec<(TypeSymbol, KType)> {
-        self.tables
+        self.keyed
             .borrow()
             .types
             .iter()
@@ -788,7 +777,7 @@ impl<'a> Bindings<'a> {
     /// An empty bucket is skipped — a shape whose overloads all retired publishes no dispatch
     /// surface to snapshot. For chain-gated picks use [`Self::lookup_function_stored`].
     pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<SealedFunction<'a>>)> {
-        self.tables
+        self.keyed
             .borrow()
             .functions
             .iter()
@@ -809,7 +798,7 @@ impl<'a> Bindings<'a> {
     /// re-anchors what it needs under its own pin.
     pub fn iter_operator_groups(&self) -> Vec<SealedOperatorGroup<'a>> {
         let mut seen: Vec<usize> = Vec::new();
-        self.tables
+        self.keyed
             .borrow()
             .operators
             .iter()
@@ -828,7 +817,7 @@ impl<'a> Bindings<'a> {
     /// applies, so the block closes over exactly what a statement at that position could have
     /// resolved.
     ///
-    /// Four tables, one snapshot, because the walk visits each scope once and the four answers are
+    /// Four keyed, one snapshot, because the walk visits each scope once and the four answers are
     /// consumed together. `types` is deliberately absent: a nominal type name reaches the block only
     /// as an explicit capture, and a copied registration's dispatch token holds its [`KType`]s by
     /// value, so dispatch inside the block does not depend on the type table travelling.
@@ -842,40 +831,65 @@ impl<'a> Bindings<'a> {
         cutoff: Option<usize>,
         alloc: A,
     ) -> VisibleBindings<A> {
-        let tables = self.tables.borrow();
+        // The value channel is read first and its borrow released before the keyed cell is taken:
+        // no verb here holds both.
+        let mut data = AllocVec::new_in(alloc);
+        let mut claims: AllocVec<ProducerId, A> = AllocVec::new_in(alloc);
+        {
+            let values = self.values.borrow();
+            values.for_each_bound(|name, index, sealed| {
+                if Self::visible(index, cutoff) {
+                    data.push((name, index, self.brand.lift_resident(sealed.duplicate())));
+                }
+            });
+            values.for_each_visible_claim(cutoff, |producer| {
+                if !claims.contains(&producer) {
+                    claims.push(producer);
+                }
+            });
+        }
+        let keyed = self.keyed.borrow();
         // Each buffer takes an upper bound on its own table up front. A bump vector that grows
         // abandons its old bytes as dead scratch until the pop, so the capacity is worth the count.
-        let mut data = AllocVec::with_capacity_in(tables.data.len(), alloc);
-        data.extend(
-            tables
-                .data
-                .iter()
-                .filter(|(_, entry)| Self::visible(entry.index, cutoff))
-                .map(|(name, entry)| (*name, self.brand.lift_resident(entry.sealed.duplicate()))),
-        );
-        let overloads = tables.functions.values().map(|bucket| bucket.len()).sum();
+        let overloads = keyed.functions.values().map(|bucket| bucket.len()).sum();
         let mut functions = AllocVec::with_capacity_in(overloads, alloc);
         functions.extend(
-            tables
+            keyed
                 .functions
                 .values()
                 .flat_map(|bucket| bucket.iter())
                 .filter(|entry| Self::visible(entry.index, cutoff))
-                .map(|entry| self.brand.lift_resident(entry.sealed.duplicate())),
+                .map(|entry| {
+                    (
+                        entry.index,
+                        self.brand.lift_resident(entry.sealed.duplicate()),
+                    )
+                }),
         );
-        let mut operators = AllocVec::with_capacity_in(tables.operators.len(), alloc);
+        let mut operators = AllocVec::with_capacity_in(keyed.operators.len(), alloc);
         operators.extend(
-            tables
+            keyed
                 .operators
                 .iter()
                 .filter(|(_, entry)| Self::visible(entry.index, cutoff))
-                .map(|(probe, entry)| (*probe, self.brand.lift_resident(entry.sealed.duplicate()))),
+                .map(|(probe, entry)| {
+                    (
+                        *probe,
+                        entry.index,
+                        self.brand.lift_resident(entry.sealed.duplicate()),
+                    )
+                }),
         );
+        for producer in keyed.claims.visible_producers(cutoff, alloc) {
+            if !claims.contains(&producer) {
+                claims.push(producer);
+            }
+        }
         VisibleBindings {
             data,
             functions,
             operators,
-            claims: tables.claims.visible_producers(cutoff, alloc),
+            claims,
         }
     }
 
@@ -905,7 +919,7 @@ impl<'a> Bindings<'a> {
     /// no-shadow consult gates on this — a genuine builtin, not a user type that a
     /// synthetic test happens to have placed in a root-position scope.
     pub fn has_builtin_type(&self, name: TypeSymbol) -> bool {
-        self.tables
+        self.keyed
             .borrow()
             .types
             .get(&name)
@@ -926,7 +940,7 @@ impl<'a> Bindings<'a> {
     }
 
     fn has_builtin_function_probe(&self, key: &[KeyElement]) -> bool {
-        self.tables
+        self.keyed
             .borrow()
             .functions
             .get(key)
@@ -942,62 +956,85 @@ impl<'a> Bindings<'a> {
         }
     }
 
+    /// How many names are committed on the value channel, and whether one particular name is —
+    /// the two fixture reads that replaced the raw map accessor, which the slotted representation
+    /// has no map to hand out.
     #[cfg(test)]
-    pub(crate) fn data(
-        &self,
-    ) -> Ref<'_, BumpBackedMap<'a, ValueSymbol, DataEntry<'a>, IdentityBuildHasher>> {
-        Ref::map(self.tables.borrow(), |t| &t.data)
+    pub(crate) fn bound_value_count(&self) -> usize {
+        self.values.borrow().bound_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_value_bound(&self, name: ValueSymbol) -> bool {
+        self.values.borrow().is_bound(name)
     }
 
     #[cfg(test)]
     pub(crate) fn functions(&self) -> Ref<'_, BumpBackedMap<'a, &'a [KeyElement], Bucket<'a>>> {
-        Ref::map(self.tables.borrow(), |t| &t.functions)
+        Ref::map(self.keyed.borrow(), |t| &t.functions)
     }
 
     #[cfg(test)]
     pub(crate) fn types(
         &self,
     ) -> Ref<'_, BumpBackedMap<'a, TypeSymbol, (KType, DeclarationSite), IdentityBuildHasher>> {
-        Ref::map(self.tables.borrow(), |t| &t.types)
+        Ref::map(self.keyed.borrow(), |t| &t.types)
     }
 
     /// The claim standing on `name` in the value channel, if any — the value-side
-    /// forward-reference probe.
+    /// forward-reference probe, read off the cell that holds it.
     #[cfg(test)]
     pub fn pending_value(&self, name: ValueSymbol) -> Option<Claim> {
-        self.tables.borrow().claims.name_claim(name.symbol())
+        self.values
+            .borrow()
+            .claims()
+            .into_iter()
+            .find(|(standing, _)| *standing == name)
+            .map(|(_, claim)| claim)
     }
 
     /// Every standing name-channel claim, tagged with the language it resolves in — the hygiene
-    /// probe for "this declaration left no in-flight producer behind". The store keys both channels
-    /// in one map, and the tag is read back off the resolved name's token class, which is what
-    /// makes that one map sound: the two bindable classes name disjoint text.
+    /// probe for "this declaration left no in-flight producer behind". Each channel is read where
+    /// its claims live, and the tag is the channel, not a re-classification of the text.
     #[cfg(test)]
     pub fn pending_names(&self, registries: &RunRegistries) -> Vec<(String, BindKind, ProducerId)> {
-        self.tables
+        let value = self
+            .values
             .borrow()
-            .claims
-            .name_claims()
+            .claims()
             .into_iter()
             .map(|(name, claim)| {
-                let name = render_label(name, registries);
-                let kind = BinderSymbol::classify(&name)
-                    .expect("only a bindable name is ever claimed")
-                    .bind_kind();
-                (name, kind, claim.producer)
-            })
-            .collect()
+                (
+                    render_label(name.symbol(), registries),
+                    BindKind::Value,
+                    claim.producer,
+                )
+            });
+        let typed = self
+            .keyed
+            .borrow()
+            .claims
+            .type_claims()
+            .into_iter()
+            .map(|(name, claim)| {
+                (
+                    render_label(name.symbol(), registries),
+                    BindKind::Type,
+                    claim.producer,
+                )
+            });
+        value.chain(typed).collect()
     }
 
     /// Every standing claim on one dispatch bucket, in install order.
     #[cfg(test)]
     pub fn pending_overload_entries(&self, bucket: &UntypedKey) -> Vec<Claim> {
-        self.tables.borrow().claims.bucket_claims(bucket)
+        self.keyed.borrow().claims.bucket_claims(bucket)
     }
 
     #[cfg(test)]
     pub fn expect_type(&self, name: TypeSymbol) -> KType {
-        self.tables
+        self.keyed
             .borrow()
             .types
             .get(&name)
@@ -1027,7 +1064,7 @@ impl<'a> Bindings<'a> {
         registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let mut tables = self.tables.borrow_mut();
+        let mut keyed = self.keyed.borrow_mut();
         let rebind = || {
             KError::new(KErrorKind::Rebind {
                 name: render_label(name.symbol(), registries),
@@ -1035,7 +1072,7 @@ impl<'a> Bindings<'a> {
         };
         match (
             policy,
-            tables.types.get(&name).map(|(_, existing)| *existing),
+            keyed.types.get(&name).map(|(_, existing)| *existing),
         ) {
             (TypeWritePolicy::Insert, Some(_)) => return Err(rebind()),
             (TypeWritePolicy::UpsertEqual, Some(existing))
@@ -1048,8 +1085,8 @@ impl<'a> Bindings<'a> {
         }
         // A same-declaration re-entry overwrites where it sits; an absent name inserts its `Copy`
         // digest key.
-        tables.types.insert(name, (kt, site));
-        tables.claims.retire_name(name.symbol(), site.index);
+        keyed.types.insert(name, (kt, site));
+        keyed.claims.retire_name(NameClaim::Type(name), site.index);
         Ok(())
     }
 
@@ -1058,15 +1095,15 @@ impl<'a> Bindings<'a> {
     /// it runs each statement to completion, so every visible binder has already committed and no
     /// claim is ever consulted.
     pub fn begin_block(&self, statements: usize, _gate: &mut WriteGate) {
-        self.tables.borrow_mut().claims.begin_block(statements);
+        self.keyed.borrow_mut().claims.begin_block(statements);
     }
 
     /// Claim `name` for the binder edge `producer` — the dispatch-time forward-reference stamp.
     /// `producer` names the slot's own installed edge, destined at this scope's region, so a
     /// consumer parking on the claim inherits that destination.
     ///
-    /// Errors `Rebind` if the claim collides: a committed `data[name]` (bindings are bind-once), or
-    /// a standing claim naming a different edge. Idempotent on same-edge re-entry. A `types` entry
+    /// Errors `Rebind` if the claim collides: a committed binding of the name (bindings are
+    /// bind-once), or a standing claim naming a different edge. Idempotent on same-edge re-entry. A `types` entry
     /// already carrying a bound identity does **not** block: a parallel nominal finalize
     /// pre-installs the external identity while its binder is still in flight, and that coexistence
     /// is a bound entry plus a live claim rather than anything either structure represents.
@@ -1074,9 +1111,9 @@ impl<'a> Bindings<'a> {
     /// The eventual [`Self::write_value`] / [`Self::write_type`] call must carry the
     /// same `index` so the consumer's visibility test stays consistent across
     /// the claimed → committed transition, and so the commit retires this very claim. `name`'s own
-    /// class picks the destination table, so a value bind never satisfies a type claim — see
-    /// [`Bindings::lookup_value`] / [`Bindings::lookup_type`], each of which probes only its own
-    /// table before the store.
+    /// class picks the destination channel, so a value bind never satisfies a type claim — see
+    /// [`Bindings::lookup_value`] (one value cell) and [`Bindings::lookup_type`] (the `types` map,
+    /// then the store).
     pub fn install_placeholder(
         &self,
         name: BinderSymbol,
@@ -1085,25 +1122,40 @@ impl<'a> Bindings<'a> {
         registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let mut tables = self.tables.borrow_mut();
         let rebind = || {
             KError::new(KErrorKind::Rebind {
                 name: render_label(name.symbol(), registries),
             })
         };
-        if let BinderSymbol::Value(name) = name
-            && tables.data.contains_key(&name)
-        {
-            return Err(rebind());
-        }
-        match tables
-            .claims
-            .claim_name(name.symbol(), Claim { producer, index })
-        {
-            Ok(()) => Ok(()),
-            // A same-producer re-entry is the same stamp arriving twice, not a second declaration.
-            Err(standing) if standing.producer == producer => Ok(()),
-            Err(_) => Err(rebind()),
+        // Each channel's claim goes where that channel's state lives — a value claim into the value
+        // cell, a type claim into the store beside the `types` map it answers for. The two cells are
+        // taken in turn, never together.
+        match name {
+            BinderSymbol::Value(name) => {
+                self.values
+                    .borrow_mut()
+                    .claim(name, producer, index)
+                    .map_err(|_| rebind())?;
+                // Recorded for the retiring slot, which finds its claim from the one address it
+                // knows about itself. The claim's state stays in the cell above; this is the name
+                // to forward there, not a second copy of it.
+                self.keyed.borrow_mut().claims.note_value_claim(index, name);
+                Ok(())
+            }
+            BinderSymbol::Type(name) => {
+                match self
+                    .keyed
+                    .borrow_mut()
+                    .claims
+                    .claim_type(name, Claim { producer, index })
+                {
+                    Ok(()) => Ok(()),
+                    // A same-producer re-entry is the same stamp arriving twice, not a second
+                    // declaration.
+                    Err(standing) if standing.producer == producer => Ok(()),
+                    Err(_) => Err(rebind()),
+                }
+            }
         }
     }
 
@@ -1125,7 +1177,7 @@ impl<'a> Bindings<'a> {
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let brand = self.brand;
-        self.tables
+        self.keyed
             .borrow_mut()
             .claims
             .claim_bucket(brand, bucket, Claim { producer, index });
@@ -1163,19 +1215,15 @@ impl<'a> Bindings<'a> {
         // Duplicate each entry into the snapshot: each seal is a bit-copy naming the source's own
         // minted description, so the replayed entry replays that same claim. The reached regions
         // stay owned by the *source* scope's region union — the replay target's own region must
-        // already outlive it (a bulk install is same-run re-entrant ascription). The `data` keys
-        // are `Copy` digests and borrow nothing at all, so nothing is cloned to release the borrow.
-        let data: Vec<(ValueSymbol, DataEntry)> = {
-            let tables = src.tables.borrow();
-            tables
-                .data
-                .iter()
-                .map(|(k, entry)| (*k, entry.duplicate()))
-                .collect()
-        };
-        for (name, entry) in data {
-            if let Some(sealed) = install(name, entry.sealed) {
-                self.write_value(name, entry.index, sealed, registries, gate)?;
+        // already outlive it (a bulk install is same-run re-entrant ascription). The names are
+        // `Copy` digests and borrow nothing at all, so nothing is cloned to release the borrow.
+        let mut data: Vec<(ValueSymbol, BindingIndex, SealedValue<'a>)> = Vec::new();
+        src.values.borrow().for_each_bound(|name, index, sealed| {
+            data.push((name, index, sealed.duplicate()));
+        });
+        for (name, index, sealed) in data {
+            if let Some(sealed) = install(name, sealed) {
+                self.write_value(name, index, sealed, registries, gate)?;
             }
         }
         Ok(())
@@ -1187,13 +1235,13 @@ impl<'a> Bindings<'a> {
     /// bucket entry gates on is the source's, so a view's window sees its members exactly where
     /// the source's own body did.
     ///
-    /// Each seal is a bit-copy and the keys are owned runs, so the `tables` borrow is released
+    /// Each seal is a bit-copy and the keys are owned runs, so the `keyed` borrow is released
     /// before the caller opens anything — which it must be, since re-anchoring a callable to read
     /// its type re-enters the source's own doors.
     pub(crate) fn iter_function_entries(
         &self,
     ) -> Vec<(UntypedKey, Vec<(BindingIndex, SealedFunction<'a>)>)> {
-        self.tables
+        self.keyed
             .borrow()
             .functions
             .iter()
@@ -1207,13 +1255,13 @@ impl<'a> Bindings<'a> {
             .collect()
     }
 
-    /// The `data` write path: commit `name` → `sealed` as a bind-once value binding. Probes for a
-    /// standing binding, writes the entry, and **retires its own claim** — it carries the name and
-    /// the [`BindingIndex`] it is writing at, so the removal is one hash removal and one bit with
-    /// nothing searched for. All under one borrow.
+    /// The value channel's write path: commit `name` → `sealed` as a bind-once value binding. The
+    /// write **retires its own claim** by replacing it in the cell it wrote, so nothing is removed
+    /// from a second structure; clearing the statement run's bit is the whole of what the claim
+    /// store hears about it, and it is one bit with nothing searched for.
     ///
     /// No cross-kind probe: a [`ValueSymbol`] and a [`TypeSymbol`] classify disjoint text, so a
-    /// name committed to `data` cannot name a `types` entry.
+    /// name committed here cannot name a `types` entry.
     pub(crate) fn write_value(
         &self,
         name: ValueSymbol,
@@ -1222,12 +1270,6 @@ impl<'a> Bindings<'a> {
         registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let mut tables = self.tables.borrow_mut();
-        if tables.data.contains_key(&name) {
-            return Err(KError::new(KErrorKind::Rebind {
-                name: render_label(name.symbol(), registries),
-            }));
-        }
         // The weight is read off the seal before it is stored, where the value is open: a bind is
         // already doing this work's worth of table mutation, so the memo costs the definition site
         // nothing beyond one `object_copy_cost` read of a value the seal hands back.
@@ -1236,10 +1278,20 @@ impl<'a> Bindings<'a> {
             .value()
             .as_object()
             .map_or(0, object_copy_cost);
+        self.values
+            .borrow_mut()
+            .bind(name, index, sealed)
+            .map_err(|_| {
+                KError::new(KErrorKind::Rebind {
+                    name: render_label(name.symbol(), registries),
+                })
+            })?;
         self.copy_cost
             .set(self.copy_cost.get().saturating_add(weight));
-        tables.data.insert(name, DataEntry { index, sealed });
-        tables.claims.retire_name(name.symbol(), index);
+        self.keyed
+            .borrow_mut()
+            .claims
+            .retire_name(NameClaim::Value(name), index);
         Ok(())
     }
 
@@ -1248,7 +1300,7 @@ impl<'a> Bindings<'a> {
     /// without opening a carrier of their own.
     #[cfg(test)]
     pub(crate) fn operator_entry_addresses(&self) -> Vec<(KeywordSymbol, usize)> {
-        self.tables
+        self.keyed
             .borrow()
             .operators
             .iter()
@@ -1267,7 +1319,7 @@ impl<'a> Bindings<'a> {
     ///
     /// [`ScopeId`]: crate::memory::ScopeId
     pub(crate) fn copied_types(&self) -> Vec<(TypeSymbol, KType, DeclarationSite)> {
-        self.tables
+        self.keyed
             .borrow()
             .types
             .iter()
@@ -1278,16 +1330,18 @@ impl<'a> Bindings<'a> {
     /// The environment copy's `types` write — [`Self::insert_copied_value`]'s type-channel twin,
     /// registry-free for the same reason: the copy fills an empty table, one entry per source name.
     pub(crate) fn insert_copied_type(&self, name: TypeSymbol, kt: KType, site: DeclarationSite) {
-        let mut tables = self.tables.borrow_mut();
+        let mut keyed = self.keyed.borrow_mut();
         debug_assert!(
-            !tables.types.contains_key(&name),
+            !keyed.types.contains_key(&name),
             "an environment copy fills an empty table, one entry per source name",
         );
-        tables.types.insert(name, (kt, site));
+        keyed.types.insert(name, (kt, site));
     }
 
-    /// The environment copy's `data` write: install a rebuilt binding into a freshly built copied
-    /// scope. Deliberately **registry-free**, which is what lets it run from inside a relocation
+    /// The environment copy's value-channel write: install a rebuilt binding into a freshly built
+    /// copied scope. A slotted destination resolves `name` through the layout it re-homed from the
+    /// source, so the entry lands in the slot its source sat in and at the source's own lexical
+    /// position. Deliberately **registry-free**, which is what lets it run from inside a relocation
     /// fold: the only thing `write_value` needs registries for is rendering a `Rebind`, and a copy
     /// fills an empty table with one entry per source name, so a collision is a construction bug
     /// rather than a program error. It is asserted here rather than reported.
@@ -1300,19 +1354,21 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
         sealed: SealedValue<'a>,
     ) {
-        let mut tables = self.tables.borrow_mut();
-        debug_assert!(
-            !tables.data.contains_key(&name),
-            "an environment copy fills an empty table, one entry per source name",
-        );
         let weight = sealed
             .open_at()
             .value()
             .as_object()
             .map_or(0, object_copy_cost);
+        let mut values = self.values.borrow_mut();
+        debug_assert!(
+            !values.is_bound(name),
+            "an environment copy fills an empty table, one entry per source name",
+        );
+        values
+            .bind(name, index, sealed)
+            .unwrap_or_else(|_| panic!("an environment copy fills an empty table"));
         self.copy_cost
             .set(self.copy_cost.get().saturating_add(weight));
-        tables.data.insert(name, DataEntry { index, sealed });
     }
 
     /// The environment copy's `functions` write — [`Self::insert_copied_value`]'s dispatch-bucket
@@ -1321,12 +1377,12 @@ impl<'a> Bindings<'a> {
     /// key and token are re-derived from the rebuilt callable's own signature at seal time, so the
     /// copy lands in the same bucket the source sat in with nothing threaded alongside it.
     pub(crate) fn insert_copied_overload(&self, index: BindingIndex, seal: OverloadSeal<'a>) {
-        let mut tables = self.tables.borrow_mut();
-        if !tables.functions.contains_key(seal.key.as_slice()) {
+        let mut keyed = self.keyed.borrow_mut();
+        if !keyed.functions.contains_key(seal.key.as_slice()) {
             let key = self.brand.allocator().slice(&seal.key);
-            tables.functions.insert(key, bump_bucket(self.brand));
+            keyed.functions.insert(key, bump_bucket(self.brand));
         }
-        let bucket = tables
+        let bucket = keyed
             .functions
             .get_mut(seal.key.as_slice())
             .expect("the bucket was just seeded if it was missing");
@@ -1358,12 +1414,12 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
         seal: &GroupSeal<'a>,
     ) {
-        let mut tables = self.tables.borrow_mut();
+        let mut keyed = self.keyed.borrow_mut();
         debug_assert!(
-            !tables.operators.contains_key(&probe),
+            !keyed.operators.contains_key(&probe),
             "an environment copy fills an empty table, one entry per source probe",
         );
-        self.install_operator_entry(&mut tables, probe, seal, index);
+        self.install_operator_entry(&mut keyed, probe, seal, index);
     }
 
     /// The `functions` write path: add `seal`'s callable to its dispatch bucket. The bucket key and
@@ -1383,14 +1439,14 @@ impl<'a> Bindings<'a> {
         registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let mut tables = self.tables.borrow_mut();
+        let mut keyed = self.keyed.borrow_mut();
         // Probe-then-insert rather than an `entry` call: the key a miss inserts has to be re-homed
         // through the brand, which the entry API has no way to defer.
-        if !tables.functions.contains_key(seal.key.as_slice()) {
+        if !keyed.functions.contains_key(seal.key.as_slice()) {
             let key = self.brand.allocator().slice(&seal.key);
-            tables.functions.insert(key, bump_bucket(self.brand));
+            keyed.functions.insert(key, bump_bucket(self.brand));
         }
-        let bucket = tables
+        let bucket = keyed
             .functions
             .get_mut(seal.key.as_slice())
             .expect("the bucket was just seeded if it was missing");
@@ -1412,7 +1468,7 @@ impl<'a> Bindings<'a> {
         });
         // A builtin seed, a direct registration or a bulk install claimed nothing, so this is a
         // no-op for them.
-        tables.claims.retire_bucket(seal.key.as_slice(), index);
+        keyed.claims.retire_bucket(seal.key.as_slice(), index);
         Ok(())
     }
 
@@ -1424,13 +1480,18 @@ impl<'a> Bindings<'a> {
     ///
     /// Keyed on the one address the retiring slot knows about itself. It is an array index and a
     /// zero test on the success path, and at most three direct removals otherwise — nothing is
-    /// searched in either direction, not the binding tables by producer and not the store by name.
+    /// searched in either direction, not the binding keyed by producer and not the store by name.
     ///
     /// Strands bump bytes: a removed bucket key's stored run is abandoned rather than freed. Name
     /// claims key by a `Copy` digest and strand nothing. Bounded by the binders that fail, so a
     /// scope's peak occupancy stays its final binding count plus that error tail.
     pub fn retire_claims(&self, index: BindingIndex, _gate: &mut WriteGate) {
-        self.tables.borrow_mut().claims.retire_statement(index);
+        // The store owns every channel's retirement but the value channel's *state*: it hands back
+        // the value name still standing, and the cell holding it is cleared under the other borrow.
+        let value_name = self.keyed.borrow_mut().claims.retire_statement(index);
+        if let Some(name) = value_name {
+            self.values.borrow_mut().retire_claim(name, index);
+        }
     }
 }
 

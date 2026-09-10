@@ -37,7 +37,7 @@ fn type_token_module_name_errors_with_the_snake_case_respelling() {
     // `IntOrd` is Type-classified, so `data` — keyed by `ValueSymbol` — holds no key that spells
     // it, and the partition is a property of the key types rather than a probe. What stands in
     // its place: the value table's entry count is unchanged by the failed dispatch.
-    let before = scope.bindings().data().len();
+    let before = scope.bindings().bound_value_count();
     let err = test_run.run_one_err(test_run.parse_one("MODULE IntOrd = (LET x = 1)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
@@ -45,7 +45,7 @@ fn type_token_module_name_errors_with_the_snake_case_respelling() {
         "expected the snake_case respelling diagnostic, got {err}",
     );
     assert_eq!(
-        scope.bindings().data().len(),
+        scope.bindings().bound_value_count(),
         before,
         "the erroring overload binds nothing",
     );
@@ -71,11 +71,9 @@ fn module_member_named_type_collides_with_builtin_type() {
         "a MODULE member named `Type` must be a Rebind naming `Type`, got {err}",
     );
     assert!(
-        scope
+        !scope
             .bindings()
-            .data()
-            .get(&value_name("int_ord", test_run.registries()))
-            .is_none(),
+            .is_value_bound(value_name("int_ord", test_run.registries())),
         "the colliding module binds nothing",
     );
 }
@@ -229,8 +227,7 @@ fn module_member_function_via_let_fn() {
     assert!(
         foo.child_scope()
             .bindings()
-            .data()
-            .contains_key(&value_name("double", test_run.registries()))
+            .is_value_bound(value_name("double", test_run.registries()))
     );
 }
 
@@ -279,11 +276,9 @@ fn module_body_error_short_circuits_finalize() {
     let scope = test_run.scope;
     test_run.run("MODULE foo = (LET x = nonexistent_name)");
     assert!(
-        scope
+        !scope
             .bindings()
-            .data()
-            .get(&value_name("foo", test_run.registries()))
-            .is_none(),
+            .is_value_bound(value_name("foo", test_run.registries())),
         "foo must not bind when its body errors",
     );
 }

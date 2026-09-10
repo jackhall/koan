@@ -153,7 +153,7 @@ fn write_type_inserts_into_types_map() {
     assert_eq!(stored, kt);
     // `Foo` is a Type token, so `data` — keyed by `ValueSymbol` — has no key that spells it; the
     // fact left to check is that the type write touched the value table not at all.
-    assert!(bindings.data().is_empty());
+    assert_eq!(bindings.bound_value_count(), 0);
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn write_type_does_not_touch_data_or_functions() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register should succeed");
-    assert!(bindings.data().is_empty());
+    assert_eq!(bindings.bound_value_count(), 0);
     assert!(bindings.functions().is_empty());
 }
 
@@ -384,7 +384,7 @@ fn value_write_commits_and_retires_its_own_claim() {
         bindings.lookup_value(value_name("x", &registries), None),
         Some(NameLookup::Bound(_)),
     ));
-    assert_eq!(bindings.data().len(), 1, "the key is stored once");
+    assert_eq!(bindings.bound_value_count(), 1, "the name is stored once");
 
     // The zero-mask path: the slot's retirement has nothing left to do, and does nothing.
     bindings.retire_claims(

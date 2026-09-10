@@ -461,7 +461,7 @@ mod tests {
         // `Distance` is a Type token and `data` is keyed by `ValueSymbol`: no key spells it, so
         // the check is that the value table is untouched.
         assert!(
-            scope.bindings().data().is_empty(),
+            scope.bindings().bound_value_count() == 0,
             "NEWTYPE must not write a value-side carrier",
         );
     }
@@ -1103,7 +1103,7 @@ mod tests {
             _ => panic!("expected a TypeConstructor SetMember identity, got {handle:?}"),
         }
         assert!(
-            scope.bindings().data().is_empty(),
+            scope.bindings().bound_value_count() == 0,
             "a constructor-family declaration writes no value-side carrier",
         );
     }

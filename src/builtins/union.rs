@@ -404,7 +404,7 @@ mod tests {
         // `Maybe` is a Type token and `data` is keyed by `ValueSymbol`, so there is no key to
         // probe under; the containing fact is that the value table stayed empty.
         assert!(
-            scope.bindings().data().is_empty(),
+            scope.bindings().bound_value_count() == 0,
             "UNION must not write a value-side carrier into data",
         );
     }
@@ -591,7 +591,7 @@ mod tests {
             "expected short-circuit Ok(Type(Union)) from finalize_union",
         );
         assert!(
-            scope.bindings().data().is_empty(),
+            scope.bindings().bound_value_count() == 0,
             "type-only finalize must not write a value-side carrier",
         );
     }

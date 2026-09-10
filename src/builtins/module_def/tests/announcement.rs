@@ -258,11 +258,9 @@ fn consumer_of_a_dead_member_errors_without_hanging() {
     let scope = test_run.scope;
     test_run.run("MODULE t = (\n  NEWTYPE Cell = :{tail :Bogus}\n  LET Alias = Cell\n)");
     assert!(
-        scope
+        !scope
             .bindings()
-            .data()
-            .get(&value_name("t", test_run.registries()))
-            .is_none(),
+            .is_value_bound(value_name("t", test_run.registries())),
         "a module whose member failed to seal binds nothing",
     );
     assert!(

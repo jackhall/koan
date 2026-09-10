@@ -38,7 +38,7 @@ fn register_type_inserts_into_types_map_not_data() {
     // has no key to probe `data` under at all — the partition is a property of the key types. What
     // stands here is the containing fact: registering a type writes nothing into `data`.
     assert!(
-        scope.bindings().data().is_empty(),
+        scope.bindings().bound_value_count() == 0,
         "type binding must not appear in data map",
     );
 }

@@ -8,6 +8,7 @@ use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::machine::model::{IdentityBuildHasher, KType, TypeSymbol, ValueSymbol};
 use crate::machine::model::{OperatorGroup, ReductionMode};
+use crate::machine::model::{SlotLayout, SlotLayoutRefFamily};
 use crate::machine::{KError, WriteGate};
 use crate::memory::{
     And, BumpBackedMap, BumpVec, Frame, FrameStorage, KoanRegion, ReferenceFamily, RegionBrand,
@@ -301,10 +302,32 @@ impl<'a> Scope<'a> {
     /// keeps a closure's captured frame alive across the hop that retires the caller. The child
     /// constructor is [`Self::child_for_frame_witnessed`], whose `root` falls out of the branded
     /// parent as `outer.root`.
+    ///
+    /// The child's value channel is **name-addressed**: this door serves the frames whose binding
+    /// set no body enumerates — a `CLOSE OVER` block, a test fixture. A per-call frame over a body
+    /// with a layout takes [`Self::open_frame_slotted`].
     pub fn open_frame(&'a self) -> Rc<CallFrame> {
         CallFrame::open_under(self.brand, self, |outer, brand| {
-            Scope::child_for_frame_witnessed(outer, brand)
+            Scope::child_for_frame_witnessed(outer, brand, None)
         })
+    }
+
+    /// [`Self::open_frame`] for a body whose value binders are lexically fixed: the child's value
+    /// channel is one bump allocation sized by `layout`, with no map built and no name hashed.
+    ///
+    /// `layout` crosses the construction brand **beside** the lexical parent, zipped into one
+    /// operand so both re-anchor at the single generative `'b` the birth brands — the same coupling
+    /// `open_frame` makes for the parent alone. Its liveness is the parent's: the layout lives in
+    /// the callable's own region (or, for a synthesized single-binder frame, the call site's), and
+    /// the frame `Rc` pins that region through `FrameStorage.outer` for as long as the child lives.
+    /// Nothing new is assumed.
+    pub fn open_frame_slotted(&'a self, layout: &'a SlotLayout<'a>) -> Rc<CallFrame> {
+        CallFrame::open_under_with::<And<ScopeRefFamily, SlotLayoutRefFamily>>(
+            self.brand,
+            SealedExtern::<ScopeRefFamily>::erase(self)
+                .zip(SealedExtern::<SlotLayoutRefFamily>::erase(layout)),
+            |(outer, layout), brand| Scope::child_for_frame_witnessed(outer, brand, Some(layout)),
+        )
     }
 
     /// **Adopt this scope as the run's frame**: a frame that *carries an already-built run scope*
@@ -410,11 +433,18 @@ impl<'a> Scope<'a> {
     /// honouring `Scope`'s invariance with no retype of its own. The brand `'a` is un-nameable and the result erases witness-less, so
     /// nothing at the brand escapes. The frame `Rc` pins the real parent (via `FrameStorage.outer`)
     /// and the run-global root, so the coupled references never out-claim a live pointee.
-    fn child_for_frame_witnessed(outer: &'a Scope<'a>, brand: RegionBrand<'a>) -> Scope<'a> {
+    fn child_for_frame_witnessed(
+        outer: &'a Scope<'a>,
+        brand: RegionBrand<'a>,
+        layout: Option<&'a SlotLayout<'a>>,
+    ) -> Scope<'a> {
         Scope {
             outer: Some(outer),
             root: outer.root,
-            bindings: ScopeBindings::Owned(Bindings::new(brand)),
+            bindings: ScopeBindings::Owned(match layout {
+                Some(layout) => Bindings::slotted(brand, layout),
+                None => Bindings::new(brand),
+            }),
             brand,
             id: ScopeId::next(),
             kind: ScopeKind::Anonymous,
@@ -645,17 +675,25 @@ impl<'a> Scope<'a> {
     /// [`Self::nearest_group_context`] answers off the same field, so a copied `GROUP` body must
     /// carry its own reborn record for an `OP` inside it to resolve the way the source did.
     ///
+    /// `layout` is the source link's own, re-homed at `brand` — the copy of a slotted scope is
+    /// slotted, addressed by the same slot order, so a source slot walk fills the destination in
+    /// place. `None` copies a keyed link to a keyed one.
+    ///
     /// Born **open**, not closed: the engine fills the tables and closes the scope after, so the
     /// bind door's own open-scope assertion holds throughout the fill.
     pub(in crate::machine::core::scope) fn alloc_copied_child(
         outer: &'a Scope<'a>,
         brand: RegionBrand<'a>,
         kind: ScopeKind<'a>,
+        layout: Option<&'a SlotLayout<'a>>,
     ) -> &'a Scope<'a> {
         brand.allocator().in_place(Scope {
             outer: Some(outer),
             root: outer.root.or(Some(outer)),
-            bindings: ScopeBindings::Owned(Bindings::new(brand)),
+            bindings: ScopeBindings::Owned(match layout {
+                Some(layout) => Bindings::slotted(brand, layout),
+                None => Bindings::new(brand),
+            }),
             brand,
             id: ScopeId::next(),
             kind,

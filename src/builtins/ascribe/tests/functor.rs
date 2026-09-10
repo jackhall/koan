@@ -310,9 +310,7 @@ fn hk_value_slot_satisfies_after_substitution() {
             m if m
                 .child_scope()
                 .bindings()
-                .data()
-                .get(&value_name("pure", test_run.registries()))
-                .is_some()
+                .is_value_bound(value_name("pure", test_run.registries()))
         ),
         "id_monad must satisfy Monad and bind a view module carrying `pure`",
     );

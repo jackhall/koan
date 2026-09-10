@@ -145,7 +145,7 @@ mod tests {
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
         // `Ordered` is a Type token, so `data` — keyed by `ValueSymbol` — holds no key that
         // spells it. What stands in place of the probe: the value table is untouched.
-        assert!(scope.bindings().data().is_empty());
+        assert!(scope.bindings().bound_value_count() == 0);
         let handle = lookup_type(scope, "Ordered").expect("Ordered binds");
         assert!(matches!(
             test_run.types().node(handle),

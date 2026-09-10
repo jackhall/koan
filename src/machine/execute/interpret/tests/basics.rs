@@ -73,14 +73,12 @@ fn match_unmatched_branch_skips_let_side_effect() {
     );
     let scope = test_run.scope;
     assert!(
-        scope
+        !scope
             .bindings()
-            .data()
-            .get(&crate::builtins::test_support::value_name(
+            .is_value_bound(crate::builtins::test_support::value_name(
                 "y",
                 test_run.registries()
-            ))
-            .is_none(),
+            )),
         "unmatched branch's LET must not have bound y"
     );
     assert_eq!(captured.borrow().as_slice(), b"after\n");

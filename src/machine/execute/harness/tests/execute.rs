@@ -40,15 +40,15 @@ fn dispatches_independent_expressions_in_order() {
             )
             .expect("value")
     );
-    let data = root.bindings().data();
+    let bindings = root.bindings();
     assert!(
-        data.contains_key(&crate::builtins::test_support::value_name(
+        bindings.is_value_bound(crate::builtins::test_support::value_name(
             "x",
             test_run.registries()
         ))
     );
     assert!(
-        data.contains_key(&crate::builtins::test_support::value_name(
+        bindings.is_value_bound(crate::builtins::test_support::value_name(
             "y",
             test_run.registries()
         ))

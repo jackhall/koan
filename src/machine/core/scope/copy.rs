@@ -36,7 +36,6 @@ use crate::memory::Global;
 use super::{Scope, ScopeKind};
 use crate::machine::core::DeliveredFunction;
 use crate::machine::core::RegionScopeFamily;
-use crate::machine::core::bindings::BindingIndex;
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::seals::{GroupSeal, OverloadSeal};
 use crate::machine::model::Carried;
@@ -182,7 +181,12 @@ fn copy_chain<'b>(
                 // record memo, which is what lands the copied kind field and every copied powerset
                 // entry on one record — the sharing `alloc_group_child` establishes at the source.
                 let (kind, born) = link.copied_kind(brand);
-                let copied = Scope::alloc_copied_child(outer, brand, kind);
+                // A slotted link copies to a slotted one over the same slot order: the layout is
+                // re-minted at the destination exactly as the copied callable's signature is, so
+                // the fill addresses each name through the copy's own plain data and the entries
+                // keep the positions their source binders wrote at.
+                let layout = link.bindings().layout().map(|layout| layout.rehomed(brand));
+                let copied = Scope::alloc_copied_child(outer, brand, kind, layout);
                 let seed = born.map(|cell| {
                     (
                         source_group_address(link),
@@ -202,9 +206,10 @@ fn copy_chain<'b>(
 /// Fill `copied` from `source`'s visible bindings. `source` is closed and claim-free (the readiness
 /// gate), so no visibility cutoff applies: a scope no live call-site chain names reads as complete,
 /// every entry visible to every body that captured it, and copying the table wholesale under a
-/// fresh id reproduces exactly what the source answered. Every copied entry therefore lands at
-/// index 0: a [`BindingIndex`] is read only by the `idx < cutoff` visibility rule, and the copy's
-/// fresh id is named by no chain, so the source's lexical positions carry no information here.
+/// fresh id reproduces exactly what the source answered. Every copied entry keeps its **source
+/// lexical position**, on all three channels: a slotted destination addresses its array by the
+/// layout it re-homed from the source, which pairs each name with the position its binder wrote at,
+/// and a keyed one records the position beside the entry the way its source did.
 ///
 /// A binding whose value **is** a callable is rebuilt against the copied scope it captured
 /// ([`rebuild_callable`]); that is what makes the recursive-closure and sibling-sharing cases hold.
@@ -243,25 +248,22 @@ fn fill_scope<'b>(
         copied.bindings().insert_copied_type(name, kt, site);
     }
 
-    for (name, cell) in visible.data.iter() {
+    for (name, index, cell) in visible.data.iter() {
         let sealed = match callable_anchor(cell, copied, memo) {
             Some(anchor) => copied.store_function_cell(&rebuild_callable(cell, anchor)),
             None => copied
                 .adopt_for_capture(cell, |carried| Ok(carried.object()))
                 .ok()?,
         };
-        copied
-            .bindings()
-            .insert_copied_value(*name, BindingIndex::value(0), sealed);
+        copied.bindings().insert_copied_value(*name, *index, sealed);
     }
 
-    for cell in visible.functions.iter() {
+    for (index, cell) in visible.functions.iter() {
         let anchor = anchor_for(&cell.open(captured_chain_addresses), copied, memo);
         let rebuilt = rebuild_registration(cell, anchor);
-        copied.bindings().insert_copied_overload(
-            BindingIndex::value(0),
-            OverloadSeal::of_delivered(copied, &rebuilt),
-        );
+        copied
+            .bindings()
+            .insert_copied_overload(*index, OverloadSeal::of_delivered(copied, &rebuilt));
     }
 
     // Re-birth per record, share per entry. A `GROUP`'s powerset keys — and a `CLOSE` flatten of
@@ -277,7 +279,7 @@ fn fill_scope<'b>(
     // a byte-identical `declaration_key`: the upsert's structural arm survives the copy verbatim,
     // and only its address arm — a fresh record, by construction — differs.
     let mut reborn: Vec<(usize, GroupSeal<'b>)> = seeded.into_iter().collect();
-    for (probe, cell) in visible.operators.iter() {
+    for (probe, index, cell) in visible.operators.iter() {
         let (address, members, mode) = cell.open(|group| {
             (
                 std::ptr::from_ref(group) as usize,
@@ -296,7 +298,7 @@ fn fill_scope<'b>(
         };
         copied
             .bindings()
-            .insert_copied_operator_group(*probe, BindingIndex::value(0), &seal);
+            .insert_copied_operator_group(*probe, *index, &seal);
     }
 
     debug_assert!(

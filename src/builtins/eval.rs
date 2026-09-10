@@ -38,7 +38,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // new frame's `outer` pointer) — matching a normal call frame. The tail is the whole quoted
     // expression run in the fresh frame's own scope (`BlockScope::None`): no block push, no seed,
     // and — unlike an arm — no split, so a parenthesized group evaluates as one expression.
-    let frame: Rc<CallFrame> = ctx.scope.open_frame();
+    //
+    // One expression means at most one binder, and no block push means it submits at *this* call's
+    // own chain index rather than at a position the body's shape fixes — so the layout is minted
+    // here from the two facts the call has in hand, rather than read off the node. It lands in the
+    // call site's region, which the frame pins through its `outer` chain for the frame's whole life.
+    let frame: Rc<CallFrame> = ctx.scope.open_frame_slotted(eval_layout(ctx, &inner));
     block_tail(
         ctx.scope.brand(),
         FramePlacement::FreshChild { frame },
@@ -48,6 +53,21 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         None,
         ctx.registries,
     )
+}
+
+/// The value-binding layout of the frame `$(expr)` opens: the single slot the quoted expression
+/// binds if it is a value binder, and otherwise nothing at all — which is the common case, and
+/// costs the frame no allocation on the value channel.
+fn eval_layout<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+    inner: &crate::machine::model::KExpression<'a>,
+) -> &'a crate::machine::model::SlotLayout<'a> {
+    match inner.statement_binder_plan().and_then(|plan| plan.name) {
+        Some(crate::machine::model::BinderSymbol::Value(name)) => {
+            crate::machine::model::SlotLayout::single(ctx.scope.brand(), name, ctx.bind_index().idx)
+        }
+        _ => crate::machine::model::SlotLayout::EMPTY,
+    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {

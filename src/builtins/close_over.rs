@@ -579,11 +579,23 @@ fn close_implicitly<'a>(
         for producer in visible.claims {
             park(parked, producer);
         }
-        plan.functions.extend(visible.functions);
-        plan.operators.extend(visible.operators);
+        // The block scope is a fresh keyed one whose statements have not run, so a copied entry's
+        // source lexical position says nothing here: the seed writes every capture at the block's
+        // own construction position. The index each snapshot carries is the environment copy's
+        // business, and is dropped.
+        plan.functions
+            .extend(visible.functions.into_iter().map(|(_, callable)| callable));
+        plan.operators.extend(
+            visible
+                .operators
+                .into_iter()
+                .map(|(probe, _, group)| (probe, group)),
+        );
         plan.modules
-            .extend(visible.data.into_iter().filter(|(_, delivered)| {
-                delivered.open(|carried| matches!(carried.object(), KObject::Module(_)))
+            .extend(visible.data.into_iter().filter_map(|(name, _, delivered)| {
+                delivered
+                    .open(|carried| matches!(carried.object(), KObject::Module(_)))
+                    .then_some((name, delivered))
             }));
     }
 }

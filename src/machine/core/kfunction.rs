@@ -11,6 +11,7 @@ use crate::machine::model::DeliveredCarried;
 use crate::machine::model::NamedPairs;
 #[cfg(test)]
 use crate::machine::model::SignatureDraft;
+use crate::machine::model::SlotLayout;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
 use crate::machine::model::{ExpressionSignature, Record, SignatureElement, shape_type_of};
 use crate::machine::model::{Unifier, UnifyFailure, Variance, admits_with};
@@ -58,6 +59,12 @@ pub struct KFunction<'a> {
     /// `VAL` slot over a quantified callable keeps working, and a call by name solves the
     /// quantifiers at argument validation exactly as a dispatched call does.
     value_ktype: KType,
+    /// The value-binding **layout** of every frame this callable opens: its parameters at position
+    /// `0` merged with the body node's own binder run ([`SlotLayout::for_function`]), bumped once
+    /// here at definition beside the signature the parameter half is read from. An activation
+    /// therefore sizes its slot array off plain data it borrows, with nothing per call to build.
+    /// [`SlotLayout::EMPTY`] for a body that opens no such frame — a builtin, a coercion wrapper.
+    layout: &'a SlotLayout<'a>,
     /// The callable's **shape** type: the interleaved keyword / argument-position run its bucket
     /// key is read off, the quantifier group, and the return. Interned once beside `value_ktype`,
     /// from the same signature — the two are the callable's two identities, one per lane.
@@ -124,6 +131,7 @@ struct FunctionBirth<'r> {
     captured: &'r Scope<'r>,
     signature: ExpressionSignature<'r>,
     body: Body<'r>,
+    layout: &'r SlotLayout<'r>,
 }
 
 /// [`Reattachable`](crate::memory::Reattachable) family for [`FunctionBirth`] — the seed operand
@@ -133,6 +141,23 @@ struct FunctionBirthFamily;
 
 crate::memory::reattachable! {
     FunctionBirthFamily => FunctionBirth<'r>,
+}
+
+/// The layout a callable's frames are sized by, read off the two halves that fix it: the
+/// signature's own parameter run and the body node's cached binder run. A body that opens no
+/// per-call frame of this shape — a builtin, a coercion wrapper delegating to another callable's
+/// body — takes the empty layout and bumps nothing.
+fn body_layout<'a>(
+    brand: RegionBrand<'a>,
+    signature: &ExpressionSignature<'a>,
+    body: &Body<'a>,
+) -> &'a SlotLayout<'a> {
+    match body {
+        Body::UserDefined(expression) => {
+            SlotLayout::for_function(brand, signature.params(), expression.body_layout())
+        }
+        Body::Builtin(_) | Body::CoercedDelegate { .. } => SlotLayout::EMPTY,
+    }
 }
 
 impl<'a> KFunction<'a> {
@@ -177,12 +202,13 @@ impl<'a> KFunction<'a> {
     ) -> DeliveredFunction {
         let signature =
             ExpressionSignature::mint(captured.brand(), return_type, elements, quantifiers);
+        let layout = body_layout(captured.brand(), &signature, &body);
         let shape_ktype = function_shape_ktype(&signature, registries);
         let value_ktype = registries.types.erase_quantified(
             function_value_ktype(&signature, registries),
             quantifiers.len(),
         );
-        Self::birth(captured, signature, body, value_ktype, shape_ktype)
+        Self::birth(captured, signature, body, layout, value_ktype, shape_ktype)
     }
 
     /// **Assemble a copy of `source` captured at `captured`, at a relocation fold's own brand** —
@@ -197,17 +223,33 @@ impl<'a> KFunction<'a> {
     /// `value_ktype` is copied, being a lifetime-free handle on the same `(params) -> ret` type.
     /// Assembling the struct stays here, where the private fields live; the fold stores.
     pub(crate) fn copy_at_fold(captured: &'a Scope<'a>, source: &KFunction<'a>) -> KFunction<'a> {
+        let signature = ExpressionSignature::mint(
+            captured.brand(),
+            source.signature.return_type(),
+            source.signature.elements(),
+            source.signature.quantifiers(),
+        );
+        // Rebuilt from the re-minted signature and the body node's own layout, exactly as the birth
+        // door builds it — never carried over, which would leave the copy borrowing the source
+        // region for the run its activations size themselves off.
+        let layout = body_layout(captured.brand(), &signature, &source.body);
         KFunction {
-            signature: ExpressionSignature::mint(
-                captured.brand(),
-                source.signature.return_type(),
-                source.signature.elements(),
-                source.signature.quantifiers(),
-            ),
+            signature,
             body: source.body,
             captured,
             value_ktype: source.value_ktype,
             shape_ktype: source.shape_ktype,
+            layout,
+        }
+    }
+
+    /// The layout every frame this callable opens is sized by — [`SlotLayout::EMPTY`] for a body
+    /// that opens none. A coercion wrapper answers its **underlying**'s: the invoke resolves the
+    /// wrapper to that callable and runs its body, so the frame is the underlying's.
+    pub(crate) fn slot_layout(&self) -> &'a SlotLayout<'a> {
+        match self.body {
+            Body::CoercedDelegate { underlying, .. } => underlying.slot_layout(),
+            Body::UserDefined(_) | Body::Builtin(_) => self.layout,
         }
     }
 
@@ -219,6 +261,7 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         signature: ExpressionSignature<'a>,
         body: Body<'a>,
+        layout: &'a SlotLayout<'a>,
         value_ktype: KType,
         shape_ktype: KType,
     ) -> DeliveredFunction {
@@ -226,6 +269,7 @@ impl<'a> KFunction<'a> {
             captured,
             signature,
             body,
+            layout,
         };
         captured
             .deliver_resident::<FunctionBirthFamily>(seed)
@@ -239,6 +283,7 @@ impl<'a> KFunction<'a> {
                         captured: birth.captured,
                         value_ktype,
                         shape_ktype,
+                        layout: birth.layout,
                     })
                 },
             )

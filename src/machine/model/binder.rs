@@ -9,6 +9,7 @@
 
 use smallvec::SmallVec;
 
+pub(crate) mod layout;
 pub(crate) mod signature;
 
 use crate::machine::core::{KError, KErrorKind, body_statement_refs};
