@@ -21,13 +21,11 @@ use crate::machine::model::{KObject, RunRegistries};
 use crate::memory::RegionBrand;
 use crate::source::{FileId, SourceRef, Span, Spanned};
 
-use super::shape::{
-    DispatchShape, FieldSlot, NodeCache, Part, PartClass, PartSummary, part_summary,
-    stored_untyped_key,
-};
-use super::{ExpressionPart, KExpression, RunIter};
+use super::shape::{FieldSlot, Part, PartSummary, part_summary};
 use crate::machine::model::StoredBinderKey;
 use crate::machine::model::lazy_slots::LazyKinds;
+use crate::parse::ast::shape::{DispatchShape, NodeCache, PartClass, stored_untyped_key};
+use crate::parse::ast::{ExpressionPart, KExpression, RunIter};
 
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,6 @@
 //! Form-table shape: the invariants every reader of [`FORMS`] depends on.
 
-use super::{FORMS, FormId, KeyElementSpec, render_key};
+use crate::parse::forms::{FORMS, FormId, KeyElementSpec, render_key};
 
 /// A tag names its own row. `FormId` is declared in table order, so a reader that has a tag can
 /// index the table by it, and a row inserted without its tag — or a tag reordered — fails here.

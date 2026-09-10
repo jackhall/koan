@@ -15,11 +15,11 @@
 
 use sexlex::{Item, Kind, Node};
 
-use crate::machine::KError;
-use crate::machine::model::admit_bare_type_slots;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
+use crate::machine::core::KError;
 use crate::memory::ProgramBrand;
+use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
+use crate::parse::forms::binder::admit_bare_type_slots;
+use crate::parse::labels::{KeywordSymbol, LabelInterner};
 use crate::source::{FileId, Span, Spanned};
 
 use super::atom;

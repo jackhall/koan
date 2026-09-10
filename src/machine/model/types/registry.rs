@@ -23,12 +23,11 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 
 use imbl::shared_ptr::RcK;
 use smallvec::SmallVec;
 
-use crate::machine::model::labels::{BinderSymbol, Symbol, TypeSymbol};
+use crate::machine::model::labels::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
 use crate::machine::model::{Carried, Held};
 
 use super::kkind::KKind;
@@ -44,35 +43,6 @@ use super::type_digest::{self, TypeDigest, schema_content_digest};
 /// union costs no heap allocation to canonicalize, and none at all when the result is a node the
 /// registry already holds.
 type MemberList = SmallVec<[KType; 4]>;
-
-/// The hasher every 128-bit-digest-keyed table runs: the node table here, the label interner, and
-/// the classified scope binding tables
-/// ([design/label-interning.md](../../../../design/label-interning.md)). A [`TypeDigest`] and a
-/// [`Symbol`](crate::machine::model::Symbol) are each the low 128 bits of a BLAKE3 hash, so they
-/// are already uniformly distributed and re-hashing would only cost cycles: keep the low 64 bits
-/// and use them directly as the bucket index.
-///
-/// Every other write is a bug — such a table is keyed by one `u128` digest and nothing else, so a
-/// call to any other `write_*` means a key type slipped in that this hasher cannot distribute.
-#[derive(Default)]
-pub struct IdentityHasher(u64);
-
-impl Hasher for IdentityHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, _bytes: &[u8]) {
-        panic!("an identity-hashed table is keyed by a single 128-bit digest and nothing else");
-    }
-
-    fn write_u128(&mut self, value: u128) {
-        self.0 = value as u64;
-    }
-}
-
-/// [`IdentityHasher`] as a `BuildHasher`.
-pub type IdentityBuildHasher = BuildHasherDefault<IdentityHasher>;
 
 /// The node table: a persistent HAMT over `RcK`, the non-atomic shared pointer. A registry is
 /// owned by exactly one run frame and never crosses a thread, so the atomic pointer kind would

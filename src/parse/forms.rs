@@ -13,15 +13,19 @@
 //! ([`MISS_DIAGNOSTICS`](crate::machine::model::miss_diagnostics::MISS_DIAGNOSTICS)) are
 //! `(FormId, …)` pairs and hold no key of their own.
 //!
-//! [`NodeCache`]: crate::machine::model::ast::NodeCache
+//! [`NodeCache`]: crate::parse::ast::NodeCache
 
-use crate::machine::model::KeyElement;
-use crate::machine::model::binder::{
+pub mod binder;
+pub mod layout;
+pub mod lazy;
+
+use crate::parse::ast::KeyElement;
+use crate::parse::forms::binder::{
     BinderFacts, BinderSurface, fn_def_binder_bucket, identifier_part_binder_name,
     op_def_binder_bucket, type_decl_binder_name, type_part_binder_name,
 };
-use crate::machine::model::labels::{KeywordSymbol, StaticName};
-use crate::machine::model::lazy_slots::LazyKinds;
+use crate::parse::forms::lazy::LazyKinds;
+use crate::parse::labels::{KeywordSymbol, StaticName};
 
 /// The fixed tokens the builtin forms are spelled with, each declared once and minted once. Every
 /// [`FORMS`] entry names its keywords out of this group, and the binder module's reserved-symbol

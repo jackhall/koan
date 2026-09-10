@@ -139,7 +139,7 @@ per parameter per call.
 
 A binding name's **token class** ([typing/tokens.md](typing/tokens.md)) is carried in the
 type of its symbol, not re-derived from text at each door. Three newtypes over `Symbol`
-([`labels.rs`](../src/machine/model/labels.rs)) partition the token space:
+([`labels.rs`](../src/parse/labels.rs)) partition the token space:
 
 - **`ValueSymbol`** — a value token (`xs`, `int_ord`, `it`): neither keyword-class nor
   Type-class.
@@ -206,7 +206,7 @@ in Rust, so their symbol is the same 128 bits for the whole process and there is
 per-run or per-call classification to discover. Such a name is **declared once and compared by
 symbol thereafter**.
 
-The declaration is a `StaticName<S>` ([`labels.rs`](../src/machine/model/labels.rs)): the
+The declaration is a `StaticName<S>` ([`labels.rs`](../src/parse/labels.rs)): the
 spelling beside a `LazyLock` memo of its classified symbol, built by the `static_name!` macro,
 which mints through the class's own `classify` funnel. A `LazyLock` over a pure function of a literal
 is a memo and not run state — `Symbol::of` answers the same bits in every run and every process,
@@ -396,7 +396,7 @@ mints nothing. Because no lookup re-derives a digest, a name spelled once and re
 many times is hashed once, at the parse.
 
 `Held::Name` is where the two vocabularies meet: it carries a
-[`BinderSymbol`](../src/machine/model/labels.rs), the class taken from the part variant the
+[`BinderSymbol`](../src/parse/labels.rs), the class taken from the part variant the
 parser assigned, so one carrier serves every name-capture slot and no consumer re-derives a
 class from a rendering. See
 [tokens.md § A binder position is a name](typing/tokens.md#a-binder-position-is-a-name).

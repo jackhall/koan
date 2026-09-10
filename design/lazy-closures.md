@@ -302,7 +302,7 @@ have lazy slots, so every remaining group in the domain evaluates in the block's
 chain and structural freeness coincides with resolution. Those forms are
 recognized by full untyped bucket key, sound for the same reason
 [`BINDER_SPECS`](../src/machine/model/binder.rs) and
-[`LAZY_SLOT_SPECS`](../src/machine/model/lazy_slots.rs) are: builtin buckets are
+[`LAZY_SLOT_SPECS`](../src/parse/forms.rs) are: builtin buckets are
 unshadowable, so a matching node can only ever resolve to that builtin's
 overloads.
 

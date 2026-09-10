@@ -4,7 +4,7 @@ The parser owns what it produces: the label vocabulary, the syntax AST, and the 
 node is classified against; its laws are stated as properties.
 
 **Problem.** `parse` produces the AST and mints every symbol, but both live under `machine::model`.
-[labels.rs](../../src/machine/model/labels.rs) holds the interner, the four symbol classes and the
+[labels.rs](../../src/parse/labels.rs) holds the interner, the four symbol classes and the
 `is_type_name` classifier; the parser imports all of them from `machine`, and `labels` itself
 imports `BindKind` from the binder table and the identity hasher from the type registry. The AST
 under [ast.rs](../../src/machine/model/ast.rs) mixes syntax with runtime: the file that defines
@@ -14,7 +14,7 @@ to a `Held` cell against a slot type and implements `Parseable`.
 The node's construction chokepoint fills seven cache fields — bucket key, dispatch shape, operator
 probe, binder plan, binder name slot, body layout, lazy-slot stamp — by probing two static tables,
 [`BINDER_SPECS`](../../src/machine/model/binder.rs) and
-[`LAZY_SLOT_SPECS`](../../src/machine/model/lazy_slots.rs). Two more tables recognize forms the
+[`LAZY_SLOT_SPECS`](../../src/parse/forms.rs). Two more tables recognize forms the
 same way: [close_inference.rs](../../src/machine/model/close_inference.rs)'s `FORM_SPECS` and
 [miss_diagnostics.rs](../../src/machine/model/miss_diagnostics.rs)'s `MISS_DIAGNOSTICS`. Of the 26,
 41, 30 and 15 keys they spell, 24, 24, 27 and 12 are spelled in at least one other table. Each

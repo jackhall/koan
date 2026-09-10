@@ -33,7 +33,7 @@ lazy-slot stamp does not keep raw is submitted as its own sub-`Dispatch`
 have spliced back in, where the spliced run stages nothing further and falls
 through to Step 1. Which slots stay raw is a fact of the node's bucket key,
 stamped at `KExpression::seal` from the static table in
-[`lazy_slots.rs`](../../src/machine/model/lazy_slots.rs) and read off the node
+[`lazy_slots.rs`](../../src/parse/forms.rs) and read off the node
 — see [expressions-and-parsing.md § Lazy
 slots](../expressions-and-parsing.md#lazy-slots). Only the fixed builtin forms
 have such slots, so every argument of a user-defined shape has evaluated by

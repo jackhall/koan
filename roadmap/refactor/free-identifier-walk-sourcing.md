@@ -37,7 +37,7 @@ interpreter:
   binder) are expressed as a position value that predicate admits unconditionally, not as a
   separate branch in the walk.
 - A builtin's registration declares, per slot, whether the body name-resolves the token, alongside
-  the slot's type and its laziness ([lazy_slots.rs](../../src/machine/model/lazy_slots.rs)); the
+  the slot's type and its laziness ([lazy_slots.rs](../../src/parse/forms.rs)); the
   walk reads label-ness through that declaration and `FORM_SPECS` carries no `Attribute` or
   `Projection` rule.
 - A builtin whose body stops resolving a slot it still accepts, or starts resolving one it read as a

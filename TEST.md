@@ -201,7 +201,7 @@ the allocation column's absolute rows do.
 The names fixed in Rust source — builtin parameter slots and the `Result` / `KError`
 tags ([design/label-interning.md § Names fixed in Rust source](design/label-interning.md#names-fixed-in-rust-source))
 — are pinned by four unit tests in
-[`labels/tests.rs`](src/machine/model/labels/tests.rs), over a static and a slot group of
+[`labels/tests.rs`](src/parse/labels/tests.rs), over a static and a slot group of
 that test module's own so they pin the mechanism rather than whatever spelling a builtin
 happens to declare. Two cover a lone declaration: `a_static_name_mints_what_of_mints` (the
 memo is exactly what the class's `of` would mint, and `text()` is the spelling as written)

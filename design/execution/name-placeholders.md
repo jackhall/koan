@@ -70,7 +70,7 @@ The store ([`claims.rs`](../../src/machine/core/bindings/claims.rs)) has three
 parts, each answering one question. A `Claim` is the pair (`ProducerId`,
 `BindingIndex`) throughout:
 
-- `by_type` — [`TypeSymbol`](../../src/machine/model/labels.rs) → `Claim`, the
+- `by_type` — [`TypeSymbol`](../../src/parse/labels.rs) → `Claim`, the
   same vocabulary the `types` map it answers beside is keyed by. The type-name
   channel's read path, and a name admits at most one claim.
 - `by_bucket` — bucket key → a **run** of `Claim`, in install order. The bucket
@@ -155,7 +155,7 @@ because sibling overloads under one head keyword (e.g. two `EXPR (PICK xs :A) ..
 
 The two channels are two fields of one key, not two alternatives: a
 [`StoredBinderKey`](../../src/machine/model/binder.rs) carries an optional
-[`BinderSymbol`](../../src/machine/model/labels.rs) — `Value(ValueSymbol)` or
+[`BinderSymbol`](../../src/parse/labels.rs) — `Value(ValueSymbol)` or
 `Type(TypeSymbol)`, either way the symbol the parser minted when it classified the
 token — and an optional
 [`BucketKeys`](../../src/machine/model/binder.rs) pair, so one statement may fill

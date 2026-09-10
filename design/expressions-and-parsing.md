@@ -194,7 +194,7 @@ channel:
   resting carrier cell a dep-finish writes back.
 
 `KObject::KExpression` takes a
-[`ProgramExpression`](../src/machine/model/ast/program.rs) — a marked AST node,
+[`ProgramExpression`](../src/parse/ast/program.rs) — a marked AST node,
 mintable only through a program-storage door — and there is no conversion from a
 working node to an AST one, so **a value can never carry a producer's reach
 through an expression** — the property the alloc door and the escape seam read as
@@ -359,10 +359,10 @@ of execute makes them ready before the parent runs. See
 
 Only the fixed builtin forms opt out of eager evaluation, and which of their
 slots are lazy is a parse-static fact: `KExpression::seal` stamps the node's
-lazy slots from the [`LAZY_SLOT_SPECS`](../src/machine/model/lazy_slots.rs)
+lazy slots from the [`LAZY_SLOT_SPECS`](../src/parse/forms.rs)
 table, keyed by the unshadowable builtin keys — the same probe pattern that
 fills `binder_plan`, written in the bucket-key vocabulary every spec table
-shares ([key_spec.rs](../src/machine/model/key_spec.rs)) — and the scheduler
+shares ([key_spec.rs](../src/parse/forms.rs)) — and the scheduler
 reads the stamp to know which children not to submit. Dispatch never decides
 evaluation — by the time an expression dispatches, every child the stamp
 left eager has already evaluated. The builtin receives the unevaluated

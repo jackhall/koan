@@ -101,7 +101,7 @@ re-attribution, plus the growth hazards a survey and the consolidated shapes tur
   which most single structures do not. Two consequences already sit in the tree: a per-call frame's
   value channel is now one layout-sized slot array rather than a hash table built per activation,
   and that shows as no movement at all in `wide_step` / `deep_frame`; and
-  [`SlotLayout::of_body`](../../src/machine/model/binder/layout.rs) mints a run for every binder
+  [`SlotLayout::of_body`](../../src/parse/forms/layout.rs) mints a run for every binder
   node at parse — including the many that are never used as a body — for +0.03 on `declare_name`,
   a cost visible only because those runs live in long-lived regions whose chunks the record does
   see. Closing this needs a bytes-*used* reader in `workgraph` (`Region::bump_capacity` reports

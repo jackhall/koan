@@ -19,11 +19,9 @@
 //! callable's captured region at birth) and is plain `Copy` data with no drop glue, so a layout
 //! costs the holder a thin pointer and its region nothing at teardown.
 
-use crate::machine::model::ValueSymbol;
-use crate::machine::model::{BinderSymbol, KType};
 use crate::memory::{BumpVec, ReferenceFamily, RegionBrand, reattachable};
-
-use super::super::ast::{ExpressionPart, KExpression};
+use crate::parse::ast::{ExpressionPart, KExpression};
+use crate::parse::labels::{BinderSymbol, ValueSymbol};
 
 /// One layout entry: a value binder's name and the lexical position its binder writes at.
 type Entry = (ValueSymbol, u32);
@@ -120,9 +118,12 @@ impl<'a> SlotLayout<'a> {
     /// same first-wins rule `of_body` applies inside the body, and leaves the body's own `LET` of a
     /// parameter name a rebind of the parameter's slot exactly as it is against the keyed map.
     /// Type-denoting parameters register types, so they take no slot.
-    pub(crate) fn for_function(
+    ///
+    /// Generic in what a parameter is paired with: only the [`BinderSymbol`] is read, so the caller
+    /// hands its own pairs through without restating their type half.
+    pub(crate) fn for_function<T>(
         brand: RegionBrand<'a>,
-        params: &[(BinderSymbol, KType)],
+        params: &[(BinderSymbol, T)],
         body: &SlotLayout<'_>,
     ) -> &'a SlotLayout<'a> {
         let values = params

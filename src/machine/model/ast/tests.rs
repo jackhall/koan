@@ -374,14 +374,12 @@ fn cached_fields_equal_on_demand_recompute() {
         e.shape(),
         classify_dispatch_shape(e.stored_key(), e.parts.first().map(|p| p.value.class()))
     );
-    let recomputed_key: crate::machine::model::types::UntypedKey = e
+    let recomputed_key: crate::parse::UntypedKey = e
         .parts
         .iter()
         .map(|p| match &p.value {
-            ExpressionPart::Keyword(symbol) => {
-                crate::machine::model::types::KeyElement::Keyword(*symbol)
-            }
-            _ => crate::machine::model::types::KeyElement::Slot,
+            ExpressionPart::Keyword(symbol) => crate::parse::KeyElement::Keyword(*symbol),
+            _ => crate::parse::KeyElement::Slot,
         })
         .collect();
     assert_eq!(e.stored_key().to_vec(), recomputed_key);

@@ -3,11 +3,11 @@
 
 use std::collections::BTreeMap;
 
-use super::LazyKinds;
 use crate::builtins::test_support::TestRun;
-use crate::machine::model::key_spec::{FORMS, Form, KeyElementSpec, key_matches, render_key};
+use crate::machine::model::key_spec::{FORMS, Form, key_matches, render_key};
 use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry, UntypedKey};
 use crate::memory::{program_storage, run_root_storage};
+use crate::parse::forms::lazy::LazyKinds;
 use crate::parse::parse;
 
 /// The kind an exact raw-capture slot type stands for; `None` for a slot type that captures

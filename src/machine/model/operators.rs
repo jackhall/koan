@@ -29,7 +29,7 @@
 use crate::memory::RegionBrand;
 
 use super::labels::KeywordSymbol;
-use super::types::{KeyElement, UntypedKey};
+use crate::parse::ast::{KeyElement, UntypedKey};
 
 /// Which way a fold nests a run of more than two operands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

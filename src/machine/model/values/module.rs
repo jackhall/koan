@@ -35,11 +35,12 @@ use crate::memory::BumpBackedMap;
 use crate::memory::RegionBrand;
 
 use super::super::types::{
-    IdentityBuildHasher, KType, Relation, SigSchema, TypeDigest, TypeNode, TypeRegistry,
-    empty_schema_digest, sig_subtype,
+    KType, Relation, SigSchema, TypeDigest, TypeNode, TypeRegistry, empty_schema_digest,
+    sig_subtype,
 };
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeSymbol;
+use crate::parse::labels::IdentityBuildHasher;
 
 /// The owned members a module is assembled from — gathered by a construction site before the value
 /// exists, because a built module's map is frozen. The map is keyed by member name and resolves

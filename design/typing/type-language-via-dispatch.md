@@ -68,7 +68,7 @@ its sigiled spelling.
 
 Everything downstream follows by construction, which is why parity is exact rather than
 maintained: the statement's untyped bucket key is unchanged (both variants are slots), the
-form's [`LAZY_SLOT_SPECS`](../../src/machine/model/lazy_slots.rs) entry already stamps the index
+form's [`LAZY_SLOT_SPECS`](../../src/parse/forms.rs) entry already stamps the index
 raw so the part is captured rather than staged as an eager sub-dispatch, and the slot's carrier
 union already lists `SigiledTypeExpr`. The two spellings are the *same part* by the time
 anything semantic looks at them. The one visible consequence is cosmetic: a diagnostic that

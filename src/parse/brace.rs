@@ -5,10 +5,10 @@
 //! `accept_comma`, and `finish`; multi-part keys/values collapse into a sub-expression via
 //! `single_or_wrapped`.
 
-use crate::machine::KError;
-use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::labels::{BinderSymbol, LabelInterner};
+use crate::machine::core::KError;
 use crate::memory::ProgramBrand;
+use crate::parse::ast::ExpressionPart;
+use crate::parse::labels::{BinderSymbol, LabelInterner};
 use crate::source::Spanned;
 
 pub(super) struct DictFrame<'a> {

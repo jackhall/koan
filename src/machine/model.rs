@@ -1,9 +1,12 @@
 pub mod ast;
 pub(crate) mod binder;
+
+// Temporary: the parser's vocabulary, still reachable at its old paths while the tree's imports are
+// swept over to `crate::parse`.
+pub(crate) use crate::parse::forms as key_spec;
+pub(crate) use crate::parse::forms::lazy as lazy_slots;
+pub(crate) use crate::parse::labels;
 pub(crate) mod close_inference;
-pub(crate) mod key_spec;
-pub(crate) mod labels;
-pub(crate) mod lazy_slots;
 pub(crate) mod miss_diagnostics;
 pub mod operators;
 pub(crate) mod pair_list;
@@ -11,9 +14,12 @@ pub(crate) mod registries;
 pub(crate) mod types;
 pub(crate) mod values;
 
+pub use crate::parse::ast::{KeyElement, UntypedKey};
+pub(crate) use crate::parse::labels::IdentityBuildHasher;
+pub use crate::parse::labels::is_keyword_token;
 #[cfg(feature = "alloc-count")]
-pub use labels::symbols_minted;
-pub use labels::{
+pub use crate::parse::labels::symbols_minted;
+pub use crate::parse::labels::{
     BinderSymbol, ClassifiedSymbol, KeywordSymbol, LabelInterner, StaticName, Symbol, TypeSymbol,
     ValueSymbol, WILDCARD, is_type_name, snake_case_identifier, wrong_binder_class,
 };
@@ -22,17 +28,15 @@ pub use operators::{
     SealedOperatorGroup, binary_key, unary_key,
 };
 pub use registries::RunRegistries;
-pub(crate) use types::IdentityBuildHasher;
 pub use types::TypeRegistry;
 pub use types::builtin_types;
 pub use types::most_specific_ktype;
 pub use types::{
     AnnouncedData, AnnouncedMember, AnnouncedWindow, Argument, DeclWindow, DeferredReturn,
     DeferredReturnSurface, DispatchToken, DispatchTokenElement, ExpressionSignature, KKind, KType,
-    KeyElement, NodeSchema, Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema,
-    ReturnType, SealedAnnounced, SealedGroup, SignatureDraft, SignatureElement, TypeNode,
-    UntypedKey, WindowView, is_keyword_token, render_keyworded_head, shape_specificity,
-    shape_type_of,
+    NodeSchema, Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema, ReturnType,
+    SealedAnnounced, SealedGroup, SignatureDraft, SignatureElement, TypeNode, WindowView,
+    render_keyworded_head, shape_specificity, shape_type_of,
 };
 pub use types::{
     CaptureShape, CaptureShapes, Unifier, UnifyFailure, Variance, admits_with, capture_footprint,
@@ -49,18 +53,20 @@ pub(crate) use values::{
     product_reaches_region, read_resting,
 };
 
-pub(crate) use ast::{
+pub(crate) use crate::parse::ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, PartClass, ProgramExpression,
-    ProgramNode, WorkingExpression, WorkingPart, classify_dispatch_shape,
+    ProgramNode, classify_dispatch_shape,
 };
+pub use crate::parse::forms::binder::{BinderBucketFn, BinderNameFn, BinderSurface};
+pub(crate) use crate::parse::forms::binder::{
+    OpArity, StoredBinderKey, op_declaration_arity, symbol_from_parts, symbol_from_quote_body,
+};
+pub(crate) use crate::parse::forms::layout::{SlotLayout, SlotLayoutRefFamily};
+pub use crate::parse::labels::BindKind;
+pub(crate) use ast::{WorkingExpression, WorkingPart};
 pub(crate) use binder::MACHINE_BINDERS;
-pub(crate) use binder::admit_bare_type_slots;
 pub(crate) use binder::announce_type_members;
-pub(crate) use binder::layout::{SlotLayout, SlotLayoutRefFamily};
 pub(crate) use binder::signature::{SignaturePosition, SignatureScan};
-pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
-pub(crate) use binder::{OpArity, op_declaration_arity};
-pub(crate) use binder::{StoredBinderKey, symbol_from_parts, symbol_from_quote_body};
 pub use close_inference::DynamicNameForm;
 pub(crate) use close_inference::infer_close_captures;
 pub(crate) use miss_diagnostics::{diagnose_miss, key_is_reserved};

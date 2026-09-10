@@ -41,6 +41,3 @@ impl LazyKinds {
         self.0 == 0
     }
 }
-
-#[cfg(test)]
-mod tests;

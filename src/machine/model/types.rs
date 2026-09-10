@@ -36,7 +36,6 @@ pub use record::Record;
 pub use recursive_group_window::{
     PendingMember, RecursiveGroupWindow, RelativeSchema, SealedGroup,
 };
-pub(crate) use registry::IdentityBuildHasher;
 pub(crate) use registry::Relation;
 pub use registry::TypeRegistry;
 pub use resolver::{
@@ -54,8 +53,8 @@ pub use signature::Specificity;
 pub use signature::most_specific_ktype;
 pub use signature::{
     Argument, DeferredReturn, DeferredReturnSurface, DispatchToken, DispatchTokenElement,
-    ExpressionSignature, KeyElement, ReturnType, SignatureDraft, SignatureElement, UntypedKey,
-    is_keyword_token, shape_specificity, shape_type_of,
+    ExpressionSignature, ReturnType, SignatureDraft, SignatureElement, shape_specificity,
+    shape_type_of,
 };
 pub(crate) use signature::{render_untyped_key, summarize_dispatch, untyped_key_of};
 pub(crate) use type_digest::{TypeDigest, empty_schema_digest};

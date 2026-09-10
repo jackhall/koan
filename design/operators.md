@@ -189,7 +189,7 @@ with the scope, so the answer cannot outlive the borrow it came from.
 A registry key — the one a subset install writes and the one a live chain probes
 with — is a **symbol-run digest**: the run's member `KeywordSymbol`s sorted by
 symbol bits, deduped, and their digests hashed through
-[`KeywordSymbol::of_run`](../src/machine/model/labels.rs). Both sides mint through
+[`KeywordSymbol::of_run`](../src/parse/labels.rs). Both sides mint through
 that one constructor — the chain's probe from `operator_probe_for`
 ([shape.rs](../src/machine/model/ast/shape.rs)) as the parse freezes the node, the
 powerset from `declared_run` at registration

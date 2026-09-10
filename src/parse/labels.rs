@@ -12,13 +12,12 @@
 //! symbol bits; the table is written only where a syntactic label is constructed and read only
 //! where one is rendered. Its growth is bounded by the run's source text.
 //!
-//! See [design/label-interning.md](../../../design/label-interning.md).
+//! See [design/label-interning.md](../../design/label-interning.md).
 
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
-
-use super::types::registry::IdentityBuildHasher;
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// A label's content identity: the low 128 bits of a BLAKE3 hash of its UTF-8 bytes.
 ///
@@ -179,7 +178,7 @@ impl std::fmt::Display for LabelDisplay<'_> {
 /// predicate for "this name classifies as a Type token" — the parser uses it to tag a
 /// `Type` part, the type-language partition (abstract-type members vs value slots in a SIG
 /// type table) reuses it, and [`TypeSymbol`] mints against it. See
-/// [design/typing/tokens.md](../../../design/typing/tokens.md).
+/// [design/typing/tokens.md](../../design/typing/tokens.md).
 pub fn is_type_name(tok: &str) -> bool {
     let mut chars = tok.chars();
     let Some(first) = chars.next() else {
@@ -193,7 +192,7 @@ pub fn is_type_name(tok: &str) -> bool {
 
 /// Suggest a value-classified rewrite of a Type-classified binder name: `IntOrd` → `int_ord`. Each
 /// interior uppercase letter opens a new word (see
-/// [design/typing/tokens.md](../../../design/typing/tokens.md)). Beside [`is_type_name`] because it
+/// [design/typing/tokens.md](../../design/typing/tokens.md)). Beside [`is_type_name`] because it
 /// is that classifier read backwards — the respelling every diagnostic offers when a value binds
 /// under a Type token.
 pub fn snake_case_identifier(name: &str) -> String {
@@ -233,7 +232,6 @@ pub static WILDCARD: StaticName<KeywordSymbol> = crate::static_name!(KeywordSymb
 /// wrap the same text — which is what makes a value/type binding collision unrepresentable rather
 /// than something a write door has to probe for.
 ///
-/// [`is_keyword_token`]: crate::machine::model::is_keyword_token
 macro_rules! classified_symbol {
     ($(#[$meta:meta])* $name:ident, $classifies:expr, $class:literal) => {
         $(#[$meta])*
@@ -289,7 +287,7 @@ classified_symbol!(
     /// A **value** binding name: a token that is neither keyword-class nor Type-class (`xs`,
     /// `int_ord`, `it`). The key type of every value-side binding table.
     ValueSymbol,
-    |text| !crate::machine::model::is_keyword_token(text) && !is_type_name(text),
+    |text| !is_keyword_token(text) && !is_type_name(text),
     "a value token"
 );
 
@@ -303,12 +301,12 @@ classified_symbol!(
 
 classified_symbol!(
     /// A **keyword-class** token: fixed syntax, per
-    /// [`is_keyword_token`](crate::machine::model::is_keyword_token) — `FN`, `+`, `<=`, and the
+    /// [`is_keyword_token`] — `FN`, `+`, `<=`, and the
     /// run digests built out of them by [`of_run`](KeywordSymbol::of_run), which stand for the
     /// operator sets the chain lane probes by. Nothing *binds* to one; the class exists because the
     /// operator table and the dispatch lane key by fixed tokens.
     KeywordSymbol,
-    crate::machine::model::is_keyword_token,
+    is_keyword_token,
     "a keyword-class token"
 );
 
@@ -389,7 +387,7 @@ fn sorted_run(members: &[KeywordSymbol]) -> smallvec::SmallVec<[KeywordSymbol; 8
 ///
 /// Only `TypeSymbol` carries this: `WITH`'s pin walk and the union-variant probes are the sites
 /// where a bare record-field symbol meets a Type-class member table, and nothing probes the other
-/// classes by bits. See [design/label-interning.md](../../../design/label-interning.md).
+/// classes by bits. See [design/label-interning.md](../../design/label-interning.md).
 impl Borrow<Symbol> for TypeSymbol {
     fn borrow(&self) -> &Symbol {
         &self.0
@@ -402,7 +400,7 @@ impl Borrow<Symbol> for TypeSymbol {
 ///
 /// This is the currency of a seam that accepts either class and routes on the answer: an FN
 /// parameter name, a placeholder install, a member probe. The variant *is* the
-/// [`BindKind`](crate::machine::model::BindKind), so a site carrying one threads no separate kind
+/// [`BindKind`], so a site carrying one threads no separate kind
 /// tag beside the name.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub enum BinderSymbol {
@@ -439,10 +437,10 @@ impl BinderSymbol {
     }
 
     /// Which side of the value/type partition this name binds on.
-    pub fn bind_kind(self) -> super::BindKind {
+    pub fn bind_kind(self) -> BindKind {
         match self {
-            BinderSymbol::Value(_) => super::BindKind::Value,
-            BinderSymbol::Type(_) => super::BindKind::Type,
+            BinderSymbol::Value(_) => BindKind::Value,
+            BinderSymbol::Type(_) => BindKind::Type,
         }
     }
 }
@@ -451,14 +449,14 @@ impl BinderSymbol {
 /// binds into: `wanted` is that channel, `name` the text as written. This is the token-class
 /// partition stated **at the text→symbol seam** — past it the classified key types make a crossing
 /// unrepresentable, so this is the one place the rule is a runtime disposition rather than a type.
-/// See [design/typing/tokens.md](../../../design/typing/tokens.md).
-pub fn wrong_binder_class(name: &str, wanted: super::BindKind) -> String {
+/// See [design/typing/tokens.md](../../design/typing/tokens.md).
+pub fn wrong_binder_class(name: &str, wanted: BindKind) -> String {
     match wanted {
-        super::BindKind::Type => format!(
+        BindKind::Type => format!(
             "`{name}` is a value token, so it names a value — a type binds under a Type token \
              (uppercase-leading with at least one lowercase letter)"
         ),
-        super::BindKind::Value => format!(
+        BindKind::Value => format!(
             "`{name}` is a Type token, so it names a type — a value binds under a value token \
              (snake_case)"
         ),
@@ -473,6 +471,61 @@ pub trait ClassifiedSymbol: Copy + sealed::Sealed {
     /// The raw digest, so a generic seam can compare and intern without knowing the class.
     fn symbol(self) -> Symbol;
 }
+
+/// Whether a binding — committed or an in-flight placeholder — lives in the value language or the
+/// type language. The `data`/`types` partition is mutually exclusive: the two tables key by
+/// disjoint classified symbol types, so a name is one xor the other by construction. A
+/// forward-reference placeholder carries its name's own class ([`BinderSymbol`]), so a type
+/// placeholder is never satisfied by a value bind, nor the reverse.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum BindKind {
+    Value,
+    Type,
+}
+
+/// True iff `s` classifies as a keyword (fixed token). See
+/// [tokens.md](../../design/typing/tokens.md): pure-symbol tokens (no ASCII letters) are always
+/// keywords; alphabetic tokens are keywords iff they have at least two ASCII-uppercase letters and
+/// no ASCII-lowercase letters.
+pub fn is_keyword_token(s: &str) -> bool {
+    let has_letter = s.chars().any(|c| c.is_ascii_alphabetic());
+    if !has_letter {
+        return true;
+    }
+    let upper_count = s.chars().filter(|c| c.is_ascii_uppercase()).count();
+    let has_lower = s.chars().any(|c| c.is_ascii_lowercase());
+    upper_count >= 2 && !has_lower
+}
+
+/// The hasher every 128-bit-digest-keyed table runs: the interner here, the type registry's node
+/// table, and the classified scope binding tables
+/// ([design/label-interning.md](../../design/label-interning.md)). A
+/// [`TypeDigest`](crate::machine::model::types::TypeDigest) and a [`Symbol`] are each the low 128
+/// bits of a BLAKE3 hash, so they
+/// are already uniformly distributed and re-hashing would only cost cycles: keep the low 64 bits
+/// and use them directly as the bucket index.
+///
+/// Every other write is a bug — such a table is keyed by one `u128` digest and nothing else, so a
+/// call to any other `write_*` means a key type slipped in that this hasher cannot distribute.
+#[derive(Default)]
+pub struct IdentityHasher(u64);
+
+impl Hasher for IdentityHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, _bytes: &[u8]) {
+        panic!("an identity-hashed table is keyed by a single 128-bit digest and nothing else");
+    }
+
+    fn write_u128(&mut self, value: u128) {
+        self.0 = value as u64;
+    }
+}
+
+/// [`IdentityHasher`] as a `BuildHasher`.
+pub type IdentityBuildHasher = BuildHasherDefault<IdentityHasher>;
 
 mod sealed {
     pub trait Sealed {}
@@ -539,7 +592,7 @@ impl<S: Copy> StaticName<S> {
 #[macro_export]
 macro_rules! static_name {
     ($class:ty, $text:literal) => {
-        $crate::machine::model::StaticName::<$class>::new($text, || {
+        $crate::parse::labels::StaticName::<$class>::new($text, || {
             <$class>::classify($text).expect(concat!(
                 "`",
                 $text,
@@ -569,14 +622,14 @@ macro_rules! slots {
         /// One builtin's parameter slots, each a name fixed in Rust source.
         struct SlotNames {
             $(
-                $slot: $crate::machine::model::StaticName<$crate::machine::model::ValueSymbol>,
+                $slot: $crate::parse::labels::StaticName<$crate::parse::labels::ValueSymbol>,
             )+
         }
 
         static $group: SlotNames = SlotNames {
             $(
-                $slot: $crate::machine::model::StaticName::new(stringify!($slot), || {
-                    <$crate::machine::model::ValueSymbol>::classify(stringify!($slot)).expect(concat!(
+                $slot: $crate::parse::labels::StaticName::new(stringify!($slot), || {
+                    <$crate::parse::labels::ValueSymbol>::classify(stringify!($slot)).expect(concat!(
                         "`",
                         stringify!($slot),
                         "` classifies as a value-class parameter slot"

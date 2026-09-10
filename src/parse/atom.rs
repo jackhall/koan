@@ -19,11 +19,12 @@ use std::str::CharIndices;
 
 use smallvec::SmallVec;
 
-use crate::machine::KError;
-use crate::machine::model::ast::{ExpressionPart, KLiteral};
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
-use crate::machine::model::{is_keyword_token, is_type_name};
+use crate::machine::core::KError;
 use crate::memory::ProgramBrand;
+use crate::parse::ast::{ExpressionPart, KLiteral};
+use crate::parse::labels::{
+    KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol, is_keyword_token, is_type_name,
+};
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
 
@@ -353,9 +354,9 @@ fn read_atom<'a>(
 #[cfg(test)]
 mod tests {
     use super::classify_token;
-    use crate::machine::model::ast::{ExpressionPart, KLiteral};
-    use crate::machine::model::labels::LabelInterner;
     use crate::memory::program_storage;
+    use crate::parse::ast::{ExpressionPart, KLiteral};
+    use crate::parse::labels::LabelInterner;
 
     fn describe(p: &ExpressionPart<'_>, labels: &LabelInterner) -> String {
         match p {
@@ -569,7 +570,7 @@ mod tests {
 
     #[test]
     fn ascription_compound_tokens_classify_as_keywords() {
-        use crate::machine::model::is_keyword_token;
+        use crate::parse::labels::is_keyword_token;
         assert!(is_keyword_token(":|"));
         assert!(is_keyword_token(":!"));
     }

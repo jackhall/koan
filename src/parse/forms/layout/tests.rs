@@ -3,9 +3,9 @@
 
 use super::SlotLayout;
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::binder::BinderSymbol;
 use crate::machine::model::{KType, LabelInterner, TypeSymbol, ValueSymbol};
 use crate::memory::{ProgramBrand, program_storage};
+use crate::parse::labels::BinderSymbol;
 use crate::parse::parse;
 
 /// The lone statement `src` parses to — the body a layout is read off.

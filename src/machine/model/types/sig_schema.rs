@@ -22,13 +22,14 @@ use crate::memory::ScopeId;
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
-use super::registry::{IdentityBuildHasher, TypeRegistry};
-use super::signature::{DispatchTokenElement, KeyElement, Specificity, shape_specificity};
+use super::registry::TypeRegistry;
+use super::signature::{DispatchTokenElement, Specificity, shape_specificity};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::{KeywordSymbol, TypeSymbol, ValueSymbol};
+use crate::machine::model::labels::{IdentityBuildHasher, KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::values::ModuleDraft;
 use crate::machine::model::{FoldDirection, ReductionMode};
 use crate::machine::model::{display_label, render_label};
+use crate::parse::ast::KeyElement;
 
 /// A schema's type-member table: Type-class name → the member's type, identity-hashed on the
 /// symbol's digest bits.

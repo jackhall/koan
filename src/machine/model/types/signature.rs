@@ -17,26 +17,7 @@ use super::node::TypeNode;
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
-
-/// One position of a bucket key: a fixed token as its [`KeywordSymbol`], or an argument slot.
-/// `Copy` and lifetime-free, so a key run is the same type whether it sits in a `Vec` a caller
-/// hands around or in a slice bumped into a region — one type, one derived `Hash`, and equality is
-/// a tag plus a `u128` compare with no text to walk.
-/// `Ord` is the canonical order a schema's keyworded members sort by — a slot before any keyword,
-/// keywords by their symbol's digest bits. Arbitrary as an order over call shapes, stable across
-/// runs, and never an interner index, which is all a canonical sort needs.
-#[derive(Eq, PartialEq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
-pub enum KeyElement {
-    Slot,
-    Keyword(KeywordSymbol),
-}
-
-/// Bucket key produced by both `ExpressionSignature::untyped_key` and
-/// `KExpression::untyped_key`; they MUST agree for any pair that should match. The parser
-/// classifies source tokens via `is_keyword_token` and mints each one's symbol there;
-/// [`SignatureElement::keyword`] uppercases a lowercase Rust-spelled token before minting, so a
-/// registration and a call arrive at the same symbol for the same token.
-pub type UntypedKey = Vec<KeyElement>;
+use crate::parse::ast::{KeyElement, UntypedKey};
 
 /// The definition-time identity of a signature for bucket dedupe: element shape plus the
 /// per-slot argument type. Two signatures are indistinguishable at dispatch iff their tokens
@@ -136,20 +117,6 @@ pub(crate) fn render_untyped_key(key: &[KeyElement], registries: &RunRegistries)
     }
     out.push(')');
     out
-}
-
-/// True iff `s` classifies as a keyword (fixed token). See
-/// [tokens.md](../../../../design/typing/tokens.md): pure-symbol tokens (no ASCII letters)
-/// are always keywords; alphabetic tokens are keywords iff they have ≥2 ASCII-uppercase
-/// letters and no ASCII-lowercase letters.
-pub fn is_keyword_token(s: &str) -> bool {
-    let has_letter = s.chars().any(|c| c.is_ascii_alphabetic());
-    if !has_letter {
-        return true;
-    }
-    let upper_count = s.chars().filter(|c| c.is_ascii_uppercase()).count();
-    let has_lower = s.chars().any(|c| c.is_ascii_lowercase());
-    upper_count >= 2 && !has_lower
 }
 
 /// The one-slot case of [`ExpressionSignature::most_specific`], over the slot types alone: returns

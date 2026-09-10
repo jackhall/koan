@@ -45,7 +45,7 @@ than ownership trees. The structural edges:
 - [`Bindings`](../src/machine/core/bindings.rs)' value channel maps each bound
   name to the dormant carrier fusing its value with the exact reach minted for
   it. A per-call frame addresses that channel by **slot** — a position in the
-  body's own [`SlotLayout`](../src/machine/model/binder/layout.rs), one bump
+  body's own [`SlotLayout`](../src/parse/forms/layout.rs), one bump
   allocation sized at frame birth — and every other scope addresses it by name
   through a bump-backed map; either way the pointee may live in this scope's
   region or in an outer one.
@@ -422,7 +422,7 @@ The **region-free leaf doors** are the first kind. [`Scalar`](../src/machine/mod
 payload; `RegionBrand::alloc_string` is its sibling for the one leaf whose *representation* is
 region-hosted, re-homing the bytes into this region as part of the store; and
 `RegionBrand::alloc_expression` takes a
-[`ProgramExpression`](../src/machine/model/ast/program.rs) and nothing else — the marker minted only
+[`ProgramExpression`](../src/parse/ast/program.rs) and nothing else — the marker minted only
 by a [`ProgramBrand`](../src/memory/program.rs) door — which is what proves the cell it
 bumps borrows only eternal-tier program storage. Each yields a resident `&'a KObject<'a>` bumped in the destination, so residence is where
 the door placed it. The witnessed spellings (`alloc_scalar_witnessed`,
@@ -739,7 +739,7 @@ consumer) is enforced by the surface rather than by convention.
 
 A per-call frame's value bindings cost one sized bump allocation, not a table
 built from nothing. Every body node carries a
-[`SlotLayout`](../src/machine/model/binder/layout.rs) computed where it is
+[`SlotLayout`](../src/parse/forms/layout.rs) computed where it is
 sealed — its value binders as a symbol-sorted run of `(ValueSymbol, lexical
 position)`, read off the same cached statement binder plans the `CLOSE` capture
 walk and the dispatch-time claim stamp read, so the layout and the binds it

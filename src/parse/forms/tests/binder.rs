@@ -3,12 +3,12 @@
 
 use std::collections::HashSet;
 
-use super::{BinderFacts, StoredBinderKey};
 use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::machine::model::UntypedKey;
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
-use crate::machine::model::key_spec::{FORMS, Form, KeyElementSpec, key_matches, render_key};
 use crate::memory::{ProgramBrand, RegionBrand, program_storage};
+use crate::parse::forms::binder::{BinderFacts, BinderSurface, StoredBinderKey};
+use crate::parse::forms::{FORMS, Form, KeyElementSpec, key_matches, render_key};
 use crate::parse::parse;
 use crate::source::Spanned;
 
@@ -115,7 +115,7 @@ fn operator_def_marker_agrees_with_the_keys_it_labels() {
             .iter()
             .any(|element| matches!(element, KeyElementSpec::Keyword(name) if name.text() == "OP"));
         assert_eq!(
-            binder.surface == super::BinderSurface::OperatorDef,
+            binder.surface == BinderSurface::OperatorDef,
             names_op,
             "form key {:?} disagrees with its surface marker",
             render_key(form.key),
@@ -274,7 +274,7 @@ fn a_statements_plan_is_its_own_spine() {
             "{source}",
         );
         assert_eq!(
-            key.buckets.map_or(0, |keys| keys.len()),
+            key.buckets.map_or(0, |keys| keys.count()),
             0,
             "the outer LET declares no bucket of its own: {source}",
         );
@@ -367,7 +367,7 @@ fn combined_forms_install_both_channels() {
             "{source}",
         );
         assert_eq!(
-            key.buckets.map_or(0, |keys| keys.len()),
+            key.buckets.map_or(0, |keys| keys.count()),
             buckets,
             "{source}"
         );

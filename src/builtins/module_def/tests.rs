@@ -19,7 +19,7 @@ fn binder_name_extracts_module_name() {
     let program = program_storage();
     let labels = crate::machine::model::LabelInterner::new();
     let expr = parse_one(&program, &labels, "MODULE foo = (LET x = 1)");
-    let name = crate::machine::model::binder::identifier_part_binder_name(&expr)
+    let name = crate::parse::forms::binder::identifier_part_binder_name(&expr)
         .expect("`MODULE foo = …` names a binder");
     assert_eq!(name.bind_kind(), crate::machine::model::BindKind::Value);
     assert_eq!(labels.render(name.symbol()), "foo");

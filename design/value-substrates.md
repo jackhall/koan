@@ -579,7 +579,7 @@ slice**, not the node struct: `KExpression` is `Copy` and rides by value in the
 cell, so what a holder can outlive is the run the node borrows and everything
 reachable from it.
 
-That fact is a type, [`ProgramExpression` / `ProgramNode`](../src/machine/model/ast/program.rs)
+That fact is a type, [`ProgramExpression` / `ProgramNode`](../src/parse/ast/program.rs)
 — `Copy` newtypes whose fields are private to their module, so the only way to
 obtain one is a mint door taking a
 [`ProgramBrand`](../src/memory/program.rs) or an accessor on a value

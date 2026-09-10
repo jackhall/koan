@@ -200,7 +200,7 @@ destination through a door whose *signature* is the enforcement instead:
   nothing to check. `alloc_string` is its sibling for the leaf whose bytes are
   region-hosted: re-homing them into the destination *is* the store.
 - **Raw AST** takes `RegionBrand::alloc_expression`, which admits a
-  [`ProgramExpression`](../src/machine/model/ast/program.rs) and nothing else — the marker
+  [`ProgramExpression`](../src/parse/ast/program.rs) and nothing else — the marker
   minted only through a [`ProgramBrand`](../src/memory/program.rs) door. A
   `KObject::KExpression` needs no *coverage* claim of its own either: the marker on its
   payload is the proof that the node's parts run is eternal-tier program storage, and the

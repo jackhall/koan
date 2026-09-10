@@ -52,7 +52,7 @@ separate facts make that borrow harmless:
   into. The eternal rule filters such a member out of every reach description
   ([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)),
   so the cell reaches nothing. That tier is typed: the cell holds a
-  [`ProgramExpression`](../src/machine/model/ast/program.rs), minted only through a
+  [`ProgramExpression`](../src/parse/ast/program.rs), minted only through a
   [`ProgramBrand`](../src/memory/program.rs) door, so a node the runtime
   synthesizes at a per-call brand cannot enter the value channel at all
   ([value-substrates.md § Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
@@ -73,7 +73,7 @@ takes its own door
 `alloc_expression_witnessed`) rather than the scalar one, for a lifetime reason
 only: `KObject<'a>` is invariant, so a cell holding raw AST has no owned rebuild to
 offer a lifetime-free signature. The door's own signature is the enforcement —
-only a [`ProgramExpression`](../src/machine/model/ast/program.rs) reaches it, so the
+only a [`ProgramExpression`](../src/parse/ast/program.rs) reaches it, so the
 node's parts run is program-storage hosted by type and the cell the door bumps
 borrows nothing a seal would have to pin.
 
