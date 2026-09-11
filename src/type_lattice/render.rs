@@ -41,16 +41,8 @@ pub fn display_label(symbol: Symbol, labels: &LabelInterner) -> LabelDisplay<'_>
 }
 
 /// Surface-syntax rendering, straight into `f`. The one place the surface arms are written.
-pub fn write_name(
-    kt: KType,
-    f: &mut std::fmt::Formatter<'_>,
-    types: &TypeRegistry,
-    labels: &LabelInterner,
-) -> std::fmt::Result {
-    write_name_in(kt, f, types, labels, &[])
-}
-
-/// [`write_name`] under a quantifier binder — the enclosing shape's parameter names, which its
+///
+/// `binder` is the quantifier binder in force — the enclosing shape's parameter names, which its
 /// element and return positions dereference through [`TypeNode::Quantified`]. Threaded rather than
 /// looked up, because a quantified leaf carries an index and nothing else; a nested shape rebinds
 /// it with its own list, exactly as it shadows one in the relations.
@@ -174,12 +166,21 @@ fn write_name_in(
     })
 }
 
-/// A [`display_name`] view: one handle plus the registries its content and labels live in.
+/// A [`display_name`] view: one handle plus the registries its content and labels live in. The one
+/// render: `Display` writes it straight into the caller's formatter, `to_string` owns it.
 pub struct TypeNameDisplay<'r> {
     ktype: KType,
     types: &'r TypeRegistry,
     labels: &'r LabelInterner,
     binder: &'r [TypeSymbol],
+}
+
+impl<'r> TypeNameDisplay<'r> {
+    /// The same render under a quantifier binder, so a diagnostic about a quantified position
+    /// prints the name its group gave it.
+    pub fn under(self, binder: &'r [TypeSymbol]) -> Self {
+        Self { binder, ..self }
+    }
 }
 
 impl std::fmt::Display for TypeNameDisplay<'_> {
@@ -188,8 +189,8 @@ impl std::fmt::Display for TypeNameDisplay<'_> {
     }
 }
 
-/// [`write_name`] as a `Display` view — what a `format!` argument naming a type uses, so the
-/// surface lands in the message's own buffer with nothing owned on the way.
+/// Surface-syntax rendering as a `Display` view — what a `format!` argument naming a type uses,
+/// so the surface lands in the message's own buffer with nothing owned on the way.
 pub fn display_name<'r>(
     kt: KType,
     types: &'r TypeRegistry,
@@ -201,28 +202,6 @@ pub fn display_name<'r>(
         labels,
         binder: &[],
     }
-}
-
-/// Surface-syntax rendering as an owned `String`.
-pub fn name(kt: KType, types: &TypeRegistry, labels: &LabelInterner) -> String {
-    display_name(kt, types, labels).to_string()
-}
-
-/// [`name`] under a quantifier binder, so a diagnostic about a quantified position prints the name
-/// its group gave it.
-pub fn name_under(
-    kt: KType,
-    binder: &[TypeSymbol],
-    types: &TypeRegistry,
-    labels: &LabelInterner,
-) -> String {
-    TypeNameDisplay {
-        ktype: kt,
-        types,
-        labels,
-        binder,
-    }
-    .to_string()
 }
 
 /// Whether this type's surface opens with the type sigil `:` — the predicate a parameter position
@@ -382,8 +361,12 @@ fn write_sig_schema(
         if index > 0 {
             f.write_str(", ")?;
         }
-        write!(f, "{}: ", display_label(*name, labels))?;
-        write_name(*kt, f, types, labels)?;
+        write!(
+            f,
+            "{}: {}",
+            display_label(*name, labels),
+            display_name(*kt, types, labels)
+        )?;
     }
     // Keyworded members follow the named ones, each as the head declaring it. They are named by a
     // call shape rather than by a name, so they follow the schema's canonical member order. A unary
@@ -454,7 +437,7 @@ pub fn render_keyworded_head(
             labels,
         }
         .to_string(),
-        None => name(shape, types, labels),
+        None => display_name(shape, types, labels).to_string(),
     }
 }
 
@@ -626,7 +609,7 @@ pub fn render_sig_failure(
     labels: &LabelInterner,
 ) -> String {
     let head = |shape: KType| render_keyworded_head(shape, operators, types, labels);
-    let show = |kt: KType| name(kt, types, labels);
+    let show = |kt: KType| display_name(kt, types, labels);
     match failure {
         SigSubtypeFailure::MissingTypeMember { name } => {
             format!(

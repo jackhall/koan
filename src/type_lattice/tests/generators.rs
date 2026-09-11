@@ -369,7 +369,6 @@ fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
             let window = RecursiveGroupWindow::new(
                 names.iter().map(|name| (*name, KKind::NewType)).collect(),
             );
-            let mut sealed = None;
             for (index, name) in names.iter().enumerate() {
                 let (repr, recursive) = reprs[index];
                 let body = if recursive {
@@ -383,9 +382,12 @@ fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
                     repr
                 };
                 let _ = name;
-                sealed = window.fill_member(index, RelativeSchema::NewType(body), &world.types);
+                window.fill_member(index, RelativeSchema::NewType(body), &world.types);
             }
-            sealed.expect("the window seals on its last fill").members[0]
+            window
+                .sealed()
+                .and_then(|sealed| sealed.member(0))
+                .expect("the window seals on its last fill")
         })
         .boxed()
 }

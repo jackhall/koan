@@ -66,8 +66,8 @@ pub use order::{is_more_specific_than, is_subtype_of, satisfied_by};
 pub use record::Record;
 pub use registry::{ShapeIntern, TypeRegistry};
 pub use render::{
-    display_label, display_name, name, name_under, render_keyworded_head, render_label,
-    render_sig_failure, write_name,
+    TypeNameDisplay, display_label, display_name, render_keyworded_head, render_label,
+    render_sig_failure,
 };
 pub use schema::{
     DeclaredGroup, OperatorMembers, SigSchema, TypeMemberMap, canonical_groups,

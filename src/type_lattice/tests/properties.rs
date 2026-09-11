@@ -26,7 +26,7 @@ use crate::type_lattice::substitute::{
 };
 use crate::type_lattice::unify::{Collector, admits_with};
 use crate::type_lattice::walk::Variance;
-use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema, SealedGroup};
+use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
 use super::generators::{World, arb_arguments, arb_shape_type, arb_type};
 
@@ -527,22 +527,22 @@ proptest! {
         let forwards = seal(&types, &names, reprs, false);
         let backwards = seal(&types, &names, reprs, true);
         // The same group presented in either member order seals to the same handles.
-        let mut mirrored = backwards.members.clone();
+        let mut mirrored = backwards.clone();
         mirrored.reverse();
-        prop_assert_eq!(forwards.members.clone(), mirrored);
+        prop_assert_eq!(forwards.clone(), mirrored);
         // Re-presenting the same group yields the same handles.
-        prop_assert_eq!(forwards.members.clone(), seal(&types, &names, reprs, false).members);
+        prop_assert_eq!(forwards, seal(&types, &names, reprs, false));
     }
 }
 
 /// Seal a group of newtypes over `reprs`, each also referencing its successor as a sibling, in
-/// announcement order or reversed.
+/// announcement order or reversed. Returns the member handles in announcement order.
 fn seal(
     types: &TypeRegistry,
     names: &[crate::parse::TypeSymbol],
     reprs: &[KType],
     reversed: bool,
-) -> SealedGroup {
+) -> Vec<KType> {
     let order: Vec<usize> = if reversed {
         (0..names.len()).rev().collect()
     } else {
@@ -553,7 +553,6 @@ fn seal(
         .map(|index| (names[*index], crate::type_lattice::kind::KKind::NewType))
         .collect();
     let window = RecursiveGroupWindow::new(announced);
-    let mut sealed = None;
     for (position, index) in order.iter().enumerate() {
         let successor = window.sibling(
             names[(index + 1) % names.len()],
@@ -561,9 +560,12 @@ fn seal(
             types,
         );
         let body = types.union_of(&[reprs[*index], successor]);
-        sealed = window.fill_member(position, RelativeSchema::NewType(body), types);
+        window.fill_member(position, RelativeSchema::NewType(body), types);
     }
-    sealed.expect("the window seals on its last fill")
+    let sealed = window.sealed().expect("the window seals on its last fill");
+    (0..names.len())
+        .map(|index| sealed.member(index).expect("every announced member sealed"))
+        .collect()
 }
 
 // --- 9. Signatures ---
@@ -600,10 +602,10 @@ proptest! {
     #[test]
     fn rendering_is_total_and_deterministic(a in one()) {
         let world = world();
-        let once = crate::type_lattice::render::name(a, &world.types, &world.labels);
-        let twice = crate::type_lattice::render::name(a, &world.types, &world.labels);
+        let once = crate::type_lattice::display_name(a, &world.types, &world.labels).to_string();
+        let twice = crate::type_lattice::display_name(a, &world.types, &world.labels).to_string();
+        prop_assert!(!once.is_empty());
         prop_assert_eq!(once, twice);
-        prop_assert!(!crate::type_lattice::render::name(a, &world.types, &world.labels).is_empty());
     }
 
     #[test]

@@ -39,7 +39,7 @@
 //!
 //! See [design/typing/type-lattice.md](../../design/typing/type-lattice.md).
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 
 use crate::memory::ScopeId;
@@ -147,7 +147,7 @@ impl PendingMember {
     }
 
     /// Whether the member's finalize has run.
-    pub fn is_filled(&self) -> bool {
+    fn is_filled(&self) -> bool {
         self.fill.borrow().is_some()
     }
 }
@@ -164,25 +164,47 @@ pub struct RecursiveGroupWindow {
     /// minted member's component digest and two applications never unify. A generative window
     /// always has exactly one member, so the nonce belongs unambiguously to its one component.
     generative_nonce: Option<ScopeId>,
-    /// What the seal minted. `None` while the window is open.
-    sealed: RefCell<Option<SealedGroup>>,
+    /// What the seal minted. Empty while the window is open; set exactly once.
+    sealed: OnceCell<SealedGroup>,
 }
 
 /// What a window's seal produced: one absolute handle per member in announcement order, plus one
-/// union handle per binder over exactly the members that binder owns.
-#[derive(Clone)]
+/// union handle per binder over exactly the members that binder owns. Every question about a
+/// sealed group is answered here; the window itself only answers about an open one.
 pub struct SealedGroup {
-    pub members: Vec<KType>,
-    pub binder_types: Vec<(TypeSymbol, KType)>,
+    members: Vec<SealedMember>,
+    binder_types: Vec<(TypeSymbol, KType)>,
+}
+
+/// One member's absolute handle with the name and owner it was announced under.
+struct SealedMember {
+    name: TypeSymbol,
+    owner: Option<TypeSymbol>,
+    kt: KType,
 }
 
 impl SealedGroup {
+    /// The absolute handle of the member at announcement index `index`.
+    pub fn member(&self, index: usize) -> Option<KType> {
+        self.members.get(index).map(|m| m.kt)
+    }
+
     /// The union handle binder `name` denotes, if this seal declared one.
     pub fn binder_type(&self, name: TypeSymbol) -> Option<KType> {
         self.binder_types
             .iter()
             .find(|(binder, _)| *binder == name)
             .map(|(_, kt)| *kt)
+    }
+
+    /// Every `(name, handle)` this seal installs: the standalone members, then the binders.
+    /// Variants are absent — a variant is reached through its binder's union node, never by name.
+    pub fn installable(&self) -> impl Iterator<Item = (TypeSymbol, KType)> + '_ {
+        self.members
+            .iter()
+            .filter(|m| m.owner.is_none())
+            .map(|m| (m.name, m.kt))
+            .chain(self.binder_types.iter().copied())
     }
 }
 
@@ -199,7 +221,7 @@ impl RecursiveGroupWindow {
             ),
             binders: RefCell::new(Vec::new()),
             generative_nonce: None,
-            sealed: RefCell::new(None),
+            sealed: OnceCell::new(),
         }
     }
 
@@ -216,7 +238,7 @@ impl RecursiveGroupWindow {
             ),
             binders: RefCell::new(vec![(binder, owned)]),
             generative_nonce: None,
-            sealed: RefCell::new(None),
+            sealed: OnceCell::new(),
         }
     }
 
@@ -228,13 +250,8 @@ impl RecursiveGroupWindow {
             members: RefCell::new(vec![PendingMember::new(name, None, kind)]),
             binders: RefCell::new(Vec::new()),
             generative_nonce: Some(nonce),
-            sealed: RefCell::new(None),
+            sealed: OnceCell::new(),
         }
-    }
-
-    /// The generativity nonce folded into this window's component digest, if any.
-    pub fn generative_nonce(&self) -> Option<ScopeId> {
-        self.generative_nonce
     }
 
     /// Index of the standalone member named `name`. Owned members — a `UNION`'s variants — never
@@ -278,40 +295,10 @@ impl RecursiveGroupWindow {
             .map(|(_, owned)| owned.clone())
     }
 
-    /// What the seal minted, or `None` while the window is still open.
-    pub fn sealed(&self) -> Option<SealedGroup> {
-        self.sealed.borrow().clone()
-    }
-
-    /// Whether the window has sealed — a cheap probe that clones nothing. Once sealed, a member
-    /// name resolves to its bound absolute handle, not the relative `Sibling` back-edge.
-    pub fn is_sealed(&self) -> bool {
-        self.sealed.borrow().is_some()
-    }
-
-    /// Number of announced members.
-    pub fn len(&self) -> usize {
-        self.members.borrow().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.members.borrow().is_empty()
-    }
-
-    /// The announced member names in announcement order.
-    pub fn member_names(&self) -> Vec<TypeSymbol> {
-        self.members.borrow().iter().map(|m| m.name).collect()
-    }
-
-    /// The names of every member whose finalize has not run — empty once the window can seal. A
-    /// name here after the declarator finished is a reference to a type the group never declared.
-    pub fn unfilled_member_names(&self) -> Vec<TypeSymbol> {
-        self.members
-            .borrow()
-            .iter()
-            .filter(|m| !m.is_filled())
-            .map(|m| m.name)
-            .collect()
+    /// What the seal minted, or `None` while the window is still open. Once sealed, a member name
+    /// resolves to its bound absolute handle, not the relative `Sibling` back-edge.
+    pub fn sealed(&self) -> Option<&SealedGroup> {
+        self.sealed.get()
     }
 
     /// The names a reference may reach bare: the standalone members and the declaring binders.
@@ -328,7 +315,9 @@ impl RecursiveGroupWindow {
     }
 
     /// Every still-unfilled member as `(name, owner)` — the owner is who carries the member's
-    /// declaration placeholder, since a variant stamps none of its own.
+    /// declaration placeholder, since a variant stamps none of its own. Empty once the window can
+    /// seal; a name here after the declarator finished is a reference to a type the group never
+    /// declared.
     pub fn unfilled_members(&self) -> Vec<(TypeSymbol, Option<TypeSymbol>)> {
         self.members
             .borrow()
@@ -338,25 +327,8 @@ impl RecursiveGroupWindow {
             .collect()
     }
 
-    /// Every `(name, handle)` this window's seal installs: the standalone members and the binders.
-    /// Empty while the window is open. Variants are absent — a variant is reached through its
-    /// binder's union node, never by name.
-    pub fn installable(&self) -> Vec<(TypeSymbol, KType)> {
-        let Some(sealed) = self.sealed() else {
-            return Vec::new();
-        };
-        self.members
-            .borrow()
-            .iter()
-            .enumerate()
-            .filter(|(_, member)| member.owner.is_none())
-            .map(|(index, member)| (member.name, sealed.members[index]))
-            .chain(sealed.binder_types.iter().copied())
-            .collect()
-    }
-
     /// Whether the member at `index` has had its finalize run — the by-index half of
-    /// [`Self::unfilled_member_names`], for a consumer holding a relative handle rather than a name.
+    /// [`Self::unfilled_members`], for a consumer holding a relative handle rather than a name.
     pub fn member_is_filled(&self, index: usize) -> bool {
         self.members
             .borrow()
@@ -404,9 +376,9 @@ impl RecursiveGroupWindow {
         index: usize,
         schema: RelativeSchema,
         types: &TypeRegistry,
-    ) -> Option<SealedGroup> {
+    ) -> Option<&SealedGroup> {
         *self.members.borrow()[index].fill.borrow_mut() = Some(schema);
-        if let Some(sealed) = self.sealed.borrow().clone() {
+        if let Some(sealed) = self.sealed.get() {
             return Some(sealed);
         }
         let complete = self.members.borrow().iter().all(PendingMember::is_filled);
@@ -440,8 +412,7 @@ impl RecursiveGroupWindow {
         drop(binder_inputs);
         drop(members);
         drop(binders);
-        *self.sealed.borrow_mut() = Some(sealed.clone());
-        Some(sealed)
+        Some(self.sealed.get_or_init(|| sealed))
     }
 
     /// Seal a one-member window in place — the standalone declarators' path, where announcement,
@@ -460,8 +431,8 @@ impl RecursiveGroupWindow {
         };
         window
             .fill_member(0, schema, types)
+            .and_then(|sealed| sealed.member(0))
             .expect("a one-member window seals on its only fill")
-            .members[0]
     }
 }
 
@@ -570,7 +541,7 @@ pub(super) fn seal_group(
     let absolute = |sibling: usize| {
         handles[sibling].expect("every member is placed before any schema is made absolute")
     };
-    let mut sealed: Vec<KType> = Vec::with_capacity(count);
+    let mut sealed: Vec<SealedMember> = Vec::with_capacity(count);
     for index in 0..count {
         let (scc_digest, position, scc_size) =
             placement[index].expect("Tarjan covers every member");
@@ -591,12 +562,20 @@ pub(super) fn seal_group(
             handles[index].expect("placed"),
             "the interned member node must key at the handle its component derived",
         );
-        sealed.push(handle);
+        sealed.push(SealedMember {
+            name: members[index].name,
+            owner: members[index].owner,
+            kt: handle,
+        });
     }
     let binder_types = binders
         .iter()
         .map(|binder| {
-            let owned: Vec<KType> = binder.members.iter().map(|index| sealed[*index]).collect();
+            let owned: Vec<KType> = binder
+                .members
+                .iter()
+                .map(|index| sealed[*index].kt)
+                .collect();
             (binder.name, types.union_of(&owned))
         })
         .collect();
