@@ -28,7 +28,7 @@ use crate::type_lattice::unify::{Collector, admits_with};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema, SealedGroup};
 
-use super::generators::{World, arb_arguments, arb_type};
+use super::generators::{World, arb_arguments, arb_shape_type, arb_type};
 
 thread_local! {
     /// One live registry and one alphabet per test thread — proptest runs each `#[test]` on its
@@ -52,6 +52,12 @@ fn one() -> BoxedStrategy<KType> {
 /// A shallower one, for the ternary laws that would otherwise multiply three deep trees.
 fn small() -> BoxedStrategy<KType> {
     arb_type(world(), 2)
+}
+
+/// A generated expression shape. The laws whose subject is a shape draw from here rather than from
+/// the whole vocabulary, where most draws would satisfy them vacuously.
+fn shape() -> BoxedStrategy<KType> {
+    arb_shape_type(world(), 3)
 }
 
 fn binary() -> ProptestConfig {
@@ -304,7 +310,7 @@ proptest! {
     #![proptest_config(binary())]
 
     #[test]
-    fn canonical_shape_form_is_a_fixed_point(a in one()) {
+    fn canonical_shape_form_is_a_fixed_point(a in shape()) {
         let types = registry();
         let read = types.with_node(a, |node| match node {
             TypeNode::ExpressionShape {
@@ -321,7 +327,7 @@ proptest! {
     }
 
     #[test]
-    fn specificity_flips_when_its_arguments_swap(a in one(), b in one()) {
+    fn specificity_flips_when_its_arguments_swap(a in shape(), b in shape()) {
         let types = registry();
         prop_assert_eq!(
             shape_specificity(&types, a, a),
@@ -343,7 +349,20 @@ proptest! {
     }
 
     #[test]
-    fn monomorphic_specificity_is_the_pointwise_fold(a in one(), b in one()) {
+    fn specificity_refuses_anything_that_is_not_a_shape(a in one(), b in shape()) {
+        let types = registry();
+        // Two things that are not both shapes share no bucket to rank under. The empty element run
+        // a non-shape reads as would otherwise make every pair of leaves compare `Equal`.
+        if !crate::type_lattice::schema::is_shape(a, &types) {
+            prop_assert_eq!(shape_specificity(&types, a, b), Specificity::Incomparable);
+            prop_assert_eq!(shape_specificity(&types, b, a), Specificity::Incomparable);
+            prop_assert!(!admits_slots(a, b, &types));
+            prop_assert!(!admits_slots(b, a, &types));
+        }
+    }
+
+    #[test]
+    fn monomorphic_specificity_is_the_pointwise_fold(a in shape(), b in shape()) {
         let types = registry();
         let monomorphic = shape_quantifiers(a, &types).is_empty()
             && shape_quantifiers(b, &types).is_empty()
@@ -372,7 +391,7 @@ proptest! {
     }
 
     #[test]
-    fn a_shape_below_another_admits_what_it_admits(a in one(), b in one()) {
+    fn a_shape_below_another_admits_what_it_admits(a in shape(), b in shape()) {
         let types = registry();
         let comparable = shape_return(a, &types).is_some()
             && shape_return(b, &types).is_some()
@@ -427,7 +446,7 @@ proptest! {
     }
 
     #[test]
-    fn a_solution_is_a_contribution_or_a_bound(a in one(), b in one()) {
+    fn a_solution_is_the_extremum_of_its_contributions(a in shape(), b in shape()) {
         let types = registry();
         let bounds = quantifier_bounds(&types, a);
         if bounds.is_empty() {
@@ -459,7 +478,38 @@ proptest! {
                 admits_with(&types, *slot, *argument, Variance::Co, &mut backwards).is_ok()
             );
         }
-        prop_assert_eq!(backwards.solve(&types).ok(), Some(solution));
+        prop_assert_eq!(backwards.solve(&types).ok(), Some(solution.clone()));
+
+        for (index, solved) in solution.iter().enumerate() {
+            let (lower, upper) = collector.contributions(index);
+            let bound = collector.bound(index);
+            // The solution is always a contribution or the declared bound — never a type the
+            // arguments and the declaration did not already spell between them.
+            prop_assert!(
+                lower.contains(solved) || upper.contains(solved) || *solved == bound,
+                "the solver minted a type nobody wrote",
+            );
+            // And it is the extremum of the set that constrains it: the maximum of the lower
+            // contributions where there are any, else the minimum of the upper ones. That is what
+            // "lies under every other solution that also admits" means for a lower-constrained
+            // variable — every admitting alternative is above every lower contribution, and the
+            // solution *is* one of them.
+            if !lower.is_empty() {
+                prop_assert!(lower.contains(solved));
+                for contribution in lower {
+                    prop_assert!(is_subtype_of(&types, *contribution, *solved));
+                }
+            } else if !upper.is_empty() {
+                prop_assert!(upper.contains(solved));
+                for contribution in upper {
+                    prop_assert!(is_subtype_of(&types, *solved, *contribution));
+                }
+            } else {
+                prop_assert_eq!(*solved, bound);
+            }
+            // Every solution lies under its variable's declared bound.
+            prop_assert!(is_subtype_of(&types, *solved, bound));
+        }
     }
 }
 
@@ -559,21 +609,32 @@ proptest! {
     }
 
     #[test]
-    fn a_canonical_overload_set_keeps_no_shape_another_admits(
-        shapes in prop::collection::vec(one(), 1..4)
+    fn a_canonical_overload_set_is_an_antichain(
+        overloads in prop::collection::vec(shape(), 1..4)
     ) {
         let types = registry();
-        let kept = crate::type_lattice::schema::canonical_overloads(shapes, &types);
-        for (index, shape) in kept.iter().enumerate() {
+        let kept =
+            crate::type_lattice::schema::canonical_overloads(overloads.clone(), &types);
+        // Canonical by subsumption, the same rule `union_of` applies to a union's members: no
+        // survivor lies below another, so no member promises only what a sibling already does.
+        for (index, one) in kept.iter().enumerate() {
             for (peer, other) in kept.iter().enumerate() {
-                if index == peer || !shape_keys_equal(*shape, *other, &types) {
-                    continue;
-                }
                 prop_assert!(
-                    !admits_slots(*other, *shape, &types)
-                        || admits_slots(*shape, *other, &types)
+                    index == peer || !is_subtype_of(&types, *other, *one),
+                    "a canonical overload set kept a member below another",
                 );
             }
+        }
+        // And the drop is complete: everything dropped has a survivor standing for it, so the
+        // canonical set promises everything the input did.
+        for dropped in &overloads {
+            prop_assert!(
+                kept.contains(dropped)
+                    || kept
+                        .iter()
+                        .any(|survivor| is_subtype_of(&types, *survivor, *dropped)),
+                "an overload was dropped with no survivor below it",
+            );
         }
     }
 }

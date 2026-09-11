@@ -253,6 +253,8 @@ impl TypeRegistry {
     /// A named rigid variable — a signature's abstract member, or an opaque ascription's
     /// per-application mint when `nonce` is set. `bound` is what it stands over, [`KType::ANY`]
     /// where the declaration constrains nothing.
+    ///
+    /// A bound holds no rigid variable of its own — see [`contains_rigid`](Self::contains_rigid).
     pub fn abstract_type(
         &self,
         source: ScopeId,
@@ -261,6 +263,10 @@ impl TypeRegistry {
         nonce: Option<ScopeId>,
         bound: KType,
     ) -> KType {
+        debug_assert!(
+            !self.contains_rigid(bound),
+            "a rigid variable's bound holds no rigid variable of its own",
+        );
         self.intern(TypeNode::AbstractType {
             source,
             name,
@@ -273,7 +279,13 @@ impl TypeRegistry {
     /// The `index`-th rigid variable of the enclosing shape's group, standing over `bound`. The one
     /// door a `Quantified` node is born through, so it is also where the run learns it has any —
     /// see [`contains_quantified`](Self::contains_quantified).
+    ///
+    /// A bound holds no rigid variable of its own — see [`contains_rigid`](Self::contains_rigid).
     pub fn quantified(&self, index: usize, bound: KType) -> KType {
+        debug_assert!(
+            !self.contains_rigid(bound),
+            "a rigid variable's bound holds no rigid variable of its own",
+        );
         self.quantifiers_exist.set(true);
         self.intern(TypeNode::Quantified { index, bound })
     }
@@ -581,6 +593,28 @@ impl TypeRegistry {
         );
         self.quantified.borrow_mut().insert(kt.digest(), answer);
         answer
+    }
+
+    /// Whether any rigid variable — `Quantified` or `AbstractType` — is reachable from `kt`.
+    ///
+    /// The invariant a **bound** carries: a bound is a variable-free type. That is what keeps the
+    /// order's two rigid clauses consistent, since below a rigid variable are only itself and
+    /// `Never` while above it is everything above its bound — and a rigid bound would put a
+    /// variable in both sets at once. The two doors that mint a rigid variable assert it, so a
+    /// caller that reaches for a rigid bound fails a test rather than producing a wrong verdict.
+    pub fn contains_rigid(&self, kt: KType) -> bool {
+        visit(
+            self,
+            kt,
+            Descent {
+                signature: Step::Leaf,
+                set_member: Step::Leaf,
+            },
+            &mut |_, node, _| match node {
+                TypeNode::Quantified { .. } | TypeNode::AbstractType { .. } => Visit::Stop,
+                _ => Visit::Descend,
+            },
+        )
     }
 
     /// Whether `kt` reads the `index`-th quantifier of the enclosing shape — what a definition asks

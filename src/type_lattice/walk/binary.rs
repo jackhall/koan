@@ -199,7 +199,7 @@ fn pairing<'n>(a: &'n TypeNode, b: &'n TypeNode, v: Variance) -> Pairing<'n> {
             positional([(*xk, *yk, v), (*xv, *yv, v)].into_iter(), Assembly::Dict)
         }
         (TypeNode::Record { fields: xf }, TypeNode::Record { fields: yf }) => {
-            by_name(xf, yf, v, v, Width::ASupersetOfB, Assembly::Record)
+            by_name(xf, yf, v, Width::ASupersetOfB, Assembly::Record)
         }
         (
             TypeNode::KFunction {
@@ -211,14 +211,7 @@ fn pairing<'n>(a: &'n TypeNode, b: &'n TypeNode, v: Variance) -> Pairing<'n> {
                 ret: yr,
             },
         ) => {
-            let mut paired = by_name(
-                xp,
-                yp,
-                v.flipped(),
-                v,
-                Width::ASubsetOfB,
-                Assembly::Function,
-            );
+            let mut paired = by_name(xp, yp, v.flipped(), Width::ASubsetOfB, Assembly::Function);
             if let Pairing::Structural { pairs, .. } = &mut paired {
                 pairs.push((*xr, *yr, v));
             }
@@ -273,7 +266,7 @@ fn pairing<'n>(a: &'n TypeNode, b: &'n TypeNode, v: Variance) -> Pairing<'n> {
                 arguments: ya,
             },
         ) => {
-            let mut paired = by_name(xa, ya, v, v, Width::Exact, Assembly::Apply);
+            let mut paired = by_name(xa, ya, v, Width::Exact, Assembly::Apply);
             if let Pairing::Structural { pairs, .. } = &mut paired {
                 pairs.insert(0, (*xc, *yc, v));
             }
@@ -303,7 +296,6 @@ fn by_name<'n>(
     a: &Record<KType>,
     b: &Record<KType>,
     child: Variance,
-    _outer: Variance,
     width: Width,
     assemble: fn(SmallVec<[BinderSymbol; 8]>) -> Assembly<'n>,
 ) -> Pairing<'n> {

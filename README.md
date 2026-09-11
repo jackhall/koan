@@ -95,11 +95,13 @@ The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/READ
 
 ## Source layout
 
-The crate splits into four top-level modules: [memory/](src/memory) (where a
+The crate splits into five top-level modules: [memory/](src/memory) (where a
 value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus the
 symbol, AST and form-table vocabulary that output is written in),
 [builtins/](src/builtins) (the K-language standard library, one file per
-builtin), and [machine/](src/machine) (the execution engine that consumes a
+builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
+type nodes — see [design/typing/type-lattice.md](design/typing/type-lattice.md)),
+and [machine/](src/machine) (the execution engine that consumes a
 `KExpression`). `parse` splits into [ast/](src/parse/ast.rs) (the syntax types,
 the node cache and the eternal-tier program marker),
 [labels.rs](src/parse/labels.rs) (`Symbol`, the content-digest handle every
@@ -149,6 +151,12 @@ owned bundle of that registry beside the label interner — see
 [builtins.rs](src/builtins.rs) (registry),
 [constructors.rs](src/machine/execute/decide/constructors.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
+
+`type_lattice/` reuses those names — `KType`, `TypeNode`, `TypeRegistry` — under
+its own path. The machine still reaches types through
+[types/](src/machine/model/types); pointing every caller at the lattice and
+deleting the files above is
+[integrate the type lattice](roadmap/refactor/type-lattice-integration.md).
 
 ```
 src/
@@ -216,6 +224,27 @@ src/
 │   ├── using_scope.rs        USING — lexical-scope introduction
 │   ├── test_support.rs
 │   └── eval.rs               # surface form `$(expr)`
+├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over labels and `ScopeId` and nothing else
+├── type_lattice/
+│   ├── node.rs           TypeNode — one interned type's content; every child position is a KType handle, so a node is shallow
+│   ├── handle.rs         KType — the Copy content-digest handle, the pinned builtin constants, and the name/kind readings off one
+│   ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
+│   ├── registry.rs       TypeRegistry — the interning table and verdict cache, the composite doors, canonical `union_of` and the canonicalizing `shape_type`
+│   ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
+│   ├── record.rs         Record<V> — ordered BinderSymbol-keyed map backing record types and lambda parameter identity
+│   ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity — the non-type payloads a node carries
+│   ├── operators.rs      ReductionMode / FoldDirection — how a run of a signature's operators reduces, which is part of the signature's identity
+│   ├── schema.rs         SigSchema, its channels' canonical orders, and the shape readers
+│   ├── walk.rs           Variance and the two drivers every structural recursion goes through
+│   ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the descent knobs and the position context
+│   ├── walk/binary.rs    the pairing table behind `lockstep`: width verdicts, the variance flip, and the rebuild door
+│   ├── order.rs          is_subtype_of — the one order, as a single Lockstep instance — plus is_more_specific_than and satisfied_by
+│   ├── lattice.rs        join (subsumption-or-union, not a walk) and meet (the rebuilding Lockstep instance)
+│   ├── unify.rs          admits_with and the Collector: contributions solved by maximum, minimum, or the declared bound
+│   ├── substitute.rs     the quantifier and member substitutions, and the three slot_* relations that are each one of them composed with an ordinary relation
+│   ├── sig_relations.rs  sig_subtype and its failure record, keyworded selection, join_schemas / meet_schemas, and shape_specificity
+│   ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
+│   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the label interner
 ├── machine.rs           pub mod core / model / execute
 └── machine/
     ├── model.rs            re-exports from model::types and model::values

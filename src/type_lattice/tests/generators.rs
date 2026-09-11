@@ -390,6 +390,12 @@ fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
         .boxed()
 }
 
+/// A generated expression shape, for the laws whose subject is a shape and which a draw from the
+/// whole vocabulary would leave mostly vacuous.
+pub fn arb_shape_type(world: World, depth: u32) -> BoxedStrategy<KType> {
+    arb_shape(world, depth, Rc::new(Vec::new()))
+}
+
 /// A tuple of argument types for a shape of `arity` positions, drawn from the ground alphabet plus a
 /// couple of composites — what the admission laws feed a candidate.
 pub fn arb_arguments(world: World, arity: usize) -> impl Strategy<Value = Vec<KType>> + use<> {

@@ -71,8 +71,8 @@ pub use render::{
 };
 pub use schema::{
     DeclaredGroup, OperatorMembers, SigSchema, TypeMemberMap, canonical_groups,
-    canonical_overloads, constructor_param_names, is_abstract_sig_member, name_sets_equal,
-    shape_keys_equal, shape_quantifiers, shape_return, shape_slots,
+    canonical_overloads, constructor_param_names, is_abstract_sig_member, is_shape,
+    name_sets_equal, shape_keys_equal, shape_quantifiers, shape_return, shape_slots,
 };
 pub use shape::{DeferredReturnSurface, DispatchTokenElement, Specificity};
 pub use sig_relations::{
@@ -80,7 +80,7 @@ pub use sig_relations::{
     select_keyworded_satisfier, shape_specificity, sig_subtype,
 };
 pub use substitute::{
-    abstract_references, canonicalize_binder, collect_siblings, erase_quantified,
+    abstract_references, canonicalize_binder, collect_siblings, erase_quantified, erase_rigid,
     instantiate_quantified, quantifier_bounds, rewrite_siblings, slot_more_specific_or_equal,
     slot_satisfied_by, slot_types_equal, substitute_quantified, substitute_sig_members,
 };

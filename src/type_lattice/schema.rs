@@ -270,6 +270,15 @@ pub fn shape_slots(kt: KType, types: &TypeRegistry) -> Vec<KType> {
     })
 }
 
+/// Whether `kt` names an expression shape.
+///
+/// The relations keyed on a bucket read a non-shape as the *empty* key, so two unrelated leaves
+/// would compare key-equal; every door that ranks or admits by key asks this first, so a caller
+/// that hands one a plain type gets a refusal rather than a vacuous verdict.
+pub fn is_shape(kt: KType, types: &TypeRegistry) -> bool {
+    types.with_node(kt, |node| matches!(node, TypeNode::ExpressionShape { .. }))
+}
+
 /// A shape's return type, or `None` for anything that is not a shape.
 pub fn shape_return(kt: KType, types: &TypeRegistry) -> Option<KType> {
     types.with_node(kt, |node| match node {

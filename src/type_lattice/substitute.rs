@@ -97,6 +97,18 @@ pub fn erase_quantified(types: &TypeRegistry, kt: KType) -> KType {
     instantiate_quantified(types, kt, &bounds)
 }
 
+/// `kt` with every rigid variable reachable from it replaced by the bound it stands over — the
+/// variable-free type it constrains to.
+///
+/// A bound is itself variable-free, so one pass reaches a fixed point. What a caller minting a
+/// *bound* out of an arbitrary type runs it through, since the two doors that take one require it.
+pub fn erase_rigid(types: &TypeRegistry, kt: KType) -> KType {
+    rebuild(types, kt, OVER_MEMBERS, &mut |_, node, _| match node {
+        TypeNode::Quantified { bound, .. } | TypeNode::AbstractType { bound, .. } => Some(*bound),
+        _ => None,
+    })
+}
+
 /// The bound each variable of `kt`'s own quantifier group stands over, in canonical index order.
 /// Empty for anything that is not a quantified shape. Canonical form guarantees every surviving
 /// variable has an occurrence, so every index is reachable.

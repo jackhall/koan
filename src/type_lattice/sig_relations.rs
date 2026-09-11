@@ -23,11 +23,11 @@ use super::order::{is_more_specific_than, is_subtype_of, satisfied_by};
 use super::registry::TypeRegistry;
 use super::schema::{
     DeclaredGroup, OperatorMembers, SigSchema, TypeMemberMap, canonical_groups,
-    canonical_overloads, constructor_param_names, name_sets_equal, shape_keys_equal,
+    canonical_overloads, constructor_param_names, is_shape, name_sets_equal, shape_keys_equal,
     shape_quantifiers, shape_slots,
 };
 use super::shape::Specificity;
-use super::substitute::{slot_satisfied_by, substitute_sig_members};
+use super::substitute::{erase_rigid, slot_satisfied_by, substitute_sig_members};
 use super::unify::{Collector, admits_with};
 use super::walk::Variance;
 use super::walk::binary::{Arm, Leftover, Lockstep, Width, lockstep};
@@ -40,7 +40,10 @@ use super::walk::binary::{Arm, Leftover, Lockstep, Width, lockstep};
 /// The one door specificity, keyworded selection and interface canonicalization all rank through,
 /// so the three cannot drift. Return types are not compared: dispatch never selects on them.
 pub fn admits_slots(declared: KType, candidate: KType, types: &TypeRegistry) -> bool {
-    if !shape_keys_equal(declared, candidate, types) {
+    if !is_shape(declared, types)
+        || !is_shape(candidate, types)
+        || !shape_keys_equal(declared, candidate, types)
+    {
         return false;
     }
     let (declared_slots, candidate_slots) =
@@ -61,6 +64,12 @@ pub fn admits_slots(declared: KType, candidate: KType, types: &TypeRegistry) -> 
 /// candidate it is the classic "more specific method" rule, so `(f _ :Number)` beats
 /// `(f FOR ALL (Elt) _ :Elt)` and `(f _ :Any)` ties with it.
 pub fn shape_specificity(types: &TypeRegistry, a: KType, b: KType) -> Specificity {
+    if !is_shape(a, types) || !is_shape(b, types) {
+        // Two things that are not both shapes have no bucket in common to rank under, which is a
+        // refusal rather than a tie: the empty element run a non-shape reads as would otherwise
+        // make every pair of leaves compare `Equal`.
+        return Specificity::Incomparable;
+    }
     let more = admits_slots(b, a, types);
     let less = admits_slots(a, b, types);
     match (more, less) {
@@ -456,7 +465,12 @@ pub fn join_schemas(types: &TypeRegistry, a: &SigSchema, b: &SigSchema) -> SigSc
             manifest_members.insert(name, left);
             continue;
         }
+        // A manifest binding can embed a rigid variable (`LIST OF Elt`), and a bound may hold none,
+        // so the demoted member's bound erases what it finds to those variables' own bounds.
+        // Widening an *upper* bound is sound: the join owes only that each operand still satisfies
+        // it, which a looser requirement makes easier.
         let bound = join(types, requirement(types, left), requirement(types, right));
+        let bound = erase_rigid(types, bound);
         let demoted = types.abstract_type(ScopeId::SENTINEL, name, param_names, None, bound);
         abstract_members.insert(name, demoted);
         generalizations.entry((left, right)).or_insert(demoted);

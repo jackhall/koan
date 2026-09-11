@@ -12,7 +12,7 @@ use crate::type_lattice::kind::KKind;
 use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::schema::{SigSchema, TypeMemberMap};
+use crate::type_lattice::schema::SigSchema;
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 
 #[test]
@@ -104,11 +104,8 @@ fn every_node_kind_has_its_own_tag() {
     let name = TypeSymbol::declared("Elt", &labels).expect("a Type token");
     let field = BinderSymbol::declared("x", &labels).expect("a bindable token");
     let keyword = crate::parse::KeywordSymbol::declared("PURE", &labels).expect("a keyword token");
-    let mut members = TypeMemberMap::default();
-    members.insert(name, KType::NUMBER);
-
-    // Exhaustive by construction: a new `TypeNode` variant is a compile error in this match, and the
-    // representative it forces someone to write is what the distinctness assertion below reads.
+    // One representative per node kind, whose digests the distinctness assertion below reads. The
+    // exhaustive match after the list is what makes a new variant a compile error here.
     let representatives: Vec<TypeNode> = vec![
         TypeNode::Number,
         TypeNode::Str,
@@ -175,8 +172,8 @@ fn every_node_kind_has_its_own_tag() {
             schema: NodeSchema::NewType(KType::NUMBER),
         },
     ];
-    // The exhaustiveness half: every variant above must be reachable from a match that names them
-    // all, so adding one without a representative fails to compile.
+    // The exhaustiveness half: a match naming every variant, so a new one fails to compile here
+    // and lands whoever added it in front of the list above.
     for node in &representatives {
         let _: &'static str = match node {
             TypeNode::Number => "Number",
@@ -221,5 +218,4 @@ fn every_node_kind_has_its_own_tag() {
         let handle = types.intern(node);
         types.with_node(handle, |_| ());
     }
-    let _ = members;
 }
