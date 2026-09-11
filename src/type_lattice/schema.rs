@@ -8,11 +8,12 @@
 //! a SIG-body-only construct.
 //!
 //! Every channel is a slice in the run region, stored in one canonical order: the three named
-//! tables symbol-sorted by name with each name once, the keyworded channel in
+//! tables are [`Members`], symbol-sorted by name with each name once — an order the type holds
+//! itself, since a table is only ever built sorted — the keyworded channel in
 //! [`canonical_overloads`] order, the operator channel in [`canonical_groups`] order. A reader walks
 //! a table in that order and never sorts one; a lookup by name is a binary search ([`member`]). The
-//! order is fixed in one place, [`TypeRegistry::signature`], the door a schema enters the lattice
-//! through.
+//! two unnamed channels' order is fixed in one place, [`TypeRegistry::signature`], the door a
+//! schema enters the lattice through.
 //!
 //! A `SigSchema` is what the [`TypeNode::Signature`] node owns; the node computes and stores the
 //! schema's content digest once at intern time, so the schema itself carries no digest field.
@@ -22,6 +23,7 @@
 //! The relations over two schemas live in [`sig_relations`](super::sig_relations).
 
 use std::cmp::Ordering;
+use std::ops::Deref;
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
 use crate::parse::{KeywordSymbol, TypeSymbol, ValueSymbol};
@@ -38,7 +40,91 @@ use super::substitute::substitute_sig_members;
 /// A named member table: `(name, type)` pairs, symbol-sorted by name with each name once. The shape
 /// every name-keyed channel of a schema is stored in, and the shape a substitution's bindings
 /// travel as.
-pub type Members<'a, N> = &'a [(N, KType)];
+///
+/// The order is the type's own invariant, not a caller's promise: a table is built only by
+/// [`Members::from_table`], which sorts and dedups, or derived from one by a step that keeps its
+/// names in place ([`copied_into`](Self::copied_into), [`map_types`](Self::map_types)). So every
+/// reader may binary-search a table ([`member`]) or walk two in lockstep ([`merge_join`]) without
+/// checking it. Reading a table is reading its slice, through `Deref`.
+pub struct Members<'a, N>(&'a [(N, KType)]);
+
+impl<N> Clone for Members<'_, N> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<N> Copy for Members<'_, N> {}
+
+impl<N> Deref for Members<'_, N> {
+    type Target = [(N, KType)];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<'a, N> IntoIterator for Members<'a, N> {
+    type Item = &'a (N, KType);
+    type IntoIter = std::slice::Iter<'a, (N, KType)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a, N: Copy> Members<'a, N> {
+    /// The table binding nothing.
+    pub const EMPTY: Self = Members(&[]);
+
+    /// This table copied into `bump`, in its stored order — how a table staged in scratch moves
+    /// into the region that keeps it.
+    pub(super) fn copied_into<'b>(self, bump: BumpAllocator<'b>) -> Members<'b, N> {
+        if self.0.is_empty() {
+            Members(&[])
+        } else {
+            Members(bump.slice(self.0))
+        }
+    }
+
+    /// This table with each bound type replaced by `read` of it, in `scratch`. The names stay
+    /// where they are, so the result is a table in the same order.
+    pub(super) fn map_types<'b>(
+        self,
+        scratch: BumpAllocator<'b>,
+        mut read: impl FnMut(KType) -> KType,
+    ) -> Members<'b, N> {
+        Members(scratch.slice_from_iter(self.0.iter().map(|(name, kt)| (*name, read(*kt)))))
+    }
+}
+
+impl<'a, N: Ord + Copy> Members<'a, N> {
+    /// `table` as a member table: sorted by name, a name bound twice keeping its later binding.
+    /// The door every table is built through. The sort is stable, which is what makes "later" the
+    /// order `table` was filled in.
+    pub fn from_table(mut table: BumpVec<'a, (N, KType)>) -> Self {
+        table.sort_by_key(|(name, _)| *name);
+        table.dedup_by(|later, earlier| {
+            let same = later.0 == earlier.0;
+            if same {
+                earlier.1 = later.1;
+            }
+            same
+        });
+        Members(table.leak())
+    }
+
+    /// [`from_table`](Self::from_table) over `pairs`, staged in `scratch`.
+    pub fn from_pairs(
+        scratch: BumpAllocator<'a>,
+        pairs: impl IntoIterator<Item = (N, KType)>,
+    ) -> Self {
+        let pairs = pairs.into_iter();
+        let mut table = BumpVec::with_capacity_in(pairs.size_hint().0, scratch);
+        table.extend(pairs);
+        Self::from_table(table)
+    }
+}
 
 /// The type `members` binds `name` to — a binary search over the table's stored order.
 pub fn member<N: Ord + Copy>(members: Members<'_, N>, name: N) -> Option<KType> {
@@ -95,9 +181,9 @@ impl SigSchema<'_> {
     /// interface names no abstract member for a slot type to substitute against.
     pub const EMPTY: SigSchema<'static> = SigSchema {
         sig_id: None,
-        abstract_members: &[],
-        manifest_members: &[],
-        value_slots: &[],
+        abstract_members: Members::EMPTY,
+        manifest_members: Members::EMPTY,
+        value_slots: Members::EMPTY,
         keyworded: &[],
         operators: &[],
     };
@@ -120,23 +206,19 @@ impl SigSchema<'_> {
     }
 
     /// Every type member's name paired with its binding, manifest first — the substitution a
-    /// relation carries into the other side's slot types. Symbol-sorted, so it is itself a
-    /// [`Members`] table.
-    pub fn member_bindings<'s>(
-        &self,
-        scratch: BumpAllocator<'s>,
-    ) -> BumpVec<'s, (TypeSymbol, KType)> {
+    /// relation carries into the other side's slot types, as one table.
+    pub fn member_bindings<'s>(&self, scratch: BumpAllocator<'s>) -> Members<'s, TypeSymbol> {
         merged_bindings(scratch, self.abstract_members, self.manifest_members)
     }
 }
 
-/// Abstract and manifest members as one symbol-sorted table, manifest winning on a shared name —
-/// one merge of two sorted runs.
+/// Abstract and manifest members as one table, manifest winning on a shared name — one merge of
+/// two sorted runs, which yields each name once and in order, so the merge is itself a table.
 pub(super) fn merged_bindings<'s>(
     scratch: BumpAllocator<'s>,
     abstract_members: Members<'_, TypeSymbol>,
     manifest_members: Members<'_, TypeSymbol>,
-) -> BumpVec<'s, (TypeSymbol, KType)> {
+) -> Members<'s, TypeSymbol> {
     let mut bindings =
         BumpVec::with_capacity_in(abstract_members.len() + manifest_members.len(), scratch);
     bindings.extend(merge_join(abstract_members, manifest_members).map(
@@ -149,7 +231,7 @@ pub(super) fn merged_bindings<'s>(
             )
         },
     ));
-    bindings
+    Members(bindings.leak())
 }
 
 /// Walk two symbol-sorted tables together in one pass, in name order: one item per name either
@@ -159,13 +241,16 @@ pub(super) fn merge_join<'a, N: Ord + Copy>(
     left: Members<'a, N>,
     right: Members<'a, N>,
 ) -> MergeJoin<'a, N> {
-    MergeJoin { left, right }
+    MergeJoin {
+        left: left.0,
+        right: right.0,
+    }
 }
 
 /// The iterator [`merge_join`] hands back.
 pub(super) struct MergeJoin<'a, N> {
-    left: Members<'a, N>,
-    right: Members<'a, N>,
+    left: &'a [(N, KType)],
+    right: &'a [(N, KType)],
 }
 
 impl<N: Ord + Copy> Iterator for MergeJoin<'_, N> {
@@ -178,7 +263,7 @@ impl<N: Ord + Copy> Iterator for MergeJoin<'_, N> {
             (None, Some(_)) => Ordering::Greater,
             (Some(left), Some(right)) => left.0.cmp(&right.0),
         };
-        let take = |table: &mut Members<'_, N>| {
+        let take = |table: &mut &[(N, KType)]| {
             let ((name, kt), rest) = table.split_first().expect("the compared side is non-empty");
             *table = rest;
             (*name, *kt)
@@ -235,7 +320,7 @@ impl<'s> SchemaDraft<'s> {
     pub fn from_schema(scratch: BumpAllocator<'s>, schema: SigSchema<'_>) -> Self {
         let copied = |table: Members<'_, _>| {
             let mut staged = BumpVec::with_capacity_in(table.len(), scratch);
-            staged.extend_from_slice(table);
+            staged.extend_from_slice(&table);
             staged
         };
         let mut keyworded = BumpVec::with_capacity_in(schema.keyworded.len(), scratch);
@@ -251,7 +336,7 @@ impl<'s> SchemaDraft<'s> {
             manifest_members: copied(schema.manifest_members),
             value_slots: {
                 let mut staged = BumpVec::with_capacity_in(schema.value_slots.len(), scratch);
-                staged.extend_from_slice(schema.value_slots);
+                staged.extend_from_slice(&schema.value_slots);
                 staged
             },
             keyworded,
@@ -332,13 +417,10 @@ pub fn specialize_schema(
         draft.insert_manifest(*name, *kt);
     }
     if let Some(sig_id) = draft.sig_id {
-        // The substitution is a `Members` table, read by binary search, so the pins are staged in
-        // name order.
-        let mut substitutions = BumpVec::with_capacity_in(pins.len(), scratch);
-        substitutions.extend_from_slice(pins);
-        substitutions.sort_by_key(|(name, _)| *name);
+        // The substitution is read by binary search, so the pins become a table.
+        let substitutions = Members::from_pairs(scratch, pins.iter().copied());
         let substitute =
-            |kt: KType| substitute_sig_members(types, scratch, kt, sig_id, &substitutions);
+            |kt: KType| substitute_sig_members(types, scratch, kt, sig_id, substitutions);
         for (_, kt) in draft.manifest_members.iter_mut() {
             *kt = substitute(*kt);
         }

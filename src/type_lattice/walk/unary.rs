@@ -424,7 +424,7 @@ fn rekey<'s>(
 }
 
 /// `schema` with every member handle replaced by its rebuild, read back in [`children`]'s order and
-/// interned. The named tables keep their names, so they stay sorted; the keyworded channel
+/// interned. Each named table is mapped type by type, which keeps its order; the keyworded channel
 /// re-canonicalizes, since two overloads may have become one.
 fn rebuilt_schema(
     types: &TypeRegistry<'_>,
@@ -434,24 +434,9 @@ fn rebuilt_schema(
 ) -> KType {
     let mut next = new.iter().copied();
     let mut replaced = || next.next().expect("one replacement per member");
-    let abstract_members = scratch.slice_from_iter(
-        schema
-            .abstract_members
-            .iter()
-            .map(|(name, _)| (*name, replaced())),
-    );
-    let manifest_members = scratch.slice_from_iter(
-        schema
-            .manifest_members
-            .iter()
-            .map(|(name, _)| (*name, replaced())),
-    );
-    let value_slots = scratch.slice_from_iter(
-        schema
-            .value_slots
-            .iter()
-            .map(|(name, _)| (*name, replaced())),
-    );
+    let abstract_members = schema.abstract_members.map_types(scratch, |_| replaced());
+    let manifest_members = schema.manifest_members.map_types(scratch, |_| replaced());
+    let value_slots = schema.value_slots.map_types(scratch, |_| replaced());
     let mut keyworded = BumpVec::with_capacity_in(schema.keyworded.len(), scratch);
     keyworded.extend(schema.keyworded.iter().map(|_| replaced()));
     canonical_overloads(types, scratch, &mut keyworded);

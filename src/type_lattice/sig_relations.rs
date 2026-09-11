@@ -237,7 +237,7 @@ pub fn sig_subtype<'run, 's>(
     // `sub` supplies. Substitution is the identity when `sup` declares nothing abstract.
     let bindings = sub.member_bindings(scratch);
     let read = |declared: KType| {
-        substitute_sig_members(types, scratch, declared, ScopeId::SENTINEL, &bindings)
+        substitute_sig_members(types, scratch, declared, ScopeId::SENTINEL, bindings)
     };
 
     // 1. Abstract members: present at the matching kind, over the same parameter-name *set*, and
@@ -491,8 +491,11 @@ pub(super) fn meet_schemas(
     let mut draft = SchemaDraft::new(scratch);
     let left_bindings = a.member_bindings(scratch);
     let right_bindings = b.member_bindings(scratch);
-    // Each side's binding for a name is its `type_member` reading: manifest first.
-    for (name, left, right) in merge_join(&left_bindings, &right_bindings) {
+    // Each side's binding for a name is its `type_member` reading: manifest first. The join yields
+    // each name once, in order, so the two tables it fills are built from runs already sorted.
+    let mut abstract_members = BumpVec::new_in(scratch);
+    let mut manifest_members = BumpVec::new_in(scratch);
+    for (name, left, right) in merge_join(left_bindings, right_bindings) {
         match (left, right) {
             (Some(left), Some(right)) => {
                 let params = match (
@@ -509,18 +512,18 @@ pub(super) fn meet_schemas(
                     // A manifest binding is the stronger claim, so it survives — provided it lies
                     // under what the other side requires.
                     (true, true) if left != right => return None,
-                    (true, true) => draft.manifest_members.push((name, left)),
+                    (true, true) => manifest_members.push((name, left)),
                     (true, false) => {
                         if !is_subtype_of(types, scratch, left, requirement(types, right)) {
                             return None;
                         }
-                        draft.manifest_members.push((name, left));
+                        manifest_members.push((name, left));
                     }
                     (false, true) => {
                         if !is_subtype_of(types, scratch, right, requirement(types, left)) {
                             return None;
                         }
-                        draft.manifest_members.push((name, right));
+                        manifest_members.push((name, right));
                     }
                     (false, false) => {
                         let bound = meet(
@@ -537,7 +540,7 @@ pub(super) fn meet_schemas(
                             None,
                             bound,
                         );
-                        draft.abstract_members.push((name, merged));
+                        abstract_members.push((name, merged));
                     }
                 }
             }
@@ -545,9 +548,9 @@ pub(super) fn meet_schemas(
                 if member(a.abstract_members, name).is_some()
                     || member(b.abstract_members, name).is_some()
                 {
-                    draft.abstract_members.push((name, only));
+                    abstract_members.push((name, only));
                 } else {
-                    draft.manifest_members.push((name, only));
+                    manifest_members.push((name, only));
                 }
             }
             (None, None) => unreachable!("a joined name is held by one side"),
@@ -558,13 +561,15 @@ pub(super) fn meet_schemas(
     // theirs — so every type carried over from an operand reads its member references through the
     // result's bindings. References are by name, which is what makes that a rename rather than a
     // reinterpretation.
-    let chosen = merged_bindings(scratch, &draft.abstract_members, &draft.manifest_members);
-    for (_, kt) in draft.manifest_members.iter_mut() {
-        *kt = substitute_sig_members(types, scratch, *kt, ScopeId::SENTINEL, &chosen);
-    }
-    let bindings = merged_bindings(scratch, &draft.abstract_members, &draft.manifest_members);
+    let abstract_members = Members::from_table(abstract_members);
+    let manifest_members = Members::from_table(manifest_members);
+    let chosen = merged_bindings(scratch, abstract_members, manifest_members);
+    let manifest_members = manifest_members.map_types(scratch, |kt| {
+        substitute_sig_members(types, scratch, kt, ScopeId::SENTINEL, chosen)
+    });
+    let bindings = merged_bindings(scratch, abstract_members, manifest_members);
     let resolve =
-        |kt: KType| substitute_sig_members(types, scratch, kt, ScopeId::SENTINEL, &bindings);
+        |kt: KType| substitute_sig_members(types, scratch, kt, ScopeId::SENTINEL, bindings);
 
     for (name, left, right) in merge_join(a.value_slots, b.value_slots) {
         let met = match (left, right) {
@@ -581,8 +586,10 @@ pub(super) fn meet_schemas(
         draft.keyworded.push(resolve(*shape));
     }
 
+    draft.abstract_members.extend_from_slice(&abstract_members);
+    draft.manifest_members.extend_from_slice(&manifest_members);
     draft.operators = merge_operator_records(scratch, a, b)?;
-    draft.sig_id = (!draft.abstract_members.is_empty()).then_some(ScopeId::SENTINEL);
+    draft.sig_id = (!abstract_members.is_empty()).then_some(ScopeId::SENTINEL);
     Some(types.signature(scratch, draft))
 }
 

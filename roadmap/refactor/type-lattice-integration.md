@@ -30,7 +30,7 @@ only as each of these is moved to its own owner and pointed at the core.
 - `RunRegistries<'run>` hosts the core's `TypeRegistry<'run>`, constructed over the run root's
   `brand.allocator()` and reached through the run frame; every step body hands the relations
   `DecideCtx::scratch()`; a declarator opens its `RecursiveGroupWindow` over its own frame's
-  allocator ([bump-hosted registry](../reduce_allocs/bump-hosted-type-registry.md)).
+  allocator ([type-registry.md § Ownership and reclamation](../../design/typing/type-registry.md#ownership-and-reclamation)).
 - A dhat flat sweep over a program that declares signatures, unions and quantified shapes
   attributes no allocation to `src/type_lattice` paths other than the verdict table.
 - The live-callable picker ranks through the core's `shape_specificity`.

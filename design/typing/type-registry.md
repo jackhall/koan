@@ -106,7 +106,10 @@ never reference each other digest independently.
 Construction is two-phase. A scope-carried **window record** fixes the group's
 membership up front and accumulates each member's schema as it finalizes (the
 pre-seal window); riding the scope chain is what lets scheduler-interleaved windows
-coexist. Inside the window a sibling reference interns as a **relative** node — the
+coexist. The window's own state — its member and binder lists, the relative schemas, and
+the sealed group it hands back — lives in the **declaring node's frame region**, not the
+run's: the node that opens a window closes it, and the seal writes only the member nodes
+into the run region. Inside the window a sibling reference interns as a **relative** node — the
 sibling's bare index, deterministic and immutable like any other content, meaningful
 against an ambient set — so window elaboration is ordinary interning, building
 composites over relative children. At **seal**, the record extracts each member's
@@ -155,18 +158,30 @@ The run frame owns the registry; the registry owns the nodes; handles own nothin
 Concretely it owns a `RunRegistries` bundle — the type registry beside the run's label
 interner ([label-interning.md](../label-interning.md)) — as a plain field, not an `Rc`.
 The registry's **content lives in the run region**: a node's slices — a union's members, a
-shape's elements and quantifier names, a record's fields, a signature's sorted member
-tables, a deferred return's text — are bumped into the region through the
+shape's elements and its quantifiers' names and bounds, a record's fields, a signature's
+symbol-sorted member tables, a constructor's parameter names, a deferred return's text — are
+bumped into the region through the
 [bump door](../../workgraph/design/witnessed-memory.md#the-bump-allocator), and the node table is a hash map built over the
 region's own allocator, keyed by digest under the identity hasher. A node is therefore
 `Copy` and carries no destructor, the table is Drop-free, and the whole graph is released
 with the region rather than freed node by node. `TypeRegistry` carries the region's
 lifetime for that reason; `KType` does not — a handle is a digest and names the same content
-in any registry that has interned it.
+in any registry that has interned it. Beside each node the table entry stores two flags,
+folded from the children's own entries at intern: whether a free quantifier is reachable,
+and whether any rigid variable is. The `contains_quantified` / `contains_rigid` probes are
+therefore one table read, with no second memo.
 
 The **verdict table** is the one heap-owned part. It both grows and shrinks — a bound on
 verdict storage is a permissible knob — and a region releases nothing before the run ends,
 so it stays a plain map that drops with the frame.
+
+Nothing transient reaches either table. Every interning door computes its digest off the
+caller's own slices first and copies content into the region only on a miss, so re-spelling
+an interned type bumps nothing. Every door and relation that needs a call-scoped buffer — a
+sort, a union's flatten, the unifier's collector cells, a walk's shadow stack, the seal's
+edge and placement tables — takes a scratch allocator from its caller (a step body's step
+scratch) and builds the buffer there. Interning a type and running a relation touch the
+global heap nowhere.
 
 Within a run the content is insert-only — interning adds nodes, nothing removes them.
 There is no eviction of content, no garbage collection, no refcounting, and no growth that
@@ -206,28 +221,29 @@ content answers.
 
 ### Reading a node
 
-The registry keeps content and verdicts in two independent `RefCell`s, and the node
-table has **one read door**: `TypeRegistry::with_node(handle, |node| …)` on
-[`registry.rs`](../../src/machine/model/types/registry.rs), which hands the node **by
-reference** for the reading closure's duration. A shape question — which
+The registry keeps content and verdicts in two independent `RefCell`s. A node is `Copy`
+— scalar payload, child handles and region slices — so the node table's read door,
+`TypeRegistry::node(handle)` on [`registry.rs`](../../src/machine/model/types/registry.rs),
+copies the node out of the table: a few words, never a type subtree.
+`with_node(handle, |node| …)` is the same read in closure form. A shape question — which
 variant, which child handles, which field types — is therefore answered without
 allocating, which is what keeps a dispatch that matches nothing from allocating per
-candidate. The other doors are written over it:
+candidate. A signature's named tables are `Members` tables, and the symbol order is the
+type's own invariant rather than a caller's promise: a table is built only through a
+constructor that sorts and dedups by name, and derived only by steps that keep its names in
+place. So a member lookup is a binary search and reading two schemas against each other is
+one merge-join in name order, and no reader sorts or checks a table. The other doors are
+written over the read:
 
-- **The owning door.** `node(handle)` is `with_node(handle, TypeNode::clone)`, for a
-  caller that needs the node past the read. A node is `Copy` — scalar payload, child
-  handles and region slices — so the clone is a few words and never a type subtree. No
-  production reader takes it: each one answers from inside the closure, including the
-  rewriting walks, which intern as they recurse. The door stays public for the test suites,
-  which match a node against an expected shape outside any closure.
 - **Per-query verbs.** `is_union`, `union_variant_target`, `union_member_named` walk the
   outer node and the members it names under one borrow and answer with `Copy` data, so a
   probe that wants a verdict rather than a node reads nothing back out.
 
-Two properties bound what a reader may do. **No reference into the table can escape**, and
-that is compile-enforced: the closure's result type is fixed at the call site and the
-node's lifetime is the call's, so a reader is confined to data it derives. **A reader may
-intern**, and that is a property of the storage rather than a discipline the callers keep:
+Two properties bound what a reader may do. **No reference into the table can escape**: a
+reader holds a copy of the node, never the table's own storage, so the table's growth — which
+strands its old bucket arrays in the region — invalidates nothing a reader holds, and what a
+reader may keep past the read is the node's `'run` slices, which live as long as the
+registry. **A reader may intern**, and that is a property of the storage rather than a discipline the callers keep:
 a node is `Copy`, so the read door copies it out of the table and releases the `RefCell`
 borrow before the reading closure runs. The slices the copy points at live in the region,
 not in the table, so an insert made while a read is live invalidates nothing the reader
@@ -277,9 +293,6 @@ are the content, and the recursive-group window/SCC seal
 turns a co-declared group into interned member nodes. A type crosses a region boundary
 as a handle copy — there is no storage door and no residence audit to run.
 
-- [Bump-hosted type registry](../../roadmap/reduce_allocs/bump-hosted-type-registry.md)
-  moves the registry's content — node payloads and the node table — into the run region;
-  the verdict table stays heap-owned.
 - [Cross-registry type-content transfer](../../roadmap/type_language/cross-registry-type-content-transfer.md)
   owns moving a value's type content into a receiving frame's registry — across sequential
   runs over a persistent scope (reachable today) and across threads once concurrency ships.

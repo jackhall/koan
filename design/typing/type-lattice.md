@@ -3,15 +3,19 @@
 The type lattice is a closed algebra over interned type nodes: the node vocabulary, the interning
 registry, the identity recipe, the structural relations between types, and the unifier that
 solves a quantified position. It lives in `src/type_lattice`, exported from the library root, and
-imports the label and symbol types from [`parse`](../../src/parse/labels.rs), `ScopeId` from
-[`memory`](../../src/memory/scope_id.rs), and nothing else. No value, cell, AST, scope, working
+imports the label and symbol types from [`parse`](../../src/parse/labels.rs) and, from
+[`memory`](../../src/memory/scope_id.rs), `ScopeId` plus the region bump seam — the allocator, its
+vector, and the bump-backed table door — that the registry's content and every scratch buffer are
+built over ([type-registry.md § Ownership and reclamation](type-registry.md#ownership-and-reclamation)).
+Nothing else. No value, cell, AST, scope, working
 part or execute-side type reaches it. Everything that matches a type against something that is
 not a type lives with that thing and calls the lattice.
 
 ## Boundary
 
 The lattice owns every type that appears inside a node: `TypeNode`, the `KType` handle,
-`TypeRegistry`, `TypeDigest`, `KKind`, the `Record` field schema, `SigSchema` with its member maps,
+`TypeRegistry`, `TypeDigest`, `KKind`, the `Record` field schema, `SigSchema` with its
+`Members` tables (symbol-sorted by construction) and the `SchemaDraft` a schema is built in,
 `NodeSchema`, the `DispatchTokenElement` an expression shape is spelled in, the
 `DeferredReturnSurface` a deferred return is shadowed as, `Specificity`, and the unifier's
 `Variance`, `Collector` and `UnifyFailure`. It also owns `ReductionMode` and `FoldDirection`: a
@@ -111,8 +115,10 @@ Two signatures join like any other pair — the larger when ordered, otherwise t
 there is no schema-level join. `meet_schemas` is the meet's signature arm: width unions, depth
 takes the stronger binding, and a conflict — two manifest types for one name, two kinds for one
 abstract member, two modes for one operator run — is the absence of a meet. A schema's keyworded members are
-canonical too, by the same subsumption rule `union_of` applies to a union's members: a shape that
-another shape is below is dropped, so two interfaces that satisfy each other are one interface.
+canonical too, by subsumption as a union's are but from the other side: a union drops the member
+below another, while an overload set drops a shape that another shape is below — the lower one
+already promises everything the upper one does — so two interfaces that satisfy each other are one
+interface.
 The order rather than admission, because the drop has to preserve what the schema promises: a
 shape admits another by its slots alone, so an admission-keyed drop can discard a member whose
 *return* the survivor does not supply, and `meet_schemas` would then land above one of its own

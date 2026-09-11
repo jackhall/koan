@@ -39,7 +39,9 @@ use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
 use super::order::{Dropped, unsubsumed};
 use super::record::Record;
-use super::schema::{DeclaredGroup, SchemaDraft, SigSchema, canonical_groups, canonical_overloads};
+use super::schema::{
+    DeclaredGroup, Members, SchemaDraft, SigSchema, canonical_groups, canonical_overloads,
+};
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 use super::substitute::substitute_quantified;
 use super::walk::Variance;
@@ -58,8 +60,8 @@ struct Entry<'run> {
 impl<'run> Entry<'run> {
     /// `node`'s entry, its flags folded from its children's own entries — one probe per child, since
     /// every child was interned first. A child not in the table reads as `false`, which is exact: the
-    /// only such child is a sealed member handle the seal's flat union door is rewriting towards,
-    /// and a sealed member is a leaf for both probes.
+    /// only such child is the handle of a group member mid-seal, which the seal's rebuilt schemas
+    /// name before its own node is interned, and a sealed member is a leaf for both probes.
     fn over(node: TypeNode<'run>, nodes: &NodeTable<'run>) -> Self {
         let (mut quantified, mut rigid) = (false, false);
         children(&node, Step::Leaf, Step::Leaf, &mut |child, _| {
@@ -452,7 +454,7 @@ impl<'run> TypeRegistry<'run> {
                         schema,
                         param_names,
                     } => NodeSchema::TypeConstructor {
-                        schema: self.rehome(schema),
+                        schema: schema.copied_into(self.bump),
                         param_names: self.rehome(param_names),
                     },
                 },
@@ -461,26 +463,28 @@ impl<'run> TypeRegistry<'run> {
     }
 
     /// A module-signature type over `draft`, in canonical form — the one door a schema enters the
-    /// lattice through. It sorts each named table by name, canonicalizes the keyworded and operator
-    /// channels, digests the result, and copies it into the region on a miss, so no interned
-    /// schema is ever uncanonical.
-    pub fn signature(&self, scratch: BumpAllocator<'_>, mut draft: SchemaDraft<'_>) -> KType {
-        draft
-            .abstract_members
-            .sort_unstable_by_key(|(name, _)| *name);
-        draft
-            .manifest_members
-            .sort_unstable_by_key(|(name, _)| *name);
-        draft.value_slots.sort_unstable_by_key(|(name, _)| *name);
-        canonical_overloads(self, scratch, &mut draft.keyworded);
-        canonical_groups(&mut draft.operators);
+    /// lattice through. It makes each named table a [`Members`], canonicalizes the keyworded and
+    /// operator channels, digests the result, and copies it into the region on a miss, so no
+    /// interned schema is ever uncanonical.
+    pub fn signature(&self, scratch: BumpAllocator<'_>, draft: SchemaDraft<'_>) -> KType {
+        let SchemaDraft {
+            sig_id,
+            abstract_members,
+            manifest_members,
+            value_slots,
+            mut keyworded,
+            mut operators,
+            ..
+        } = draft;
+        canonical_overloads(self, scratch, &mut keyworded);
+        canonical_groups(&mut operators);
         self.intern_schema(SigSchema {
-            sig_id: draft.sig_id,
-            abstract_members: &draft.abstract_members,
-            manifest_members: &draft.manifest_members,
-            value_slots: &draft.value_slots,
-            keyworded: &draft.keyworded,
-            operators: &draft.operators,
+            sig_id,
+            abstract_members: Members::from_table(abstract_members),
+            manifest_members: Members::from_table(manifest_members),
+            value_slots: Members::from_table(value_slots),
+            keyworded: &keyworded,
+            operators: &operators,
         })
     }
 
@@ -493,9 +497,9 @@ impl<'run> TypeRegistry<'run> {
             TypeNode::Signature {
                 schema: SigSchema {
                     sig_id: schema.sig_id,
-                    abstract_members: self.rehome(schema.abstract_members),
-                    manifest_members: self.rehome(schema.manifest_members),
-                    value_slots: self.rehome(schema.value_slots),
+                    abstract_members: schema.abstract_members.copied_into(self.bump),
+                    manifest_members: schema.manifest_members.copied_into(self.bump),
+                    value_slots: schema.value_slots.copied_into(self.bump),
                     keyworded: self.rehome(schema.keyworded),
                     operators: self.rehome_groups(schema.operators),
                 },

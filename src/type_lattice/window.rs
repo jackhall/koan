@@ -84,23 +84,13 @@ impl<'w> RelativeSchema<'w> {
         schema: &[(TypeSymbol, KType)],
         param_names: &[TypeSymbol],
     ) -> Self {
-        let mut table = BumpVec::with_capacity_in(schema.len(), scratch);
-        table.extend_from_slice(schema);
-        // Stable, so a later entry for a name stays after an earlier one and wins the dedup.
-        table.sort_by_key(|(name, _)| *name);
-        table.dedup_by(|later, earlier| {
-            let same = later.0 == earlier.0;
-            if same {
-                *earlier = *later;
-            }
-            same
-        });
+        let schema = Members::from_pairs(scratch, schema.iter().copied());
         let mut names = BumpVec::with_capacity_in(param_names.len(), scratch);
         names.extend_from_slice(param_names);
         names.sort_unstable();
         names.dedup();
         RelativeSchema::TypeConstructor {
-            schema: host.slice(&table),
+            schema: schema.copied_into(host),
             param_names: host.slice(&names),
         }
     }
@@ -114,7 +104,7 @@ impl<'w> RelativeSchema<'w> {
     }
 
     /// Rewrite every sibling handle through `resolve`, yielding the same shape with its rewritten
-    /// schema table in `scratch`. The table keeps its names, so it stays sorted.
+    /// schema table in `scratch`.
     fn map_handles<'x>(
         self,
         types: &TypeRegistry<'_>,
@@ -131,16 +121,11 @@ impl<'w> RelativeSchema<'w> {
             RelativeSchema::TypeConstructor {
                 schema,
                 param_names,
-            } => {
-                let mut rewritten = BumpVec::with_capacity_in(schema.len(), scratch);
-                for (name, kt) in schema {
-                    rewritten.push((*name, rewrite_siblings(types, scratch, *kt, resolve)));
-                }
-                RelativeSchema::TypeConstructor {
-                    schema: rewritten.leak(),
-                    param_names,
-                }
-            }
+            } => RelativeSchema::TypeConstructor {
+                schema: schema
+                    .map_types(scratch, |kt| rewrite_siblings(types, scratch, kt, resolve)),
+                param_names,
+            },
         }
     }
 

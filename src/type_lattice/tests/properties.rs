@@ -17,8 +17,8 @@ use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::order::{is_more_specific_than, is_subtype_of, satisfied_by};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{
-    SigSchema, canonical_overloads, is_shape, shape_keys_equal, shape_quantifiers, shape_return,
-    shape_slots, specialize_schema,
+    Members, SigSchema, canonical_overloads, is_shape, shape_keys_equal, shape_quantifiers,
+    shape_return, shape_slots, specialize_schema,
 };
 use crate::type_lattice::shape::Specificity;
 use crate::type_lattice::sig_relations::{
@@ -302,7 +302,7 @@ proptest! {
             prop_assert_eq!(substitute_quantified(&types, scratch, a, &[b, b, b]), a);
         }
         prop_assert_eq!(
-            substitute_sig_members(&types, scratch, a, ScopeId::SENTINEL, &[]),
+            substitute_sig_members(&types, scratch, a, ScopeId::SENTINEL, Members::EMPTY),
             a
         );
     }
@@ -337,19 +337,19 @@ proptest! {
         let cart = fresh_cart();
         let scratch = allocator(&cart);
         let world = world();
-        let members = [(world.type_names[0], c)];
+        let members = Members::from_pairs(scratch, [(world.type_names[0], c)]);
         let id = ScopeId::SENTINEL;
-        let substituted = substitute_sig_members(&types, scratch, a, id, &members);
+        let substituted = substitute_sig_members(&types, scratch, a, id, members);
         prop_assert_eq!(
-            slot_satisfied_by(&types, scratch, a, b, id, &members),
+            slot_satisfied_by(&types, scratch, a, b, id, members),
             satisfied_by(&types, scratch, substituted, b)
         );
         prop_assert_eq!(
-            slot_more_specific_or_equal(&types, scratch, a, b, id, &members),
+            slot_more_specific_or_equal(&types, scratch, a, b, id, members),
             is_subtype_of(&types, scratch, substituted, b)
         );
         prop_assert_eq!(
-            slot_types_equal(&types, scratch, a, b, id, &members),
+            slot_types_equal(&types, scratch, a, b, id, members),
             substituted == b
         );
     }

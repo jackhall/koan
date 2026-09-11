@@ -224,17 +224,17 @@ src/
 │   ├── using_scope.rs        USING — lexical-scope introduction
 │   ├── test_support.rs
 │   └── eval.rs               # surface form `$(expr)`
-├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over labels and `ScopeId` and nothing else
+├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over labels, `ScopeId` and the region bump seam and nothing else
 ├── type_lattice/
 │   ├── node.rs           TypeNode — one interned type's content; every child position is a KType handle, so a node is shallow
 │   ├── handle.rs         KType — the Copy content-digest handle, the pinned builtin constants, and the name/kind readings off one
 │   ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-│   ├── registry.rs       TypeRegistry — the interning table and verdict cache, the composite doors, canonical `union_of` and the canonicalizing `shape_type`
+│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the heap verdict cache, the composite doors, canonical `union_of`, the canonicalizing `shape_type` and `signature`
 │   ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
-│   ├── record.rs         Record<V> — ordered BinderSymbol-keyed map backing record types and lambda parameter identity
+│   ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
 │   ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity — the non-type payloads a node carries
 │   ├── operators.rs      ReductionMode / FoldDirection — how a run of a signature's operators reduces, which is part of the signature's identity
-│   ├── schema.rs         SigSchema, its channels' canonical orders, and the shape readers
+│   ├── schema.rs         SigSchema over symbol-sorted Members tables, the SchemaDraft the signature door canonicalizes, the channels' canonical orders, and the shape readers
 │   ├── walk.rs           Variance and the two drivers every structural recursion goes through
 │   ├── walk/unary.rs     the arm table behind `visit` and `rebuild`, with the descent knobs and the position context
 │   ├── walk/binary.rs    the pairing table behind `lockstep`: width verdicts, the variance flip, and the rebuild door

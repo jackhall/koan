@@ -135,6 +135,10 @@ fn interning_and_relations_touch_no_heap() {
     let mut draft = SchemaDraft::new(scratch);
     draft.push_keyworded(offers);
     let mismatched = types.signature(scratch, draft);
+    // A module fixing the member `module` fixes to a different type: the two have no meet.
+    let mut draft = SchemaDraft::new(scratch);
+    draft.insert_manifest(elt, KType::STR);
+    let clashing = types.signature(scratch, draft);
 
     // A three-member recursive group — two newtypes and a constructor — sealed through a window.
     let names = [elt, item, wrap];
@@ -175,6 +179,9 @@ fn interning_and_relations_touch_no_heap() {
     let _ = join(&types, scratch, group_member, KType::NUMBER);
     let _ = meet(&types, scratch, record, narrow);
     let _ = meet(&types, scratch, union, record);
+    // Two signatures meet member for member; two manifest bindings for one name have no meet.
+    assert_ne!(meet(&types, scratch, interface, module), KType::NEVER);
+    assert_eq!(meet(&types, scratch, module, clashing), KType::NEVER);
 
     let mut collector = Collector::new(scratch, 1);
     assert!(
