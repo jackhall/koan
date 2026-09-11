@@ -19,41 +19,89 @@ use super::handle::KType;
 use super::lattice::meet;
 use super::node::TypeNode;
 use super::operators::ReductionMode;
-use super::order::{is_more_specific_than, is_subtype_of, satisfied_by};
+use super::order::{dominant, is_more_specific_than, is_subtype_of, satisfied_by};
 use super::registry::TypeRegistry;
 use super::schema::{
     DeclaredGroup, OperatorMembers, SigSchema, TypeMemberMap, canonical_groups,
-    canonical_overloads, constructor_param_names, is_shape, name_sets_equal, shape_keys_equal,
-    shape_quantifiers, shape_slots,
+    canonical_overloads, constructor_param_names, elements_key_equal, is_shape, merged_bindings,
+    name_sets_equal, shape_keys_equal, shape_quantifiers, shape_slots,
 };
-use super::shape::Specificity;
+use super::shape::{DispatchTokenElement, Specificity};
 use super::substitute::{slot_satisfied_by, substitute_sig_members};
 use super::unify::{Collector, admits_with};
 use super::walk::Variance;
 
 // --- Specificity ---
 
-/// Whether `declared` admits `candidate`'s argument positions — `declared`'s variables solved,
-/// `candidate`'s rigid.
+/// Whether [`admits_shape`] compares the return positions. Dispatch never selects on a return, so
+/// specificity leaves them out; the order's instantiation clause reads them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Returns {
+    Ignored,
+    Checked,
+}
+
+/// Whether `declared` admits `candidate` position by position — `declared`'s variables solved,
+/// `candidate`'s rigid — and, under [`Returns::Checked`], `declared`'s return under `candidate`'s.
 ///
-/// The one door specificity, keyworded selection and interface canonicalization all rank through,
-/// so the three cannot drift. Return types are not compared: dispatch never selects on them.
-pub(super) fn admits_slots(declared: KType, candidate: KType, types: &TypeRegistry) -> bool {
-    if !is_shape(declared, types)
-        || !is_shape(candidate, types)
-        || !shape_keys_equal(declared, candidate, types)
-    {
-        return false;
-    }
-    let (declared_slots, candidate_slots) =
-        (shape_slots(declared, types), shape_slots(candidate, types));
-    let mut collector = Collector::new(shape_quantifiers(declared, types).len());
-    for (slot, argument) in declared_slots.iter().zip(candidate_slots.iter()) {
-        if admits_with(types, *slot, *argument, Variance::Co, &mut collector).is_err() {
-            return false;
-        }
-    }
-    collector.solve(types).is_ok()
+/// The one door specificity, keyworded selection, interface canonicalization and the order's
+/// shape-instantiation clause all rank through, so none can drift. Prenex instantiation through
+/// the collector: each slot pair asks the candidate's slot to lie under the declared one
+/// (covariant for the collector, since a slot's own polarity is contravariant), the return pair
+/// asks the declared return to lie under the candidate's, and `solve` decides. The candidate's
+/// `Quantified` nodes fall to the rigid rule automatically, because the collector only ever solves
+/// declared-side variables and the carried side is never substituted. Two things that are not both
+/// shapes under one key admit nothing.
+pub(super) fn admits_shape(
+    types: &TypeRegistry,
+    declared: KType,
+    candidate: KType,
+    returns: Returns,
+) -> bool {
+    types.with_node(declared, |declared_node| {
+        types.with_node(candidate, |candidate_node| {
+            let (
+                TypeNode::ExpressionShape {
+                    quantifiers,
+                    elements: declared_elements,
+                    ret: declared_ret,
+                },
+                TypeNode::ExpressionShape {
+                    elements: candidate_elements,
+                    ret: candidate_ret,
+                    ..
+                },
+            ) = (declared_node, candidate_node)
+            else {
+                return false;
+            };
+            if !elements_key_equal(declared_elements, candidate_elements) {
+                return false;
+            }
+            let mut collector = Collector::new(quantifiers.len());
+            for pair in declared_elements.iter().zip(candidate_elements.iter()) {
+                if let (DispatchTokenElement::Slot(slot), DispatchTokenElement::Slot(argument)) =
+                    pair
+                    && admits_with(types, *slot, *argument, Variance::Co, &mut collector).is_err()
+                {
+                    return false;
+                }
+            }
+            if returns == Returns::Checked
+                && admits_with(
+                    types,
+                    *declared_ret,
+                    *candidate_ret,
+                    Variance::Contra,
+                    &mut collector,
+                )
+                .is_err()
+            {
+                return false;
+            }
+            collector.solve(types).is_ok()
+        })
+    })
 }
 
 /// Rank two candidates under one bucket key by mutual admission.
@@ -69,8 +117,8 @@ pub fn shape_specificity(types: &TypeRegistry, a: KType, b: KType) -> Specificit
         // make every pair of leaves compare `Equal`.
         return Specificity::Incomparable;
     }
-    let more = admits_slots(b, a, types);
-    let less = admits_slots(a, b, types);
+    let more = admits_shape(types, b, a, Returns::Ignored);
+    let less = admits_shape(types, a, b, Returns::Ignored);
     match (more, less) {
         (true, false) => Specificity::StrictlyMore,
         (false, true) => Specificity::StrictlyLess,
@@ -82,16 +130,9 @@ pub fn shape_specificity(types: &TypeRegistry, a: KType, b: KType) -> Specificit
 /// The one-slot case of a specificity tournament, over the slot types alone: `Some(i)` iff
 /// `candidates[i]` is strictly below every peer in the order.
 pub fn most_specific_ktype(types: &TypeRegistry, candidates: &[KType]) -> Option<usize> {
-    candidates
-        .iter()
-        .enumerate()
-        .find(|(i, a)| {
-            candidates
-                .iter()
-                .enumerate()
-                .all(|(j, b)| *i == j || is_more_specific_than(types, **a, *b))
-        })
-        .map(|(i, _)| i)
+    dominant(candidates.len(), |i, j| {
+        is_more_specific_than(types, candidates[i], candidates[j])
+    })
 }
 
 // --- The relation ---
@@ -400,19 +441,14 @@ pub fn select_keyworded_satisfier(
     if let [only] = satisfiers[..] {
         return Ok(only);
     }
-    satisfiers
-        .iter()
-        .find(|i| {
-            satisfiers.iter().all(|j| {
-                *i == j
-                    || matches!(
-                        shape_specificity(types, candidates[**i], candidates[*j]),
-                        Specificity::StrictlyMore
-                    )
-            })
-        })
-        .copied()
-        .ok_or(satisfiers)
+    dominant(satisfiers.len(), |i, j| {
+        matches!(
+            shape_specificity(types, candidates[satisfiers[i]], candidates[satisfiers[j]]),
+            Specificity::StrictlyMore
+        )
+    })
+    .map(|i| satisfiers[i])
+    .ok_or(satisfiers)
 }
 
 // --- Meet of schemas ---
@@ -500,17 +536,11 @@ pub(super) fn meet_schemas(
     // theirs — so every type carried over from an operand reads its member references through the
     // result's bindings. References are by name, which is what makes that a rename rather than a
     // reinterpretation.
-    let mut chosen = abstract_members.clone();
-    for (name, kt) in &manifest_members {
-        chosen.insert(*name, *kt);
-    }
+    let chosen = merged_bindings(&abstract_members, &manifest_members);
     for kt in manifest_members.values_mut() {
         *kt = substitute_sig_members(types, *kt, ScopeId::SENTINEL, &chosen);
     }
-    let mut bindings = abstract_members.clone();
-    for (name, kt) in &manifest_members {
-        bindings.insert(*name, *kt);
-    }
+    let bindings = merged_bindings(&abstract_members, &manifest_members);
     let resolve = |kt: KType| substitute_sig_members(types, kt, ScopeId::SENTINEL, &bindings);
 
     let mut value_slots: HashMap<ValueSymbol, KType, IdentityBuildHasher> = HashMap::default();

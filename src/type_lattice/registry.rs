@@ -27,13 +27,13 @@ use super::digest::{self, TypeDigest, schema_content_digest};
 use super::handle::KType;
 use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
-use super::order::is_subtype_of;
+use super::order::unsubsumed;
 use super::record::Record;
 use super::schema::SigSchema;
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 use super::substitute::substitute_quantified;
 use super::walk::Variance;
-use super::walk::unary::{Descent, Step, Visit, visit, visit_in};
+use super::walk::unary::{LEAF, Visit, visit, visit_in};
 
 /// A union's members under construction. Inline up to four — the width that covers a hand-written
 /// `A | B | C` and the variant lists of all but the widest `UNION` declarations — so the common
@@ -55,6 +55,36 @@ pub(super) enum Relation {
     SigSatisfies,
 }
 
+/// A verdict's key: the subject, the candidate, and which question was asked.
+type VerdictKey = (TypeDigest, TypeDigest, Relation);
+
+/// The verdict table's hasher. A key is two content digests and a relation tag, and a digest is
+/// already a uniformly distributed hash, so the table folds the two digests' low words together —
+/// rotated apart, so `(a, b)` and `(b, a)` land in different buckets — rather than re-hashing
+/// thirty-three bytes through SipHash on every relation probe. Equality still compares the whole
+/// key, so a fold collision costs a probe and never a wrong verdict.
+#[derive(Default)]
+struct VerdictHasher(u64);
+
+impl std::hash::Hasher for VerdictHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    /// The relation tag: a derived `Hash` feeds its discriminant here as native-endian bytes.
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(*byte);
+        }
+    }
+
+    fn write_u128(&mut self, digest: u128) {
+        self.0 = self.0.rotate_left(32) ^ (digest as u64);
+    }
+}
+
+type VerdictBuildHasher = std::hash::BuildHasherDefault<VerdictHasher>;
+
 /// What interning a shape produced: the canonical handle, and how the caller's declaration-order
 /// quantifier indices map onto the canonical group.
 #[derive(Clone, Debug)]
@@ -70,7 +100,7 @@ pub struct ShapeIntern {
 /// its own borrow.
 pub struct TypeRegistry {
     nodes: RefCell<NodeMap>,
-    verdicts: RefCell<HashMap<(TypeDigest, TypeDigest, Relation), bool>>,
+    verdicts: RefCell<HashMap<VerdictKey, bool, VerdictBuildHasher>>,
     quantified: RefCell<HashMap<TypeDigest, bool, IdentityBuildHasher>>,
     quantifiers_exist: std::cell::Cell<bool>,
 }
@@ -88,7 +118,7 @@ impl TypeRegistry {
     pub fn new() -> Self {
         let registry = Self {
             nodes: RefCell::new(NodeMap::with_hasher(IdentityBuildHasher::default())),
-            verdicts: RefCell::new(HashMap::new()),
+            verdicts: RefCell::new(HashMap::default()),
             quantified: RefCell::new(HashMap::default()),
             quantifiers_exist: std::cell::Cell::new(false),
         };
@@ -433,15 +463,11 @@ impl TypeRegistry {
     ) -> Vec<Occurrences> {
         let mut census = vec![Occurrences::default(); arity];
         let mut seen = 0usize;
-        let leaf = Descent {
-            signature: Step::Leaf,
-            set_member: Step::Leaf,
-        };
         let mut count = |kt: KType, position: Variance| {
             visit_in(
                 self,
                 kt,
-                leaf,
+                LEAF,
                 position,
                 &mut |_, node, context| match node {
                     TypeNode::ExpressionShape { .. } => Visit::Skip,
@@ -503,12 +529,8 @@ impl TypeRegistry {
             // Subsumption: a member below another contributes nothing the other does not already
             // admit. Mutually ordered members are equal handles, which the dedup above removed, so
             // the surviving set is an antichain and dropping is order-insensitive.
-            let candidates = flat.clone();
-            flat.retain(|member| {
-                !candidates
-                    .iter()
-                    .any(|peer| peer != member && is_subtype_of(self, *member, *peer))
-            });
+            let mut keep = unsubsumed(self, &flat).into_iter();
+            flat.retain(|_| keep.next().unwrap_or(true));
         }
         if flat.is_empty() {
             return KType::NEVER;
@@ -572,24 +594,16 @@ impl TypeRegistry {
         if let Some(known) = self.quantified.borrow().get(&kt.digest()) {
             return *known;
         }
-        let answer = visit(
-            self,
-            kt,
-            Descent {
-                signature: Step::Leaf,
-                set_member: Step::Leaf,
+        let answer = visit(self, kt, LEAF, &mut |node_handle, node, _| match node {
+            // A shape's own variables are bound by it, so nothing under one is free here.
+            TypeNode::ExpressionShape { .. } => Visit::Skip,
+            TypeNode::Quantified { .. } => Visit::Stop,
+            _ => match self.quantified.borrow().get(&node_handle.digest()) {
+                Some(true) => Visit::Stop,
+                Some(false) => Visit::Skip,
+                None => Visit::Descend,
             },
-            &mut |node_handle, node, _| match node {
-                // A shape's own variables are bound by it, so nothing under one is free here.
-                TypeNode::ExpressionShape { .. } => Visit::Skip,
-                TypeNode::Quantified { .. } => Visit::Stop,
-                _ => match self.quantified.borrow().get(&node_handle.digest()) {
-                    Some(true) => Visit::Stop,
-                    Some(false) => Visit::Skip,
-                    None => Visit::Descend,
-                },
-            },
-        );
+        });
         self.quantified.borrow_mut().insert(kt.digest(), answer);
         answer
     }
@@ -602,57 +616,33 @@ impl TypeRegistry {
     /// variable in both sets at once. The two doors that mint a rigid variable assert it, so a
     /// caller that reaches for a rigid bound fails a test rather than producing a wrong verdict.
     pub fn contains_rigid(&self, kt: KType) -> bool {
-        visit(
-            self,
-            kt,
-            Descent {
-                signature: Step::Leaf,
-                set_member: Step::Leaf,
-            },
-            &mut |_, node, _| match node {
-                TypeNode::Quantified { .. } | TypeNode::AbstractType { .. } => Visit::Stop,
-                _ => Visit::Descend,
-            },
-        )
+        visit(self, kt, LEAF, &mut |_, node, _| match node {
+            TypeNode::Quantified { .. } | TypeNode::AbstractType { .. } => Visit::Stop,
+            _ => Visit::Descend,
+        })
     }
 
     /// Whether `kt` reads the `index`-th quantifier of the enclosing shape — what a definition asks
     /// of each name its `FOR ALL` group lists.
     pub fn references_quantifier(&self, kt: KType, index: usize) -> bool {
         self.contains_quantified(kt)
-            && visit(
-                self,
-                kt,
-                Descent {
-                    signature: Step::Leaf,
-                    set_member: Step::Leaf,
-                },
-                &mut |_, node, _| match node {
-                    TypeNode::ExpressionShape { .. } => Visit::Skip,
-                    TypeNode::Quantified { index: found, .. } if *found == index => Visit::Stop,
-                    TypeNode::Quantified { .. } => Visit::Skip,
-                    _ => Visit::Descend,
-                },
-            )
+            && visit(self, kt, LEAF, &mut |_, node, _| match node {
+                TypeNode::ExpressionShape { .. } => Visit::Skip,
+                TypeNode::Quantified { index: found, .. } if *found == index => Visit::Stop,
+                TypeNode::Quantified { .. } => Visit::Skip,
+                _ => Visit::Descend,
+            })
     }
 
     /// Whether every free `Quantified` position reachable from `kt` names an index below `arity` —
     /// the [`shape_type`](Self::shape_type) well-formedness probe.
     pub(super) fn quantifier_indices_in_range(&self, kt: KType, arity: usize) -> bool {
-        !visit(
-            self,
-            kt,
-            Descent {
-                signature: Step::Leaf,
-                set_member: Step::Leaf,
-            },
-            &mut |_, node, _| match node {
-                TypeNode::ExpressionShape { .. } => Visit::Skip,
-                TypeNode::Quantified { index, .. } if *index >= arity => Visit::Stop,
-                TypeNode::Quantified { .. } => Visit::Skip,
-                _ => Visit::Descend,
-            },
-        )
+        !visit(self, kt, LEAF, &mut |_, node, _| match node {
+            TypeNode::ExpressionShape { .. } => Visit::Skip,
+            TypeNode::Quantified { index, .. } if *index >= arity => Visit::Stop,
+            TypeNode::Quantified { .. } => Visit::Skip,
+            _ => Visit::Descend,
+        })
     }
 
     // --- Verdicts ---

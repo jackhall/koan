@@ -39,8 +39,9 @@
 //!
 //! See [design/typing/type-lattice.md](../../design/typing/type-lattice.md).
 
-use std::cell::{OnceCell, RefCell};
-use std::collections::HashMap;
+use std::cell::{OnceCell, Ref, RefCell};
+
+use smallvec::SmallVec;
 
 use crate::memory::ScopeId;
 use crate::parse::{Symbol, TypeSymbol};
@@ -274,7 +275,8 @@ impl RecursiveGroupWindow {
         let owned = self.binder_members(binder)?;
         let members = self.members.borrow();
         owned
-            .into_iter()
+            .iter()
+            .copied()
             .find(|index| members[*index].name.symbol() == tag)
     }
 
@@ -287,12 +289,14 @@ impl RecursiveGroupWindow {
     }
 
     /// The member indices `binder` owns, in announcement order.
-    fn binder_members(&self, binder: TypeSymbol) -> Option<Vec<usize>> {
-        self.binders
-            .borrow()
-            .iter()
-            .find(|(name, _)| *name == binder)
-            .map(|(_, owned)| owned.clone())
+    fn binder_members(&self, binder: TypeSymbol) -> Option<Ref<'_, [usize]>> {
+        Ref::filter_map(self.binders.borrow(), |binders| {
+            binders
+                .iter()
+                .find(|(name, _)| *name == binder)
+                .map(|(_, owned)| owned.as_slice())
+        })
+        .ok()
     }
 
     /// What the seal minted, or `None` while the window is still open. Once sealed, a member name
@@ -358,10 +362,8 @@ impl RecursiveGroupWindow {
     /// through here.
     pub fn binder_union(&self, name: TypeSymbol, types: &TypeRegistry) -> Option<KType> {
         let owned = self.binder_members(name)?;
-        let siblings: Vec<KType> = owned
-            .into_iter()
-            .map(|index| types.sibling(index))
-            .collect();
+        let siblings: SmallVec<[KType; 8]> =
+            owned.iter().map(|index| types.sibling(*index)).collect();
         Some(types.union_of(&siblings))
     }
 
@@ -387,16 +389,19 @@ impl RecursiveGroupWindow {
         }
         let members = self.members.borrow();
         let binders = self.binders.borrow();
-        let inputs: Vec<SealMemberInput> = members
+        // The fills stay in place — the window still answers `unfilled_members` after the seal —
+        // so the seal reads each one under its own borrow rather than cloning the schema out.
+        let fills: Vec<Ref<'_, Option<RelativeSchema>>> =
+            members.iter().map(|m| m.fill.borrow()).collect();
+        let inputs: Vec<SealMemberInput<'_>> = members
             .iter()
-            .map(|m| SealMemberInput {
+            .zip(fills.iter())
+            .map(|(m, fill)| SealMemberInput {
                 name: m.name,
                 owner: m.owner,
                 kind: m.kind,
-                schema: m
-                    .fill
-                    .borrow()
-                    .clone()
+                schema: fill
+                    .as_ref()
                     .expect("the window seals only once every member is filled"),
             })
             .collect();
@@ -409,6 +414,7 @@ impl RecursiveGroupWindow {
             .collect();
         let sealed = seal_group(&inputs, &binder_inputs, self.generative_nonce, types);
         drop(inputs);
+        drop(fills);
         drop(binder_inputs);
         drop(members);
         drop(binders);
@@ -437,7 +443,7 @@ impl RecursiveGroupWindow {
 }
 
 /// One filled member handed to [`seal_group`] — the pure boundary into the identity computation.
-pub(super) struct SealMemberInput {
+pub(super) struct SealMemberInput<'m> {
     /// The declared name: the bare tag for a variant. Digested, and the primary canonical sort key.
     pub name: TypeSymbol,
     /// The binder that owns this member, if any. A **sort tiebreak only** — never folded into
@@ -445,7 +451,7 @@ pub(super) struct SealMemberInput {
     /// and two same-tag variants under different binders take distinct fold positions.
     pub owner: Option<TypeSymbol>,
     pub kind: KKind,
-    pub schema: RelativeSchema,
+    pub schema: &'m RelativeSchema,
 }
 
 /// One declaring binder handed to [`seal_group`]: its name and the indices of the members it owns.
@@ -458,7 +464,7 @@ pub(super) struct SealBinderInput<'m> {
 /// order, plus each binder's union over the members it owns. Implements the per-component identity
 /// described in this module's header.
 pub(super) fn seal_group(
-    members: &[SealMemberInput],
+    members: &[SealMemberInput<'_>],
     binders: &[SealBinderInput<'_>],
     generative_nonce: Option<ScopeId>,
     types: &TypeRegistry,
@@ -481,27 +487,21 @@ pub(super) fn seal_group(
     // `member index → (its component's digest, its position in that component, size)`.
     let mut placement: Vec<Option<(TypeDigest, usize, usize)>> = vec![None; count];
 
-    for component in tarjan_components(&edges) {
+    for mut order in tarjan_components(&edges) {
         // Canonical presentation order is the numeric order of the members' name symbols, with the
         // owning binder as tiebreak so two same-tag variants of different binders take stable
         // distinct positions. It is the order the digest feed folds in, so index and feed agree.
         // The owner orders but does not digest.
-        let mut order = component.clone();
         order.sort_by(|a, b| {
             (members[*a].name, members[*a].owner).cmp(&(members[*b].name, members[*b].owner))
         });
-        let position_of: HashMap<usize, usize> = order
-            .iter()
-            .enumerate()
-            .map(|(position, member)| (*member, position))
-            .collect();
 
         // Re-encode each member's schema for the fold: an intra-component reference becomes a
         // relative index into *this component's* canonical order, a cross-component one folds
         // the referent's already-finished handle as ordinary external content.
         let presented: Vec<NodeSchema> = {
-            let resolve = |sibling: usize| match position_of.get(&sibling) {
-                Some(position) => types.sibling(*position),
+            let resolve = |sibling: usize| match order.iter().position(|m| *m == sibling) {
+                Some(position) => types.sibling(position),
                 None => handles[sibling].expect(
                     "a cross-component sibling is upstream, so its component sealed already",
                 ),
@@ -608,7 +608,8 @@ fn tarjan_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
         state.index += 1;
         state.stack.push(v);
         state.on_stack[v] = true;
-        for w in state.edges[v].clone() {
+        for edge in 0..state.edges[v].len() {
+            let w = state.edges[v][edge];
             match state.indices[w] {
                 None => {
                     strong_connect(state, w);

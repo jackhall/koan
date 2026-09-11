@@ -9,6 +9,8 @@
 //! The four laws — commutativity, associativity, idempotence and absorption — hold over every node
 //! kind, and that is what fixes both operations.
 
+use smallvec::SmallVec;
+
 use super::handle::KType;
 use super::node::TypeNode;
 use super::order::is_subtype_of;
@@ -100,7 +102,7 @@ impl Lockstep for Meet {
     ) -> KType {
         // A value in both operands is in some member of each, so the meet is the union of the
         // per-pair meets. Pairs that meet at `Never` contribute nothing, and `union_of` drops them.
-        let mut met: Vec<KType> = Vec::with_capacity(a.len() * b.len());
+        let mut met: SmallVec<[KType; 8]> = SmallVec::with_capacity(a.len() * b.len());
         for x in a {
             for y in b {
                 met.push(recurse(self, *x, *y, v));
@@ -116,7 +118,7 @@ impl Lockstep for Meet {
             return KType::NEVER;
         }
         if arm.width.bound_keeps_leftovers(false) {
-            let mut extra: Vec<Leftover> = arm.only_a.to_vec();
+            let mut extra: SmallVec<[Leftover; 8]> = SmallVec::from_slice(arm.only_a);
             extra.extend_from_slice(arm.only_b);
             return arm.rebuild.compose(paired, &extra);
         }

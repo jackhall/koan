@@ -15,6 +15,8 @@
 
 use std::collections::HashMap;
 
+use smallvec::SmallVec;
+
 use crate::memory::ScopeId;
 use crate::parse::{IdentityBuildHasher, KeywordSymbol, TypeSymbol, ValueSymbol};
 
@@ -22,7 +24,7 @@ use super::handle::KType;
 use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
 use super::operators::{FoldDirection, ReductionMode};
-use super::order::is_subtype_of;
+use super::order::unsubsumed;
 use super::registry::TypeRegistry;
 use super::shape::DispatchTokenElement;
 use super::substitute::substitute_sig_members;
@@ -151,15 +153,23 @@ impl SigSchema {
     /// Every type member's name paired with its binding, manifest first — the substitution a
     /// relation carries into the other side's slot types.
     pub fn member_bindings(&self) -> TypeMemberMap {
-        let mut bindings = TypeMemberMap::default();
-        for (name, repr) in &self.abstract_members {
-            bindings.insert(*name, *repr);
-        }
-        for (name, kt) in &self.manifest_members {
-            bindings.insert(*name, *kt);
-        }
-        bindings
+        merged_bindings(&self.abstract_members, &self.manifest_members)
     }
+}
+
+/// Abstract and manifest members as one name → binding map, manifest winning on a shared name.
+pub(super) fn merged_bindings(
+    abstract_members: &TypeMemberMap,
+    manifest_members: &TypeMemberMap,
+) -> TypeMemberMap {
+    let mut bindings = TypeMemberMap::default();
+    for (name, repr) in abstract_members {
+        bindings.insert(*name, *repr);
+    }
+    for (name, kt) in manifest_members {
+        bindings.insert(*name, *kt);
+    }
+    bindings
 }
 
 /// A schema's operator channel in canonical order — sorted by member run, then by mode, exact
@@ -216,13 +226,10 @@ pub fn canonical_overloads(mut overloads: Vec<KType>, types: &TypeRegistry) -> V
     if overloads.len() < 2 {
         return overloads;
     }
-    // Quadratic in a bucket's width, which is the width an interface declares overloads at.
-    let candidates = overloads.clone();
-    overloads.retain(|shape| {
-        !candidates
-            .iter()
-            .any(|peer| peer != shape && is_subtype_of(types, *peer, *shape))
-    });
+    // Quadratic in a bucket's width, which is the width an interface declares overloads at. The
+    // order runs the other way from a union's: a shape *above* another is the one dropped.
+    let mut keep = unsubsumed(types, &overloads).into_iter();
+    overloads.retain(|_| keep.next().unwrap_or(true));
     overloads
 }
 
@@ -235,15 +242,22 @@ pub fn canonical_overloads(mut overloads: Vec<KType>, types: &TypeRegistry) -> V
 pub fn shape_keys_equal(left: KType, right: KType, types: &TypeRegistry) -> bool {
     types.with_node(left, |left_node| {
         types.with_node(right, |right_node| {
-            let (left, right) = (shape_elements(left_node), shape_elements(right_node));
-            left.len() == right.len()
-                && left.iter().zip(right).all(|(a, b)| match (a, b) {
-                    (DispatchTokenElement::Keyword(x), DispatchTokenElement::Keyword(y)) => x == y,
-                    (DispatchTokenElement::Slot(_), DispatchTokenElement::Slot(_)) => true,
-                    _ => false,
-                })
+            elements_key_equal(shape_elements(left_node), shape_elements(right_node))
         })
     })
+}
+
+/// [`shape_keys_equal`] over two element runs already in hand.
+pub(super) fn elements_key_equal(
+    left: &[DispatchTokenElement],
+    right: &[DispatchTokenElement],
+) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(a, b)| match (a, b) {
+            (DispatchTokenElement::Keyword(x), DispatchTokenElement::Keyword(y)) => x == y,
+            (DispatchTokenElement::Slot(_), DispatchTokenElement::Slot(_)) => true,
+            _ => false,
+        })
 }
 
 /// A shape node's element sequence; empty for a node that is not a shape, which no schema member
@@ -256,9 +270,9 @@ pub(super) fn shape_elements(node: &TypeNode) -> &[DispatchTokenElement] {
 }
 
 /// A shape's argument-position types, in order — the bucket key's typed half, for the readers that
-/// compare or render one position at a time.
-pub fn shape_slots(kt: KType, types: &TypeRegistry) -> Vec<KType> {
-    // Owns: the slot list is the function's return value, so it outlives the read.
+/// compare or render one position at a time. Inline up to eight, the width of any hand-written
+/// head, so the read costs no heap allocation.
+pub fn shape_slots(kt: KType, types: &TypeRegistry) -> SmallVec<[KType; 8]> {
     types.with_node(kt, |node| {
         shape_elements(node)
             .iter()
@@ -322,8 +336,8 @@ pub(super) fn name_sets_equal(left: &[TypeSymbol], right: &[TypeSymbol]) -> bool
     if left.len() != right.len() {
         return false;
     }
-    let mut left: Vec<TypeSymbol> = left.to_vec();
-    let mut right: Vec<TypeSymbol> = right.to_vec();
+    let mut left: SmallVec<[TypeSymbol; 4]> = left.iter().copied().collect();
+    let mut right: SmallVec<[TypeSymbol; 4]> = right.iter().copied().collect();
     left.sort_unstable();
     right.sort_unstable();
     left == right

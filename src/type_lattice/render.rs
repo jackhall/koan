@@ -417,28 +417,24 @@ pub fn render_keyworded_head(
     if let Some(head) = render_operator_head(shape, operators, types, labels) {
         return head;
     }
-    // Owns: the surface is written after the read closes, so it cannot borrow the node.
-    let read: Option<(Vec<TypeSymbol>, Vec<DispatchTokenElement>, KType)> =
-        types.with_node(shape, |node| match node {
-            TypeNode::ExpressionShape {
-                quantifiers,
-                elements,
-                ret,
-            } => Some((quantifiers.clone(), elements.to_vec(), *ret)),
-            _ => None,
-        });
-    match read {
-        Some((quantifiers, elements, ret)) => ShapeSurface {
-            shape,
-            quantifiers: &quantifiers,
-            elements: &elements,
+    // Rendered under the read: the nested reads the surface takes are fine inside a `with_node`
+    // closure, so nothing is cloned out of the node first.
+    types.with_node(shape, |node| match node {
+        TypeNode::ExpressionShape {
+            quantifiers,
+            elements,
             ret,
+        } => ShapeSurface {
+            shape,
+            quantifiers,
+            elements,
+            ret: *ret,
             types,
             labels,
         }
         .to_string(),
-        None => display_name(shape, types, labels).to_string(),
-    }
+        _ => display_name(shape, types, labels).to_string(),
+    })
 }
 
 /// [`write_shape_surface`] as a `Display` view, for the diagnostics that keep the text.

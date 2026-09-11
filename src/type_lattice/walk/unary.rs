@@ -43,6 +43,13 @@ pub struct Descent {
     pub set_member: Step,
 }
 
+/// The knobs a probe over quantifier structure takes: a nested signature and a sealed member are
+/// both opaque, so the walk reaches only what the type spells inline.
+pub const LEAF: Descent = Descent {
+    signature: Step::Leaf,
+    set_member: Step::Leaf,
+};
+
 /// Which union door reassembles a rebuilt union.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UnionDoor {

@@ -13,7 +13,7 @@ use super::node::TypeNode;
 use super::order::is_subtype_of;
 use super::registry::TypeRegistry;
 use super::schema::TypeMemberMap;
-use super::walk::unary::{Descent, Rebuild, Step, UnionDoor, Visit, rebuild, visit};
+use super::walk::unary::{LEAF, Rebuild, Step, UnionDoor, Visit, rebuild, visit};
 
 /// The knobs a quantifier walk takes: a nested signature is opaque content, and rebuilt unions
 /// canonicalize.
@@ -27,12 +27,6 @@ const OVER_QUANTIFIERS: Rebuild = Rebuild {
 const OVER_MEMBERS: Rebuild = Rebuild {
     signature: Step::Through,
     union: UnionDoor::Canonical,
-};
-
-/// The knobs a probe over quantifier structure takes.
-const LEAF: Descent = Descent {
-    signature: Step::Leaf,
-    set_member: Step::Leaf,
 };
 
 /// Rewrite every **free** `Quantified(i)` inside `kt` to `bindings[i]` — the per-call substitution

@@ -258,7 +258,7 @@ fn abstract_type_digest(
     h.scope_id(source)
         .symbol(name.symbol())
         .count(param_names.len());
-    let mut sorted: Vec<TypeSymbol> = param_names.to_vec();
+    let mut sorted: SmallVec<[TypeSymbol; 4]> = param_names.iter().copied().collect();
     sorted.sort_unstable();
     for param in sorted {
         h.symbol(param.symbol());

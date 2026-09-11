@@ -17,7 +17,7 @@ use crate::type_lattice::schema::{
 };
 use crate::type_lattice::shape::Specificity;
 use crate::type_lattice::sig_relations::{
-    admits_slots, meet_schemas, shape_specificity, sig_subtype,
+    Returns, admits_shape, meet_schemas, shape_specificity, sig_subtype,
 };
 use crate::type_lattice::substitute::{
     canonicalize_binder, erase_quantified, instantiate_quantified, quantifier_bounds,
@@ -356,8 +356,8 @@ proptest! {
         if !crate::type_lattice::schema::is_shape(a, &types) {
             prop_assert_eq!(shape_specificity(&types, a, b), Specificity::Incomparable);
             prop_assert_eq!(shape_specificity(&types, b, a), Specificity::Incomparable);
-            prop_assert!(!admits_slots(a, b, &types));
-            prop_assert!(!admits_slots(b, a, &types));
+            prop_assert!(!admits_shape(&types, a, b, Returns::Ignored));
+            prop_assert!(!admits_shape(&types, b, a, Returns::Ignored));
         }
     }
 

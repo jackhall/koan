@@ -10,12 +10,12 @@
 //! value-slot rule — reaches it through [`is_subtype_of`], so there is no second descent to keep in
 //! step with this one.
 
+use smallvec::SmallVec;
+
 use super::handle::KType;
 use super::node::TypeNode;
 use super::registry::{Relation, TypeRegistry};
-use super::schema::{shape_quantifiers, shape_return, shape_slots};
-use super::sig_relations::sig_subtype;
-use super::unify::{Collector, admits_with};
+use super::sig_relations::{Returns, admits_shape, sig_subtype};
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
 
@@ -118,8 +118,10 @@ impl Lockstep for Order {
                     // Above a rigid variable is everything above its bound.
                     (TypeNode::Quantified { bound, .. }, _)
                     | (TypeNode::AbstractType { bound, .. }, _) => is_subtype_of(types, *bound, b),
+                    // A quantified shape is below another when some instantiation of its group
+                    // puts every slot and the return under the other's, with the other's rigid.
                     (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
-                        instantiates_below(types, a, b)
+                        admits_shape(types, a, b, Returns::Checked)
                     }
                     _ => false,
                 }
@@ -156,36 +158,26 @@ fn is_rigid(node: &TypeNode) -> bool {
     )
 }
 
-/// Whether some instantiation of `a`'s quantifier group, each variable under its bound, puts the
-/// instance below `b` with `b`'s variables rigid.
-///
-/// Prenex instantiation through the collector: each slot pair asks `b`'s slot to lie under `a`'s
-/// (covariant for the collector, since a slot's own polarity is contravariant), the return pair
-/// asks `a`'s return to lie under `b`'s, and `solve` decides. `b`'s `Quantified` nodes fall to the
-/// rigid rule automatically, because the collector only ever solves declared-side variables and the
-/// carried side is never substituted.
-fn instantiates_below(types: &TypeRegistry, a: KType, b: KType) -> bool {
-    let (a_slots, b_slots) = (shape_slots(a, types), shape_slots(b, types));
-    if a_slots.len() != b_slots.len() || !keywords_agree(types, a, b) {
-        return false;
-    }
-    let (Some(a_ret), Some(b_ret)) = (shape_return(a, types), shape_return(b, types)) else {
-        return false;
-    };
-    let mut collector = Collector::new(shape_quantifiers(a, types).len());
-    for (declared, carried) in a_slots.iter().zip(b_slots.iter()) {
-        if admits_with(types, *declared, *carried, Variance::Co, &mut collector).is_err() {
-            return false;
-        }
-    }
-    if admits_with(types, a_ret, b_ret, Variance::Contra, &mut collector).is_err() {
-        return false;
-    }
-    collector.solve(types).is_ok()
+/// One flag per member: `false` where the member lies below some *other* member, so the survivors
+/// form an antichain — the subsumption rule a union and an overload set canonicalize by. Two
+/// mutually ordered members are one handle, so a caller dedups first and no pair drops both sides.
+pub(super) fn unsubsumed(types: &TypeRegistry, members: &[KType]) -> SmallVec<[bool; 8]> {
+    members
+        .iter()
+        .map(|member| {
+            !members
+                .iter()
+                .any(|peer| peer != member && is_subtype_of(types, *member, *peer))
+        })
+        .collect()
 }
 
-/// Whether two shapes key the same bucket: equal element runs, keyword for keyword, position for
-/// position.
-fn keywords_agree(types: &TypeRegistry, a: KType, b: KType) -> bool {
-    super::schema::shape_keys_equal(a, b, types)
+/// The index of the one element of `0..count` that `dominates` every other, if there is one — the
+/// tournament a most-specific overload, a keyworded selection and a contribution set's extremum
+/// all run.
+pub(super) fn dominant(
+    count: usize,
+    mut dominates: impl FnMut(usize, usize) -> bool,
+) -> Option<usize> {
+    (0..count).find(|&i| (0..count).all(|j| i == j || dominates(i, j)))
 }

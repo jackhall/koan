@@ -153,13 +153,25 @@ The asymmetry between the two edge kinds is a design invariant:
 
 The run frame owns the registry; the registry owns the nodes; handles own nothing.
 Concretely it owns a `RunRegistries` bundle — the type registry beside the run's label
-interner ([label-interning.md](../label-interning.md)) — as a plain field, not an `Rc`
-and not region-bumped: both halves own growing heap maps that need `Drop`, and regions
-are Drop-free. Within a run the registry is insert-only — interning adds nodes, nothing removes them
-— and the whole graph drops with the run frame. There is no eviction of content, no
-garbage collection, no refcounting, and no growth that outlives the run. Dedup keeps
-the node population at the number of *distinct* types the run builds, which is what
-bounds the growth.
+interner ([label-interning.md](../label-interning.md)) — as a plain field, not an `Rc`.
+The registry's **content lives in the run region**: a node's slices — a union's members, a
+shape's elements and quantifier names, a record's fields, a signature's sorted member
+tables, a deferred return's text — are bumped into the region through the
+[bump door](../../workgraph/design/witnessed-memory.md#the-bump-allocator), and the node table is a hash map built over the
+region's own allocator, keyed by digest under the identity hasher. A node is therefore
+`Copy` and carries no destructor, the table is Drop-free, and the whole graph is released
+with the region rather than freed node by node. `TypeRegistry` carries the region's
+lifetime for that reason; `KType` does not — a handle is a digest and names the same content
+in any registry that has interned it.
+
+The **verdict table** is the one heap-owned part. It both grows and shrinks — a bound on
+verdict storage is a permissible knob — and a region releases nothing before the run ends,
+so it stays a plain map that drops with the frame.
+
+Within a run the content is insert-only — interning adds nodes, nothing removes them.
+There is no eviction of content, no garbage collection, no refcounting, and no growth that
+outlives the run. Dedup keeps the node population at the number of *distinct* types the
+run builds, which is what bounds the growth.
 
 ## How the registry reaches its readers
 
@@ -198,19 +210,16 @@ The registry keeps content and verdicts in two independent `RefCell`s, and the n
 table has **one read door**: `TypeRegistry::with_node(handle, |node| …)` on
 [`registry.rs`](../../src/machine/model/types/registry.rs), which hands the node **by
 reference** for the reading closure's duration. A shape question — which
-variant, which child handles, which field types — is therefore answered without copying
-the node, which is what keeps a dispatch that matches nothing from allocating per
+variant, which child handles, which field types — is therefore answered without
+allocating, which is what keeps a dispatch that matches nothing from allocating per
 candidate. The other doors are written over it:
 
 - **The owning door.** `node(handle)` is `with_node(handle, TypeNode::clone)`, for a
-  caller that needs the node to outlive the read. A node is shallow — scalar payload plus
-  child handles — so the clone never copies a type subtree, but a variant carrying a field
-  record, a member list or a schema allocates to clone. No production reader takes it:
-  each one either answers from inside the closure — including the rewriting walks, which
-  intern as they recurse — or copies past the read the single field it must own, saying at
-  the site why owning it is structural rather than a way around the borrow. The door stays
-  public for the test suites, which match a node against an expected shape outside any
-  closure.
+  caller that needs the node past the read. A node is `Copy` — scalar payload, child
+  handles and region slices — so the clone is a few words and never a type subtree. No
+  production reader takes it: each one answers from inside the closure, including the
+  rewriting walks, which intern as they recurse. The door stays public for the test suites,
+  which match a node against an expected shape outside any closure.
 - **Per-query verbs.** `is_union`, `union_variant_target`, `union_member_named` walk the
   outer node and the members it names under one borrow and answer with `Copy` data, so a
   probe that wants a verdict rather than a node reads nothing back out.
@@ -219,18 +228,15 @@ Two properties bound what a reader may do. **No reference into the table can esc
 that is compile-enforced: the closure's result type is fixed at the call site and the
 node's lifetime is the call's, so a reader is confined to data it derives. **A reader may
 intern**, and that is a property of the storage rather than a discipline the callers keep:
-the node table is a persistent HAMT, so the read door clones it — a root-pointer bump, `O(1)`
-— and releases the `RefCell` borrow before the reading closure runs. `intern` takes the live
-table mutably against no outstanding borrow; the snapshot in the reader's hand does not
-share the insert, and a handle minted mid-read resolves through the fresh snapshot its own
-`with_node` takes. The snapshot is what that costs: an insert made while a read is live
-copies the lookup path instead of updating the table in place, so reading in place trades a
-node clone per read for a path copy per intern-under-a-read. Every interning door — `intern`
-and the union-member door alike — funnels through one insert-if-absent path, so a digest is
-probed once per intern rather than once per door. The consequence that matters is that a
-walk which *rewrites* types as it recurses runs at any depth under a read: signature
-satisfaction meets a nested signature in a
-slot type and materializes the substituted schema right there
+a node is `Copy`, so the read door copies it out of the table and releases the `RefCell`
+borrow before the reading closure runs. The slices the copy points at live in the region,
+not in the table, so an insert made while a read is live invalidates nothing the reader
+holds, and a handle minted mid-read resolves through its own `with_node`. Every interning
+door — `intern` and the union-member door alike — funnels through one insert-if-absent
+path, so a digest is probed once per intern rather than once per door. The consequence that
+matters is that a walk which *rewrites* types as it recurses runs at any depth under a
+read: signature satisfaction meets a nested signature in a slot type and materializes the
+substituted schema right there
 ([modules.md § VAL-slot reads carry the abstract member identity](modules.md#val-slot-reads-carry-the-abstract-member-identity)),
 under the `with_node` its own entry point is holding.
 
@@ -242,7 +248,7 @@ signature satisfaction compare types structurally and build no substituted type
 that materializes only at a nested signature, where the relation between two signatures is
 the schema recursion itself).
 
-Reads nest freely, since each takes its own snapshot: the specificity walk reads both sides
+Reads nest freely, since each holds only its own copy: the specificity walk reads both sides
 at once and recurses under both. Recording a verdict under a read is likewise fine — verdicts
 live in their own cell — so a memoizing predicate writes its answer without touching the
 read it is running under.
@@ -255,12 +261,10 @@ own run frame and therefore owns its own registry — per-thread interning by
 construction, with no locks and no shared table. Digests are minted locally and agree
 across threads by content, so two registries never need reconciling to agree on
 identity. Moving a value between threads means its types' content must land in the
-receiving frame's registry. Two candidate mechanisms: copy the value's type nodes
-plus everything reachable through their composition edges, skipping any digest the
-receiver already holds; or, since node storage is a persistent (immutable) map, merge
-the two maps outright, sharing structure instead of copying. Under either mechanism
-the handles themselves need no translation — a digest is the same value in both
-registries.
+receiving frame's registry: copy the value's type nodes plus everything reachable
+through their composition edges into the receiving region, skipping any digest the
+receiver already holds. The handles themselves need no translation — a digest is the
+same value in both registries.
 
 ## Open work
 
@@ -273,8 +277,10 @@ are the content, and the recursive-group window/SCC seal
 turns a co-declared group into interned member nodes. A type crosses a region boundary
 as a handle copy — there is no storage door and no residence audit to run.
 
+- [Bump-hosted type registry](../../roadmap/reduce_allocs/bump-hosted-type-registry.md)
+  moves the registry's content — node payloads and the node table — into the run region;
+  the verdict table stays heap-owned.
 - [Cross-registry type-content transfer](../../roadmap/type_language/cross-registry-type-content-transfer.md)
   owns moving a value's type content into a receiving frame's registry — across sequential
   runs over a persistent scope (reachable today) and across threads once concurrency ships.
-  The transfer mechanism (subgraph copy vs. persistent-map merge) and whether verdict edges
-  ride along as warm cache are undecided even within this design.
+  Whether verdict edges ride along as warm cache is undecided even within this design.

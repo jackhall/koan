@@ -1144,9 +1144,7 @@ digraph {
     "koan::type_lattice::order" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
     "koan::type_lattice::order" -> "koan::type_lattice::node" [label="uses", style="dashed"];
     "koan::type_lattice::order" -> "koan::type_lattice::registry" [label="uses", style="dashed"];
-    "koan::type_lattice::order" -> "koan::type_lattice::schema" [label="uses", style="dashed"];
     "koan::type_lattice::order" -> "koan::type_lattice::sig_relations" [label="uses", style="dashed"];
-    "koan::type_lattice::order" -> "koan::type_lattice::unify" [label="uses", style="dashed"];
     "koan::type_lattice::order" -> "koan::type_lattice::walk" [label="uses", style="dashed"];
     "koan::type_lattice::order" -> "koan::type_lattice::walk::binary" [label="uses", style="dashed"];
     "koan::type_lattice::record" -> "koan::parse" [label="uses", style="dashed"];

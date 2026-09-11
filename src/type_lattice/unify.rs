@@ -14,7 +14,7 @@
 
 use super::handle::KType;
 use super::node::TypeNode;
-use super::order::is_subtype_of;
+use super::order::{dominant, is_subtype_of};
 use super::registry::TypeRegistry;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
@@ -60,6 +60,16 @@ pub struct Collector {
     /// Each variable's declared bound, recorded off the `Quantified` node when a contribution
     /// reached it.
     bounds: Vec<KType>,
+    /// Every contribution in arrival order — the cell it landed in and the bound that cell held
+    /// before — so a [`rollback`](Self::rollback) pops exactly what a rejected attempt added.
+    trail: Vec<(usize, Variance, KType)>,
+}
+
+/// A point in a [`Collector`]'s history, for [`Collector::rollback`].
+#[derive(Clone, Copy)]
+struct Mark {
+    cells: usize,
+    trail: usize,
 }
 
 impl Collector {
@@ -69,7 +79,32 @@ impl Collector {
             lower: vec![Vec::new(); arity],
             upper: vec![Vec::new(); arity],
             bounds: vec![KType::ANY; arity],
+            trail: Vec::new(),
         }
+    }
+
+    /// Where the history stands now.
+    fn mark(&self) -> Mark {
+        Mark {
+            cells: self.bounds.len(),
+            trail: self.trail.len(),
+        }
+    }
+
+    /// Forget every contribution since `mark`. Contributions only ever append, so the trail names
+    /// exactly what to pop, and a cell the walk grew since then goes with it.
+    fn rollback(&mut self, mark: Mark) {
+        while self.trail.len() > mark.trail {
+            let (index, variance, previous) = self.trail.pop().expect("the trail reaches the mark");
+            match variance {
+                Variance::Co => self.lower[index].pop(),
+                Variance::Contra => self.upper[index].pop(),
+            };
+            self.bounds[index] = previous;
+        }
+        self.lower.truncate(mark.cells);
+        self.upper.truncate(mark.cells);
+        self.bounds.truncate(mark.cells);
     }
 
     /// Record that `carried` reached the `index`-th variable at `variance`.
@@ -79,14 +114,16 @@ impl Collector {
             self.upper.resize(index + 1, Vec::new());
             self.bounds.resize(index + 1, KType::ANY);
         }
-        self.bounds[index] = bound;
         let cell = match variance {
             Variance::Co => &mut self.lower[index],
             Variance::Contra => &mut self.upper[index],
         };
-        if !cell.contains(&carried) {
-            cell.push(carried);
+        if cell.contains(&carried) {
+            return;
         }
+        cell.push(carried);
+        let previous = std::mem::replace(&mut self.bounds[index], bound);
+        self.trail.push((index, variance, previous));
     }
 
     /// The lower and upper contributions to the `index`-th variable, in arrival order — what
@@ -160,15 +197,11 @@ fn extremum(types: &TypeRegistry, contributions: &[KType], end: Bound) -> Option
     if contributions.is_empty() {
         return Some(None);
     }
-    contributions
-        .iter()
-        .find(|candidate| {
-            contributions.iter().all(|other| match end {
-                Bound::Maximum => is_subtype_of(types, *other, **candidate),
-                Bound::Minimum => is_subtype_of(types, **candidate, *other),
-            })
-        })
-        .map(|found| Some(*found))
+    dominant(contributions.len(), |candidate, other| match end {
+        Bound::Maximum => is_subtype_of(types, contributions[other], contributions[candidate]),
+        Bound::Minimum => is_subtype_of(types, contributions[candidate], contributions[other]),
+    })
+    .map(|found| Some(contributions[found]))
 }
 
 /// Does `carried` fill the position `declared`, and what does it contribute to the variables there?
@@ -220,7 +253,8 @@ fn most_determined_first(
 }
 
 /// The collecting [`Lockstep`] instance. It owns its collector so a declared-side union can try
-/// each member on a clone and keep the first that admits.
+/// each member in turn, rolling back what a rejected one contributed and keeping the first that
+/// admits.
 struct Admits {
     collector: Collector,
 }
@@ -280,18 +314,18 @@ impl Lockstep for Admits {
     ) -> Admission {
         // Every carried member must be admitted by some declared member. A non-union side arrives
         // as a one-element slice, so this covers a union on either side and on both. The
-        // declared-side choice is made on a clone, so a rejected member leaves no contribution
+        // declared-side choice rolls back on rejection, so a rejected member leaves no contribution
         // behind; contributions from every carried member accumulate in the one collector.
         for one in carried {
             let mut admitted = false;
             for option in most_determined_first(types, declared, *one) {
-                let saved = self.collector.clone();
+                let mark = self.collector.mark();
                 match recurse(self, option, *one, v) {
                     Ok(()) => {
                         admitted = true;
                         break;
                     }
-                    Err(_) => self.collector = saved,
+                    Err(_) => self.collector.rollback(mark),
                 }
             }
             if !admitted {
