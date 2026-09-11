@@ -10,7 +10,7 @@
 //! value-slot rule — reaches it through [`is_subtype_of`], so there is no second descent to keep in
 //! step with this one.
 
-use smallvec::SmallVec;
+use crate::memory::{BumpAllocator, BumpVec};
 
 use super::handle::KType;
 use super::node::TypeNode;
@@ -39,7 +39,12 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 ///   its bound, puts the instance below the other with the other's variables rigid.
 /// - A pre-seal `Sibling` and a sealed member are atoms, with the same profile as each other.
 /// - Every other pair is unrelated.
-pub fn is_subtype_of(types: &TypeRegistry, a: KType, b: KType) -> bool {
+pub fn is_subtype_of(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: KType,
+    b: KType,
+) -> bool {
     if a == b || b == KType::ANY || a == KType::NEVER {
         return true;
     }
@@ -49,20 +54,37 @@ pub fn is_subtype_of(types: &TypeRegistry, a: KType, b: KType) -> bool {
     if let Some(known) = types.verdict(a.digest(), b.digest(), Relation::Subtype) {
         return known;
     }
-    let verdict = lockstep(types, a, b, Variance::Co, &mut Order { root: true });
+    let verdict = lockstep(
+        types,
+        scratch,
+        a,
+        b,
+        Variance::Co,
+        &mut Order { root: true },
+    );
     types.record_verdict(a.digest(), b.digest(), Relation::Subtype, verdict);
     verdict
 }
 
 /// The strict order: unequal handles and a subtype.
-pub fn is_more_specific_than(types: &TypeRegistry, a: KType, b: KType) -> bool {
-    a != b && is_subtype_of(types, a, b)
+pub fn is_more_specific_than(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    a: KType,
+    b: KType,
+) -> bool {
+    a != b && is_subtype_of(types, scratch, a, b)
 }
 
 /// Whether the type a position carries fills the slot declared there — the order, read from the
 /// slot's side.
-pub fn satisfied_by(types: &TypeRegistry, slot: KType, carried: KType) -> bool {
-    is_subtype_of(types, carried, slot)
+pub fn satisfied_by(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    slot: KType,
+    carried: KType,
+) -> bool {
+    is_subtype_of(types, scratch, carried, slot)
 }
 
 /// The order as a [`Lockstep`] instance. `root` is what routes every nested pair back through
@@ -74,64 +96,67 @@ struct Order {
 impl Lockstep for Order {
     type Out = bool;
 
-    fn enter(&mut self, types: &TypeRegistry, a: KType, b: KType, v: Variance) -> Option<bool> {
+    fn enter(
+        &mut self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        a: KType,
+        b: KType,
+        v: Variance,
+    ) -> Option<bool> {
         if !self.root {
             // A contravariant position asks the reverse question, which is the same relation with
             // the operands swapped.
             return Some(match v {
-                Variance::Co => is_subtype_of(types, a, b),
-                Variance::Contra => is_subtype_of(types, b, a),
+                Variance::Co => is_subtype_of(types, scratch, a, b),
+                Variance::Contra => is_subtype_of(types, scratch, b, a),
             });
         }
         self.root = false;
         None
     }
 
-    fn leaf(&mut self, types: &TypeRegistry, a: KType, b: KType, _v: Variance) -> bool {
-        types.with_node(a, |na| {
-            types.with_node(b, |nb| {
-                // A rigid variable's down-set is checked first: below one are only itself — which
-                // the caller's equality guard already answered — and `Never`.
-                if is_rigid(nb) {
-                    return false;
+    fn leaf(
+        &mut self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        a: KType,
+        b: KType,
+        _v: Variance,
+    ) -> bool {
+        let (na, nb) = (types.node(a), types.node(b));
+        // A rigid variable's down-set is checked first: below one are only itself — which the
+        // caller's equality guard already answered — and `Never`.
+        if is_rigid(&nb) {
+            return false;
+        }
+        match (na, nb) {
+            (TypeNode::OfKind(x), TypeNode::OfKind(y)) => y.admits(x),
+            (TypeNode::Signature { schema: sub, .. }, TypeNode::Signature { schema: sup, .. }) => {
+                if let Some(known) = types.verdict(a.digest(), b.digest(), Relation::SigSatisfies) {
+                    return known;
                 }
-                match (na, nb) {
-                    (TypeNode::OfKind(x), TypeNode::OfKind(y)) => y.admits(*x),
-                    (
-                        TypeNode::Signature { schema: sub, .. },
-                        TypeNode::Signature { schema: sup, .. },
-                    ) => {
-                        if let Some(known) =
-                            types.verdict(a.digest(), b.digest(), Relation::SigSatisfies)
-                        {
-                            return known;
-                        }
-                        let verdict = sig_subtype(types, sub, sup).is_ok();
-                        types.record_verdict(
-                            a.digest(),
-                            b.digest(),
-                            Relation::SigSatisfies,
-                            verdict,
-                        );
-                        verdict
-                    }
-                    // Above a rigid variable is everything above its bound.
-                    (TypeNode::Quantified { bound, .. }, _)
-                    | (TypeNode::AbstractType { bound, .. }, _) => is_subtype_of(types, *bound, b),
-                    // A quantified shape is below another when some instantiation of its group
-                    // puts every slot and the return under the other's, with the other's rigid.
-                    (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
-                        admits_shape(types, a, b, Returns::Checked)
-                    }
-                    _ => false,
-                }
-            })
-        })
+                let verdict = sig_subtype(types, scratch, sub, sup).is_ok();
+                types.record_verdict(a.digest(), b.digest(), Relation::SigSatisfies, verdict);
+                verdict
+            }
+            // Above a rigid variable is everything above its bound.
+            (TypeNode::Quantified { bound, .. }, _) | (TypeNode::AbstractType { bound, .. }, _) => {
+                is_subtype_of(types, scratch, bound, b)
+            }
+            // A quantified shape is below another when some instantiation of its group puts every
+            // slot and the return under the other's, with the other's rigid.
+            (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
+                admits_shape(types, scratch, a, b, Returns::Checked)
+            }
+            _ => false,
+        }
     }
 
     fn set_wise(
         &mut self,
-        _types: &TypeRegistry,
+        _types: &TypeRegistry<'_>,
+        _scratch: BumpAllocator<'_>,
         a: &[KType],
         b: &[KType],
         v: Variance,
@@ -142,7 +167,13 @@ impl Lockstep for Order {
         a.iter().all(|x| b.iter().any(|y| recurse(self, *x, *y, v)))
     }
 
-    fn structural(&mut self, _types: &TypeRegistry, paired: &[bool], arm: Arm<'_>) -> bool {
+    fn structural(
+        &mut self,
+        _types: &TypeRegistry<'_>,
+        _scratch: BumpAllocator<'_>,
+        paired: &[bool],
+        arm: Arm<'_, '_>,
+    ) -> bool {
         paired.iter().all(|verdict| *verdict) && arm.width.permits(arm.only_a, arm.only_b)
     }
 
@@ -151,25 +182,44 @@ impl Lockstep for Order {
     }
 }
 
-fn is_rigid(node: &TypeNode) -> bool {
+fn is_rigid(node: &TypeNode<'_>) -> bool {
     matches!(
         node,
         TypeNode::Quantified { .. } | TypeNode::AbstractType { .. }
     )
 }
 
-/// One flag per member: `false` where the member lies below some *other* member, so the survivors
-/// form an antichain — the subsumption rule a union and an overload set canonicalize by. Two
-/// mutually ordered members are one handle, so a caller dedups first and no pair drops both sides.
-pub(super) fn unsubsumed(types: &TypeRegistry, members: &[KType]) -> SmallVec<[bool; 8]> {
-    members
-        .iter()
-        .map(|member| {
-            !members
-                .iter()
-                .any(|peer| peer != member && is_subtype_of(types, *member, *peer))
+/// Which member of an ordered pair a canonicalization drops.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Dropped {
+    /// The lower one — a union's rule: a member below another admits nothing the other does not.
+    Below,
+    /// The upper one — an overload set's rule: a member above another promises nothing the lower
+    /// one does not, since whatever satisfies the lower satisfies it too.
+    Above,
+}
+
+/// One flag per member: `false` where the member lies on the `dropped` side of some *other*
+/// member, so the survivors form an antichain — the subsumption rule a union and an overload set
+/// canonicalize by, each from its own side. Two mutually ordered members are one handle, so a
+/// caller dedups first and no pair drops both sides.
+pub(super) fn unsubsumed<'s>(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'s>,
+    members: &[KType],
+    dropped: Dropped,
+) -> BumpVec<'s, bool> {
+    let mut keep = BumpVec::with_capacity_in(members.len(), scratch);
+    keep.extend(members.iter().map(|member| {
+        !members.iter().any(|peer| {
+            peer != member
+                && match dropped {
+                    Dropped::Below => is_subtype_of(types, scratch, *member, *peer),
+                    Dropped::Above => is_subtype_of(types, scratch, *peer, *member),
+                }
         })
-        .collect()
+    }));
+    keep
 }
 
 /// The index of the one element of `0..count` that `dominates` every other, if there is one — the

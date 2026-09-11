@@ -1,8 +1,10 @@
 //! The import boundary, as a test over this module's own source.
 //!
-//! The lattice's only `crate::` edges are the label and symbol types from `parse` and `ScopeId`
-//! from `memory`. The compiler cannot enforce that — a public module may name anything in its own
-//! crate — so the rule is checked here, by reading the files.
+//! The lattice's only `crate::` edges are the label and symbol types from `parse`, and `ScopeId`
+//! plus the bump-allocation seam the registry and every scratch buffer are built over from
+//! `memory` — with, in its own suite, the lib-test binary's allocation counter. The compiler cannot
+//! enforce that — a public module may name anything in its own crate — so the rule is checked here,
+//! by reading the files.
 
 use std::path::{Path, PathBuf};
 
@@ -23,10 +25,17 @@ const PARSE_ITEMS: &[&str] = &[
 ];
 
 /// The path prefixes the lattice may name outside `parse`: `ScopeId` and its associated items, the
-/// macro that mints a static name, and its own module path.
+/// region allocator with the vector and table shapes built over it and the door a writable table
+/// is built through, the macro that mints a static name, the lib-test allocation counter, and its
+/// own module path.
 const PREFIXES: &[&str] = &[
+    "crate::memory::BumpAllocator",
+    "crate::memory::BumpBackedMap",
+    "crate::memory::BumpVec",
     "crate::memory::ScopeId",
+    "crate::memory::bump_table",
     "crate::static_name",
+    "crate::tests::allocation_count",
     "crate::type_lattice",
 ];
 
@@ -57,7 +66,7 @@ fn the_core_names_only_labels_and_scope_ids() {
     }
     assert!(
         offenders.is_empty(),
-        "the type lattice may name only the label types and `ScopeId`, but found:\n{}",
+        "the type lattice may name only the label types, `ScopeId` and the bump seam, but found:\n{}",
         offenders.join("\n")
     );
 }

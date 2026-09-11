@@ -4,31 +4,52 @@
 //! The alphabets are tiny on purpose — three binder names, three Type names, two keywords, two
 //! value names — because the interesting collisions are structural, and a wide alphabet makes two
 //! generated types share a shape only by accident.
+//!
+//! A strategy is `'static`, so the registry it interns into lives over a region leaked for the rest
+//! of the test process. Everything transient — a generated value's scratch buffers, a sealed
+//! group's window — lives in a fresh region dropped as soon as the value is built
+//! ([`with_scratch`]), so generation keeps nothing but interned content.
 
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use proptest::prelude::*;
+use workgraph::witnessed::RegionHandle;
+use workgraph::witnessed::doctest_fixture::RegionCart;
+pub use workgraph::witnessed::doctest_fixture::fresh_cart;
 
-use crate::memory::ScopeId;
+use crate::memory::{BumpAllocator, ScopeId};
 use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
-use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::operators::{FoldDirection, ReductionMode};
-use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::schema::{
-    DeclaredGroup, OperatorMembers, SigSchema, TypeMemberMap, canonical_groups, canonical_overloads,
-};
+use crate::type_lattice::schema::SchemaDraft;
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
+
+/// The allocator over `cart`'s region — a registry's home or a scratch, gone with the cart.
+pub fn allocator(cart: &RegionCart) -> BumpAllocator<'_> {
+    RegionHandle::from_owner(cart).allocator()
+}
+
+/// A region that lives for the rest of the test process, so a strategy can hold handles into it.
+fn leaked_region() -> BumpAllocator<'static> {
+    let cart: &'static Rc<RegionCart> = Box::leak(Box::new(fresh_cart()));
+    allocator(cart)
+}
+
+/// Run `build` over a fresh scratch region, dropped as soon as it returns.
+pub fn with_scratch<R>(build: impl FnOnce(BumpAllocator<'_>) -> R) -> R {
+    let cart = fresh_cart();
+    build(allocator(&cart))
+}
 
 /// One registry, one interner and the alphabets, shared by every strategy in a `proptest!` block.
 #[derive(Clone)]
 pub struct World {
-    pub types: Rc<TypeRegistry>,
+    pub types: Rc<TypeRegistry<'static>>,
     pub labels: Rc<LabelInterner>,
     pub binders: Rc<Vec<BinderSymbol>>,
     pub type_names: Rc<Vec<TypeSymbol>>,
@@ -47,7 +68,7 @@ impl World {
         let declare_value =
             |text: &str| ValueSymbol::declared(text, &labels).expect("a value token");
         World {
-            types: Rc::new(TypeRegistry::new()),
+            types: Rc::new(TypeRegistry::in_region(leaked_region())),
             binders: Rc::new(vec![
                 declare_binder("x"),
                 declare_binder("y"),
@@ -112,16 +133,26 @@ fn arb_type_in(
         2 => inner().prop_map(move |element| list_world.types.list(element)),
         2 => (inner(), inner())
             .prop_map(move |(key, value)| dict_world.types.dict(key, value)),
-        2 => arb_fields(record_world.clone(), inner())
-            .prop_map(move |fields| record_world.types.record(fields)),
-        2 => (arb_fields(function_world.clone(), inner()), inner())
-            .prop_map(move |(params, ret)| function_world.types.function_type(params, ret)),
-        2 => prop::collection::vec(inner(), 1..4)
-            .prop_map(move |members| union_world.types.union_of(&members)),
-        1 => (inner(), arb_fields(apply_world.clone(), inner()))
-            .prop_map(move |(constructor, arguments)| apply_world
-                .types
-                .constructor_apply(constructor, arguments)),
+        2 => arb_fields(record_world.clone(), inner()).prop_map(move |fields| {
+            with_scratch(|scratch| record_world.types.record(scratch, &fields))
+        }),
+        2 => (arb_fields(function_world.clone(), inner()), inner()).prop_map(
+            move |(params, ret)| {
+                with_scratch(|scratch| function_world.types.function_type(scratch, &params, ret))
+            }
+        ),
+        2 => prop::collection::vec(inner(), 1..4).prop_map(move |members| {
+            with_scratch(|scratch| union_world.types.union_of(scratch, &members))
+        }),
+        1 => (inner(), arb_fields(apply_world.clone(), inner())).prop_map(
+            move |(constructor, arguments)| {
+                with_scratch(|scratch| {
+                    apply_world
+                        .types
+                        .constructor_apply(scratch, constructor, &arguments)
+                })
+            }
+        ),
         3 => arb_shape(shape_world, depth, shape_members),
         2 => arb_signature(sig_world, depth),
         1 => arb_sealed_member(group_world, depth),
@@ -156,11 +187,7 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
         let names = world.type_names.clone();
         let types = world.types.clone();
         (0..names.len())
-            .prop_map(move |index| {
-                types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-                    names[index],
-                )))
-            })
+            .prop_map(move |index| types.deferred_return(DeferredReturnSurface::Type(names[index])))
             .boxed()
     };
     let opaque = (
@@ -169,14 +196,17 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
         0..grounds.len(),
     )
         .prop_map(move |(name, arity, bound)| {
-            let params = abstract_world.type_names[..arity.min(2)].to_vec();
-            abstract_world.types.abstract_type(
-                OPAQUE_MINT,
-                abstract_world.type_names[name],
-                params,
-                Some(OPAQUE_MINT),
-                abstract_world.grounds()[bound],
-            )
+            let params = &abstract_world.type_names[..arity.min(2)];
+            with_scratch(|scratch| {
+                abstract_world.types.abstract_type(
+                    scratch,
+                    OPAQUE_MINT,
+                    abstract_world.type_names[name],
+                    params,
+                    Some(OPAQUE_MINT),
+                    abstract_world.grounds()[bound],
+                )
+            })
         });
     let mut rigid: Vec<KType> = bound.as_ref().clone();
     rigid.extend(members.iter().copied());
@@ -191,17 +221,23 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
 /// binder, since the canonical binder is reserved for a signature's own members.
 const OPAQUE_MINT: ScopeId = ScopeId::from_raw(1, 1);
 
-/// Zero to three named fields over `value`, keyed from the binder alphabet.
+/// Zero to three named fields over `value`, keyed from the binder alphabet, each name once: a
+/// later draw for a name replaces an earlier one in place, the record a parser that rejects
+/// duplicate fields would have kept.
 fn arb_fields(
     world: World,
     value: BoxedStrategy<KType>,
-) -> impl Strategy<Value = Record<KType>> + use<> {
-    prop::collection::vec((0..world.binders.len(), value), 0..3).prop_map(move |fields| {
-        Record::from_pairs(
-            fields
-                .into_iter()
-                .map(|(name, kt)| (world.binders[name], kt)),
-        )
+) -> impl Strategy<Value = Vec<(BinderSymbol, KType)>> + use<> {
+    prop::collection::vec((0..world.binders.len(), value), 0..3).prop_map(move |drawn| {
+        let mut fields: Vec<(BinderSymbol, KType)> = Vec::new();
+        for (name, kt) in drawn {
+            let name = world.binders[name];
+            match fields.iter_mut().find(|(held, _)| *held == name) {
+                Some(field) => field.1 = kt,
+                None => fields.push((name, kt)),
+            }
+        }
+        fields
     })
 }
 
@@ -267,7 +303,9 @@ fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy
                         run.push(DispatchTokenElement::Keyword(keyword));
                         run.push(DispatchTokenElement::Slot(slot));
                     }
-                    world.types.shape_type(&names, &run, ret).handle
+                    with_scratch(|scratch| {
+                        world.types.shape_type(scratch, &names, &run, ret).handle
+                    })
                 })
         })
         .boxed()
@@ -284,20 +322,25 @@ fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
     prop::collection::vec((0..world.type_names.len(), 0..grounds.len()), 0..2)
         .prop_flat_map(move |declared| {
             let world = outer.clone();
-            let mut abstract_members = TypeMemberMap::default();
+            let mut abstract_members: Vec<(TypeSymbol, KType)> = Vec::new();
             for (name, bound) in declared {
                 let name = world.type_names[name];
-                abstract_members.entry(name).or_insert_with(|| {
-                    world.types.abstract_type(
-                        ScopeId::SENTINEL,
-                        name,
-                        Vec::new(),
-                        None,
-                        world.grounds()[bound],
-                    )
-                });
+                if abstract_members.iter().all(|(held, _)| *held != name) {
+                    let member = with_scratch(|scratch| {
+                        world.types.abstract_type(
+                            scratch,
+                            ScopeId::SENTINEL,
+                            name,
+                            &[],
+                            None,
+                            world.grounds()[bound],
+                        )
+                    });
+                    abstract_members.push((name, member));
+                }
             }
-            let members: Rc<Vec<KType>> = Rc::new(abstract_members.values().copied().collect());
+            let members: Rc<Vec<KType>> =
+                Rc::new(abstract_members.iter().map(|(_, kt)| *kt).collect());
             let none = Rc::new(Vec::new());
             let manifest = arb_type_in(world.clone(), depth - 1, none.clone(), members.clone());
             let slot = arb_type_in(world.clone(), depth - 1, none.clone(), members.clone());
@@ -309,49 +352,52 @@ fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
                 prop::collection::vec((0..world.keywords.len(), 0..3usize), 0..2),
             )
                 .prop_map(move |(manifests, slots, keyworded, operators)| {
-                    let mut schema = SigSchema::empty();
-                    for (name, kt) in manifests {
-                        let name = world.type_names[name];
-                        if !abstract_members.contains_key(&name) {
-                            schema.manifest_members.insert(name, kt);
+                    with_scratch(|scratch| {
+                        let mut draft = SchemaDraft::new(scratch);
+                        for (name, kt) in manifests {
+                            let name = world.type_names[name];
+                            if abstract_members.iter().all(|(held, _)| *held != name) {
+                                draft.insert_manifest(name, kt);
+                            }
                         }
-                    }
-                    for (name, kt) in slots {
-                        schema.value_slots.insert(world.values[name], kt);
-                    }
-                    schema.sig_id = (!abstract_members.is_empty()).then_some(ScopeId::SENTINEL);
-                    schema.abstract_members = abstract_members.clone();
-                    schema.keyworded = canonical_overloads(keyworded, &world.types);
-                    let mut claimed: HashMap<KeywordSymbol, ReductionMode> = HashMap::new();
-                    let mut records: OperatorMembers = Vec::new();
-                    for (keyword, mode) in operators {
-                        let keyword = world.keywords[keyword];
-                        let mode = match mode {
-                            0 => ReductionMode::FoldLeft,
-                            1 => ReductionMode::FoldRight,
-                            _ => ReductionMode::Pairwise {
-                                combiner: world.keywords[0],
-                                direction: FoldDirection::Left,
-                            },
-                        };
-                        // A channel never has two records over one operator, which the generator
-                        // has to respect: the invariant is the schema's, not the relation's.
-                        if claimed.insert(keyword, mode).is_none() {
-                            records.push(DeclaredGroup {
-                                members: vec![keyword],
-                                mode,
-                            });
+                        for (name, kt) in slots {
+                            draft.insert_value_slot(world.values[name], kt);
                         }
-                    }
-                    schema.operators = canonical_groups(records);
-                    world.types.signature(schema)
+                        draft.sig_id = (!abstract_members.is_empty()).then_some(ScopeId::SENTINEL);
+                        for (name, member) in &abstract_members {
+                            draft.insert_abstract(*name, *member);
+                        }
+                        for shape in keyworded {
+                            draft.push_keyworded(shape);
+                        }
+                        let mut claimed: HashMap<KeywordSymbol, ReductionMode> = HashMap::new();
+                        for (keyword, mode) in operators {
+                            let keyword = world.keywords[keyword];
+                            let mode = match mode {
+                                0 => ReductionMode::FoldLeft,
+                                1 => ReductionMode::FoldRight,
+                                _ => ReductionMode::Pairwise {
+                                    combiner: world.keywords[0],
+                                    direction: FoldDirection::Left,
+                                },
+                            };
+                            // A channel never has two records over one operator, which the
+                            // generator has to respect: the invariant is the schema's, not the
+                            // relation's.
+                            if claimed.insert(keyword, mode).is_none() {
+                                draft.push_operator_group(&[keyword], mode);
+                            }
+                        }
+                        world.types.signature(scratch, draft)
+                    })
                 })
         })
         .boxed()
 }
 
 /// One member of a freshly sealed recursive group, whose relative schemas may hold unions over
-/// sibling references — the shape the seal's canonicalization claim is about.
+/// sibling references — the shape the seal's canonicalization claim is about. The window is hosted
+/// in the value's own scratch region, which it does not outlive.
 fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
     let repr = arb_type_in(
         world.clone(),
@@ -366,28 +412,29 @@ fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
         .prop_map(move |(count, reprs)| {
             let count = count.min(reprs.len()).max(1);
             let names: Vec<TypeSymbol> = world.type_names[..count.min(3)].to_vec();
-            let window = RecursiveGroupWindow::new(
-                names.iter().map(|name| (*name, KKind::NewType)).collect(),
-            );
-            for (index, name) in names.iter().enumerate() {
-                let (repr, recursive) = reprs[index];
-                let body = if recursive {
-                    let sibling = window.sibling(
-                        names[(index + 1) % names.len()],
-                        KKind::NewType,
-                        &world.types,
-                    );
-                    world.types.union_of(&[repr, sibling])
-                } else {
-                    repr
-                };
-                let _ = name;
-                window.fill_member(index, RelativeSchema::NewType(body), &world.types);
-            }
-            window
-                .sealed()
-                .and_then(|sealed| sealed.member(0))
-                .expect("the window seals on its last fill")
+            let announced: Vec<(TypeSymbol, KKind)> =
+                names.iter().map(|name| (*name, KKind::NewType)).collect();
+            with_scratch(|scratch| {
+                let window = RecursiveGroupWindow::new(scratch, &announced);
+                for index in 0..names.len() {
+                    let (repr, recursive) = reprs[index];
+                    let body = if recursive {
+                        let sibling = window.sibling(
+                            names[(index + 1) % names.len()],
+                            KKind::NewType,
+                            &world.types,
+                        );
+                        world.types.union_of(scratch, &[repr, sibling])
+                    } else {
+                        repr
+                    };
+                    window.fill_member(index, RelativeSchema::NewType(body), &world.types, scratch);
+                }
+                window
+                    .sealed()
+                    .and_then(|sealed| sealed.member(0))
+                    .expect("the window seals on its last fill")
+            })
         })
         .boxed()
 }
@@ -405,7 +452,9 @@ pub fn arb_arguments(world: World, arity: usize) -> impl Strategy<Value = Vec<KT
         let mut pool = world.grounds();
         pool.push(KType::BOOL);
         pool.push(KType::NEVER);
-        pool.push(world.types.union_of(&[KType::NUMBER, KType::STR]));
+        pool.push(with_scratch(|scratch| {
+            world.types.union_of(scratch, &[KType::NUMBER, KType::STR])
+        }));
         pool
     };
     prop::collection::vec(0..pool.len(), arity)

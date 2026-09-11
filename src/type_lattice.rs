@@ -20,6 +20,14 @@
 //! wrote. [`sig_subtype`] and [`meet_schemas`] are the order and the meet over two signature schemas —
 //! two unordered signatures join to their union — and [`shape_specificity`] ranks two candidates under one bucket key.
 //!
+//! # Storage
+//!
+//! A [`TypeRegistry`] is built over the run region's bump allocator, and every node it interns —
+//! with every slice a node holds — lives in that region: nothing the lattice owns carries drop
+//! glue, and the region releases it whole. The verdict table is the one heap-owned part. Every door
+//! and relation that needs a transient buffer takes a scratch allocator from its caller and builds
+//! the buffer there, so interning a type or running a relation touches the global heap nowhere.
+//!
 //! # Writing a new walk
 //!
 //! Every structural recursion here goes through one of the two drivers in [`walk`], with rendering
@@ -70,9 +78,9 @@ pub use render::{
     render_sig_failure,
 };
 pub use schema::{
-    DeclaredGroup, OperatorMembers, SigSchema, TypeMemberMap, canonical_groups,
-    canonical_overloads, constructor_param_names, is_abstract_sig_member, is_shape,
-    shape_keys_equal, shape_return, shape_slots,
+    DeclaredGroup, Members, SchemaDraft, SigSchema, constructor_param_names,
+    is_abstract_sig_member, is_shape, member, shape_keys_equal, shape_return, shape_slots,
+    specialize_schema,
 };
 pub use shape::{DeferredReturnSurface, DispatchTokenElement, Specificity};
 pub use sig_relations::{

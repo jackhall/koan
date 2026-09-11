@@ -14,27 +14,27 @@
 //! **There is one recipe.** A node's digest is its tag byte, its own scalar payload, and its
 //! children's digests — which are already known, because children are handles. Nothing here walks
 //! a type: [`node_digest`] is one layer deep, and [`schema_content_digest`] reads a schema's
-//! members by their handles. Projection re-sources every reference to a signature's own abstract
+//! members by their handles, each table straight through in the canonical order it is stored in.
+//! The only buffer a recipe needs is the symbol sort an order-blind record or union digests under,
+//! which stages in the caller's scratch. Projection re-sources every reference to a signature's own abstract
 //! members to [`ScopeId::SENTINEL`] before a schema reaches here, so a textually identical
 //! declaration already presents identical handles and there is nothing left for a deep
 //! canonicalizing walk to do.
 //!
 //! **The hasher lives here and only here.** Every payload begins with a distinct domain tag byte
-//! so no two variants can share a digest, every `String` is length-prefixed so concatenation is
+//! so no two variants can share a digest, every text run is length-prefixed so concatenation is
 //! unambiguous, and every child digest / [`ScopeId`] / integer is fed little-endian.
 
-use crate::memory::ScopeId;
-use crate::parse::{Symbol, TypeSymbol};
+use crate::memory::{BumpAllocator, BumpVec, ScopeId};
+use crate::parse::{BinderSymbol, Symbol, TypeSymbol};
 
 use super::handle::KType;
 use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
 use super::operators::{FoldDirection, ReductionMode};
-use super::record::Record;
 use super::registry::TypeRegistry;
 use super::schema::SigSchema;
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
-use smallvec::SmallVec;
 
 /// A `KType`'s content identity: the low 128 bits of a BLAKE3 hash of its content.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
@@ -108,7 +108,7 @@ impl DigestHasher {
         self
     }
 
-    /// A `String`, unambiguously: its byte length as a `u64` LE, then its bytes.
+    /// A text run, unambiguously: its byte length as a `u64` LE, then its bytes.
     fn string(&mut self, s: &str) -> &mut Self {
         self.inner.update(&(s.len() as u64).to_le_bytes());
         self.inner.update(s.as_bytes());
@@ -160,7 +160,11 @@ fn kkind_tag(k: KKind) -> u8 {
 /// `TAG_SET_LOCAL`, meaningful only against an ambient window. A [`TypeNode::SetMember`] is
 /// `(component digest, index in component)` — its schema is *not* re-fed here, because the
 /// component digest was computed over exactly that content at seal.
-pub(super) fn node_digest(node: &TypeNode) -> TypeDigest {
+///
+/// Every per-shape builder below is also reachable from the registry, so each door interns
+/// probe-first: an arm here is its builder over the node's own fields, so a digest taken off a
+/// caller's borrowed slices equals the digest of the node those slices would build.
+pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> TypeDigest {
     match node {
         TypeNode::Number => leaf_digest(TAG_NUMBER),
         TypeNode::Str => leaf_digest(TAG_STR),
@@ -175,7 +179,7 @@ pub(super) fn node_digest(node: &TypeNode) -> TypeDigest {
         TypeNode::Any => leaf_digest(TAG_ANY),
         TypeNode::Never => leaf_digest(TAG_NEVER),
         TypeNode::OfKind(k) => of_kind_digest(*k),
-        TypeNode::DeferredReturn(surface) => deferred_return_digest(surface),
+        TypeNode::DeferredReturn(surface) => deferred_return_digest(*surface),
         TypeNode::AbstractType {
             source,
             name,
@@ -185,19 +189,22 @@ pub(super) fn node_digest(node: &TypeNode) -> TypeDigest {
         } => abstract_type_digest(*source, *name, param_names, *nonce, *bound),
         TypeNode::List { element } => list_digest(element.digest()),
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
-        TypeNode::Record { fields } => record_digest(fields),
-        TypeNode::KFunction { params, ret } => function_digest(params, ret.digest()),
+        TypeNode::Record { fields } => record_digest(scratch, fields.as_slice()),
+        TypeNode::KFunction { params, ret } => {
+            function_digest(scratch, params.as_slice(), ret.digest())
+        }
         TypeNode::ExpressionShape {
             quantifiers,
             elements,
             ret,
+            ..
         } => shape_digest(quantifiers.len(), elements, ret.digest()),
         TypeNode::Quantified { index, bound } => quantified_digest(*index, *bound),
-        TypeNode::Union { members } => union_digest(members),
+        TypeNode::Union { members } => union_digest(scratch, members),
         TypeNode::ConstructorApply {
             constructor,
             arguments,
-        } => constructor_apply_digest(constructor.digest(), arguments),
+        } => constructor_apply_digest(scratch, constructor.digest(), arguments.as_slice()),
         TypeNode::Signature { schema_digest, .. } => signature_digest(*schema_digest),
         TypeNode::Sibling(index) => sibling_digest(*index),
         TypeNode::SetMember {
@@ -220,7 +227,7 @@ fn of_kind_digest(kind: KKind) -> TypeDigest {
 
 /// A deferred FN return: a discriminant byte for the surface shape, then the shape's own identity
 /// — a bare name's symbol bits, a captured expression's canonical render.
-fn deferred_return_digest(surface: &DeferredReturnSurface) -> TypeDigest {
+pub(super) fn deferred_return_digest(surface: DeferredReturnSurface<'_>) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_DEFERRED_RETURN);
     match surface {
         DeferredReturnSurface::Type(name) => h.byte(0).symbol(name.symbol()),
@@ -231,15 +238,15 @@ fn deferred_return_digest(surface: &DeferredReturnSurface) -> TypeDigest {
 
 /// A relative sibling reference: its bare index under `TAG_SET_LOCAL`, so computing an enclosing
 /// component's digest never recurses back into the component.
-fn sibling_digest(index: usize) -> TypeDigest {
+pub(super) fn sibling_digest(index: usize) -> TypeDigest {
     DigestHasher::new(TAG_SET_LOCAL).count(index).finish()
 }
 
 /// A named rigid variable's identity fields: the generativity `nonce` first, then the binder
-/// `source`, the name, the parameter names fed sorted so the encoding is order-blind, and the
-/// bound the variable stands over. Names feed as fixed-width symbol bits and sort by those bits —
-/// a canonical order over the same set.
-fn abstract_type_digest(
+/// `source`, the name, the parameter names, and the bound the variable stands over. The parameter
+/// names arrive symbol-sorted — the order the node stores them in, a canonical order over the set
+/// that is their identity — and feed as fixed-width symbol bits.
+pub(super) fn abstract_type_digest(
     source: ScopeId,
     name: TypeSymbol,
     param_names: &[TypeSymbol],
@@ -258,9 +265,7 @@ fn abstract_type_digest(
     h.scope_id(source)
         .symbol(name.symbol())
         .count(param_names.len());
-    let mut sorted: SmallVec<[TypeSymbol; 4]> = param_names.iter().copied().collect();
-    sorted.sort_unstable();
-    for param in sorted {
+    for param in param_names {
         h.symbol(param.symbol());
     }
     h.digest(bound.digest()).finish()
@@ -270,12 +275,12 @@ fn abstract_type_digest(
 // — so the work is shallow: one hash over one tag and a few `u128`s, never a walk.
 
 /// `List<element>`.
-fn list_digest(element: TypeDigest) -> TypeDigest {
+pub(super) fn list_digest(element: TypeDigest) -> TypeDigest {
     DigestHasher::new(TAG_LIST).digest(element).finish()
 }
 
 /// `Dict<key, value>`.
-fn dict_digest(key: TypeDigest, value: TypeDigest) -> TypeDigest {
+pub(super) fn dict_digest(key: TypeDigest, value: TypeDigest) -> TypeDigest {
     DigestHasher::new(TAG_DICT)
         .digest(key)
         .digest(value)
@@ -283,16 +288,23 @@ fn dict_digest(key: TypeDigest, value: TypeDigest) -> TypeDigest {
 }
 
 /// A structural record type.
-fn record_digest(fields: &Record<KType>) -> TypeDigest {
+pub(super) fn record_digest(
+    scratch: BumpAllocator<'_>,
+    fields: &[(BinderSymbol, KType)],
+) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_RECORD);
-    feed_record(&mut h, fields);
+    feed_record(&mut h, scratch, fields);
     h.finish()
 }
 
 /// A function type `(params) -> ret`.
-fn function_digest(params: &Record<KType>, ret: TypeDigest) -> TypeDigest {
+pub(super) fn function_digest(
+    scratch: BumpAllocator<'_>,
+    params: &[(BinderSymbol, KType)],
+    ret: TypeDigest,
+) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_KFUNCTION);
-    feed_record(&mut h, params);
+    feed_record(&mut h, scratch, params);
     h.digest(ret).finish()
 }
 
@@ -302,9 +314,6 @@ fn function_digest(params: &Record<KType>, ret: TypeDigest) -> TypeDigest {
 /// parameter record is order-blind: a shape's argument positions are what dispatch reads. Each
 /// variable's bound rides in its own `Quantified` occurrences, which canonical form guarantees.
 ///
-/// Reachable from the registry so a shape can be interned probe-first: the `ExpressionShape` arm
-/// of [`node_digest`] is this call over the node's own fields, so a digest taken here off a
-/// borrowed element run equals the digest of the node that run would build.
 pub(super) fn shape_digest(
     arity: usize,
     elements: &[DispatchTokenElement],
@@ -324,44 +333,44 @@ pub(super) fn shape_digest(
 /// A positional rigid variable: its index in the enclosing shape's quantifier group, then the
 /// bound it stands over. The bound is identity — two shapes differing only in a variable's bound
 /// admit different arguments.
-fn quantified_digest(index: usize, bound: KType) -> TypeDigest {
+pub(super) fn quantified_digest(index: usize, bound: KType) -> TypeDigest {
     DigestHasher::new(TAG_QUANTIFIED)
         .count(index)
         .digest(bound.digest())
         .finish()
 }
 
-/// A union — order-blind, matching its set-based identity: sort the member digests.
-///
-/// Reachable from the registry so a union can be interned probe-first: the `Union` arm of
-/// [`node_digest`] is this call over the node's member slice.
-pub(super) fn union_digest(members: &[KType]) -> TypeDigest {
-    // The sort needs its own buffer, and the digest is taken per union evaluation rather than once
-    // at intern, so the members ride inline: the width a union is written at fits.
-    let mut member_digests: SmallVec<[TypeDigest; 8]> =
-        members.iter().map(|m| m.digest()).collect();
+/// A union — order-blind, matching its set-based identity: the member digests feed sorted, staged
+/// in `scratch`. The node keeps its members in the order first written, for rendering.
+pub(super) fn union_digest(scratch: BumpAllocator<'_>, members: &[KType]) -> TypeDigest {
+    let mut member_digests = BumpVec::with_capacity_in(members.len(), scratch);
+    member_digests.extend(members.iter().map(|m| m.digest()));
     member_digests.sort_unstable();
     let mut h = DigestHasher::new(TAG_UNION);
     h.count(member_digests.len());
-    for d in member_digests {
-        h.digest(d);
+    for d in member_digests.iter() {
+        h.digest(*d);
     }
     h.finish()
 }
 
 /// `ConstructorApply(ctor, args)` — the args feed symbol-keyed and symbol-sorted (see
 /// [`feed_record`]), matching the order-blind identity of the args `Record`.
-fn constructor_apply_digest(ctor: TypeDigest, args: &Record<KType>) -> TypeDigest {
+pub(super) fn constructor_apply_digest(
+    scratch: BumpAllocator<'_>,
+    ctor: TypeDigest,
+    args: &[(BinderSymbol, KType)],
+) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_CONSTRUCTOR_APPLY);
     h.digest(ctor);
-    feed_record(&mut h, args);
+    feed_record(&mut h, scratch, args);
     h.finish()
 }
 
 /// A module-signature type's digest: its schema's content digest — identity by interface, not by
 /// mint. `WITH` pins fold into the schema before interning, so the schema content is the whole
 /// identity.
-fn signature_digest(content_digest: TypeDigest) -> TypeDigest {
+pub(super) fn signature_digest(content_digest: TypeDigest) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIGNATURE);
     h.digest(content_digest);
     h.finish()
@@ -370,36 +379,28 @@ fn signature_digest(content_digest: TypeDigest) -> TypeDigest {
 /// The content digest of a normalized signature schema — a pure function of its members, read one
 /// layer deep.
 ///
-/// Abstract members feed `(name, order, sorted parameter names, bound digest)`; manifest members,
-/// value slots and keyworded shapes feed their handles' own digests, the named groups in
-/// symbol-sorted order (the maps are unordered) and the keyworded group in the schema's canonical
-/// order; operator records feed their member runs and modes last.
+/// Abstract members feed `(name, order, parameter names, bound digest)`; manifest members, value
+/// slots and keyworded shapes feed their handles' own digests; operator records feed their member
+/// runs and modes last. Every channel is stored in its canonical order — the named tables
+/// symbol-sorted, the keyworded group and the operator records in the schema's own canonical order
+/// — so each is fed straight through and the declaration order never reaches the digest.
 ///
 /// No walk descends a member. Projection has already re-sourced every reference to one of the
 /// signature's own abstract members to [`ScopeId::SENTINEL`], so a textually identical declaration
 /// projects to identical handles and a schema digests by its member handles alone.
-pub(super) fn schema_content_digest(schema: &SigSchema, types: &TypeRegistry) -> TypeDigest {
+pub(super) fn schema_content_digest(schema: SigSchema<'_>, types: &TypeRegistry<'_>) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIG_CONTENT);
 
     // Each abstract member feeds its name, then its order — `0x00` for a first-order proper type,
     // `0x01` plus the parameter names for a constructor — then the bound it stands over. The
-    // parameter names feed sorted, so the encoding is order-blind.
-    let mut abstracts: Vec<(TypeSymbol, Vec<TypeSymbol>, KType)> = schema
-        .abstract_members
-        .iter()
-        .map(|(name, kt)| {
-            let (params, bound) = read_abstract(*kt, types);
-            (*name, params, bound)
-        })
-        .collect();
-    abstracts.sort_by_key(|(name, _, _)| *name);
-    h.count(abstracts.len());
-    for (name, mut param_names, bound) in abstracts {
+    // parameter names are stored sorted, so the encoding is order-blind.
+    h.count(schema.abstract_members.len());
+    for (name, member) in schema.abstract_members {
+        let (param_names, bound) = read_abstract(*member, types);
         h.symbol(name.symbol());
         if param_names.is_empty() {
             h.byte(0);
         } else {
-            param_names.sort_unstable();
             h.byte(1).count(param_names.len());
             for param in param_names {
                 h.symbol(param.symbol());
@@ -420,22 +421,20 @@ pub(super) fn schema_content_digest(schema: &SigSchema, types: &TypeRegistry) ->
         schema.value_slots.iter().map(|(n, kt)| (n.symbol(), *kt)),
     );
 
-    // Keyworded members: each declared shape's own digest, in the schema's canonical member order.
-    // The bucket key rides inside the shape's recipe, so it is fed once rather than beside each
-    // member.
+    // Keyworded members: each declared shape's own digest. The bucket key rides inside the shape's
+    // recipe, so it is fed once rather than beside each member.
     h.count(schema.keyworded.len());
-    for member in &schema.keyworded {
+    for member in schema.keyworded {
         h.digest(member.digest());
     }
 
-    // Operator members: each declared chaining record as its member run then its mode. The channel
-    // is stored canonically, so the declaration order never reaches the digest. A pairwise mode
-    // additionally feeds its combiner symbol and direction — two records differing only in how
-    // they chain are two interfaces.
+    // Operator members: each declared chaining record as its member run then its mode. A pairwise
+    // mode additionally feeds its combiner symbol and direction — two records differing only in
+    // how they chain are two interfaces.
     h.count(schema.operators.len());
-    for group in &schema.operators {
+    for group in schema.operators {
         h.count(group.members.len());
-        for member in &group.members {
+        for member in group.members {
             h.symbol(member.symbol());
         }
         match group.mode {
@@ -469,29 +468,24 @@ pub(super) fn empty_schema_digest() -> TypeDigest {
 
 /// An abstract member's order and bound, read off its own node. The one read
 /// [`schema_content_digest`] takes: a member handle names an `AbstractType`, whose parameter names
-/// carry its order and whose `bound` is what it stands over. Anything else in the map is a
+/// carry its order and whose `bound` is what it stands over. Anything else in the table is a
 /// first-order member over `Any`.
-fn read_abstract(member: KType, types: &TypeRegistry) -> (Vec<TypeSymbol>, KType) {
-    // Owns: the parameter list feeds the sorted digest-input vector being built past this read.
-    types.with_node(member, |node| match node {
+fn read_abstract<'run>(member: KType, types: &TypeRegistry<'run>) -> (&'run [TypeSymbol], KType) {
+    match types.node(member) {
         TypeNode::AbstractType {
             param_names, bound, ..
-        } => (param_names.clone(), *bound),
-        _ => (Vec::new(), KType::ANY),
-    })
+        } => (param_names, bound),
+        _ => (&[], KType::ANY),
+    }
 }
 
-/// Feed a `name -> type` member sequence into `h` in symbol-sorted order (the source maps are
-/// unordered), each type by its handle's own digest. Shared by the manifest members (Type-keyed)
-/// and the value slots (value-keyed), which is why it takes raw [`Symbol`]s rather than one
-/// classified key type.
-fn feed_named_types(h: &mut DigestHasher, members: impl Iterator<Item = (Symbol, KType)>) {
-    let mut pairs: Vec<(Symbol, TypeDigest)> =
-        members.map(|(name, kt)| (name, kt.digest())).collect();
-    pairs.sort_by_key(|(name, _)| *name);
-    h.count(pairs.len());
-    for (name, d) in pairs {
-        h.symbol(name).digest(d);
+/// Feed a `name -> type` member table into `h` in its stored symbol order, each type by its handle's
+/// own digest. Shared by the manifest members (Type-keyed) and the value slots (value-keyed), which
+/// is why it takes raw [`Symbol`]s rather than one classified key type.
+fn feed_named_types(h: &mut DigestHasher, members: impl ExactSizeIterator<Item = (Symbol, KType)>) {
+    h.count(members.len());
+    for (name, kt) in members {
+        h.symbol(name).digest(kt.digest());
     }
 }
 
@@ -511,17 +505,19 @@ pub(super) fn member_ref_digest(scc_digest: TypeDigest, index: usize) -> TypeDig
 }
 
 /// Order-blind record digest: `(symbol, field digest)` pairs in canonical order — the numeric order
-/// of the symbols. Matches `Record`'s order-blind equality. Shared by `Record` and `KFunction`
-/// params and `ConstructorApply` arguments.
-fn feed_record(h: &mut DigestHasher, record: &Record<KType>) {
-    let mut pairs: Vec<(Symbol, TypeDigest)> = record
-        .iter()
-        .map(|(key, value)| (key.symbol(), value.digest()))
-        .collect();
+/// of the symbols, staged in `scratch`. Matches `Record`'s order-blind equality. Shared by `Record`
+/// and `KFunction` params and `ConstructorApply` arguments.
+fn feed_record(h: &mut DigestHasher, scratch: BumpAllocator<'_>, fields: &[(BinderSymbol, KType)]) {
+    let mut pairs = BumpVec::with_capacity_in(fields.len(), scratch);
+    pairs.extend(
+        fields
+            .iter()
+            .map(|(key, value)| (key.symbol(), value.digest())),
+    );
     pairs.sort_unstable_by_key(|pair| pair.0);
     h.count(pairs.len());
-    for (symbol, d) in pairs {
-        h.symbol(symbol).digest(d);
+    for (symbol, d) in pairs.iter() {
+        h.symbol(*symbol).digest(*d);
     }
 }
 
@@ -532,7 +528,7 @@ fn feed_record(h: &mut DigestHasher, record: &Record<KType>) {
 pub(super) struct ComponentMember<'m> {
     pub name: TypeSymbol,
     pub kind: KKind,
-    pub schema: &'m NodeSchema,
+    pub schema: NodeSchema<'m>,
 }
 
 /// The content digest of one strongly-connected component of a recursive-group window — the
@@ -570,13 +566,10 @@ pub(super) fn component_digest(
                 schema,
                 param_names,
             } => {
-                // HashMap iteration order is nondeterministic — sort by the keys' symbol bits.
-                let mut entries: Vec<(TypeSymbol, TypeDigest)> =
-                    schema.iter().map(|(k, v)| (*k, v.digest())).collect();
-                entries.sort_unstable_by_key(|(name, _)| *name);
-                h.byte(1).count(entries.len());
-                for (name, d) in entries {
-                    h.symbol(name.symbol()).digest(d);
+                // Both lists are stored symbol-sorted, so each feeds in its stored order.
+                h.byte(1).count(schema.len());
+                for (name, kt) in schema {
+                    h.symbol(name.symbol()).digest(kt.digest());
                 }
                 h.count(param_names.len());
                 for p in param_names {

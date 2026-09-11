@@ -1,9 +1,11 @@
 //! [`TypeNode`] — one interned type's content, the thing a [`KType`] handle names.
 //!
 //! A node stores its variant tag, its scalar payload (names, [`ScopeId`]s, a signature's schema
-//! shape), and **handles to its child types** — never owned substructure. Nodes are immutable
-//! from the moment they are interned, and the registry that owns them is insert-only for the
-//! life of a run, so a handle stays dereferenceable as long as its registry lives.
+//! shape), and **handles to its child types** — never owned substructure. Every run a node holds —
+//! a union's members, a shape's elements, a record's fields, a schema's tables — is a slice in the
+//! run region, so a node is `Copy` and carries no drop glue. Nodes are immutable from the moment
+//! they are interned, and the registry that owns them is insert-only for the life of a run, so a
+//! handle stays dereferenceable as long as its registry lives.
 //!
 //! Interning and node reads live on [`TypeRegistry`](super::registry::TypeRegistry); the digest
 //! recipe per variant lives in [`digest`](super::digest).
@@ -17,14 +19,14 @@ use super::digest::TypeDigest;
 use super::handle::KType;
 use super::kind::KKind;
 use super::record::Record;
-use super::schema::{SigSchema, TypeMemberMap};
+use super::schema::{Members, SigSchema};
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 
-/// The content of one interned type. Every child position is a [`KType`] handle, so a node is
-/// shallow: cloning one out of the registry copies its scalar payload and its children's
-/// digests, never a type subtree.
-#[derive(Clone)]
-pub enum TypeNode {
+/// The content of one interned type. Every child position is a [`KType`] handle and every run is a
+/// `'run` slice, so reading a node out of the registry copies its scalar payload and a few fat
+/// pointers, never a type subtree.
+#[derive(Clone, Copy)]
+pub enum TypeNode<'run> {
     Number,
     Str,
     Bool,
@@ -66,13 +68,14 @@ pub enum TypeNode {
     /// for the mint `:|` produces, so two opaque ascriptions of one SIG never unify.
     /// `param_names` carries the member's order — empty is a first-order proper type
     /// (`TYPE Elt`), non-empty a constructor over those named parameters (`TYPE (Elem AS Wrap)`).
+    /// They are stored symbol-sorted: a constructor's identity is its parameter-name *set*.
     /// `bound` is what the variable stands over, [`KType::ANY`] unless declared.
     ///
     /// Every field is identity; nothing here is digest-excluded.
     AbstractType {
         source: ScopeId,
         name: TypeSymbol,
-        param_names: Vec<TypeSymbol>,
+        param_names: &'run [TypeSymbol],
         nonce: Option<ScopeId>,
         bound: KType,
     },
@@ -89,12 +92,12 @@ pub enum TypeNode {
     /// width/depth subtyping, order-blind by `(name, type)` for identity and declaration-ordered
     /// for rendering.
     Record {
-        fields: Record<KType>,
+        fields: Record<'run>,
     },
     /// A function type `(params) -> ret`. koan has no positional call syntax, so a
     /// function-typed slot records the names a caller must use to invoke what it receives.
     KFunction {
-        params: Record<KType>,
+        params: Record<'run>,
         ret: KType,
     },
     /// An **expression shape** — the type of a keyworded, positional definition reached by
@@ -110,13 +113,16 @@ pub enum TypeNode {
     /// render-only too: the digest feeds the arity, so alpha-variants intern once and
     /// `quantifiers` holds whichever spelling was interned first. Each surviving variable's
     /// *bound* rides on its own [`Self::Quantified`] occurrences, which the canonical form
-    /// guarantees exist.
+    /// guarantees exist; `bounds` is the same list read off them once, at intern.
     ExpressionShape {
         /// The type parameters this shape binds, in `Quantified` index order. Render-only:
         /// the arity is identity, the names are not.
-        quantifiers: Vec<TypeSymbol>,
+        quantifiers: &'run [TypeSymbol],
+        /// Each quantifier's bound, in the same order. Digest-excluded: the occurrences already
+        /// carry it.
+        bounds: &'run [KType],
         /// The call shape: fixed keywords interleaved with the argument positions' declared types.
-        elements: Box<[DispatchTokenElement]>,
+        elements: &'run [DispatchTokenElement],
         ret: KType,
     },
     /// A **rigid variable bound by the enclosing [`Self::ExpressionShape`]**: the `index`-th
@@ -127,17 +133,18 @@ pub enum TypeNode {
         bound: KType,
     },
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
-    /// deduplicated, no nested `Union`, no member below another, always two or more. Identity is
-    /// order-blind. Build through [`TypeRegistry::union_of`](super::registry::TypeRegistry::union_of).
+    /// deduplicated, no nested `Union`, no member below another, always two or more, in the order
+    /// first written. Identity is order-blind. Build through
+    /// [`TypeRegistry::union_of`](super::registry::TypeRegistry::union_of).
     Union {
-        members: Vec<KType>,
+        members: &'run [KType],
     },
     /// Application of a higher-kinded type constructor to argument types. `arguments` maps each
     /// of the constructor's parameter names to the elaborated argument type; the digest feeds
     /// them name-sorted, so the same name-to-type map is the same application however written.
     ConstructorApply {
         constructor: KType,
-        arguments: Record<KType>,
+        arguments: Record<'run>,
     },
     /// A module signature — owned interface content. A `SIG`-declared interface, a module's
     /// self-sig, and the empty signature (the lattice top `:Module` lowers to) are all this one
@@ -148,12 +155,12 @@ pub enum TypeNode {
     /// [`schema_content_digest`](super::digest::schema_content_digest) of `schema`, computed once
     /// at construction.
     Signature {
-        schema: SigSchema,
+        schema: SigSchema<'run>,
         schema_digest: TypeDigest,
     },
     /// Confined carrier for a synthesized FN `ret` slot whose source return is deferred. Holds
     /// only the hashable surface shadow, and admits nothing on its own.
-    DeferredReturn(DeferredReturnSurface),
+    DeferredReturn(DeferredReturnSurface<'run>),
     /// A relative sibling reference inside a pre-seal recursive-group window: the sibling's bare
     /// index, meaningful only against the ambient window. Ordinary registry content, and the
     /// order relates it as an atom with the same profile as the member it will become — which is
@@ -173,22 +180,23 @@ pub enum TypeNode {
         scc_size: usize,
         name: TypeSymbol,
         kind: KKind,
-        schema: NodeSchema,
+        schema: NodeSchema<'run>,
     },
 }
 
 /// A sealed member's schema, over absolute member handles: every sibling reference inside it is
 /// the sibling's own [`KType`], which is what makes a group's composition edges cyclic. The
 /// pre-seal window carries the relative twin of this shape.
-#[derive(Clone)]
-pub enum NodeSchema {
+#[derive(Clone, Copy)]
+pub enum NodeSchema<'run> {
     /// Fresh nominal over a transparent representation.
     NewType(KType),
     /// Higher-kinded constructor: erased-parameter variant schema plus parameter names. Both the
     /// schema's keys and the parameter names are Type-class labels, interned at the declaration
-    /// that mints the family, so the schema compares and clones without touching text.
+    /// that mints the family, and both are stored symbol-sorted — the schema so it is read in one
+    /// order, the parameter names because a constructor's identity is their set.
     TypeConstructor {
-        schema: TypeMemberMap,
-        param_names: Vec<TypeSymbol>,
+        schema: Members<'run, TypeSymbol>,
+        param_names: &'run [TypeSymbol],
     },
 }

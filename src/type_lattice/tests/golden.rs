@@ -4,7 +4,8 @@
 //! computes, and that no two node kinds share a domain tag. The first catches a recipe change that
 //! would silently re-identify a builtin leaf; the second catches a new variant added without one.
 
-use crate::parse::{BinderSymbol, LabelInterner, TypeSymbol};
+use crate::memory::ScopeId;
+use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
 
 use crate::type_lattice::digest::node_digest;
 use crate::type_lattice::handle::KType;
@@ -12,13 +13,17 @@ use crate::type_lattice::kind::KKind;
 use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
-use crate::type_lattice::schema::SigSchema;
+use crate::type_lattice::schema::{SchemaDraft, SigSchema};
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
+
+use super::generators::{allocator, fresh_cart};
 
 #[test]
 fn constants_match_freshly_interned_nodes() {
-    let types = TypeRegistry::new();
-    let pins: &[(&str, KType, TypeNode)] = &[
+    let cart = fresh_cart();
+    let region = allocator(&cart);
+    let types = TypeRegistry::in_region(region);
+    let pins: &[(&str, KType, TypeNode<'_>)] = &[
         ("NUMBER", KType::NUMBER, TypeNode::Number),
         ("STR", KType::STR, TypeNode::Str),
         ("BOOL", KType::BOOL, TypeNode::Bool),
@@ -82,7 +87,7 @@ fn constants_match_freshly_interned_nodes() {
     ];
     for (name, pinned, node) in pins {
         assert_eq!(
-            node_digest(node),
+            node_digest(region, node),
             pinned.digest(),
             "the pinned `KType::{name}` is not the digest its own node computes",
         );
@@ -90,7 +95,7 @@ fn constants_match_freshly_interned_nodes() {
     // The empty signature carries a schema digest computed at intern time, so it is checked through
     // the door that mints one rather than against a hand-built node.
     assert_eq!(
-        types.signature(SigSchema::empty()),
+        types.signature(region, SchemaDraft::new(region)),
         KType::EMPTY_SIGNATURE,
         "the pinned `KType::EMPTY_SIGNATURE` is not what the signature door interns for an empty \
          schema",
@@ -100,13 +105,21 @@ fn constants_match_freshly_interned_nodes() {
 #[test]
 fn every_node_kind_has_its_own_tag() {
     let labels = LabelInterner::new();
-    let types = TypeRegistry::new();
     let name = TypeSymbol::declared("Elt", &labels).expect("a Type token");
     let field = BinderSymbol::declared("x", &labels).expect("a bindable token");
-    let keyword = crate::parse::KeywordSymbol::declared("PURE", &labels).expect("a keyword token");
+    let keyword = KeywordSymbol::declared("PURE", &labels).expect("a keyword token");
+    // The representatives' runs, declared ahead of the registry so they outlive every node that is
+    // interned over them.
+    let fields = [(field, KType::NUMBER)];
+    let arguments = [(field, KType::STR)];
+    let elements = [DispatchTokenElement::Keyword(keyword)];
+    let members = [KType::NUMBER, KType::STR];
+    let cart = fresh_cart();
+    let region = allocator(&cart);
+    let types = TypeRegistry::in_region(region);
     // One representative per node kind, whose digests the distinctness assertion below reads. The
     // exhaustive match after the list is what makes a new variant a compile error here.
-    let representatives: Vec<TypeNode> = vec![
+    let representatives: Vec<TypeNode<'_>> = vec![
         TypeNode::Number,
         TypeNode::Str,
         TypeNode::Bool,
@@ -121,9 +134,9 @@ fn every_node_kind_has_its_own_tag() {
         TypeNode::Never,
         TypeNode::OfKind(KKind::ProperType),
         TypeNode::AbstractType {
-            source: crate::memory::ScopeId::SENTINEL,
+            source: ScopeId::SENTINEL,
             name,
-            param_names: Vec::new(),
+            param_names: &[],
             nonce: None,
             bound: KType::ANY,
         },
@@ -135,36 +148,35 @@ fn every_node_kind_has_its_own_tag() {
             value: KType::NUMBER,
         },
         TypeNode::Record {
-            fields: Record::from_pairs([(field, KType::NUMBER)]),
+            fields: Record::over(&fields),
         },
         TypeNode::KFunction {
-            params: Record::from_pairs([(field, KType::NUMBER)]),
+            params: Record::over(&fields),
             ret: KType::NUMBER,
         },
         TypeNode::ExpressionShape {
-            quantifiers: Vec::new(),
-            elements: vec![DispatchTokenElement::Keyword(keyword)].into_boxed_slice(),
+            quantifiers: &[],
+            bounds: &[],
+            elements: &elements,
             ret: KType::NUMBER,
         },
         TypeNode::Quantified {
             index: 0,
             bound: KType::ANY,
         },
-        TypeNode::Union {
-            members: vec![KType::NUMBER, KType::STR],
-        },
+        TypeNode::Union { members: &members },
         TypeNode::ConstructorApply {
             constructor: KType::NUMBER,
-            arguments: Record::from_pairs([(field, KType::STR)]),
+            arguments: Record::over(&arguments),
         },
         TypeNode::Signature {
-            schema: SigSchema::empty(),
-            schema_digest: node_digest(&TypeNode::Number),
+            schema: SigSchema::EMPTY,
+            schema_digest: node_digest(region, &TypeNode::Number),
         },
         TypeNode::DeferredReturn(DeferredReturnSurface::Type(name)),
         TypeNode::Sibling(0),
         TypeNode::SetMember {
-            scc_digest: node_digest(&TypeNode::Number),
+            scc_digest: node_digest(region, &TypeNode::Number),
             index: 0,
             scc_size: 1,
             name,
@@ -204,7 +216,10 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::SetMember { .. } => "SetMember",
         };
     }
-    let digests: Vec<_> = representatives.iter().map(node_digest).collect();
+    let digests: Vec<_> = representatives
+        .iter()
+        .map(|node| node_digest(region, node))
+        .collect();
     for (index, digest) in digests.iter().enumerate() {
         for (peer, other) in digests.iter().enumerate() {
             assert!(
@@ -215,7 +230,7 @@ fn every_node_kind_has_its_own_tag() {
     }
     // Every representative is interned content, so the table can name each one back.
     for node in representatives {
-        let handle = types.intern(node);
+        let handle = types.intern(region, node);
         types.with_node(handle, |_| ());
     }
 }

@@ -1115,7 +1115,6 @@ digraph {
     "koan::type_lattice::digest" -> "koan::type_lattice::kind" [label="uses", style="dashed"];
     "koan::type_lattice::digest" -> "koan::type_lattice::node" [label="uses", style="dashed"];
     "koan::type_lattice::digest" -> "koan::type_lattice::operators" [label="uses", style="dashed"];
-    "koan::type_lattice::digest" -> "koan::type_lattice::record" [label="uses", style="dashed"];
     "koan::type_lattice::digest" -> "koan::type_lattice::registry" [label="uses", style="dashed"];
     "koan::type_lattice::digest" -> "koan::type_lattice::schema" [label="uses", style="dashed"];
     "koan::type_lattice::digest" -> "koan::type_lattice::shape" [label="uses", style="dashed"];
@@ -1125,6 +1124,7 @@ digraph {
     "koan::type_lattice::handle" -> "koan::type_lattice::node" [label="uses", style="dashed"];
     "koan::type_lattice::handle" -> "koan::type_lattice::registry" [label="uses", style="dashed"];
     "koan::type_lattice::kind" -> "koan::parse" [label="uses", style="dashed"];
+    "koan::type_lattice::lattice" -> "koan::memory" [label="uses", style="dashed"];
     "koan::type_lattice::lattice" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
     "koan::type_lattice::lattice" -> "koan::type_lattice::node" [label="uses", style="dashed"];
     "koan::type_lattice::lattice" -> "koan::type_lattice::order" [label="uses", style="dashed"];
@@ -1141,6 +1141,7 @@ digraph {
     "koan::type_lattice::node" -> "koan::type_lattice::schema" [label="uses", style="dashed"];
     "koan::type_lattice::node" -> "koan::type_lattice::shape" [label="uses", style="dashed"];
     "koan::type_lattice::operators" -> "koan::parse" [label="uses", style="dashed"];
+    "koan::type_lattice::order" -> "koan::memory" [label="uses", style="dashed"];
     "koan::type_lattice::order" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
     "koan::type_lattice::order" -> "koan::type_lattice::node" [label="uses", style="dashed"];
     "koan::type_lattice::order" -> "koan::type_lattice::registry" [label="uses", style="dashed"];
@@ -1148,6 +1149,7 @@ digraph {
     "koan::type_lattice::order" -> "koan::type_lattice::walk" [label="uses", style="dashed"];
     "koan::type_lattice::order" -> "koan::type_lattice::walk::binary" [label="uses", style="dashed"];
     "koan::type_lattice::record" -> "koan::parse" [label="uses", style="dashed"];
+    "koan::type_lattice::record" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
     "koan::type_lattice::registry" -> "koan::memory" [label="uses", style="dashed"];
     "koan::type_lattice::registry" -> "koan::parse" [label="uses", style="dashed"];
     "koan::type_lattice::registry" -> "koan::type_lattice::digest" [label="uses", style="dashed"];
@@ -1171,7 +1173,6 @@ digraph {
     "koan::type_lattice::render" -> "koan::type_lattice::schema" [label="uses", style="dashed"];
     "koan::type_lattice::render" -> "koan::type_lattice::shape" [label="uses", style="dashed"];
     "koan::type_lattice::render" -> "koan::type_lattice::sig_relations" [label="uses", style="dashed"];
-    "koan::type_lattice::render" -> "koan::type_lattice::substitute" [label="uses", style="dashed"];
     "koan::type_lattice::schema" -> "koan::memory" [label="uses", style="dashed"];
     "koan::type_lattice::schema" -> "koan::parse" [label="uses", style="dashed"];
     "koan::type_lattice::schema" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
@@ -1198,18 +1199,21 @@ digraph {
     "koan::type_lattice::sig_relations" -> "koan::type_lattice::unify" [label="uses", style="dashed"];
     "koan::type_lattice::sig_relations" -> "koan::type_lattice::walk" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::memory" [label="uses", style="dashed"];
+    "koan::type_lattice::substitute" -> "koan::parse" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::type_lattice::node" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::type_lattice::order" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::type_lattice::registry" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::type_lattice::schema" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::type_lattice::walk::unary" [label="uses", style="dashed"];
+    "koan::type_lattice::unify" -> "koan::memory" [label="uses", style="dashed"];
     "koan::type_lattice::unify" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
     "koan::type_lattice::unify" -> "koan::type_lattice::node" [label="uses", style="dashed"];
     "koan::type_lattice::unify" -> "koan::type_lattice::order" [label="uses", style="dashed"];
     "koan::type_lattice::unify" -> "koan::type_lattice::registry" [label="uses", style="dashed"];
     "koan::type_lattice::unify" -> "koan::type_lattice::walk" [label="uses", style="dashed"];
     "koan::type_lattice::unify" -> "koan::type_lattice::walk::binary" [label="uses", style="dashed"];
+    "koan::type_lattice::walk::binary" -> "koan::memory" [label="uses", style="dashed"];
     "koan::type_lattice::walk::binary" -> "koan::parse" [label="uses", style="dashed"];
     "koan::type_lattice::walk::binary" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
     "koan::type_lattice::walk::binary" -> "koan::type_lattice::node" [label="uses", style="dashed"];
@@ -1217,6 +1221,7 @@ digraph {
     "koan::type_lattice::walk::binary" -> "koan::type_lattice::registry" [label="uses", style="dashed"];
     "koan::type_lattice::walk::binary" -> "koan::type_lattice::shape" [label="uses", style="dashed"];
     "koan::type_lattice::walk::binary" -> "koan::type_lattice::walk" [label="uses", style="dashed"];
+    "koan::type_lattice::walk::unary" -> "koan::memory" [label="uses", style="dashed"];
     "koan::type_lattice::walk::unary" -> "koan::parse" [label="uses", style="dashed"];
     "koan::type_lattice::walk::unary" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
     "koan::type_lattice::walk::unary" -> "koan::type_lattice::node" [label="uses", style="dashed"];

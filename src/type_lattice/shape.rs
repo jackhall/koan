@@ -22,16 +22,17 @@ pub enum DispatchTokenElement {
 
 /// A confined FN `ret` slot whose source return is deferred to per-call elaboration — `-> er` or
 /// `-> er.Carrier`. It holds only the hashable surface shadow: a bare name's lifetime-free
-/// [`TypeSymbol`], or an expression's canonical render. Identity is syntactic, so a
+/// [`TypeSymbol`], or an expression's canonical render, which the registry bumps into the run
+/// region when the node is interned. Identity is syntactic, so a
 /// [`TypeNode::DeferredReturn`](super::node::TypeNode::DeferredReturn) compares, hashes and
 /// digests by surface form.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum DeferredReturnSurface {
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum DeferredReturnSurface<'run> {
     Type(TypeSymbol),
-    Expression(String),
+    Expression(&'run str),
 }
 
-impl DeferredReturnSurface {
+impl DeferredReturnSurface<'_> {
     /// Surface form for diagnostics, written straight into `f`; the `Type` carrier resolves its
     /// spelling through the run's interner and the `Expression` carrier writes the text it stores.
     pub fn write_surface(

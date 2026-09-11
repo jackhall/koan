@@ -58,7 +58,7 @@ impl KType {
     // --- Fixed handles ---
     //
     // The twelve leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>` and the empty
-    // signature name content every registry pre-seeds (`TypeRegistry::new`), so their digests are
+    // signature name content every registry pre-seeds (`TypeRegistry::in_region`), so their digests are
     // known at compile time and lowering a builtin type name needs no registry in hand. The
     // literals below are the digest recipe's output; `constants_match_freshly_interned_nodes` in
     // the golden module recomputes each one from its own node, so a recipe change fails loudly
@@ -138,7 +138,7 @@ impl KType {
     /// have recorded, so rendering resolves either way.
     pub fn name_symbol(
         self,
-        types: &TypeRegistry,
+        types: &TypeRegistry<'_>,
         labels: &crate::parse::LabelInterner,
     ) -> Option<TypeSymbol> {
         let fixed = |name: &StaticName<TypeSymbol>| Some(labels.record(name));
@@ -178,7 +178,7 @@ impl KType {
     /// `OfKind`. A signature is `Signature`, a user-declared nominal is its family read off its
     /// member node, an abstract member with declared parameters is a constructor, and every other
     /// type is `ProperType`. Never returns [`KKind::AnyType`], which is a slot-only expectation.
-    pub fn kind_of(self, types: &TypeRegistry) -> KKind {
+    pub fn kind_of(self, types: &TypeRegistry<'_>) -> KKind {
         types.with_node(self, |node| match node {
             TypeNode::Signature { .. } => KKind::Signature,
             TypeNode::SetMember { kind, .. } => *kind,
