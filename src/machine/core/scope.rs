@@ -460,11 +460,11 @@ impl<'a> Scope<'a> {
             ScopeBindings::Owned(Bindings::new(outer.brand)),
             ScopeKind::Sig {
                 name,
-                slots: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
+                slots: RefCell::new(ManuallyDrop::new(bump_table(outer.brand.allocator()))),
                 keyworded: RefCell::new(ManuallyDrop::new(BumpVec::new_in(
                     outer.brand.allocator(),
                 ))),
-                operators: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
+                operators: RefCell::new(ManuallyDrop::new(bump_table(outer.brand.allocator()))),
             },
         )
     }

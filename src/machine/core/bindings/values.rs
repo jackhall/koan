@@ -98,7 +98,7 @@ impl<'a> ValueStore<'a> {
     /// An empty name-addressed store over `brand`'s region.
     pub(super) fn keyed(brand: RegionBrand<'a>) -> Self {
         ValueStore::Keyed {
-            cells: bump_table(brand),
+            cells: bump_table(brand.allocator()),
             claimed: 0,
         }
     }

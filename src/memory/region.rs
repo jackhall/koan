@@ -476,17 +476,17 @@ impl FrameStorageExt for FrameStorage {
     }
 }
 
-/// Build one of a scope's tables over its region bump, **proving at compile time** that its entries
-/// carry no drop glue. The bump runs no destructor, so a `Drop`-bearing key or value would silently
-/// leak whatever it owns; the assert is monomorphization-checked, so a future entry field that
-/// brings glue back is a build error at the declaration that admitted it rather than a leak.
+/// Build a writable table over `bump`, **proving at compile time** that its entries carry no drop
+/// glue. The bump runs no destructor, so a `Drop`-bearing key or value would silently leak whatever
+/// it owns; the assert is monomorphization-checked, so a future entry field that brings glue back
+/// is a build error at the declaration that admitted it rather than a leak.
 ///
-/// This is where each table's storage choice is stated: all five of a scope's tables route here, so
-/// none has an unstated exemption. It lives beside the brand rather than beside the tables because
-/// it is the one construction that names the map implementation directly — the substrate rule keeps
-/// that spelling inside `memory`.
+/// This is where each bump-backed table's storage choice is stated: a scope's five tables and the
+/// type registry's node table all route here, so none has an unstated exemption. It lives beside
+/// the brand rather than beside the tables because it is the one construction that names the map
+/// implementation directly — the substrate rule keeps that spelling inside `memory`.
 pub(crate) fn bump_table<'a, K, V, S: BuildHasher + Default>(
-    brand: RegionBrand<'a>,
+    bump: BumpAllocator<'a>,
 ) -> BumpBackedMap<'a, K, V, S> {
     const {
         assert!(
@@ -494,5 +494,5 @@ pub(crate) fn bump_table<'a, K, V, S: BuildHasher + Default>(
             "a bump-backed table's entries must carry no drop glue: the bump runs no destructor",
         )
     };
-    hashbrown::HashMap::with_hasher_in(S::default(), brand.allocator())
+    hashbrown::HashMap::with_hasher_in(S::default(), bump)
 }

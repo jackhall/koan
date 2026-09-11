@@ -491,9 +491,9 @@ impl<'a> Bindings<'a> {
             brand,
             values: RefCell::new(ManuallyDrop::new(values)),
             keyed: RefCell::new(ManuallyDrop::new(Keyed {
-                types: bump_table(brand),
-                functions: bump_table(brand),
-                operators: bump_table(brand),
+                types: bump_table(brand.allocator()),
+                functions: bump_table(brand.allocator()),
+                operators: bump_table(brand.allocator()),
                 claims: ClaimStore::new(brand),
             })),
             copy_cost: Cell::new(0),

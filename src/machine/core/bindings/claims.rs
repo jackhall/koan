@@ -121,8 +121,8 @@ impl<'a> ClaimStore<'a> {
     /// An empty store over `brand`'s region — the same bump every binding map's storage lives in.
     pub(super) fn new(brand: RegionBrand<'a>) -> Self {
         ClaimStore {
-            by_type: bump_table(brand),
-            by_bucket: bump_table(brand),
+            by_type: bump_table(brand.allocator()),
+            by_bucket: bump_table(brand.allocator()),
             by_statement: BumpVec::new_in(brand.allocator()),
             fanned_out: false,
         }

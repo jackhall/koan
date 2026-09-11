@@ -306,7 +306,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
 fn an_owned_key_probes_a_bumped_run_keyed_table() {
     let program = program_storage();
     let brand = program.brand().region();
-    let mut table: BumpBackedMap<'_, &[KeyElement], u32> = bump_table(brand);
+    let mut table: BumpBackedMap<'_, &[KeyElement], u32> = bump_table(brand.allocator());
 
     let take: UntypedKey = vec![
         crate::builtins::test_support::key_keyword("TAKE"),
