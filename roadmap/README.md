@@ -62,7 +62,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Round-trip the builtin forms under arbitrary layout](refactor/round-trip-builtin-forms.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Substitute, then ask](refactor/substitution-walk-collapse.md)
-- [Rewrite the type lattice under property tests](refactor/type-lattice-rewrite.md)
+- [Integrate the type lattice](refactor/type-lattice-integration.md)
 - [One structural walk over `TypeNode`](refactor/type-structure-combinator.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)

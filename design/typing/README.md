@@ -27,6 +27,10 @@ Type-system mechanics:
   type is one immutable node, `KType` is the type's `Copy` content digest
   serving as the handle into that graph, labeled composition edges are the
   content, and subtype verdicts ride the same graph as droppable cache edges.
+- [type-lattice.md](type-lattice.md) — the lattice core: the closed node
+  algebra under `src/type_lattice`, its import boundary, the two walk drivers
+  every structural recursion goes through, substitution as composition, the
+  single identity recipe, the seal door, and the laws that test it.
 - [elaboration.md](elaboration.md) — how a type name resolves to a
   `KType`: the scheduler-driven elaborator, recursion via threaded-set
   recognition, module-qualified names, the binding-map partition that
