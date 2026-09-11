@@ -1199,7 +1199,6 @@ digraph {
     "koan::type_lattice::sig_relations" -> "koan::type_lattice::substitute" [label="uses", style="dashed"];
     "koan::type_lattice::sig_relations" -> "koan::type_lattice::unify" [label="uses", style="dashed"];
     "koan::type_lattice::sig_relations" -> "koan::type_lattice::walk" [label="uses", style="dashed"];
-    "koan::type_lattice::sig_relations" -> "koan::type_lattice::walk::binary" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::memory" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::type_lattice::handle" [label="uses", style="dashed"];
     "koan::type_lattice::substitute" -> "koan::type_lattice::node" [label="uses", style="dashed"];

@@ -17,7 +17,7 @@ use crate::type_lattice::schema::{
 };
 use crate::type_lattice::shape::Specificity;
 use crate::type_lattice::sig_relations::{
-    admits_slots, join_schemas, meet_schemas, shape_specificity, sig_subtype,
+    admits_slots, meet_schemas, shape_specificity, sig_subtype,
 };
 use crate::type_lattice::substitute::{
     canonicalize_binder, erase_quantified, instantiate_quantified, quantifier_bounds,
@@ -585,8 +585,6 @@ proptest! {
         };
         prop_assert!(sig_subtype(&types, &left, &left).is_ok());
         prop_assert!(sig_subtype(&types, &left, &SigSchema::empty()).is_ok());
-        let joined = join_schemas(&types, &left, &right);
-        prop_assert!(sig_subtype(&types, &left, &joined).is_ok());
         if let Some(met) = meet_schemas(&types, &left, &right) {
             prop_assert!(sig_subtype(&types, &met, &left).is_ok());
             prop_assert!(sig_subtype(&types, &met, &right).is_ok());

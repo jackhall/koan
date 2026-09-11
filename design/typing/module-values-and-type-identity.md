@@ -61,30 +61,14 @@ kind-wildcard exception.
 
 ## Joining two signatures
 
-Two signature types have a least upper bound under the width/depth relation above, so a
-container of modules with differing self-sigs memoizes their least common interface rather
-than `Any` — a list of modules that each satisfy `Ordered` fills a `:(LIST OF Ordered)` slot
-([`join_schemas`](../../src/machine/model/types/sig_schema.rs), the `Signature` arm of
-`TypeRegistry::join`).
-
-- **Width intersects.** A member only one operand names is dropped: the bound may promise
-  only what both operands supply. Two signatures sharing no members join to the empty
-  signature — the module-lattice top `:Module` — never to `Any`.
-- **Depth reconciles per member.** Two equal manifest bindings survive manifest. Anything
-  else at a matching kind — two differing manifests, a manifest against an abstract, two
-  abstracts — demotes to an *abstract* member at that kind, the strongest requirement both
-  bindings still satisfy. A kind disagreement (one side first-order, or two constructors over
-  different parameter names) has no common requirement, so the member drops.
-- **Value slots join pointwise, through the demoted members first.** A slot typed by one
-  operand's binding of a demoted member and the other's rejoins as a reference to that
-  member, rather than coarsening. The generalization is variance-aware: a function slot's
-  return joins covariantly while its parameters *meet*, so widening a parameter never claims
-  a satisfying module accepts arguments neither operand does.
-
-A joined schema carries the canonical `ScopeId::SENTINEL` binder every projected SIG carries
-and mints nonce-free abstract members, and the schema digest ignores `sig_id` — so a joined
-signature is content-identical to the equivalent written `SIG` declaration and interns to the
-same handle.
+Two signature types join as any two types do: the larger when one satisfies the other,
+otherwise their union ([type-lattice.md § Join and meet](type-lattice.md#join-and-meet)). A
+container of modules with differing self-sigs therefore carries the union of those self-sigs as
+its element type, never `Any` and never a merged interface. The union is the least upper bound —
+each self-sig lies below it, and it lies below every interface both satisfy — and it loses nothing
+at a slot: a union is below `Ordered` exactly when every member is, so a list of modules that
+each satisfy `Ordered` fills a `:(LIST OF Ordered)` slot. No operation merges two schemas into
+one interface; a name for what two modules have in common is a written `SIG`.
 
 ## Content-addressed type identity
 

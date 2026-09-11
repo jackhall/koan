@@ -421,7 +421,7 @@ where a body needs them and are absent from the type, so two definitions differi
 parameter names project one shape. Argument *order* and keyword placement are identity — what a
 canonically ordered parameter record erases and an element run keeps. The bucket key is a reading
 of the member — the element run with its slot types erased — so nothing stores it a
-second time and every consumer — satisfaction, `join_schemas`, `fold_pins`, specificity, rendering,
+second time and every consumer — satisfaction, `meet_schemas`, `fold_pins`, specificity, rendering,
 the view's install path — reads one representation. A schema's `keyworded` channel is therefore a
 flat canonical run of shapes rather than a key-indexed map: several members may key one bucket, an
 exact duplicate is a `Rebind`, and a same-key declaration at different slot types is one more
@@ -466,11 +466,9 @@ call by name solves the quantifiers exactly as a dispatched call does.
 The keyworded channel is signature content: it feeds the schema's content digest, is rendered
 after the value slots in a signature's name (`SIG (zero: Elt, (PURE _ :Elt) -> Elt)`), rides
 `TYPE OF`, folds through `WITH` pins like any other declared type (two overloads that collapse to
-one under a pin become one), and intersects in a signature join. The join takes **all pairs** under
-a shared key: every left member joins positionally against every right member keying the same
-bucket — slots meet, the return joins — and a pair whose slot met to `Never` is dropped as vacuous.
-Each kept pair is an upper bound of both operands, so the canonical set of them is the strongest
-interface both still satisfy.
+one under a pin become one), and unions in a signature meet: the meet of two schemas keeps every
+keyworded member either declares, canonicalized by subsumption, so a module satisfying the meet
+supplies both channels.
 
 **Satisfaction mirrors dispatch resolution.** For each declared member, `sig_subtype` filters the
 module's members to those keying the same bucket, keeps the ones that *satisfy* the declared shape,

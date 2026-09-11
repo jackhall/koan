@@ -34,7 +34,8 @@ only as each of these is moved to its own owner and pointed at the core.
   along with every hand-written test a law now covers.
 - Every dispatch verdict that changes is enumerated, each with the law the old verdict broke, and a
   test pins the new verdict. The enumeration covers at least: container element inference yielding
-  unions where it yielded `Any`; overloads that the tier rules ranked and the order leaves
+  unions where it yielded `Any`; a container of modules with differing self-signatures carrying
+  their union where it carried a merged interface; overloads that the tier rules ranked and the order leaves
   ambiguous; quantified admission that no longer depends on argument order and no longer accepts a
   mixed-type pair.
 - A test pins that a rendered type parses back to the same handle, over the core's generated

@@ -7,8 +7,8 @@
 //! substitution, each keyworded member satisfied by an overload the same selection dispatch would
 //! make, and each operator record covered at an equal mode.
 //!
-//! [`join_schemas`] is the module lattice's least upper bound and [`meet_schemas`] its dual — the
-//! latter is what two signatures meet at in [`meet`](super::lattice::meet).
+//! [`meet_schemas`] is what two signatures meet at in [`meet`](super::lattice::meet): the module
+//! lattice has no join of its own, since two unordered signatures join to their union.
 
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ use crate::memory::ScopeId;
 use crate::parse::{IdentityBuildHasher, KeywordSymbol, TypeSymbol, ValueSymbol};
 
 use super::handle::KType;
-use super::lattice::{join, meet};
+use super::lattice::meet;
 use super::node::TypeNode;
 use super::operators::ReductionMode;
 use super::order::{is_more_specific_than, is_subtype_of, satisfied_by};
@@ -27,10 +27,9 @@ use super::schema::{
     shape_quantifiers, shape_slots,
 };
 use super::shape::Specificity;
-use super::substitute::{erase_rigid, slot_satisfied_by, substitute_sig_members};
+use super::substitute::{slot_satisfied_by, substitute_sig_members};
 use super::unify::{Collector, admits_with};
 use super::walk::Variance;
-use super::walk::binary::{Arm, Leftover, Lockstep, Width, lockstep};
 
 // --- Specificity ---
 
@@ -416,134 +415,7 @@ pub fn select_keyworded_satisfier(
         .ok_or(satisfiers)
 }
 
-// --- Join and meet of schemas ---
-
-/// The least upper bound of two schemas under the relation [`sig_subtype`] decides.
-///
-/// **Width intersects.** A member only one operand names is dropped: the bound may promise only what
-/// both operands supply.
-///
-/// **Depth reconciles per member.** Two equal manifest bindings survive manifest. Anything else at a
-/// matching kind demotes to an abstract member over the join of what the two bindings require — the
-/// strongest requirement both still satisfy. A kind disagreement has no common requirement at all,
-/// so the member drops.
-///
-/// **Value slots join pointwise**, but through the demoted members first: a slot typed by one
-/// operand's binding of `Carrier` and the other's rejoins as a reference to `Carrier` itself rather
-/// than coarsening to `Any`.
-pub fn join_schemas(types: &TypeRegistry, a: &SigSchema, b: &SigSchema) -> SigSchema {
-    // Sorted, so the demoted-member choice a binding-pair collision settles on is the lowest member
-    // symbol rather than a hash order.
-    let mut names: Vec<TypeSymbol> = a
-        .manifest_members
-        .keys()
-        .chain(a.abstract_members.keys())
-        .copied()
-        .collect();
-    names.sort_unstable();
-
-    let mut abstract_members = TypeMemberMap::default();
-    let mut manifest_members = TypeMemberMap::default();
-    // (`a`'s binding, `b`'s binding) → the member demoted over that pair. Two members demoting over
-    // one pair of bindings are interchangeable in a slot position, so the lowest symbol wins.
-    let mut generalizations: HashMap<(KType, KType), KType> = HashMap::new();
-    for name in names {
-        let (Some(left), Some(right)) = (a.type_member(name), b.type_member(name)) else {
-            continue;
-        };
-        let param_names = match (
-            constructor_param_names(left, types),
-            constructor_param_names(right, types),
-        ) {
-            (None, None) => Vec::new(),
-            (Some(x), Some(y)) if name_sets_equal(&x, &y) => x,
-            _ => continue,
-        };
-        let manifest_in_both =
-            a.manifest_members.contains_key(&name) && b.manifest_members.contains_key(&name);
-        if left == right && manifest_in_both {
-            manifest_members.insert(name, left);
-            continue;
-        }
-        // A manifest binding can embed a rigid variable (`LIST OF Elt`), and a bound may hold none,
-        // so the demoted member's bound erases what it finds to those variables' own bounds.
-        // Widening an *upper* bound is sound: the join owes only that each operand still satisfies
-        // it, which a looser requirement makes easier.
-        let bound = join(types, requirement(types, left), requirement(types, right));
-        let bound = erase_rigid(types, bound);
-        let demoted = types.abstract_type(ScopeId::SENTINEL, name, param_names, None, bound);
-        abstract_members.insert(name, demoted);
-        generalizations.entry((left, right)).or_insert(demoted);
-    }
-
-    let mut value_slots = HashMap::default();
-    for (name, left) in &a.value_slots {
-        if let Some(right) = b.value_slots.get(name) {
-            value_slots.insert(
-                *name,
-                generalize(types, *left, *right, Variance::Co, &generalizations),
-            );
-        }
-    }
-
-    // Keyworded members join **pairwise under a shared key**: every left member against every right
-    // member keying the same bucket. A pair whose slots met to `Never` is dropped as vacuous, since
-    // nothing fills it. Each kept pair is an upper bound of both operands.
-    let mut keyworded: Vec<KType> = Vec::new();
-    for left in &a.keyworded {
-        for right in &b.keyworded {
-            if !shape_keys_equal(*left, *right, types) {
-                continue;
-            }
-            let joined = generalize(types, *left, *right, Variance::Co, &generalizations);
-            // Two shapes with no common shape above them — a quantifier group only one of them
-            // binds, say — bound at their union, which declares no bucket at all. A pair whose
-            // slots met to `Never` is vacuous the same way: nothing fills it. Either one drops,
-            // which is what width intersection already does to a member only one operand names.
-            if !shape_keys_equal(joined, *left, types)
-                || shape_slots(joined, types).contains(&KType::NEVER)
-            {
-                continue;
-            }
-            keyworded.push(joined);
-        }
-    }
-    let keyworded = canonical_overloads(keyworded, types);
-
-    // Operator members intersect pairwise under an **equal** mode: two modes make incompatible
-    // claims, so only same-mode pairs have a common weakening — the operators both operands agree
-    // chain that way.
-    let mut operators = OperatorMembers::new();
-    for left in &a.operators {
-        for right in &b.operators {
-            if left.mode != right.mode {
-                continue;
-            }
-            let members: Vec<KeywordSymbol> = left
-                .members
-                .iter()
-                .filter(|member| right.members.contains(member))
-                .copied()
-                .collect();
-            if !members.is_empty() {
-                operators.push(DeclaredGroup {
-                    members,
-                    mode: left.mode,
-                });
-            }
-        }
-    }
-
-    SigSchema {
-        // A schema with no abstract member names nothing for a slot to substitute against.
-        sig_id: (!abstract_members.is_empty()).then_some(ScopeId::SENTINEL),
-        abstract_members,
-        manifest_members,
-        value_slots,
-        keyworded,
-        operators: canonical_groups(operators),
-    }
-}
+// --- Meet of schemas ---
 
 /// The greatest lower bound of two schemas, or `None` when they make conflicting claims: two
 /// manifest bindings for one name, two parameter-name sets for one member, or two chaining modes
@@ -704,93 +576,4 @@ fn merge_operator_records(a: &SigSchema, b: &SigSchema) -> Option<OperatorMember
         });
     }
     Some(canonical_groups(merged))
-}
-
-/// Anti-unify two slot types against `generalizations`, then bound what does not generalize.
-///
-/// A pair the two operands bind one demoted member to *is* that member: a module satisfying the
-/// join supplies some binding for it, and each operand's slot type is exactly its own binding, so
-/// the reference is satisfied in either variance. Anything left over falls to [`join`] at a
-/// covariant position and [`meet`] at a contravariant one, which is what the driver's variance
-/// already tracks.
-fn generalize(
-    types: &TypeRegistry,
-    a: KType,
-    b: KType,
-    v: Variance,
-    generalizations: &HashMap<(KType, KType), KType>,
-) -> KType {
-    lockstep(types, a, b, v, &mut Generalize { generalizations })
-}
-
-struct Generalize<'g> {
-    generalizations: &'g HashMap<(KType, KType), KType>,
-}
-
-impl Lockstep for Generalize<'_> {
-    type Out = KType;
-
-    fn enter(&mut self, _types: &TypeRegistry, a: KType, b: KType, _v: Variance) -> Option<KType> {
-        if let Some(member) = self.generalizations.get(&(a, b)) {
-            return Some(*member);
-        }
-        (a == b).then_some(a)
-    }
-
-    fn leaf(&mut self, types: &TypeRegistry, a: KType, b: KType, v: Variance) -> KType {
-        bound_of(types, a, b, v)
-    }
-
-    fn set_wise(
-        &mut self,
-        types: &TypeRegistry,
-        a: &[KType],
-        b: &[KType],
-        v: Variance,
-        recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> KType,
-    ) -> KType {
-        match v {
-            // An upper bound of two unions admits every member of either.
-            Variance::Co => {
-                let all: Vec<KType> = a.iter().chain(b.iter()).copied().collect();
-                types.union_of(&all)
-            }
-            // A lower bound distributes, exactly as `meet` does.
-            Variance::Contra => {
-                let mut met: Vec<KType> = Vec::with_capacity(a.len() * b.len());
-                for x in a {
-                    for y in b {
-                        met.push(recurse(self, *x, *y, v));
-                    }
-                }
-                types.union_of(&met)
-            }
-        }
-    }
-
-    fn structural(&mut self, types: &TypeRegistry, paired: &[KType], arm: Arm<'_>) -> KType {
-        let leftovers = !(arm.only_a.is_empty() && arm.only_b.is_empty());
-        if arm.width == Width::Exact && leftovers {
-            let (a, b) = arm.rebuild.operands();
-            return bound_of(types, a, b, arm.variance);
-        }
-        if arm
-            .width
-            .bound_keeps_leftovers(arm.variance == Variance::Co)
-        {
-            let mut extra: Vec<Leftover> = arm.only_a.to_vec();
-            extra.extend_from_slice(arm.only_b);
-            return arm.rebuild.compose(paired, &extra);
-        }
-        arm.rebuild.compose(paired, &[])
-    }
-}
-
-/// The plain lattice bound at the polarity of the position: an upper bound covariantly, a lower one
-/// contravariantly.
-fn bound_of(types: &TypeRegistry, a: KType, b: KType, v: Variance) -> KType {
-    match v {
-        Variance::Co => join(types, a, b),
-        Variance::Contra => meet(types, a, b),
-    }
 }

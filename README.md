@@ -242,7 +242,7 @@ src/
 │   ├── lattice.rs        join (subsumption-or-union, not a walk) and meet (the rebuilding Lockstep instance)
 │   ├── unify.rs          admits_with and the Collector: contributions solved by maximum, minimum, or the declared bound
 │   ├── substitute.rs     the quantifier and member substitutions, and the three slot_* relations that are each one of them composed with an ordinary relation
-│   ├── sig_relations.rs  sig_subtype and its failure record, keyworded selection, join_schemas / meet_schemas, and shape_specificity
+│   ├── sig_relations.rs  sig_subtype and its failure record, keyworded selection, meet_schemas, and shape_specificity
 │   ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
 │   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the label interner
 ├── machine.rs           pub mod core / model / execute

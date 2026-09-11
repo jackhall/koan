@@ -143,11 +143,7 @@ pub fn lockstep<L: Lockstep>(
                         only_a: &only_a,
                         only_b: &only_b,
                         variance: v,
-                        rebuild: Rebuilder {
-                            types,
-                            assembly,
-                            operands: (a, b),
-                        },
+                        rebuild: Rebuilder { types, assembly },
                     },
                 )
             }
@@ -348,16 +344,9 @@ enum Assembly<'n> {
 pub struct Rebuilder<'n> {
     types: &'n TypeRegistry,
     assembly: Assembly<'n>,
-    operands: (KType, KType),
 }
 
 impl Rebuilder<'_> {
-    /// The two handles this arm paired — what an instance falls back on when the arm's leftovers
-    /// leave nothing to compose.
-    pub fn operands(&self) -> (KType, KType) {
-        self.operands
-    }
-
     /// Rebuild this arm from its paired children, in the order the driver produced them, plus
     /// `extra` fields to carry over on a name-keyed arm. `extra` is ignored where the arm has no
     /// names to carry.

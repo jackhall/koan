@@ -17,8 +17,8 @@
 //! their canonical union otherwise — and [`meet`] the greatest lower bound. [`admits_with`] walks a
 //! declared type against a carried one and collects what would solve the quantified positions;
 //! [`Collector::solve`] takes a maximum, a minimum, or the bound, and never mints a union nobody
-//! wrote. [`sig_subtype`], [`join_schemas`] and [`meet_schemas`] are the same three questions over
-//! two signature schemas, and [`shape_specificity`] ranks two candidates under one bucket key.
+//! wrote. [`sig_subtype`] and [`meet_schemas`] are the order and the meet over two signature schemas —
+//! two unordered signatures join to their union — and [`shape_specificity`] ranks two candidates under one bucket key.
 //!
 //! # Writing a new walk
 //!
@@ -76,8 +76,8 @@ pub use schema::{
 };
 pub use shape::{DeferredReturnSurface, DispatchTokenElement, Specificity};
 pub use sig_relations::{
-    SigSubtypeFailure, join_schemas, most_specific_ktype, select_keyworded_satisfier,
-    shape_specificity, sig_subtype,
+    SigSubtypeFailure, most_specific_ktype, select_keyworded_satisfier, shape_specificity,
+    sig_subtype,
 };
 pub use substitute::{
     canonicalize_binder, erase_quantified, erase_rigid, instantiate_quantified, quantifier_bounds,

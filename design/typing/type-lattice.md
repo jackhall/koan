@@ -51,8 +51,7 @@ themselves, `Any` and `Never`. What they capture is admission's concern.
 
 The public surface is `is_subtype_of`, `is_more_specific_than`, `satisfied_by`, `join`, `meet`,
 `union_of`, the quantifier substitutions, the member substitutions and the three `slot_*`
-compositions, `admits_with` with its collector, `join_schemas`, `sig_subtype`,
-`select_keyworded_satisfier`, `shape_specificity`, the composite construction doors, rendering,
+compositions, `admits_with` with its collector, `sig_subtype`, `select_keyworded_satisfier`, `shape_specificity`, the composite construction doors, rendering,
 node reads, and the window doors. Every caller reaches types through these, and through nothing
 else: the submodules are private, so the re-export list at the crate root is the whole interface;
 a `TypeNode` is built outside the lattice only through the registry door for its shape, never
@@ -108,9 +107,10 @@ the seal's rewrite renames each `Sibling` to a member with the same relation pro
 re-interns a union through the flat door without a second subsumption pass and the result is
 canonical.
 
-`join_schemas` is width intersection with per-member depth reconciliation; `meet_schemas` is its
-dual and reports a conflict — two manifest types for one name, two kinds for one abstract member,
-two modes for one operator run — as the absence of a meet. A schema's keyworded members are
+Two signatures join like any other pair — the larger when ordered, otherwise their union — so
+there is no schema-level join. `meet_schemas` is the meet's signature arm: width unions, depth
+takes the stronger binding, and a conflict — two manifest types for one name, two kinds for one
+abstract member, two modes for one operator run — is the absence of a meet. A schema's keyworded members are
 canonical too, by the same subsumption rule `union_of` applies to a union's members: a shape that
 another shape is below is dropped, so two interfaces that satisfy each other are one interface.
 The order rather than admission, because the drop has to preserve what the schema promises: a
