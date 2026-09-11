@@ -30,7 +30,7 @@ use super::node::{NodeSchema, TypeNode};
 use super::order::is_subtype_of;
 use super::record::Record;
 use super::schema::SigSchema;
-use super::shape::DispatchTokenElement;
+use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 use super::substitute::substitute_quantified;
 use super::walk::Variance;
 use super::walk::unary::{Descent, Step, Visit, visit, visit_in};
@@ -43,12 +43,12 @@ type MemberList = SmallVec<[KType; 4]>;
 /// The node table: a persistent HAMT over `RcK`, the non-atomic shared pointer. A registry is
 /// owned by exactly one run frame and never crosses a thread. Persistence buys an `O(1)` snapshot
 /// for bulk walks.
-pub type NodeMap = imbl::GenericHashMap<TypeDigest, TypeNode, IdentityBuildHasher, RcK>;
+type NodeMap = imbl::GenericHashMap<TypeDigest, TypeNode, IdentityBuildHasher, RcK>;
 
 /// Which question a recorded verdict answers. The two never alias — each digest domain is disjoint
 /// by construction — but the enum still keys the map explicitly.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Relation {
+pub(super) enum Relation {
     /// [`is_subtype_of`](super::order::is_subtype_of), the one order.
     Subtype,
     /// [`sig_subtype`](super::sig_relations::sig_subtype) over the two schemas.
@@ -136,7 +136,7 @@ impl TypeRegistry {
     ///
     /// Reachable from inside a [`with_node`](Self::with_node) closure: that read borrows the cell
     /// only long enough to take its snapshot, so the write borrow here is uncontended.
-    pub fn intern(&self, node: TypeNode) -> KType {
+    pub(super) fn intern(&self, node: TypeNode) -> KType {
         self.intern_digested(digest::node_digest(&node), || node)
     }
 
@@ -209,13 +209,6 @@ impl TypeRegistry {
         })
     }
 
-    /// An `O(1)` snapshot of the node table, for a bulk walk that would otherwise want to hold the
-    /// borrow open. The snapshot shares structure with the live table and does not observe later
-    /// interning — which is what makes it safe to walk while interning.
-    pub fn nodes_snapshot(&self) -> NodeMap {
-        self.nodes.borrow().clone()
-    }
-
     // --- Composite construction ---
     //
     // The single entry point per composite shape. Each takes child handles and returns the
@@ -240,6 +233,12 @@ impl TypeRegistry {
     /// A function type `(params) -> ret`.
     pub fn function_type(&self, params: Record<KType>, ret: KType) -> KType {
         self.intern(TypeNode::KFunction { params, ret })
+    }
+
+    /// A confined FN return slot whose source return is deferred to per-call elaboration, carried
+    /// as the surface it is shadowed by.
+    pub fn deferred_return(&self, surface: DeferredReturnSurface) -> KType {
+        self.intern(TypeNode::DeferredReturn(surface))
     }
 
     /// Application of a higher-kinded type constructor to the parameter-name-keyed `arguments`.
@@ -528,7 +527,7 @@ impl TypeRegistry {
     /// on it. It is sound there because the rename `Sibling(i) ↦ member_i` preserves every
     /// subsumption verdict: both are atoms, below only themselves and `Never`, and distinct indices
     /// name distinct members — so a union canonical before the seal is canonical after it.
-    pub fn intern_union_flat(&self, members: &[KType]) -> KType {
+    pub(super) fn intern_union_flat(&self, members: &[KType]) -> KType {
         let mut flat: MemberList = MemberList::with_capacity(members.len());
         for member in members {
             if !flat.contains(member) {

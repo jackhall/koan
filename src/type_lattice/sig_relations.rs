@@ -39,7 +39,7 @@ use super::walk::binary::{Arm, Leftover, Lockstep, Width, lockstep};
 ///
 /// The one door specificity, keyworded selection and interface canonicalization all rank through,
 /// so the three cannot drift. Return types are not compared: dispatch never selects on them.
-pub fn admits_slots(declared: KType, candidate: KType, types: &TypeRegistry) -> bool {
+pub(super) fn admits_slots(declared: KType, candidate: KType, types: &TypeRegistry) -> bool {
     if !is_shape(declared, types)
         || !is_shape(candidate, types)
         || !shape_keys_equal(declared, candidate, types)
@@ -552,7 +552,11 @@ pub fn join_schemas(types: &TypeRegistry, a: &SigSchema, b: &SigSchema) -> SigSc
 /// Width unions — a lower bound may promise everything either operand promises — and depth
 /// reconciles per member, so a shared value slot meets and a shared type member takes the stronger
 /// binding.
-pub fn meet_schemas(types: &TypeRegistry, a: &SigSchema, b: &SigSchema) -> Option<SigSchema> {
+pub(super) fn meet_schemas(
+    types: &TypeRegistry,
+    a: &SigSchema,
+    b: &SigSchema,
+) -> Option<SigSchema> {
     let mut abstract_members = TypeMemberMap::default();
     let mut manifest_members = TypeMemberMap::default();
     let names: Vec<TypeSymbol> = a

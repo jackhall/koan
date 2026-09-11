@@ -124,7 +124,7 @@ impl RelativeSchema {
 
 /// One announced member of an open window. `kind` is known when the member is announced; the
 /// schema arrives at the member's own finalize, hence the [`RefCell`].
-pub struct PendingMember {
+pub(super) struct PendingMember {
     /// The declared name — the bare tag for a variant. Unique among the members one binder owns,
     /// which with `owner` is what makes the canonical component presentation deterministic.
     pub name: TypeSymbol,
@@ -466,7 +466,7 @@ impl RecursiveGroupWindow {
 }
 
 /// One filled member handed to [`seal_group`] — the pure boundary into the identity computation.
-pub struct SealMemberInput {
+pub(super) struct SealMemberInput {
     /// The declared name: the bare tag for a variant. Digested, and the primary canonical sort key.
     pub name: TypeSymbol,
     /// The binder that owns this member, if any. A **sort tiebreak only** — never folded into
@@ -478,7 +478,7 @@ pub struct SealMemberInput {
 }
 
 /// One declaring binder handed to [`seal_group`]: its name and the indices of the members it owns.
-pub struct SealBinderInput<'m> {
+pub(super) struct SealBinderInput<'m> {
     pub name: TypeSymbol,
     pub members: &'m [usize],
 }
@@ -486,7 +486,7 @@ pub struct SealBinderInput<'m> {
 /// Turn a filled group into interned content: one absolute handle per member in announcement
 /// order, plus each binder's union over the members it owns. Implements the per-component identity
 /// described in this module's header.
-pub fn seal_group(
+pub(super) fn seal_group(
     members: &[SealMemberInput],
     binders: &[SealBinderInput<'_>],
     generative_nonce: Option<ScopeId>,

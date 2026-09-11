@@ -58,15 +58,6 @@ impl<V> Record<V> {
         record
     }
 
-    /// The intern-boundary copy: a transient slice becomes owned content. The single allocation a
-    /// type node's field record pays, amortized because equal content interns to one node per run.
-    pub fn from_slice(pairs: &[(BinderSymbol, V)]) -> Self
-    where
-        V: Clone,
-    {
-        Record::from_pairs(pairs.iter().cloned())
-    }
-
     /// Fields in insertion (declaration) order, as the slice a transient record travels as.
     pub fn as_slice(&self) -> &[(BinderSymbol, V)] {
         &self.fields
@@ -75,11 +66,6 @@ impl<V> Record<V> {
     /// Fields in insertion (declaration) order.
     pub fn iter(&self) -> FieldIter<'_, V> {
         self.fields.iter().map(borrow_field as fn(_) -> _)
-    }
-
-    /// Consume into owned `(name, value)` pairs in insertion order.
-    pub fn into_pairs(self) -> impl Iterator<Item = (BinderSymbol, V)> {
-        self.fields.into_iter()
     }
 
     pub fn keys(&self) -> impl Iterator<Item = BinderSymbol> + '_ {

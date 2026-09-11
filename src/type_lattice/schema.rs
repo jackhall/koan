@@ -289,7 +289,7 @@ pub fn shape_return(kt: KType, types: &TypeRegistry) -> Option<KType> {
 
 /// A shape's quantifier group — the render-only names, in index order. Empty for a monomorphic
 /// shape and for anything that is not a shape.
-pub fn shape_quantifiers(kt: KType, types: &TypeRegistry) -> Vec<TypeSymbol> {
+pub(super) fn shape_quantifiers(kt: KType, types: &TypeRegistry) -> Vec<TypeSymbol> {
     types.with_node(kt, |node| match node {
         TypeNode::ExpressionShape { quantifiers, .. } => quantifiers.clone(),
         _ => Vec::new(),
@@ -318,7 +318,7 @@ pub fn constructor_param_names(kt: KType, types: &TypeRegistry) -> Option<Vec<Ty
 /// Order-blind comparison of two constructor parameter lists: identity is the name set, and
 /// declaration order is presentation. Symbol order is the canonical order — an arbitrary but
 /// stable total order over the same names, which is all a set comparison needs.
-pub fn name_sets_equal(left: &[TypeSymbol], right: &[TypeSymbol]) -> bool {
+pub(super) fn name_sets_equal(left: &[TypeSymbol], right: &[TypeSymbol]) -> bool {
     if left.len() != right.len() {
         return false;
     }

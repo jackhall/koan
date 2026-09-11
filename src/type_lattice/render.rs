@@ -227,7 +227,7 @@ pub fn name_under(
 
 /// Whether this type's surface opens with the type sigil `:` — the predicate a parameter position
 /// consults to decide whether to prefix one of its own, without inspecting rendered text.
-pub fn surface_opens_sigil(kt: KType, types: &TypeRegistry) -> bool {
+pub(super) fn surface_opens_sigil(kt: KType, types: &TypeRegistry) -> bool {
     types.with_node(kt, |node| match node {
         TypeNode::List { .. }
         | TypeNode::Dict { .. }
@@ -272,7 +272,7 @@ fn write_param_record(
 ///
 /// `shape` is the handle the group's bounds are read off: a variable's bound rides on its own
 /// occurrences, so the group is spelled from the interned node rather than carried beside it.
-pub fn write_shape_surface(
+pub(super) fn write_shape_surface(
     f: &mut std::fmt::Formatter<'_>,
     shape: KType,
     quantifiers: &[TypeSymbol],
@@ -545,7 +545,10 @@ fn render_operator_head(
 /// `None` for a record one of its own members' heads already spells in full: a bare `OP` head
 /// declares exactly a fold-left singleton, and a `UNARY OP` head exactly a unary one, so rendering
 /// those again would print one declaration twice.
-pub fn render_declared_group(group: &DeclaredGroup, labels: &LabelInterner) -> Option<String> {
+pub(super) fn render_declared_group(
+    group: &DeclaredGroup,
+    labels: &LabelInterner,
+) -> Option<String> {
     let singleton = group.members.len() == 1;
     if singleton && matches!(group.mode, ReductionMode::FoldLeft | ReductionMode::Unary) {
         return None;

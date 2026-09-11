@@ -38,7 +38,15 @@ use smallvec::SmallVec;
 
 /// A `KType`'s content identity: the low 128 bits of a BLAKE3 hash of its content.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
-pub struct TypeDigest(pub u128);
+pub struct TypeDigest(pub(super) u128);
+
+/// The digest's hexadecimal spelling — the one reading a caller outside the lattice has of the
+/// bits, for a diagnostic that names a handle by identity.
+impl std::fmt::LowerHex for TypeDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::LowerHex::fmt(&self.0, f)
+    }
+}
 
 // Domain tag bytes — one per digestible shape, so no two variants can share a digest even with
 // identical trailing payloads. These values are identity-load-bearing: never reorder or reuse a

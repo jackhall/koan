@@ -7,7 +7,6 @@
 //! memoized, so the composition costs one intern per changed composite.
 
 use crate::memory::ScopeId;
-use crate::parse::TypeSymbol;
 
 use super::handle::KType;
 use super::node::TypeNode;
@@ -207,7 +206,7 @@ pub fn canonicalize_binder(types: &TypeRegistry, kt: KType, declared: ScopeId) -
 /// member of the group being sealed, which the canonicalizing door would fault on reading — and the
 /// rename preserves every subsumption verdict anyway, so the result is canonical without a second
 /// pass.
-pub fn rewrite_siblings(
+pub(super) fn rewrite_siblings(
     types: &TypeRegistry,
     kt: KType,
     resolve: &impl Fn(usize) -> KType,
@@ -227,7 +226,7 @@ pub fn rewrite_siblings(
 }
 
 /// Collect every sibling index `kt` references, at any depth, in walk order.
-pub fn collect_siblings(types: &TypeRegistry, kt: KType, out: &mut Vec<usize>) {
+pub(super) fn collect_siblings(types: &TypeRegistry, kt: KType, out: &mut Vec<usize>) {
     visit(types, kt, LEAF, &mut |_, node, _| match node {
         TypeNode::Sibling(index) => {
             out.push(*index);
@@ -235,28 +234,6 @@ pub fn collect_siblings(types: &TypeRegistry, kt: KType, out: &mut Vec<usize>) {
         }
         _ => Visit::Descend,
     });
-}
-
-/// Hand every abstract-member reference reachable from `kt` to `f`, as its binder and its name.
-pub fn abstract_references(
-    types: &TypeRegistry,
-    kt: KType,
-    f: &mut impl FnMut(ScopeId, TypeSymbol),
-) {
-    visit(
-        types,
-        kt,
-        Descent {
-            signature: Step::Through,
-            set_member: Step::Leaf,
-        },
-        &mut |_, node, _| {
-            if let TypeNode::AbstractType { source, name, .. } = node {
-                f(*source, *name);
-            }
-            Visit::Descend
-        },
-    );
 }
 
 // --- Substitute, then ask ---

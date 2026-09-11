@@ -89,15 +89,11 @@ impl Collector {
         }
     }
 
-    /// How many variables this collector holds cells for.
-    pub fn arity(&self) -> usize {
-        self.bounds.len()
-    }
-
     /// The lower and upper contributions to the `index`-th variable, in arrival order — what
     /// reached it at a covariant position and what reached it at a contravariant one. Empty slices
     /// for an index no argument reached.
-    pub fn contributions(&self, index: usize) -> (&[KType], &[KType]) {
+    #[cfg(test)]
+    pub(super) fn contributions(&self, index: usize) -> (&[KType], &[KType]) {
         fn cell(cells: &[Vec<KType>], index: usize) -> &[KType] {
             cells.get(index).map_or(&[], Vec::as_slice)
         }
@@ -106,7 +102,8 @@ impl Collector {
 
     /// The bound recorded for the `index`-th variable, or [`KType::ANY`] for an index no
     /// contribution reached.
-    pub fn bound(&self, index: usize) -> KType {
+    #[cfg(test)]
+    pub(super) fn bound(&self, index: usize) -> KType {
         self.bounds.get(index).copied().unwrap_or(KType::ANY)
     }
 

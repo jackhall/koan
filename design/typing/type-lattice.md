@@ -51,9 +51,15 @@ themselves, `Any` and `Never`. What they capture is admission's concern.
 
 The public surface is `is_subtype_of`, `is_more_specific_than`, `satisfied_by`, `join`, `meet`,
 `union_of`, the quantifier substitutions, the member substitutions and the three `slot_*`
-compositions, `admits_with` with its collector, `join_schemas`, `meet_schemas`, `sig_subtype`,
-`select_keyworded_satisfier`, `shape_specificity`, interning, rendering, node reads, and the
-window and seal doors. Every caller reaches types through these.
+compositions, `admits_with` with its collector, `join_schemas`, `sig_subtype`,
+`select_keyworded_satisfier`, `shape_specificity`, the composite construction doors, rendering,
+node reads, and the window doors. Every caller reaches types through these, and through nothing
+else: the submodules are private, so the re-export list at the crate root is the whole interface;
+a `TypeNode` is built outside the lattice only through the registry door for its shape, never
+interned raw, so no site can construct content the registry has not seen; and a `TypeDigest` is
+read outside the lattice only as a handle's identity or its hexadecimal spelling. `meet_schemas`,
+the seal, the sibling walks and the rendering helpers are reached through `meet`, the window and
+the rendering entry points, not named by a caller.
 
 ### The order
 
@@ -193,7 +199,7 @@ the current position. Member substitution
 descends into a nested signature and asks the context about shadowing; quantifier substitution
 stops its leaf rule at the first nested shape; identity canonicalization treats a signature as a
 leaf. Substitution, canonicalization, sibling rewriting, the quantifier census, and the
-member-reference folds are each written as leaf rules.
+sibling census are each written as leaf rules.
 
 The **binary driver** owns the pairing policy per arm — positional for lists, dicts and
 monomorphic shapes, by name for record fields, function parameters and constructor arguments,

@@ -35,23 +35,23 @@
 //!
 //! See [design/typing/type-lattice.md](../design/typing/type-lattice.md).
 
-pub mod digest;
-pub mod handle;
-pub mod kind;
-pub mod lattice;
-pub mod node;
-pub mod operators;
-pub mod order;
-pub mod record;
-pub mod registry;
-pub mod render;
-pub mod schema;
-pub mod shape;
-pub mod sig_relations;
-pub mod substitute;
-pub mod unify;
-pub mod walk;
-pub mod window;
+mod digest;
+mod handle;
+mod kind;
+mod lattice;
+mod node;
+mod operators;
+mod order;
+mod record;
+mod registry;
+mod render;
+mod schema;
+mod shape;
+mod sig_relations;
+mod substitute;
+mod unify;
+mod walk;
+mod window;
 
 #[cfg(test)]
 mod tests;
@@ -64,29 +64,26 @@ pub use node::{NodeSchema, TypeNode};
 pub use operators::{FoldDirection, ReductionMode};
 pub use order::{is_more_specific_than, is_subtype_of, satisfied_by};
 pub use record::Record;
-pub use registry::{Relation, ShapeIntern, TypeRegistry};
+pub use registry::{ShapeIntern, TypeRegistry};
 pub use render::{
-    display_label, display_name, name, name_under, render_declared_group, render_keyworded_head,
-    render_label, render_sig_failure, surface_opens_sigil, write_name, write_shape_surface,
+    display_label, display_name, name, name_under, render_keyworded_head, render_label,
+    render_sig_failure, write_name,
 };
 pub use schema::{
     DeclaredGroup, OperatorMembers, SigSchema, TypeMemberMap, canonical_groups,
     canonical_overloads, constructor_param_names, is_abstract_sig_member, is_shape,
-    name_sets_equal, shape_keys_equal, shape_quantifiers, shape_return, shape_slots,
+    shape_keys_equal, shape_return, shape_slots,
 };
 pub use shape::{DeferredReturnSurface, DispatchTokenElement, Specificity};
 pub use sig_relations::{
-    SigSubtypeFailure, admits_slots, join_schemas, meet_schemas, most_specific_ktype,
-    select_keyworded_satisfier, shape_specificity, sig_subtype,
+    SigSubtypeFailure, join_schemas, most_specific_ktype, select_keyworded_satisfier,
+    shape_specificity, sig_subtype,
 };
 pub use substitute::{
-    abstract_references, canonicalize_binder, collect_siblings, erase_quantified, erase_rigid,
-    instantiate_quantified, quantifier_bounds, rewrite_siblings, slot_more_specific_or_equal,
-    slot_satisfied_by, slot_types_equal, substitute_quantified, substitute_sig_members,
+    canonicalize_binder, erase_quantified, erase_rigid, instantiate_quantified, quantifier_bounds,
+    slot_more_specific_or_equal, slot_satisfied_by, slot_types_equal, substitute_quantified,
+    substitute_sig_members,
 };
 pub use unify::{Collector, UnifyFailure, admits_with};
 pub use walk::Variance;
-pub use window::{
-    PendingMember, RecursiveGroupWindow, RelativeSchema, SealBinderInput, SealMemberInput,
-    SealedGroup, seal_group,
-};
+pub use window::{RecursiveGroupWindow, RelativeSchema, SealedGroup};
