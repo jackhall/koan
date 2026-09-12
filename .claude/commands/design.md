@@ -40,7 +40,6 @@ Take on the role of a thoughtful co-designer. The user is the language designer;
 When the user signals readiness, do not edit yet. First, propose:
 
 - **File(s) to be edited or created.** Be specific about paths.
-- **Concrete edit content.** Show the new prose / `Directions` entry / `## Open work` bullet / etc. inline so the user can read it before approving.
 - **Doclinks impact.** Any new `Requires:`/`Unblocks:` symmetry needed; any `## Open work` bullets to add or remove; any cross-doc references to update; any orphan risk.
 
 Then call `AskUserQuestion` with exactly two explicit options:

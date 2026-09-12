@@ -12,17 +12,13 @@ memory module, so a value's representation records the scheduler's delivery
 envelope, the escape seam's copy-or-pin cost model, and the dispatch layer's
 needs (`NamedPairs`, `coerce_function_cell`) alongside what the value *is*.
 `src/memory` ([memory.rs](../../src/memory.rs)) is the module the rewrite keeps
-— storage profile, allocation brands, the per-call frame shell, program
-storage, `ScopeId` — and it imports nothing back, but nothing sits on it
-yet: the frame shell is generic over a family the old runtime supplies. Its
-own suite is gated behind `pending_rewrite` for the same reason
-([TEST.md](../../TEST.md#the-pending-rewrite)).
+— the slot array, program storage, `ScopeId` — and it imports nothing back,
+but nothing sits on it yet.
 
 **Acceptance criteria.**
 
 - A `values` module depends on `memory`, `parse` and `type_lattice` and on no
-  scheduler or scope type; `memory`'s frame shell is instantiated by it and
-  `memory`'s suite runs in the default slate.
+  scheduler or scope type; `memory`'s shapes are instantiated by it.
 - Every composite value — list, dict, record, function, module, tagged value —
   is region-resident and `Drop`-free, born through a brand-confined construction
   door; there is no per-value reference count and no runtime residence audit.
@@ -40,11 +36,9 @@ own suite is gated behind `pending_rewrite` for the same reason
 
 **Directions.**
 
-- *`memory` rides `cellgraph`'s region — decided.* `memory` instantiates
-  `workgraph`'s witnessed module today; the scheduler that replaces `workgraph`
-  is built after this item and `workgraph` is deleted with it, so `memory` is
-  re-hosted on a `cellgraph` cell's region directly. One region type per run,
-  and the `substrate` alias file was written to make the swap a local rewrite.
+- *`memory` rides `cellgraph`'s region — decided, and its own item.*
+  [Memory on cellgraph](memory-on-cellgraph.md) narrows the module to shapes
+  over the cell's own region; this item instantiates those shapes.
 - *One universal enum or per-kind types — open.* `KObject` made every
   consumer match on every variant; per-kind types with a small tagged union at
   the boundary is the alternative. Recommended: per-kind types, with the enum
@@ -56,7 +50,9 @@ own suite is gated behind `pending_rewrite` for the same reason
 
 ## Dependencies
 
-**Requires:** none — the rewrite's foundation; `cellgraph`, `memory` and the type lattice are shipped.
+**Requires:**
+
+- [Memory on cellgraph](memory-on-cellgraph.md) — a value is born through the narrowed module's doors.
 
 **Unblocks:**
 

@@ -74,15 +74,16 @@ Four absences are design statements rather than gaps:
   every merge rely on. Nothing in a region is ever dropped, because a bump
   releases its chunks whole: every family a region hosts is `DropFree`. A
   region is a *bundle* — the bump it writes into, plus the bumps of everything
-  absorbed into it.
+  absorbed into it. Inside a step the executing cell's own region is reachable
+  at its own brand, `'cell`, distinct from the step's.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and
-  **never calls**. It rests beside the reach of whatever it captured, minted
-  into its own cell's holds when stored — a cell holds what its continuation
-  reads — which makes it a dormant carrier like any other. Storing a successor
-  repoints the cell at the entry the new reach interns to and overwrites none,
-  so a cell alternating between a few continuation shapes costs one entry per
-  shape. A cell with no continuation is **storage-only**: the answer to "a
+  **never calls**. It is stored at `'cell` and records no reach of its own: a
+  cell holds what its continuation reads, and every reference the
+  continuation can capture is one the cell's holds already cover — its own
+  region, or storage a pinned crossing minted in when it arrived — so the
+  store prices nothing and touches no table. A cell with no continuation is
+  **storage-only**: the answer to "a
   region that outlives its step but is never executed in" — a cart a loop
   accumulates into, a mailbox a scheduler parks values in.
 - **Holds**, in two relations — *birth* (the parent chain, derived at creation)
@@ -125,6 +126,19 @@ liveness, and the brand a step's doors hand out is the step's own — so "a
 carrier is reachable only inside an `enter` scope" is a lifetime rather than a
 rule.
 
+**Two brands per step.** `'b` is the step: a carrier branded to it was built
+or redeemed by this step's doors and dies with the step. `'cell` is the
+executing cell's own region: invariant, quantified per `enter`, with no
+outlives relation to `'b`. A value built there is held as a plain `&'cell`
+reference and needs no carrier, because its reach is the cell itself and the
+cell's birth row already keeps it; the three carrier states are for a value
+homed in another cell or crossing a step. The continuation's captures are
+`'cell` references, re-anchored at each step's brand, which is how per-cell
+embedder structure rides the cell without a frame type. A foreign carrier is
+read at a borrow strictly inside the step and can never coerce to `'cell`, so
+the only reference that lands in a cell's region without passing the verdict
+is one into that same region.
+
 **A value and its reach are never separable, and never forgeable.** Every
 carrier constructor is crate-private and the mask type is crate-private too, so
 there is nothing an embedder can assemble that would hand a value a reach of its
@@ -137,11 +151,13 @@ own choosing. That single forgery is what the three states exist to prevent.
 - **`enter(handle, step)`** sets the cell's executing bit for the scope of
   `step` and supplies a step context. A cell cannot be entered while it is
   already executing. Within the scope a step can take the cell's continuation
-  re-anchored at the step lifetime; allocate into its own region; allocate into
-  any other live cell by handle (destination-homed placement); mint a bare hold
-  on another cell; read a carrier it built; store a successor continuation, over
-  captures or over nothing; `keep` a carrier it holds, which hands back the
-  at-rest form; and `redeem` one a previous step put to rest.
+  re-anchored at `'cell`; take a `Copy` writer onto its own region at `'cell`;
+  allocate into any other live cell by handle (destination-homed placement),
+  or into itself at `'cell`; lift an own-region value to a carrier whose reach
+  is the cell itself; mint a bare hold on another cell; read a carrier it
+  built; store a successor continuation, over captures or over nothing; `keep`
+  a carrier it holds, which hands back the at-rest form; and `redeem` one a
+  previous step put to rest.
 
   The continuation read *is* the sealed tier's accessor — a capture whose region
   sealed since it was stored comes back reading storage that sealed cell still
@@ -251,6 +267,9 @@ to put: an operand homed in a tree cell crossing to a destination neither on
 that cell's chain nor under it is a **forced copy**
 ([src/tree/README.md](src/tree/README.md)).
 
+A `'cell` reference is not an operand: embedding it prices nothing because it
+crosses nothing.
+
 There are no price *verbs*. The substrate computes what retention costs, but
 every one of those queries is crate-private, along with the vocabulary they
 speak — the mask, the sealed id, the closure and occupancy answers name nothing
@@ -276,8 +295,9 @@ exactly one decision.
   slab index, sparse sets, frozen aggregates, holder counts, and the dense slab
   with its free list.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
-  merge performs, the `Writer` a build closure receives, and the sealed cell's
-  frozen-closure memo.
+  merge performs, `Writer` — the crate's one write surface: `fill`, a run laid
+  down by index under a compile-time no-destructor check, and `text`; every
+  simpler shape is the embedder's — and the sealed cell's frozen-closure memo.
 - [src/scratch.rs](src/scratch.rs) — the graph's one scratch region and the
   doors every verb's transients go through.
 - [src/carrier.rs](src/carrier.rs) — `Ready` and `Active`, the two carrier
@@ -352,6 +372,8 @@ machinery and not the `alloc` within it.
 
 - [roadmap/](roadmap/README.md) — the crate's own tree. The substrate's
   build-out is complete; what is open is recorded there as unplanned gaps.
+- [Cell brand and writer doors](roadmap/cell-brand-and-writer.md) — the
+  `'cell` brand, `writer`, `fill` and the carrier bridge described above.
 - [Rebuilding workgraph over cellgraph](../workgraph/old_roadmap/adopt-cellgraph.md)
   — the first embedder's adoption.
 
