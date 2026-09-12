@@ -3,8 +3,8 @@
 Where a value lives and how long — koan's instantiation of the region
 substrate, and every substrate name koan spells.
 
-The payload-generic engine underneath is a library's; this module is koan's
-*policy* over it. [`region`](region.rs) declares the storage profile and the
+The payload-generic engine underneath is `workgraph::witnessed`'s; this module
+is koan's *policy* over it. [`region`](region.rs) declares the storage profile and the
 allocation brands, [`frame`](frame.rs) the per-call frame shell,
 [`program`](program.rs) the program-text tier above the run root,
 [`scope_id`](scope_id.rs) the position-independent identity a resident carries,

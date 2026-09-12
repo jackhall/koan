@@ -1,8 +1,9 @@
 //! Where a value lives and how long — Koan's instantiation of the region substrate, and every
 //! substrate name Koan spells.
 //!
-//! The payload-generic engine underneath is a library's; this module is Koan's policy over it. [`region`] declares the storage profile and the allocation brands (with
-//! the residence derivations a brand's region owner supplies), [`frame`] the per-call frame shell,
+//! The payload-generic engine underneath is `workgraph::witnessed`'s; this module is Koan's
+//! policy over it. [`region`] declares the storage profile and the allocation brands (with the
+//! residence derivations a brand's region owner supplies), [`frame`] the per-call frame shell,
 //! [`program`] the program-text tier above the run root, and [`scope_id`] the position-independent
 //! identity a resident carries so nothing depends on where it sits.
 //!

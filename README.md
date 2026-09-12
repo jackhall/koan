@@ -81,7 +81,7 @@ The output is one [`KExpression`](src/parse/ast.rs) per top-level line: an order
 
 `parse` owns what it produces, not just the walk that produces it: [labels.rs](src/parse/labels.rs) mints and interns every symbol, [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [forms.rs](src/parse/forms.rs) holds `FORMS` — the one table spelling every builtin form's bucket key, tagged by a `FormId`, carrying the binder facts, the lazy slots and the reserved bit each form's readers ask for. A node probes that table once; the close-inference rules and the miss diagnostics name a form by its tag rather than respelling its key.
 
-`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [old_design/expressions-and-parsing.md](old_design/expressions-and-parsing.md).
+`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [src/parse/README.md](src/parse/README.md).
 
 ### dispatch — `KExpression` → `DispatchOutcome` against a `Scope`
 
@@ -104,7 +104,7 @@ value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus t
 symbol, AST and form-table vocabulary that output is written in),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
-type nodes — see [old_design/typing/type-lattice.md](old_design/typing/type-lattice.md)),
+type nodes — see [src/type_lattice/README.md](src/type_lattice/README.md)),
 and [machine/](src/machine) (the execution engine that consumes a
 `KExpression`). `parse` splits into [ast/](src/parse/ast.rs) (the syntax types,
 the node cache and the eternal-tier program marker),
@@ -151,7 +151,7 @@ schema a signature node carries, and the canonical signature-subtyping relation)
 run-frame-owned store that memoizes subtype verdicts by digest pair),
 [registries.rs](src/machine/model/registries.rs) (`RunRegistries`, the run frame's
 owned bundle of that registry beside the label interner — see
-[old_design/label-interning.md](old_design/label-interning.md)),
+[src/parse/README.md](src/parse/README.md) § Labels),
 [builtins.rs](src/builtins.rs) (registry),
 [constructors.rs](src/machine/execute/decide/constructors.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
@@ -329,15 +329,32 @@ src/
 
 ## Design and roadmap
 
-A module's design doc is the `README.md` in its directory — the rewrite's
-convention, tracked in
-[roadmap/rewrite/design-docs-in-modules.md](roadmap/rewrite/design-docs-in-modules.md)
-for the kept modules and written fresh by each rewrite item for its own. The
-topical tree the old runtime was documented under is retired at
-[old_design/](old_design/README.md): its docs describe the runtime behind
-`pending_rewrite` and stay as requirements reading, alongside the docs for kept
-modules until each moves into its module. The cell substrate's design is its
-crate README, [cellgraph/](cellgraph/README.md).
+A module's design doc is the `README.md` in its own source directory, linked
+from that module's top-of-file comment. The kept modules carry theirs:
+
+- [src/parse/README.md](src/parse/README.md) — the division of labour with
+  `sexlex`, the label vocabulary and its content-digest identity, the borrowed
+  splice-free AST and its structural cache, and the `FORMS` table every node is
+  classified against at construction.
+- [src/memory/README.md](src/memory/README.md) — the three storage tiers, the
+  frame shell that names no Koan value, the one-place substrate alias layer, the
+  two table shapes, and the drop-freeness the region discipline rests on.
+- [src/type_lattice/README.md](src/type_lattice/README.md) — the closed algebra:
+  digest identity, the node vocabulary, the interning registry, the one order
+  and the lattice operations over it, and the unifier that solves a quantified
+  position.
+- [sexlex/README.md](sexlex/README.md) — the layout half of the parser: what it
+  decides, the three things it refuses, and the three indentation regimes.
+- [cellgraph/README.md](cellgraph/README.md) — the cell substrate's contract and
+  verbs, with [cellgraph/src/graph/README.md](cellgraph/src/graph/README.md) for
+  matrix liveness, the sealed tier and pricing, and
+  [cellgraph/src/tree/README.md](cellgraph/src/tree/README.md) for tree cells.
+
+Each rewrite item writes its own module's README the same way, fresh against the
+code it lands. The topical tree the old runtime was documented under is frozen at
+[old_design/](old_design/README.md): it is requirements reading for the runtime
+behind `pending_rewrite` — never added to, never edited, and carrying no link
+into a kept module.
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. Its [README](roadmap/README.md) groups work into project
@@ -345,10 +362,11 @@ subdirectories — each with its own README naming the project and listing its r
 items — and derives a "Next items" list, everything with no still-open prerequisite, from
 those cross-links (`tools/doclinks.py sync-next`).
 
-The [cellgraph/](cellgraph/README.md) cell substrate carries its own design and
-roadmap trees, so it reads as a standalone library rather than as Koan's
-internals; work items cross-link across the trees and `doclinks` gates them as
-one dependency graph, but each tree derives its own "Next items" list. The
+The [cellgraph/](cellgraph/README.md) cell substrate carries its design in its
+own module READMEs and its open work in a roadmap tree of its own, so it reads as
+a standalone library rather than as Koan's internals; work items cross-link
+across the trees and `doclinks` gates them as one dependency graph, but each tree
+derives its own "Next items" list. The
 [workgraph/](workgraph/README.md) scheduler is the old runtime's and is replaced
 by a fresh crate ([roadmap/rewrite/scheduler-on-cellgraph.md](roadmap/rewrite/scheduler-on-cellgraph.md));
 its design and roadmap trees are retired under `old_` prefixes, as is the
@@ -356,6 +374,6 @@ boundary doc [old_design/scheduler-library.md](old_design/scheduler-library.md).
 
 [sexlex/](sexlex/README.md) is the third crate Koan embeds: the layout half of
 the parser, with no vocabulary of its own. Unlike the other two it carries no
-design or roadmap tree — its README introduces the five rules about whitespace,
-brackets, quotes, adjacency and indentation, and the crate doc on
-[sexlex/src/lib.rs](sexlex/src/lib.rs) is their precise statement.
+roadmap tree — its README is the whole design statement, and the crate doc on
+[sexlex/src/lib.rs](sexlex/src/lib.rs) is the precise form of the five rules
+about whitespace, brackets, quotes, adjacency and indentation it rests on.

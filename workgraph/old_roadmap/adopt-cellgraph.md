@@ -8,7 +8,7 @@ pin bundles, a `PinsRegion` hook, and an antichain fold
 region, erased continuation, anchor — with DAG-only state: `SlotState`
 terminality, dep edges, notify and park bookkeeping, terminal delivery,
 splicing. The `cellgraph` crate
-([old_cellgraph/README.md](../../cellgraph/README.md)) supplies the cell
+([cellgraph/README.md](../../cellgraph/README.md)) supplies the cell
 half with matrix liveness, and `workgraph` does not use it: two substrates
 exist, and koan sits on the one the design has moved off.
 

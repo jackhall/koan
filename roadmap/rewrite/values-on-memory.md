@@ -36,7 +36,7 @@ own suite is gated behind `pending_rewrite` for the same reason
 - `values` has its own unit suite and Miri slate entries, and both are clean.
 - `src/values/README.md` is the module's design doc, written fresh rather than
   migrated from `old_design/`, and the module's top-of-file comment links it
-  ([design-docs-in-modules.md](design-docs-in-modules.md)).
+  ([the doc partition](../../.claude/skills/documentation/SKILL.md)).
 
 **Directions.**
 

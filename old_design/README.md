@@ -185,7 +185,7 @@ A **foundation** is a source file every operation in some concern
 *has* to go through — name resolution threads
 [scope.rs](../src/machine/core/scope.rs) →
 [bindings.rs](../src/machine/core/bindings.rs); allocation goes
-through region.rs; nothing storable
+through `region.rs`; nothing storable
 exists without a `region.rs` entry. A
 foundation is *correctly* cited everywhere — every doc touching the
 concern has to name it, because the concept the doc is explaining

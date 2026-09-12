@@ -194,10 +194,10 @@ the last tree child's disposal is what sets its cascade off. Sealing or absorbin
 a root moves its whole bundle, spliced tree bumps included — already what a region
 does.
 
-## What this retires, and what it leaves open
+## What the pool does not decide
 
-Group sealing is retired: a subtree's internal holds never exist, so there is no
-chain of sealed cells to collapse into one.
+A subtree's internal holds never exist, so a tree cell needs no group sealing:
+there is no chain of sealed cells for the pool to collapse into one.
 
 **Kind selection is the embedder's.** The substrate ships both kinds and no rule
 for choosing between them. Which cell a creation takes is an admission decision,

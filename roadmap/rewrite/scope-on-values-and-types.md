@@ -39,7 +39,7 @@ runtime.
   same output, and `tools/verify_snippets.py` reads the rewritten binary.
 - `src/scope/README.md` is the module's design doc, written fresh rather than
   migrated from `old_design/`, and the module's top-of-file comment links it
-  ([design-docs-in-modules.md](design-docs-in-modules.md)).
+  ([the doc partition](../../.claude/skills/documentation/SKILL.md)).
 
 **Directions.**
 
