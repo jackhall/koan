@@ -10,8 +10,9 @@
 
 use cellgraph::{
     Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
-    Erased, Operand, Prices, Ready, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError,
-    ReleaseTreeError, SlabHandle, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
+    Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError, ReleaseAbsorption,
+    ReleaseError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext, TreeHandle, Verdict,
+    Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -57,6 +58,28 @@ fn build_slice<'r>(writer: Writer<'r>) -> &'r [u32] {
 
 fn build_text<'r>(writer: Writer<'r>) -> &'r str {
     writer.text("koan")
+}
+
+/// The producer-decided run: a filter settles the width only once the elements exist, so there is
+/// no length to hand `fill`.
+fn build_run<'r>(writer: Writer<'r>) -> &'r [u32] {
+    let mut run: Run<'r, u32> = writer.run();
+    run.extend((1..8u32).filter(|value| value % 3 == 0));
+    run.push(99);
+    assert!(!run.is_empty() && run.len() == 3);
+    run.finish()
+}
+
+/// The same shape for text: a rendering whose length no caller knows up front, formatted straight
+/// into the region.
+fn build_prose<'r>(writer: Writer<'r>) -> &'r str {
+    use std::fmt::Write;
+
+    let mut prose: Prose<'r> = writer.prose();
+    for value in build_run(writer) {
+        write!(prose, "{value};").expect("a region sink never fails");
+    }
+    prose.finish()
 }
 
 /// An embedder's own helper over carriers, which is the one reason [`Erased`] is nameable from
@@ -164,6 +187,10 @@ fn every_public_door_answers_from_outside_the_crate() {
             let number = context.lift::<Number>(build_number(context.writer()));
             let numbers = context.lift::<Numbers>(build_slice(context.writer()));
             let text = context.lift::<Text>(build_text(context.writer()));
+            let filtered = context.lift::<Numbers>(build_run(context.writer()));
+            let rendered = context.lift::<Text>(build_prose(context.writer()));
+            assert_eq!(read_first(context, &filtered), &[3, 6, 99]);
+            assert_eq!(read_first(context, &rendered), "3;6;99;");
             let pushed = context
                 .alloc_into::<Number, Number>(root, &[pinned_operand(&number)], |writer, views| {
                     match views[0] {

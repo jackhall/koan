@@ -304,10 +304,11 @@ exactly one decision.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
   merge performs, `Regions` — the table of every live cell's region, which a
   step holds shared for its whole length so that nothing can move or drop a bump
-  under a writer into it — `Writer` — the crate's one write surface: `fill`, a
-  run laid down by index under a compile-time no-destructor check, and `text`;
-  every simpler shape is the embedder's — and the sealed cell's frozen-closure
-  memo.
+  under a writer into it — `Writer` — the crate's one write surface, a verb per
+  shape a region cannot be given: `fill` and `text` where the width is settled
+  before the first element, `run` and `prose` where only the producer settles it,
+  each handing back the region borrow once the producer is done; every simpler
+  shape is the embedder's — and the sealed cell's frozen-closure memo.
 - [src/scratch.rs](src/scratch.rs) — the graph's one scratch region and the
   doors every verb's transients go through.
 - [src/carrier.rs](src/carrier.rs) — `Ready` and `Active`, the two carrier

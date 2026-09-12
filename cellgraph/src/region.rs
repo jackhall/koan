@@ -256,10 +256,14 @@ impl Regions {
 /// verb returns a shared `&'r` rather than the `&mut` the bump itself yields: a written value is
 /// region state its holder names, never one it owns.
 ///
-/// Two verbs, because two is what a region cannot be given by an embedder: [`fill`](Writer::fill)
-/// lays down a run by index under a compile-time no-destructor check, and [`text`](Writer::text)
-/// writes a `str`, whose bytes have no `T` to index by. Every simpler shape — one value, a copied
-/// slice, a run collected from an iterator — is the embedder's, derived from `fill`.
+/// A verb per shape a region cannot be given by an embedder, in two pairs. Known width, where the
+/// count is settled before the first element: [`fill`](Writer::fill) lays down a run by index
+/// under a compile-time no-destructor check, and [`text`](Writer::text) writes a `str`, whose
+/// bytes have no `T` to index by. Producer-decided width, where only the elements settle it:
+/// [`run`](Writer::run) takes pushes and [`prose`](Writer::prose) takes formatted writes, each
+/// handing back the region borrow once the producer is done. Every simpler shape — one value, a
+/// copied slice, a run collected from an iterator of known length — is the embedder's, derived
+/// from these.
 #[derive(Clone, Copy)]
 pub struct Writer<'r>(&'r Bump);
 
@@ -279,5 +283,98 @@ impl<'r> Writer<'r> {
     /// Write text.
     pub fn text(self, text: &str) -> &'r str {
         self.0.alloc_str(text)
+    }
+
+    /// A run whose length the producer decides — a filtered or mapped list, a split — pushed one
+    /// element at a time and closed with [`Run::finish`].
+    ///
+    /// The buffer grows in place while it is the region's newest allocation: a growth allocates
+    /// the delta and slides the bytes down inside the chunk. An allocation interleaved between
+    /// pushes ends that, and the next growth copies to a fresh buffer and strands the outgrown one
+    /// as dead region bytes — the same cost a growing scratch transient pays. A run whose elements
+    /// are themselves written into this region as the loop goes interleaves by construction; build
+    /// those in the embedder's own scratch first and lay the run down with `fill`.
+    ///
+    /// Where the length is known before the first element, [`fill`](Self::fill) costs no header
+    /// and no growth path.
+    pub fn run<T>(self) -> Run<'r, T> {
+        const { assert!(!std::mem::needs_drop::<T>()) };
+        Run(allocator_api2::vec::Vec::new_in(self.0))
+    }
+
+    /// Text whose length the producer decides: a [`fmt::Write`](std::fmt::Write) sink into the
+    /// region, closed with [`Prose::finish`]. Same growth story as [`run`](Self::run), which it is
+    /// a run of bytes over.
+    pub fn prose(self) -> Prose<'r> {
+        Prose(self.run())
+    }
+}
+
+/// A run under construction in a region, at the brand of the writer that opened it.
+///
+/// No `Drop`: a run abandoned mid-build is dead region bytes, like every other buffer a bump
+/// outgrows. Nothing it holds runs a destructor either — [`Writer::run`] asserts that at the
+/// instantiation site, the way [`Writer::fill`] does.
+pub struct Run<'r, T>(allocator_api2::vec::Vec<T, &'r Bump>);
+
+impl<'r, T> Run<'r, T> {
+    /// Append one element.
+    pub fn push(&mut self, value: T) {
+        self.0.push(value);
+    }
+
+    /// Append every element of `values`.
+    pub fn extend(&mut self, values: impl IntoIterator<Item = T>) {
+        self.0.extend(values);
+    }
+
+    /// How many elements are down so far.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether nothing has been pushed yet.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Give the slack back and hand out the borrow of the run that lives in the region.
+    ///
+    /// The trim reclaims into the chunk only while the buffer is still the region's newest
+    /// allocation; otherwise it is a no-op and the slack stays dead region bytes.
+    pub fn finish(mut self) -> &'r [T] {
+        self.0.shrink_to_fit();
+        self.0.leak()
+    }
+}
+
+/// Text under construction in a region: a [`fmt::Write`](std::fmt::Write) sink over a
+/// [`Run`] of bytes, so `write!` lands its output straight in the region's chunk.
+pub struct Prose<'r>(Run<'r, u8>);
+
+impl std::fmt::Write for Prose<'_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.0.extend(text.bytes());
+        Ok(())
+    }
+}
+
+impl<'r> Prose<'r> {
+    /// How many bytes — not characters — are down so far.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether nothing has been written yet.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Give the slack back and hand out the borrow of the text that lives in the region.
+    ///
+    /// The bytes only ever arrived from a `&str`, so the check passes by construction; it is a
+    /// linear pass the crate pays rather than take an `unsafe` it has no other need for.
+    pub fn finish(self) -> &'r str {
+        std::str::from_utf8(self.0.finish()).expect("every byte came from a str")
     }
 }
