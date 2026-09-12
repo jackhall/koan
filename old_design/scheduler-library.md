@@ -4,7 +4,7 @@ Koan's runtime substrate — the deferred-work scheduler, the region memory
 system, and the witnessed carrier machinery — is a self-contained library
 stack with no dependency on Koan's language semantics. It ships as two
 workspace crates: `cellgraph`
-*(working name — [cellgraph.md](../cellgraph/design/cellgraph.md))*, the
+*(working name — [cellgraph/README.md](../cellgraph/README.md))*, the
 computation-cell substrate (witnessed memory plus a cell table:
 continuations, memory anchors, inter-cell values — no acyclicity, no
 terminality), and `workgraph`, the DAG scheduler layered on it (dep edges,
@@ -101,7 +101,7 @@ a concept, not a final identifier.
   a bare frame pin never escapes the scheduler.
 - **Finish** — the continuation a consumer runs once its deps resolve.
 - **Workload** — the embedder-facing trait: the cell contract
-  ([cellgraph.md](../cellgraph/design/cellgraph.md) — the continuation family, the memory anchor
+  ([cellgraph/README.md](../cellgraph/README.md) — the continuation family, the memory anchor
   `Frame` (which projects its region owner through `Anchor::owner`), and the
   brand-indexed value family Koan instantiates with `Carried`) plus the
   terminal error type the DAG layer's `Result`-shaped terminal protocol adds.

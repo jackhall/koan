@@ -1,6 +1,6 @@
 //! [`Dormant`] — the carrier at rest: a value put down in its home cell's region between steps,
 //! with no lifetime of its own. The least live of the three states a value with reach passes
-//! through ([design/cellgraph.md](../design/cellgraph.md) § The contract: two embedder types), and
+//! through ([../README.md](../README.md) § The contract: two embedder types), and
 //! the only one an embedder may hold across an `enter` scope.
 //!
 //! A dormant carrier carries **no reach**. Its mask lives in its home cell's reach table, where

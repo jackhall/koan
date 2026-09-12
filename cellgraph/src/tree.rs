@@ -1,5 +1,5 @@
 //! The tree pool: the third region habitat, for a call subtree whose liveness is a stack
-//! discipline rather than a matrix reading. See [design/tree-cells.md](../design/tree-cells.md).
+//! discipline rather than a matrix reading. See [tree/README.md](tree/README.md).
 //!
 //! A tree cell lives **under a root** — a slab cell — through a chain of tree parents, and owns its
 //! region outright. It takes no slab slot, so the pool grows without a cap; it has no row, no

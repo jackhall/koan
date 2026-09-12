@@ -217,7 +217,7 @@ fn an_acyclic_hold_graph_reports_no_ring() {
 
 // The doors a value crosses steps through: `keep` puts a carrier down in the reach table of its
 // home cell, and `redeem` takes it back up in a later step of a cell entitled to that storage. See
-// [design/cellgraph.md § Passing values between cells](../../../design/cellgraph.md).
+// [../../../README.md § Passing values between cells](../../../README.md).
 
 /// The one entry a cell's reach table holds, by the index a key names.
 fn dormant_reach<C: Reattachable>(graph: &CellGraph<C>, slot: u32, index: u32) -> &GraphReach<1> {

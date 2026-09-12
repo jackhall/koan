@@ -1,7 +1,7 @@
 # cellgraph roadmap
 
 Open work on the `cellgraph` computation-cell substrate (working name —
-[design/cellgraph.md](../design/cellgraph.md)). The substrate stands, retains
+[../README.md](../README.md)). The substrate stands, retains
 atomically, prices what that retention costs, and carries values across steps.
 The substrate's own build-out is complete, and so are the representation
 changes its measurement harness gates; what is open is the gaps recorded below,
@@ -33,8 +33,8 @@ as surprises, not scheduled.
   rather than one per slot; the tier panics at that point rather than reusing a
   serial, since a reused one would let a retired id name a live sealed cell.
 - **Pricing against outside holders.** The unique-slice query
-  ([design/liveness-matrix.md § Bounding the two
-  tiers](../design/liveness-matrix.md#bounding-the-two-tiers)) bills a node to
+  ([../src/graph/README.md § Bounding the two
+  tiers](../src/graph/README.md#bounding-the-two-tiers)) bills a node to
   a candidate unless *another candidate's* closure also reaches it; a hold
   from outside the candidate set — a live cell, or a sealed cell the embedder
   is not weighing — is not discounted, so a release the query prices as freeing

@@ -1,7 +1,7 @@
 //! The liveness-matrix invariants, over random interleavings of the verbs. The hand-written tests
 //! pin shapes; this one pins that no order of `create` / `hold` / `alloc_into` / `keep` / `redeem`
 //! / `read` / `release` can break the conditions the whole model rests on
-//! ([liveness-matrix.md § Invariants](../../../design/liveness-matrix.md#invariants)):
+//! ([../README.md § Invariants](../README.md#invariants)):
 //!
 //! - a recycled slot is named by nothing — no occupant's row in either relation, and no frozen
 //!   aggregate;
@@ -23,7 +23,7 @@
 //! - every memoized closure still equals the walk that would recompute it, and no memo exists
 //!   unless a price query put it there — the never-invalidated memo carried across every
 //!   interleaving, and the substrate's own paths pricing nothing;
-//! - and, over the tree pool ([tree-cells.md](../../../design/tree-cells.md)): no tombstone names
+//! - and, over the tree pool ([../../tree/README.md](../../tree/README.md)): no tombstone names
 //!   storage that is gone, every tombstone is on exactly one lineage list, every parent's child
 //!   count equals the children that still name it, every pledge is an ancestor and every
 //!   intermediate below a pledged cell is pledged at least as shallow, and a value kept in a tree

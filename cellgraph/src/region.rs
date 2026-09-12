@@ -1,6 +1,6 @@
 //! [`Region`] — the **cell region**: one cell's bump, the only place a value with reach may rest,
 //! in pointer-stable chunks that a sealing cell's storage detaches with unmoved. See
-//! [design/cellgraph.md](../design/cellgraph.md) § The cell.
+//! [../README.md](../README.md) § The cell.
 //!
 //! The bump is lifetime-free, so a region borrow `'r` enters only at the allocating call. That is
 //! what lets a value written here hold an `&'r` back into the very region it lives in with no
@@ -13,7 +13,7 @@
 //!
 //! A region is a **bundle** of bumps: the one it writes into, plus the bumps of every region
 //! absorbed into it. Absorption is how a merge splices storage
-//! ([liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)) —
+//! ([graph/README.md § Locality tactics](graph/README.md#locality-tactics)) —
 //! a `Bump` moves without moving a chunk byte, so the pointer stability a detached seal already
 //! relies on carries a borrow across the merge unchanged.
 

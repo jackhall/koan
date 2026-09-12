@@ -2,7 +2,7 @@
 //! slots as an inline [`Bits`] row, sealed regions as a sparse id set that is itself inline up to
 //! two ids, so union and dedup are a word `OR` plus a sorted merge and membership is a bit test or
 //! a binary search. See
-//! [design/liveness-matrix.md](../design/liveness-matrix.md) § Reach as a hybrid mask.
+//! [graph/README.md](graph/README.md) § Reach as a hybrid mask.
 //!
 //! A mask is never handed to a caller beside a bare value: it exists only inside a
 //! [`Ready`](crate::Ready) carrier or a stored continuation, and the type is crate-private, so

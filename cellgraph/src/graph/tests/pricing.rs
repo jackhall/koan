@@ -1,7 +1,7 @@
 //! The price queries an embedder decides copy-versus-hold with: what a hold on a sealed cell keeps
 //! alive, the slice of that only one of several candidates reaches, what a live cart has accreted,
-//! and how full the two tiers are. See [liveness-matrix.md § Bounding the two
-//! tiers](../../../design/liveness-matrix.md#bounding-the-two-tiers).
+//! and how full the two tiers are. See [../README.md § Bounding the two
+//! tiers](../README.md#bounding-the-two-tiers).
 //!
 //! Every shape here keeps a sealed cell above the count a locality merge would absorb it at — an
 //! extra live holder, or a refused release — because a merge that fires leaves nothing to price.

@@ -336,8 +336,8 @@ for the kept modules and written fresh by each rewrite item for its own. The
 topical tree the old runtime was documented under is retired at
 [old_design/](old_design/README.md): its docs describe the runtime behind
 `pending_rewrite` and stay as requirements reading, alongside the docs for kept
-modules until each moves into its module. The cell substrate's design tree,
-[cellgraph/design/](cellgraph/design/), migrates the same way.
+modules until each moves into its module. The cell substrate's design is its
+crate README, [cellgraph/](cellgraph/README.md).
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. Its [README](roadmap/README.md) groups work into project

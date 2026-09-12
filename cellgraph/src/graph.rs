@@ -3,8 +3,8 @@
 //! falls into, the relocation map that forwards a dormant carrier through a merge, and the
 //! `create` / `enter` / `release` verbs. The embedder's crossing verdict is taken here too, at
 //! construction, and consulted once per operand of every placement. See
-//! [design/cellgraph.md](../design/cellgraph.md) § Verbs and § The crossing verdict, and
-//! [design/liveness-matrix.md](../design/liveness-matrix.md) § The model.
+//! [../README.md](../README.md) § Verbs and § The crossing verdict, and
+//! [graph/README.md](graph/README.md) § The model.
 
 #[cfg(test)]
 mod tests;
@@ -73,8 +73,8 @@ pub enum RedeemError {
 }
 
 /// Whether a dying cell's storage may fold into a unique live holder rather than mint a sealed cell
-/// of its own — the embedder's per-release say over death-time absorption ([liveness-matrix.md §
-/// Locality tactics](../design/liveness-matrix.md#locality-tactics)).
+/// of its own — the embedder's per-release say over death-time absorption ([graph/README.md §
+/// Locality tactics](graph/README.md#locality-tactics)).
 ///
 /// The choice is recorded on the slot at the release and consulted when the slot *disposes*, which
 /// may be later: a dead cell a descendant's birth row still names waits in the slab first.
@@ -118,7 +118,7 @@ pub enum Verdict {
 /// Both prices of one operand crossing into one destination, and the occupancy the choice plays
 /// out against — the whole input of the crossing verdict, and **the only place the substrate's
 /// prices appear in a signature**
-/// ([liveness-matrix.md § Bounding the two tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
+/// ([graph/README.md § Bounding the two tiers](graph/README.md#bounding-the-two-tiers)).
 ///
 /// The substrate ships the numbers and no threshold. Whether the ramp is linear, a watermark step,
 /// or a flat "always pin" is the embedder's call, and it is the one closure a graph is built with.
@@ -283,7 +283,7 @@ pub(crate) struct RetentionPrice {
 /// Occupancy of both tiers at one instant — the input an embedder ramps a copy-versus-hold
 /// threshold over. The substrate ships the numbers and no threshold: whether the ramp is linear or
 /// a watermark step is the embedder's call
-/// ([liveness-matrix.md § Bounding the two tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
+/// ([graph/README.md § Bounding the two tiers](graph/README.md#bounding-the-two-tiers)).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Occupancy {
     /// Slab slots occupied — live cells and dead-but-undisposed ones alike.
@@ -471,8 +471,8 @@ pub struct CellGraph<C: Reattachable, const W: usize = 1> {
     birth: Matrix<W>,
     /// The pin relation's slab half: row M is the set of live cells whose region storage M's own
     /// dormant values read. Written only by [`CellGraph::mint`], which is the mint OR of
-    /// [liveness-matrix.md § Reach as a hybrid
-    /// mask](../design/liveness-matrix.md#reach-as-a-hybrid-mask).
+    /// [graph/README.md § Reach as a hybrid
+    /// mask](graph/README.md#reach-as-a-hybrid-mask).
     pins: Matrix<W>,
     /// The pin relation's sparse half: per slot, the sealed regions that cell's values read.
     sealed_holds: Box<[SealedSet]>,
@@ -699,7 +699,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
     /// The cell owns its region outright and takes no slab slot, so this door has no full refusal:
     /// what bounds the pool is the depth of the call tree, not the slab's cap. It takes no row and
     /// no column either — a placement into it mints into its root, and a carrier homed in it
-    /// travels with the root's bit ([design/tree-cells.md](../design/tree-cells.md)).
+    /// travels with the root's bit ([tree/README.md](tree/README.md)).
     pub fn create_tree(
         &mut self,
         parent: impl Into<CellHandle>,
@@ -1141,7 +1141,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
     /// Take a disposable dead cell out of the slab, by the four exits it has: reclamation when
     /// nothing reaches its storage, absorption into a unique slab holder, a seal into a single
     /// sealed namer, and the plain seal everything else takes
-    /// ([liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)).
+    /// ([graph/README.md § Locality tactics](graph/README.md#locality-tactics)).
     ///
     /// The two merges are the degenerate shapes the model is designed around — a chain of
     /// single-consumer producers — and each one is a sealed cell the tier never mints. A refused
@@ -1482,7 +1482,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
     /// The walk is complete because only `create` and `release` write the birth relation: no
     /// disposal changes any slot's birth-holder count, so the only slots this release can bring to
     /// zero are the ones its own row named, its ancestors. Each ancestor's row names everything
-    /// the row below it names ([liveness-matrix.md § Two relations](../design/liveness-matrix.md#two-relations-two-structures)),
+    /// the row below it names ([graph/README.md § Two relations](graph/README.md#two-relations-two-structures)),
     /// so the dead ancestors this release zeroes are a prefix of the chain upward: a live
     /// ancestor, or one another branch's row still names, stops the walk, and everything above it
     /// is still held.
@@ -1542,7 +1542,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
 
     /// The seal transition: convert every representation of the dying cell from slab bit to sealed
     /// id, detach its storage, and recycle its slot
-    /// ([liveness-matrix.md § The seal transition](../design/liveness-matrix.md#the-seal-transition)).
+    /// ([graph/README.md § The seal transition](graph/README.md#the-seal-transition)).
     ///
     /// The work is bounded by `holders`, `namers`, and the aggregate's width — never by what the
     /// region stores. Nothing here reads a region byte: monotone holds make the frozen row
@@ -1704,7 +1704,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
     ///
     /// The slab is bounded by its cap; this tier is bounded only by what programs retain, so its
     /// occupancy is the number worth asking for
-    /// ([liveness-matrix.md § Bounding the two tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
+    /// ([graph/README.md § Bounding the two tiers](graph/README.md#bounding-the-two-tiers)).
     #[cfg(test)]
     pub(crate) fn sealed_retained_bytes(&self, id: SealedId) -> Option<usize> {
         self.sealed.get(id).map(SealedCell::retained_bytes)
@@ -2659,8 +2659,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// Destination-homed placement: build a value **in `dest`'s region**, embedding the views of
     /// `operands`, and fold every operand's reach into `dest`'s hold set.
     ///
-    /// This is the push shape of [design/cellgraph.md § Passing values between
-    /// cells](../design/cellgraph.md#passing-values-between-cells): the producer builds straight
+    /// This is the push shape of [../README.md § Passing values between
+    /// cells](../README.md#passing-values-between-cells): the producer builds straight
     /// into the consumer, the consumer's row takes the reach, and the producer can then die.
     /// Operands share one family `V` and arrive as carriers, never as values beside a mask.
     ///
@@ -2768,8 +2768,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
 
     /// Redeem an at-rest carrier into this step, or refuse.
     ///
-    /// This is the door both crossing shapes of [design/cellgraph.md § Passing values between
-    /// cells](../design/cellgraph.md#passing-values-between-cells) complete through: a value the
+    /// This is the door both crossing shapes of [../README.md § Passing values between
+    /// cells](../README.md#passing-values-between-cells) complete through: a value the
     /// producer built into the consumer comes back in the consumer's own later step, and a value
     /// the consumer held its producer for comes back after the producer sealed.
     ///

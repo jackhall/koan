@@ -4,10 +4,10 @@
 //! family enters as a type parameter and is stored erased.
 //!
 //! The cell model — the slot-plus-generation handle, the `create` / `enter` / `release` verbs,
-//! the parent birth relation — is [design/cellgraph.md](../design/cellgraph.md). The matrix that
+//! the parent birth relation — is [../README.md](../README.md). The matrix that
 //! decides when a cell may be reclaimed, the mint OR that is the only write into it, and the
 //! sealed tier a still-held cell falls into on release, are
-//! [design/liveness-matrix.md](../design/liveness-matrix.md).
+//! [graph/README.md](graph/README.md).
 //!
 //! The public surface is what `tests/surface.rs` exercises.
 

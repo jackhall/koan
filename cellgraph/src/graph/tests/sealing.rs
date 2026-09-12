@@ -1,6 +1,6 @@
 //! The sealed tier: the transition a still-reached cell takes at its death, the hybrid mask that
 //! carries its id, the accessor that derives reach from its frozen aggregate, and the cascade that
-//! retires it. See [design/liveness-matrix.md](../../../design/liveness-matrix.md) § The sealed
+//! retires it. See [../README.md](../README.md) § The sealed
 //! tier.
 
 use super::super::*;

@@ -5,7 +5,7 @@ and the retired `old_design/` tree holds only docs for code the rewrite replaces
 
 **Problem.** Design docs live in one flat tree apart from the code:
 [old_design/](../../old_design/README.md) for koan and
-[cellgraph/design/](../../cellgraph/design/) for the cell substrate. The docs
+[cellgraph/](../../cellgraph/README.md) for the cell substrate. The docs
 that describe kept modules sit there beside docs for the runtime the rewrite
 replaces — `parse` is described by
 [expressions-and-parsing.md](../../old_design/expressions-and-parsing.md) and

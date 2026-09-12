@@ -1,7 +1,7 @@
 //! The three locality merges: a dying cell absorbed into its unique slab holder, a count-1 sealed
 //! region absorbed at its holder's seal, and a cell with no slab holder sealing into its single
-//! sealed namer. See [liveness-matrix.md § Locality
-//! tactics](../../../design/liveness-matrix.md#locality-tactics).
+//! sealed namer. See [../README.md § Locality
+//! tactics](../README.md#locality-tactics).
 //!
 //! Each merge is a sealed cell the tier never mints, so what these tests read is an absence: no id,
 //! no index entry, no accessor indirection — and the storage still there, in the bundle that took

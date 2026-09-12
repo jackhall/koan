@@ -1,7 +1,7 @@
 //! The crossing: the one closure a graph is built with, consulted once per operand of every
 //! placement over operands, and the two brands its answer hands the build
-//! ([design/liveness-matrix.md § Bounding the two
-//! tiers](../../../design/liveness-matrix.md#bounding-the-two-tiers)).
+//! ([../README.md § Bounding the two
+//! tiers](../README.md#bounding-the-two-tiers)).
 //!
 //! What these pin: the verdict sees both prices and both tiers' occupancy; a pin mints the
 //! operand's reach into the destination and a copy mints nothing; the marginal pin price discounts

@@ -51,9 +51,9 @@ more than once before dying.
 - *Dormant-slot matrix habitat — open.* A dormant slot's frame is
   live-but-not-executing; the liveness matrix names no habitat for any
   installed-but-unrun frame
-  ([liveness-matrix.md](../../cellgraph/design/liveness-matrix.md)) — the
+  ([cellgraph/src/graph/README.md](../../cellgraph/src/graph/README.md)) — the
   gap predates this item and needs one answer covering both.
-  [Tree cells](../../cellgraph/design/tree-cells.md) fixes a yielding
+  [Tree cells](../../cellgraph/src/tree/README.md) fixes a yielding
   producer as a slab cell, since a yield is the one mid-life delivery to an
   outside consumer.
 - *Buffered channels — deferred.* A policy layer over dormant producers (a

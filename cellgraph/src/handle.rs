@@ -1,8 +1,8 @@
 //! Cell identity, over both habitats: a slab slot or a tree-pool index, paired with the generation
 //! of the occupant that place held when the handle was minted. [`CellHandle`] is the two of them as
 //! one name, which is what a door that takes a destination or a parent asks for. See
-//! [design/cellgraph.md](../design/cellgraph.md) § The cell and
-//! [design/tree-cells.md](../design/tree-cells.md).
+//! [../README.md](../README.md) § The cell and
+//! [tree/README.md](tree/README.md).
 
 /// A name for one cell: the slab slot it occupies, plus the generation that distinguishes it from
 /// every other occupant of that slot. `Copy`, so a handle is passed around freely; naming a cell
@@ -34,7 +34,7 @@ impl SlabHandle {
 /// verb for the same reason.
 ///
 /// The pool is separate from the slab and takes no cap, so a tree handle names no slab bit and no
-/// mask ever holds one. See [design/tree-cells.md](../design/tree-cells.md).
+/// mask ever holds one. See [tree/README.md](tree/README.md).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TreeHandle {
     index: u32,

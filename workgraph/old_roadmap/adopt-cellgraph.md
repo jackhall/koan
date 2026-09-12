@@ -8,7 +8,7 @@ pin bundles, a `PinsRegion` hook, and an antichain fold
 region, erased continuation, anchor — with DAG-only state: `SlotState`
 terminality, dep edges, notify and park bookkeeping, terminal delivery,
 splicing. The `cellgraph` crate
-([old_design/cellgraph.md](../../cellgraph/design/cellgraph.md)) supplies the cell
+([old_cellgraph/README.md](../../cellgraph/README.md)) supplies the cell
 half with matrix liveness, and `workgraph` does not use it: two substrates
 exist, and koan sits on the one the design has moved off.
 
@@ -40,7 +40,7 @@ exist, and koan sits on the one the design has moved off.
   Miri slate is clean.
 - The kind rule is an admission decision at creation: a cell whose source
   edge is destined at its creator's region, or at a
-  [tree cell](../../cellgraph/design/tree-cells.md) under the same root, is a
+  [tree cell](../../cellgraph/src/tree/README.md) under the same root, is a
   tree cell; top-level statements, yielding producers, and any cell an outside
   consumer can pin while it lives are slab cells. The substrate ships both
   kinds and no rule for choosing between them.
@@ -83,11 +83,11 @@ exist, and koan sits on the one the design has moved off.
   occupancy of both tiers, and ships no threshold: the copy-versus-hold ramp
   — linear on occupancy, or a step at fixed watermarks — is chosen here, over
   the substrate's occupancy signal
-  ([liveness-matrix.md § Bounding the two tiers](../../cellgraph/design/liveness-matrix.md#bounding-the-two-tiers)),
+  ([cellgraph/src/graph/README.md § Bounding the two tiers](../../cellgraph/src/graph/README.md#bounding-the-two-tiers)),
   from this embedder's own measurements. The prices reach this layer only
   through the crossing-verdict closure the table is constructed with
-  ([cellgraph.md § The crossing
-  verdict](../../cellgraph/design/cellgraph.md#the-crossing-verdict)); the
+  ([cellgraph/README.md § The crossing
+  verdict](../../cellgraph/README.md#the-crossing-verdict)); the
   ramp is that closure's body.
 
 ## Dependencies

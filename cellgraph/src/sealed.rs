@@ -1,7 +1,7 @@
 //! The second tier: regions whose cell died while something still reached their storage. A sealed
 //! region has no slab slot, no matrix row, and no generation — only a frozen aggregate, a holder
 //! count, and the chunks its cell detached. See
-//! [design/liveness-matrix.md](../design/liveness-matrix.md) § The sealed tier.
+//! [graph/README.md](graph/README.md) § The sealed tier.
 //!
 //! Ids come from a monotone space and are never reused, which is what lets the tier skip
 //! generations entirely: a sealed name cannot be re-bound, so it cannot go stale. The *slot* an id
@@ -246,8 +246,8 @@ impl<const W: usize> SealedCell<W> {
     ///   none of them frozen, and a mint writes a live cell's hold set.
     ///
     /// So the node set is fixed and the bytes are fixed, and the memo stays exact for the sealed
-    /// cell's whole life ([liveness-matrix.md § Bounding the two
-    /// tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
+    /// cell's whole life ([graph/README.md § Bounding the two
+    /// tiers](graph/README.md#bounding-the-two-tiers)).
     pub(crate) fn memo(&self) -> Option<&[SealedId]> {
         self.storage.memo()
     }

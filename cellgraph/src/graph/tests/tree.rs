@@ -1,5 +1,5 @@
 //! The tree cell: the third region habitat, for a call subtree whose liveness is a stack
-//! discipline ([design/tree-cells.md](../../../design/tree-cells.md)).
+//! discipline ([../../tree/README.md](../../tree/README.md)).
 //!
 //! What these pin: the three verbs and their refusals; a chain deeper than the slab cap running to
 //! completion on a two-slot slab; the ancestry rule's three answers and the pledge an upward pin

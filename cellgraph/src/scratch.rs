@@ -1,6 +1,6 @@
 //! The **scratch region**: the one place a verb's transients live. Reset at the entry of every
 //! verb, never inside one, so a value in it lives exactly as long as the verb that built it. See
-//! [design/cellgraph.md](../design/cellgraph.md) § Verbs.
+//! [../README.md](../README.md) § Verbs.
 //!
 //! A reset runs no destructor — a bump releases its chunks whole — which is why nothing with drop
 //! glue may go in it. The doors below assert that at compile time, the way the cell-region doors

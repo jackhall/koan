@@ -9,7 +9,7 @@ sits on `workgraph`'s own cell substrate — the witnessed module with its
 reference-counted pin bundles and antichain fold, and a node store
 ([node_store.rs](../../workgraph/src/scheduler/node_store.rs)) that interleaves
 cell state with dep edges, park/notify bookkeeping, terminal delivery and
-splicing. `cellgraph` ([cellgraph.md](../../cellgraph/design/cellgraph.md))
+splicing. `cellgraph` ([cellgraph/README.md](../../cellgraph/README.md))
 supplies the cell half with matrix liveness and tree cells, and nothing above it
 uses it: the substrate the design settled on has no scheduler, and the scheduler
 Koan runs on is the substrate the design moved off. The old runtime's execute
@@ -53,7 +53,7 @@ rewrite can restate; it is a record of what the old substrate required.
   is its own. Recommended: shape it against what a `values` delivery needs to
   carry, and do not restate the old `Outcome` enum.
 - *Tree cells versus slab cells for a call — decided.* Per
-  [tree-cells.md](../../cellgraph/design/tree-cells.md): a call subtree is a
+  [cellgraph/src/tree/README.md](../../cellgraph/src/tree/README.md): a call subtree is a
   stack discipline and takes tree cells; slab cells are for work whose
   liveness is not nested.
 
