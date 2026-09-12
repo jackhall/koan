@@ -85,7 +85,10 @@ fn expected(mut entries: Vec<(ValueSymbol, usize)>) -> Vec<(ValueSymbol, usize)>
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..ProptestConfig::default()
+    })]
 
     /// A body's slots are its distinct value binders in symbol order, each at the position its own
     /// statement submits at (`i + 1`), with a repeated name keeping its earliest. Type binders and

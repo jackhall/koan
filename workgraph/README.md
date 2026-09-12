@@ -66,8 +66,8 @@ The crate has its own verification slate, so a library change can land ahead of
 koan's adoption of it:
 
 ```sh
-tools/verify.sh   # from the repo root; picks the library slate when every
-                  # changed path is under workgraph/
+tools/verify.sh   # from the repo root; the routine tier picks the library slate
+                  # when every changed path is under workgraph/
 ```
 
 That slate runs `cargo test -p workgraph --features test-hooks` (unit tests and

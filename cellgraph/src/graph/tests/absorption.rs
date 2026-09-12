@@ -552,7 +552,7 @@ fn heavy() -> std::ops::Range<usize> {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: if cfg!(miri) { 4 } else { 64 },
+        cases: if cfg!(miri) { 4 } else { (ProptestConfig::default().cases / 4).max(64) },
         failure_persistence: None,
         ..ProptestConfig::default()
     })]

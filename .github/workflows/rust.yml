@@ -1,5 +1,13 @@
 name: Rust
 
+# The total verification tier. The routine tier is the pre-commit hook's job — by the time a change
+# reaches here it has already been through tests, lints and the link audit, so what CI adds is the
+# readings no one wants to pay for per commit: coverage, the Miri leak/UB audit, the module-graph
+# score, and a property sweep 32× the routine depth.
+#
+# Nothing here rebaselines the trend logs under `observe/` — CI has no commit to record them
+# against. Refresh them from a local total run: `KOAN_REBASELINE=1 tools/verify.sh --total`.
+
 on:
   push:
     branches: [ "master" ]
@@ -10,13 +18,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  total:
     runs-on: ubuntu-latest
+    # Miri over the audit slate and a 2048-case property sweep are both minutes, not seconds.
+    timeout-minutes: 60
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v4
+
+      # Stable runs the slate; nightly carries Miri, which has no stable channel.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Install cargo-modules
+        run: cargo install --locked cargo-modules
+
+      - name: Total verification slate
+        run: tools/verify.sh --total

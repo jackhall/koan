@@ -66,16 +66,20 @@ fn shape() -> BoxedStrategy<KType> {
     arb_shape_type(world(), 3)
 }
 
+/// The binary laws take the whole of whatever depth the tier asks for: the space two generated
+/// types range over is the widest any law here draws from, and a thin sweep of it proves little.
 fn binary() -> ProptestConfig {
     ProptestConfig {
-        cases: 256,
+        cases: crate::tests::case_share(1, 1),
         ..ProptestConfig::default()
     }
 }
 
+/// Three deep trees per case, so the ternary laws take three-eighths of the binary depth to land
+/// near the same wall-clock — the ratio holds at whatever the tier sets.
 fn ternary() -> ProptestConfig {
     ProptestConfig {
-        cases: 96,
+        cases: crate::tests::case_share(3, 8),
         ..ProptestConfig::default()
     }
 }

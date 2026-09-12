@@ -36,9 +36,9 @@ Items that move the boundary split in three, each landing on its own:
    whoever remembers why it is there.
 
 An expand may break koan outright when the old surface cannot be kept alongside
-the new. That is allowed to land: `tools/verify.sh` detects a workgraph-only
-change scope, runs the library slate, and reports koan's compile state without
-gating on it. What is owed in exchange is step 2 — an expand that breaks koan
+the new. That is allowed to land: the routine tier of `tools/verify.sh` detects a
+workgraph-only change scope, runs the library slate, and reports koan's compile
+state without gating on it. What is owed in exchange is step 2 — an expand that breaks koan
 lands with its migrate item already written down, so the debt is tracked rather
 than discovered at the next koan build.
 

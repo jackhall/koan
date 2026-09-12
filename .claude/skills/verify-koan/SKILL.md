@@ -1,6 +1,6 @@
 ---
 name: verify-koan
-description: Use this skill to run the standard koan build-verification slate. Invoke before handing off to the shepherd agent or whenever the user says "verify the build", "run checks", or "is this green?". Does *not* run the Miri audit slate — that has its own dedicated skill.
+description: Use this skill to run a koan build-verification tier — routine (`tools/verify.sh`) or total (`tools/verify.sh --total`). Invoke before handing off to the shepherd agent or whenever the user says "verify the build", "run checks", or "is this green?". The routine tier does *not* run Miri, coverage or the modgraph score; the total tier does.
 ---
 
 # verify-koan
@@ -9,7 +9,9 @@ description: Use this skill to run the standard koan build-verification slate. I
 tools/verify.sh
 ```
 
-This command runs in the pre-commit hook, so there is no need to run it immediately before committing.
+The routine tier runs in the pre-commit hook, so there is no need to run it immediately before
+committing. `tools/verify.sh --total` is the deep slate: coverage, Miri, the modgraph score and a
+32× property sweep, in minutes rather than seconds.
 
 Read [`tools/verify.sh`](../../../tools/verify.sh) for what runs and in what order.
 
@@ -20,28 +22,47 @@ already reduced its output to the count, score, or delta worth keeping, and a
 failing step has already replayed its output in full. `KOAN_VERBOSE=1` replays
 every step's output when a passing step's own numbers genuinely aren't enough.
 
-## Two slates, picked by change scope
+## Two tiers, and three scopes within the routine one
 
-The script inspects every path differing from `HEAD` (staged, unstaged, and untracked) and picks one of two slates. Nothing to configure — just report which one ran.
+The tier is the argument; the scope is read from the changed paths. Nothing to configure — just
+report which ran.
 
-- **Full slate** (7 steps) whenever any changed path sits outside `workgraph/`, and on a clean tree. koan compiling is a gate, as are coverage and the modgraph score. Every cargo step builds the default feature set — the modules the rewrite keeps — so the old runtime behind `pending_rewrite` is neither built nor tested here; TEST.md § The pending rewrite lists the on-demand commands.
-- **Library slate** (3 steps) when *every* changed path is under `workgraph/`: `cargo test -p workgraph` (unit tests and doctests, `--features test-hooks`), clippy on the same, and doclinks. It then reports whether koan still compiles **as information, never as a gate.**
+- **Routine** (`tools/verify.sh`, the default and what the pre-commit hook runs): slate-audit,
+  tests (unit, integration and doctests in one pass), the cellgraph surface pair, clippy, doclinks.
+  Property laws run at 64 cases. It measures nothing — no coverage, no modgraph, no Miri — and
+  costs seconds.
+- **Total** (`tools/verify.sh --total`, what CI runs): the routine steps plus coverage, Miri over
+  the audit slate, the modgraph tooling tests and the complexity score, with property laws at 2048
+  cases. Minutes. Run it before a merge, or when the user asks for the deep slate.
 
-The library slate exists so a workgraph change can land ahead of koan's adoption of it — see [the library roadmap's convention](../../../workgraph/old_roadmap/README.md). koan failing to compile against workgraph `HEAD` is the expected mid-migration state there, so treat the reported error count as the size of the debt now owed, not as a failure to fix before committing. Coverage, snippets, the allocation audit, and the modgraph score are koan-rooted and do not run; the trend logs are not rebaselined.
+Within the routine tier the script inspects every path differing from `HEAD` (staged, unstaged and
+untracked) and narrows itself:
+
+- **Markdown only** — doclinks alone. A change that cannot reach a build gets the link audit and
+  nothing else.
+- **`workgraph/` only** or **`cellgraph/` only** — that crate's tests, clippy and doclinks, then it
+  reports whether the crates above it still compile **as information, never as a gate**. This is
+  what lets a library change land ahead of its adoption — see
+  [the library roadmap's convention](../../../workgraph/old_roadmap/README.md). koan failing to
+  compile against `workgraph` `HEAD` is the expected mid-migration state; treat the reported error
+  count as the size of the debt now owed, not as a failure to fix before committing.
+- **Anything else** — the whole workspace, where every crate compiling is a gate.
+
+Every cargo step in either tier builds the default feature set — the modules the rewrite keeps — so
+the old runtime behind `pending_rewrite` is neither built nor tested; TEST.md § The pending rewrite
+lists the on-demand commands.
 
 ## Reporting the result
 
 The script's final line is the report. **Quote it to the user verbatim** rather
-than reassembling one from the step lines. Full slate:
+than reassembling one from the step lines. It names its own tier and scope, so a narrowed run is
+never mistaken for a full one:
 
 ```
-Verify: tests ok, doctests ok, clippy clean, doclinks ok, coverage 91.35% (Δ -0.00 vs 91.35%), modgraph tests ok, modgraph score 6749.00 (Δ +0.00 vs 6749.00).
-```
-
-Library slate — it names its own scope, so it is never mistaken for a full run:
-
-```
+Verify (routine): slate ok, tests ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok.
+Verify (docs only): doclinks ok.
 Verify (workgraph only): tests ok, clippy clean, doclinks ok, koan compiles.
+Verify (total): slate ok, tests ok, doctests ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok, miri ok, coverage 87.18% (Δ -0.00 vs 87.18%), modgraph tests ok, modgraph score 1809.79 (Δ +0.00 vs 1809.79).
 ```
 
 Two things the line does not carry, which are worth adding in your own words
@@ -60,8 +81,8 @@ summary line; report the substance of it, not just the clause.
 
 ## What this skill does *not* do
 
-- **Miri.** The audit slate is separately gated and slow; use the `miri` skill when you need memory-safety verification.
+- **Miri, coverage or the modgraph score — in the routine tier.** All three are total-tier steps. Use `tools/verify.sh --total` when the user wants them, or the `miri` skill for a targeted memory-safety question.
 - **`cargo fmt`.** Format drift isn't gated here. Run `cargo fmt --all` separately when needed.
-- **Rebaseline the trend logs.** Coverage and the modgraph score report a delta against the newest recorded entry but write nothing; only `KOAN_REBASELINE` (which pre-commit sets) records a new one.
+- **Rebaseline the trend logs.** The total tier's coverage and modgraph steps report a delta against the newest recorded entry but write nothing; only `KOAN_REBASELINE=1` records a new one, and the routine tier has no reading to record.
 - **Gate on the modgraph score.** It reports; it never fails the run. Use the delta as input to a code-review judgment call, and report it to the user.
 - **The tutorial snippets and the allocation audit.** Both read the old runtime's binary; run `tools/verify_snippets.py` (after `cargo build --features pending_rewrite`) and `tools/alloc_audit.py` on demand.

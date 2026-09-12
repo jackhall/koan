@@ -271,7 +271,10 @@ fn other_eager_shape(shape: &PartShape) -> PartShape {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..ProptestConfig::default()
+    })]
 
     /// The dispatch shape is a function of the stored key and the head part's class, and of nothing
     /// else: it matches the rule stated independently here, `Keyworded` appears only when the run

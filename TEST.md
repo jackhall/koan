@@ -9,6 +9,36 @@ Four layers, each with a distinct job:
 4. **The region debug audits** — debug-only over-pinning diagnostics over a real
    program run, reported and never enforced.
 
+## Two verification tiers
+
+[`tools/verify.sh`](tools/verify.sh) runs one of two tiers, and the tier is the argument:
+
+```sh
+tools/verify.sh            # routine — what the pre-commit hook runs
+tools/verify.sh --total    # total — what CI runs, and what you run before a merge
+```
+
+The **routine** tier answers "did this change break anything": the unsafe-site drift check, tests
+and doctests, the cellgraph surface checks, clippy, doc links. It measures nothing, so it costs
+seconds. It also reads the changed paths and narrows itself — a Markdown-only change runs the link
+audit alone, a change confined to `workgraph/` or `cellgraph/` runs that crate's slate and reports
+the crates above it rather than gating on them.
+
+The **total** tier adds everything that costs minutes: coverage instrumentation, the
+[Miri audit slate](#the-miri-audit-slate), the modgraph complexity score, and a property sweep 32×
+deeper than the routine one. It reads no change scope — it always runs the whole workspace — and it
+is the only tier that rebaselines the trend logs under `observe/`, and then only with
+`KOAN_REBASELINE=1`. CI runs it on every push and PR against `master`.
+
+Property depth is the one variable `PROPTEST_CASES`, which `ProptestConfig::default()` reads: the
+routine tier sets 64, the total tier 2048, and every property module states its share of that
+default (`crate::tests::case_share`) rather than a literal, so the modules' relative depths hold at
+whatever the tier — or you — ask for. No module goes below 64 cases.
+
+```sh
+PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the lattice laws
+```
+
 ## The pending rewrite
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
@@ -51,13 +81,15 @@ code (parser, scheduler, dispatch, interpreter all have suites). After smoke-
 testing a feature or bug fix, capture the smoke test as a unit test in the
 nearest module's `tests` block.
 
-CI runs `cargo build --verbose && cargo test --verbose` on push and PR against
-`master` (see [.github/workflows/rust.yml](.github/workflows/rust.yml)).
+CI runs the total tier on push and PR against `master` (see
+[.github/workflows/rust.yml](.github/workflows/rust.yml)); the pre-commit hook runs the routine
+tier.
 
 ### Parser property suites
 
 The parser's laws are stated as [proptest](https://docs.rs/proptest) properties
-rather than pinned one input at a time, at 64 cases each. A pin that fixes a
+rather than pinned one input at a time, at a quarter of the tier's depth — 64 cases under the
+routine tier, 512 under the total one. A pin that fixes a
 diagnostic message or a surface rule is *not* rewritten as a property and stays
 beside its sibling unit tests. Seven files hold the thirty properties:
 
@@ -227,12 +259,11 @@ The sweep is the recorder. It runs every shape through the counted binary and wr
 the readings to [`observe/alloc.txt`](observe/alloc.txt) — one row per commit swept,
 newest first, capped to the last five, with the marginal terms derived from each row
 on read rather than stored beside it.
-`tools/verify.sh` runs it
-every slate, read-only unless `KOAN_REBASELINE` is set, and the pre-commit hook
-sets it and stages the result — so the record and the change that moved it land
-in one commit, and nothing has to be re-measured against a base revision to be
-trusted. What a figure *means* is in [audit/README.md](audit/README.md), which
-quotes none of them.
+The sweep reads the interpreter binary, so it
+runs on demand rather than in either verification tier: run it with `--baseline` in the
+commit that moves a reading, and the record and the change that moved it land together —
+nothing has to be re-measured against a base revision to be trusted. What a figure *means*
+is in [audit/README.md](audit/README.md), which quotes none of them.
 
 The regression test is the gate. It brackets each recorded shape and asserts its count
 against a bound whose headroom is smaller than the repetition count a single new allocation

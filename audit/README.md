@@ -119,11 +119,11 @@ reader who cannot tell whether it still holds re-measures a base revision to fin
 is the work the record exists to save. What this file carries is what the numbers *mean*: which
 term prices which path, what moves one, and what a movement is evidence of.
 
-`tools/alloc_audit.py` is the only writer. `tools/verify.sh` runs it every slate, read-only
-unless `KOAN_REBASELINE` is set, and the pre-commit hook sets it and stages the result — so the
-record and the change that moved it land in one commit. The slate passes `--quiet`, which keeps
-the shape and term rows that moved against the recorded sweep and the bounds that drifted, and
-drops the rest under a one-line summary; run the script without it for the whole sweep.
+`tools/alloc_audit.py` is the only writer, and it runs on demand: the sweep reads the interpreter
+binary, which only a `pending_rewrite` build produces, so neither verification tier runs it. Run it
+yourself when a change touches an allocating path, and with `--baseline` to record the sweep
+alongside that change. `--quiet` keeps the shape and term rows that moved against the recorded
+sweep and the bounds that drifted, and drops the rest under a one-line summary.
 
 A shape's Δ column is exact: a single allocation more than the recorded row prints as `+1`,
 which is the movement the bounds exist to catch, and keeping the row's columns per-shape rather

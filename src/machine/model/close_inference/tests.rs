@@ -468,7 +468,10 @@ fn fill(text: &str, names: &[&str]) -> String {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..ProptestConfig::default()
+    })]
 
     /// A name is free iff it is read at a statement no later than the one binding it, or never
     /// bound in the block at all — the positional rule, with the cutoff strict so a binder does not

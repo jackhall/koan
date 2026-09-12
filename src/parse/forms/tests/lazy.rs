@@ -48,7 +48,10 @@ const MEMBERS: &[(KType, Option<LazyKinds>)] = &[
 ];
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..ProptestConfig::default()
+    })]
 
     /// The derivation distributes over union members: a union-typed slot contributes every member's
     /// kind and nothing else, so a bucket that spells its raw capture as a union is held to a table

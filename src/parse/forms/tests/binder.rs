@@ -158,7 +158,10 @@ fn name_token_at(statement: &KExpression<'_>, index: usize) -> Option<Symbol> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..ProptestConfig::default()
+    })]
 
     /// A parsed builtin form caches the table entry its key matches, and every fact the node
     /// answers off that entry is the entry's: the declared-name position is the form's

@@ -870,7 +870,10 @@ fn compound(base: &str, base_shape: &str, suffixes: &[Suffix]) -> (String, Strin
 // --- The laws ---
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..ProptestConfig::default()
+    })]
 
     /// **Law 1.** Any layout the surface admits reads back as the tree it was rendered from:
     /// how wide a gap separates two items, whether a trailing group is written inline or as an
