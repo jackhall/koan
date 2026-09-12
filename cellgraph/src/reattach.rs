@@ -87,7 +87,7 @@ macro_rules! reattachable {
 /// `Reattachable`-bounded wrappers, so `A` / `B` are always `T::At<_>` for one family — the trait's
 /// layout-invariance contract is what makes the bitwise move sound.
 ///
-/// `transmute` can't prove `size_of::<T::At<'a>>() == size_of::<T::At<'b>>()` for an opaque
+/// `transmute` can't prove `size_of::<T::At<'x>>() == size_of::<T::At<'y>>()` for an opaque
 /// associated-type projection, so this goes through `transmute_copy` (which assumes the size
 /// equality the contract guarantees) behind a `ManuallyDrop` so the source is not dropped after
 /// the move. `const` asserts restore the size check `transmute` would emit and add the alignment
