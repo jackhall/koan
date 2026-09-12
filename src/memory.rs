@@ -1,9 +1,7 @@
 //! Where a value lives and how long — Koan's instantiation of the region substrate, and every
 //! substrate name Koan spells.
 //!
-//! The payload-generic engine underneath is `workgraph`'s witnessed module
-//! ([workgraph/old_design/witnessed-memory.md](../workgraph/old_design/witnessed-memory.md)); this module is
-//! Koan's policy over it. [`region`] declares the storage profile and the allocation brands (with
+//! The payload-generic engine underneath is a library's; this module is Koan's policy over it. [`region`] declares the storage profile and the allocation brands (with
 //! the residence derivations a brand's region owner supplies), [`frame`] the per-call frame shell,
 //! [`program`] the program-text tier above the run root, and [`scope_id`] the position-independent
 //! identity a resident carries so nothing depends on where it sits.
@@ -51,9 +49,7 @@
 //! `cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))` has no caller in a default build
 //! until the rewrite adopts it; the marker comes off with the adoption.
 //!
-//! See [memory-model.md](../old_design/memory-model.md),
-//! [value-substrates.md](../old_design/value-substrates.md) and
-//! [per-call-region/](../old_design/per-call-region/README.md).
+//! See [memory/README.md](memory/README.md).
 
 pub mod frame;
 pub mod program;

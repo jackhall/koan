@@ -8,10 +8,7 @@
 //! shell over a `FrameStorage` is [`frame`](super::frame); the program-text tier above the run root
 //! is [`program`](super::program).
 //!
-//! See [per-call-region/README.md](../../old_design/per-call-region/README.md) for the carrier
-//! set, escaping-value retention, ancestor chain, and TCO frame reuse;
-//! [memory-model.md § Region lifetime erasure](../../old_design/memory-model.md#region-lifetime-erasure)
-//! for the heap-pinning / drop-order invariants.
+//! See [README.md](README.md) § Three tiers, and why the boundaries fall where they do.
 
 use std::hash::BuildHasher;
 use std::rc::{Rc, Weak};
@@ -29,8 +26,7 @@ use super::substrate::{
 /// is chunk deallocation and no per-slot glue runs at all: a `KFunction` with its signature elements
 /// a bumped run of `&str`, a `Module` with its path and member tables bump-hosted, and a
 /// [`Scope`](crate::machine::core::Scope) with its binding tables built over the same allocator and its own destructor
-/// structurally absent. See
-/// [value-substrates.md § Untyped arenas](../../old_design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
+/// structurally absent ([README.md](README.md) § Drop-freeness is a compile-time fact).
 ///
 /// A [`TypeSymbol`](crate::parse::TypeSymbol) and a
 /// [`KType`](crate::machine::model::KType) need no storage at
@@ -376,8 +372,8 @@ pub(crate) trait KoanRegionExt {
     /// projection lazily, so a `build` typed `-> Carried<'b>` fails to satisfy a `-> T::At<'b>`
     /// bound. Naming the projection makes the bounds syntactically identical. An inline closure
     /// returning the concrete type still unifies fine at the call site.
-    // Drives the object-family construction inversion
-    // (old_design/per-node-memory.md): a region-pure leaf builds its value inside this closure.
+    // Drives the object-family construction inversion: a region-pure leaf builds its value
+    // inside this closure.
     #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     fn fold_witnessed<T: Reattachable + DropFree>(
         owner: Rc<FrameStorage>,

@@ -38,13 +38,13 @@ body's lexical chain, by which point every sibling binder has registered.
 
 The mechanism lives in two install channels. Which channels a binder fills — and
 the name and bucket keys it declares — is read **parse-statically**: every
-[`KExpression`](../../src/parse/ast.rs) caches, beside its
+`KExpression` caches, beside its
 `DispatchShape`, what it *itself* installs into the enclosing scope
-([`binder_plan`](../../src/parse/ast/shape.rs), per the position rule below) —
+(`binder_plan`, per the position rule below) —
 its own spine, never what its slots contain. The single source of truth for which
 AST forms introduce a binder, and which name and buckets each declares, is the
-[`BinderFacts`](../../src/parse/forms/binder.rs) riding a
-[`FORMS`](../../src/parse/forms.rs) entry: a form is a binder because its entry
+`BinderFacts` riding a
+`FORMS` entry: a form is a binder because its entry
 carries them, and the keys are pinned against the live builtin table by the
 table⟺registration consistency test.
 
@@ -70,7 +70,7 @@ The store ([`claims.rs`](../../src/machine/core/bindings/claims.rs)) has three
 parts, each answering one question. A `Claim` is the pair (`ProducerId`,
 `BindingIndex`) throughout:
 
-- `by_type` — [`TypeSymbol`](../../src/parse/labels.rs) → `Claim`, the
+- `by_type` — `TypeSymbol` → `Claim`, the
   same vocabulary the `types` map it answers beside is keyed by. The type-name
   channel's read path, and a name admits at most one claim.
 - `by_bucket` — bucket key → a **run** of `Claim`, in install order. The bucket
@@ -155,7 +155,7 @@ because sibling overloads under one head keyword (e.g. two `EXPR (PICK xs :A) ..
 
 The two channels are two fields of one key, not two alternatives: a
 [`StoredBinderKey`](../../src/machine/model/binder.rs) carries an optional
-[`BinderSymbol`](../../src/parse/labels.rs) — `Value(ValueSymbol)` or
+`BinderSymbol` — `Value(ValueSymbol)` or
 `Type(TypeSymbol)`, either way the symbol the parser minted when it classified the
 token — and an optional
 [`BucketKeys`](../../src/machine/model/binder.rs) pair, so one statement may fill
@@ -207,7 +207,7 @@ Binder builtins declare themselves through the `binder: bool` flag they pass to
 `GROUP`, `SIG`, `UNION`, `NEWTYPE`, `FN`, `OP`); dispatch itself reads
 binder-ness off the *expression*'s cached form entry — the flag is the
 registration-side declaration of the same fact, pinned against the
-[`FORMS`](../../src/parse/forms.rs) table (where the name or
+`FORMS` table (where the name or
 bucket each form installs lives once) by the table⟺registration consistency
 test. `VAL` is a declaration
 form that installs nothing; everything else stays placeholder-free.
@@ -298,7 +298,7 @@ were installed into is the scope it retires against:
 fresh-cart sibling `fresh_cart_tail` are the only `Action::Tail` constructors,
 and their callers are `MATCH` / `TRY` arms, `EVAL`, `USING` and both `CLOSE`
 forms, none of which carries binder facts in
-[`FORMS`](../../src/parse/forms.rs) — an FN body's tail belongs
+`FORMS` — an FN body's tail belongs
 to the call's slot, not the declaration's. And **a scope is fanned out into
 exactly once**, which is what lets `by_statement` be a fixed run sized at the
 fan-out.
@@ -354,9 +354,9 @@ same binding and replayed on the wake.
 
 Binder discovery is parse-static and **per-statement**, so submission does no AST
 recursion. Every node caches
-[`binder_plan`](../../src/parse/ast/shape.rs) — what that node itself installs
+`binder_plan` — what that node itself installs
 into the enclosing scope, read at seal off the node's cached
-[`FORMS`](../../src/parse/forms.rs) entry and `None` for a node
+`FORMS` entry and `None` for a node
 that is not a binder. The dispatch-layer submission chokepoint
 [`KoanRuntime::submit_expression`](../../src/machine/execute/decide/submit.rs)
 reads that plan **once**, for a statement submission, and stamps its claims — the

@@ -7,11 +7,11 @@ system.
 
 ## Parser pipeline
 
-[`parse`](../src/parse.rs) runs in two phases, and the split is a split of
+`parse` runs in two phases, and the split is a split of
 authority: the first knows layout and no vocabulary, the second knows koan and no
 layout.
 
-1. **Layout.** [`sexlex::read`](../sexlex/src/lib.rs) reads the text into a tree
+1. **Layout.** `sexlex::read` reads the text into a tree
    of atoms, strings, commas and bracketed or line-shaped groups. A token is a
    maximal run of anything that is not whitespace, a bracket, a quote or a comma,
    so `:Number`, `a.b`, `->` and `#` all arrive as single atoms; string bodies
@@ -21,14 +21,14 @@ layout.
    five rules it applies, and it interprets nothing else — which atoms are
    keywords, which glued prefixes are sigils, what a comma means inside a brace
    are all the layer above's business.
-2. **Lowering.** [lower.rs](../src/parse/lower.rs) walks that tree into
+2. **Lowering.** lower.rs walks that tree into
    `KExpression`s: sigils and their groups, the redundant-wrapper peel, brace
    pairing, collection adjacency, and the spans every part carries. The rules are
    the sections below.
 
 Two files serve the lowering:
 
-- [atom.rs](../src/parse/atom.rs) — classify one atom. It splits the atom on its
+- atom.rs — classify one atom. It splits the atom on its
   colons (`x:Number` is the word `x` and the type `Number`) and classifies each
   piece as a literal, keyword (any pure-symbol token that is not a builtin
   compound trigger — `=`, `->`, `:|`, `:!`, `+`, `|`, `<=`, `>>`, `==`, `!=` — or
@@ -41,7 +41,7 @@ Two files serve the lowering:
   uppercase but classifies as neither keyword nor type (single uppercase letter,
   or uppercase + digits only) is a parse error. See
   [typing/tokens.md](typing/tokens.md) for what the three classes mean.
-- [operators.rs](../src/parse/operators.rs) — table of compound-atom operators
+- operators.rs — table of compound-atom operators
   (`.`, `?`); add a row to extend.
 
 Because whitespace is the only thing that delimits an atom, an operator has to be
@@ -50,7 +50,7 @@ identifier may be. The same holds for `=`, so a record field is `{x = 1}`.
 
 ## Line continuation
 
-Indentation is layout, so the rules are [`sexlex`](../sexlex/src/lib.rs)'s and
+Indentation is layout, so the rules are `sexlex`'s and
 its crate doc is their spec; what follows is the shape they give koan. Each
 non-blank line is a group, with deeper indentation nesting and dedents closing.
 Three things let a single expression span multiple physical lines:
@@ -115,7 +115,7 @@ atom followed by a group, which is exactly the application koan means by them.
 
 ## `KExpression` shape
 
-Output is one [`KExpression`](../src/parse/ast.rs) per top-level line:
+Output is one `KExpression` per top-level line:
 an ordered sequence of `ExpressionPart`s — `Keyword`, `Identifier`, `Type`,
 nested `Expression`, `SigiledTypeExpr`, `ListLiteral`, `DictLiteral`, or typed
 `Literal`.
@@ -139,7 +139,7 @@ The `Keyword`-vs-slot split is the parser's contract with dispatch:
   delimiters the frame consumes itself, and everything else in it is a value.
   `[FOO 1]`, `[1 + 2]`, `{count: FOO}` and `{x = FOO}` are parse errors naming the
   spelling, raised at the one part-push funnel
-  ([lower.rs](../src/parse/lower.rs)). A keyword inside a *nested*
+  (lower.rs). A keyword inside a *nested*
   expression is untouched — `[(1 + 2) 3]` is an ordinary two-element list, and
   `a.b` / `x?` inside a literal are too, because the compound builders wrap their
   `ATTR` / `TRY` keyword in a nested part before it is pushed.
@@ -149,15 +149,15 @@ unevaluated expression as a value, pass it around, and evaluate it on demand.
 
 ### Structural cache and dispatch shape
 
-As its parts run is frozen, [`KExpression`](../src/parse/ast.rs) fills a
-[`NodeCache`](../src/parse/ast/shape.rs) — the one structural cache both
+As its parts run is frozen, `KExpression` fills a
+`NodeCache` — the one structural cache both
 expression families carry, holding five facts:
 
-- the **stored bucket key**, the run of [`KeyElement`](../src/parse/ast/shape.rs)s
+- the **stored bucket key**, the run of `KeyElement`s
   dispatch matches on, bumped into the node's own region;
 - the **`DispatchShape`**, classified from that key plus the head part's class;
 - an optional **operator probe**, `Some` only for an `OperatorChain`;
-- the **[`FORMS`](../src/parse/forms.rs) entry** the key matches, or `None` for
+- the **`FORMS` entry** the key matches, or `None` for
   every user-defined bucket — the one table probe in the tree, from which every
   later form question is answered by tag rather than by re-walking the key: which
   slots stay raw ([Lazy slots](#lazy-slots)), which position carries a binder's
@@ -182,7 +182,7 @@ that fills the region's bytes straight from an exact-length iterator, so a
 caller whose slots are computed one at a time pays no owned staging run. The
 parser collects each run in a plain `Vec` and takes the iterator doors, freezing
 it through the chokepoint once, when the run is complete
-([lower.rs](../src/parse/lower.rs)). The cache is invariant under the dispatch-time
+(lower.rs). The cache is invariant under the dispatch-time
 splice that swaps a `StagedSlot` for the resolved sub-result's `Spliced` cell —
 one part for one part, no structural change — so a working node copies it from
 the AST node it derives from rather than re-deriving it.
@@ -193,7 +193,7 @@ The parser's output type and the type the scheduler dispatches are **two concret
 structs**, and the split is what keeps a resolved sub-result out of the value
 channel:
 
-- [`KExpression`](../src/parse/ast.rs) is raw, unevaluated syntax — parser
+- `KExpression` is raw, unevaluated syntax — parser
   output, an `FN` body, a quote body, a `:KExpression` / `:SigiledTypeExpr` /
   `:RecordType` slot capture, a MATCH arm body. Its parts run and every string in
   it borrow the eternal-tier program storage that parsed them, so the node is
@@ -207,7 +207,7 @@ channel:
   resting carrier cell a dep-finish writes back.
 
 `KObject::KExpression` takes a
-[`ProgramExpression`](../src/parse/ast/program.rs) — a marked AST node,
+`ProgramExpression` — a marked AST node,
 mintable only through a program-storage door — and there is no conversion from a
 working node to an AST one, so **a value can never carry a producer's reach
 through an expression** — the property the alloc door and the escape seam read as
@@ -329,18 +329,18 @@ other, so it takes the call arm — see
 
 The `:(...)` glued-right sigil opens a *parse-context marker* group. The
 parser collects the inner tokens into a regular `KExpression` and wraps it as
-[`ExpressionPart::SigiledTypeExpr(&KExpression)`](../src/parse/ast.rs)
+`ExpressionPart::SigiledTypeExpr(&KExpression)`
 — no inner-shape recognition runs at parse time. Shape decisions
 (keyworded `:(LIST OF Number)`, nominal construction `:(MyStruct {x = 1})`,
 etc.) are the dispatcher's responsibility: the
 sigil's only job is to flag "this slot evaluates to a type, not a value". The
-lowering is the `:`-sigil arm of [lower.rs](../src/parse/lower.rs); the
+lowering is the `:`-sigil arm of lower.rs; the
 dispatcher's `sigiled_type_expr` handler tail-replaces the slot with a `Dispatch`
 of the wrapped expression.
 
 Two spellings of the sigil exist and mean the same thing. `:(...)` takes a type
 expression; `:{...}` takes a record type, an
-[`ExpressionPart::RecordType`](../src/parse/ast.rs) the elaborator folds
+`ExpressionPart::RecordType` the elaborator folds
 straight to a record `KType`. Both require the `:` to be glued to its group, and
 a `:` glued to a name (`x:Number`, `:Number`) is the annotation form — the atom
 splits on the colon and the name after it must be a type name. A `:` that is
@@ -375,8 +375,8 @@ of execute makes them ready before the parent runs. See
 
 Only the fixed builtin forms opt out of eager evaluation, and which of their
 slots are lazy is a parse-static fact: the node's
-[`NodeCache`](../src/parse/ast/shape.rs) resolves its
-[`FORMS`](../src/parse/forms.rs) entry at construction, and that entry's
+`NodeCache` resolves its
+`FORMS` entry at construction, and that entry's
 `lazy_slots` stamp says which slots stay raw. Builtin keys are unshadowable, so
 matching one is sound; the scheduler reads `lazy_kinds_at(index)` off the cached
 entry to know which children not to submit. Dispatch never decides
@@ -449,12 +449,12 @@ reaches a user signature — and `$` threads a captured expression value back
 into evaluation.
 
 The sigils are **expression-level operators** in
-[lower.rs](../src/parse/lower.rs), not entries in the compound-operator registry.
+lower.rs, not entries in the compound-operator registry.
 A sigil is an atom that is exactly `#` or `$` and is glued to the group after it
 — which is all the layout tree has to record for the lowering to recognize one.
 
 Quoting is **parse-static**: `#(...)` folds its body into an
-[`ExpressionPart::QuotedExpression`](../src/parse/ast.rs)
+`ExpressionPart::QuotedExpression`
 — a part that is a slot for dispatch purposes and behaves like a literal, resolving
 to the `KObject::KExpression` value of the captured body. There is no quoting
 operation at run time and the body never dispatches.

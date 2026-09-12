@@ -6,7 +6,7 @@ value is kept alive. Part of the [per-call region protocol](README.md).
 ## Carriers
 
 The lifecycle pin is a `Rc<FrameStorage>`, not a `Rc<CallFrame>`.
-`CallFrame` is a thin shell over a refcounted [`FrameStorage`](../../src/memory/region.rs)
+`CallFrame` is a thin shell over a refcounted `FrameStorage`
 — the per-call `KoanRegion` plus the `outer` link that keeps the
 lexical-ancestor frames' storage alive. An escaping value pins the
 *storage*, so the region outlives the shell independently — a `FreshTail` tail
@@ -25,9 +25,9 @@ allocation can close a region↔value cycle, so the allocation engine carries no
 
 `FrameStorage` itself carries `outer: Option<Rc<FrameStorage>>`, which chains the parent per-call
 frame's storage when a builtin-built frame's child scope's `outer` points into per-call memory (MATCH
-/ TRY / EVAL). The pin is derived inside [`Frame::open_under`](../../src/memory/frame.rs) from the
+/ TRY / EVAL). The pin is derived inside `Frame::open_under` from the
 parent scope's own region owner
-([`RegionBrand::parent_frame_pin`](../../src/memory/region.rs)), never passed by the builtin. This is
+(`RegionBrand::parent_frame_pin`), never passed by the builtin. This is
 distinct from escaping-value liveness: `outer` keeps a region alive for an *outer-scope lookup* the
 new frame's child scope performs at run time.
 
@@ -67,7 +67,7 @@ relocates it across each dep edge — never the producer.
   re-stamps the value **in place**, in the producer's own region (a coarsening
   re-tag, e.g. `List<Number>` through `:(LIST OF Any)`, re-allocates there too).
   Declared or not, it seals the
-  [`CarrierWitness`](../../src/memory/substrate.rs) — the
+  `CarrierWitness` — the
   reference-only carrier, pinning nothing — **as-is**: there is no Done-boundary
   relocation or sever gate. The producer frame's lifetime is decided by
   delivery at finalize: a copy verdict frees it there, a pin verdict transfers

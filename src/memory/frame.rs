@@ -43,10 +43,7 @@ pub type FrameCoverage = StepCoverage<FrameStorage>;
 /// an escaping closure extends only the *storage* (via [`Self::storage_rc`]), not the shell, so a
 /// `FreshTail` tail hop can drop this frame's shell outright without foreclosing on the escapee.
 ///
-/// See [per-call-region/README.md](../../old_design/per-call-region/README.md) for the
-/// carrier set, escaping-value retention, ancestor chain, and TCO
-/// frame reuse; [memory-model.md § Region lifetime erasure](../../old_design/memory-model.md#region-lifetime-erasure)
-/// for the heap-pinning / drop-order invariants.
+/// See [README.md](README.md) § A frame is a region shell and nothing else.
 pub struct Frame<F: Reattachable + DropFree> {
     /// The per-call resident paired with the frame storage that owns its region, as one delivery
     /// [`Delivered`] envelope: the storage is the envelope's retained host, the resident its
@@ -199,7 +196,7 @@ impl<K: Reattachable + DropFree> Frame<ReferenceFamily<K>> {
     /// (the same `Rc` every iteration). Only a loop that genuinely builds a fresh closure over each
     /// iteration's frame retains `O(N)` frames — an unavoidable data dependency, since evaluating
     /// the final closure reaches every one. The chain is a DAG (each frame's `outer` names a
-    /// strictly older frame), so it forms no cycle; see `old_design/tail-call-optimization.md`.
+    /// strictly older frame), so it forms no cycle.
     ///
     /// The resident is *born* at the destination: [`RegionHandle::bump_born_with`] hands `child` a
     /// placement over the fresh region at a `for<'b>` brand, with `outer` re-anchored to that same

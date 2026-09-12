@@ -1,6 +1,5 @@
 //! What a `:` refuses, and the one place a bare `(…)` reads as a type expression anyway.
 //!
-//! See [type-language-via-dispatch](../../../old_design/typing/type-language-via-dispatch.md).
 //! The parser does no shape-folding inside `:(...)`: every sigil emits
 //! `ExpressionPart::SigiledTypeExpr(inner)` whose inner mirrors the parens contents, and its
 //! idempotence is [`properties`](super::properties)' ninth law.

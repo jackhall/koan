@@ -99,8 +99,8 @@ Option<Rc<FrameStorage>>`) keeps the parent frame's storage alive
 whenever the child's `outer` points into per-call memory.
 
 That pin is **derived**, not threaded by the caller. The frame door
-[`Frame::open_under`](../../src/memory/frame.rs) reads it off the parent's own allocation brand via
-[`RegionBrand::parent_frame_pin`](../../src/memory/region.rs): the parent
+`Frame::open_under` reads it off the parent's own allocation brand via
+`RegionBrand::parent_frame_pin`: the parent
 scope's own region owner — read off its region's host back-link — when the
 parent lives in a per-call region, or
 no pin when it lives in the run-root region (which outlives the run — a

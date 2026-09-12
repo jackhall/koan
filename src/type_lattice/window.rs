@@ -43,7 +43,7 @@
 //! through the flat door, which reads no member nodes — necessary, because a rewritten sibling
 //! handle names a member the registry has not interned yet.
 //!
-//! See [old_design/typing/type-lattice.md](../../old_design/typing/type-lattice.md).
+//! See [README.md](README.md) § Recursive groups: identity is the SCC, not the declaration.
 
 use std::cell::{Cell, RefCell};
 
@@ -320,7 +320,7 @@ impl<'w> RecursiveGroupWindow<'w> {
     /// `tag` probes by bare symbol bits: a variant tag arriving from a record-literal field name
     /// carries no class, and the member list it is matched against is keyed by the `TypeSymbol` the
     /// declaration minted. Symbol equality is text equality, so a hit witnesses the class rather
-    /// than asserting it ([old_design/label-interning.md](../../old_design/label-interning.md)).
+    /// than asserting it.
     pub fn variant_index(&self, binder: TypeSymbol, tag: Symbol) -> Option<usize> {
         let owned = self.binder_members(binder)?;
         let members = self.members.borrow();

@@ -32,7 +32,7 @@ lazy-slot stamp does not keep raw is submitted as its own sub-`Dispatch`
 [`keyworded::initial`](../../src/machine/execute/decide/keyworded.rs) once they
 have spliced back in, where the spliced run stages nothing further and falls
 through to Step 1. Which slots stay raw is a fact of the node's bucket key,
-carried by the [`FORMS`](../../src/parse/forms.rs) entry the node resolved at
+carried by the `FORMS` entry the node resolved at
 construction and read off its cache
 — see [expressions-and-parsing.md § Lazy
 slots](../expressions-and-parsing.md#lazy-slots). Only the fixed builtin forms

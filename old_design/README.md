@@ -19,9 +19,9 @@ than the boundary Koan meets it at — live in the crate's own tree,
 [workgraph/old_design/](../workgraph/README.md): the witnessed memory
 substrate, the reach representation, the DAG scheduler's own graph
 shape, and sectioned reach evidence; the `cellgraph` cell substrate
-beneath the scheduler has a tree of its own,
-[cellgraph/design/](../cellgraph/README.md). The Koan-side docs below own
-Koan's *instantiation* of that machinery, not the machinery itself.
+beneath the scheduler documents itself in its own crate. The Koan-side
+docs below own Koan's *instantiation* of that machinery, not the
+machinery itself.
 
 ## Doc index
 
@@ -185,8 +185,8 @@ A **foundation** is a source file every operation in some concern
 *has* to go through — name resolution threads
 [scope.rs](../src/machine/core/scope.rs) →
 [bindings.rs](../src/machine/core/bindings.rs); allocation goes
-through [region.rs](../src/memory/region.rs); nothing storable
-exists without a [`region.rs`](../src/memory/region.rs) entry. A
+through region.rs; nothing storable
+exists without a `region.rs` entry. A
 foundation is *correctly* cited everywhere — every doc touching the
 concern has to name it, because the concept the doc is explaining
 genuinely passes through that file. The doc co-citation signal

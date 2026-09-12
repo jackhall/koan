@@ -16,7 +16,7 @@ roadmap items use with fixed meanings. The machinery behind them is owned by
 just enough to read the policy.
 
 - **Region** — the per-call allocation unit
-  ([`KoanRegion`](../src/memory/region.rs)): a set of arenas owned by one
+  (`KoanRegion`): a set of arenas owned by one
   call frame, freed all at once when the frame's last hold drops. "Arena"
   names storage inside a region.
 - **Substrate** — the stored cells behind a composite value (a list's element
@@ -54,11 +54,11 @@ just enough to read the policy.
 ## Where the substrate lives
 
 Koan's instantiation of the region engine is one top-level module,
-[`src/memory/`](../src/memory.rs): the storage profile and the allocation brands
-([region.rs](../src/memory/region.rs)), the per-call frame shell
-([frame.rs](../src/memory/frame.rs)), the program-text tier above the run root
-([program.rs](../src/memory/program.rs)), and every substrate name Koan spells
-([substrate.rs](../src/memory/substrate.rs)). `substrate.rs` is the crate's only
+`src/memory/`: the storage profile and the allocation brands
+(region.rs), the per-call frame shell
+(frame.rs), the program-text tier above the run root
+(program.rs), and every substrate name Koan spells
+(substrate.rs). `substrate.rs` is the crate's only
 import of `workgraph::witnessed`, `hashbrown` and `allocator_api2`, so swapping
 the engine is a rewrite of that file plus
 [`machine::execute::step`](../src/machine/execute/step.rs), which owns the step
@@ -83,12 +83,12 @@ file that owns the payload. The trade-off is deliberate: substrate spellings are
 no longer readable from one file, and in exchange `memory` names no Koan value
 type at all.
 
-Its one back-edge is `Scope`: [frame.rs](../src/memory/frame.rs) names it to read
+Its one back-edge is `Scope`: frame.rs names it to read
 the child a frame's envelope carries. `region.rs`, `program.rs` and
 `substrate.rs` import nothing from the rest of Koan. That back-edge stays: there
 is no scope trait and no second `Scope` type. A per-call frame's value bindings
 change *representation* — a slot array
-([slots.rs](../src/memory/slots.rs)) sized by the body's layout, in place of the
+(slots.rs) sized by the body's layout, in place of the
 name-keyed map — but that is a storage variant inside `Bindings`, so the frame
 shell stays family-generic and never names a scope.
 
@@ -119,7 +119,7 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   `KKey::String` dict key. A wrap carrier's discriminant is not a string at all: it is
   the interned [`KType`](typing/ktype/README.md) identity handle, fixed-width `Copy` data
   pointing into no region ([label-interning.md](label-interning.md)).
-  [`KExpression`](../src/parse/ast.rs) is a `Copy` handle whose parts run
+  `KExpression` is a `Copy` handle whose parts run
   is a bumped slice of `Copy` parts
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
 
@@ -176,7 +176,7 @@ Three consequences define the regime:
 
 Every composite substrate is born through a **branded door** — a fold placement
 ([`FoldedPlacement`](../workgraph/src/witnessed.rs) via
-[`FoldingBrand`](../src/memory/region.rs)), the step allocator, or a
+`FoldingBrand`), the step allocator, or a
 scope door — whose enclosing combinator composes the witness naming every
 operand the value was built from. Residence is
 compile-enforced by the door's brand: there is **no runtime residence audit
@@ -189,7 +189,7 @@ scalars, which own their data outright, and a quoted expression, whose parts run
 already sits in the eternal-tier storage that parsed it; no container is ever
 built without a door in hand. The door is a brand paired with the **holder-rule proof** its
 per-cell verdicts are read under
-([`SubstrateDoor`](../src/memory/region.rs)), so a container cannot be
+(`SubstrateDoor`), so a container cannot be
 built through a bare brand: a cell that keeps borrowing a foreign source hands
 the alloc door that source's stored description, and reading a description's
 members back out is sound only while something pins every region it names.
@@ -291,7 +291,7 @@ needs both).
 Every string a value-family slot holds — a `KObject::KString`, a
 `KKey::String` dict key — is a `&'a str` bumped into the
 region the value lives in
-([`RegionBrand::allocator`](../src/memory/region.rs), over workgraph's
+(`RegionBrand::allocator`, over workgraph's
 [`BumpAllocator::text`](../workgraph/src/witnessed/bump.rs)). The slot
 owns no allocation, so it runs no destructor at region death and the bytes go
 with the bump's chunks; that is what makes the slot `Copy` and `deep_clone` a
@@ -496,7 +496,7 @@ cannot be `Copy`: copying it would fork the state its holders share. It is
 structurally `Drop`-free all the same: every field is `Copy`, a `Cell` of a `Copy`,
 or a bump-backed table whose own vacuous destructor is suppressed. That claim is a
 compile-time assert, not an audited marker — the `reattachable!` declaration in
-[region.rs](../src/memory/region.rs) carries
+region.rs carries
 `!needs_drop::<Scope<'static>>()`, and the bump verb that admits it
 ([`BumpAllocator::in_place`](../workgraph/src/witnessed/bump.rs)) restates the same
 assert per store. A field that later brings glue back fails the build at both.
@@ -549,14 +549,14 @@ keys it removes. Every success path overwrites its claim where it sits, so a
 table's peak occupancy is its final binding count plus that error tail.
 
 Expression parts are not in it either, for the same reason. Both node families —
-the raw AST [`KExpression`](../src/parse/ast.rs) and the scheduler's
+the raw AST `KExpression` and the scheduler's
 [`WorkingExpression`](../src/machine/model/ast/working.rs) — are `Copy` handles
 over bumped slices of `Copy` parts, so no expression slot carries `Drop` glue and
 region death for a spliced node's part storage is chunk deallocation. Their
 storage tiers differ and that difference is what the value channel reads:
 
 - **Raw AST lives in program storage**, a `FrameStorage` at the eternal tier
-  minted by [`program_storage`](../src/memory/program.rs) above the run
+  minted by `program_storage` above the run
   root ([memory-model.md](memory-model.md)). The eternal rule filters such a
   member out of every pin bundle and reach description, so a value pointing at
   program text reaches nothing.
@@ -579,10 +579,10 @@ slice**, not the node struct: `KExpression` is `Copy` and rides by value in the
 cell, so what a holder can outlive is the run the node borrows and everything
 reachable from it.
 
-That fact is a type, [`ProgramExpression` / `ProgramNode`](../src/parse/ast/program.rs)
+That fact is a type, `ProgramExpression` / `ProgramNode`
 — `Copy` newtypes whose fields are private to their module, so the only way to
 obtain one is a mint door taking a
-[`ProgramBrand`](../src/memory/program.rs) or an accessor on a value
+`ProgramBrand` or an accessor on a value
 that already carries the proof. The door's contract is its **parameter type**,
 not a promise: `ProgramBrand<'a>` is invariant in `'a`, so a held brand never
 shortens, and a door's `parts` are therefore taken at program storage's own
@@ -595,7 +595,7 @@ doors' *products* that are covariant: a `ProgramExpression<'program>` coerces
 into a `KObject<'step>` cell and a `KExpression` into step borrows.
 `KObject::KExpression` takes a
 `ProgramExpression`, and the four expression-holding
-[`ExpressionPart`](../src/parse/ast.rs) arms (`Expression`,
+`ExpressionPart` arms (`Expression`,
 `SigiledTypeExpr`, `RecordType`, `QuotedExpression`) — the only conduits from the
 AST into the value channel — hold a `ProgramNode`, so each door compiles its
 proof out of the arm it matched. A node built at a per-call brand cannot be

@@ -20,7 +20,7 @@ expression shape's surface form is:
 EXPR (<signature>) -> ReturnType = (<body>)
 ```
 
-The signature is itself a [`KExpression`](../src/parse/ast.rs) mixing
+The signature is itself a `KExpression` mixing
 fixed `Keyword` tokens and `name: Type` parameter triples. The triple form is
 required — a bare identifier without `: Type` is a parse error; use `: Any` to
 opt out of type-checking for a slot. Keyword tokens are part of the dispatch
@@ -100,7 +100,7 @@ have hidden both.
 ## Calling convention: per-call scope
 
 The user-fn body executor (`run_user_fn`, lowered onto the scheduler by
-`dispatch::exec::invoke`) allocates a per-call [`CallFrame`](../src/memory/frame.rs),
+`dispatch::exec::invoke`) allocates a per-call `CallFrame`,
 binds each parameter into a fresh child `Scope` whose `outer` is the function's
 captured definition scope, and returns the body unmodified as
 `Action::Tail` (lowered to `Outcome::Continue`) for the scheduler to dispatch in the same slot.

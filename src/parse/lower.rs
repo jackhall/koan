@@ -11,7 +11,7 @@
 //! quotes. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. Everything else is an
 //! atom, which [`super::atom`] classifies.
 //!
-//! See [old_design/expressions-and-parsing.md](../../old_design/expressions-and-parsing.md).
+//! See [README.md](README.md) § The division of labour with `sexlex`.
 
 use sexlex::{Item, Kind, Node};
 

@@ -4,7 +4,7 @@ Koan's runtime substrate — the deferred-work scheduler, the region memory
 system, and the witnessed carrier machinery — is a self-contained library
 stack with no dependency on Koan's language semantics. It ships as two
 workspace crates: `cellgraph`
-*(working name — [cellgraph/README.md](../cellgraph/README.md))*, the
+*(working name — cellgraph/README.md)*, the
 computation-cell substrate (witnessed memory plus a cell table:
 continuations, memory anchors, inter-cell values — no acyclicity, no
 terminality), and `workgraph`, the DAG scheduler layered on it (dep edges,
@@ -101,7 +101,7 @@ a concept, not a final identifier.
   a bare frame pin never escapes the scheduler.
 - **Finish** — the continuation a consumer runs once its deps resolve.
 - **Workload** — the embedder-facing trait: the cell contract
-  ([cellgraph/README.md](../cellgraph/README.md) — the continuation family, the memory anchor
+  (cellgraph/README.md — the continuation family, the memory anchor
   `Frame` (which projects its region owner through `Anchor::owner`), and the
   brand-indexed value family Koan instantiates with `Carried`) plus the
   terminal error type the DAG layer's `Result`-shaped terminal protocol adds.
@@ -126,7 +126,7 @@ a concept, not a final identifier.
   `allocator` is `pub(crate)` to `workgraph`, so a bare
   `&Region` has no allocation surface at all — the only public minter is
   `RegionHandle::from_owner`, gated on the (unsafe-to-implement) `RegionOwner`
-  contract. [region.rs](../src/memory/region.rs) holds only Koan's
+  contract. region.rs holds only Koan's
   profile (`KoanStorageProfile`, `KoanRegion`, `FrameStorage`) and a
   thin `RegionBrand` veneer over `RegionHandle` adding Koan-family-typed
   `alloc_*` wrappers, carrying no capability rule of its own; it allocates

@@ -21,8 +21,7 @@
 //! a crate-visible re-export — has no caller in a default build until the rewrite adopts it, and
 //! the marker comes off with the adoption.
 //!
-//! See [old_design/expressions-and-parsing.md](../old_design/expressions-and-parsing.md) and
-//! [old_design/label-interning.md](../old_design/label-interning.md).
+//! See [parse/README.md](parse/README.md).
 
 pub mod ast;
 pub mod forms;

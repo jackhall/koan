@@ -25,7 +25,7 @@
 //! transient buffers, and every door computes its digest off the caller's own slices first, so
 //! content is bumped into the region only on a miss.
 //!
-//! See [old_design/typing/type-registry.md](../../old_design/typing/type-registry.md).
+//! See [README.md](README.md) § Storage: one region, one heap table.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

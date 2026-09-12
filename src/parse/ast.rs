@@ -52,15 +52,13 @@ pub enum ExpressionPart<'a> {
     Expression(ProgramNode<'a>),
     /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` must dispatch
     /// in type-context, returning a type-side carrier. Shape recognition is the
-    /// dispatcher's responsibility — the parser does no folding here. See
-    /// [old_design/typing/type-language-via-dispatch.md](../../old_design/typing/type-language-via-dispatch.md).
+    /// dispatcher's responsibility — the parser does no folding here.
     SigiledTypeExpr(ProgramNode<'a>),
     /// First-class record type `:{x :Number, y :Str}`. The nested `KExpression` is the
     /// field-list `(x :Number, y :Str)` — the same `<name> :<Type>` pair shape a SIG member
     /// or FN parameter list uses. Unlike `SigiledTypeExpr`, this is matched
     /// structurally (the elaborator folds it straight to a record `KType`); there is no
-    /// internal type-constructor builtin behind it. See
-    /// [old_design/typing/type-language-via-dispatch.md](../../old_design/typing/type-language-via-dispatch.md).
+    /// internal type-constructor builtin behind it.
     RecordType(ProgramNode<'a>),
     ListLiteral(&'a [ExpressionPart<'a>]),
     DictLiteral(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
@@ -75,7 +73,7 @@ pub enum ExpressionPart<'a> {
     /// quoting operation and the body never dispatches. Behaves as a literal everywhere: it is a
     /// `Slot` in the untyped key, a single one classifies [`DispatchShape::LiteralPassThrough`],
     /// and it resolves to `KObject::KExpression(<body>)` — the value `$(...)` evaluates. See
-    /// [old_design/expressions-and-parsing.md](../../old_design/expressions-and-parsing.md).
+    /// [README.md](README.md) § The AST: borrowed, `Copy`, and splice-free.
     QuotedExpression(ProgramNode<'a>),
 }
 

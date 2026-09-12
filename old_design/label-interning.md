@@ -37,7 +37,7 @@ consulted only when a label is rendered. No per-record, per-call, or per-node ow
 A symbol is its own lookup key, exactly as a `KType` handle is its digest
 ([type-identity.md](typing/type-identity.md)). The two share one digest vocabulary:
 128-bit truncated BLAKE3, identity-hashed in any map keyed by them
-([`IdentityHasher`](../src/parse/labels.rs), which passes the low 64 bits of a digest
+(`IdentityHasher`, which passes the low 64 bits of a digest
 straight through rather than re-hashing them), with the same
 collision footing — an accidental collision is less likely than a hardware fault,
 so symbol equality is label equality with no repair path.
@@ -141,7 +141,7 @@ per parameter per call.
 
 A binding name's **token class** ([typing/tokens.md](typing/tokens.md)) is carried in the
 type of its symbol, not re-derived from text at each door. Three newtypes over `Symbol`
-([`labels.rs`](../src/parse/labels.rs)) partition the token space:
+(`labels.rs`) partition the token space:
 
 - **`ValueSymbol`** — a value token (`xs`, `int_ord`, `it`): neither keyword-class nor
   Type-class.
@@ -208,7 +208,7 @@ in Rust, so their symbol is the same 128 bits for the whole process and there is
 per-run or per-call classification to discover. Such a name is **declared once and compared by
 symbol thereafter**.
 
-The declaration is a `StaticName<S>` ([`labels.rs`](../src/parse/labels.rs)): the
+The declaration is a `StaticName<S>` (`labels.rs`): the
 spelling beside a `LazyLock` memo of its classified symbol, built by the `static_name!` macro,
 which mints through the class's own `classify` funnel. A `LazyLock` over a pure function of a literal
 is a memo and not run state — `Symbol::of` answers the same bits in every run and every process,
@@ -313,7 +313,7 @@ because the two classes name disjoint text.
 
 A dispatch bucket key is the one composite in that table: not a single label but a run of
 positions, a keyword's `KeywordSymbol` where the shape fixes a token and `Slot` where it
-takes an argument ([`KeyElement`](../src/parse/ast/shape.rs)). The element is
+takes an argument (`KeyElement`). The element is
 `Copy` and lifetime-free, so the run a caller owns and the run a scope bumped into its region
 are the same type — one derived `Hash`, and a key re-homes by copying `u128`s rather than
 keyword bytes. Rendering such a key names each keyword by resolving its symbol, on the same
@@ -349,13 +349,13 @@ reached differently: two convert where the parser classifies the token, one wher
 consults a table.
 
 The **keyword** vocabulary converts at the **parse boundary**. Where the parser classifies a
-atom as keyword-class ([atom.rs](../src/parse/atom.rs)) it mints the token's
+atom as keyword-class (atom.rs) it mints the token's
 `KeywordSymbol` and interns it in the same step, and the part carries that symbol alone —
 `ExpressionPart::Keyword(KeywordSymbol)`, no spelling beside it
-([ast.rs](../src/parse/ast.rs)). Nothing downstream re-hashes: a node's bucket key, a
+(ast.rs). Nothing downstream re-hashes: a node's bucket key, a
 signature element, an operator chain's cached registry probe and every keyword comparison read
 the symbol the parse already minted, and the fixed tokens the machine itself compares against
-(`AS`, `->`, `_`, the [form table](../src/parse/forms.rs)'s keys, the reserved operator names)
+(`AS`, `->`, `_`, the form table's keys, the reserved operator names)
 are `StaticName` memos
 minted once per process. That placement is not convenience — `Symbol::of` is a BLAKE3 hash, and
 a keyword sits on the hot dispatch probe path, where paying one per keyword per call is exactly
@@ -399,7 +399,7 @@ mints nothing. Because no lookup re-derives a digest, a name spelled once and re
 many times is hashed once, at the parse.
 
 `Held::Name` is where the two vocabularies meet: it carries a
-[`BinderSymbol`](../src/parse/labels.rs), the class taken from the part variant the
+`BinderSymbol`, the class taken from the part variant the
 parser assigned, so one carrier serves every name-capture slot and no consumer re-derives a
 class from a rendering. See
 [tokens.md § A binder position is a name](typing/tokens.md#a-binder-position-is-a-name).
@@ -531,7 +531,7 @@ render `<staged>` rather than name a type they do not have.
 The two expression families differ in signature here: `ExpressionPart`'s inherent `summary` keeps a
 bare `&LabelInterner` and renders surface spelling, which is what a *parse*-time shape error wants
 (a record literal's rejected field name, in
-[brace.rs](../src/parse/brace.rs)) — and parse renders it while still *filling* the
+brace.rs) — and parse renders it while still *filling* the
 interner a run frame has yet to adopt, so the bundle is not available to it. Its `Part` impl narrows
 the bundle down to that interner.
 

@@ -12,7 +12,7 @@
 //! symbol bits; the table is written only where a syntactic label is constructed and read only
 //! where one is rendered. Its growth is bounded by the run's source text.
 //!
-//! See [old_design/label-interning.md](../../old_design/label-interning.md).
+//! See [README.md](README.md) § Labels: identity is a content digest, the interner is not an authority.
 
 use std::borrow::Borrow;
 use std::cell::RefCell;
@@ -179,8 +179,7 @@ impl std::fmt::Display for LabelDisplay<'_> {
 /// ASCII-lowercase elsewhere (`IntOrd`, `Ordered`, `Carrier`). The single canonical
 /// predicate for "this name classifies as a Type token" — the parser uses it to tag a
 /// `Type` part, the type-language partition (abstract-type members vs value slots in a SIG
-/// type table) reuses it, and [`TypeSymbol`] mints against it. See
-/// [old_design/typing/tokens.md](../../old_design/typing/tokens.md).
+/// type table) reuses it, and [`TypeSymbol`] mints against it. See [README.md](README.md) § Labels.
 pub fn is_type_name(tok: &str) -> bool {
     let mut chars = tok.chars();
     let Some(first) = chars.next() else {
@@ -193,8 +192,7 @@ pub fn is_type_name(tok: &str) -> bool {
 }
 
 /// Suggest a value-classified rewrite of a Type-classified binder name: `IntOrd` → `int_ord`. Each
-/// interior uppercase letter opens a new word (see
-/// [old_design/typing/tokens.md](../../old_design/typing/tokens.md)). Beside [`is_type_name`] because it
+/// interior uppercase letter opens a new word. Beside [`is_type_name`] because it
 /// is that classifier read backwards — the respelling every diagnostic offers when a value binds
 /// under a Type token.
 pub fn snake_case_identifier(name: &str) -> String {
@@ -389,7 +387,7 @@ fn sorted_run(members: &[KeywordSymbol]) -> smallvec::SmallVec<[KeywordSymbol; 8
 ///
 /// Only `TypeSymbol` carries this: `WITH`'s pin walk and the union-variant probes are the sites
 /// where a bare record-field symbol meets a Type-class member table, and nothing probes the other
-/// classes by bits. See [old_design/label-interning.md](../../old_design/label-interning.md).
+/// classes by bits. See [README.md](README.md) § Labels.
 impl Borrow<Symbol> for TypeSymbol {
     fn borrow(&self) -> &Symbol {
         &self.0
@@ -451,7 +449,7 @@ impl BinderSymbol {
 /// binds into: `wanted` is that channel, `name` the text as written. This is the token-class
 /// partition stated **at the text→symbol seam** — past it the classified key types make a crossing
 /// unrepresentable, so this is the one place the rule is a runtime disposition rather than a type.
-/// See [old_design/typing/tokens.md](../../old_design/typing/tokens.md).
+/// See [README.md](README.md) § Labels.
 pub fn wrong_binder_class(name: &str, wanted: BindKind) -> String {
     match wanted {
         BindKind::Type => format!(
@@ -485,8 +483,8 @@ pub enum BindKind {
     Type,
 }
 
-/// True iff `s` classifies as a keyword (fixed token). See
-/// [tokens.md](../../old_design/typing/tokens.md): pure-symbol tokens (no ASCII letters) are always
+/// True iff `s` classifies as a keyword (fixed token) ([README.md](README.md) § Labels):
+/// pure-symbol tokens (no ASCII letters) are always
 /// keywords; alphabetic tokens are keywords iff they have at least two ASCII-uppercase letters and
 /// no ASCII-lowercase letters.
 pub fn is_keyword_token(s: &str) -> bool {
@@ -500,8 +498,7 @@ pub fn is_keyword_token(s: &str) -> bool {
 }
 
 /// The hasher every 128-bit-digest-keyed table runs: the interner here, the type registry's node
-/// table, and the classified scope binding tables
-/// ([old_design/label-interning.md](../../old_design/label-interning.md)). A
+/// table, and the classified scope binding tables. A
 /// [`TypeDigest`](crate::machine::model::types::TypeDigest) and a [`Symbol`] are each the low 128
 /// bits of a BLAKE3 hash, so they
 /// are already uniformly distributed and re-hashing would only cost cycles: keep the low 64 bits

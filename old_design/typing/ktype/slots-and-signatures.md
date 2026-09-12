@@ -215,7 +215,7 @@ a member behaves inside a union precisely as it does as a bare slot type:
   reduces the union to the one member claiming the part's shape before its capture arms run,
   so a union spelling captures exactly as the bare member would.
 - The seal-time raw-kind stamp: a bucket whose slot is a union is held to a
-  [`FORMS`](../../../src/parse/forms.rs) entry whose `lazy_slots` cover *every*
+  `FORMS` entry whose `lazy_slots` cover *every*
   member's kind, since any of them can arrive at that index.
 
 **Raw capture and shape-only admission are separate properties**, and only the exact carrier

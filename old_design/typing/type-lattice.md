@@ -3,8 +3,8 @@
 The type lattice is a closed algebra over interned type nodes: the node vocabulary, the interning
 registry, the identity recipe, the structural relations between types, and the unifier that
 solves a quantified position. It lives in `src/type_lattice`, exported from the library root, and
-imports the label and symbol types from [`parse`](../../src/parse/labels.rs) and, from
-[`memory`](../../src/memory/scope_id.rs), `ScopeId` plus the region bump seam — the allocator, its
+imports the label and symbol types from `parse` and, from
+`memory`, `ScopeId` plus the region bump seam — the allocator, its
 vector, and the bump-backed table door — that the registry's content and every scratch buffer are
 built over ([type-registry.md § Ownership and reclamation](type-registry.md#ownership-and-reclamation)).
 Nothing else. No value, cell, AST, scope, working
@@ -72,7 +72,7 @@ the rendering entry points, not named by a caller.
 whether the carried type is a subtype of the slot.
 
 - `Never` is the bottom and `Any` the top.
-- `OfKind(x) ≤ OfKind(y)` when `y` admits `x`; the kind lattice of [`KKind`](../../src/type_lattice/kind.rs)
+- `OfKind(x) ≤ OfKind(y)` when `y` admits `x`; the kind lattice of `KKind`
   is the whole story on the type channel.
 - Lists, dicts and constructor applications are covariant in every child. Records are covariant
   and width-superset: the subtype has every field of the supertype. Functions are contravariant

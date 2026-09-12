@@ -128,7 +128,7 @@ resolves directly.
 ## Layers
 
 The parser's bare type-leaf carrier is
-[`ExpressionPart::Type(TypeSymbol)`](../../src/parse/ast.rs) — the interned
+`ExpressionPart::Type(TypeSymbol)` — the interned
 content digest of the source name and nothing else
 ([label-interning.md](../label-interning.md)). The pipeline from that token to a
 fully-elaborated `&'a KType` runs through five layers, each with
@@ -414,8 +414,8 @@ per-dispatch-poll `bare_outcomes` cache and parks on the producers behind every 
 bare-name part — so admission always decides against landed facts, and which overload wins
 never depends on drain order. Two slot kinds are exempt, both owned by a binder form's own
 machinery and both statically known from the expression's cached form entry
-([`KExpression::binder_name_slot`](../../src/parse/ast.rs), off
-[`BinderFacts::name_slot`](../../src/parse/forms/binder.rs)):
+(`KExpression::binder_name_slot`, off
+`BinderFacts::name_slot`):
 
 - the **declared-name position** — the slot owns the name (`x` in `LET x = …`), so an inner
   shadowing binder must not wait on a same-named outer binder still in flight (its own claim

@@ -1,6 +1,6 @@
 # The DAG scheduler
 
-What `workgraph` adds on top of the [cellgraph](../../cellgraph/README.md)
+What `workgraph` adds on top of the cellgraph
 substrate: a *scheduling discipline* over cells. Cells become **nodes** with dependency edges,
 a wake protocol, and terminal delivery. Everything here is defined in terms of
 edges and terminals — which is exactly why none of it belongs one layer down.

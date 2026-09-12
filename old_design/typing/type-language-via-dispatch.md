@@ -38,7 +38,7 @@ to the value-side path.
 
 **One shape, whether the sigil was written or synthesized.** A sigil whose body is a lone
 sub-expression re-labels that node onto the wrapper instead of building a fresh layer
-([the type-sigil lowering](../../src/parse/lower.rs)), so `:(Point.x)` lands on exactly the
+(the type-sigil lowering), so `:(Point.x)` lands on exactly the
 one-node shape `build_attr` already emits for a Type-class tail (`Maybe.Some`), and `:(…)` is
 idempotent. A lone non-expression part (`:(Number)`) and a multi-part body (`:(LIST OF Number)`)
 are untouched. This is normalization, not recognition — the parser still reads no meaning out of
@@ -54,11 +54,11 @@ parenthesized constructor forms are spelled bare too: **inside a binder form's t
 `OP #(++) OVER (LIST OF Str) = (…)` are the same declarations as their sigiled twins.
 
 The equivalence is minted at parse, and its scope is exactly the masked slots. The
-[`BinderFacts`](../../src/parse/forms/binder.rs) riding a
-[`FORMS`](../../src/parse/forms.rs) entry carry a `type_slots` mask — the parts-run
+`BinderFacts` riding a
+`FORMS` entry carry a `type_slots` mask — the parts-run
 positions that form reads as a type expression — and
-[`admit_bare_type_slots`](../../src/parse/forms/binder.rs), called as each expression run
-closes ([`lower_body`](../../src/parse/lower.rs)), rewrites a plain
+`admit_bare_type_slots`, called as each expression run
+closes (`lower_body`), rewrites a plain
 `Expression` part at each masked index to `SigiledTypeExpr`. Same `KExpression` payload, new
 parse-context marker; any other part kind there (a `Type` token, a `:(…)`, a `:{…}`, an
 identifier) is left alone, a run matching no binder key is untouched, and the rewrite is
@@ -69,7 +69,7 @@ its sigiled spelling.
 
 Everything downstream follows by construction, which is why parity is exact rather than
 maintained: the statement's untyped bucket key is unchanged (both variants are slots), the
-form's [`FORMS`](../../src/parse/forms.rs) entry already stamps the index
+form's `FORMS` entry already stamps the index
 raw so the part is captured rather than staged as an eager sub-dispatch, and the slot's carrier
 union already lists `SigiledTypeExpr`. The two spellings are the *same part* by the time
 anything semantic looks at them. The one visible consequence is cosmetic: a diagnostic that
@@ -206,7 +206,7 @@ stays an unknown-type error. See
 schema lowering to a [`TypeNode::Record`](ktype/records-and-limits.md#record-fields-and-ktype-hashing) node,
 distinct from any nominal struct. The `:` type-sigil anchors to `{` (not only `(`),
 and the parser emits a first-class `ExpressionPart::RecordType(<field list>)` part
-([lower.rs](../../src/parse/lower.rs)) whose nested `KExpression` is the bare
+(lower.rs) whose nested `KExpression` is the bare
 `(x :Number, …)` field list. Unlike `:(...)` (which wraps a `SigiledTypeExpr` for the
 dispatcher to route), `:{...}` is matched *structurally*: the `DispatchShape::RecordType`
 handler folds the field list straight to a `Record` node via the shared field-list parser
@@ -247,8 +247,8 @@ it appears, and never also a pair. So the annotation form belongs to the record 
 whose `:{` sigil is exactly what distinguishes it — `:{xs :(List Number)}` — and inside a
 plain brace the same spelling leaves the entry unpaired. `{k :Number}` and `{'k':(f x)}`
 are errors naming the sigil reading; `{k: Number}`, `{k : Number}` and `{'k': (f x)}` are
-the dict entries they were reaching for. ([`brace.rs`](../../src/parse/brace.rs) owns the
-pairing state machine; the sigil arm is in [`lower.rs`](../../src/parse/lower.rs).) Mixing
+the dict entries they were reaching for. (`brace.rs` owns the
+pairing state machine; the sigil arm is in `lower.rs`.) Mixing
 `:` and `=` pairs in one brace is its own error (`mixed ':' and '=' in a brace literal`).
 
 A **repeated field name in a record literal is a parse error**: a record's field list is
@@ -394,10 +394,10 @@ name binding and ride the name-keyed placeholder channel. A bare `EXPR` / `OP` r
 bucket and rides the bucket-keyed channel instead; the combined
 `LET <name> = FN EXPR …` statement (and its `OP` twin) rides both from one binder. Which forms are
 binders — and the name and buckets each declares — is read parse-statically from
-the [`BinderFacts`](../../src/parse/forms/binder.rs) riding the node's cached
-[`FORMS`](../../src/parse/forms.rs) entry; the two
+the `BinderFacts` riding the node's cached
+`FORMS` entry; the two
 channels are the two fields of one
-[`StoredBinderKey`](../../src/parse/forms/binder.rs) record, an optional name
+`StoredBinderKey` record, an optional name
 and up to two bucket keys.
 
 The bucket-keyed channel admits *sibling* overloads under one head

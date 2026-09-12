@@ -41,7 +41,7 @@
 //! registry ([`tests::properties`]). Hand-written tests remain only where a law cannot express the
 //! shape, and each says which.
 //!
-//! See [old_design/typing/type-lattice.md](../old_design/typing/type-lattice.md).
+//! See [type_lattice/README.md](type_lattice/README.md).
 
 mod digest;
 mod handle;

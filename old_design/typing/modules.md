@@ -154,7 +154,7 @@ Opaque ascription is **generative**: each application mints a fresh
 `KType::AbstractType { source: view.scope_id(), name }` per declared abstract
 type, where `view` is the freshly allocated child module the ascription
 introduces. `AbstractType`'s `source` is a plain
-[`ScopeId`](../../src/memory/scope_id.rs), so the variant is owned data
+`ScopeId`, so the variant is owned data
 carrying no `&Module`. It has two **minting sites** — this per-call ascription
 module, and the SIG decl scope for a declaration-time member (below) — which the
 representation no longer distinguishes: they differ only in *which* scope id

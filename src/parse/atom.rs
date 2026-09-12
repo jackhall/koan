@@ -12,7 +12,7 @@
 //! mid-token errors attach the enclosing token's span so the message names the
 //! offending char while the span pinpoints the token.
 //!
-//! See [old_design/expressions-and-parsing.md](../../old_design/expressions-and-parsing.md).
+//! See [README.md](README.md) § The division of labour with `sexlex`.
 
 use std::iter::Peekable;
 use std::str::CharIndices;
@@ -208,8 +208,8 @@ fn take_digits(bytes: &[u8], at: &mut usize) -> usize {
     *at - start
 }
 
-/// Classify a sub-token per the token-class rules in
-/// [old_design/typing/tokens.md](../../old_design/typing/tokens.md). Capital-leading tokens
+/// Classify a sub-token per the token-class rules ([README.md](README.md) § Labels).
+/// Capital-leading tokens
 /// that match neither the keyword nor the type shape are rejected rather than falling
 /// through to Identifier, so a stray `A` or `K9` can't silently shadow a future
 /// type-position binding. Types and Identifiers reject non-alphanumeric content so

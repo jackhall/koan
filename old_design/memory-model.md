@@ -1,10 +1,10 @@
 # Memory model and scoping rules
 
-Every `KObject` lives in a [`KoanRegion`](../src/memory/region.rs). Top-level
+Every `KObject` lives in a `KoanRegion`. Top-level
 work allocates into the **run-root region**; each user-fn call gets its own
-**per-call `KoanRegion`** owned by [`CallFrame`](../src/memory/frame.rs),
+**per-call `KoanRegion`** owned by `CallFrame`,
 freed when the call's slot finalizes. Above both sits
-[`program_storage`](../src/memory/program.rs), the region program text and
+`program_storage`, the region program text and
 its parsed AST are bumped into: created before the run root and dropped after it, at
 the same **eternal** tier (`PinsRegion::needs_no_pin`), so a value pointing at
 program text names no member any pin bundle has to hold. It stays outside the frame
@@ -28,7 +28,7 @@ expression parts already hosted there
 `Scope`'s `Drop`-freedom is structural rather than audited: every field is `Copy`, a
 `Cell` of a `Copy`, or a bump-backed table whose own vacuous destructor is
 suppressed, and the `reattachable!` declaration in
-[region.rs](../src/memory/region.rs) states that as a compile-time
+region.rs states that as a compile-time
 `!needs_drop::<Scope<'static>>()` assert — a field that later brings glue back fails
 the build there.
 A `KType` and a `TypeSymbol` take neither tier: both are lifetime-free `Copy`
@@ -45,7 +45,7 @@ than ownership trees. The structural edges:
 - [`Bindings`](../src/machine/core/bindings.rs)' value channel maps each bound
   name to the dormant carrier fusing its value with the exact reach minted for
   it. A per-call frame addresses that channel by **slot** — a position in the
-  body's own [`SlotLayout`](../src/parse/forms/layout.rs), one bump
+  body's own `SlotLayout`, one bump
   allocation sized at frame birth — and every other scope addresses it by name
   through a bump-backed map; either way the pointee may live in this scope's
   region or in an outer one.
@@ -59,7 +59,7 @@ than ownership trees. The structural edges:
   scope's region owner, read off the region's own host back-link. It carries no
   per-value liveness anchor:
   the region an escaping closure reaches is pinned by its envelope's owned
-  [`FrameCoverage`](../src/memory/frame.rs) bundle while it rides a
+  `FrameCoverage` bundle while it rides a
   scheduler slot, then minted — description into the consumer region's reach
   table, pins onto the binding entry — when the value is bound (see
   [§ Region lifetime erasure](#region-lifetime-erasure)).
@@ -121,7 +121,7 @@ protocol sits on top of.
 
 ## Region lifetime erasure
 
-No **value** stored in a [`KoanRegion`](../src/memory/region.rs) is erased at
+No **value** stored in a `KoanRegion` is erased at
 all. The region's storage is its bump, and a bump's own type carries no lifetime, so
 `'a` enters only at the allocating call: a value whose fields are already at the
 caller's `'a` — its region back-pointer included — is built there and placed there,
@@ -204,7 +204,7 @@ At construction the scope reference is coupled at its target lifetime with no sc
 re-anchor verb. A same-region child stores its already-`'a` parent by plain coercion — the
 constructors take `&'a Scope<'a>`. A per-call child, whose lexical parent / root is longer-lived,
 builds through the externally-witnessed construction door
-[`Frame::open_under`](../src/memory/frame.rs): it mints the fresh region, brands it and the
+`Frame::open_under`: it mints the fresh region, brands it and the
 foreign parent at one `for<'b>` (the `zip`-combined [`SealedExtern::open`](../workgraph/src/witnessed.rs) the
 run-loop step also rests on), calls the caller's construction closure to build the real invariant
 resident coupling them, and wraps the finished `(storage, envelope)` pair — so the per-call child is
@@ -213,7 +213,7 @@ outside the witnessed substrate. The door is generic over the family it seats an
 type; [`Scope::open_frame`](../src/machine/core/scope.rs) is the Koan-side caller that passes its
 own brand, itself as `outer`, and the private `Scope` constructor as the closure — the split that
 keeps `memory` from knowing what a scope is while `Scope` still owns what a scope is.
-[`Frame::adopting`](../src/memory/frame.rs), behind
+`Frame::adopting`, behind
 [`Scope::adopt_as_run_frame`](../src/machine/core/scope.rs), is the run-root spelling of the same
 coupling, over an already-built root rather than a fresh child; it derives the storage from the
 root's own brand rather than taking it. `Frame`'s own wrap constructor is private, so those two
@@ -221,7 +221,7 @@ doors are the only way a storage and a resident are paired.
 
 `CallFrame` — Koan's instantiation
 [`Frame<ScopeRefFamily>`](../src/machine/core/scope.rs) of that generic shell — holds the pair as one
-[`Delivered<ScopeRefFamily>`](../src/memory/substrate.rs) envelope:
+`Delivered<ScopeRefFamily>` envelope:
 the frame storage is the envelope's retained host and the child scope its member-less resident
 carrier, so the storage-pins-the-scope co-location is a construction invariant of the envelope rather
 than a field-order convention. A scheduler slot's `NodeScope::YokedChild` (a cart-ancestor block
@@ -265,7 +265,7 @@ witness `W` that pins its pointee in one value, so "the witness keeps the value 
 invariant rather than a co-stored field pair plus a SAFETY comment. `W` is a [`Witness`](../workgraph/src/witnessed.rs)
 — an `unsafe` marker asserting its pointee stays at a fixed address while held; `Rc<F>` qualifies
 (a static `StableDeref` assert records the obligation), and a *set* of them — the Koan result-slot
-and lift coverage [`FrameCoverage`](../src/memory/frame.rs) — pins every region a value reaches at
+and lift coverage `FrameCoverage` — pins every region a value reaches at
 once, an empty set being a frameless / run-region terminal whose backing outlives the carrier. The carrier is re-anchored through one
 of three read/transform accessors, all sound by construction: `with` re-anchors behind a **rank-2**
 `for<'b>` brand so the fabricated content lifetime cannot escape the closure into the result (the
@@ -291,7 +291,7 @@ carry none; `yoke` in fact routes only the safe `erase`, carrying no retype of i
 
 The value channel is borrow-checked end to end. `finalize` takes the workload's finished terminal
 as a [`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope bundling the erased value under
-a [`CarrierWitness`](../src/memory/substrate.rs) — the **reference-only** carrier, a
+a `CarrierWitness` — the **reference-only** carrier, a
 reference to the value's reach description and nothing else, pinning nothing itself; the description
 is where both of the value's region facts live, its host region and the regions its borrows reach —
 sealed **as-is** (a declared return is checked and re-stamped in place first): there is no
@@ -314,7 +314,7 @@ pin plus the step's owned pins, so the whole tail nests inside the brand and car
 witness-borrow reattach. That brand is **bounded above by `'run`**: the open hands its closure a
 [`Within<'b, 'run>`](../workgraph/src/witnessed/dormant.rs) token whose declared `'run: 'b` the
 `for<'b>` instantiation discharges, which is what lets the run's
-[`ProgramBrand<'run>`](../src/memory/program.rs) — a live borrow, not a sealed carrier —
+`ProgramBrand<'run>` — a live borrow, not a sealed carrier —
 be stored unshortened where the step's
 [`DecideCtx`](../src/machine/execute/decide/ctx.rs) is built: the context keeps `'program`
 distinct from the step lifetime, related only by its own `'program: 'step` bound, and the token is
@@ -358,7 +358,7 @@ and eternal rules instead
 
 The per-call frame's seed binds (`KFunction::invoke` params, the deferred-return-type
 elaboration) open the child scope at a `for<'b>` brand through
-[`CallFrame::with_resident`](../src/memory/frame.rs) and **relocate** their caller value into the
+`CallFrame::with_resident` and **relocate** their caller value into the
 opened scope's own region through the substrate before binding it — the param-bind via
 [`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs) (which relocates the value into the
 frame region at a fold brand, the fold's composition minting and retaining what the copy still
@@ -382,9 +382,9 @@ through the same [`BumpAllocator`](../workgraph/src/witnessed/bump.rs) verbs, an
 so a bare `&KoanRegion` has no allocation surface and only a `RegionHandle` minted from a region
 owner (or handed out at a `for<'b>` brand) can write.
 
-A [`CallFrame`](../src/memory/frame.rs) is a region shell and nothing else: a
+A `CallFrame` is a region shell and nothing else: a
 `Delivered<ScopeRefFamily>` envelope pairing the per-call child scope with the
-[`FrameStorage`](../src/memory/region.rs) that owns its region, plus that same
+`FrameStorage` that owns its region, plus that same
 `Rc<FrameStorage>` held beside it (the envelope's members are one flat antichain, so the frame's own
 storage is not recoverable from it by identity). `FrameStorage` bundles the `KoanRegion` and an
 `Option<Rc<FrameStorage>>` for the parent-frame chain. The run's own lookup state and output sink
@@ -422,8 +422,8 @@ The **region-free leaf doors** are the first kind. [`Scalar`](../src/machine/mod
 payload; `RegionBrand::alloc_string` is its sibling for the one leaf whose *representation* is
 region-hosted, re-homing the bytes into this region as part of the store; and
 `RegionBrand::alloc_expression` takes a
-[`ProgramExpression`](../src/parse/ast/program.rs) and nothing else — the marker minted only
-by a [`ProgramBrand`](../src/memory/program.rs) door — which is what proves the cell it
+`ProgramExpression` and nothing else — the marker minted only
+by a `ProgramBrand` door — which is what proves the cell it
 bumps borrows only eternal-tier program storage. Each yields a resident `&'a KObject<'a>` bumped in the destination, so residence is where
 the door placed it. The witnessed spellings (`alloc_scalar_witnessed`,
 `alloc_expression_witnessed`) seal that product under a member-less own-region description: the empty
@@ -460,7 +460,7 @@ taken at a `for<'b>` lifetime no ambient borrow inhabits. A `KObject` embedding 
 - **folded** (`FoldingBrand::alloc_object_folded` / `alloc_cell_folded` / `alloc_substrate_folded` /
   `alloc_function_folded`) — no runtime audit at all,
   sound by signature: each is one line over the single generic
-  [`FoldingBrand::alloc_folded<T: Copy>`](../src/memory/region.rs), written as an inherent `impl`
+  `FoldingBrand::alloc_folded<T: Copy>`, written as an inherent `impl`
   block in the file that owns its payload
   ([value-substrates.md § Where the substrate lives](value-substrates.md#where-the-substrate-lives)),
   so the rank-2 argument is stated once. The sink takes its input at the brand lifetime
@@ -470,7 +470,7 @@ taken at a `for<'b>` lifetime no ambient borrow inhabits. A `KObject` embedding 
   ambient-lifetime capture cannot coerce to `'b` (which has no outlives relation to any enclosing
   lifetime), so smuggling a captured borrow past a folded sink is a compile error rather than a
   runtime-audited obligation. `FoldingBrand`'s sole constructor
-  ([`in_fold_closure`](../src/memory/region.rs)) takes a
+  (`in_fold_closure`) takes a
   [`FoldedPlacement`](../workgraph/src/witnessed.rs) — a compile-only capability privately wrapping
   the destination handle — which only a fold engine (`transfer_into` / `transfer_all_into` /
   `merge_into` / `Delivered::project` / `StepAllocator::alloc_carried_with`) mints over the
@@ -480,7 +480,7 @@ taken at a `for<'b>` lifetime no ambient borrow inhabits. A `KObject` embedding 
   [`bump`](../workgraph/src/witnessed.rs) door: a `KObject`, a `Held` cell, a `Module` and a
   `ContainerSubstrate` are all `Copy`, so the cell lands in the destination's bump and the brand's
   `'a` — the fold's own — is what discharges the residence obligation at compile time.
-- **born** ([`Frame::open_under`](../src/memory/frame.rs), behind
+- **born** (`Frame::open_under`, behind
   [`Scope::open_frame`](../src/machine/core/scope.rs);
   [`Scope::alloc_child_transparent`](../src/machine/core/scope.rs)) — the same rank-2 argument for
   the two stores that embed an operand living in *another* region, which no destination brand can
@@ -617,7 +617,7 @@ in any debug build, with the report surface re-exported from
 ([reach.md § Debug audits](../workgraph/old_design/reach.md#debug-audits)). Koan needs
 no wiring for it: `FrameStorage` is the library's `RegionHost`, so the walk's
 ancestor enumeration is the same `outer` chain
-[`pins_region`](../src/memory/frame.rs) already answers over.
+`pins_region` already answers over.
 
 The **reach-tightness report** ([`reach_audit.rs`](../audit/reach_audit.rs))
 is Koan's, and compiles only under `cfg(any(test, feature = "region-audit"))` —
@@ -739,7 +739,7 @@ consumer) is enforced by the surface rather than by convention.
 
 A per-call frame's value bindings cost one sized bump allocation, not a table
 built from nothing. Every body node carries a
-[`SlotLayout`](../src/parse/forms/layout.rs) computed where it is
+`SlotLayout` computed where it is
 sealed — its value binders as a symbol-sorted run of `(ValueSymbol, lexical
 position)`, read off the same cached statement binder plans the `CLOSE` capture
 walk and the dispatch-time claim stamp read, so the layout and the binds it
@@ -753,7 +753,7 @@ be kept in step: a name's slot is a binary search either side of the call.
 An activation opens its frame through `open_frame_slotted`, which zips the
 layout beside the lexical parent into one operand so both re-anchor at the birth
 brand, and the child's value channel becomes a
-[`SlotArray`](../src/memory/slots.rs) of `layout.len()` cells in one bump
+`SlotArray` of `layout.len()` cells in one bump
 allocation — none at all for a body binding no value, which takes the shared
 empty layout. Every other scope — the run root, module and `SIG` bodies, `USING`
 overlays, a `CLOSE OVER` block's captured environment — keeps a name-keyed map,
@@ -787,7 +787,7 @@ party's death schedule reaches into another's subtree.
 - Per-call-region protocol verification (escaping-value relocation and retention, TCO
   frame reuse, MATCH `FrameStorage.outer` chain) is enumerated in
   [per-call-region/scope-handles.md § Verification](per-call-region/scope-handles.md#verification).
-- [`region_death_frees_every_drop_free_family`](../src/memory/tests.rs)
+- `region_death_frees_every_drop_free_family`
   fills one frame region with all five substrate shapes — each carrying a bumped string leaf, so
   the region holds re-homed bytes and index metadata as well as cells — plus a run of `KFunction`s
   whose signatures put a bumped element run and synthesized keyword / parameter-name bytes in the

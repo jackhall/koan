@@ -13,10 +13,8 @@
 //!
 //! One alias per library generic, and no second alias for the same generic: a site that needs a
 //! parameter an alias does not bind is a design question about the profile, not a variant to add
-//! here. See [old_design/scheduler-library.md](../../old_design/scheduler-library.md) for the crate
-//! boundary this file sits on, and
-//! [workgraph/old_design/witnessed-memory.md](../../workgraph/old_design/witnessed-memory.md) for the
-//! machinery itself.
+//! here. See [README.md](README.md) § An alias is not an instantiation, and a store is not the
+//! storage.
 
 use super::region::{FrameStorage, KoanStorageProfile};
 

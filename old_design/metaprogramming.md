@@ -21,7 +21,7 @@ concurrent siblings deterministic around a splice.
   an ordinary first-class value. It can be bound with `LET`, passed to and
   returned from functions, and stored in containers like any other value.
 - **Quote** — `#(…)`: a parse-static
-  [`ExpressionPart::QuotedExpression`](../src/parse/ast.rs). It
+  `ExpressionPart::QuotedExpression`. It
   evaluates to the expression value of its body; the body itself never
   dispatches. Quotation happens entirely at parse time — there is no run-time
   quoting operation.
@@ -35,7 +35,7 @@ concurrent siblings deterministic around a splice.
   computed sub-expression. Its content does not exist until evaluation, so
   nothing about it is readable parse-statically.
 - **Lazy `:KExpression` slot** — a slot the node's cached
-  [`FORMS`](../src/parse/forms.rs) entry stamps `lazy`, resolved when the node
+  `FORMS` entry stamps `lazy`, resolved when the node
   is constructed. A literal expression part in such
   a slot is captured **raw** — handed to the builtin un-dispatched — so the
   builtin decides what its content means. Only builtins have lazy slots; a

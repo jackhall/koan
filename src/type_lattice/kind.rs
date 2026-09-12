@@ -4,7 +4,7 @@
 //! against it. `OfKind` is **type-channel only** — it admits a type value, never a runtime
 //! instance (a value is matched by a type, never by a kind).
 //!
-//! See [old_design/typing/type-lattice.md](../../old_design/typing/type-lattice.md).
+//! See [README.md](README.md) § The node vocabulary.
 
 use crate::parse::{LabelInterner, StaticName, TypeSymbol};
 
