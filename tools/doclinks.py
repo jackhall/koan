@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Maintain links between docs and source for the koan repo.
 
-Three doc trees are covered: koan's own `design/` + `roadmap/`, and one per
-embedded crate — `workgraph/` and `cellgraph/`, each with its own `design/` +
-`roadmap/` pair. Roadmap items across all three form one dependency graph —
-cross-tree edges are gated for symmetry like any other — but each tree derives
-its own "Next items" index. A roadmap directory whose name starts with `old_`
-holds retired requirements docs: linked, gated for symmetry and orphans, but
-never listed as next and given no derived slice.
+A module's design doc is the `README.md` in its source directory, so the gates
+reach into `src/` as well as the doc trees. Three doc trees are covered: koan's
+own `design/` + `roadmap/`, and one per embedded crate — `workgraph/` and
+`cellgraph/`, each with its own `design/` + `roadmap/` pair. Roadmap items across
+all three form one dependency graph — cross-tree edges are gated for symmetry
+like any other — but each tree derives its own "Next items" index. A roadmap
+directory whose name starts with `old_` holds retired requirements docs: linked,
+gated for symmetry and orphans, but never listed as next and given no derived
+slice.
 
 Subcommands:
   check                run every gating audit in one pass: broken links, roadmap
                        Requires/Unblocks symmetry, orphaned design/ + roadmap/
-                       docs, and the derived Next-items list, plus an
+                       docs and module READMEs, and the derived Next-items list,
+                       plus an
                        informational report of src/**/*.rs files changed vs a git
                        ref. Exits non-zero if any gate fails; the source-tree
                        section never affects the exit code.
@@ -52,16 +55,33 @@ REPO = Path(__file__).resolve().parent.parent
 # and their own source tree, alongside koan's at the root.
 EMBEDDED_CRATES = ("workgraph", "cellgraph")
 
+# Embedded crates with a source tree and a README but no doc trees of their own:
+# small enough that the crate README is the whole design statement. They are
+# scanned for links and orphan-gated on their module READMEs like any other
+# source tree, and contribute nothing to the roadmap or design gates.
+LEAF_CRATES = ("sexlex",)
+
 MD_GLOBS = (
     "*.md", "audit/**/*.md", "src/**/*.md", "design/**/*.md", "old_design/**/*.md",
     "roadmap/**/*.md",
     *(g for c in EMBEDDED_CRATES
       for g in (f"{c}/*.md", f"{c}/src/**/*.md", f"{c}/design/**/*.md",
                 f"{c}/old_design/**/*.md", f"{c}/roadmap/**/*.md")),
+    *(g for c in LEAF_CRATES for g in (f"{c}/*.md", f"{c}/src/**/*.md")),
 )
 SRC_GLOBS = (
     "src/**/*.rs", "audit/**/*.rs",
-    *(f"{c}/src/**/*.rs" for c in EMBEDDED_CRATES),
+    *(f"{c}/src/**/*.rs" for c in EMBEDDED_CRATES + LEAF_CRATES),
+)
+
+# Where a module's design doc sits: a `README.md` in the module's own source
+# directory, koan's and every embedded crate's alike. These are orphan-gated
+# beside the doc trees — a module README nothing links is a doc a reader of the
+# module will never be sent to, and the module's top-of-file comment is what
+# links it.
+MODULE_README_GLOBS = (
+    "src/**/README.md",
+    *(f"{c}/src/**/README.md" for c in EMBEDDED_CRATES + LEAF_CRATES),
 )
 
 # Roadmap items live in one tree per crate: koan's own `roadmap/`, and each
@@ -377,6 +397,8 @@ def _check_orphans() -> int:
     targets: list[Path] = []
     for root in DESIGN_ROOTS + ROADMAP_ROOTS:
         targets.extend(root.glob("**/*.md"))
+    for pat in MODULE_README_GLOBS:
+        targets.extend(REPO.glob(pat))
     targets.sort()
 
     referenced: set[Path] = set()
@@ -390,7 +412,8 @@ def _check_orphans() -> int:
     if orphans:
         print(f"\n{len(orphans)} orphaned doc(s).", file=sys.stderr)
         return 1
-    print("No orphaned design/ or roadmap/ docs (koan or an embedded crate).")
+    print("No orphaned design/, roadmap/ or module-README docs "
+          "(koan or an embedded crate).")
     return 0
 
 
