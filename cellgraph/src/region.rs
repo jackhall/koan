@@ -106,12 +106,19 @@ impl Region {
     /// The write surface at a caller-chosen `'r` — the executing cell's own writer, minted once at
     /// `enter` and handed to the step for the whole of it.
     ///
+    /// The `&self` is load-bearing beyond the borrow it widens: a bump is interior-mutable
+    /// throughout, so a *shared* borrow of a region tolerates every read and write the graph's
+    /// other paths make into the same bump while this writer is out. An exclusive borrow would
+    /// not — it is unique over those bytes whatever their type — so the first price query to walk
+    /// this region would end the writer's life.
+    ///
     /// # Safety
     ///
     /// `'r` must lie within one step of the cell this region belongs to: for all of `'r` the region
     /// is neither moved off its slot, taken, nor dropped. The graph verbs that do any of those
     /// (`release`, `release_tree`, disposal) cannot run inside a step, because `enter` holds the
-    /// graph exclusively for its whole length.
+    /// graph exclusively for its whole length. The caller must also reach this region through a
+    /// shared borrow, for the reason above.
     pub(crate) unsafe fn writer_at<'r>(&self) -> Writer<'r> {
         // SAFETY: see the contract. The `Bump` sits inline in a slab slot (a `Box<[SlabCell]>`
         // that is never reallocated) or in a tree-pool entry, and a bump's chunks are heap

@@ -653,12 +653,27 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         // The executing cell's region is minted here rather than at its first write, so the step's
         // own writer is a field copy and the one borrow-widening retype sits at the step's edge
         // beside `begin`. `Region::new` claims no chunk, so a step that never writes costs none.
+        match cell {
+            CellHandle::Slab(handle) => {
+                self.slots[handle.slot() as usize]
+                    .region
+                    .get_or_insert_with(Region::new);
+            }
+            CellHandle::Tree(handle) => {
+                self.trees.region_mut(handle.index());
+            }
+        }
+        // Taken again through a **shared** path, and the exclusive borrow above is over. A writer
+        // descended from an exclusive borrow of the region would not survive the step: a bump's
+        // fields are interior-mutable, but an exclusive borrow is unique over them all the same,
+        // so the first read of that bump through any other path — a price query walking the
+        // graph — freezes it and forbids every write underneath. A shared borrow of the region
+        // carries the interior mutability instead, and tolerates both.
         let region = match cell {
-            CellHandle::Slab(handle) => self.slots[handle.slot() as usize]
-                .region
-                .get_or_insert_with(Region::new),
-            CellHandle::Tree(handle) => self.trees.region_mut(handle.index()),
-        };
+            CellHandle::Slab(handle) => self.slots[handle.slot() as usize].region.as_ref(),
+            CellHandle::Tree(handle) => self.trees.region(handle.index()),
+        }
+        .expect("the executing cell's region was just minted");
         // SAFETY: `writer_at` asks that the region stay where it is, unmoved and undropped, for
         // the whole of the brand. That brand is `'cell`, quantified by this call and nameable
         // nowhere outside `step`, so it lies within this `enter` — and `enter` holds the graph

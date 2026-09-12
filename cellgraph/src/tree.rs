@@ -342,6 +342,12 @@ impl<C: Reattachable> TreePool<C> {
             .get_or_insert_with(Region::new)
     }
 
+    /// The cell's region as a shared borrow, for a caller that has already minted it — the step's
+    /// own writer, which must not descend from an exclusive borrow.
+    pub(crate) fn region(&self, index: u32) -> Option<&Region> {
+        self.branch(index).region.as_ref()
+    }
+
     /// Take the cell's storage off it, for the splice or the drop that disposal performs.
     pub(crate) fn take_region(&mut self, index: u32) -> Option<Region> {
         self.branch_mut(index).region.take()
