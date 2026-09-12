@@ -264,6 +264,98 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 ///     })
 ///     .unwrap();
 /// ```
+///
+/// Severing is by lifetime, and a family's `'graph` borrows are not region storage, so they cross a
+/// copy as they are. A family nesting one under a region borrow rebuilds only the region part:
+///
+/// ```
+/// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, Writer};
+/// use cellgraph::reattachable;
+/// #[derive(Clone, Copy)]
+/// struct Entry<'graph, 'cell> {
+///     program: &'graph str,
+///     count: &'cell u32,
+/// }
+/// struct Work;
+/// struct Listing;
+/// reattachable!(Work => String, Listing => &'cell Entry<'graph, 'cell>);
+/// impl DropFree for Listing {}
+/// fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
+///     let mut value = Some(value);
+///     &writer.fill(1, |_| value.take().unwrap())[0]
+/// }
+///
+/// let program = String::from("program text");
+/// let mut graph: CellGraph<'_, Work> = CellGraph::new(2, |_| Verdict::Copy);
+/// let cell = graph.create(None, None).unwrap();
+/// let other = graph.create(None, None).unwrap();
+/// graph
+///     .enter(cell, |context| {
+///         let count = one(context.writer(), 41);
+///         let entry = one(context.writer(), Entry { program: &program, count });
+///         let source = context.lift::<Listing>(entry);
+///         context
+///             .alloc_into::<Listing, Listing>(
+///                 other,
+///                 &[Operand { carrier: &source, copy_bytes: 0 }],
+///                 |writer, views| match views[0] {
+///                     CrossedOperand::Pinned(entry) => Active::new(entry),
+///                     // The `'graph` borrow embeds as it is; the count is written again.
+///                     CrossedOperand::Copied(entry) => Active::new(one(writer, Entry {
+///                         program: entry.program,
+///                         count: one(writer, *entry.count),
+///                     })),
+///                 },
+///             )
+///             .unwrap();
+///     })
+///     .unwrap();
+/// ```
+///
+/// Embedding the copied view's region part is still a compile error:
+///
+/// ```compile_fail
+/// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, Writer};
+/// use cellgraph::reattachable;
+/// #[derive(Clone, Copy)]
+/// struct Entry<'graph, 'cell> {
+///     program: &'graph str,
+///     count: &'cell u32,
+/// }
+/// struct Work;
+/// struct Listing;
+/// reattachable!(Work => String, Listing => &'cell Entry<'graph, 'cell>);
+/// impl DropFree for Listing {}
+/// fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
+///     let mut value = Some(value);
+///     &writer.fill(1, |_| value.take().unwrap())[0]
+/// }
+///
+/// let program = String::from("program text");
+/// let mut graph: CellGraph<'_, Work> = CellGraph::new(2, |_| Verdict::Copy);
+/// let cell = graph.create(None, None).unwrap();
+/// let other = graph.create(None, None).unwrap();
+/// graph
+///     .enter(cell, |context| {
+///         let count = one(context.writer(), 41);
+///         let entry = one(context.writer(), Entry { program: &program, count });
+///         let source = context.lift::<Listing>(entry);
+///         context
+///             .alloc_into::<Listing, Listing>(
+///                 other,
+///                 &[Operand { carrier: &source, copy_bytes: 0 }],
+///                 |writer, views| match views[0] {
+///                     CrossedOperand::Pinned(entry) => Active::new(entry),
+///                     CrossedOperand::Copied(entry) => Active::new(one(writer, Entry {
+///                         program: entry.program,
+///                         count: entry.count,
+///                     })),
+///                 },
+///             )
+///             .unwrap();
+///     })
+///     .unwrap();
+/// ```
 pub enum CrossedOperand<'graph, 'cell, 'severed, V: Reattachable<'graph>>
 where
     'graph: 'cell + 'severed,
@@ -469,6 +561,51 @@ enum Crossing {
 /// may borrow through without the substrate pricing, reaching, or retyping it. The borrow checker
 /// is what makes it outlive the graph, and the graph is invariant in it, so it never shortens to a
 /// step's brand. An embedder with no such storage writes `CellGraph<'static, C>`.
+///
+/// A cell may hold a `'graph` borrow from the moment it is created, and the continuation comes back
+/// through it in a later step:
+///
+/// ```
+/// use cellgraph::{CellGraph, Verdict, reattachable};
+/// struct Script;
+/// reattachable!(Script => &'graph str);
+///
+/// let program = String::from("program text");
+/// let mut graph: CellGraph<'_, Script> = CellGraph::new(1, |_| Verdict::Pin);
+/// let cell = graph.create(None, Some(program.as_str())).unwrap();
+/// let read = graph
+///     .enter(cell, |context| context.continuation().map(str::len))
+///     .unwrap();
+/// assert_eq!(read, Some(12));
+/// ```
+///
+/// So the storage cannot go while the graph that may hold a borrow of it is still used:
+///
+/// ```compile_fail
+/// use cellgraph::{CellGraph, Verdict, reattachable};
+/// struct Script;
+/// reattachable!(Script => &'graph str);
+///
+/// let program = String::from("program text");
+/// let mut graph: CellGraph<'_, Script> = CellGraph::new(1, |_| Verdict::Pin);
+/// let cell = graph.create(None, Some(program.as_str())).unwrap();
+/// drop(program);
+/// let read = graph
+///     .enter(cell, |context| context.continuation().map(str::len))
+///     .unwrap();
+/// ```
+///
+/// And the graph lifetime does not shorten:
+///
+/// ```compile_fail
+/// use cellgraph::{CellGraph, reattachable};
+/// struct Work;
+/// reattachable!(Work => String);
+///
+/// fn shorten<'long: 'short, 'short>(graph: CellGraph<'long, Work>) -> CellGraph<'short, Work> {
+///     graph
+/// }
+/// ```
 ///
 /// Two halves, borrowed apart by a step: the [`Cells`] — identity, relations, holds, the sealed
 /// tier — which a step holds exclusively, and the [`Regions`] every live cell writes into, which

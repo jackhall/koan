@@ -24,7 +24,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-22 tests, grouped by the unsafe site each pins down. Names below are the exact
+23 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -101,14 +101,17 @@ reclaimed, and one whose sealed cell has retired, are moved into the door and re
 a valid move because the value rests as bytes rather than as a reference. The sixth is the
 crossing's severing: a copied view is re-anchored at a brand unrelated to the destination's region
 and deep-copied through the writer, while a pinned one is embedded, so both re-anchors run in one
-build.
+build. The seventh carries two lifetimes through a keep and a redeem across a home that sealed: the
+value nests a borrow of heap storage outside the graph under a region borrow, and what Miri checks
+is that the retype moves the region borrow and leaves the `'graph` one naming the same live bytes.
 
 - `graph::tests::values::push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step`
 - `graph::tests::values::pull_completes_after_the_producer_seals`
 - `graph::tests::values::pull_completes_after_the_producer_is_absorbed_into_the_consumer`
 - `graph::tests::values::a_dormant_carrier_forwarded_through_two_merges_is_still_found`
 - `graph::tests::values::redeem_refuses_once_the_storage_is_gone`
-- `graph::tests::crossing::a_copied_view_is_readable_and_a_pinned_one_embeddable`
+- `graph::tests::prices::a_copied_view_is_readable_and_a_pinned_one_embeddable`
+- `graph::tests::values::a_graph_borrow_in_a_kept_value_redeems_after_its_home_seals`
 
 **The own-region brand** ([src/region.rs](../src/region.rs), [src/graph.rs](../src/graph.rs)) —
 the same `retype` primitive at the two doors that re-anchor at `'cell`, the shared borrow of the

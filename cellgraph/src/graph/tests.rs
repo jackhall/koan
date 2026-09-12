@@ -27,6 +27,19 @@ struct Number;
 crate::reattachable!(Number => &'cell u32);
 impl DropFree for Number {}
 
+/// A value nesting a borrow of storage outside the graph under a region borrow, so a keep and a
+/// redeem carry a reference the retype must leave alone beside one it moves.
+#[derive(Clone, Copy)]
+struct Entry<'graph, 'cell> {
+    program: &'graph u32,
+    count: &'cell u32,
+}
+
+/// The family of an [`Entry`] behind a region borrow.
+struct Listing;
+crate::reattachable!(Listing => &'cell Entry<'graph, 'cell>);
+impl DropFree for Listing {}
+
 const ANCHOR: u32 = 7;
 
 /// The crossing verdict every test that is not about the crossing itself passes: pin, always. It
@@ -142,8 +155,8 @@ fn kept_reach<'a, C: Reattachable<'static>, T: Reattachable<'static> + DropFree>
 
 /// What a slot currently holds, by handle — the state assertions read the slab directly, since
 /// residence is not observable through the public verbs.
-fn state_of<C: Reattachable<'static>>(
-    graph: &CellGraph<'static, C>,
+fn state_of<'graph, C: Reattachable<'graph>>(
+    graph: &CellGraph<'graph, C>,
     handle: SlabHandle,
 ) -> SlabState {
     graph.cells.slots[handle.slot() as usize].state

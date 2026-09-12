@@ -2,7 +2,10 @@
 //! both relations, and the ring detector.
 
 use super::super::*;
-use super::{ANCHOR, Borrowed, Number, Owned, number_here, one, operand, pin, pinned, state_of};
+use super::{
+    ANCHOR, Borrowed, Entry, Listing, Number, Owned, number_here, one, operand, pin, pinned,
+    state_of,
+};
 
 #[test]
 fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
@@ -278,6 +281,57 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
         })
         .unwrap();
     assert_eq!(read, 41);
+}
+
+#[test]
+fn a_graph_borrow_in_a_kept_value_redeems_after_its_home_seals() {
+    // Heap storage outside the graph, so Miri tracks the borrow the retype must not move.
+    let program = Box::new(ANCHOR);
+    let mut graph: CellGraph<'_, Owned> = CellGraph::new(2, pin);
+    let consumer = graph.create(None, None).unwrap();
+    let producer = graph.create(None, None).unwrap();
+
+    graph
+        .enter(consumer, |context| context.hold(producer))
+        .unwrap()
+        .unwrap();
+    let kept = graph
+        .enter(producer, |context| {
+            let count = one(context.writer(), ANCHOR + 1);
+            let entry = one(
+                context.writer(),
+                Entry {
+                    program: &program,
+                    count,
+                },
+            );
+            let carrier = context.lift::<Listing>(entry);
+            context.keep(carrier)
+        })
+        .unwrap();
+
+    // Held, so the producer's region seals: the `'cell` borrow now names storage the sealed tier
+    // retains, and the `'graph` borrow names storage the graph never owned.
+    graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+    assert_eq!(state_of(&graph, producer), SlabState::Free);
+    assert_eq!(graph.cells.sealed.len(), 1);
+
+    graph
+        .enter(consumer, |context| {
+            let carrier = context
+                .redeem(kept)
+                .expect("the consumer holds the sealed cell");
+            let read = context.read(&carrier).value();
+            assert!(std::ptr::eq(read.program, &*program));
+            assert_eq!(*read.program, ANCHOR);
+            assert_eq!(*read.count, ANCHOR + 1);
+        })
+        .unwrap();
+
+    graph
+        .release(consumer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]

@@ -8,6 +8,8 @@
 //! The test is an integration test on purpose. A unit test lives inside the crate, where
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
+use std::marker::PhantomData;
+
 use cellgraph::{
     Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
     Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError, ReleaseAbsorption,
@@ -19,27 +21,45 @@ use cellgraph::{
 /// in a region.
 struct Work;
 
-/// A second continuation family, borrowing, so a successor can capture a reference at the cell
-/// brand and come back re-anchored at the next step's.
+/// A second continuation family, borrowing, so a successor can capture a reference at `'here` and
+/// come back re-anchored at the next step's.
 struct Resumed;
 
-/// Three value families, each borrowing its cell's region storage through the one lifetime the
-/// [`reattachable`] contract allows.
+/// A third continuation family, naming the graph lifetime itself, so a successor can capture a
+/// borrow of storage the embedder owns outside the graph.
+struct Script<'graph>(PhantomData<&'graph str>);
+
+/// Three value families, each borrowing its cell's region storage through `'cell`, the lifetime the
+/// [`reattachable`] contract retypes.
 struct Number;
 struct Numbers;
 struct Text;
 
+/// A value nesting a borrow of storage the embedder owns outside the graph under a borrow of a
+/// cell's region — the shape `'graph` exists for.
+#[derive(Clone, Copy)]
+struct Entry<'graph, 'cell> {
+    program: &'graph str,
+    count: &'cell u32,
+}
+
+/// The family of an [`Entry`] behind a region borrow.
+struct Listing;
+
 reattachable!(
     Work => String,
     Resumed => &'cell u32,
+    Script<'graph> => &'graph str,
     Number => &'cell u32,
     Numbers => &'cell [u32],
     Text => &'cell str,
+    Listing => &'cell Entry<'graph, 'cell>,
 );
 
 impl DropFree for Number {}
 impl DropFree for Numbers {}
 impl DropFree for Text {}
+impl DropFree for Listing {}
 
 /// The writer's one run verb, at length one — the shape an embedder derives a single-value write
 /// from, since the substrate ships no such verb.
@@ -474,5 +494,103 @@ fn the_tree_pool_answers_from_outside_the_crate() {
 
     graph.release_tree(outer).unwrap();
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
+    // Storage the embedder owns outside the graph, which the graph may borrow but not outlive.
+    let program = String::from("program text");
+    let mut graph: CellGraph<'_, Work> = CellGraph::new(1, weigh);
+    let root = graph.create(None, None).unwrap();
+    let left = graph.create_tree(root, None).unwrap();
+    let right = graph.create_tree(root, None).unwrap();
+    graph
+        .enter(left, |context| {
+            let count = one(context.writer(), 41);
+            let entry = one(
+                context.writer(),
+                Entry {
+                    program: &program,
+                    count,
+                },
+            );
+            let source = context.lift::<Listing>(entry);
+            // A sibling is neither on the home's chain nor under it: the crossing is a forced copy.
+            let copied = context
+                .alloc_into::<Listing, Listing>(
+                    right,
+                    &[pinned_operand(&source)],
+                    |writer, views| {
+                        let CrossedOperand::Copied(entry) = views[0] else {
+                            panic!("a sibling crossing is a forced copy");
+                        };
+                        // The `'graph` borrow embeds as it is; only the region part is written again.
+                        Active::new(one(
+                            writer,
+                            Entry {
+                                program: entry.program,
+                                count: one(writer, *entry.count),
+                            },
+                        ))
+                    },
+                )
+                .unwrap();
+            let read = read_first(context, &copied);
+            assert!(std::ptr::eq(read.program, program.as_str()));
+            assert!(!std::ptr::eq(read.count, count));
+            assert_eq!(*read.count, 41);
+        })
+        .unwrap();
+    graph.release_tree(right).unwrap();
+    graph.release_tree(left).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn a_graph_borrow_is_captured_kept_and_redeemed_after_its_home_is_released() {
+    let program = String::from("program text");
+    let mut graph: CellGraph<'_, Script<'_>> = CellGraph::new(2, weigh);
+    let producer = graph.create(None, None).unwrap();
+    let consumer = graph.create(None, None).unwrap();
+    let dormant: Dormant<'_, Listing> = graph
+        .enter(producer, |context| {
+            let count = one(context.writer(), 41);
+            let entry = one(
+                context.writer(),
+                Entry {
+                    program: &program,
+                    count,
+                },
+            );
+            let carrier = context.lift::<Listing>(entry);
+            context.keep(carrier)
+        })
+        .unwrap();
+    graph
+        .enter(consumer, |context| {
+            context.hold(producer).unwrap();
+            // The successor captures the borrow of storage outside the graph, and prices nothing.
+            context.store_successor(program.as_str());
+        })
+        .unwrap();
+    // The consumer holds the producer, so its region seals rather than reclaims.
+    graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+    graph
+        .enter(consumer, |context| {
+            let captured = context.continuation().expect("the successor was stored");
+            assert!(std::ptr::eq(captured, program.as_str()));
+            let redeemed = context
+                .redeem(dormant)
+                .expect("the consumer holds the sealed producer");
+            let read = context.read(&redeemed).value();
+            assert!(std::ptr::eq(read.program, program.as_str()));
+            assert_eq!(*read.count, 41);
+        })
+        .unwrap();
+    graph
+        .release(consumer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert!(graph.is_empty());
 }
