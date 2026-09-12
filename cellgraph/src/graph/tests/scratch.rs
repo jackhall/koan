@@ -6,7 +6,7 @@
 //! and the bytes handed out of them — directly.
 
 use super::super::*;
-use super::{Number, Owned, operand, pin, pinned};
+use super::{Number, Owned, number_here, one, operand, pin, pinned};
 
 /// Operands in the placement the dirtying helper makes. Wide enough that the per-operand lists
 /// outgrow the region's first chunk, which is what leaves a reading behind: a bump rewinds the
@@ -19,11 +19,11 @@ const WIDE: usize = 256;
 fn place_over(graph: &mut CellGraph<Owned>, from: SlabHandle, into: SlabHandle, operands: usize) {
     graph
         .enter(from, |context| {
-            let source = context.alloc::<Number>(|writer| writer.value(1));
+            let source = number_here(context, 1);
             let carriers: Vec<_> = (0..operands).map(|_| operand(&source)).collect();
             context
                 .alloc_into::<Number, Number>(into, &carriers, |writer, views| {
-                    writer.value(views.iter().map(|view| *pinned(view)).sum())
+                    one(writer, views.iter().map(|view| *pinned(view)).sum())
                 })
                 .unwrap();
         })

@@ -17,7 +17,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-24 tests, grouped by the unsafe site each pins down. Names below are the exact
+27 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -112,6 +112,21 @@ build.
 - `graph::tests::values::a_dormant_carrier_forwarded_through_two_merges_is_still_found`
 - `graph::tests::values::redeem_refuses_once_the_storage_is_gone`
 - `graph::tests::crossing::a_copied_view_is_readable_and_a_pinned_one_embeddable`
+
+**The own-region brand** ([src/region.rs](../src/region.rs), [src/graph.rs](../src/graph.rs)) —
+`Region::writer_at` widens a shared borrow of a cell's bump to the step's `'cell` brand, so one
+writer minted at `enter` stays live across every door the step then takes through `&mut`. That is
+the shape Miri is the referee for: a `Bump` is entirely interior-mutable, so the shared reference
+tolerates the foreign writes those doors make, and no door may take the executing cell's `Region`
+itself through `&mut` while the writer is out. The first test is the load-bearing one — the writer
+is taken before every own-cell door and written through after all of them. The second and third are
+the re-anchor at the cell brand: a capture at `'cell` is read back a step later, once with the
+cell's own bundle grown by an absorption under it, and once with the pinned home sealed out of the
+slab entirely.
+
+- `graph::tests::values::a_writer_taken_at_entry_writes_after_every_own_cell_door`
+- `graph::tests::values::a_cell_reference_captured_by_the_continuation_reads_after_the_region_absorbs`
+- `graph::tests::values::a_pinned_view_at_the_cell_brand_survives_its_home_sealing`
 
 **The tree habitat's splice, copy and tombstone** ([src/tree.rs](../src/tree.rs),
 [src/graph.rs](../src/graph.rs)) — the same `retype` primitive where the storage under a borrow

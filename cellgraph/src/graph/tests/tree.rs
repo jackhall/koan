@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::super::*;
-use super::{Borrowed, Number, Owned, number, operand_at, pin, state_of, take};
+use super::{Borrowed, Number, Owned, number, number_here, one, operand_at, pin, state_of, take};
 use crate::tree::TreeState;
 
 /// An operand the embedder will never copy: at a cost above anything a pin can price, a verdict
@@ -42,10 +42,10 @@ fn recording(
 
 /// Build a number in the cell the step is running in.
 fn number_in<'b, C: Reattachable>(
-    context: &mut StepContext<'b, C>,
+    context: &mut StepContext<'b, '_, C>,
     value: u32,
 ) -> Ready<'b, Number> {
-    context.alloc::<Number>(move |writer| writer.value(value))
+    number_here(context, value)
 }
 
 #[test]
@@ -60,12 +60,7 @@ fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
     assert_eq!(graph.tree_children_of(root), 1);
 
     let (cell, continuation) = graph
-        .enter(tree, |context| {
-            (
-                context.cell(),
-                context.continuation().map(Active::into_value),
-            )
-        })
+        .enter(tree, |context| (context.cell(), context.continuation()))
         .unwrap();
     assert_eq!(cell, CellHandle::Tree(tree));
     assert_eq!(continuation.as_deref(), Some("next"));
@@ -339,7 +334,7 @@ fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
             let value = number_in(context, 4);
             context
                 .alloc_into::<Number, Number>(tree, &[kept_operand(&value)], |writer, views| {
-                    writer.value(number(&views[0]) + 1)
+                    one(writer, number(&views[0]) + 1)
                 })
                 .unwrap();
         })
@@ -682,9 +677,10 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
     graph
         .enter(destination, |context| {
             let carrier = context.redeem(kept).unwrap();
-            context.store_successor_capturing(&[kept_operand(&carrier)], |writer, views| {
+            let captured = context.alloc_here(&[kept_operand(&carrier)], |writer, views| {
                 take(&views[0], writer)
             });
+            context.store_successor(captured);
         })
         .unwrap();
 
@@ -694,7 +690,6 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
             *context
                 .continuation()
                 .expect("the successor is still in the slot")
-                .value()
         })
         .unwrap();
     assert_eq!(read, 33);

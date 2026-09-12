@@ -7,13 +7,13 @@
 //! extra live holder, or a refused release — because a merge that fires leaves nothing to price.
 
 use super::super::*;
-use super::{Number, Owned, pin};
+use super::{Owned, number_here, pin};
 
 /// Give a cell a region of its own, so it prices at more than nothing.
 fn allocate(graph: &mut CellGraph<Owned>, cell: SlabHandle) {
     graph
         .enter(cell, |context| {
-            context.alloc::<Number>(|writer| writer.value(1));
+            number_here(context, 1);
         })
         .unwrap();
 }

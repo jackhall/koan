@@ -31,7 +31,7 @@ fn a_memo_survives_its_region_moving_and_absorbing() {
     // The move a merge makes: another region's bump joins the bundle. The memo is in this region's
     // own bump, which the absorb leaves where it is.
     let other = Region::new();
-    other.writer().slice(&[7u64; 16]);
+    other.writer().fill(16, |_| 7u64);
     let before = region.allocated_bytes();
     region.absorb(other);
     assert!(region.allocated_bytes() > before);

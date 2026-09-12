@@ -2,9 +2,7 @@
 //! both relations, and the ring detector.
 
 use super::super::*;
-use super::{
-    ANCHOR, Borrowed, Number, Owned, continuation_reach_index, operand, pin, pinned, state_of,
-};
+use super::{ANCHOR, Borrowed, Number, Owned, number_here, one, operand, pin, pinned, state_of};
 
 #[test]
 fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
@@ -13,7 +11,7 @@ fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
 
     let read = graph
         .enter(cell, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             assert!(value.reach().names(cell.slot()));
             *context.read(&value).value()
         })
@@ -26,11 +24,20 @@ fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
 }
 
 #[test]
-fn a_cell_that_never_allocates_mints_no_region() {
+fn a_cell_that_never_allocates_claims_no_chunk() {
     let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
     let cell = graph.create(None, None).unwrap();
-    graph.enter(cell, |context| context.cell()).unwrap();
+    // A cell that was never entered has no region at all.
     assert!(graph.slots[cell.slot() as usize].region.is_none());
+
+    // Entering mints one, since the step takes its writer at `enter`. An empty bump claims no
+    // chunk, so what the cell costs is still nothing.
+    graph.enter(cell, |context| context.cell()).unwrap();
+    let region = graph.slots[cell.slot() as usize]
+        .region
+        .as_ref()
+        .expect("a step's writer is minted at its cell's region");
+    assert_eq!(region.allocated_bytes(), 0);
 }
 
 #[test]
@@ -41,7 +48,7 @@ fn placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach() {
 
     let read = graph
         .enter(producer, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             // The placed value *is* the operand's borrow, so it genuinely reads the producer's
             // storage from the consumer's region.
             let placed = context
@@ -103,23 +110,23 @@ fn a_reattached_borrow_survives_the_live_region_it_names_growing_under_it() {
     graph
         .enter(keeper, |context| {
             let value = context
-                .alloc_into::<Number, Number>(host, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(host, &[], |writer, _| one(writer, 41))
                 .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            let captured =
+                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            context.store_successor(captured);
         })
         .unwrap();
 
     let read = graph
         .enter(keeper, |context| {
-            let opened = context.continuation().unwrap();
-            let borrow = opened.value();
+            let borrow = context.continuation().unwrap();
             // Every allocation takes the host's region through `&mut`, which is the retag the
             // reattached borrow has to survive — the chunk it names is its own allocation, reached
             // through the bump rather than inside it.
             for value in 0..GROWTH {
                 context
-                    .alloc_into::<Number, Number>(host, &[], |writer, _| writer.value(value as u32))
+                    .alloc_into::<Number, Number>(host, &[], |writer, _| one(writer, value as u32))
                     .unwrap();
             }
             *borrow
@@ -238,7 +245,7 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
     let kept = graph
         .enter(producer, |context| {
             let placed = context
-                .alloc_into::<Number, Number>(consumer, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(consumer, &[], |writer, _| one(writer, 41))
                 .unwrap();
             context.keep(placed)
         })
@@ -278,7 +285,7 @@ fn pull_completes_after_the_producer_seals() {
         .unwrap();
     let kept = graph
         .enter(producer, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             context.keep(value)
         })
         .unwrap();
@@ -325,7 +332,7 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
         .unwrap();
     let kept = graph
         .enter(producer, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             context.keep(value)
         })
         .unwrap();
@@ -351,7 +358,7 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
     // keys name different entries and both redeem.
     let own = graph
         .enter(consumer, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(9));
+            let value = number_here(context, 9);
             context.keep(value)
         })
         .unwrap();
@@ -384,7 +391,7 @@ fn a_dormant_carrier_forwarded_through_two_merges_is_still_found() {
         .unwrap();
     let kept = graph
         .enter(head, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             context.keep(value)
         })
         .unwrap();
@@ -421,7 +428,7 @@ fn redeem_refuses_a_cell_that_does_not_hold_the_home() {
 
     let kept = graph
         .enter(home, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             context.keep(value)
         })
         .unwrap();
@@ -465,7 +472,7 @@ fn redeem_refuses_once_the_storage_is_gone() {
 
     let orphan = graph
         .enter(reclaimed, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             context.keep(value)
         })
         .unwrap();
@@ -487,7 +494,7 @@ fn redeem_refuses_once_the_storage_is_gone() {
         .unwrap();
     let retired = graph
         .enter(sealed_home, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             context.keep(value)
         })
         .unwrap();
@@ -513,7 +520,7 @@ fn a_birth_hold_entitles_a_child_to_its_parents_dormant_carrier() {
 
     let kept = graph
         .enter(parent, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             context.keep(value)
         })
         .unwrap();
@@ -563,7 +570,7 @@ fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
         .unwrap();
     let first = graph
         .enter(producer, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             context.keep(value)
         })
         .unwrap();
@@ -609,7 +616,7 @@ fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
 }
 
 #[test]
-fn the_continuation_interns_its_reach_like_any_other_keep() {
+fn a_continuation_store_takes_no_reach_table_entry() {
     let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
     let cell = graph.create(None, None).unwrap();
     let over = graph.create(None, None).unwrap();
@@ -619,47 +626,34 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
             .enter(cell, |context| {
                 context.continuation();
                 let carrier = context
-                    .alloc_into::<Number, Number>(over, &[], |writer, _| writer.value(value))
+                    .alloc_into::<Number, Number>(over, &[], |writer, _| one(writer, value))
                     .unwrap();
-                context.store_successor_capturing(&[operand(&carrier)], |_writer, views| {
-                    pinned(&views[0])
-                });
+                let captured =
+                    context.alloc_here(&[operand(&carrier)], |_writer, views| pinned(&views[0]));
+                context.store_successor(captured);
             })
             .unwrap();
     };
 
+    // The capture crossed at `alloc_here`, which is where the price was taken and the hold minted.
+    // By the time the store runs there is nothing left to appraise and nothing to record: the
+    // cell's reach table stays empty.
     capturing(&mut graph, 41);
-    assert_eq!(
-        graph.slots[cell.slot() as usize].continuation_reach_index,
-        Some(0)
-    );
-    assert_eq!(graph.slots[cell.slot() as usize].reaches.len(), 1);
-    let stored = continuation_reach_index(&graph, cell);
-    assert!(stored.names(over.slot()));
-    assert!(stored.names(cell.slot()));
+    assert!(graph.holds(cell, over));
+    assert_eq!(graph.slots[cell.slot() as usize].reaches.len(), 0);
 
-    // A continuation that captures nothing reaches nothing, and reaching nothing takes no entry:
-    // the cell stops naming one rather than emptying the entry it named, which is what makes an
-    // entry immutable content.
+    // A continuation that captures nothing goes through the same door and records the same nothing.
     graph
         .enter(cell, |context| {
             context.continuation();
             context.store_successor(&ANCHOR);
         })
         .unwrap();
-    assert_eq!(
-        graph.slots[cell.slot() as usize].continuation_reach_index,
-        None
-    );
+    assert_eq!(graph.slots[cell.slot() as usize].reaches.len(), 0);
 
-    // And the capturing store comes back to the entry it minted the first time, because its reach
-    // is the same reach. Alternating for a whole run costs that one entry and nothing more.
+    // Alternating for a whole run costs no entry either: the hold is monotone and was minted once.
     for value in 0..8 {
         capturing(&mut graph, value);
-        assert_eq!(
-            graph.slots[cell.slot() as usize].continuation_reach_index,
-            Some(0)
-        );
         graph
             .enter(cell, |context| {
                 context.continuation();
@@ -669,13 +663,13 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
     }
     assert_eq!(
         graph.slots[cell.slot() as usize].reaches.len(),
-        1,
-        "a reach table holds one entry per distinct reach, not one per store"
+        0,
+        "a continuation carries no mask, so no number of stores mints an entry"
     );
 
     capturing(&mut graph, 7);
     let read = graph
-        .enter(cell, |context| *context.continuation().unwrap().value())
+        .enter(cell, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(read, 7);
 }
@@ -689,7 +683,7 @@ fn keeping_the_same_reach_twice_takes_one_entry_and_both_keys_redeem() {
         .enter(cell, |context| {
             let mut kept = Vec::new();
             for value in 0..16 {
-                let carrier = context.alloc::<Number>(|writer| writer.value(value));
+                let carrier = number_here(context, value);
                 kept.push(context.keep(carrier));
             }
             kept
@@ -716,4 +710,117 @@ fn keeping_the_same_reach_twice_takes_one_entry_and_both_keys_redeem() {
         })
         .unwrap();
     assert_eq!(read, (0..16).collect::<Vec<u32>>());
+}
+
+#[test]
+fn a_writer_taken_at_entry_writes_after_every_own_cell_door() {
+    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let cell = graph.create(None, None).unwrap();
+    let other = graph.create(None, None).unwrap();
+    let third = graph.create(None, None).unwrap();
+
+    let resting = graph
+        .enter(other, |context| {
+            let value = number_here(context, 5);
+            context.keep(value)
+        })
+        .unwrap();
+
+    let kept = graph
+        .enter(cell, |context| {
+            // Taken before anything else and used after everything else: the shared borrow of the
+            // cell's own bump has to survive every `&mut` the doors below take under it.
+            let writer = context.writer();
+
+            let foreign = context
+                .alloc_into::<Number, Number>(other, &[], |writer, _| one(writer, 41))
+                .unwrap();
+            let here = context.alloc_here(&[operand(&foreign)], |_writer, views| pinned(&views[0]));
+            let placed = context
+                .alloc_into::<Number, Number>(third, &[operand(&foreign)], |_writer, views| {
+                    pinned(&views[0])
+                })
+                .unwrap();
+            context.hold(other).unwrap();
+            context.hold(third).unwrap();
+            let parked = context.keep(placed);
+            let redeemed = context.redeem(parked).unwrap();
+            let seen = *context.read(&redeemed).value();
+            context.store_successor(here);
+            let carrier = context.redeem(resting).unwrap();
+            let carried = *context.read(&carrier).value();
+
+            let late = context.lift::<Number>(one(writer, seen + carried));
+            context.keep(late)
+        })
+        .unwrap();
+
+    let read = graph
+        .enter(cell, |context| {
+            let carrier = context.redeem(kept).unwrap();
+            (
+                *context.read(&carrier).value(),
+                *context.continuation().unwrap(),
+            )
+        })
+        .unwrap();
+    assert_eq!(read, (46, 41));
+}
+
+#[test]
+fn a_cell_reference_captured_by_the_continuation_reads_after_the_region_absorbs() {
+    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let holder = graph.create(None, None).unwrap();
+    let dying = graph.create(None, None).unwrap();
+
+    graph
+        .enter(dying, |context| {
+            let _ = number_here(context, 7);
+        })
+        .unwrap();
+    graph
+        .enter(holder, |context| {
+            context.hold(dying).unwrap();
+            context.store_successor(one(context.writer(), 41));
+        })
+        .unwrap();
+
+    graph.release(dying, ReleaseAbsorption::IntoHolder).unwrap();
+    assert_eq!(state_of(&graph, dying), SlabState::Free);
+
+    // The dying cell's bump joined the holder's bundle, growing it under a borrow already minted
+    // into the holder's own chunks — which the splice leaves exactly where they are.
+    let read = graph
+        .enter(holder, |context| *context.continuation().unwrap())
+        .unwrap();
+    assert_eq!(read, 41);
+}
+
+#[test]
+fn a_pinned_view_at_the_cell_brand_survives_its_home_sealing() {
+    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let cell = graph.create(None, None).unwrap();
+    let home = graph.create(None, None).unwrap();
+
+    // The crossing minted the home into this cell's holds before the view was nameable at the cell
+    // brand, so the home seals rather than reclaiming when it dies.
+    graph
+        .enter(cell, |context| {
+            let foreign = context
+                .alloc_into::<Number, Number>(home, &[], |writer, _| one(writer, 41))
+                .unwrap();
+            let held = context.alloc_here(&[operand(&foreign)], |_writer, views| pinned(&views[0]));
+            context.store_successor(held);
+        })
+        .unwrap();
+
+    graph.release(home, ReleaseAbsorption::Refused).unwrap();
+    assert_eq!(graph.sealed.len(), 1);
+
+    // The storage detached unmoved into the sealed cell, so the capture re-anchors onto bytes that
+    // are still where they were written.
+    let read = graph
+        .enter(cell, |context| *context.continuation().unwrap())
+        .unwrap();
+    assert_eq!(read, 41);
 }

@@ -11,7 +11,8 @@ use proptest::prelude::*;
 
 use super::super::*;
 use super::{
-    Borrowed, Number, Owned, continuation_reach_index, live_bytes, operand, pin, pinned, state_of,
+    Borrowed, Number, Owned, kept_reach, live_bytes, number_here, one, operand, pin, pinned,
+    state_of,
 };
 
 /// Bytes a cell's region bundle occupies, or zero for a cell that never allocated.
@@ -79,15 +80,23 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
     let consumer = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
 
-    // The consumer keeps a continuation over a value living in the producer's region, so it is the
-    // producer's one holder and its stored mask names the producer's slot.
-    graph
+    // The consumer pins a value living in the producer's region into its own holds and keeps it
+    // as its continuation's capture, so it is the producer's one holder. It bundles the same value
+    // into its own region and keeps that, which is the stored mask the merge has to rewrite.
+    let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(producer, &[], |writer, _| one(writer, 41))
                 .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            let captured =
+                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                    pinned(&views[0])
+                })
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
     assert!(graph.holds(consumer, producer));
@@ -110,7 +119,7 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
 
     // The merge rewrote the consumer's stored mask: the dead cell's bit became the holder's, and
     // nothing sealed, so the mask stays a plain slab row over live cells.
-    let stored = continuation_reach_index(&graph, consumer);
+    let stored = kept_reach(&graph, &kept);
     assert!(stored.names(consumer.slot()));
     assert!(!stored.names(producer.slot()));
     assert_eq!(stored.sealed().len(), 0);
@@ -118,7 +127,7 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
     // The bump moved into the consumer's bundle without moving a chunk byte, so the borrow reads
     // the same address.
     let value = graph
-        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .enter(consumer, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 41);
 }
@@ -178,13 +187,20 @@ fn a_refused_release_seals_as_before() {
     let consumer = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
 
-    graph
+    let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(producer, &[], |writer, _| one(writer, 41))
                 .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            let captured =
+                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                    pinned(&views[0])
+                })
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
 
@@ -195,9 +211,9 @@ fn a_refused_release_seals_as_before() {
     let id = only_sealed_cell(&graph);
     assert_eq!(graph.sealed.get(id).unwrap().holders, 1);
 
-    assert!(continuation_reach_index(&graph, consumer).names_sealed(id));
+    assert!(kept_reach(&graph, &kept).names_sealed(id));
     let value = graph
-        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .enter(consumer, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 41);
 }
@@ -272,14 +288,14 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
 
     graph
         .enter(base, |context| {
-            context.alloc::<Number>(|writer| writer.value(1));
+            number_here(context, 1);
             context.hold(reached)
         })
         .unwrap()
         .unwrap();
     graph
         .enter(middle, |context| {
-            context.alloc::<Number>(|writer| writer.value(2));
+            number_here(context, 2);
             context.hold(base)
         })
         .unwrap()
@@ -388,14 +404,14 @@ fn a_count_one_sealed_cell_held_by_a_live_cell_stays_sealed() {
 
     graph
         .enter(holder, |context| {
-            context.alloc::<Number>(|writer| writer.value(1));
+            number_here(context, 1);
             context.hold(held)
         })
         .unwrap()
         .unwrap();
     graph
         .enter(held, |context| {
-            context.alloc::<Number>(|writer| writer.value(2));
+            number_here(context, 2);
             context.hold(extra)
         })
         .unwrap()
@@ -445,18 +461,25 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
         .enter(namer, |context| context.hold(dying))
         .unwrap()
         .unwrap();
-    graph
+    let kept = graph
         .enter(keeper, |context| {
             let value = context
-                .alloc_into::<Number, Number>(namer, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(namer, &[], |writer, _| one(writer, 41))
                 .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            let captured =
+                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(keeper, &[operand(&value)], |_writer, views| {
+                    pinned(&views[0])
+                })
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
     graph
         .enter(dying, |context| {
-            context.alloc::<Number>(|writer| writer.value(7));
+            number_here(context, 7);
             context.hold(reached)
         })
         .unwrap()
@@ -483,9 +506,9 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     assert!(graph.naming[reached.slot() as usize].contains(id));
 
     // The read still goes through the sealed cell, whose bundle grew a bump under the borrow.
-    assert!(continuation_reach_index(&graph, keeper).names_sealed(id));
+    assert!(kept_reach(&graph, &kept).names_sealed(id));
     let value = graph
-        .enter(keeper, |context| *context.continuation().unwrap().value())
+        .enter(keeper, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 41);
 }
@@ -512,7 +535,7 @@ fn absorb_work_for(dormant: usize, reached: u32, shared: u32, alone: u32) -> u64
     graph
         .enter(producer, |context| {
             for value in 0..dormant {
-                context.alloc::<Number>(|writer| writer.value(value as u32));
+                number_here(context, value as u32);
             }
             for cell in reached_cells
                 .iter()

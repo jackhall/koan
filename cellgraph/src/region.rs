@@ -9,7 +9,8 @@
 //!
 //! Nothing stored in a region is ever dropped — a bump releases its chunks whole — which is why
 //! every family a region hosts is [`DropFree`](crate::DropFree). The write surface is
-//! [`Writer`], a `Copy` handle a step receives inside a build closure's brand and cannot widen.
+//! [`Writer`], a `Copy` handle a step receives at a brand it cannot widen: a build closure's own
+//! for a foreign destination, and the executing cell's `'cell` for its own region.
 //!
 //! A region is a **bundle** of bumps: the one it writes into, plus the bumps of every region
 //! absorbed into it. Absorption is how a merge splices storage
@@ -39,8 +40,8 @@ struct BumpRun<T: Copy> {
     len: usize,
 }
 
-/// One cell's storage: the bump it writes into, plus the bumps it has absorbed. Minted lazily at
-/// the cell's first allocation, so a cell that never allocates costs no chunk.
+/// One cell's storage: the bump it writes into, plus the bumps it has absorbed. An empty bump
+/// claims no chunk, so a region a cell never writes into costs nothing to have.
 pub(crate) struct Region {
     bump: Bump,
     /// Bumps merged in from regions this one absorbed. Read-only from here on — nothing is ever
@@ -102,6 +103,23 @@ impl Region {
         Writer(&self.bump)
     }
 
+    /// The write surface at a caller-chosen `'r` — the executing cell's own writer, minted once at
+    /// `enter` and handed to the step for the whole of it.
+    ///
+    /// # Safety
+    ///
+    /// `'r` must lie within one step of the cell this region belongs to: for all of `'r` the region
+    /// is neither moved off its slot, taken, nor dropped. The graph verbs that do any of those
+    /// (`release`, `release_tree`, disposal) cannot run inside a step, because `enter` holds the
+    /// graph exclusively for its whole length.
+    pub(crate) unsafe fn writer_at<'r>(&self) -> Writer<'r> {
+        // SAFETY: see the contract. The `Bump` sits inline in a slab slot (a `Box<[SlabCell]>`
+        // that is never reallocated) or in a tree-pool entry, and a bump's chunks are heap
+        // allocations it never moves — so the bytes this reference names stay where they are for
+        // all of `'r`, and only a graph verb could take the region away.
+        Writer(unsafe { &*(&self.bump as *const Bump) })
+    }
+
     /// Take `other`'s chunks into this bundle. The bumps move; the chunks do not, so a borrow
     /// minted before the merge still names its bytes — `other`'s own memo included, whose `BumpRun`
     /// goes with `other` and leaves its bytes behind as a bump's dead bytes.
@@ -111,6 +129,13 @@ impl Region {
     /// own takes that bundle over instead of copying it in. Order carries no meaning here — the
     /// list exists to keep the chunks alive and to total their bytes — so the swap costs nothing.
     fn absorb(&mut self, mut other: Region) {
+        // An empty bundle takes the source over whole rather than listing it, which is what keeps a
+        // merge into a cell that never wrote off the allocator. Nothing of this region's is lost:
+        // a bump with no chunk holds no value, and a memo would have cost bytes.
+        if self.bump.allocated_bytes() == 0 && self.absorbed.is_empty() {
+            *self = other;
+            return;
+        }
         if self.absorbed.len() < other.absorbed.len() {
             std::mem::swap(&mut self.absorbed, &mut other.absorbed);
         }
@@ -152,24 +177,31 @@ impl Region {
     }
 }
 
-/// The write surface into a region's bytes, handed to a build closure at the closure's own brand.
+/// The write surface into a region's bytes, at the brand the door that hands one out chose: a
+/// build closure's own, or the executing cell's `'cell`.
 ///
 /// `Copy` with a private field, so a writer exists only where the graph hands one out, and every
 /// verb returns a shared `&'r` rather than the `&mut` the bump itself yields: a written value is
-/// region state its holder names, never one it owns. `T: Copy` on the value verbs is what stands
-/// in for the missing destructor — a bump never runs one.
+/// region state its holder names, never one it owns.
+///
+/// Two verbs, because two is what a region cannot be given by an embedder: [`fill`](Writer::fill)
+/// lays down a run by index under a compile-time no-destructor check, and [`text`](Writer::text)
+/// writes a `str`, whose bytes have no `T` to index by. Every simpler shape — one value, a copied
+/// slice, a run collected from an iterator — is the embedder's, derived from `fill`.
 #[derive(Clone, Copy)]
 pub struct Writer<'r>(&'r Bump);
 
 impl<'r> Writer<'r> {
-    /// Write one value and hand back the borrow of it that lives in the region.
-    pub fn value<T: Copy>(self, value: T) -> &'r T {
-        self.0.alloc(value)
-    }
-
-    /// Write a run of values contiguously.
-    pub fn slice<T: Copy>(self, items: &[T]) -> &'r [T] {
-        self.0.alloc_slice_copy(items)
+    /// Write a run of `len` values, each built from its index, and hand back the borrow of it that
+    /// lives in the region.
+    ///
+    /// A bump releases its chunks whole and never walks a value, so `T` must run no destructor.
+    /// The check is a `const` assert on `T` rather than a `T: Copy` bound: a bound would also
+    /// refuse the interior mutability a cell-resident table needs (`Cell<u32>` is drop-free but
+    /// not `Copy`), and the assert fires at the instantiation site either way.
+    pub fn fill<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'r [T] {
+        const { assert!(!std::mem::needs_drop::<T>()) };
+        self.0.alloc_slice_fill_with(len, fill)
     }
 
     /// Write text.

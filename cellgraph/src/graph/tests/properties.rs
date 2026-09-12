@@ -32,7 +32,7 @@
 use proptest::prelude::*;
 
 use super::super::*;
-use super::{Borrowed, Number, live_bytes, operand_at, pin, take};
+use super::{Borrowed, Number, live_bytes, number_here, one, operand_at, pin, take};
 use crate::tree::{Ancestor, TreeState};
 
 const CAP: u32 = 6;
@@ -474,7 +474,7 @@ fn expected_redeem(
 /// was kept as, which is what says a mask forwarded through a merge — or a tombstone chain — still
 /// names the right storage.
 fn check_redeem(
-    context: &StepContext<'_, Borrowed>,
+    context: &StepContext<'_, '_, Borrowed>,
     dormant: Dormant<Number>,
     carried: u32,
 ) -> Result<(), RedeemError> {
@@ -656,7 +656,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     && graph.is_live(producer)
                 {
                     let _ = graph.enter(producer, |context| {
-                        let value = context.alloc::<Number>(|writer| writer.value(1));
+                        let value = number_here(context, 1);
                         context
                             .alloc_into::<Number, Number>(
                                 consumer,
@@ -676,12 +676,13 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 {
                     let _ = graph.enter(cell, |context| {
                         if let Ok(value) =
-                            context.alloc_into::<Number, Number>(over, &[], |w, _| w.value(1))
+                            context.alloc_into::<Number, Number>(over, &[], |w, _| one(w, 1))
                         {
-                            context.store_successor_capturing(
-                                &[operand_at(&value, 1)],
-                                |writer, views| take(&views[0], writer),
-                            );
+                            let captured = context
+                                .alloc_here(&[operand_at(&value, 1)], |writer, views| {
+                                    take(&views[0], writer)
+                                });
+                            context.store_successor(captured);
                         }
                     });
                 }
@@ -696,7 +697,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     next_value += 1;
                     let dormant = graph
                         .enter(cell, |context| {
-                            let value = context.alloc::<Number>(|writer| writer.value(carried));
+                            let value = number_here(context, carried);
                             context.keep(value)
                         })
                         .unwrap();
@@ -759,7 +760,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     && graph.is_live(producer)
                 {
                     let _ = graph.enter(producer, |context| {
-                        let value = context.alloc::<Number>(|writer| writer.value(1));
+                        let value = number_here(context, 1);
                         context
                             .alloc_into::<Number, Number>(
                                 consumer,
@@ -781,7 +782,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     next_value += 1;
                     let dormant = graph
                         .enter(cell, |context| {
-                            let value = context.alloc::<Number>(|writer| writer.value(carried));
+                            let value = number_here(context, carried);
                             context.keep(value)
                         })
                         .unwrap();
@@ -824,7 +825,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 {
                     graph
                         .enter(cell, |context| {
-                            let _ = context.continuation().map(|opened| *opened.value());
+                            let _ = context.continuation();
                         })
                         .unwrap();
                 }

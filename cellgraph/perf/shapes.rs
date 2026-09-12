@@ -12,7 +12,7 @@
 
 use cellgraph::{
     CellGraph, CellHandle, CrossedOperand, Dormant, DropFree, Operand, Prices, Ready, Reattachable,
-    ReleaseAbsorption, SlabHandle, TreeHandle, Verdict, Writer, reattachable,
+    ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
 
 use crate::meter::{Verb, measure};
@@ -20,10 +20,6 @@ use crate::meter::{Verb, measure};
 /// The cap every shape builds at: the full width of a one-word graph, which is the width the crate
 /// ships at. One cap for the whole set, so a row's `cap` column is a constant across the record.
 pub const CAP: u32 = 64;
-
-/// The widest operand list any shape passes, and so the stack buffer a slice build writes into: a
-/// build closure that allocated would charge the placement for the harness's own work.
-const MAX_OPERANDS: usize = 32;
 
 /// The continuation family: an owned string, holding nothing a region owns.
 pub struct Work;
@@ -60,20 +56,32 @@ fn pinned<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Ready<'b, V>) -> Oper
     }
 }
 
+/// One value, laid down through the writer's single run verb — the shape every embedder derives
+/// its own one-value write from, since the substrate ships no such verb. No allocation of its own:
+/// the `Option` is a stack slot the run of one empties.
+fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
+    let mut value = Some(value);
+    &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
+}
+
+/// A value homed in the executing cell: the own-region write, then the bridge that makes it a
+/// carrier. What every shape's `Verb::Alloc` row measures.
+fn number_here<'b>(context: &StepContext<'b, '_, Work>, value: u32) -> Ready<'b, Number> {
+    context.lift::<Number>(one(context.writer(), value))
+}
+
 fn build_number<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Number>]) -> &'r u32 {
     match views[0] {
-        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => writer.value(*value),
+        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => one(writer, *value),
     }
 }
 
+/// Written straight out of the views: the run is filled by index, so the build needs no buffer of
+/// its own and the placement is charged for nothing the harness did.
 fn build_slice<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Number>]) -> &'r [u32] {
-    let mut buffer = [0u32; MAX_OPERANDS];
-    for (cell, view) in buffer.iter_mut().zip(views) {
-        *cell = match view {
-            CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => **value,
-        };
-    }
-    writer.slice(&buffer[..views.len()])
+    writer.fill(views.len(), |index| match views[index] {
+        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => *value,
+    })
 }
 
 /// Per-step value cost in one cell: a value kept at the end of every step and redeemed at the head
@@ -84,9 +92,7 @@ fn keep_redeem(n: u32) {
 
     let first = measure(Verb::Enter, || {
         graph.enter(cell, |context| {
-            let value = measure(Verb::Alloc, || {
-                context.alloc::<Number>(|writer| writer.value(0))
-            });
+            let value = measure(Verb::Alloc, || number_here(context, 0));
             measure(Verb::Keep, || context.keep(value))
         })
     })
@@ -100,9 +106,7 @@ fn keep_redeem(n: u32) {
                 let carrier = measure(Verb::Redeem, || context.redeem(held).unwrap());
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
                 assert_eq!(value, step - 1);
-                let next = measure(Verb::Alloc, || {
-                    context.alloc::<Number>(|writer| writer.value(value + 1))
-                });
+                let next = measure(Verb::Alloc, || number_here(context, value + 1));
                 measure(Verb::Keep, || context.keep(next))
             })
         })
@@ -131,9 +135,7 @@ fn keep_shapes(n: u32) {
         sources.push(source);
         let resting = measure(Verb::Enter, || {
             graph.enter(source, |context| {
-                let value = measure(Verb::Alloc, || {
-                    context.alloc::<Number>(|writer| writer.value(i))
-                });
+                let value = measure(Verb::Alloc, || number_here(context, i));
                 let placed = measure(Verb::AllocInto, || {
                     context
                         .alloc_into::<Number, Number>(dest, &[pinned(&value)], build_number)
@@ -181,9 +183,7 @@ fn push_chain(n: u32) {
         let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
         let resting = measure(Verb::Enter, || {
             graph.enter(producer, |context| {
-                let value = measure(Verb::Alloc, || {
-                    context.alloc::<Number>(|writer| writer.value(i))
-                });
+                let value = measure(Verb::Alloc, || number_here(context, i));
                 let pushed = measure(Verb::AllocInto, || {
                     context
                         .alloc_into::<Number, Number>(consumer, &[pinned(&value)], build_number)
@@ -230,9 +230,7 @@ fn pull_chain(n: u32) {
         let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
         let resting = measure(Verb::Enter, || {
             graph.enter(producer, |context| {
-                let value = measure(Verb::Alloc, || {
-                    context.alloc::<Number>(|writer| writer.value(i))
-                });
+                let value = measure(Verb::Alloc, || number_here(context, i));
                 measure(Verb::Keep, || context.keep(value))
             })
         })
@@ -306,9 +304,7 @@ fn fan_out_round(
         graph.enter(source, |context| {
             let mut values = measure(Verb::Harness, || Vec::with_capacity(m as usize));
             for i in 0..m {
-                let value = measure(Verb::Alloc, || {
-                    context.alloc::<Number>(|writer| writer.value(i))
-                });
+                let value = measure(Verb::Alloc, || number_here(context, i));
                 values.push(value);
             }
             let operands: Vec<Operand<'_, '_, Number>> =
@@ -377,9 +373,7 @@ fn shared_subtier(n: u32) {
     for (i, base) in bases.iter().enumerate() {
         let resting = measure(Verb::Enter, || {
             graph.enter(*base, |context| {
-                let value = measure(Verb::Alloc, || {
-                    context.alloc::<Number>(|writer| writer.value(i as u32))
-                });
+                let value = measure(Verb::Alloc, || number_here(context, i as u32));
                 measure(Verb::Keep, || context.keep(value))
             })
         })
@@ -477,16 +471,12 @@ fn tree_chain(n: u32) {
             measure(Verb::EnterTree, || {
                 graph.enter(cell, |context| {
                     let value = match taken {
-                        None => measure(Verb::Alloc, || {
-                            context.alloc::<Number>(|writer| writer.value(0))
-                        }),
+                        None => measure(Verb::Alloc, || number_here(context, 0)),
                         Some(resting) => {
                             let carrier =
                                 measure(Verb::Redeem, || context.redeem(resting).unwrap());
                             let seen = measure(Verb::Read, || *context.read(&carrier).value());
-                            measure(Verb::Alloc, || {
-                                context.alloc::<Number>(|writer| writer.value(seen + 1))
-                            })
+                            measure(Verb::Alloc, || number_here(context, seen + 1))
                         }
                     };
                     let placed = measure(Verb::AllocInto, || {

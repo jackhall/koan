@@ -71,8 +71,24 @@ fn take<'r>(view: &CrossedOperand<'r, '_, Number>, writer: Writer<'r>) -> &'r u3
         // Pinned: the borrow itself, embedded in the destination's storage.
         CrossedOperand::Pinned(value) => value,
         // Copied: severed, so the only thing that typechecks is a fresh allocation.
-        CrossedOperand::Copied(value) => writer.value(**value),
+        CrossedOperand::Copied(value) => one(writer, **value),
     }
+}
+
+/// One value, laid down through the writer's single run verb — the shape an embedder derives its
+/// own one-value write from, and what these tests use in place of one.
+fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
+    let mut value = Some(value);
+    &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
+}
+
+/// A `Number` carrier homed in the executing cell: the own-region write, then the bridge to a
+/// carrier. What a test that wants a value living where the step runs does.
+fn number_here<'b, C: Reattachable>(
+    context: &StepContext<'b, '_, C>,
+    value: u32,
+) -> Ready<'b, Number> {
+    context.lift::<Number>(one(context.writer(), value))
 }
 
 /// What a view reads, whichever brand it arrived at — for a build that only needs the number.
@@ -96,19 +112,26 @@ fn live_bytes<C: Reattachable>(graph: &CellGraph<C>, cap: u32) -> usize {
         .sum()
 }
 
-/// The reach of a cell's stored continuation, read out of the reach table entry it occupies. The
-/// continuation is a dormant carrier like any other, so this is the same lookup a redeem performs.
-fn continuation_reach_index<C: Reattachable>(
-    graph: &CellGraph<C>,
-    handle: SlabHandle,
-) -> &GraphReach<1> {
-    let cell = &graph.slots[handle.slot() as usize];
-    let index = cell
-        .continuation_reach_index
-        .expect("the cell stored a continuation over captures");
-    cell.reaches
-        .get(index)
-        .expect("the entry the continuation names is in the reach table")
+/// The reach a kept carrier interned, read out of the entry it landed in — the same lookup a
+/// redeem performs, minus the entitlement check.
+///
+/// A continuation carries no mask of its own, so a `keep` over the same storage is the specimen
+/// the seal transition's rewrite and every merge's mask maintenance are read through.
+fn kept_reach<'g, C: Reattachable, T: Reattachable + DropFree>(
+    graph: &'g CellGraph<C>,
+    dormant: &Dormant<T>,
+) -> &'g GraphReach<1> {
+    let key = dormant.key();
+    let CellHandle::Slab(home) = key.home else {
+        panic!("a value homed in a tree cell interns no reach")
+    };
+    let Some(SlabForward::Slab { slot, first_index }) = graph.locate(home) else {
+        panic!("the kept carrier's home is still in the slab")
+    };
+    graph.slots[slot as usize]
+        .reaches
+        .get(first_index + key.index)
+        .expect("a relocated key names an entry of the reach table it landed in")
 }
 
 /// What a slot currently holds, by handle — the state assertions read the slab directly, since
@@ -251,7 +274,7 @@ fn the_continuation_comes_back_re_anchored_at_the_step_brand() {
     let cell = graph.create(None, Some(&ANCHOR)).unwrap();
 
     let read = graph
-        .enter(cell, |context| *context.continuation().unwrap().value())
+        .enter(cell, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(read, 7);
 
@@ -271,11 +294,7 @@ fn a_step_stores_the_successor_the_next_step_receives() {
             context.store_successor(String::from("second"));
         })
         .unwrap();
-    let next = graph
-        .enter(cell, |context| {
-            context.continuation().map(|opened| opened.into_value())
-        })
-        .unwrap();
+    let next = graph.enter(cell, |context| context.continuation()).unwrap();
     assert_eq!(next.as_deref(), Some("second"));
 }
 

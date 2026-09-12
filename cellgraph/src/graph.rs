@@ -9,6 +9,8 @@
 #[cfg(test)]
 mod tests;
 
+use std::marker::PhantomData;
+
 use smallvec::SmallVec;
 
 use crate::carrier::{Active, CellHome, Ready};
@@ -176,7 +178,7 @@ pub struct Operand<'a, 'b, V: Reattachable + DropFree, const W: usize = 1> {
 /// let other = graph.create(None, None).unwrap();
 /// let read = graph
 ///     .enter(cell, |context| {
-///         let value = context.alloc::<Number>(|writer| writer.value(41));
+///         let value = context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0]);
 ///         let placed = context
 ///             .alloc_into::<Number, Number>(
 ///                 other,
@@ -185,7 +187,7 @@ pub struct Operand<'a, 'b, V: Reattachable + DropFree, const W: usize = 1> {
 ///                     // The borrow itself, stored in the destination's region.
 ///                     CrossedOperand::Pinned(value) => value,
 ///                     // A severed view can only be read and written again.
-///                     CrossedOperand::Copied(value) => writer.value(*value),
+///                     CrossedOperand::Copied(value) => &writer.fill(1, |_| *value)[0],
 ///                 },
 ///             )
 ///             .unwrap();
@@ -210,7 +212,7 @@ pub struct Operand<'a, 'b, V: Reattachable + DropFree, const W: usize = 1> {
 /// let other = graph.create(None, None).unwrap();
 /// graph
 ///     .enter(cell, |context| {
-///         let value = context.alloc::<Number>(|writer| writer.value(41));
+///         let value = context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0]);
 ///         context
 ///             .alloc_into::<Number, Number>(
 ///                 other,
@@ -244,14 +246,14 @@ pub struct Operand<'a, 'b, V: Reattachable + DropFree, const W: usize = 1> {
 /// let mut escaped: Option<&[CrossedOperand<'_, '_, Number>]> = None;
 /// graph
 ///     .enter(cell, |context| {
-///         let value = context.alloc::<Number>(|writer| writer.value(41));
+///         let value = context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0]);
 ///         context
 ///             .alloc_into::<Number, Number>(
 ///                 other,
 ///                 &[Operand { carrier: &value, copy_bytes: usize::MAX }],
 ///                 |writer, views| {
 ///                     escaped = Some(views);
-///                     writer.value(0)
+///                     &writer.fill(1, |_| 0)[0]
 ///                 },
 ///             )
 ///             .unwrap();
@@ -377,14 +379,10 @@ struct SlabCell<C: Reattachable, const W: usize> {
     /// What the release of this cell said about death-time absorption. Read at the slot's
     /// disposal, which is why it rests here rather than travelling with the call.
     absorption: ReleaseAbsorption,
-    /// The continuation at rest, erased. Its reach is one entry of `reaches` — the continuation is
-    /// a dormant carrier like any other, so the seal transition maintains one collection per cell.
+    /// The continuation at rest, erased. It carries no reach of its own: every reference it can
+    /// capture is at the cell's `'cell` brand, which names storage the cell's hold set already
+    /// covers — its own region, or a region a pinned crossing minted in.
     continuation: Option<Erased<C>>,
-    /// Which entry of `reaches` holds the continuation's reach, and `None` for a continuation
-    /// that reaches nothing. A store repoints this at the entry its reach interns to rather than
-    /// writing the entry it named before, so a cell that alternates between a few continuation
-    /// shapes settles at one entry per shape.
-    continuation_reach_index: Option<u32>,
     /// The reach of every value kept in this cell's region, interned on content — the one durable
     /// habitat of a mask on the slab side, and what the seal transition's step 1 rewrites. One
     /// entry per distinct reach is what bounds that rewrite.
@@ -393,9 +391,10 @@ struct SlabCell<C: Reattachable, const W: usize> {
     /// through the relocation entries themselves. Bounded by merges, never by values, and one
     /// word rather than a vector: the links live where the entries already are.
     lineage: Option<SlabHandle>,
-    /// Minted at the cell's first allocation, so a cell that never allocates costs no chunk. Freed
-    /// whole at reclamation, and detached unmoved at a seal — which is what makes a cell's death
-    /// O(1) in its dormant values either way.
+    /// Minted when the cell is first entered, since a step takes its writer at `enter`. An empty
+    /// bump claims no chunk, so a cell that never writes still costs none. Freed whole at
+    /// reclamation, and detached unmoved at a seal — which is what makes a cell's death O(1) in
+    /// its dormant values either way.
     region: Option<Region>,
     /// Tree children whose chain tops out at this cell and that have not disposed — the birth
     /// tally's analogue for the pool. A released root waits dead-but-undisposed while any of them
@@ -416,7 +415,6 @@ impl<C: Reattachable, const W: usize> SlabCell<C, W> {
             parent: None,
             absorption: ReleaseAbsorption::IntoHolder,
             continuation: None,
-            continuation_reach_index: None,
             reaches: ReachTable::default(),
             lineage: None,
             region: None,
@@ -621,10 +619,13 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
     /// Run `step` against the cell, with its executing flag set for the scope.
     ///
     /// The step receives a context, not the graph, so it can neither enter another cell nor
-    /// declare a death; the graph stays exclusively borrowed for the whole call. The context's
-    /// lifetime is a fresh brand the step cannot leak, since `R` is chosen outside the call and so
-    /// cannot name it — that is what makes handing region-borrowing values back re-anchored at it
-    /// sound.
+    /// declare a death; the graph stays exclusively borrowed for the whole call.
+    ///
+    /// **Both of the context's brands are fresh here**, quantified by this call because both are
+    /// elided in `step`'s argument. `'b` brands the carriers this step's doors hand back; `'cell`
+    /// names the executing cell's own region. `R` is chosen outside the call, so it can name
+    /// neither — which is what makes handing region-borrowing values back re-anchored at them
+    /// sound, and what keeps a `'cell` reference from leaving the step that minted it.
     ///
     /// Re-entering the executing cell is not representable: the step never holds the graph.
     ///
@@ -645,10 +646,25 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
     pub fn enter<R>(
         &mut self,
         cell: impl Into<CellHandle>,
-        step: impl FnOnce(&mut StepContext<'_, C, W>) -> R,
+        step: impl FnOnce(&mut StepContext<'_, '_, C, W>) -> R,
     ) -> Result<R, EnterError> {
         let cell = cell.into();
         self.begin(cell)?;
+        // The executing cell's region is minted here rather than at its first write, so the step's
+        // own writer is a field copy and the one borrow-widening retype sits at the step's edge
+        // beside `begin`. `Region::new` claims no chunk, so a step that never writes costs none.
+        let region = match cell {
+            CellHandle::Slab(handle) => self.slots[handle.slot() as usize]
+                .region
+                .get_or_insert_with(Region::new),
+            CellHandle::Tree(handle) => self.trees.region_mut(handle.index()),
+        };
+        // SAFETY: `writer_at` asks that the region stay where it is, unmoved and undropped, for
+        // the whole of the brand. That brand is `'cell`, quantified by this call and nameable
+        // nowhere outside `step`, so it lies within this `enter` — and `enter` holds the graph
+        // exclusively for its whole length, so `release`, `release_tree` and every disposal, the
+        // only paths that take a region off its cell, cannot run under it.
+        let writer = unsafe { region.writer_at() };
         // The scratch comes off the graph for the whole step: the doors take `&mut self`, so a
         // transient borrowing the field could not coexist with them. The context's `Drop` hands it
         // back, so a panicking step loses no chunk.
@@ -657,7 +673,9 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         let mut context = StepContext {
             graph: self,
             cell,
+            writer,
             scratch: Some(scratch),
+            _cell: PhantomData,
         };
         Ok(step(&mut context))
     }
@@ -2361,15 +2379,16 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
     }
 
     /// The one path from a built value into a region: fold `reach` into the destination's hold
-    /// set, write the value, and hand back the carrier that pairs it with its own reach — the
-    /// destination's bit plus everything the operands reached.
+    /// set, write the value there, and hand back the carrier that pairs it with its own reach —
+    /// the destination's bit plus everything the operands reached. The pair is bundled before it
+    /// is returned, so no loose value-plus-reach exists anywhere.
     ///
     /// The carrier's brand is free here and fixed by the door that calls it: every caller is a
     /// [`StepContext`] method whose return type names the step's own brand.
     fn mint_and_build<'b, T>(
         &mut self,
         dest: Destination,
-        reach: GraphReach<W>,
+        mut reach: GraphReach<W>,
         build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
     ) -> Ready<'b, T, W>
     where
@@ -2378,28 +2397,6 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         // A bump releases its chunks whole and never walks a value, so a family with drop glue
         // would leak whatever it owns. `DropFree` declares the absence; this is the check.
         const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
-        let (value, reach) = self.place::<T>(dest, reach, build);
-        Ready::new(value, reach, dest.home)
-    }
-
-    /// Fold `reach` into the destination's hold set, build the value in the destination's region,
-    /// and hand back its erased form beside its own reach: the destination's bit plus everything
-    /// the operands reached. Private: both callers bundle the pair at once, into a carrier or into
-    /// the slot's continuation fields, so no loose value-plus-reach exists outside this function's
-    /// return.
-    ///
-    /// Bounded on `Reattachable` alone, since a continuation family may carry drop glue: it is
-    /// dropped when its slot recycles rather than bump-freed, so the `DropFree` check belongs at
-    /// the door that hands back a [`Ready`].
-    fn place<T>(
-        &mut self,
-        dest: Destination,
-        mut reach: GraphReach<W>,
-        build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
-    ) -> (Erased<T>, GraphReach<W>)
-    where
-        T: Reattachable,
-    {
         self.mint(dest.mint_slot, &reach);
         let value = {
             let region = match dest.home {
@@ -2413,7 +2410,7 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         // The mint slot, not the home: a value homed in a tree cell reaches its root, which is what
         // every hold on its behalf was minted into.
         reach.add(dest.mint_slot);
-        (value, reach)
+        Ready::new(value, reach, dest.home)
     }
 
     /// The scratch region as the test-only walkers reach it: they run outside every verb, so the
@@ -2436,21 +2433,36 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
 /// The view of the graph a step gets: its own cell's continuation slot, the cell-region doors, and
 /// its own identity.
 ///
-/// `'b` is the step's brand — the lifetime of the graph borrow the enclosing
-/// [`enter`](CellGraph::enter) holds. Nothing carrying it escapes the call.
-pub struct StepContext<'b, C: Reattachable, const W: usize = 1> {
+/// **Two brands, and no outlives relation between them.**
+///
+/// `'b` is the step's: the lifetime of the graph borrow the enclosing
+/// [`enter`](CellGraph::enter) holds, and what every carrier this step's doors hand back is
+/// branded to. Nothing carrying it escapes the call.
+///
+/// `'cell` is the executing cell's. A reference at `'cell` names storage the cell's hold set
+/// covers for the cell's whole life: its own region, or a region a pinned crossing into this cell
+/// has minted into its holds. It is **invariant** — the `PhantomData` below — and quantified per
+/// `enter`, so a step can neither widen it nor let a reference at it out; and a foreign carrier's
+/// [`read`](Self::read) lands at a borrow strictly inside the step, which cannot coerce to it. The
+/// one door from a `'cell` reference into anything that outlives the step is
+/// [`lift`](Self::lift).
+pub struct StepContext<'b, 'cell, C: Reattachable, const W: usize = 1> {
     graph: &'b mut CellGraph<C, W>,
     /// The cell this step is running in, of either kind.
     cell: CellHandle,
+    /// The executing cell's write surface, minted once at `enter`. A `Copy` field, so
+    /// [`writer`](Self::writer) is a read rather than a door onto the region.
+    writer: Writer<'cell>,
     /// The graph's scratch region, held here for the length of the step and handed back by `Drop`.
     /// A door splits this off the graph borrow so a transient and a `&mut CellGraph` coexist.
     ///
     /// An `Option` so the hand-back is a move out and not a swap against a fresh region: minting
     /// one to leave behind would be the one allocation the step machinery does not need.
     scratch: Option<Scratch>,
+    _cell: PhantomData<fn(&'cell ()) -> &'cell ()>,
 }
 
-impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
+impl<'b, 'cell, C: Reattachable, const W: usize> StepContext<'b, 'cell, C, W> {
     /// The cell this step is running in, of either kind.
     pub fn cell(&self) -> CellHandle {
         self.cell
@@ -2480,7 +2492,86 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         }
     }
 
-    /// Take the cell's continuation, re-anchored at the step brand.
+    /// The executing cell's own write surface, at the cell brand.
+    ///
+    /// **This is the own-region write.** It takes no closure and no build: a value written here is
+    /// a plain `&'cell` reference, needing no carrier, because its reach is the executing cell and
+    /// the cell keeps itself. The writer is minted once, at `enter`, so this is a field read — a
+    /// step may take it as many times as it likes, and one taken before a door still writes after
+    /// it.
+    ///
+    /// ```
+    /// use cellgraph::{CellGraph, Verdict, reattachable};
+    /// struct Work;
+    /// reattachable!(Work => String);
+    ///
+    /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
+    /// let cell = graph.create(None, None).unwrap();
+    /// let read = graph
+    ///     .enter(cell, |context| {
+    ///         let counters = context.writer().fill(3, |index| index as u32);
+    ///         // Written a moment ago, and embeddable in what is written next.
+    ///         let spine: &[&u32] = context.writer().fill(1, |_| &counters[2]);
+    ///         *spine[0]
+    ///     })
+    ///     .unwrap();
+    /// assert_eq!(read, 2);
+    /// ```
+    ///
+    /// A foreign carrier's read cannot be embedded here. It arrives at a borrow strictly inside the
+    /// step, which has no outlives relation to `'cell`, so the only reference that lands in a
+    /// cell's region without passing the crossing verdict is one into that same region. The brand
+    /// is what carries this: `Writer` is covariant, so a write may always be taken at a *shorter*
+    /// brand than `'cell` — and a run written at a shorter one is unreadable past it, so nothing
+    /// it holds can be named again. What cannot happen is the reverse, a foreign read reaching
+    /// `'cell`, which is where every door that outlives the step asks for its value:
+    ///
+    /// ```compile_fail
+    /// use cellgraph::{CellGraph, DropFree, Verdict, reattachable};
+    /// struct Work;
+    /// reattachable!(Work => String);
+    /// struct Number;
+    /// reattachable!(Number => &'r u32);
+    /// impl DropFree for Number {}
+    /// struct Spine;
+    /// reattachable!(Spine => &'r [&'r u32]);
+    /// impl DropFree for Spine {}
+    ///
+    /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
+    /// let cell = graph.create(None, None).unwrap();
+    /// let other = graph.create(None, None).unwrap();
+    /// graph
+    ///     .enter(cell, |context| {
+    ///         let foreign = context
+    ///             .alloc_into::<Number, Number>(other, &[], |writer, _| &writer.fill(1, |_| 41)[0])
+    ///             .unwrap();
+    ///         let read = context.read(&foreign);
+    ///         let spine = context.writer().fill(1, |_| read.value());
+    ///         // The spine is only at `'cell` if the read's borrow is, and it is not.
+    ///         context.lift::<Spine>(spine);
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// And a `'cell` reference cannot leave the `enter` that minted it: `R` is chosen outside the
+    /// call, so it cannot name the brand.
+    ///
+    /// ```compile_fail
+    /// use cellgraph::{CellGraph, Verdict, reattachable};
+    /// struct Work;
+    /// reattachable!(Work => String);
+    ///
+    /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
+    /// let cell = graph.create(None, None).unwrap();
+    /// let escaped: Option<&u32> = graph
+    ///     .enter(cell, |context| Some(&context.writer().fill(1, |_| 41u32)[0]))
+    ///     .unwrap();
+    /// ```
+    pub fn writer(&self) -> Writer<'cell> {
+        self.writer
+    }
+
+    /// Take the cell's continuation, re-anchored at the cell brand.
     ///
     /// **This is the sealed tier's accessor.** A continuation captured over values in cells that
     /// have since sealed comes back reading storage those sealed cells still retain. The door hangs
@@ -2488,7 +2579,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// inside an `enter` scope.
     ///
     /// The slot is left empty: a continuation is one-shot, and a step that wants the cell entered
-    /// again stores a successor.
+    /// again stores a successor. A multi-shot embedder takes its continuation, runs it, and stores
+    /// it back — which costs nothing, since a store prices nothing.
     ///
     /// There is no graph-level twin, so a value reaching sealed storage cannot be read from
     /// outside a step:
@@ -2502,43 +2594,44 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// let cell = graph.create(None, None).unwrap();
     /// let _ = graph.continuation(cell);
     /// ```
-    pub fn continuation(&mut self) -> Option<Active<'b, C>> {
+    pub fn continuation(&mut self) -> Option<C::At<'cell>> {
         let stored = match self.cell {
             CellHandle::Slab(handle) => {
                 self.graph.slots[handle.slot() as usize].continuation.take()
             }
             CellHandle::Tree(handle) => self.graph.trees.take_continuation(handle.index()),
         }?;
-        // SAFETY: the value's referents are region storage in the cells and sealed regions its
-        // stored reach names — the reach-table entry `continuation_reach_index` names, which the
-        // seal transition maintains, and none at all when it names no entry — and that reach was
-        // minted into the executing cell's hold set when it was stored, so every one of them is
-        // either a live cell or a held sealed cell, whose chunks are pointer-stable and detached
-        // unmoved. For a tree step the hold set is the root's, and the captures' own storage is
-        // either the root's, one of the cells it holds, or a tree cell on this one's chain — an
-        // ancestor, which outlives it, or the executing cell itself. The cell is live for all of
-        // `'b` (it is the one executing), so its holds are too. `'b` is the enclosing `enter`'s
-        // graph borrow, unnameable by the step's return type, so nothing anchored at it escapes.
-        let value = unsafe { stored.reattach::<'b>() };
-        Some(Active::new(value))
+        // SAFETY: the value came in through `store_successor` at some earlier step's `'cell`, so
+        // its referents are storage that brand covers: this cell's own region, whose chunks are
+        // pointer-stable and which a seal detaches and a merge absorbs unmoved, or a region a
+        // pinned crossing minted into this cell's hold set — a live cell, or a sealed cell the
+        // hold has followed into the tier, both of which keep their chunks. The cell is live for
+        // all of this step (it is the one executing) and its holds are monotone for its life, so
+        // every one of them is still there. For a tree step the hold set is the root's, and a
+        // capture's own storage is the root's, one of the cells it holds, or a tree cell on this
+        // one's chain — an ancestor, which outlives it, or the executing cell itself. `'cell` is
+        // quantified by the enclosing `enter` and nameable nowhere outside it, which discharges
+        // the invariant-family condition: nothing anchored at it escapes the step.
+        Some(unsafe { stored.reattach::<'cell>() })
     }
 
-    /// Store a continuation that captures nothing any region owns, so it reaches nothing.
+    /// Store the continuation the next step of this cell receives.
     ///
-    /// Crossing nothing takes no entry: the cell stops naming one rather than naming an entry that
-    /// names nothing, so a cell whose continuations never capture keeps an empty reach table.
-    /// Whatever entry an earlier store pointed at stays as it is — entries are content, and nothing
-    /// rewrites one because the value that minted it moved on.
-    pub fn store_successor(&mut self, continuation: C::At<'static>) {
-        let stored = Erased::store(continuation);
+    /// **The store prices nothing and records no reach.** A continuation's captures are `'cell`
+    /// references, and `'cell` names only storage this cell's hold set already covers: its own
+    /// region, which the cell keeps by being alive, or a region a pinned crossing minted into its
+    /// holds when the reference arrived through [`alloc_here`](Self::alloc_here). So there is
+    /// nothing left for a store to appraise, and no mask for the seal transition to rewrite —
+    /// a cell's continuation takes no reach-table entry.
+    ///
+    /// A continuation that captures nothing is the same door: `'cell` is satisfied by an owned
+    /// value or an `&'static` one just as it is by a region reference.
+    pub fn store_successor(&mut self, continuation: C::At<'cell>) {
+        let stored = Erased::<C>::erase(continuation);
         match self.cell {
             CellHandle::Slab(handle) => {
-                let cell = &mut self.graph.slots[handle.slot() as usize];
-                cell.continuation_reach_index = None;
-                cell.continuation = Some(stored);
+                self.graph.slots[handle.slot() as usize].continuation = Some(stored)
             }
-            // A tree cell records no reach: it never seals, so there is nothing a stored mask would
-            // have to be rewritten for.
             CellHandle::Tree(handle) => self
                 .graph
                 .trees
@@ -2546,71 +2639,29 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         }
     }
 
-    /// Store a continuation built over carriers, so it may capture values living in regions.
+    /// The own-cell crossing: price `operands` into the executing cell, mint what pins into its
+    /// hold set, and run `build` with the cell's own writer beside the views.
     ///
-    /// The captures' reach is minted into this cell's hold set before the continuation rests in
-    /// its slot: a cell holds what its own continuation reads, which is what keeps those regions
-    /// alive across the gap between this step and the next.
+    /// This is how a value homed elsewhere becomes reachable at `'cell`. A pinned view arrives as
+    /// `V::At<'cell>` and **may leave the build** — that is exactly what the pin bought, since its
+    /// reach went into this cell's holds before `build` ran, so the cell keeps that storage for as
+    /// long as it lives. A copied view arrives severed, at a brand bound by the call, so embedding
+    /// one or handing it back is a compile error and the only copy that typechecks is a deep one
+    /// through the writer.
     ///
-    /// That reach is kept exactly as [`keep`](Self::keep) keeps one — interned into this cell's
-    /// reach table, with the continuation pointing at the entry it landed in. Storing over an
-    /// earlier continuation writes no entry, so a reach-table entry is content that only the seal
-    /// transition's uniform rewrite ever changes.
+    /// `build` returns whatever it returns: a `'cell` value needs no carrier and no family. A
+    /// build that uses no writer — `alloc_here(&[operand], |_, views| pinned(&views[0]))` — is the
+    /// "pin this into my holds and give me the borrow" operation.
     ///
-    /// `build` also receives this cell's own write surface, since a continuation that captures
-    /// anything usually needs somewhere to put the captures' spine; the self rule makes the
-    /// resulting self-reach a hold on nothing.
+    /// An own-region write with nothing to cross does not come here at all: that is
+    /// [`writer`](Self::writer). A `'cell` reference is not an operand either — it crosses nothing,
+    /// so there is no price to take.
     ///
-    /// Captures are priced in the order they are given, each against what the ones before it have
-    /// already pinned: the first capture from a shared source carries the shared cost and the rest
-    /// price at the margin.
-    pub fn store_successor_capturing<V>(
-        &mut self,
-        captures: &[Operand<'_, 'b, V, W>],
-        build: impl for<'r, 'v> FnOnce(Writer<'r>, &[CrossedOperand<'r, 'v, V>]) -> C::At<'r>,
-    ) where
-        V: Reattachable + DropFree,
-        Erased<V>: Copy,
-    {
-        // The scratch splits off the graph borrow: the transients below live in it while the
-        // doors below hold the graph exclusively.
-        let dest = self.executing_dest();
-        let StepContext {
-            graph,
-            cell: _,
-            scratch,
-        } = &mut *self;
-        let scratch = scratch
-            .as_ref()
-            .expect("a step holds the scratch region for its whole length");
-        let (reach, verdicts) = graph.appraise_and_pledge(dest, captures, scratch);
-        let (value, reach) = graph.place::<C>(dest, reach, move |writer| {
-            // SAFETY: see `reanchor_operands`. `place` has already folded every pinned
-            // capture's reach into this cell's hold set before it calls this closure, so none
-            // of that storage can go away while the cell holds it, and the views live only for
-            // the `build` call.
-            let views = unsafe { reanchor_operands(captures, verdicts, scratch) };
-            build(writer, views)
-        });
-        match dest.home {
-            CellHome::Slab(slot) => {
-                let cell = &mut graph.slots[slot as usize];
-                cell.continuation_reach_index = Some(cell.reaches.intern(reach));
-                cell.continuation = Some(value);
-            }
-            CellHome::Tree(index) => graph.trees.set_continuation(index, Some(value)),
-        }
-    }
-
-    /// Build a value in the executing cell's own region.
-    ///
-    /// `build` receives the region's write surface at a brand it cannot widen, so the value it
-    /// returns borrows region-derived or owned data and nothing else — an ambient `&'x` has no
-    /// outlives relation to a universally quantified `'r`. The value's reach is therefore exactly
-    /// the executing cell, and the mint's self rule makes storing it a hold on nothing.
+    /// Operands are priced in the order they are given, each against what the ones before it have
+    /// already pinned.
     ///
     /// ```
-    /// use cellgraph::{CellGraph, DropFree, Verdict, reattachable};
+    /// use cellgraph::{CellGraph, CrossedOperand, DropFree, Operand, Verdict, reattachable};
     /// struct Work;
     /// reattachable!(Work => String);
     /// struct Number;
@@ -2619,41 +2670,56 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     ///
     /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
     /// let cell = graph.create(None, None).unwrap();
+    /// let other = graph.create(None, None).unwrap();
     /// let read = graph
     ///     .enter(cell, |context| {
-    ///         let value = context.alloc::<Number>(|writer| writer.value(41));
-    ///         *context.read(&value).value()
+    ///         let foreign = context
+    ///             .alloc_into::<Number, Number>(other, &[], |writer, _| &writer.fill(1, |_| 41)[0])
+    ///             .unwrap();
+    ///         let pinned: &u32 = context.alloc_here(
+    ///             &[Operand { carrier: &foreign, copy_bytes: usize::MAX }],
+    ///             |_writer, views| match views[0] {
+    ///                 CrossedOperand::Pinned(value) => value,
+    ///                 CrossedOperand::Copied(_) => unreachable!("the verdict always pins"),
+    ///             },
+    ///         );
+    ///         *pinned
     ///     })
     ///     .unwrap();
     /// assert_eq!(read, 41);
     /// ```
-    ///
-    /// A carrier cannot leave the step that built it: its home brand is the step's own, and
-    /// `enter`'s result type is chosen outside the call, so it cannot name that brand.
-    ///
-    /// ```compile_fail
-    /// use cellgraph::{CellGraph, DropFree, Ready, Verdict, reattachable};
-    /// struct Work;
-    /// reattachable!(Work => String);
-    /// struct Number;
-    /// reattachable!(Number => &'r u32);
-    /// impl DropFree for Number {}
-    ///
-    /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
-    /// let cell = graph.create(None, None).unwrap();
-    /// let escaped: Ready<'_, Number> = graph
-    ///     .enter(cell, |context| context.alloc::<Number>(|writer| writer.value(41)))
-    ///     .unwrap();
-    /// ```
-    pub fn alloc<T>(
+    pub fn alloc_here<R, V>(
         &mut self,
-        build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
-    ) -> Ready<'b, T, W>
+        operands: &[Operand<'_, 'b, V, W>],
+        build: impl for<'v> FnOnce(Writer<'cell>, &[CrossedOperand<'cell, 'v, V>]) -> R,
+    ) -> R
     where
-        T: Reattachable + DropFree,
+        V: Reattachable + DropFree,
+        Erased<V>: Copy,
     {
+        // The scratch splits off the graph borrow: the verdicts and the views live in it while the
+        // appraisal below holds the graph exclusively.
         let dest = self.executing_dest();
-        self.graph.mint_and_build(dest, GraphReach::empty(), build)
+        let StepContext {
+            graph,
+            writer,
+            scratch,
+            ..
+        } = &mut *self;
+        let scratch = scratch
+            .as_ref()
+            .expect("a step holds the scratch region for its whole length");
+        let (reach, verdicts) = graph.appraise_and_pledge(dest, operands, scratch);
+        // Nothing is placed here — no value is erased and no carrier comes back — so the mint the
+        // placement path performs on its way into a region happens directly. The self rule makes
+        // the executing cell's own bit a no-op, so an operand already homed here costs no hold.
+        graph.mint(dest.mint_slot, &reach);
+        // SAFETY: see `reanchor_operands`. Every pinned operand's reach is now in the executing
+        // cell's hold set, so the storage it names is kept for as long as the cell lives — which
+        // covers `'cell` — and the copied views live only for the `build` call, whose `for<'v>`
+        // quantifier keeps one from escaping it.
+        let views = unsafe { reanchor_operands(operands, verdicts, scratch) };
+        build(*writer, views)
     }
 
     /// Destination-homed placement: build a value **in `dest`'s region**, embedding the views of
@@ -2681,11 +2747,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     {
         // The scratch splits off the graph borrow: the crossed operands and the views live in it
         // while the placement below holds the graph exclusively.
-        let StepContext {
-            graph,
-            cell: _,
-            scratch,
-        } = &mut *self;
+        let StepContext { graph, scratch, .. } = &mut *self;
         let scratch = scratch
             .as_ref()
             .expect("a step holds the scratch region for its whole length");
@@ -2716,6 +2778,75 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
             let views = unsafe { reanchor_operands(operands, verdicts, scratch) };
             build(writer, views)
         }))
+    }
+
+    /// The bridge from an own-region value to a carrier, reaching the executing cell.
+    ///
+    /// A `'cell` value is carrier-free while it stays in the cell that built it; it needs a carrier
+    /// the moment it must be an operand, be [`keep`](Self::keep)ed, or be built into another cell.
+    /// The reach it takes on is the executing cell alone, which covers its referents: they are the
+    /// cell's own region, or storage a pinned crossing put in the cell's hold set, and a hold on a
+    /// cell keeps its hold set with it — through the cell's death, since a seal keeps the whole
+    /// aggregate.
+    ///
+    /// The consequence a consumer sees is that the hold it takes on a lifted value is a **direct**
+    /// one on the producer. A [`redeem`](Self::redeem) of something homed in a cell the producer
+    /// merely holds is `Unheld` from the consumer — a refusal, never a dangle.
+    ///
+    /// ```
+    /// use cellgraph::{CellGraph, DropFree, Verdict, reattachable};
+    /// struct Work;
+    /// reattachable!(Work => String);
+    /// struct Number;
+    /// reattachable!(Number => &'r u32);
+    /// impl DropFree for Number {}
+    ///
+    /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
+    /// let cell = graph.create(None, None).unwrap();
+    /// let read = graph
+    ///     .enter(cell, |context| {
+    ///         let value = context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0]);
+    ///         *context.read(&value).value()
+    ///     })
+    ///     .unwrap();
+    /// assert_eq!(read, 41);
+    /// ```
+    ///
+    /// A carrier cannot leave the step that built it: its home brand is the step's own, and
+    /// `enter`'s result type is chosen outside the call, so it cannot name that brand.
+    ///
+    /// ```compile_fail
+    /// use cellgraph::{CellGraph, DropFree, Ready, Verdict, reattachable};
+    /// struct Work;
+    /// reattachable!(Work => String);
+    /// struct Number;
+    /// reattachable!(Number => &'r u32);
+    /// impl DropFree for Number {}
+    ///
+    /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
+    /// let cell = graph.create(None, None).unwrap();
+    /// let escaped: Ready<'_, Number> = graph
+    ///     .enter(cell, |context| {
+    ///         context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0])
+    ///     })
+    ///     .unwrap();
+    /// ```
+    pub fn lift<T>(&self, value: T::At<'cell>) -> Ready<'b, T, W>
+    where
+        T: Reattachable + DropFree,
+    {
+        // A bump releases its chunks whole and never walks a value, so a family with drop glue
+        // would leak whatever it owns. `DropFree` declares the absence; this is the check, the
+        // same one `mint_and_build` makes at the placement doors.
+        const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
+        // The mint slot, not the home: a value homed in a tree cell reaches its root, which is what
+        // every hold on its behalf is minted into.
+        let dest = self.executing_dest();
+        Ready::new(
+            Erased::<T>::erase(value),
+            GraphReach::single(dest.mint_slot),
+            dest.home,
+        )
     }
 
     /// Mint a bare hold on another live cell — the pull shape's first half: the executing cell
@@ -2924,7 +3055,7 @@ impl<C: Reattachable, const W: usize> Drop for Parked<'_, C, W> {
     }
 }
 
-impl<C: Reattachable, const W: usize> Drop for StepContext<'_, C, W> {
+impl<C: Reattachable, const W: usize> Drop for StepContext<'_, '_, C, W> {
     fn drop(&mut self) {
         match self.cell {
             CellHandle::Slab(handle) => {

@@ -4,7 +4,7 @@
 //! tier.
 
 use super::super::*;
-use super::{Borrowed, Number, Owned, continuation_reach_index, operand, pin, pinned};
+use super::{Borrowed, Number, Owned, kept_reach, number_here, one, operand, pin, pinned};
 
 /// Two dormant-value counts far enough apart that a transition proportional to storage could not
 /// produce the same work for both. The Miri run takes the smaller pair — the shapes are what it
@@ -32,10 +32,10 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
     graph
         .enter(producer, |context| {
             for value in 0..stored {
-                context.alloc::<Number>(|writer| writer.value(value as u32));
+                number_here(context, value as u32);
             }
             for value in 0..kept_by_producer {
-                let carrier = context.alloc::<Number>(|writer| writer.value(value as u32));
+                let carrier = number_here(context, value as u32);
                 context.keep(carrier);
             }
         })
@@ -45,10 +45,10 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
         let source = graph.create(None, None).unwrap();
         graph
             .enter(source, |context| {
-                let local = context.alloc::<Number>(|writer| writer.value(value as u32));
+                let local = number_here(context, value as u32);
                 let carrier = context
                     .alloc_into::<Number, Number>(holder, &[operand(&local)], |writer, views| {
-                        writer.value(*pinned(&views[0]))
+                        one(writer, *pinned(&views[0]))
                     })
                     .unwrap();
                 context.keep(carrier);
@@ -137,15 +137,23 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
         .unwrap()
         .unwrap();
 
-    // The consumer builds a value into the producer's region and keeps it as its continuation, so
-    // the consumer holds the producer and its stored mask names the producer's slot.
-    graph
+    // The consumer builds a value into the producer's region and pins it into its own holds as
+    // its continuation's capture, so the consumer holds the producer. It also bundles the same
+    // value into its own region and keeps it, which is the stored mask the transition rewrites.
+    let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(producer, &[], |writer, _| one(writer, 41))
                 .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            let captured =
+                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                    pinned(&views[0])
+                })
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
     assert!(graph.holds(consumer, producer));
@@ -157,7 +165,7 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
     // The transition rewrote the consumer's stored mask in place: the dying slot's bit traded for
     // the sealed cell's id, and what that region reached lives on in the sealed cell's frozen
     // aggregate.
-    let stored = continuation_reach_index(&graph, consumer);
+    let stored = kept_reach(&graph, &kept);
     assert!(stored.names_sealed(id));
     assert!(!stored.names(producer.slot()));
     assert!(
@@ -171,7 +179,7 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
 
     // The storage detached unmoved, so the borrow the re-anchor hands back still reads it.
     let value = graph
-        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .enter(consumer, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 41);
 }
@@ -183,17 +191,27 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
     let first = graph.create(None, None).unwrap();
     let second = graph.create(None, None).unwrap();
 
-    graph
+    let kept = graph
         .enter(consumer, |context| {
-            let one = context
-                .alloc_into::<Number, Number>(first, &[], |writer, _| writer.value(1))
+            let from_first = context
+                .alloc_into::<Number, Number>(first, &[], |writer, _| one(writer, 1))
                 .unwrap();
-            let two = context
-                .alloc_into::<Number, Number>(second, &[], |writer, _| writer.value(2))
+            let from_second = context
+                .alloc_into::<Number, Number>(second, &[], |writer, _| one(writer, 2))
                 .unwrap();
-            context.store_successor_capturing(&[operand(&one), operand(&two)], |_writer, views| {
-                pinned(&views[1])
-            });
+            let captured = context.alloc_here(
+                &[operand(&from_first), operand(&from_second)],
+                |_writer, views| pinned(&views[1]),
+            );
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(
+                    consumer,
+                    &[operand(&from_first), operand(&from_second)],
+                    |_writer, views| pinned(&views[1]),
+                )
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
 
@@ -203,15 +221,12 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
     minted.sort();
     assert_eq!(minted.len(), 2);
 
-    let named: Vec<SealedId> = continuation_reach_index(&graph, consumer)
-        .sealed()
-        .iter()
-        .collect();
+    let named: Vec<SealedId> = kept_reach(&graph, &kept).sealed().iter().collect();
     // The sparse half unions by sorted merge, so the two ids arrive deduplicated and in id order.
     assert_eq!(named, minted);
 
     let value = graph
-        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .enter(consumer, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 2);
 }
