@@ -824,3 +824,26 @@ fn a_pinned_view_at_the_cell_brand_survives_its_home_sealing() {
         .unwrap();
     assert_eq!(read, 41);
 }
+
+#[test]
+fn a_placement_into_the_executing_cell_writes_beside_the_steps_own_writer() {
+    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let cell = graph.create(None, None).unwrap();
+
+    let read = graph
+        .enter(cell, |context| {
+            // The destination is the executing cell, so the build's writer and the step's own
+            // writer name one bump, and both are used inside the build. Two shared borrows of an
+            // interior-mutable bump coexist; an exclusive one anywhere in the chain would not.
+            let own = context.writer();
+            let placed = context
+                .alloc_into::<Number, Number>(cell, &[], move |writer, _| {
+                    let early = one(own, 7u32);
+                    one(writer, *early + 1)
+                })
+                .unwrap();
+            *context.read(&placed).value()
+        })
+        .unwrap();
+    assert_eq!(read, 8);
+}

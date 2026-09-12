@@ -17,7 +17,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-27 tests, grouped by the unsafe site each pins down. Names below are the exact
+28 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -119,12 +119,15 @@ writer minted at `enter` stays live across every door the step then takes throug
 the shape Miri is the referee for: a `Bump` is entirely interior-mutable, so the shared reference
 tolerates the foreign writes those doors make, and no door may take the executing cell's `Region`
 itself through `&mut` while the writer is out. The first test is the load-bearing one — the writer
-is taken before every own-cell door and written through after all of them. The second and third are
-the re-anchor at the cell brand: a capture at `'cell` is read back a step later, once with the
-cell's own bundle grown by an absorption under it, and once with the pinned home sealed out of the
-slab entirely.
+is taken before every own-cell door and written through after all of them. The second is the shape
+where two writers name one bump: a placement whose destination is the executing cell, with the
+step's own writer used inside the build closure — which stands only because every borrow of a
+region in the chain is shared. The third and fourth are the re-anchor at the cell brand: a capture
+at `'cell` is read back a step later, once with the cell's own bundle grown by an absorption under
+it, and once with the pinned home sealed out of the slab entirely.
 
 - `graph::tests::values::a_writer_taken_at_entry_writes_after_every_own_cell_door`
+- `graph::tests::values::a_placement_into_the_executing_cell_writes_beside_the_steps_own_writer`
 - `graph::tests::values::a_cell_reference_captured_by_the_continuation_reads_after_the_region_absorbs`
 - `graph::tests::values::a_pinned_view_at_the_cell_brand_survives_its_home_sealing`
 
@@ -164,9 +167,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-12: 179.27s — 109 tests, 0 leaks, 0 UB
 - 2026-09-12: 155.60s — 108 tests, 0 leaks, 0 UB
 - 2026-09-07: 176.08s — 105 tests, 0 leaks, 0 UB
 - 2026-09-06: 172.83s — 87 tests, 0 leaks, 0 UB
 - 2026-09-06: 166.57s — 82 tests, 0 leaks, 0 UB
-- 2026-09-06: 150.44s — 77 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

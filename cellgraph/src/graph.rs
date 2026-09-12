@@ -2414,12 +2414,28 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
         self.mint(dest.mint_slot, &reach);
         let value = {
+            // Minted first, through an exclusive borrow that ends here. A destination entered for
+            // the first time has no region yet, and this is where it gets one.
+            match dest.home {
+                CellHome::Slab(slot) => {
+                    self.slots[slot as usize]
+                        .region
+                        .get_or_insert_with(Region::new);
+                }
+                CellHome::Tree(index) => {
+                    self.trees.region_mut(index);
+                }
+            }
+            // Then reached through a **shared** borrow, for the reason `enter` takes the step's own
+            // writer through one: the destination may be the executing cell, whose `'cell` writer
+            // is out for the whole step. A write through that writer is foreign to an exclusive
+            // borrow of the same region and would disable it, faulting this build's own writer
+            // underneath. Two shared borrows of one bump coexist — its bytes are interior-mutable.
             let region = match dest.home {
-                CellHome::Slab(slot) => self.slots[slot as usize]
-                    .region
-                    .get_or_insert_with(Region::new),
-                CellHome::Tree(index) => self.trees.region_mut(index),
-            };
+                CellHome::Slab(slot) => self.slots[slot as usize].region.as_ref(),
+                CellHome::Tree(index) => self.trees.region(index),
+            }
+            .expect("the destination's region was just minted");
             Erased::<T>::erase(build(region.writer()))
         };
         // The mint slot, not the home: a value homed in a tree cell reaches its root, which is what
