@@ -30,8 +30,8 @@ struct Numbers;
 
 reattachable!(
     Work => String,
-    Number => &'r u32,
-    Numbers => &'r [u32],
+    Number => &'cell u32,
+    Numbers => &'cell [u32],
 );
 
 impl DropFree for Number {}
@@ -61,7 +61,7 @@ fn pinned<'a, 'step, V: Reattachable + DropFree>(
 /// One value, laid down through the writer's single run verb — the shape every embedder derives
 /// its own one-value write from, since the substrate ships no such verb. No allocation of its own:
 /// the `Option` is a stack slot the run of one empties.
-fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
+fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
     let mut value = Some(value);
     &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
 }
@@ -72,10 +72,10 @@ fn number_here<'step>(context: &StepContext<'step, '_, Work>, value: u32) -> Rea
     context.lift::<Number>(one(context.writer(), value))
 }
 
-fn build_number<'r, 'severed>(
-    writer: Writer<'r>,
-    views: &[CrossedOperand<'r, 'severed, Number>],
-) -> &'r u32 {
+fn build_number<'cell, 'severed>(
+    writer: Writer<'cell>,
+    views: &[CrossedOperand<'cell, 'severed, Number>],
+) -> &'cell u32 {
     match views[0] {
         CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => one(writer, *value),
     }
@@ -83,10 +83,10 @@ fn build_number<'r, 'severed>(
 
 /// Written straight out of the views: the run is filled by index, so the build needs no buffer of
 /// its own and the placement is charged for nothing the harness did.
-fn build_slice<'r, 'severed>(
-    writer: Writer<'r>,
-    views: &[CrossedOperand<'r, 'severed, Number>],
-) -> &'r [u32] {
+fn build_slice<'cell, 'severed>(
+    writer: Writer<'cell>,
+    views: &[CrossedOperand<'cell, 'severed, Number>],
+) -> &'cell [u32] {
     writer.fill(views.len(), |index| match views[index] {
         CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => *value,
     })

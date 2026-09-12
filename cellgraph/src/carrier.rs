@@ -68,7 +68,7 @@ impl<T: Reattachable + DropFree, const W: usize> Ready<'_, T, W> {
     /// Copy the erased form out without consuming the carrier — the read door's first half.
     ///
     /// The bound is on the **erased** form, not on `T::At<'static>`. A `T::At<'static>: Copy`
-    /// bound in scope makes rustc prove `Copy` for a re-anchored `T::At<'r>` by unifying `'r` with
+    /// bound in scope makes rustc prove `Copy` for a re-anchored `T::At<'cell>` by unifying `'cell` with
     /// `'static`, since a projection carries no variance; bounding `Erased<T>` keeps the live form
     /// move-only and the re-anchor's lifetime free.
     pub(crate) fn erased(&self) -> Erased<T>
@@ -108,33 +108,33 @@ where
     }
 }
 
-/// The in-use carrier: the value re-anchored at the reading borrow `'r`. The borrow checker keeps
-/// it inside `'r`, so it cannot outlive the step that read it.
+/// The in-use carrier: the value re-anchored at the reading borrow `'cell`. The borrow checker keeps
+/// it inside `'cell`, so it cannot outlive the step that read it.
 ///
 /// The reach stays behind in the reach table: it is the substrate's bookkeeping, and the borrow
 /// the reader gets is already bounded by the cell's life. Bounded only by [`Reattachable`], since a
 /// continuation comes back through this state too and rests in its cell's slot rather than a
 /// region, where drop glue is fine.
-pub struct Active<'r, T: Reattachable> {
-    value: T::At<'r>,
+pub struct Active<'cell, T: Reattachable> {
+    value: T::At<'cell>,
 }
 
-impl<'r, T: Reattachable> Active<'r, T> {
-    pub(crate) fn new(value: T::At<'r>) -> Self {
+impl<'cell, T: Reattachable> Active<'cell, T> {
+    pub(crate) fn new(value: T::At<'cell>) -> Self {
         Active { value }
     }
 
     /// The re-anchored value.
-    pub fn value(&self) -> T::At<'r>
+    pub fn value(&self) -> T::At<'cell>
     where
-        T::At<'r>: Copy,
+        T::At<'cell>: Copy,
     {
         self.value
     }
 
     /// The re-anchored value, consuming the open — the by-move twin of [`value`](Active::value)
     /// for a family whose live form is not `Copy`.
-    pub fn into_value(self) -> T::At<'r> {
+    pub fn into_value(self) -> T::At<'cell> {
         self.value
     }
 }

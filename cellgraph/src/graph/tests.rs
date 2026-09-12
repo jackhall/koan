@@ -16,7 +16,7 @@ crate::reattachable!(Owned => String);
 
 /// A family that borrows, so the erase-and-re-anchor round trip moves a real reference.
 struct Borrowed;
-crate::reattachable!(Borrowed => &'r u32);
+crate::reattachable!(Borrowed => &'cell u32);
 
 /// A family whose erased form has drop glue, so a reclaim's release of the slot is observable.
 struct Counted;
@@ -24,7 +24,7 @@ crate::reattachable!(Counted => Rc<()>);
 
 /// A value family: a borrow into region storage, so a carrier's reach is a real cross-cell edge.
 struct Number;
-crate::reattachable!(Number => &'r u32);
+crate::reattachable!(Number => &'cell u32);
 impl DropFree for Number {}
 
 const ANCHOR: u32 = 7;
@@ -56,9 +56,9 @@ fn operand<'a, 'step, V: Reattachable + DropFree>(
 
 /// The pinned view of a crossed operand. Every test that uses it runs under [`pin`], so the copy
 /// arm is unreachable rather than merely unexpected.
-fn pinned<'r, V: Reattachable>(view: &CrossedOperand<'r, '_, V>) -> V::At<'r>
+fn pinned<'cell, V: Reattachable>(view: &CrossedOperand<'cell, '_, V>) -> V::At<'cell>
 where
-    V::At<'r>: Copy,
+    V::At<'cell>: Copy,
 {
     match view {
         CrossedOperand::Pinned(value) => *value,
@@ -68,7 +68,7 @@ where
 
 /// The deep copy a severed view allows and the embed a pinned one allows, in one build — what a
 /// test that runs under both verdicts passes.
-fn take<'r>(view: &CrossedOperand<'r, '_, Number>, writer: Writer<'r>) -> &'r u32 {
+fn take<'cell>(view: &CrossedOperand<'cell, '_, Number>, writer: Writer<'cell>) -> &'cell u32 {
     match view {
         // Pinned: the borrow itself, embedded in the destination's storage.
         CrossedOperand::Pinned(value) => value,
@@ -79,7 +79,7 @@ fn take<'r>(view: &CrossedOperand<'r, '_, Number>, writer: Writer<'r>) -> &'r u3
 
 /// One value, laid down through the writer's single run verb — the shape an embedder derives its
 /// own one-value write from, and what these tests use in place of one.
-fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
+fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
     let mut value = Some(value);
     &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
 }

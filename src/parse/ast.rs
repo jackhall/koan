@@ -245,7 +245,7 @@ pub struct KExpression<'a> {
 
 // Lifetimes do not affect layout, so this retype is a no-op transmute. The witness's `'b: 'w` bound
 // is what makes a reattach a shortening; nothing here weakens it.
-reattachable! { KExpression<'static> => KExpression<'r> }
+reattachable! { KExpression<'static> => KExpression<'cell> }
 
 impl<'a> KExpression<'a> {
     /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.

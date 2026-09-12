@@ -31,10 +31,10 @@ struct Text;
 
 reattachable!(
     Work => String,
-    Resumed => &'r u32,
-    Number => &'r u32,
-    Numbers => &'r [u32],
-    Text => &'r str,
+    Resumed => &'cell u32,
+    Number => &'cell u32,
+    Numbers => &'cell [u32],
+    Text => &'cell str,
 );
 
 impl DropFree for Number {}
@@ -43,27 +43,27 @@ impl DropFree for Text {}
 
 /// The writer's one run verb, at length one — the shape an embedder derives a single-value write
 /// from, since the substrate ships no such verb.
-fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
+fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
     let mut value = Some(value);
     &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
 }
 
-fn build_number<'r>(writer: Writer<'r>) -> &'r u32 {
+fn build_number<'cell>(writer: Writer<'cell>) -> &'cell u32 {
     one(writer, 7)
 }
 
-fn build_slice<'r>(writer: Writer<'r>) -> &'r [u32] {
+fn build_slice<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
     writer.fill(3, |index| index as u32 + 1)
 }
 
-fn build_text<'r>(writer: Writer<'r>) -> &'r str {
+fn build_text<'cell>(writer: Writer<'cell>) -> &'cell str {
     writer.text("koan")
 }
 
 /// The producer-decided run: a filter settles the width only once the elements exist, so there is
 /// no length to hand `fill`.
-fn build_run<'r>(writer: Writer<'r>) -> &'r [u32] {
-    let mut run: Run<'r, u32> = writer.run();
+fn build_run<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
+    let mut run: Run<'cell, u32> = writer.run();
     run.extend((1..8u32).filter(|value| value % 3 == 0));
     run.push(99);
     assert!(!run.is_empty() && run.len() == 3);
@@ -72,10 +72,10 @@ fn build_run<'r>(writer: Writer<'r>) -> &'r [u32] {
 
 /// The same shape for text: a rendering whose length no caller knows up front, formatted straight
 /// into the region.
-fn build_prose<'r>(writer: Writer<'r>) -> &'r str {
+fn build_prose<'cell>(writer: Writer<'cell>) -> &'cell str {
     use std::fmt::Write;
 
-    let mut prose: Prose<'r> = writer.prose();
+    let mut prose: Prose<'cell> = writer.prose();
     for value in build_run(writer) {
         write!(prose, "{value};").expect("a region sink never fails");
     }
@@ -85,10 +85,10 @@ fn build_prose<'r>(writer: Writer<'r>) -> &'r str {
 /// An embedder's own helper over carriers, which is the one reason [`Erased`] is nameable from
 /// outside: the read door's `Copy` bound is on the erased form, so a caller that wants to be
 /// generic over the value family has to write that bound too.
-fn read_first<'s, 'step, V>(
-    context: &'s StepContext<'step, '_, Work>,
-    carrier: &'s Ready<'step, V>,
-) -> V::At<'s>
+fn read_first<'cell, 'step, V>(
+    context: &'cell StepContext<'step, '_, Work>,
+    carrier: &'cell Ready<'step, V>,
+) -> V::At<'cell>
 where
     V: Reattachable + DropFree,
     Erased<V>: Copy,

@@ -156,7 +156,7 @@ pub struct Operand<'a, 'step, V: Reattachable + DropFree, const W: usize = 1> {
     pub copy_bytes: usize,
 }
 
-/// An operand as the build closure receives it: at the destination's cell-region brand when the
+/// An operand as the build closure receives it: at the destination's region brand, `'cell`, when the
 /// verdict pinned it, at an unrelated brand when the verdict copied it.
 ///
 /// The build closure is quantified over both brands, so a `Copied` view has no outlives relation to
@@ -170,7 +170,7 @@ pub struct Operand<'a, 'step, V: Reattachable + DropFree, const W: usize = 1> {
 /// struct Work;
 /// reattachable!(Work => String);
 /// struct Number;
-/// reattachable!(Number => &'r u32);
+/// reattachable!(Number => &'cell u32);
 /// impl DropFree for Number {}
 ///
 /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -204,7 +204,7 @@ pub struct Operand<'a, 'step, V: Reattachable + DropFree, const W: usize = 1> {
 /// struct Work;
 /// reattachable!(Work => String);
 /// struct Number;
-/// reattachable!(Number => &'r u32);
+/// reattachable!(Number => &'cell u32);
 /// impl DropFree for Number {}
 ///
 /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Copy);
@@ -228,7 +228,7 @@ pub struct Operand<'a, 'step, V: Reattachable + DropFree, const W: usize = 1> {
 /// ```
 ///
 /// The views themselves die with the build call. They are handed over out of the graph's scratch
-/// region, which the next verb's entry resets, and the `for<'r, 'severed>` quantifier is what keeps one
+/// region, which the next verb's entry resets, and the `for<'cell, 'severed>` quantifier is what keeps one
 /// from outliving the call that received it — a caller cannot name either brand, so it has nowhere
 /// to put the slice:
 ///
@@ -237,7 +237,7 @@ pub struct Operand<'a, 'step, V: Reattachable + DropFree, const W: usize = 1> {
 /// struct Work;
 /// reattachable!(Work => String);
 /// struct Number;
-/// reattachable!(Number => &'r u32);
+/// reattachable!(Number => &'cell u32);
 /// impl DropFree for Number {}
 ///
 /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -260,8 +260,8 @@ pub struct Operand<'a, 'step, V: Reattachable + DropFree, const W: usize = 1> {
 ///     })
 ///     .unwrap();
 /// ```
-pub enum CrossedOperand<'r, 'severed, V: Reattachable> {
-    Pinned(V::At<'r>),
+pub enum CrossedOperand<'cell, 'severed, V: Reattachable> {
+    Pinned(V::At<'cell>),
     Copied(V::At<'severed>),
 }
 
@@ -2451,7 +2451,7 @@ impl<C: Reattachable, const W: usize> Cells<C, W> {
         dest: Destination,
         mut reach: GraphReach<W>,
         regions: &Regions,
-        build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
+        build: impl for<'cell> FnOnce(Writer<'cell>) -> T::At<'cell>,
     ) -> Ready<'step, T, W>
     where
         T: Reattachable + DropFree,
@@ -2596,10 +2596,10 @@ impl<'step, 'here, C: Reattachable, const W: usize> StepContext<'step, 'here, C,
     /// struct Work;
     /// reattachable!(Work => String);
     /// struct Number;
-    /// reattachable!(Number => &'r u32);
+    /// reattachable!(Number => &'cell u32);
     /// impl DropFree for Number {}
     /// struct Spine;
-    /// reattachable!(Spine => &'r [&'r u32]);
+    /// reattachable!(Spine => &'cell [&'cell u32]);
     /// impl DropFree for Spine {}
     ///
     /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -2730,7 +2730,7 @@ impl<'step, 'here, C: Reattachable, const W: usize> StepContext<'step, 'here, C,
     /// struct Work;
     /// reattachable!(Work => String);
     /// struct Number;
-    /// reattachable!(Number => &'r u32);
+    /// reattachable!(Number => &'cell u32);
     /// impl DropFree for Number {}
     ///
     /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -2804,10 +2804,10 @@ impl<'step, 'here, C: Reattachable, const W: usize> StepContext<'step, 'here, C,
         &mut self,
         dest: impl Into<CellHandle>,
         operands: &[Operand<'_, 'step, V, W>],
-        build: impl for<'r, 'severed> FnOnce(
-            Writer<'r>,
-            &[CrossedOperand<'r, 'severed, V>],
-        ) -> T::At<'r>,
+        build: impl for<'cell, 'severed> FnOnce(
+            Writer<'cell>,
+            &[CrossedOperand<'cell, 'severed, V>],
+        ) -> T::At<'cell>,
     ) -> Result<Ready<'step, T, W>, Stale<CellHandle>>
     where
         T: Reattachable + DropFree,
@@ -2848,7 +2848,7 @@ impl<'step, 'here, C: Reattachable, const W: usize> StepContext<'step, 'here, C,
         Ok(cells.mint_and_build(dest, reach, regions, move |writer| {
             // SAFETY: see `reanchor_operands`. `mint_and_build` has already folded every pinned
             // operand's reach into the destination's hold set before it calls this closure, so
-            // that storage outlives both `'r` and the destination.
+            // that storage outlives both `'cell` and the destination.
             let views = unsafe { reanchor_operands(operands, verdicts, scratch) };
             build(writer, views)
         }))
@@ -2872,7 +2872,7 @@ impl<'step, 'here, C: Reattachable, const W: usize> StepContext<'step, 'here, C,
     /// struct Work;
     /// reattachable!(Work => String);
     /// struct Number;
-    /// reattachable!(Number => &'r u32);
+    /// reattachable!(Number => &'cell u32);
     /// impl DropFree for Number {}
     ///
     /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -2894,7 +2894,7 @@ impl<'step, 'here, C: Reattachable, const W: usize> StepContext<'step, 'here, C,
     /// struct Work;
     /// reattachable!(Work => String);
     /// struct Number;
-    /// reattachable!(Number => &'r u32);
+    /// reattachable!(Number => &'cell u32);
     /// impl DropFree for Number {}
     ///
     /// let mut graph: CellGraph<Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -3054,7 +3054,7 @@ impl<'step, 'here, C: Reattachable, const W: usize> StepContext<'step, 'here, C,
 
     /// Read a carrier out at the reading borrow. The door hangs on the context, so a value with
     /// reach is only ever live inside an `enter` scope.
-    pub fn read<'s, T>(&'s self, carrier: &'s Ready<'step, T, W>) -> Active<'s, T>
+    pub fn read<'cell, T>(&'cell self, carrier: &'cell Ready<'step, T, W>) -> Active<'cell, T>
     where
         T: Reattachable + DropFree,
         Erased<T>: Copy,
@@ -3063,9 +3063,9 @@ impl<'step, 'here, C: Reattachable, const W: usize> StepContext<'step, 'here, C,
         // — whose mint folded its reach into the destination's hold set — or redeemed by one,
         // which checked that the executing cell keeps the storage the reach names, in the slab or
         // in the tier. Either way its referents are region storage that is live for the whole
-        // step: nothing dies inside one. So they are live for all of `'s`, which the `&'s self`
+        // step: nothing dies inside one. So they are live for all of `'cell`, which the `&'cell self`
         // borrow bounds inside the step brand, and the re-anchor shortens.
-        let value: T::At<'s> = unsafe { carrier.erased().reattach::<'s>() };
+        let value: T::At<'cell> = unsafe { carrier.erased().reattach::<'cell>() };
         Active::new(value)
     }
 }
@@ -3079,12 +3079,12 @@ impl<'step, 'here, C: Reattachable, const W: usize> StepContext<'step, 'here, C,
 /// that is live for the whole step — nothing dies inside one, since `release` needs the graph and
 /// `enter` holds it exclusively — and a pinned operand's reach has additionally been minted into
 /// the destination's hold set before this runs. The views live only for the build call, and the
-/// caller's `for<'r, 'severed>` quantifier keeps one from escaping it.
-unsafe fn reanchor_operands<'r, 'severed, 'scratch, V, const W: usize>(
+/// caller's `for<'cell, 'severed>` quantifier keeps one from escaping it.
+unsafe fn reanchor_operands<'cell, 'severed, 'scratch, V, const W: usize>(
     operands: &[Operand<'_, '_, V, W>],
     verdicts: &[Verdict],
     scratch: &'scratch Scratch,
-) -> &'scratch [CrossedOperand<'r, 'severed, V>]
+) -> &'scratch [CrossedOperand<'cell, 'severed, V>]
 where
     V: Reattachable + DropFree,
     Erased<V>: Copy,
@@ -3093,7 +3093,7 @@ where
         let erased = operands[index].carrier.erased();
         match verdicts[index] {
             // SAFETY: see the function contract.
-            Verdict::Pin => CrossedOperand::Pinned(unsafe { erased.reattach::<'r>() }),
+            Verdict::Pin => CrossedOperand::Pinned(unsafe { erased.reattach::<'cell>() }),
             // SAFETY: see the function contract.
             Verdict::Copy => CrossedOperand::Copied(unsafe { erased.reattach::<'severed>() }),
         }

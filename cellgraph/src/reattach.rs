@@ -14,12 +14,12 @@ use std::mem::ManuallyDrop;
 ///
 /// An implementor asserts that `At<'x>` and `At<'y>` are the *same type up to the lifetime
 /// parameter* — identical size, alignment, and validity — for all `'x`, `'y`. Every well-formed
-/// `type At<'r> = Foo<'r>;` where `Foo` is generic only in that lifetime satisfies this. Do not
+/// `type At<'cell> = Foo<'cell>;` where `Foo` is generic only in that lifetime satisfies this. Do not
 /// implement it for a family whose layout depends on the lifetime.
 pub unsafe trait Reattachable {
-    /// The family's form at `'r`. Bounded `: 'r` because a single-lifetime family's value borrows
-    /// only through `'r`, which is what lets a family's form be held behind a `&'r`.
-    type At<'r>: 'r;
+    /// The family's form at `'cell`. Bounded `: 'cell` because a single-lifetime family's value borrows
+    /// only through `'cell`, which is what lets a family's form be held behind a `&'cell`.
+    type At<'cell>: 'cell;
 }
 
 /// A family whose live form runs no destructor, so it may rest in a cell's region.
@@ -32,11 +32,11 @@ pub unsafe trait Reattachable {
 /// own slot, not in a region, and its glue runs when the slot reclaims.
 pub trait DropFree {}
 
-/// Generate `unsafe impl Reattachable` for layout-invariant families. Each `Family => At<'r>` pair
-/// expands to the trait impl; write the associated-type body with a literal `'r`
-/// (`Continuation => Step<'r>`, `Owned => String`).
+/// Generate `unsafe impl Reattachable` for layout-invariant families. Each `Family => At<'cell>` pair
+/// expands to the trait impl; write the associated-type body with a literal `'cell`
+/// (`Continuation => Step<'cell>`, `Owned => String`).
 ///
-/// The `unsafe` obligation — that `Family`'s `At<'r>` is one type up to the lifetime `'r`, per
+/// The `unsafe` obligation — that `Family`'s `At<'cell>` is one type up to the lifetime `'cell`, per
 /// [`Reattachable`]'s contract — is discharged **once** here, so embedder families carry no
 /// open-coded `unsafe impl`. The macro cannot *check* layout-invariance, so only invoke it with
 /// families that genuinely satisfy the contract.
@@ -44,14 +44,14 @@ pub trait DropFree {}
 /// ```
 /// use cellgraph::reattachable;
 /// struct Borrowed;
-/// reattachable!(Borrowed => &'r u32);
+/// reattachable!(Borrowed => &'cell u32);
 /// ```
 #[macro_export]
 macro_rules! reattachable {
     ($($family:ty => $at:ty),+ $(,)?) => {$(
-        // SAFETY: see the macro docs — `$family`'s `At<'r>` is layout-invariant in `'r`.
+        // SAFETY: see the macro docs — `$family`'s `At<'cell>` is layout-invariant in `'cell`.
         unsafe impl $crate::Reattachable for $family {
-            type At<'r> = $at;
+            type At<'cell> = $at;
         }
     )+};
 }
@@ -82,7 +82,7 @@ unsafe fn retype<A, B>(value: A) -> B {
 }
 
 /// A one-lifetime family value held in its `'static` form, so it can rest in a lifetime-free slot.
-/// One door puts a value in, another takes it back out at a caller-chosen `'r`, and the crate's
+/// One door puts a value in, another takes it back out at a caller-chosen `'cell`, and the crate's
 /// single lifetime-retype sits between them — nothing else names it.
 ///
 /// The type is public only so an embedder can write the `Erased<V>: Copy` bound the capture doors
@@ -98,7 +98,7 @@ impl<T: Reattachable> Erased<T> {
         Erased { inner: value }
     }
 
-    /// Hold a family value born at some shorter `'r`, forgetting that lifetime for storage.
+    /// Hold a family value born at some shorter `'cell`, forgetting that lifetime for storage.
     ///
     /// The **signature is safe**: forgetting a lifetime cannot fabricate one. Nothing may be read
     /// out of the erased form without a [`reattach`](Erased::reattach), whose own contract is what
@@ -112,24 +112,24 @@ impl<T: Reattachable> Erased<T> {
         }
     }
 
-    /// Re-anchor the held value at a caller-chosen `'r`.
+    /// Re-anchor the held value at a caller-chosen `'cell`.
     ///
     /// # Safety
     ///
-    /// `'r` must be a lifetime the value's referents outlive. A value that arrived through
-    /// [`store`] is at `'static`, so any `'r` satisfies that; a value that arrived through
-    /// [`erase`] came from some `'x`, and the caller must know `'x: 'r` — this crate's callers know
+    /// `'cell` must be a lifetime the value's referents outlive. A value that arrived through
+    /// [`store`] is at `'static`, so any `'cell` satisfies that; a value that arrived through
+    /// [`erase`] came from some `'x`, and the caller must know `'x: 'cell` — this crate's callers know
     /// it because the referents are region storage the graph keeps alive for the whole step the
-    /// `'r` brand belongs to. A family that is **invariant** in its lifetime (`Cell<&'r u32>`, say)
-    /// additionally requires that nothing borrowed for `'r` is written into the re-anchored value
+    /// `'cell` brand belongs to. A family that is **invariant** in its lifetime (`Cell<&'cell u32>`, say)
+    /// additionally requires that nothing borrowed for `'cell` is written into the re-anchored value
     /// and then read back at a longer lifetime; the step brand this crate reattaches at is
     /// unnameable outside its own `enter` scope, which is what discharges that second condition.
     ///
     /// [`store`]: Erased::store
     /// [`erase`]: Erased::erase
-    pub(crate) unsafe fn reattach<'r>(self) -> T::At<'r> {
+    pub(crate) unsafe fn reattach<'cell>(self) -> T::At<'cell> {
         // SAFETY: see the method contract; lifetime-only retype of a single-lifetime family.
-        unsafe { retype::<T::At<'static>, T::At<'r>>(self.inner) }
+        unsafe { retype::<T::At<'static>, T::At<'cell>>(self.inner) }
     }
 }
 

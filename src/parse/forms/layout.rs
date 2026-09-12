@@ -36,10 +36,10 @@ pub struct SlotLayout<'a> {
     entries: &'a [Entry],
 }
 
-// Lifetimes do not affect layout, so the retype is a no-op: `SlotLayout<'r>` is one thin slice
-// reference whatever `'r` is. The macro's `!needs_drop` backstop is the drop-freeness proof a
+// Lifetimes do not affect layout, so the retype is a no-op: `SlotLayout<'cell>` is one thin slice
+// reference whatever `'cell` is. The macro's `!needs_drop` backstop is the drop-freeness proof a
 // bump-hosted layout rests on.
-reattachable! { SlotLayout<'static> => SlotLayout<'r> }
+reattachable! { SlotLayout<'static> => SlotLayout<'cell> }
 
 impl<'a> SlotLayout<'a> {
     /// The layout of a body that binds no value — the shared empty run, so a bodyless or
