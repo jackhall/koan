@@ -686,7 +686,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // Dropping `producer_storage` here frees the region; Miri confirms 0 leaks (no self-cycle).
 }
 
-// `FrameReach::mint` — the witness-set hosting substrate (workgraph/design/reach.md § Composition).
+// `FrameReach::mint` — the witness-set hosting substrate (workgraph/old_design/reach.md § Composition).
 // Each test below pins one rule of the mint's composition (exact membership, the self rule,
 // outer-chain subsumption, precise reads, teardown release). The mint returns the hosted
 // (`Weak`-membered) description alone and retains the owned bundle that pins its members into the

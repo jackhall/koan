@@ -503,7 +503,7 @@ mod tests {
     ///
     /// Both calls pass the same `site`, simulating one declaration's parallel finalize: installer
     /// equality is what makes the second install idempotent rather than a `Rebind`. See
-    /// [design/typing/type-identity.md](../../design/typing/type-identity.md).
+    /// [old_design/typing/type-identity.md](../../old_design/typing/type-identity.md).
     #[test]
     fn finalize_union_seals_then_is_idempotent() {
         let program = program_storage();

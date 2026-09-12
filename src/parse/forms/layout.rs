@@ -122,6 +122,7 @@ impl<'a> SlotLayout<'a> {
     ///
     /// Generic in what a parameter is paired with: only the [`BinderSymbol`] is read, so the caller
     /// hands its own pairs through without restating their type half.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn for_function<T>(
         brand: RegionBrand<'a>,
         params: &[(BinderSymbol, T)],
@@ -144,6 +145,7 @@ impl<'a> SlotLayout<'a> {
 
     /// One binder at one position — the layout of a frame whose whole body is a single statement
     /// submitted at a position the call site fixes rather than the body's own shape (`EVAL`).
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn single(
         brand: RegionBrand<'a>,
         name: ValueSymbol,
@@ -156,6 +158,7 @@ impl<'a> SlotLayout<'a> {
 
     /// Re-home this layout into `brand`'s region — what a copied environment's scope takes, minted
     /// at the destination the way the copied callable's signature is.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn rehomed<'b>(&self, brand: RegionBrand<'b>) -> &'b SlotLayout<'b> {
         if self.entries.is_empty() {
             return SlotLayout::EMPTY;

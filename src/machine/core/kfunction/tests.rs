@@ -190,7 +190,7 @@ fn classify_excludes_binder_name_slot_from_wrap() {
 /// A `ProperType` slot is a kind expectation, not a literal-name slot: it asks for a type
 /// *value*, so a bare `Type` token at one is wrapped and resolved like any other bare name.
 /// Only the literal-name slot types withhold the wrap — see
-/// [design/typing/ktype/slots-and-signatures.md § Type-position slot kinds](../../../../design/typing/ktype/slots-and-signatures.md#type-position-slot-kinds).
+/// [old_design/typing/ktype/slots-and-signatures.md § Type-position slot kinds](../../../../old_design/typing/ktype/slots-and-signatures.md#type-position-slot-kinds).
 #[test]
 fn classify_wraps_a_type_token_in_a_propertype_slot() {
     let registries = RunRegistries::new();

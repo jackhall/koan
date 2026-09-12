@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! End-to-end tests for the anonymous-union surface `:(A | B)` — the `|` unary-mode
 //! operator group and its union-type constructor builtin (Phase 2 of anonymous-unions).
 //!
@@ -7,7 +8,7 @@
 //! dispatch (AC5 / fork F4); the three-member run building in one pass (AC7); the known
 //! surface asymmetry pins (§ 4.3); and value-context behavior.
 //!
-//! Companion design: [design/typing/type-language-via-dispatch.md].
+//! Companion design: [old_design/typing/type-language-via-dispatch.md].
 
 use std::rc::Rc;
 

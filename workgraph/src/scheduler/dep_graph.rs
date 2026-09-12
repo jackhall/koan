@@ -1,7 +1,7 @@
 //! Per-slot dependency-graph state. Each slot's [`DepRow`] holds the two coordinated fields
 //! (`notify`, `pending`) that share the slot index — keeping them in one row makes Inv-A
 //! (wake-pending coherence) structural rather than enforced — plus the slot's memory anchor. See
-//! [design/dag-scheduler.md § The dep row and its invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants).
+//! [old_design/dag-scheduler.md § The dep row and its invariants](../../old_design/dag-scheduler.md#the-dep-row-and-its-invariants).
 //!
 //! The row holds no retention and no backward edge list: a delivered value lives in its destination
 //! region, so nothing here has to keep a producer alive past its own finalize.

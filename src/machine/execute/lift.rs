@@ -3,7 +3,7 @@
 //! the verb choice ([`seam_verb`]) paired with the retention claim it implies
 //! ([`seam_still_borrows`]). The cost decision, the per-value relocation verbs, and the stored
 //! release read live in [`crate::machine::model`], shared with the core binding seams. See
-//! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
+//! [old_design/value-substrates.md § Escape](../../../old_design/value-substrates.md#escape-pin-by-default).
 
 use crate::machine::model::DeliveredCarried;
 use crate::machine::model::product_reaches_region;

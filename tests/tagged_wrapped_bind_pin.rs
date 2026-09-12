@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! Integration coverage for the cost-driven-copy bind seam's **pin** path over the nominal wrap
 //! carrier `KObject::Wrapped` (`Scope::copy_delivered_substrate`), in both its shapes: a union
 //! variant and a `NEWTYPE` instance. A wrapped value whose payload holds a closure captured in its

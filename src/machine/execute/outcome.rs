@@ -614,8 +614,8 @@ where
 /// That anchor is what covers the run-lived data the continuation reads — the parked AST, a finish
 /// closure's captured scope, a bumped closure's host region — held in the run region or a strict
 /// ancestor of the slot's per-call cart for the whole dormant life, which is the owned tier's
-/// standing obligation ([workgraph/design/witnessed-memory.md § What a droppable family
-/// accepts](../../../workgraph/design/witnessed-memory.md#what-a-droppable-family-accepts)).
+/// standing obligation ([workgraph/old_design/witnessed-memory.md § What a droppable family
+/// accepts](../../../workgraph/old_design/witnessed-memory.md#what-a-droppable-family-accepts)).
 pub(in crate::machine::execute) struct ContinuationFamily;
 
 reattachable!(droppable ContinuationFamily => NodeContinuation<'r>);

@@ -21,7 +21,7 @@
 //! write discipline is a resolution rule, not a convention. That is what lets the verbs take firm
 //! `borrow_mut`s — no koan frame is on the stack to hold a competing borrow, so contention is
 //! unrepresentable. See [`gate`] for the capability, [`ops`] for the currency, and
-//! [design/memory-model.md](../../../design/memory-model.md).
+//! [old_design/memory-model.md](../../../old_design/memory-model.md).
 //!
 //! There is no borrow order to keep: **no verb holds both cells at once**. A verb touching both
 //! channels — a placeholder install that stamps a cell and records the statement that stamped it —
@@ -93,11 +93,12 @@ mod gate;
 mod ops;
 mod values;
 
+pub(crate) use crate::parse::powerset_probes;
 pub use claims::Claim;
 pub(crate) use claims::ClaimStore;
 use claims::NameClaim;
 pub use gate::WriteGate;
-pub(crate) use ops::{TypeWritePolicy, WriteOp, powerset_probes};
+pub(crate) use ops::{TypeWritePolicy, WriteOp};
 pub(crate) use values::ValueAddress;
 use values::ValueStore;
 
@@ -491,9 +492,9 @@ impl<'a> Bindings<'a> {
             brand,
             values: RefCell::new(ManuallyDrop::new(values)),
             keyed: RefCell::new(ManuallyDrop::new(Keyed {
-                types: bump_table(brand),
-                functions: bump_table(brand),
-                operators: bump_table(brand),
+                types: bump_table(brand.allocator()),
+                functions: bump_table(brand.allocator()),
+                operators: bump_table(brand.allocator()),
                 claims: ClaimStore::new(brand),
             })),
             copy_cost: Cell::new(0),

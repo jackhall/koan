@@ -7,14 +7,14 @@ description: Trigger for a change tracked in `roadmap/` — when the user hands 
 
 You are driving a koan roadmap item from plan to shipped docs. Unless told otherwise, do the implementation yourself, inline. If you encounter a large-scale but mechanical change, ask the user conversationally if you may fan out agents for it. 
 
-Delegate final design/ and roadmap/ documentation and the final audit to the adversarial **shepherd** subagent. You may only edit markdown while you are in plan mode.
+Delegate final old_design/ and roadmap/ documentation and the final audit to the adversarial **shepherd** subagent. You may only edit markdown while you are in plan mode.
 
 The skill takes one required path and one optional path, both in scratch and named after the roadmap item:
 
 - `<roadmap-path>` — a `roadmap/*.md` file describing the item. **Required.**
 - `<plan-path>` — a `scratch/*-plan.md` file containing an implementation plan the user prepared (e.g. via `/design`, prior conversation, or plan mode). **Optional.** If absent, you start in plan mode and produce one before touching code.
 
-Throughout, `slug` = basename of `<roadmap-path>` with the `.md` suffix stripped (e.g. `roadmap/type_language/types-in-value-channel.md` → `types-in-value-channel`).
+Throughout, `slug` = basename of `<roadmap-path>` with the `.md` suffix stripped (e.g. `roadmap/old_type_language/types-in-value-channel.md` → `types-in-value-channel`).
 
 ## Workflow
 
@@ -29,7 +29,7 @@ Load the `/roadmap-plan` skill.
 Substeps:
 
 1. If a `<plan-path>` was provided, skip to preflight.
-2. Otherwise, **start in plan mode** (`EnterPlanMode`). Research the item against the codebase and the relevant `design/*.md`, then present an implementation plan with `ExitPlanMode`.
+2. Otherwise, **start in plan mode** (`EnterPlanMode`). Research the item against the codebase and the relevant design docs (the module's `README.md`, or `old_design/*.md` for the retired runtime), then present an implementation plan with `ExitPlanMode`.
 3. On approval, persist the approved plan to `scratch/<slug>-plan.md` (gitignored) so the shepherd and any re-invocation can read it.
 4. If the plan seems like it might be too large, look for good ways to split it over multiple roadmap items. If you find a good split, stop and present it to the user.
 5. The user accepts the split, create the new roadmap items and bring the original item up-to-date, then **exit**.
@@ -43,7 +43,7 @@ With a plan in hand and implementation about to start, verify the git working tr
 
 ```bash
 git status --porcelain \
-  | grep -vE ' (README\.md|tutorial/[^ ]+\.md|design/[^ ]+\.md|roadmap/[^ ]+\.md)$'
+  | grep -vE ' (README\.md|tutorial/[^ ]+\.md|old_design/[^ ]+\.md|roadmap/[^ ]+\.md)$'
 ```
 
 `scratch/` is .gitignored.
@@ -66,7 +66,7 @@ Then implement the plan directly against the codebase:
 - If you discover the plan is wrong mid-implementation, **surface it and stop** — don't silently re-design. The user may ask to return to planning.
 - Use the `rust-refactor` skill for structural work (renames, file moves, batch rewrites). Don't reinvent its tooling.
 - Use the `miri` skill whenever the work touches memory safety.
-- Update top-of-file and inline source comments as you go, per Claude.md. **Don't** touch `design/`, `roadmap/` (including its `README.md` index), `README.md`, or `tutorial/` — those are for planning in step 1 or the shepherd in step 3.
+- Update top-of-file and inline source comments as you go, per Claude.md. **Don't** touch a module `README.md` design doc, `old_design/`, `roadmap/` (including its `README.md` index), `README.md`, or `tutorial/` — those are for planning in step 1 or the shepherd in step 3.
 - When code-complete, run the `verify-koan` skill so tests + clippy are green and a modgraph baseline is recorded before you hand off to the shepherd (which runs the authoritative final slate after its doc edits).
 
 Your implementation is visible inline as you work, so there is no formal **approval gate** here. If you hit a fork that's genuinely the user's call, raise it conversationally in the moment — don't batch it into a gate.
@@ -101,7 +101,7 @@ Structured summary you compose (this is the shepherd's input contract — match 
 - New items surfaced: <list, or "none">.
 
 ## Doc impact hint
-- design/<file>.md: <which sections plausibly need updating>   (or "none")
+- old_design/<file>.md: <which sections plausibly need updating>   (or "none")
 
 ## Verification run
 cargo test: <N passed, M failed>

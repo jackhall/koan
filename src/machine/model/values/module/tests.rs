@@ -2,7 +2,7 @@
 //! ([`Module::alloc_at_child_scope`]) and the bump-hosted member maps read back through the
 //! resulting borrow. The underlying erase-store / re-anchor UB shapes are pinned library-side in the
 //! workgraph slate's born-door group; these run under plain `cargo test`. See
-//! [`design/memory-model.md`](../../../../../design/memory-model.md).
+//! [`old_design/memory-model.md`](../../../../../old_design/memory-model.md).
 use super::*;
 use crate::builtins::test_support::{TestRun, type_name};
 use crate::memory::{FrameStorageExt, program_storage, run_root_storage};

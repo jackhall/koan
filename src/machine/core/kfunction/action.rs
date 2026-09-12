@@ -73,7 +73,7 @@ pub struct BoundArg<'a, 'c> {
 /// envelopes. A named read reads the symbol off the slot's declared name and scans the schema —
 /// linear over call arity, no hash, no map, no allocation.
 ///
-/// See [design/label-interning.md](../../../../design/label-interning.md).
+/// See [old_design/label-interning.md](../../../../old_design/label-interning.md).
 #[derive(Clone, Copy)]
 pub struct BoundArgs<'a, 'c> {
     schema: &'c [(BinderSymbol, KType)],
@@ -424,7 +424,7 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
 /// re-projected at wake — a deferred binder `register_*`s on it here — plus the step construction
 /// context wrapping the frame storage owning that scope's region, resolved by the step machinery so
 /// a finish allocates with no failure path (`ctx.region()` / `ctx.alloc()` / `ctx.alloc_with()`;
-/// `design/scheduler-library.md` guarantees 3 and 5).
+/// `old_design/scheduler-library.md` guarantees 3 and 5).
 pub struct FinishCtx<'a, 'r> {
     pub scope: &'a Scope<'a>,
     pub ctx: StepAllocator<'a>,

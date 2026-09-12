@@ -72,7 +72,7 @@ where
     /// only [`Anchor::owner`]. The row holds the anchor from alloc until finalize: delivery moves
     /// the terminal into its destinations, so the slot's reclaim drops the anchor unconditionally
     /// and the scheduler keeps no pin of its own
-    /// ([design/reach.md § Retention model](../../design/reach.md#retention-model)).
+    /// ([old_design/reach.md § Retention model](../../old_design/reach.md#retention-model)).
     type Frame: Anchor;
     /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler rests on the
     /// owned tier (`SealedPinned<Self::Continuation, Rc<Self::Frame>>`), sealed against the node's

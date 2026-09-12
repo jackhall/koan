@@ -1,6 +1,6 @@
 //! `VAL <name:Identifier> : <ty:ProperType>` — SIG-body-only declarator for value
 //! slots whose declared type is recorded explicitly. See
-//! [design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures).
+//! [old_design/typing/modules.md § Structures and signatures](../../old_design/typing/modules.md#structures-and-signatures).
 //!
 //! A VAL slot records "value member whose declared type is `kt`" into the SIG decl_scope's
 //! own slot collector ([`Scope::sig_value_slots`]) — a schema-in-progress separate from

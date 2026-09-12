@@ -8,7 +8,7 @@
 //! Interning and node reads live on [`TypeRegistry`](super::registry::TypeRegistry); the digest
 //! recipe per variant lives in [`type_digest`](super::type_digest).
 //!
-//! See [design/typing/type-registry.md](../../../../design/typing/type-registry.md).
+//! See [old_design/typing/type-registry.md](../../../../old_design/typing/type-registry.md).
 
 use crate::memory::ScopeId;
 use crate::parse::TypeSymbol;

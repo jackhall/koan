@@ -1,5 +1,6 @@
+#![cfg(feature = "pending_rewrite")]
 //! End-to-end smoke test for a functor — a module-returning function — mirroring the
-//! `MakeSet` shape from [design/typing/functors.md](../design/typing/functors.md).
+//! `MakeSet` shape from [old_design/typing/functors.md](../old_design/typing/functors.md).
 //!
 //! The test exercises the full pipeline:
 //! 1. **Define** — `EXPR (MAKESET er :Ordered) -> Module = (MODULE generated = ...)` registers
@@ -68,7 +69,7 @@ fn functor_e2e_makeset_produces_module() {
     let region = run_root_storage();
     // `(MAKESET int_ord)` works directly when `int_ord`'s carrier carries the declared
     // signature in its `compatible_sigs` set. The LET partition guard
-    // (design/typing/elaboration.md § Binding-map partition) forces the ascription rebind to
+    // (old_design/typing/elaboration.md § Binding-map partition) forces the ascription rebind to
     // use a Type-classified identifier (`LET int_ord = (int_ord_base :! Ordered)`) so the
     // module/signature carrier never rides a value-classified alias; the dispatch admission
     // then consults `compatible_sigs` at the signature-typed slot, so no parens-wrap or

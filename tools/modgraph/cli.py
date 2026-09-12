@@ -55,7 +55,7 @@ def _add_score_args(p: argparse.ArgumentParser) -> None:
                         "(default 325)")
     p.add_argument("--delta", type=float, default=1.0,
                    help="prose-attribution weight δ in effective LOC (default 1.0). "
-                        "Each design/roadmap/README markdown doc has its raw LOC "
+                        "Each old_design/roadmap/README markdown doc has its raw LOC "
                         "split uniformly across the src files it links to; that "
                         "share is multiplied by δ and folded into the size charge. "
                         "Set 0 to disable.")

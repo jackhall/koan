@@ -10,6 +10,7 @@
 ## Project Context
 - Koan is a pre-release language with NO users; do not invent backward-compatibility concerns or migration paths in design proposals.
 - Write documentation (tutorial/, README.md) from the user's perspective, not the implementer's.
+- The runtime is being rewritten from the ground up. The kept modules are `cellgraph`, `sexlex`, `src/parse`, `src/memory`, `src/source.rs` and `src/type_lattice`; `src/machine`, `src/builtins`, the binary and `tests/` are the old runtime behind the `pending_rewrite` feature. The default build, test and lint slate excludes it; do not spend effort improving it.
 
 # Rust Conventions
 - When refactoring types/lifetimes, verify with `cargo build` after each step rather than batching multiple type changes.
@@ -22,7 +23,7 @@
 
 ## Documentation
 - Keep documentation updated and as concise as possible. Do not sacrifice grammar for brevity.
-- For work touching `README.md`, `tutorial/`, `design/*.md`, or `roadmap/*.md` (including the `roadmap/README.md` index), invoke the **documentation skill** — it owns the doc-tree partition rules, deletion-vs-edit semantics for shipped roadmap items, and the `doclinks check` gating workflow.
+- For work touching `README.md`, `tutorial/`, a module's `README.md` design doc, `old_design/*.md`, or `roadmap/*.md` (including the `roadmap/README.md` index), invoke the **documentation skill** — it owns the doc-tree partition rules, deletion-vs-edit semantics for shipped roadmap items, and the `doclinks check` gating workflow.
 - Source-file comments stay here because they're maintained during implementation, not at the doc-update phase:
   - Top-of-file comments: explain the code in the file, assumptions it makes, and how it's related to the code in other files. Link to design docs where needed. Update these as you go.
   - Inline comments: keep these to 3-4 lines. Extra content should go in the top-of-file comments or in design docs; link when needed. Update these as you go.

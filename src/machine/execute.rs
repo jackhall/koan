@@ -8,8 +8,8 @@
 //! ([`harness`]) maps each outcome onto the
 //! [`StepVerdict`](crate::scheduler::StepVerdict) the scheduler's drain applies.
 //!
-//! See [design/execution/README.md](../../design/execution/README.md) and
-//! [design/memory-model.md](../../design/memory-model.md).
+//! See [old_design/execution/README.md](../../old_design/execution/README.md) and
+//! [old_design/memory-model.md](../../old_design/memory-model.md).
 
 mod ambient;
 mod decide;

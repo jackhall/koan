@@ -2,7 +2,6 @@
 //! of a compound atom, a compound keyword, and the file a span resolves against. That every other
 //! span indexes its own text is [`properties`](super::properties)' fourth law.
 
-use crate::builtins::test_support::probe_symbol;
 use crate::memory::{ProgramBrand, program_storage};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::parse::{parse, parse_with_path};
@@ -110,4 +109,10 @@ fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
         f.resolve(span.start)
     });
     assert_eq!((line, col), (3, 5));
+}
+
+/// The operator-probe symbol for a probe key a test spells out (`"ATTR"`, `":|"`).
+fn probe_symbol(text: &str) -> crate::parse::labels::KeywordSymbol {
+    crate::parse::labels::KeywordSymbol::of(text)
+        .expect("a test fixture operator probe is keyword-class")
 }

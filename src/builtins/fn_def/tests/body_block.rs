@@ -1,5 +1,5 @@
-//! Multi-statement FN body behavior — see [design/execution/README.md
-//! § Multi-statement FN body split](../../../../design/execution/calls-and-values.md#multi-statement-fn-body-split).
+//! Multi-statement FN body behavior — see [old_design/execution/README.md
+//! § Multi-statement FN body split](../../../../old_design/execution/calls-and-values.md#multi-statement-fn-body-split).
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::model::KObject;

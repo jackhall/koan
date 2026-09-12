@@ -1,5 +1,5 @@
 //! Keyworded parameterized-type constructor builtins reached through the `:(...)` sigil.
-//! See [type-language-via-dispatch](../../design/typing/type-language-via-dispatch.md).
+//! See [type-language-via-dispatch](../../old_design/typing/type-language-via-dispatch.md).
 //!
 //! - `LIST OF :Type` → `Carried::Type` of an interned `List` handle
 //! - `MAP :Type -> :Type` → `Carried::Type` of an interned `Dict` handle

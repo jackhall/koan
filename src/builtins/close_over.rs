@@ -1,6 +1,6 @@
 //! `CLOSE OVER (<captures>) (<block>)` and `CLOSE (<block>)` — severance with the captures written
 //! out, and severance with them inferred. See
-//! [design/lazy-closures.md](../../design/lazy-closures.md).
+//! [old_design/lazy-closures.md](../../old_design/lazy-closures.md).
 //!
 //! The two forms differ only in where the capture list comes from ([`Captures`]); everything below
 //! that — resolution, parking, the severed frame, the seed — is one spine.
@@ -31,9 +31,9 @@
 //!   lifetime-free handle and copies by value. A capture that resolves to a **callable** takes the
 //!   `Consolidate` verb instead: its own captured environment is rebuilt at the block's region too,
 //!   so the severance is transitive ([lazy-closures.md § Lazy
-//!   close](../../design/lazy-closures.md)). A **module** capture still rides that copy as a
+//!   close](../../old_design/lazy-closures.md)). A **module** capture still rides that copy as a
 //!   borrow leaf — i.e. pinned — the remaining deferred half
-//!   ([module-scope-consolidation.md](../../roadmap/foundation/module-scope-consolidation.md)).
+//!   ([module-scope-consolidation.md](../../roadmap/old_foundation/module-scope-consolidation.md)).
 //! - A **signature-shaped pattern** `(HELPER _)` names one full untyped bucket key and captures
 //!   every visible overload registered under it, pinned.
 //! - **Implicit close** copies every dispatch registration, operator-registry entry and module

@@ -4,8 +4,8 @@ use crate::machine::model::KObject;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, CarriedFamily};
 use crate::memory::RegionHandleFamily;
-use crate::parse::{StaticName, TypeSymbol};
-use crate::source::{self, FileId, SourceLoc, SourceRef, Span};
+use crate::parse::{ParseError, StaticName, TypeSymbol};
+use crate::source::{self, SourceLoc, SourceRef};
 
 use super::Scope;
 use crate::machine::model::DeliveredCarried;
@@ -78,11 +78,8 @@ pub enum KErrorKind {
     },
     /// A builtin's structural assumption about an argument's shape didn't hold.
     ShapeError(String),
-    ParseError {
-        message: String,
-        span: Option<Span>,
-        file: Option<FileId>,
-    },
+    /// The parser's own error, carried whole.
+    ParseError(ParseError),
     /// In-language `RAISE`-style builtin landing pad.
     User(String),
     /// Same-scope rebind rejected; cross-scope shadowing remains allowed.
@@ -190,16 +187,6 @@ impl KError {
             kind,
             frames: Vec::new(),
         }
-    }
-
-    /// Parse-pass error constructor. Resolves `file` from the thread-local
-    /// `CURRENT_FILE` so call sites only thread the observed `Span`.
-    pub fn parse(msg: impl Into<String>, span: Option<Span>) -> Self {
-        Self::new(KErrorKind::ParseError {
-            message: msg.into(),
-            span,
-            file: source::current(),
-        })
     }
 
     pub fn with_frame(mut self, frame: TraceFrame) -> Self {
@@ -505,11 +492,11 @@ impl KErrorKind {
                     KObject::KString(brand.allocator().text(msg)),
                 )],
             ),
-            KErrorKind::ParseError {
+            KErrorKind::ParseError(ParseError {
                 message,
                 span,
                 file,
-            } => {
+            }) => {
                 let mut fields: Vec<(&'static StaticName<ValueSymbol>, KObject<'a>)> =
                     Vec::with_capacity(6);
                 fields.push((
@@ -594,6 +581,12 @@ impl KErrorKind {
 fn write_location(f: &mut fmt::Formatter<'_>, location: Option<&SourceLoc>) -> fmt::Result {
     let Some(loc) = location else { return Ok(()) };
     write!(f, " at {}:{}:{}", loc.path, loc.line, loc.col_utf16)
+}
+
+impl From<ParseError> for KError {
+    fn from(error: ParseError) -> Self {
+        Self::new(KErrorKind::ParseError(error))
+    }
 }
 
 impl fmt::Display for KError {
@@ -687,25 +680,7 @@ impl fmt::Display for KErrorKind {
                 }
             }
             KErrorKind::ShapeError(reason) => write!(f, "shape error: {reason}"),
-            KErrorKind::ParseError {
-                message,
-                span,
-                file,
-            } => {
-                let loc = match (span, file) {
-                    (Some(sp), Some(fid)) => source::with(*fid, |sf| {
-                        let (line, col_utf16) = sf.resolve(sp.start);
-                        Some((sf.path.clone(), line, col_utf16))
-                    }),
-                    _ => None,
-                };
-                match loc {
-                    Some((path, line, col)) => {
-                        write!(f, "parse error at {path}:{line}:{col}: {message}")
-                    }
-                    None => write!(f, "parse error: {message}"),
-                }
-            }
+            KErrorKind::ParseError(error) => write!(f, "{error}"),
             KErrorKind::User(msg) => write!(f, "{msg}"),
             KErrorKind::Rebind { name } => {
                 write!(f, "name '{name}' is already bound in this scope")

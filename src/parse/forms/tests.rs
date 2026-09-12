@@ -4,5 +4,6 @@
 
 mod binder;
 mod lazy;
+#[cfg(feature = "pending_rewrite")]
 mod registration;
 mod table;

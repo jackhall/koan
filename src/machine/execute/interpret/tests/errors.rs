@@ -3,6 +3,7 @@
 use super::*;
 use crate::machine::KErrorKind;
 use crate::machine::execute::interpret_with_writer_path;
+use crate::parse::ParseError;
 
 #[test]
 fn unbound_name_at_top_level_returns_error() {
@@ -98,7 +99,7 @@ fn parse_error_carries_span_and_renders_location() {
     match result {
         Err(e) => {
             match &e.kind {
-                KErrorKind::ParseError { span, file, .. } => {
+                KErrorKind::ParseError(ParseError { span, file, .. }) => {
                     assert!(span.is_some(), "expected span on parse error: {e}");
                     assert!(file.is_some(), "expected file on parse error: {e}");
                 }

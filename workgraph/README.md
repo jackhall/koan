@@ -17,27 +17,27 @@ The crate names no type from its embedder: the dependency direction is
 This directory carries the library's own docs, kept separate from koan's so the
 crate reads as a standalone library rather than as one of koan's internals.
 
-- [design/](design/) — the library's design docs.
-  - [witnessed-memory.md](design/witnessed-memory.md) — the memory substrate:
+- [old_design/](old_design/) — the library's design docs.
+  - [witnessed-memory.md](old_design/witnessed-memory.md) — the memory substrate:
     the erase-store / witness / reattach core, the `Region<P>` bump allocator,
     the `yoke` / `merge_into` / `map` construction surface with its
     one-wrapper-per-cell invariant, the `seal` / `open` / `transfer_into` access
     surface, and the dormant union slot with the `DropFree` split between its
     Copy and owned resting tiers.
-  - [reach.md](design/reach.md) — reach evidence: the split into non-owning
+  - [reach.md](old_design/reach.md) — reach evidence: the split into non-owning
     descriptions and holder-owned pin bundles, the three carrier states and
     their transform verbs, the holder rule, the mint rules (self, subsumption,
     eternal), and the delivery-driven retention model.
-  - [dag-scheduler.md](design/dag-scheduler.md) — what the DAG layer adds over
+  - [dag-scheduler.md](old_design/dag-scheduler.md) — what the DAG layer adds over
     the cell substrate: the edge slab and its containment lattice, the
     node-store lifecycle, push/notify dep edges and the dep-row invariants, the
     two-band work queue, the drain protocol (the embedder's step callback and
     its `StepVerdict`), alias splicing, and delivery at finalize with the
     unconditional slot reclaim behind it.
-  - [sectioned-reach.md](design/sectioned-reach.md) — reach evidence stored at
+  - [sectioned-reach.md](old_design/sectioned-reach.md) — reach evidence stored at
     sub-value granularity: the interned description side table and
     run-partitioned container storage.
-- [roadmap/](roadmap/README.md) — open work on the library, and the
+- [roadmap/](old_roadmap/README.md) — open work on the library, and the
   expand / migrate / contract convention for a change that moves the boundary
   koan sits on.
 - [observe/miri_slate.md](observe/miri_slate.md) — the Miri audit slate's
@@ -49,16 +49,16 @@ matrix that decides when a cell is reclaimed.
 
 Docs that state the *boundary* between the library and its embedder stay on
 koan's side, because they describe the division rather than the library:
-[design/scheduler-library.md](../design/scheduler-library.md) owns the
+[old_design/scheduler-library.md](../old_design/scheduler-library.md) owns the
 responsibility split and the consumer API, while
-[design/per-node-memory.md](../design/per-node-memory.md) and
-[design/witness-hosting.md](../design/witness-hosting.md) own koan's own
+[old_design/per-node-memory.md](../old_design/per-node-memory.md) and
+[old_design/witness-hosting.md](../old_design/witness-hosting.md) own koan's own
 instantiation of the substrate above — which construction verb each koan site
 takes, and koan's escape, residence and eternal-tier policy.
 
 An embedder-facing walkthrough — workload instantiation, regions and carriers,
 a minimal example embedder — is still owed, and lands with
-[Publishing the workgraph crate](roadmap/workgraph-extraction.md).
+[Publishing the workgraph crate](old_roadmap/workgraph-extraction.md).
 
 ## Verify
 

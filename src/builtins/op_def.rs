@@ -23,7 +23,7 @@
 //! An operator body captures its declaring scope, so it sees its sibling module bindings exactly as
 //! a bare `EXPR` body does, and an `OP` statement evaluates to the function it declares.
 //!
-//! Surface design: [design/operators.md](../../design/operators.md).
+//! Surface design: [old_design/operators.md](../../old_design/operators.md).
 
 use crate::machine::WriteGate;
 use crate::machine::execute::extend_deps_on;

@@ -1,5 +1,5 @@
 //! `USING <module> SCOPE <block>` — block-scoped module opening. See
-//! `design/typing/modules.md` § "Block-scoped opening".
+//! `old_design/typing/modules.md` § "Block-scoped opening".
 //!
 //! `m` is eager (a resolved module value), `body` is lazy
 //! (a [`KType::KEXPRESSION`] type) so it evaluates in the opened scope.

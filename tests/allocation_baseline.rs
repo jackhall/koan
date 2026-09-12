@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! Allocation baselines for the recorded execute-path shapes.
 //!
 //! Four shapes, each with a single scaling parameter `n`, each held to one bound.

@@ -2,8 +2,8 @@
 //! of the erase-to-`'static` / reattach-to-`'r` discipline every lifetime-free inter-node carrier
 //! shares. It sits below both an embedder's value layer and [`scheduler`](crate::scheduler) and
 //! names no concrete workload type, so each depends on it for the machinery, not the reverse.
-//! See [design/witnessed-memory.md](../design/witnessed-memory.md) and
-//! [design/reach.md § The carrier states](../design/reach.md#the-carrier-states).
+//! See [old_design/witnessed-memory.md](../old_design/witnessed-memory.md) and
+//! [old_design/reach.md § The carrier states](../old_design/reach.md#the-carrier-states).
 //!
 //! A node's slot stores a borrow-carrying value the borrow checker can't lifetime-track: it forgets
 //! the borrow's lifetime to `'static` for storage and re-anchors it at a caller-chosen lifetime on

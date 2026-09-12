@@ -36,8 +36,8 @@
 //! finished digest is in the fold. There is no third case, so two members can share a digest only
 //! by sharing content.
 //!
-//! See [design/typing/type-registry.md](../../../../design/typing/type-registry.md) and
-//! [design/typing/type-identity.md](../../../../design/typing/type-identity.md).
+//! See [old_design/typing/type-registry.md](../../../../old_design/typing/type-registry.md) and
+//! [old_design/typing/type-identity.md](../../../../old_design/typing/type-identity.md).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -253,7 +253,7 @@ impl RecursiveGroupWindow {
     /// `tag` probes by bare symbol bits: a variant tag arriving from a record-literal field name
     /// carries no class, and the member list it is matched against is keyed by the `TypeSymbol` the
     /// declaration minted. Symbol equality is text equality, so a hit witnesses the class rather
-    /// than asserting it ([design/label-interning.md](../../../../design/label-interning.md)).
+    /// than asserting it ([old_design/label-interning.md](../../../../old_design/label-interning.md)).
     pub fn variant_index(&self, binder: TypeSymbol, tag: Symbol) -> Option<usize> {
         let owned = self.binder_members(binder)?;
         let members = self.members.borrow();

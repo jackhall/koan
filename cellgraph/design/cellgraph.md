@@ -11,7 +11,7 @@ held across arbitrary spans, or never entered at all. Liveness is decided by
 the [liveness matrix](liveness-matrix.md). Everything that makes a
 *scheduler* — dependency edges, wakeups, terminals, delivery — is layered
 above by an embedder; `workgraph` is the first
-([dag-scheduler.md](../../workgraph/design/dag-scheduler.md)). The dependency
+([dag-scheduler.md](../../workgraph/old_design/dag-scheduler.md)). The dependency
 direction is `koan` → `workgraph` → `cellgraph`, and each arrow is
 compile-enforced: the lower crate names no type from the higher one.
 
@@ -63,7 +63,7 @@ compile-enforced: the lower crate names no type from the higher one.
 
 - **Continuation** — the work. A one-lifetime reattachable family
   (the erase-to-`'static` / re-anchor contract the witnessed core carries,
-  [witnessed-memory.md](../../workgraph/design/witnessed-memory.md)).
+  [witnessed-memory.md](../../workgraph/old_design/witnessed-memory.md)).
   Everything an embedder knows about a cell that the substrate does not — its
   name-resolution state, its semantic frame, any output obligation — rides
   inside the continuation's captures, or as a value at rest in the cell's
@@ -277,5 +277,5 @@ The substrate's own slices are all built; what is left is its adoption, and
 the gaps nothing is scheduled against are recorded in
 [the roadmap](../roadmap/README.md).
 
-- [Rebuilding workgraph over cellgraph](../../workgraph/roadmap/adopt-cellgraph.md)
+- [Rebuilding workgraph over cellgraph](../../workgraph/old_roadmap/adopt-cellgraph.md)
   — the first embedder's adoption.

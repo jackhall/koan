@@ -9,7 +9,7 @@
 //! This closes record subtyping's projection direction: it can break an
 //! `AmbiguousDispatch` tie between two width-incomparable record arms by
 //! re-tagging the carrier so only one arm admits. See
-//! [design/typing/ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance).
+//! [old_design/typing/ktype/parameterization-and-variance.md § Variance](../../old_design/typing/ktype/parameterization-and-variance.md#variance).
 
 use crate::machine::WriteGate;
 
@@ -285,7 +285,7 @@ mod tests {
     /// `5`, so dispatch fails cleanly with `DispatchFailed` rather than eagerly evaluating
     /// `(x y)` and leaking its `unbound name 'x'`: the relaxed admission pass keeps it a
     /// clean miss (see
-    /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
+    /// [scheduler.md § In-walk dispatch precedence](../../old_design/typing/scheduler.md#in-walk-dispatch-precedence)).
     #[test]
     fn from_non_record_operand_is_dispatch_non_match() {
         use crate::machine::KErrorKind;

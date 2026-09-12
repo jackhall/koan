@@ -5,7 +5,7 @@
 //! [`crate::parse::classify_dispatch_shape`]); this arm resolves the
 //! chain's cached operator probe against the per-scope operator registry, walked
 //! through the scope chain (innermost visible wins; see
-//! [the lookup protocol](../../../../design/typing/lookup-protocol.md)).
+//! [the lookup protocol](../../../../old_design/typing/lookup-protocol.md)).
 //!
 //! A registry miss first probes for a **visible pending** `OP` declaration: the declaration's
 //! registry write lands only when its body finalizes, so a chain that runs while a lexically
@@ -231,7 +231,7 @@ fn reduce_fold_right<'step>(
 /// `sym [x1 x2 x3]` and the infix chain `x1 sym x2 sym x3` both become the bare 2-part expression
 /// `[ Keyword(sym), ListLiteral([x1, x2, x3]) ]`, the shape `HEAD [1 2 3]` dispatches through — so
 /// prefix and infix coincide on one body
-/// ([design/expressions-and-parsing.md](../../../../design/expressions-and-parsing.md)).
+/// ([old_design/expressions-and-parsing.md](../../../../old_design/expressions-and-parsing.md)).
 ///
 /// A well-formed unary run names one operator throughout, so the first operator keyword's span and
 /// text stand in for the whole run. A list literal's own element scheduling resolves each element,
@@ -364,7 +364,7 @@ const PAIRWISE_HAS_TWO_PAIRS: &str =
 /// keyworded dispatch, so it binds its two inputs *positionally* and resolution is the ordinary
 /// scope walk at the chain's *use site* — a missing, non-callable, or wrong-arity combiner surfaces
 /// as an ordinary error there (see
-/// [design/operators.md](../../../../design/operators.md)).
+/// [old_design/operators.md](../../../../old_design/operators.md)).
 ///
 /// `chain` is the originating operator chain: the synthesized keyword part has no source token of
 /// its own, so it takes the chain's extent, and the combined node names the chain's file.

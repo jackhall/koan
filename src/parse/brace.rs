@@ -5,7 +5,7 @@
 //! `accept_comma`, and `finish`; multi-part keys/values collapse into a sub-expression via
 //! `single_or_wrapped`.
 
-use crate::machine::core::KError;
+use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::ExpressionPart;
 use crate::parse::labels::{BinderSymbol, LabelInterner};
@@ -46,7 +46,7 @@ const MIXED_DELIMITERS: &str = "mixed `:` and `=` in a brace literal: use `=` fo
 /// is a type sigil wherever it is written, so `{k :Number}` and `{'k':(f x)}` are a key beside an
 /// annotation with nothing pairing them — and without the hint the writer sees only that a
 /// separator is missing, not that the `:` they wrote was read as the other thing.
-fn unterminated_entry(mode: BraceMode, key: &[ExpressionPart<'_>]) -> KError {
+fn unterminated_entry(mode: BraceMode, key: &[ExpressionPart<'_>]) -> ParseError {
     let mut message = match mode {
         BraceMode::Record => "unterminated field in record literal (missing '=')".to_string(),
         BraceMode::Dict => "unterminated key in dict literal (missing ':')".to_string(),
@@ -67,7 +67,7 @@ fn unterminated_entry(mode: BraceMode, key: &[ExpressionPart<'_>]) -> KError {
              than a separator — and a record *type* is written `:{name :Type}`",
         );
     }
-    KError::parse(message, None)
+    ParseError::new(message, None)
 }
 
 enum DictPairState<'a> {
@@ -151,14 +151,14 @@ impl<'a> DictFrame<'a> {
         conflict: BraceMode,
         missing: &str,
         inside_value: &str,
-    ) -> Result<(), KError> {
+    ) -> Result<(), ParseError> {
         if self.mode == conflict {
-            return Err(KError::parse(MIXED_DELIMITERS, None));
+            return Err(ParseError::new(MIXED_DELIMITERS, None));
         }
         self.mode = target;
         match std::mem::replace(&mut self.state, DictPairState::Empty) {
-            DictPairState::Empty => Err(KError::parse(missing, None)),
-            DictPairState::Key(parts) if parts.is_empty() => Err(KError::parse(missing, None)),
+            DictPairState::Empty => Err(ParseError::new(missing, None)),
+            DictPairState::Key(parts) if parts.is_empty() => Err(ParseError::new(missing, None)),
             DictPairState::Key(parts) => {
                 self.state = DictPairState::Value {
                     key: single_or_wrapped(self.brand, parts),
@@ -168,14 +168,14 @@ impl<'a> DictFrame<'a> {
             }
             DictPairState::Value { key, value } => {
                 self.state = DictPairState::Value { key, value };
-                Err(KError::parse(inside_value, None))
+                Err(ParseError::new(inside_value, None))
             }
         }
     }
 
     /// Errors if no key was buffered or if a `:` arrives while a value is already
     /// being built — one `:` per pair. Selects (or confirms) dict mode.
-    pub(super) fn accept_colon(&mut self) -> Result<(), KError> {
+    pub(super) fn accept_colon(&mut self) -> Result<(), ParseError> {
         self.accept_separator(
             BraceMode::Dict,
             BraceMode::Record,
@@ -186,7 +186,7 @@ impl<'a> DictFrame<'a> {
 
     /// Record counterpart of [`accept_colon`](Self::accept_colon): a `=` separates a
     /// field name from its value. Selects (or confirms) record mode; one `=` per field.
-    pub(super) fn accept_equals(&mut self) -> Result<(), KError> {
+    pub(super) fn accept_equals(&mut self) -> Result<(), ParseError> {
         self.accept_separator(
             BraceMode::Record,
             BraceMode::Dict,
@@ -197,7 +197,7 @@ impl<'a> DictFrame<'a> {
 
     /// Trailing or repeated commas no-op (`{a: 1,}` and `{a: 1,, b: 2}` both legal);
     /// a comma after a key without `:`, or after `:` with no value, errors.
-    pub(super) fn accept_comma(&mut self) -> Result<(), KError> {
+    pub(super) fn accept_comma(&mut self) -> Result<(), ParseError> {
         match std::mem::replace(&mut self.state, DictPairState::Empty) {
             DictPairState::Empty => Ok(()),
             DictPairState::Key(parts) if parts.is_empty() => Ok(()),
@@ -206,7 +206,7 @@ impl<'a> DictFrame<'a> {
                 self.state = DictPairState::Key(parts);
                 Err(error)
             }
-            DictPairState::Value { value, .. } if value.is_empty() => Err(KError::parse(
+            DictPairState::Value { value, .. } if value.is_empty() => Err(ParseError::new(
                 "missing value after ':' in dict literal",
                 None,
             )),
@@ -220,7 +220,10 @@ impl<'a> DictFrame<'a> {
     /// Commit any in-progress pair and yield the completed contents — a dict's pairs or
     /// a record's `(field, value)` list. Errors for a key/field without its separator, a
     /// separator without a value, or (record mode) a non-identifier field name.
-    pub(super) fn finish(mut self, labels: &LabelInterner) -> Result<BraceContents<'a>, KError> {
+    pub(super) fn finish(
+        mut self,
+        labels: &LabelInterner,
+    ) -> Result<BraceContents<'a>, ParseError> {
         // Only an explicit `:` commits the frame to a dict; `Record` and the
         // separator-less `Unknown` (empty `{}`) both finish as a record.
         let is_record = self.mode != BraceMode::Dict;
@@ -231,7 +234,7 @@ impl<'a> DictFrame<'a> {
                 return Err(unterminated_entry(self.mode, &parts));
             }
             DictPairState::Value { value, .. } if value.is_empty() => {
-                return Err(KError::parse(
+                return Err(ParseError::new(
                     if is_record {
                         "missing value after '=' in record literal"
                     } else {
@@ -253,7 +256,7 @@ impl<'a> DictFrame<'a> {
                     // never name-resolved) — e.g. abstract type-slot names in `WITH {Elt = T}`.
                     ExpressionPart::Type(t) => BinderSymbol::Type(t),
                     other => {
-                        return Err(KError::parse(
+                        return Err(ParseError::new(
                             format!(
                                 "record field name must be a bare identifier or Type token, got `{}`",
                                 other.summary(labels)
@@ -266,7 +269,7 @@ impl<'a> DictFrame<'a> {
                 // mistake rather than an override. Dict keys stay unchecked: they are
                 // arbitrary value expressions keyed at runtime, not a shape.
                 if fields.iter().any(|(seen, _)| *seen == name) {
-                    return Err(KError::parse(
+                    return Err(ParseError::new(
                         format!(
                             "duplicate field `{}` in record literal",
                             labels.render(name.symbol())

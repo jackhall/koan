@@ -1,6 +1,6 @@
 //! [`StepContext`] — the step construction context: a library-owned handle a step loop hands to a
 //! finish, whose two verbs make guarantees 3 and 5 of
-//! [scheduler-library.md § The guarantees](../../../design/scheduler-library.md#the-guarantees)
+//! [scheduler-library.md § The guarantees](../../../old_design/scheduler-library.md#the-guarantees)
 //! structural. [`StepContext::alloc`] builds a value reachable only through the held frame's own
 //! region (reach = own region only, by the `yoke` brand); [`StepContext::alloc_with`] relocates the
 //! whole run of delivered dep envelopes in one act first, so the built value's carrier names every

@@ -1,5 +1,5 @@
 //! `Module` — the first-class module value produced by the `MODULE` builtin. See
-//! [design/typing/modules.md](../../../../design/typing/modules.md).
+//! [old_design/typing/modules.md](../../../../old_design/typing/modules.md).
 //!
 //! **Terminology — "module-signature" vs "expression-signature".** A module-signature is the
 //! interface a module can be ascribed to via `:|` / `:!` — a `SIG`-declared interface or a
@@ -24,7 +24,7 @@
 //! ([`BumpAllocator::frozen_table`](crate::memory::BumpAllocator::frozen_table)) and a plain interned self-sig handle.
 //! `Module` is
 //! therefore `Copy` and `Drop`-free: it rides the region bump and region death frees it as a chunk
-//! ([value-substrates.md § Untyped arenas](../../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+//! ([value-substrates.md § Untyped arenas](../../../../old_design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
 
 use std::collections::HashMap;
 

@@ -536,7 +536,7 @@ impl<'a> Scope<'a> {
     /// pointer-copies the top node and lets its region-resident substrate borrow ride.
     ///
     /// The verb also fixes the retention claim the fold hands its composition, under the release
-    /// rule ([value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach)):
+    /// rule ([value-substrates.md § Sectioned reach](../../../../old_design/value-substrates.md#sectioned-reach)):
     /// a `Copy`'s predicate runs over the rebuilt value, so a plain-data record drops the producer
     /// region and a tail loop's retiring frame does not ride the binding, while a `Pin` keeps every
     /// region the source envelope named — which is what covers the pointer-copied substrate still
@@ -839,7 +839,7 @@ impl<'a> Scope<'a> {
 /// The copy-vs-pin question is a correctness question there, not a cost one: a `Pin` outcome would
 /// leave the block's region reaching into the region the capture was taken from, which is the one
 /// thing the form exists to prevent, and the copy is priced by writing the form
-/// ([design/lazy-closures.md](../../../../design/lazy-closures.md)). So the chooser does not run and
+/// ([old_design/lazy-closures.md](../../../../old_design/lazy-closures.md)). So the chooser does not run and
 /// the disposition is always `Relocate`. Its [`SeverSeam`] token is gated the same way
 /// [`BindSeam`] is.
 pub(crate) enum AdoptSeam {

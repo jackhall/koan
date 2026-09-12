@@ -7,7 +7,7 @@
 //!
 //! Binding is a statement-level act — the legal positions are exactly statement position and a
 //! lazily-captured body (see
-//! [design/execution/name-placeholders.md](../../../../design/execution/name-placeholders.md)); a
+//! [old_design/execution/name-placeholders.md](../../../../old_design/execution/name-placeholders.md)); a
 //! [`SubmitContext::SubDispatch`] binder is rejected with [`KErrorKind::NestedBinder`].
 
 use crate::machine::ProducerId;

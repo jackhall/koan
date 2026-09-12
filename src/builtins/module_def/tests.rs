@@ -56,7 +56,7 @@ fn type_token_module_name_errors_with_the_snake_case_respelling() {
 /// ([`crate::machine::core::scope`] `shadows_builtin_type`), so `LET Type = Number`
 /// raises `Rebind` naming `Type` rather than declaring the member. Modules and
 /// signatures name their principal abstract type member `Carrier`
-/// (see [design/typing/modules.md](../../../design/typing/modules.md)); this pins the
+/// (see [old_design/typing/modules.md](../../../old_design/typing/modules.md)); this pins the
 /// collision so the docs and the implementation cannot silently disagree.
 #[test]
 fn module_member_named_type_collides_with_builtin_type() {

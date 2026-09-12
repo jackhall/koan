@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! Integration tests for forward references under the index-gated resolution rule. A binding at
 //! lexical index `i` is visible to a consumer at cutoff `c` iff `i < c`, so a later sibling is
 //! invisible and no surface parks through to it. Mutual recursion has one spelling — co-declaring

@@ -206,6 +206,6 @@ cell, because an outside consumer can pin it while it lives.
 
 ## Open work
 
-- [Rebuilding workgraph over cellgraph](../../workgraph/roadmap/adopt-cellgraph.md)
+- [Rebuilding workgraph over cellgraph](../../workgraph/old_roadmap/adopt-cellgraph.md)
   — the first embedder's kind rule, its delivery walk's adoption of a tree
   terminal, and the scheduler-shaped tests over both kinds.

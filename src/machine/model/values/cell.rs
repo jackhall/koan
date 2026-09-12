@@ -24,7 +24,7 @@
 //! [`RunRegistries::held_summary`](crate::machine::model::RunRegistries::held_summary), both owned
 //! by the registry that holds the answer.
 //!
-//! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
+//! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../old_design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
 use crate::machine::model::KObject;
 use crate::machine::model::types::KType;

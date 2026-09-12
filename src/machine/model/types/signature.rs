@@ -285,7 +285,7 @@ pub fn shape_specificity(left: KType, right: KType, registries: &RunRegistries) 
 /// A callable's call shape at rest: a bumped run of elements plus a `return_type`. Every field is
 /// `Copy` and `Drop`-free — the keyword and parameter-name text is `&'a str` bumped into the
 /// signature's own region — which is what lets a `KFunction` live in the region bump rather than a
-/// lifetime-typed cell ([value-substrates.md § Untyped arenas](../../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+/// lifetime-typed cell ([value-substrates.md § Untyped arenas](../../../../old_design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
 ///
 /// `'a` names both the elements run and `return_type`'s `Deferred` arm, which captures a live
 /// [`KExpression`] for per-call re-elaboration.
@@ -331,7 +331,7 @@ pub struct SignatureDraft<'a> {
 /// in return-type position (`EXPR (LIFT er: Ordered) -> er = ...`); `Deferred` holds the
 /// captured surface form for per-call re-elaboration against the per-call scope where the
 /// parameter's type-language identity is registered. See
-/// [functors.md](../../../../design/typing/functors.md).
+/// [functors.md](../../../../old_design/typing/functors.md).
 ///
 /// `'a` threads only through the `Deferred` arm's captured [`KExpression`] — `Resolved`'s
 /// `KType` is owned and carries no lifetime of its own.

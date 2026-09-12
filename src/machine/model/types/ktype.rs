@@ -120,7 +120,7 @@ impl KType {
 
     /// Surface-syntax rendering, straight into `f`. The rendered form parses back to the same
     /// type through the dispatch-driven type-language path (see
-    /// [type-language via dispatch](../../../../design/typing/type-language-via-dispatch.md)).
+    /// [type-language via dispatch](../../../../old_design/typing/type-language-via-dispatch.md)).
     ///
     /// The one place the surface arms are written. Nodes are read in place and children recurse
     /// into the same formatter, so a nested type costs the caller's buffer and nothing else.

@@ -309,7 +309,7 @@ impl<'a> Scope<'a> {
     /// purpose: an explicit data capture copies so the producer can die, a closed-over module pins
     /// because only a callable reaches the consolidate verb, so a module value's own environment is
     /// never rebuilt
-    /// ([module-scope-consolidation.md](../../../../roadmap/foundation/module-scope-consolidation.md));
+    /// ([module-scope-consolidation.md](../../../../roadmap/old_foundation/module-scope-consolidation.md));
     /// a closed-over *callable* takes the severing door and consolidates.
     pub(crate) fn adopt_binding_pinned(
         &'a self,

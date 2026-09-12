@@ -7,7 +7,7 @@ The substrate's own build-out is complete, and so are the representation
 changes its measurement harness gates; what is open is the gaps recorded below,
 which nothing is scheduled against. `workgraph`'s
 adoption of the crate is on the scheduler's own roadmap
-([workgraph/roadmap/](../../workgraph/roadmap/README.md)), and koan's is
+([workgraph/old_roadmap/](../../workgraph/old_roadmap/README.md)), and koan's is
 [roadmap/](../../roadmap/README.md).
 
 ## Next items

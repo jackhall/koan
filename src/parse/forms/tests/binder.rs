@@ -109,6 +109,21 @@ const DECLARATIONS: &[(&str, Expectation)] = &[
 const GLYPHS: &[&str] = &["⊕", "⊗", "≺", "⊸", "⊛"];
 
 /// The lone top-level statement `source` parses to, with its cache filled.
+/// A keyword part for a hand-built AST, classified and minted with nothing recorded.
+fn kw_part<'a>(text: &str) -> ExpressionPart<'a> {
+    ExpressionPart::Keyword(
+        crate::parse::KeywordSymbol::of(text).expect("a test fixture keyword is keyword-class"),
+    )
+}
+
+/// [`kw_part`]'s value-channel twin: an identifier part for a hand-built AST.
+fn identifier_part<'a>(text: &str) -> ExpressionPart<'a> {
+    ExpressionPart::Identifier(
+        crate::parse::ValueSymbol::classify(text)
+            .expect("a test fixture identifier is a value token"),
+    )
+}
+
 fn parse_one<'a>(brand: ProgramBrand<'a>, source: &str) -> KExpression<'a> {
     parse(brand, &LabelInterner::new(), source)
         .expect("the rendered form parses")
@@ -212,11 +227,11 @@ proptest! {
         }
 
         // A run the table does not spell: a long fresh keyword followed by fresh identifiers.
-        let mut run = vec![crate::builtins::test_support::kw_part(&stranger_keyword)];
+        let mut run = vec![kw_part(&stranger_keyword)];
         run.extend(
             stranger
                 .iter()
-                .map(|name| crate::builtins::test_support::identifier_part(name)),
+                .map(|name| identifier_part(name)),
         );
         let user = KExpression::new_from_iter(
             brand.region(),

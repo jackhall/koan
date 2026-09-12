@@ -4,8 +4,8 @@
 //! mints nothing. `outer` is the ancestor-frame link [`RegionHost::pins_region`] walks for
 //! [`PinBundle`](super::PinBundle) subsumption.
 //!
-//! Design: [witnessed-memory.md](../../design/witnessed-memory.md),
-//! [reach.md](../../design/reach.md).
+//! Design: [witnessed-memory.md](../../old_design/witnessed-memory.md),
+//! [reach.md](../../old_design/reach.md).
 
 use std::cell::OnceCell;
 use std::rc::{Rc, Weak};

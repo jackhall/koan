@@ -21,9 +21,9 @@
 //! the splice) drops the entry naming it. Generation stamps are debug-only, so a release-build walk
 //! that met a recycled index would deliver into a stranger's edge.
 //!
-//! See [design/dag-scheduler.md § Edges and the boundary](../../design/dag-scheduler.md#edges-and-the-boundary),
-//! [§ Late wiring and install](../../design/dag-scheduler.md#late-wiring-and-install) and
-//! [§ Delivery at finalize](../../design/dag-scheduler.md#delivery-at-finalize).
+//! See [old_design/dag-scheduler.md § Edges and the boundary](../../old_design/dag-scheduler.md#edges-and-the-boundary),
+//! [§ Late wiring and install](../../old_design/dag-scheduler.md#late-wiring-and-install) and
+//! [§ Delivery at finalize](../../old_design/dag-scheduler.md#delivery-at-finalize).
 
 use std::rc::Rc;
 #[cfg(debug_assertions)]
@@ -102,7 +102,7 @@ impl<W: Workload> Destination<W> {
     /// **The scheduler's one `unsafe`**: borrow the destination region a live edge names.
     ///
     /// The witness is the containment lattice — *destination outlives owner outlives edge*
-    /// ([design/dag-scheduler.md § Edges and the boundary](../../design/dag-scheduler.md#edges-and-the-boundary)).
+    /// ([old_design/dag-scheduler.md § Edges and the boundary](../../old_design/dag-scheduler.md#edges-and-the-boundary)).
     /// Wiring establishes the upper half: the install door is handed an `Rc` on the destination's
     /// owner (or inherits a standing edge's destination, whose own owner is holding it), so the
     /// region is covered at the moment the pointer is recorded, and the destination sits at or above

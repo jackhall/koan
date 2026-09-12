@@ -508,7 +508,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
-    // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
+    // The seal chokepoint (Ruling 5, old_design/value-substrates.md): every record's carrier
     // conservatively claims its own home as a member at construction, regardless of its own
     // contents — the retention predicate's walk over the rebuilt cell is what actually decides
     // release vs. retain below; the claim only matters if the source is retained.

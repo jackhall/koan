@@ -68,7 +68,7 @@ You're auditing one Rust source file in the koan repo (a pre-release programming
 
 # Project context
 - Pre-release language, NO users — no backward-compat concerns.
-- Design docs at design/*.md (shipped behavior). Roadmap at roadmap/*.md (future work).
+- Design docs at old_design/*.md (shipped behavior). Roadmap at roadmap/*.md (future work).
 
 # Your target
 **Audit and edit:** <PATH>
@@ -78,17 +78,17 @@ You're auditing one Rust source file in the koan repo (a pre-release programming
 2. Edit the file in place to remove or rewrite excessive/stale/WHAT-only comments.
 3. Trim the top-of-file block to: purpose + key assumptions + design-doc links.
 4. **Do not delete a long but load-bearing rationale** (SAFETY block on unsafe code, non-obvious invariant > 4 lines). Leave it in place and flag it as a "migration candidate".
-5. **Do not edit any file other than your target.** No design/, no roadmap/, no other source files. Do not run cargo.
+5. **Do not edit any file other than your target.** No old_design/, no roadmap/, no other source files. Do not run cargo.
 
 # Available design docs (read-only — for verifying links and suggesting migration targets)
-design/effects.md, design/error-handling.md, design/execution-model.md, design/expressions-and-parsing.md, design/functional-programming.md, design/memory-model.md, design/module-system.md, design/type-system.md
+old_design/effects.md, old_design/error-handling.md, old_design/execution-model.md, old_design/expressions-and-parsing.md, old_design/functional-programming.md, old_design/memory-model.md, old_design/module-system.md, old_design/type-system.md
 
 # Output format
 ## Result for <PATH>
 - **Lines removed:** <int>
 - **Stale comments fixed:** <list or "none">
 - **Migration candidates:**
-  - <PATH>:<line> → suggested target: <design/foo.md or "unsure">
+  - <PATH>:<line> → suggested target: <old_design/foo.md or "unsure">
     Verbatim text:
     > <block>
 - **Flags:** <broken links, references to types you couldn't find, or "none">
@@ -107,7 +107,7 @@ For each migration candidate the agents flagged, decide accept/reject by compari
 - **Design doc doesn't cover it but should** — invoke the `documentation` skill to refresh the partition rules, then add a section to the design doc and link from source.
 - **SAFETY block at an `unsafe` site** — leave inline. Rust review convention is that SAFETY justifications sit at the unsafe operation.
 
-**Path-computation pitfall.** Markdown links from a source file resolve relative to that file's directory. From `src/dispatch/runtime/arena.rs` (depth 3 under `src/`), `design/memory-model.md` is `../../../design/memory-model.md` — count the slashes in the path under `src/`, not including `src/` itself. Off-by-one passes Rust's compiler but fails `doclinks check`.
+**Path-computation pitfall.** Markdown links from a source file resolve relative to that file's directory. From `src/dispatch/runtime/arena.rs` (depth 3 under `src/`), `design/memory-model.md` is `../../../old_design/memory-model.md` — count the slashes in the path under `src/`, not including `src/` itself. Off-by-one passes Rust's compiler but fails `doclinks check`.
 
 ### 5. Verify
 

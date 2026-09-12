@@ -2,17 +2,45 @@
 
 Four layers, each with a distinct job:
 
-1. **`cargo test`** — every unit test in the crate, run on every push and PR.
+1. **`cargo test`** — every unit test in the modules the rewrite keeps, run on every push and PR.
 2. **`cargo clippy` / `cargo fmt`** — lints and formatting.
 3. **The Miri audit slate** — targeted memory-safety coverage for every unsafe
    site in the runtime, run under tree borrows.
 4. **The region debug audits** — debug-only over-pinning diagnostics over a real
    program run, reported and never enforced.
 
+## The pending rewrite
+
+The runtime is being rewritten from the ground up. The modules the rewrite keeps —
+`memory`, `parse`, `source`, `type_lattice` and the embedded crates `cellgraph`,
+`sexlex` and `workgraph` — are what a default build compiles and a default
+`cargo test` runs. Everything above them — `machine`, `builtins`, the interpreter
+binary, the guard fixtures and every `tests/*.rs` integration binary — sits behind
+the `pending_rewrite` cargo feature, so the default slate spends nothing on code
+slated for replacement. Every other koan feature (`alloc-count`, `dhat`,
+`region-audit`, the two seam-force features) is a knob on the old runtime and
+turns it on.
+
+```sh
+cargo test                                                        # the kept modules only
+cargo test --features pending_rewrite                             # the old runtime's suite as well
+cargo build --features pending_rewrite                            # the interpreter binary
+cargo clippy --all-targets --features pending_rewrite -- -D warnings
+```
+
+The verify slate (`tools/verify.sh`), the pre-commit hook and CI run the default
+build. The tools that only mean something over the old runtime — `tools/alloc_audit.py`,
+`tools/seam_equivalence.sh` and `tools/observe_tests.py audit` — turn the feature on
+themselves; `tools/verify_snippets.py` reads a binary built with it, and
+`tools/miri.py --pending-rewrite` runs the old runtime's own Miri slate. A test in a kept module that reaches the old runtime — `memory`'s
+own suite, the form-table⟺registration law, the AST cache laws that ride a
+`WorkingExpression` — is gated with it and comes back as the rewrite replaces what
+it reached.
+
 ## Unit tests
 
 ```sh
-cargo test                  # all unit tests, across the workspace
+cargo test                  # the kept modules' unit tests, across the workspace
 cargo test parse::          # one module
 cargo test -p sexlex        # the layout crate alone
 cargo test -- --nocapture   # show stdout
@@ -64,12 +92,12 @@ beside its sibling unit tests. Seven files hold the thirty properties:
 Every runnable code block in [`tutorial/`](tutorial/README.md) is checked against
 the interpreter by [`tools/verify_snippets.py`](tools/verify_snippets.py): it runs
 each `koan` block that is immediately followed by a `text` expected-output block
-and diffs the result. This runs as a step in the verify slate (`tools/verify.sh`),
-so tutorial drift fails the same gate as tests and lints. Run it standalone after
-editing the tutorial:
+and diffs the result. The interpreter is the old runtime's binary, so the check
+is not in the verify slate while that runtime is `pending_rewrite`; run it
+standalone after editing the tutorial:
 
 ```sh
-cargo build && python3 tools/verify_snippets.py
+cargo build --features pending_rewrite && python3 tools/verify_snippets.py
 ```
 
 ## Linting and formatting
@@ -130,13 +158,19 @@ each embedded crate's own slate covers that library in isolation:
 [cellgraph/observe/miri_slate.md](cellgraph/observe/miri_slate.md).
 
 The model the slate signs off on is documented in
-[design/memory-model.md](design/memory-model.md#verification).
+[old_design/memory-model.md](old_design/memory-model.md#verification).
 
 ### Command of record
 
 ```sh
 MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --quiet -- <test-names>
 ```
+
+Two slates. [`observe/miri_slate.md`](observe/miri_slate.md) covers the modules
+the rewrite keeps and runs on the default build; `python3 tools/miri.py` drives
+it. [`observe/miri_slate_pending_rewrite.md`](observe/miri_slate_pending_rewrite.md)
+is the old runtime's slate, frozen with the code it audits: `python3 tools/miri.py
+--pending-rewrite` selects it and adds `--features pending_rewrite`.
 
 The first run under a fresh Miri target dir takes several minutes to compile;
 subsequent runs are 1–3 min per test. Triage workflow (per-test re-runs,
@@ -153,9 +187,11 @@ before trusting a clean result — exit code 0 alone is not sufficient, since
 
 ### The slate
 
-The canonical slate — test names grouped by the unsafe site each pins down,
-the policy for adding tests, and the runtime baseline (five most-recent full-
-slate runs) all live in [`observe/miri_slate.md`](observe/miri_slate.md).
+The canonical slate — test names grouped by the substrate discipline each pins
+down, the policy for adding tests, and the runtime baseline (five most-recent
+full-slate runs) all live in [`observe/miri_slate.md`](observe/miri_slate.md);
+the old runtime's keeps the same shape in
+[`observe/miri_slate_pending_rewrite.md`](observe/miri_slate_pending_rewrite.md).
 
 ## Region debug audits
 
@@ -163,7 +199,7 @@ Two diagnostics report **over-pinning** — a region kept alive longer than the
 values reaching it need, which every other check passes silently because it
 breaks no invariant. Both are compiled out of a release build, and both only
 record: neither panics, and neither changes what is retained
-([design/memory-model.md § Debug region audits](design/memory-model.md#debug-region-audits)).
+([old_design/memory-model.md § Debug region audits](old_design/memory-model.md#debug-region-audits)).
 
 ```sh
 cargo run -- program.koan                       # debug build: pin rings reported
@@ -184,7 +220,7 @@ traffic two ways.
 python3 tools/alloc_audit.py                            # sweep every shape and report
 python3 tools/alloc_audit.py --baseline                 # sweep and record
 cargo run --features alloc-count -- program.koan        # one program's totals, on stderr
-cargo test --test allocation_baseline                   # the bounded regression test
+cargo test --features pending_rewrite --test allocation_baseline   # the bounded regression test
 ```
 
 The sweep is the recorder. It runs every shape through the counted binary and writes
@@ -232,7 +268,7 @@ cannot reach. A figure that moves shows up as a delta in the sweep's report, the
 the allocation column's absolute rows do.
 
 The names fixed in Rust source — builtin parameter slots and the `Result` / `KError`
-tags ([design/label-interning.md § Names fixed in Rust source](design/label-interning.md#names-fixed-in-rust-source))
+tags ([old_design/label-interning.md § Names fixed in Rust source](old_design/label-interning.md#names-fixed-in-rust-source))
 — are pinned by four unit tests in
 [`labels/tests.rs`](src/parse/labels/tests.rs), over a static and a slot group of
 that test module's own so they pin the mechanism rather than whatever spelling a builtin

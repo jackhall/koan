@@ -148,7 +148,7 @@ mod tests {
 
     /// A spliced `LET` runs inside `EVAL`'s fresh frame and never reaches the
     /// enclosing scope — statement position or not, nothing installs outside.
-    /// [roadmap/metaprogramming/eval-splices-in-place.md] owns the gap to the
+    /// [roadmap/old_metaprogramming/eval-splices-in-place.md] owns the gap to the
     /// designed splice-in-place semantics.
     #[test]
     fn eval_spliced_let_is_frame_local() {
@@ -165,7 +165,7 @@ mod tests {
     /// A spliced `LET` in an eager argument position runs frame-local and yields
     /// its value — it does not hit the `NestedBinder` position check, because
     /// `EVAL` evaluates through its own frame, not through sub-dispatch
-    /// submission. When [roadmap/metaprogramming/eval-splices-in-place.md] routes
+    /// submission. When [roadmap/old_metaprogramming/eval-splices-in-place.md] routes
     /// splices through submission, this position must error like hand-written
     /// source; this test pins the pre-splice-in-place behavior.
     #[test]

@@ -1,5 +1,5 @@
 //! Ascription operators `:|` (opaque) and `:!` (transparent).
-//! See [design/typing/modules.md](../../design/typing/modules.md).
+//! See [old_design/typing/modules.md](../../old_design/typing/modules.md).
 //!
 //! Satisfaction is checked through the signature-subtyping relation: the source module's
 //! self-sig must be a subtype of the signature's schema (manifest members equal, abstract

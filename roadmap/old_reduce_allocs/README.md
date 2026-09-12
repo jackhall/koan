@@ -1,0 +1,113 @@
+# Reduce allocations
+
+> **Stale as work, kept as requirements.** Written against the old runtime,
+> now behind `pending_rewrite`; the items below record what the language needs
+> and are retired by the [rewrite](../rewrite/README.md) as it meets them.
+
+Cut the execute path's measured allocation traffic. The recorded figures in
+[`observe/alloc.txt`](../../observe/alloc.txt) put a number on a step, a live frame and a
+declared name — one row per commit swept, from which one marginal cost per unit of work is
+derived, and [audit/README.md](../../audit/README.md) says what each term prices — and
+`tests/allocation_baseline.rs` holds the shapes to a bound, so each item here removes a named
+term from a measured total rather than an assumed one. The shapes are composites rather than
+one-path isolations, so a term names *that* a cost moved; naming *where* is the dhat profiler's
+job — run a shape's pair under the `dhat` cargo feature and difference it with
+`tools/dhat_diff.py` (see [audit/README.md](../../audit/README.md)). Each item here owns an
+attributed share, and what no item owns is recorded under [Unplanned work](#unplanned-work).
+
+
+## Unplanned work
+
+Allocation sites and hazards no item owns yet — the per-step ones a 2026-08-27 dhat sweep
+over the wide pair attributed, recorded so the next item starts from a claim rather than a
+re-attribution, plus the growth hazards a survey and the consolidated shapes turned up:
+
+- **Pin-cycle walk maps** — `Region::detect_pin_cycle` hash-map traffic under
+  `retain_reach` ([workgraph/src/witnessed/region.rs](../../workgraph/src/witnessed/region.rs)),
+  2/step on each of the adopt and rest seams — adjacent to the reach-intern door in the same
+  file, whose own per-step blocks the two-tier table
+  ([sectioned-reach.md § Interned side table](../../workgraph/old_design/sectioned-reach.md#interned-side-table))
+  already removed.
+- **Relocation copies at the seam** — `alloc_dict` (8/step) and `Record::from_pairs` (6/step)
+  under `relocate_object_into` ([src/machine/model/values/kobject.rs](../../src/machine/model/values/kobject.rs))
+  ← `lift::copy_carried` ([src/machine/execute/lift.rs](../../src/machine/execute/lift.rs)). A
+  copy that crosses a region boundary rebuilds the carrier's own storage, so these are the
+  copy arm of the copy-versus-pin price rather than overhead on it — priced, not wasted. What
+  would move them is a decision made at frame death instead of per crossing
+  ([untyped_arena/region-evacuation.md](../old_untyped_arena/region-evacuation.md)), which is where
+  a whole region's survivors are known at once.
+- **Bounded-but-data-dependent bump fills** — a `BumpVec` that outgrows its reservation
+  abandons its old buffer as dead region bytes, and bumpalo extends in place only for the
+  most recent allocation, so a fill that interleaves with other allocations abandons on
+  every regrow. An exact-length fill closes this by type — `BumpAllocator::slice_from_iter`
+  and `Deps::from_requests_in` take an `ExactSizeIterator` and reserve its length, so growth
+  is unrepresentable. The fills whose final length is data-dependent under a known upper
+  bound have no such bound available, since the capacity is a runtime value:
+  `Sectioned::build`'s `runs`
+  ([workgraph/src/witnessed/sectioned.rs](../../workgraph/src/witnessed/sectioned.rs)),
+  `resolve_dispatch`'s `survivors`
+  ([src/machine/execute/decide/resolve_dispatch.rs](../../src/machine/execute/decide/resolve_dispatch.rs)),
+  and `field_list`'s `owned`
+  ([src/machine/execute/decide/field_list.rs](../../src/machine/execute/decide/field_list.rs)).
+  Three deduped producer lists in
+  [resolve_dispatch.rs](../../src/machine/execute/decide/resolve_dispatch.rs) — `decide_relaxed`'s
+  `parked`, `relaxed_parked_producers`' `producers`, and `decide_scope`'s pending-branch union —
+  sit a tier weaker still: they accumulate across a loop over *candidates*, whose length the
+  overload bucket sets, so the reservation is not the enclosing loop's length at all. Their
+  `expr.parts.len()` capacity holds because a `Lean::Parked` can name no producer that is not
+  already at some `bare_outcomes[i]` — the per-decide, per-slot resolution cache every candidate
+  consults — and because the accumulator dedupes. That is a claim about the dispatch cache's
+  provenance, spanning the three functions that build, read, and dedupe it, rather than a claim
+  a reader checks against the loop in front of them.
+  Weakest of all is `awaited` in
+  [fn_def/signature.rs](../../src/builtins/fn_def/signature.rs), the one step-transient buffer the
+  builtin bodies left on the heap, and left there for exactly this reason: it grows by
+  `extend(producers)` over a `TypeResolution::Park(Vec<ProducerId>)`
+  ([src/machine/model/types/resolver.rs](../../src/machine/model/types/resolver.rs)) whose length
+  the resolver sets, so unlike the three above it has no candidate-count claim to rest a
+  reservation on — no upper bound is available at the fill site at all. Its own peer
+  `sub_dispatches` pushes once per signature part and relocates cleanly, which is what isolates
+  this one. The heap `Vec` behind `Park` is the same site read from the producing end.
+  A `Filling<'a, T>` that owns the reservation and is the only route to a leaked bump slice
+  would concentrate the discipline in one audited type instead of every author, but its
+  capacity check stays runtime — so that shape is a narrowing, not a close.
+- **Step-transient buffers the machine hands a builtin** — a builtin body pays for a buffer it
+  neither builds nor outlives when the door it calls returns one.
+  [`body_statement_refs`](../../src/machine/core/kfunction/body.rs) collects a `Vec` of statement
+  references per call, and
+  [`resolver::seal_writes`](../../src/machine/model/types/resolver.rs) returns a `Vec<WriteOp>`
+  that reaches the action's write channel and dies there — handed over directly by
+  [union.rs](../../src/builtins/union.rs), and carried through `SealOutcome::Sealed` by
+  [newtype_def.rs](../../src/builtins/newtype_def.rs), which returns it up the declarator's
+  finalize contract without ever naming the door that built it. All of them die inside the step
+  that called them, so all of them belong on `ctx.scratch`; closing either door means
+  threading an allocator through a machine-level door its callers share rather than editing one
+  body, which is why the builtin-side sweep left them.
+- **Doors no recorded shape walks** — `audit/shapes/` reaches neither `A | B`, `WITH`,
+  `OP` nor `GROUP`, and no shape performs a `Type.member` read or a dynamic `s."x"` read. The
+  allocations removed on those paths are stated at the site and confirmed by a flat sweep rather
+  than by a term that moved, so a regression on any of them is invisible to
+  [`observe/alloc.txt`](../../observe/alloc.txt). A shape that exercises the operator and
+  type-algebra doors would give them a bound; adding one moves every absolute figure in the record,
+  which is why it is its own decision rather than a step inside another item.
+- **Bump-byte occupancy is unmeasured** — every figure in
+  [`observe/alloc.txt`](../../observe/alloc.txt) comes from a counting *global* allocator, and a
+  region's bump is one allocation at mint
+  ([`FIRST_CHUNK_BYTES`](../../workgraph/src/witnessed/region.rs), 4096, doubling from there). So
+  everything a region hosts — every binding table's bucket array, every bumped run — is invisible
+  to the record unless it crosses a chunk boundary, and a `WIDE` frame's region reserves ~250 KB,
+  which most single structures do not. Two consequences already sit in the tree: a per-call frame's
+  value channel is now one layout-sized slot array rather than a hash table built per activation,
+  and that shows as no movement at all in `wide_step` / `deep_frame`; and
+  [`SlotLayout::of_body`](../../src/parse/forms/layout.rs) mints a run for every binder
+  node at parse — including the many that are never used as a body — for +0.03 on `declare_name`,
+  a cost visible only because those runs live in long-lived regions whose chunks the record does
+  see. Closing this needs a bytes-*used* reader in `workgraph` (`Region::bump_capacity` reports
+  reserved chunk capacity, not usage) plus a column in `tools/alloc_audit.py`; both change what the
+  record means, which is why it is its own decision rather than a step inside another item.
+
+## Items
+
+Every requirements doc in this retired project.
+
+- [Frame recycling](frame-recycling.md)

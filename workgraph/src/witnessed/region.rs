@@ -17,13 +17,13 @@
 //! rules cut the two shapes that arise by construction. A debug-build detector reports whatever is
 //! left, online at the fold that would close the ring ([`Region::retain_reach`]); it is diagnostic
 //! and compiles out of a release build entirely
-//! ([design/reach.md § Debug audits](../../design/reach.md#debug-audits)).
+//! ([old_design/reach.md § Debug audits](../../old_design/reach.md#debug-audits)).
 //!
 //! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`) lives in the embedder's arena
 //! module (Koan's `machine::core::arena`). See
-//! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
+//! [memory-model.md § Region lifetime erasure](../../../old_design/memory-model.md#region-lifetime-erasure)
 //! for the reference-side lifetime-erasure soundness argument and
-//! [design/reach.md § Retention model](../../design/reach.md#retention-model)
+//! [old_design/reach.md § Retention model](../../old_design/reach.md#retention-model)
 //! for how an escaped value's region stays alive.
 
 use std::cell::{OnceCell, RefCell};
@@ -68,7 +68,7 @@ pub struct Region<W: StorageProfile> {
     /// living in this region ([`Region::intern_reach_retained`]), keyed on the canonical member set
     /// so one description exists per distinct reach per region. Separate from the family
     /// [`bump`](Self::bump) so a description is never value-page data (see
-    /// [design/reach.md § The reach description](../../design/reach.md#the-reach-description)).
+    /// [old_design/reach.md § The reach description](../../old_design/reach.md#the-reach-description)).
     /// A [`ReachDescription`] owns nothing — its members are `Weak`, so hosting it here pins no
     /// region; what keeps those members alive is [`retained_reach`](Self::retained_reach) below,
     /// folded by the same act that interned the entry.

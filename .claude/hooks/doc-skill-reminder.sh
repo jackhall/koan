@@ -15,10 +15,10 @@ sentinel="/tmp/claude-doc-skill-reminder-fired-${session_id}"
 
 if git -C "$repo" status --porcelain 2>/dev/null | \
      awk '{print $NF}' | \
-     grep -qE '^(README\.md|tutorial/|ROADMAP\.md|design/|roadmap/)'; then
+     grep -qE '^(README\.md|tutorial/|ROADMAP\.md|old_design/|roadmap/)'; then
   touch "$sentinel"
   cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"This turn looks doc-shaped. If you have not already invoked the `documentation` skill this session, do so before editing the koan doc tree (README.md, tutorial/, ROADMAP.md, design/, roadmap/)."}}
+{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"This turn looks doc-shaped. If you have not already invoked the `documentation` skill this session, do so before editing the koan doc tree (README.md, tutorial/, ROADMAP.md, old_design/, roadmap/)."}}
 JSON
 fi
 

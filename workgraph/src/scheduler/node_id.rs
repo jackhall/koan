@@ -10,7 +10,7 @@
 /// free list, so two ids for one index from different allocations compare equal, and an id is
 /// meaningful only while the incarnation that minted it lives. A holder needing identity to
 /// survive reclamation mints its own, as koan does with `StatementId` and `ProducerId`
-/// ([design/dag-scheduler.md § Slots and the node-store lifecycle](../../design/dag-scheduler.md#slots-and-the-node-store-lifecycle)).
+/// ([old_design/dag-scheduler.md § Slots and the node-store lifecycle](../../old_design/dag-scheduler.md#slots-and-the-node-store-lifecycle)).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId {
     index: usize,

@@ -37,7 +37,7 @@
 //! `SIG` declarations and in record literals alike; if one ever reached [`Record::from_pairs`], the
 //! last-wins insert still leaves keys unique, so `Hash`/`Eq` stay well-defined.
 //!
-//! See [design/label-interning.md](../../../../design/label-interning.md).
+//! See [old_design/label-interning.md](../../../../old_design/label-interning.md).
 
 use std::hash::{Hash, Hasher};
 

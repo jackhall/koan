@@ -2,7 +2,7 @@
 //! substrate name Koan spells.
 //!
 //! The payload-generic engine underneath is `workgraph`'s witnessed module
-//! ([workgraph/design/witnessed-memory.md](../workgraph/design/witnessed-memory.md)); this module is
+//! ([workgraph/old_design/witnessed-memory.md](../workgraph/old_design/witnessed-memory.md)); this module is
 //! Koan's policy over it. [`region`] declares the storage profile and the allocation brands (with
 //! the residence derivations a brand's region owner supplies), [`frame`] the per-call frame shell,
 //! [`program`] the program-text tier above the run root, and [`scope_id`] the position-independent
@@ -47,9 +47,13 @@
 //! and hold `KType`, `SealedValue` and dispatch buckets, so moving them would import a dozen names
 //! back. What is *storage* in a binding table is the table shape, and that already lives here.
 //!
-//! See [memory-model.md](../design/memory-model.md),
-//! [value-substrates.md](../design/value-substrates.md) and
-//! [per-call-region/](../design/per-call-region/README.md).
+//! **The runtime is this module's consumer, and the runtime is `pending_rewrite`.** A door marked
+//! `cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))` has no caller in a default build
+//! until the rewrite adopts it; the marker comes off with the adoption.
+//!
+//! See [memory-model.md](../old_design/memory-model.md),
+//! [value-substrates.md](../old_design/value-substrates.md) and
+//! [per-call-region/](../old_design/per-call-region/README.md).
 
 pub mod frame;
 pub mod program;
@@ -58,7 +62,7 @@ pub mod scope_id;
 mod slots;
 pub mod substrate;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "pending_rewrite"))]
 mod tests;
 
 pub use frame::{Frame, FrameCoverage, FrameReach};
@@ -66,6 +70,7 @@ pub use program::{ProgramBrand, ProgramStorage, program_storage};
 pub use region::{
     FoldingBrand, FrameStorage, KoanRegion, RegionBrand, SubstrateDoor, run_root_storage,
 };
+#[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
 pub(crate) use region::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, bump_table};
 pub use scope_id::ScopeId;
 pub use slots::{SlotArray, SlotConflict, SlotState};

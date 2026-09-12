@@ -39,7 +39,7 @@ an operand's regions when its product embeds nothing of that operand. It hooks i
 `alloc_carried_with`'s brand closure, which is the one moment both the operand views and
 the product are nameable, and `src/main.rs` prints its flags after a
 `cargo run --features region-audit` run. Its place in the memory model is
-[memory-model.md § Debug region audits](../design/memory-model.md#debug-region-audits).
+[memory-model.md § Debug region audits](../old_design/memory-model.md#debug-region-audits).
 
 ## The counter
 
@@ -235,7 +235,7 @@ spelling it was written with, and registration classified the normalized form ag
 record. The draft door normalizes and interns once and registration copies the classified symbol,
 so a keyword element is hashed where it is written and nowhere after. Each such spelling is a
 `StaticName` declared beside the body that reads it
-([label-interning.md § Names fixed in Rust source](../design/label-interning.md#names-fixed-in-rust-source)):
+([label-interning.md § Names fixed in Rust source](../old_design/label-interning.md#names-fixed-in-rust-source)):
 minted once for the process at first touch and compared by symbol everywhere after.
 
 Not all of the process's one-time mints sit in that fixed figure. A keyword the machine compares
@@ -252,7 +252,7 @@ a statement declares tokens as it runs, and each of them — keyword, value name
 — is hashed where it is written. A **Type token** mints at the parse that classifies it and nowhere
 after, where each seam that read one used to re-classify its text. An `Identifier` part carries the
 symbol its parse minted and every reader down to the lookup ladder takes it
-([label-interning.md § Where text becomes a symbol](../design/label-interning.md#where-text-becomes-a-symbol));
+([label-interning.md § Where text becomes a symbol](../old_design/label-interning.md#where-text-becomes-a-symbol));
 a `Keyword` part carries its symbol and nothing else, so the spelling a diagnostic prints is
 resolved out of the run's label table rather than carried beside every token. A record's field list
 yields its parse-minted symbols rather than handing names on as text, so a declared field is not

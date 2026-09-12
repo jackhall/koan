@@ -22,9 +22,9 @@ use proptest::prelude::*;
 
 use super::super::atom::classify_token;
 use super::{top, tree};
-use crate::machine::core::bindings::powerset_probes;
 use crate::memory::program_storage;
 use crate::parse::labels::{Symbol, is_keyword_token, is_type_name};
+use crate::parse::powerset_probes;
 use crate::parse::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, KeywordSymbol, LabelInterner,
     parse,

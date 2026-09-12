@@ -1,0 +1,499 @@
+# Expressions and parsing
+
+This doc covers the parser pipeline, the `KExpression` shape it produces, the
+language's eager-by-default evaluation rule (and how lazy slots opt out), and
+how users extend the surface syntax through `EXPR` definitions rather than a macro
+system.
+
+## Parser pipeline
+
+[`parse`](../src/parse.rs) runs in two phases, and the split is a split of
+authority: the first knows layout and no vocabulary, the second knows koan and no
+layout.
+
+1. **Layout.** [`sexlex::read`](../sexlex/src/lib.rs) reads the text into a tree
+   of atoms, strings, commas and bracketed or line-shaped groups. A token is a
+   maximal run of anything that is not whitespace, a bracket, a quote or a comma,
+   so `:Number`, `a.b`, `->` and `#` all arrive as single atoms; string bodies
+   come through verbatim; each line becomes a `Layout` group that deeper lines
+   nest inside; and every item records whether the next sibling touched it
+   (`glued`), which is all a sigil needs. The crate's own doc is the spec for the
+   five rules it applies, and it interprets nothing else — which atoms are
+   keywords, which glued prefixes are sigils, what a comma means inside a brace
+   are all the layer above's business.
+2. **Lowering.** [lower.rs](../src/parse/lower.rs) walks that tree into
+   `KExpression`s: sigils and their groups, the redundant-wrapper peel, brace
+   pairing, collection adjacency, and the spans every part carries. The rules are
+   the sections below.
+
+Two files serve the lowering:
+
+- [atom.rs](../src/parse/atom.rs) — classify one atom. It splits the atom on its
+  colons (`x:Number` is the word `x` and the type `Number`) and classifies each
+  piece as a literal, keyword (any pure-symbol token that is not a builtin
+  compound trigger — `=`, `->`, `:|`, `:!`, `+`, `|`, `<=`, `>>`, `==`, `!=` — or
+  alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`), type
+  name (uppercase-leading with at least one lowercase — `Number`, `KFunction`,
+  `Ordered`), identifier, or compound (member access, prefix/suffix operators).
+  Tagging arbitrary symbol tokens as keywords is what lets a post-parse detector
+  recognize chainable operators (see the `OperatorChain` shape below); the builtin
+  triggers `.`/`?` keep their compound desugaring instead. A token that starts
+  uppercase but classifies as neither keyword nor type (single uppercase letter,
+  or uppercase + digits only) is a parse error. See
+  [typing/tokens.md](typing/tokens.md) for what the three classes mean.
+- [operators.rs](../src/parse/operators.rs) — table of compound-atom operators
+  (`.`, `?`); add a row to extend.
+
+Because whitespace is the only thing that delimits an atom, an operator has to be
+whitespace-delimited too: `a < b` is three atoms and `a<b` is one, which no
+identifier may be. The same holds for `=`, so a record field is `{x = 1}`.
+
+## Line continuation
+
+Indentation is layout, so the rules are [`sexlex`](../sexlex/src/lib.rs)'s and
+its crate doc is their spec; what follows is the shape they give koan. Each
+non-blank line is a group, with deeper indentation nesting and dedents closing.
+Three things let a single expression span multiple physical lines:
+
+- **Trailing comma.** A line ending in `,` continues onto the next non-blank
+  line regardless of indentation; the joined lines flatten into one group.
+- **Open `[` / `{`.** A collection literal whose match is on a later line carries
+  the intervening lines as part of its span, indentation-insensitively — content
+  and the closing `]` / `}` may sit at any column (the same implicit-line-joining
+  model Python uses inside brackets). This leniency is deliberate. Unlike `(`,
+  brackets are unambiguously terminated, so indentation can't change meaning; the
+  same-or-greater-indent rule that `(` carries is intentionally *not* imposed here.
+  Enforcing it would buy only visual hygiene — at the cost of breaking flush-left
+  data layouts and adding parser machinery to a path that is correct today — so it
+  is set aside; a linter is the better home for that style nudge if it is ever
+  wanted.
+- **Open `(`.** A paren left open at a line break is *indentation-sensitive*: a
+  deeper line nests inside the group as its own wrapped sub-expression
+  (nest-per-line), and the matching `)` may sit at any indentation greater than
+  or equal to its opener. A non-closing line at the opener's indentation or
+  shallower is an expression break while the paren is still open — rejected as a
+  dangling `(`; a `)` shallower than its opener is rejected for the same reason.
+  So `PRINT (\n  3.14\n)` parses (the `)` returns to `PRINT`'s column), but
+  `PRINT (\n3.14\n)` is a syntax error.
+
+  Nest-per-line holds for the line that carries the closer too: its own content
+  is a group and the `)` closes the paren that content sits in. So where the
+  closer sits is layout, not structure — a three-member body reads as three
+  siblings whether the group closes on its last member's line or on one of its
+  own — and text written *after* the closer continues the line the paren was
+  opened on.
+
+### The redundant-wrapper peel
+
+A body whose whole content is one group means what that group means: `((a b))`
+and `(a b)` are the same call, and so is the single body line of
+
+```
+PRINT (
+  3.14
+)
+```
+
+which is why that reads exactly as `PRINT (3.14)` does rather than
+adding a layer for the body line. The peel runs on the layout tree, before any node
+is built, so no node is ever built and then rewritten. It descends through parens
+and body lines only — never into a `[`/`{` literal, which is a value rather than
+a wrapper, never into a `:(...)`, where a paren is structure the dispatcher reads
+(`(Function ((List Number)) -> Bool)` takes one argument whose own type is
+parenthesized), and never past a sigil-led line, whose group is the quote's body.
+A compound atom reaches the same shape without a group — `a.b` classifies to one
+`ATTR` sub-expression — so a body that came out as a single sub-expression is
+unwrapped too, which is what makes a line reading `a.b` that call rather than a
+statement holding it.
+
+### Collection adjacency
+
+A `[` or `{` may not be glued to a token on either side: `foo[1]` would read as
+an index and `[1]foo` as an application, and koan spells neither that way, so
+both are parse errors. Parens carry no such rule — `Some(42)` and `f(x)` are an
+atom followed by a group, which is exactly the application koan means by them.
+
+## `KExpression` shape
+
+Output is one [`KExpression`](../src/parse/ast.rs) per top-level line:
+an ordered sequence of `ExpressionPart`s — `Keyword`, `Identifier`, `Type`,
+nested `Expression`, `SigiledTypeExpr`, `ListLiteral`, `DictLiteral`, or typed
+`Literal`.
+
+The `Keyword`-vs-slot split is the parser's contract with dispatch:
+
+- `Keyword` parts contribute fixed tokens to a signature's bucket key (the part
+  that has to match exactly). A keyword part is `Keyword(KeywordSymbol)` — the
+  symbol the classifier minted and interned, and nothing else. That symbol is what
+  the key holds, what every keyword comparison reads, and what a diagnostic
+  resolves back through the run's interner to print
+  ([label-interning.md](label-interning.md)).
+- `Identifier`, `Type`, literals, and sub-expressions become slots that compete
+  on type specificity (see [typing/ktype/README.md](typing/ktype/README.md)). The
+  two name parts carry a symbol and no text at all — `Identifier(ValueSymbol)` and
+  `Type(TypeSymbol)`, each minted and interned by the classification that produced
+  the part — so a name is hashed once, at the parse, and every later reader carries
+  those bits ([label-interning.md](label-interning.md)).
+- A keyword is fixed syntax, so a **list, dict or record literal refuses one**: the
+  only keyword-shaped things such a literal's syntax has are the `,` / `:` / `=`
+  delimiters the frame consumes itself, and everything else in it is a value.
+  `[FOO 1]`, `[1 + 2]`, `{count: FOO}` and `{x = FOO}` are parse errors naming the
+  spelling, raised at the one part-push funnel
+  ([lower.rs](../src/parse/lower.rs)). A keyword inside a *nested*
+  expression is untouched — `[(1 + 2) 3]` is an ordinary two-element list, and
+  `a.b` / `x?` inside a literal are too, because the compound builders wrap their
+  `ATTR` / `TRY` keyword in a nested part before it is pushed.
+
+`KExpression` is itself a first-class `KObject` variant — user code can hold an
+unevaluated expression as a value, pass it around, and evaluate it on demand.
+
+### Structural cache and dispatch shape
+
+As its parts run is frozen, [`KExpression`](../src/parse/ast.rs) fills a
+[`NodeCache`](../src/parse/ast/shape.rs) — the one structural cache both
+expression families carry, holding five facts:
+
+- the **stored bucket key**, the run of [`KeyElement`](../src/parse/ast/shape.rs)s
+  dispatch matches on, bumped into the node's own region;
+- the **`DispatchShape`**, classified from that key plus the head part's class;
+- an optional **operator probe**, `Some` only for an `OperatorChain`;
+- the **[`FORMS`](../src/parse/forms.rs) entry** the key matches, or `None` for
+  every user-defined bucket — the one table probe in the tree, from which every
+  later form question is answered by tag rather than by re-walking the key: which
+  slots stay raw ([Lazy slots](#lazy-slots)), which position carries a binder's
+  declared name, whether the shape is reserved, which close-inference rule and
+  which miss diagnostic apply;
+- the **binder plan** — is this node itself a binder, and which name and bucket
+  key(s) it installs into the enclosing scope, per the position rule in
+  [execution/name-placeholders.md](execution/name-placeholders.md).
+
+The plan covers this node's own spine only; nothing a slot contains joins it. All
+of it is a pure function of expression structure — no scope, no types — so it is
+computed once and read by the dispatch driver on every call of the enclosing
+function rather than re-derived per call. The plan is read once, at statement
+submission, before any splice; it is filled by the AST node's seal alone, since a
+binder is always parsed syntax. The cache is filled at one private construction chokepoint,
+which derives it from a parts run already resident in the node's region — so a
+node cannot exist with a stale or unfilled cache, and nothing mutates a part run
+afterwards. The public doors — `KExpression::{new, build, nested}` and the
+`ProgramBrand` mints that wrap them — differ only in how the run reaches the
+region: each takes a borrowed run to copy in, and each has a `_from_iter` peer
+that fills the region's bytes straight from an exact-length iterator, so a
+caller whose slots are computed one at a time pays no owned staging run. The
+parser collects each run in a plain `Vec` and takes the iterator doors, freezing
+it through the chokepoint once, when the run is complete
+([lower.rs](../src/parse/lower.rs)). The cache is invariant under the dispatch-time
+splice that swaps a `StagedSlot` for the resolved sub-result's `Spliced` cell —
+one part for one part, no structural change — so a working node copies it from
+the AST node it derives from rather than re-deriving it.
+
+### Two nodes: raw AST and the scheduler's working copy
+
+The parser's output type and the type the scheduler dispatches are **two concrete
+structs**, and the split is what keeps a resolved sub-result out of the value
+channel:
+
+- [`KExpression`](../src/parse/ast.rs) is raw, unevaluated syntax — parser
+  output, an `FN` body, a quote body, a `:KExpression` / `:SigiledTypeExpr` /
+  `:RecordType` slot capture, a MATCH arm body. Its parts run and every string in
+  it borrow the eternal-tier program storage that parsed them, so the node is
+  `Copy`, `Drop`-free and covariant in its lifetime: it flows into shorter-lived
+  code by ordinary subtyping, with no reattach and no witness.
+- [`WorkingExpression`](../src/machine/model/ast/working.rs) is what the scheduler
+  mutates. Its `WorkingPart` either wraps an `ExpressionPart` verbatim
+  (`Ast`, a pointer copy of parsed syntax), points at a node the scheduler itself
+  synthesized (`Expression`, `RecordType`), or is one of the two arms no AST can
+  hold: `StagedSlot`, the hole an eager operand is staged into, and `Spliced`, the
+  resting carrier cell a dep-finish writes back.
+
+`KObject::KExpression` takes a
+[`ProgramExpression`](../src/parse/ast/program.rs) — a marked AST node,
+mintable only through a program-storage door — and there is no conversion from a
+working node to an AST one, so **a value can never carry a producer's reach
+through an expression** — the property the alloc door and the escape seam read as
+a structural fact ([value-substrates.md § Value-channel
+AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
+
+Crossing runs one way, through `WorkingExpression::from_ast(brand, ast)`: the
+parts run is wrapped as `Ast` parts and the cache copied, which is a pointer copy
+rather than a rebuild. The structural readers are written once and shared two
+ways: shape classification, the bucket key, the operator probe and the form probe
+live on the `NodeCache` both families embed, and read a stored key plus the head
+part's class rather than a parts run, so no reader is generic over a part; the
+field-list slot view stays on the
+[`Part`](../src/machine/model/ast/shape.rs) trait, which `ExpressionPart` and
+`WorkingPart` each implement.
+
+`DispatchShape` partitions expressions into the bare-name and single-part
+fast lanes, the head-position call shapes, `Keyworded`, `OperatorChain`, and the
+non-callable-head sink. The classifier sweeps for any `Keyword` part first: a
+keyword anywhere produces `Keyworded` (refined to `OperatorChain` for the chain
+shape below). `Keyworded` is therefore produced **only** when a real keyword is
+present — it is not a catch-all for unclassified heads.
+
+With no keyword present, a single-part expression takes its bare-name or
+pass-through lane (`BareIdentifier`, `BareTypeLeaf`, `SigiledTypeExpr`,
+`LiteralPassThrough`), and a multi-part expression branches on its head shape into
+one of the **head-position call shapes**, each routing to its own calling
+convention:
+
+- `TypeCall` — a leaf `Type` head (`MyStruct {x = 1}`). The name resolves
+  synchronously to a type identity and constructs.
+- `FunctionValueCall` — a lowercase `Identifier` head (`f {x = 7}`). The head
+  resolves to a function or a constructible-type value.
+- `HeadDeferred` — a nested `Expression` head (`(pick) {x = 1}`). The head is
+  evaluated first, and the resulting value's kind — function or
+  constructible type — selects the convention.
+- `TypeHeadDeferred` — a `:(...)` `SigiledTypeExpr` head. The sigil guarantees a
+  type result, so it prunes the function arm and admits only a constructible
+  type; anything else surfaces a type-shaped diagnostic.
+- `NonCallableHead` — a literal, list, dict, or record head in a multi-part
+  expression. Heads are always eager and must resolve to something callable, so
+  this shape raises a `DispatchFailed` at the dispatch entry.
+
+The chain shape is a refinement of `Keyworded`: a slot-led `Slot (Keyword Slot)+`
+run with two or more keyword positions, which nothing else produces (no builtin
+reaches two keywords behind a leading argument). It carves the track for chainable
+user operators — the operator probe caches the `KeywordSymbol` the per-scope
+operator registry is keyed by, the run digest of the chain's distinct operator
+symbols (`KeywordSymbol::of_run`, sorted by symbol bits and deduped). No spelling
+is read to build it: the members' digests stream through one hasher, a registry
+probe compares symbol bits, and only the cold diagnostic paths resolve the glyphs
+back out of the run's interner.
+
+A recognized chain reduces in
+[`decide/operator_chain.rs`](../src/machine/execute/decide/operator_chain.rs)
+by the mode its resolved [`OperatorGroup`](../src/machine/model/operators.rs)
+declares. The reducer allocates no result values: three of the four modes are
+pure syntactic rewrites handed back to ordinary dispatch, and the fourth stages
+sub-dispatches the scheduler already knows how to run.
+
+- **Fold-left / fold-right** rewrite the run into nested binary dispatches —
+  `a + b + c` ⇒ `[ [a + b] + c ]` (left) or `[ a + [b + c] ]` (right) — where
+  each inner 3-part expression resolves through the existing eager-subs
+  sub-dispatch track before the outer keyword runs as an ordinary binary call.
+  Every operand appears exactly once, so no evaluation-order question arises.
+- **Unary** lowers the whole run to one keyword-first call over a list literal:
+  both the infix chain `x1 sym x2 sym x3` and the prefix form `sym [x1 x2 x3]`
+  become `[ Keyword(sym), ListLiteral([x1 x2 x3]) ]` — the same shape
+  `HEAD [1 2 3]` dispatches through — so prefix and infix coincide on one body.
+- **Pairwise** dispatches each adjacent pair through its own operator's binary
+  body and folds the pair results through the group's combiner, in the direction
+  the group declares. The combiner is an *operator*, synthesized infix
+  (`[left, Keyword(<combiner>), right]` — `AND` for the comparisons) and resolved
+  by the ordinary scope walk at the use site, so it binds its two inputs
+  positionally. A shared middle operand evaluates
+  **once**: every operand is staged as its own sub-dispatch, and each resolved
+  cell is spliced into the up-to-two adjacent pairs it feeds — so `f x < g y < h z`
+  runs `g y` a single time. This is the one mode that runs sub-dispatches itself
+  rather than purely rewriting syntax.
+
+A run whose probe spans two groups, or names an operator no group declares, is a
+registry miss surfaced as a structured `DispatchFailed`; the user resolves a
+cross-group mix (`a + b * c`) with explicit parentheses (`a + (b * c)`). (A miss
+first parks on a still-finalizing `OP` declaration of one of the chain's
+operators, if the scope walk sees one — a declaration earlier in the same
+submitted block resolves whatever order the scheduler pops the statements in.)
+
+The registry walk is **innermost-wins**, like every other name. The builtin
+comparison (pairwise), additive, and multiplicative (both fold-left) groups and
+their binary bodies are seeded into the run-global root by
+`register_builtin_operator_groups` in
+[`builtins/arithmetic.rs`](../src/builtins/arithmetic.rs), so they are found
+*last*: they are chaining defaults a declaring scope may override, not
+unshadowable claims on their symbols. Unlike the type and function ladders this
+walk is not builtin-first, because a registry hit carries a member set and a mode
+but no operand types — it cannot type-gate the way a function bucket does. The
+type-union `|` operator is its own single-member **Unary** group:
+[`builtins/type_union.rs`](../src/builtins/type_union.rs) seeds it — its two
+overloads and its group entry — through the same unary-operator registration door
+a `UNARY OP` declaration uses ([operators.md § Unary operators](operators.md#unary-operators)),
+supplying native bodies. So `:(A | B | C)` reduces to one
+keyword-first call over the whole member run (see
+[typing/type-language-via-dispatch.md § Anonymous-union sigil](typing/type-language-via-dispatch.md#anonymous-union-sigil)).
+
+User modules populate the registry through the `OP` / `GROUP` declaration surface
+— a quoted operator symbol, a chaining mode, and (for pairwise) a combiner — which
+[operators.md](operators.md) specifies.
+
+The four call-shape lanes that resolve a head to a callable —
+`TypeCall`, `FunctionValueCall`, `HeadDeferred`, `TypeHeadDeferred` — converge on
+one shared apply-a-callable tail in
+[`decide/apply_callable.rs`](../src/machine/execute/decide/apply_callable.rs)
+with two execution arms: *construct* from a type schema, or *call* a `KFunction`
+by name. A functor — a module-returning function — is a `KFunction` like any
+other, so it takes the call arm — see
+[typing/functors.md](typing/functors.md).
+
+## Type-expression sigil
+
+The `:(...)` glued-right sigil opens a *parse-context marker* group. The
+parser collects the inner tokens into a regular `KExpression` and wraps it as
+[`ExpressionPart::SigiledTypeExpr(&KExpression)`](../src/parse/ast.rs)
+— no inner-shape recognition runs at parse time. Shape decisions
+(keyworded `:(LIST OF Number)`, nominal construction `:(MyStruct {x = 1})`,
+etc.) are the dispatcher's responsibility: the
+sigil's only job is to flag "this slot evaluates to a type, not a value". The
+lowering is the `:`-sigil arm of [lower.rs](../src/parse/lower.rs); the
+dispatcher's `sigiled_type_expr` handler tail-replaces the slot with a `Dispatch`
+of the wrapped expression.
+
+Two spellings of the sigil exist and mean the same thing. `:(...)` takes a type
+expression; `:{...}` takes a record type, an
+[`ExpressionPart::RecordType`](../src/parse/ast.rs) the elaborator folds
+straight to a record `KType`. Both require the `:` to be glued to its group, and
+a `:` glued to a name (`x:Number`, `:Number`) is the annotation form — the atom
+splits on the colon and the name after it must be a type name. A `:` that is
+glued to neither is an error.
+
+The same marker is minted without a sigil in one place: as each parts run closes,
+[`admit_bare_type_slots`](../src/machine/model/binder.rs) rewrites a plain `(…)` sitting
+in a binder form's **type slot** to `SigiledTypeExpr`, so `-> (LIST OF Str)` and
+`-> :(LIST OF Str)` are the same part. It runs on the still-unfrozen `Vec`, before
+the construction chokepoint fills the node's cache. See
+[typing/type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
+for the full sigil-and-dispatch contract.
+
+## Eager evaluation by default
+
+The scheduler evaluates every nested `(...)` before its parent dispatches. So
+without further machinery,
+
+```
+MATCH cond WITH (true -> (a) false -> (b))
+```
+
+would evaluate both `(a)` and `(b)` regardless of `cond`, and `MATCH` would
+just be a post-hoc selector picking one of the two already-computed values.
+This is a deliberate consequence of the graph-based execution model: the
+parent slot's arguments are dependencies in the DAG, and the topological order
+of execute makes them ready before the parent runs. See
+[execution/README.md](execution/README.md). To get real branching behavior,
+`MATCH` opts its branch slots into laziness — the next section.
+
+## Lazy slots
+
+Only the fixed builtin forms opt out of eager evaluation, and which of their
+slots are lazy is a parse-static fact: the node's
+[`NodeCache`](../src/parse/ast/shape.rs) resolves its
+[`FORMS`](../src/parse/forms.rs) entry at construction, and that entry's
+`lazy_slots` stamp says which slots stay raw. Builtin keys are unshadowable, so
+matching one is sound; the scheduler reads `lazy_kinds_at(index)` off the cached
+entry to know which children not to submit. Dispatch never decides
+evaluation — by the time an expression dispatches, every child the stamp
+left eager has already evaluated. The builtin receives the unevaluated
+`KExpression` in each stamped slot and emits a fresh `Dispatch` for the
+chosen branch only. Two mechanisms exist:
+[`KoanRuntime::dispatch_in_scope`](../src/machine/execute/harness.rs) submits a child
+node directly, while [`Action::Tail`](../src/machine/core/kfunction/action.rs) — used
+by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
+place.
+
+The stamp records which part *kinds* stay raw at each slot index rather than a
+per-index boolean, because one bucket mixes raw capture and eager
+sub-dispatch at the same index across its overloads: `NEWTYPE <name> =
+<repr>` captures a `:(…)` type expression or a `:{…}` record type raw while a
+bare `(…)` in that position evaluates. Index `i` of bucket `k` carries kind
+`K` exactly when some builtin overload registered under `k` types slot `i`
+with `K`'s raw-capture slot type, and a table⟺registration consistency test
+pins `FORMS` to the live signatures in both directions.
+
+User signatures have no lazy slots: a `:KExpression` parameter on a user definition is
+an ordinary eager value parameter, satisfied by a `#(…)` literal or any
+expression that evaluates to a `KExpression` value — the next two sections.
+
+## Extending the surface
+
+Users add what look like new keyword forms by writing `EXPR` definitions.
+
+```
+EXPR (LOOP body :KExpression) -> Any = (...)
+```
+
+defines a new dispatchable signature: keyword `LOOP`, slot `body`. The parser
+already classifies `LOOP` as a keyword (all-caps, no lowercase), and
+`body` as a slot, so the call site keys and scores the same way a builtin's
+would — the dispatch table doesn't distinguish user-defined from built-in
+functions when scoring matches. What a user form cannot do is suppress
+evaluation: the call site is `LOOP #(PRINT "x")`, and `body` receives the
+quoted `KExpression` *value*. A bare `LOOP (PRINT "x")` evaluates the group
+first (printing once) and then dispatches on the result — which matches the
+`:KExpression` slot only if that result is itself an expression value. Code
+reaches a function as a value; only the fixed builtin forms are syntax with
+lazy slots.
+
+There is no macro system. The dispatch table **is** the language's extension
+mechanism. Three consequences:
+
+- New "syntax" cannot rewrite the parser. It can only introduce new dispatchable
+  shapes within the existing token grammar.
+- A user-defined function competes with builtins on slot-specificity, so a
+  more-specific user signature can override a more-general builtin where the
+  shapes overlap.
+- A user form that takes code says so at every call site — the `#(…)`
+  argument is the reader's local proof that the group does not run here.
+
+See [functional-programming.md](functional-programming.md) for how the body
+binds parameters into a per-call scope and what `Action::Tail` does at
+the slot.
+
+## Quote and eval sigils
+
+Two prefix sigils give surface to the lazy/eager split: `#(expr)` *quotes* —
+captures the body's AST as a `KObject::KExpression` value with no evaluation —
+and `$(expr)` *evals* — resolves its operand and, if the result is a
+`KObject::KExpression`, dispatches the captured AST. Together they carry
+code across the eager default: the quote is the one spelling that keeps a
+literal group from running outside a builtin lazy slot — it is how an AST
+reaches a user signature — and `$` threads a captured expression value back
+into evaluation.
+
+The sigils are **expression-level operators** in
+[lower.rs](../src/parse/lower.rs), not entries in the compound-operator registry.
+A sigil is an atom that is exactly `#` or `$` and is glued to the group after it
+— which is all the layout tree has to record for the lowering to recognize one.
+
+Quoting is **parse-static**: `#(...)` folds its body into an
+[`ExpressionPart::QuotedExpression`](../src/parse/ast.rs)
+— a part that is a slot for dispatch purposes and behaves like a literal, resolving
+to the `KObject::KExpression` value of the captured body. There is no quoting
+operation at run time and the body never dispatches.
+
+Evaluation is genuinely a run-time operation, so `$(...)` wraps its body under
+the head keyword `EVAL`, producing the AST shape `(EVAL <body>)` the EVAL builtin
+dispatches on.
+[EVAL](../src/builtins/eval.rs)'s slot is `Any` so the scheduler
+eagerly evaluates the operand first, after which the body checks the result is
+a `KExpression` and tail-dispatches the inner AST in a fresh `CallFrame`
+(mirroring `MATCH`'s per-call frame so free names resolve against the
+surrounding lexical scope but body-introduced bindings don't leak). EVAL
+returns whatever the inner AST evaluates to; a non-`KExpression` operand
+produces a structured `TypeMismatch`.
+
+From the user's point of view, two surface forms are available. A **whole line**
+whose first atom starts with `#` or `$` quotes (or evaluates) that line, its
+child lines included: `LET x =\n  #3` binds `x` to the quoted AST of `3`, and
+`#bar\n  baz` quotes `bar (baz)`. Anywhere else the sigil must take a group —
+`#(expr)` / `$(expr)` — so inside a comma-continuation or a bracket/dict
+continuation, which are line joins rather than lines of their own, the bare form
+is unavailable and a bare `#sym` there errors. Tests lock both halves of the
+contract: explicit `#(2)` works in every continuation form, bare `#2` works only
+as a line's own head.
+
+Mid-line the rule is uniformly group-only: any character following a `#` or `$`
+other than `(` is a parse error (`expected '(' after '#', found <c>`). The
+whole-line form is what a sigil-led layout line means, not a rewrite the parser
+performs on the text before reading it. The bare `EVAL` keyword form that the `$`
+desugaring produces happens to dispatch (the parser classifies all-caps
+tokens as keywords, and the dispatch table matches), but it is not
+documented surface — user code goes through the sigil. `#` desugars to no
+keyword at all: the quote is captured by the parser, so there is no bare
+form of it to dispatch.
+
+## Open work
+
+- [EVAL splices in place](../roadmap/old_metaprogramming/eval-splices-in-place.md)
+  — [old_design/metaprogramming.md](metaprogramming.md) specifies EVAL as a splice
+  into the enclosing scope, sequenced by a block-level barrier; the fresh
+  `CallFrame` confinement this doc describes is the shipped behavior it
+  replaces.

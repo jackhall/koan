@@ -11,11 +11,11 @@
 //! quotes. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. Everything else is an
 //! atom, which [`super::atom`] classifies.
 //!
-//! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
+//! See [old_design/expressions-and-parsing.md](../../old_design/expressions-and-parsing.md).
 
 use sexlex::{Item, Kind, Node};
 
-use crate::machine::core::KError;
+use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
 use crate::parse::forms::binder::admit_bare_type_slots;
@@ -32,8 +32,8 @@ pub(super) fn lower_source<'a>(
     labels: &LabelInterner,
     source: &str,
     file: Option<FileId>,
-) -> Result<Vec<KExpression<'a>>, KError> {
-    let lines = sexlex::read(source).map_err(|e| KError::parse(e.to_string(), Some(e.span)))?;
+) -> Result<Vec<KExpression<'a>>, ParseError> {
+    let lines = sexlex::read(source).map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
     let lower = Lower {
         program,
         labels,
@@ -85,13 +85,13 @@ struct Lower<'a, 'l, 's> {
 impl<'a, 's> Lower<'a, '_, 's> {
     /// One top-level line. A `#`-led line is a statement that holds a quote; a `$`-led line *is*
     /// the `EVAL` call, since evaluation is what the line asks for.
-    fn statement(&self, line: &Item<'s>) -> Result<KExpression<'a>, KError> {
+    fn statement(&self, line: &Item<'s>) -> Result<KExpression<'a>, ParseError> {
         let Node::Group {
             kind: Kind::Layout,
             items,
         } = &line.node
         else {
-            return Err(KError::parse(
+            return Err(ParseError::new(
                 "expected a layout line at the top level",
                 Some(line.span),
             ));
@@ -123,7 +123,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         mut items: &[Item<'s>],
         span: Span,
         wrappers: Wrappers,
-    ) -> Result<ProgramExpression<'a>, KError> {
+    ) -> Result<ProgramExpression<'a>, ParseError> {
         if wrappers == Wrappers::Peel {
             while let [only] = items
                 && let Some(inner) = peelable(only)
@@ -163,7 +163,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         items: I,
         context: &mut Context<'_, 'a>,
         wrappers: Wrappers,
-    ) -> Result<Vec<Spanned<ExpressionPart<'a>>>, KError>
+    ) -> Result<Vec<Spanned<ExpressionPart<'a>>>, ParseError>
     where
         I: Iterator<Item = &'i Item<'s>>,
         's: 'i,
@@ -231,11 +231,11 @@ impl<'a, 's> Lower<'a, '_, 's> {
         context: &mut Context<'_, 'a>,
         parts: &mut Vec<Spanned<ExpressionPart<'a>>>,
         part: Spanned<ExpressionPart<'a>>,
-    ) -> Result<(), KError> {
+    ) -> Result<(), ParseError> {
         if !matches!(context, Context::Expression)
             && let ExpressionPart::Keyword(symbol) = part.value
         {
-            return Err(KError::parse(
+            return Err(ParseError::new(
                 format!(
                     "`{}` is a keyword, so it cannot be an element of a list, dict, or record \
                      literal",
@@ -261,7 +261,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         item: &Item<'s>,
         context: &mut Context<'_, 'a>,
         parts: &mut Vec<Spanned<ExpressionPart<'a>>>,
-    ) -> Result<(), KError> {
+    ) -> Result<(), ParseError> {
         if let Some(sigil) = sigil_kind(text) {
             if sigil != ':' {
                 return Err(self.missing_sigil_group(sigil, item.span.start));
@@ -302,7 +302,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         inner: &[Item<'s>],
         kind: Kind,
         wrappers: Wrappers,
-    ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+    ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
         if kind == Kind::Layout
             && let Some(sigil) = self.sigil_led_line(inner, item.span, wrappers)?
         {
@@ -323,7 +323,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         inner: &[Item<'s>],
         kind: Kind,
         wrappers: Wrappers,
-    ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+    ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
         let allocator = self.program.region().allocator();
         if kind == Kind::Bracket {
             let parts = self.lower_run(inner.iter(), &mut Context::List, wrappers)?;
@@ -354,7 +354,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         group_kind: Kind,
         inner: &[Item<'s>],
         wrappers: Wrappers,
-    ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+    ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
         let outer = Span {
             start: sigil.span.start,
             end: group.span.end,
@@ -412,7 +412,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         items: &[Item<'s>],
         span: Span,
         wrappers: Wrappers,
-    ) -> Result<Option<Sigil<'a>>, KError> {
+    ) -> Result<Option<Sigil<'a>>, ParseError> {
         let Some(kind) = sigil_lead(items) else {
             return Ok(None);
         };
@@ -486,13 +486,13 @@ impl<'a, 's> Lower<'a, '_, 's> {
 
     /// A collection literal can't be glued to a token on either side: `foo[1]` would read as an
     /// index and `[1]foo` as an application, and koan spells neither that way.
-    fn check_adjacency(&self, item: &Item<'s>, kind: Kind) -> Result<(), KError> {
+    fn check_adjacency(&self, item: &Item<'s>, kind: Kind) -> Result<(), ParseError> {
         let opener = kind.delimiters().expect("bracket kinds carry delimiters").0;
         if let Some(previous) = self.char_before(item.span.start)
             && !previous.is_whitespace()
             && !matches!(previous, '(' | '[' | '{')
         {
-            return Err(KError::parse(
+            return Err(ParseError::new(
                 format!(
                     "'{opener}' must be preceded by whitespace, '(', '[', or '{{' \
                      (got {:?}); collection literals can't be glued to a token",
@@ -504,7 +504,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         self.check_close_adjacency(item, kind)
     }
 
-    fn check_close_adjacency(&self, item: &Item<'s>, kind: Kind) -> Result<(), KError> {
+    fn check_close_adjacency(&self, item: &Item<'s>, kind: Kind) -> Result<(), ParseError> {
         let closer = kind.delimiters().expect("bracket kinds carry delimiters").1;
         let next = self.source[item.span.end as usize..].chars().next();
         if matches!(next, None | Some(')' | ']' | '}'))
@@ -512,7 +512,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         {
             return Ok(());
         }
-        Err(KError::parse(
+        Err(ParseError::new(
             format!(
                 "'{closer}' must be followed by whitespace, ')', ']', or '}}' \
                  (got {next:?}); collection literals can't be glued to a token",
@@ -523,27 +523,27 @@ impl<'a, 's> Lower<'a, '_, 's> {
 
     /// A `:` that named no type. Which mistake it was is in what follows it: nothing at all, a
     /// space (the annotation lost its operand), or a token that is no type name.
-    fn colon_error(&self, at: u32) -> KError {
+    fn colon_error(&self, at: u32) -> ParseError {
         match self.char_at(at) {
-            None => KError::parse(
+            None => ParseError::new(
                 "trailing ':' at end of input; expected a type name or `(`",
                 None,
             ),
-            Some(c) if c.is_whitespace() => KError::parse(
+            Some(c) if c.is_whitespace() => ParseError::new(
                 "':' must be glued to its operand at a type position; \
                  write `name :Type` (no space after `:`) or `:(List ...)`",
                 None,
             ),
-            Some(c) => KError::parse(atom::not_a_type_name(c), None),
+            Some(c) => ParseError::new(atom::not_a_type_name(c), None),
         }
     }
 
     /// `#` and `$` take a `(...)` group and nothing else. The message names what was found in its
     /// place, which is the character right after the sigil byte.
-    fn missing_sigil_group(&self, sigil: char, at: u32) -> KError {
+    fn missing_sigil_group(&self, sigil: char, at: u32) -> ParseError {
         match self.source[at as usize..].chars().nth(1) {
-            Some(c) => KError::parse(format!("expected '(' after '{sigil}', found '{c}'"), None),
-            None => KError::parse(
+            Some(c) => ParseError::new(format!("expected '(' after '{sigil}', found '{c}'"), None),
+            None => ParseError::new(
                 format!("trailing '{sigil}' sigil at end of input; expected '('"),
                 None,
             ),
@@ -614,12 +614,12 @@ pub(super) fn lower_run_for_tests<'a>(
     program: ProgramBrand<'a>,
     labels: &LabelInterner,
     source: &str,
-) -> Result<KExpression<'a>, KError> {
-    let lines = sexlex::read(source).map_err(|e| KError::parse(e.to_string(), Some(e.span)))?;
+) -> Result<KExpression<'a>, ParseError> {
+    let lines = sexlex::read(source).map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
     let line = match lines.as_slice() {
         [] => return Ok(program.build_expression(&[], None, None).node()),
         [line] => line,
-        _ => return Err(KError::parse("this helper reads exactly one line", None)),
+        _ => return Err(ParseError::new("this helper reads exactly one line", None)),
     };
     let Node::Group {
         kind: Kind::Layout,

@@ -423,7 +423,7 @@ fn let_type_class_signature_alias_preserves_identity() {
 }
 
 /// Partition guard regression site: a value-classified binder name with a
-/// module RHS rejects at the LET site. See design/typing/elaboration.md
+/// module RHS rejects at the LET site. See old_design/typing/elaboration.md
 /// § Binding-map partition. A module is a value, so a *Type*-classified binder is the wrong
 /// spelling for one — whatever RHS produced it. The diagnostic names the snake_case respelling.
 #[test]

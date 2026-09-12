@@ -16,8 +16,8 @@
 //! [`Anchor::owner`] and the two behavioural hooks, [`Workload::deliver`] and
 //! [`Workload::retiring`].
 //!
-//! See [design/dag-scheduler.md](../design/dag-scheduler.md) and
-//! [design/reach.md](../design/reach.md).
+//! See [old_design/dag-scheduler.md](../old_design/dag-scheduler.md) and
+//! [old_design/reach.md](../old_design/reach.md).
 
 use std::rc::Rc;
 
@@ -144,7 +144,7 @@ impl<W: Workload> Scheduler<W> {
     /// its own past this call: an embedder relocates whatever the next incarnation reads into the
     /// new anchor's region *before* replacing, so ordering the retiring region's free stays a local
     /// of the apply path rather than a row field spanning a step
-    /// ([design/reach.md § Retention model](../design/reach.md#retention-model)).
+    /// ([old_design/reach.md § Retention model](../old_design/reach.md#retention-model)).
     pub(in crate::scheduler) fn replace(
         &mut self,
         id: NodeId,
@@ -290,7 +290,7 @@ impl<W: Workload> Scheduler<W> {
 
     /// Wire one edge from `producer` toward a destination region, named by its owner: holding
     /// `destination` at this call is the wiring-time proof the caller pins that region
-    /// ([design/dag-scheduler.md § Edges and the boundary](../design/dag-scheduler.md#edges-and-the-boundary)),
+    /// ([old_design/dag-scheduler.md § Edges and the boundary](../old_design/dag-scheduler.md#edges-and-the-boundary)),
     /// which is why the door takes an owner and performs no coverage check of its own. The standing
     /// half of the lattice — the destination stays covered for the edge's life — rides the releasing
     /// owner's teardown verb.
@@ -315,13 +315,13 @@ impl<W: Workload> Scheduler<W> {
     /// Wire a second edge to the producer behind `source`, **inheriting `source`'s destination
     /// region**: the consumer parking on an embedder's placeholder edge lands its delivery in the
     /// region that placeholder already named, not in the consumer's own
-    /// ([design/dag-scheduler.md § Edges and the boundary](../design/dag-scheduler.md#edges-and-the-boundary)).
+    /// ([old_design/dag-scheduler.md § Edges and the boundary](../old_design/dag-scheduler.md#edges-and-the-boundary)).
     /// Sound on the containment lattice without naming an owner here: `source` stands, so its owner
     /// stands, so the region it names is covered — and the new edge's own owner sits below that
     /// owner on the same lattice.
     ///
     /// Returns **filled-or-parked**, which is the whole of the readiness question
-    /// ([§ Late wiring and install](../design/dag-scheduler.md#late-wiring-and-install)):
+    /// ([§ Late wiring and install](../old_design/dag-scheduler.md#late-wiring-and-install)):
     ///
     /// - `source` **filled** — its producer already delivered into the destination both edges name,
     ///   so the new edge shares that resident. The per-destination dedup the walk applies, applied

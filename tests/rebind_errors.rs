@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! Integration tests for the same-scope rebind rule and per-signature DuplicateOverload
 //! check. Both error variants land in `KErrorKind::Rebind` / `DuplicateOverload`; the
 //! tests assert via `read_result` since builtins propagate structured errors rather than

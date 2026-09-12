@@ -5,7 +5,9 @@ Three doc trees are covered: koan's own `design/` + `roadmap/`, and one per
 embedded crate — `workgraph/` and `cellgraph/`, each with its own `design/` +
 `roadmap/` pair. Roadmap items across all three form one dependency graph —
 cross-tree edges are gated for symmetry like any other — but each tree derives
-its own "Next items" index.
+its own "Next items" index. A roadmap directory whose name starts with `old_`
+holds retired requirements docs: linked, gated for symmetry and orphans, but
+never listed as next and given no derived slice.
 
 Subcommands:
   check                run every gating audit in one pass: broken links, roadmap
@@ -51,9 +53,11 @@ REPO = Path(__file__).resolve().parent.parent
 EMBEDDED_CRATES = ("workgraph", "cellgraph")
 
 MD_GLOBS = (
-    "*.md", "audit/**/*.md", "design/**/*.md", "roadmap/**/*.md",
+    "*.md", "audit/**/*.md", "src/**/*.md", "design/**/*.md", "old_design/**/*.md",
+    "roadmap/**/*.md",
     *(g for c in EMBEDDED_CRATES
-      for g in (f"{c}/*.md", f"{c}/design/**/*.md", f"{c}/roadmap/**/*.md")),
+      for g in (f"{c}/*.md", f"{c}/src/**/*.md", f"{c}/design/**/*.md",
+                f"{c}/old_design/**/*.md", f"{c}/roadmap/**/*.md")),
 )
 SRC_GLOBS = (
     "src/**/*.rs", "audit/**/*.rs",
@@ -66,13 +70,22 @@ SRC_GLOBS = (
 # symmetry like any other — but each tree owns its own derived `## Next items`
 # index, so none reaches across the split to list another's work.
 ROADMAP_ROOTS = (
-    REPO / "roadmap", *(REPO / c / "roadmap" for c in EMBEDDED_CRATES),
+    REPO / "roadmap",
+    *(REPO / c / r for c in EMBEDDED_CRATES for r in ("roadmap", "old_roadmap")),
 )
+
+# A directory whose name starts with `old_` — `roadmap/old_foundation/`,
+# `workgraph/old_roadmap/` — holds retired requirements docs: items written
+# against the runtime the rewrite replaces, kept because each still records a
+# requirement. They stay in the link, symmetry and orphan gates, but are never
+# "next" and their READMEs carry no derived slice.
+RETIRED_PREFIX = "old_"
 
 # Doc trees whose files are subject to the orphan gate, paired with the roadmap
 # roots above.
 DESIGN_ROOTS = (
-    REPO / "design", *(REPO / c / "design" for c in EMBEDDED_CRATES),
+    REPO / "design", REPO / "old_design",
+    *(REPO / c / d for c in EMBEDDED_CRATES for d in ("design", "old_design")),
 )
 
 
@@ -82,6 +95,14 @@ def roadmap_items() -> list[Path]:
     for root in ROADMAP_ROOTS:
         out.extend(root.glob("**/*.md"))
     return sorted(out)
+
+
+def is_retired(path: Path) -> bool:
+    """Whether `path` sits under a retired (`old_`-prefixed) roadmap directory."""
+    return any(
+        part.startswith(RETIRED_PREFIX)
+        for part in path.resolve().relative_to(REPO.resolve()).parts[:-1]
+    )
 
 
 def under_roadmap(path: Path) -> bool:
@@ -507,10 +528,10 @@ def compute_next_items() -> list[Path]:
     while one pointing at a live roadmap item does. Both roadmap trees are walked
     as one graph, so a koan item blocked by a library item stays off the list.
     Sorted by repo-relative path so the generated list is deterministic; README
-    indexes are excluded."""
+    indexes and retired (`old_`) items are excluded."""
     out: list[Path] = []
     for f in roadmap_items():
-        if f.name == "README.md":
+        if f.name == "README.md" or is_retired(f):
             continue
         requires, _ = parse_dep_section(f)
         if not any(r.exists() for r in requires):
@@ -529,8 +550,11 @@ def project_readmes() -> list[Path]:
     each embedded crate's `roadmap/README.md`, whose one crate *is* its project so
     it carries the slice directly. These hold the per-project description plus a
     derived `## Next items` slice; `sync-next` regenerates the slice and `check`
-    gates it."""
-    out = sorted((REPO / "roadmap").resolve().glob("*/README.md"))
+    gates it. Retired (`old_`) projects carry no slice and are skipped."""
+    out = [
+        p for p in sorted((REPO / "roadmap").resolve().glob("*/README.md"))
+        if not is_retired(p)
+    ]
     for crate in EMBEDDED_CRATES:
         library = (REPO / crate / "roadmap" / "README.md").resolve()
         if library.exists():

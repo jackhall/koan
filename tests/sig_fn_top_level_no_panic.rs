@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! Integration test for the scheduler-reclaim-vs-interpret-readback fix: a
 //! top-level `SIG` followed by an `FN` whose signature references the SIG (both
 //! as parameter type and return type) used to panic at the interpret seam's

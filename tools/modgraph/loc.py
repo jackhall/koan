@@ -1,4 +1,4 @@
-"""LOC measures, the per-file size charge, and design/roadmap prose attribution.
+"""LOC measures, the per-file size charge, and old_design/roadmap prose attribution.
 
 Three LOC measures feed the score:
   * production LOC (`file_loc`/`subtree_loc`) — tests and `#[cfg(test)]` blocks
@@ -18,7 +18,7 @@ from pathlib import Path
 from modules import is_test_file, module_to_file, strip_cfg_test_blocks
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MD_GLOBS = ("*.md", "design/**/*.md", "roadmap/**/*.md")
+MD_GLOBS = ("*.md", "old_design/**/*.md", "old_design/**/*.md", "roadmap/**/*.md")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 
 
@@ -121,7 +121,7 @@ def owner_credit(prose_loc: float, epsilon: float, owner_pivot: float) -> float:
 def size_charge(eff_loc: float, gamma: float, pivot: float) -> float:
     """Soft log-shaped penalty per file: γ·L·log(1 + L/T). L is the
     *effective* reader LOC — raw code/comment lines plus uniformly-
-    attributed prose from any design/roadmap doc that mentions this file,
+    attributed prose from any old_design/roadmap doc that mentions this file,
     plus a per-hop charge for every outbound `*.md` link the file embeds.
     The structural terms (coupling, nesting) still weight by production
     LOC; the size term reflects total reading effort to comprehend the
@@ -201,7 +201,7 @@ def build_prose_attribution(
     src_root: Path,
     redirect: dict[Path, Path] | None = None,
 ) -> tuple[dict[Path, float], dict[Path, int]]:
-    """Walk all design/roadmap/top-level markdown files, attribute each
+    """Walk all old_design/roadmap/top-level markdown files, attribute each
     doc's raw LOC *uniformly* across every src file it links to, and count
     each src file's outbound `*.md` hops. Returns (attributed_prose,
     hop_count), both keyed by *path relative to the repo's canonical

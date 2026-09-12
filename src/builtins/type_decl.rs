@@ -1,6 +1,6 @@
 //! `TYPE <name:ProperType>` / `TYPE (<Param>… AS <Name>)` — SIG-body-only declarators for
 //! *abstract* type members: a witness-less type slot a satisfying module must supply. See
-//! [design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures).
+//! [old_design/typing/modules.md § Structures and signatures](../../old_design/typing/modules.md#structures-and-signatures).
 //!
 //! Two overloads share the keyword `TYPE`:
 //!

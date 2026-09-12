@@ -496,7 +496,7 @@ fn an_escaped_body_applies_a_per_call_operator() {
 /// flattened dispatch registration's defining frame on purpose (see this module's header) — the
 /// producer frame is still open at the crossing, so its rebuild declines and the callable rides
 /// verbatim. That retention is the registration's, not the operator table's, and it is owned by
-/// [its own roadmap item](../../../roadmap/foundation/flattened-registration-pins-its-frame.md).
+/// [its own roadmap item](../../../roadmap/old_foundation/flattened-registration-pins-its-frame.md).
 /// With the table rebuilt, declaring the operator costs exactly what declaring the plain keyworded
 /// `FN` costs, at every producer depth — which is what this asserts.
 #[cfg(not(feature = "seam-force-pin"))]
@@ -558,7 +558,7 @@ fn an_escaped_closure_applies_an_operator_from_its_group_body() {
 ///
 /// Both sides sit on a floor neither can leave: the module *value* `ops` is bound pinned, and that
 /// pin chains one region per producer level
-/// ([module-scope-consolidation](../../../roadmap/foundation/module-scope-consolidation.md)), so
+/// ([module-scope-consolidation](../../../roadmap/old_foundation/module-scope-consolidation.md)), so
 /// each side holds depth + 2 regions where an operator-free chain answers `(1, 0)`. The floor is
 /// high enough to cover the body scope's own region, so equality here bounds what the body scope
 /// can cost — never more than the module value already pins — without witnessing the rebuild

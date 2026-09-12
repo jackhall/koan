@@ -26,7 +26,7 @@ cd "$(git rev-parse --show-toplevel)"
 step() { printf '\n=== %s ===\n' "$*"; }
 
 step "1/3 default build (cost-driven chooser)"
-cargo test
+cargo test --features pending_rewrite
 
 step "2/3 --features seam-force-copy (every record escape copies)"
 cargo test --features seam-force-copy

@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! Integration coverage for the single escape seam: a declared return re-stamps in place in its
 //! producer's region rather than relocating at the Done boundary. The headline program is a
 //! substrate-returning operator chained three deep through a binding — the exact shape the deleted

@@ -34,7 +34,7 @@
 //! scope and joins no group. Members' own registry writes are skipped ([`super::op_def`]) — the
 //! group is the sole registrar for its members.
 //!
-//! Surface design: [design/operators.md](../../design/operators.md).
+//! Surface design: [old_design/operators.md](../../old_design/operators.md).
 
 use crate::machine::WriteGate;
 

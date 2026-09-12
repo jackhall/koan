@@ -22,7 +22,7 @@
 //!
 //! The walk is exact rather than conservative, because laziness is static: a bare `(…)` outside a
 //! builtin's lazy slot evaluates in the block's own chain, so its identifiers are genuine uses. See
-//! [design/lazy-closures.md](../../../design/lazy-closures.md).
+//! [old_design/lazy-closures.md](../../../old_design/lazy-closures.md).
 
 use crate::machine::core::body_statement_refs;
 use crate::machine::model::binder::{

@@ -10,8 +10,8 @@
 //! door, [`Host::wire_deps`]; slot retirement is the [`Workload::retiring`] hook. The
 //! dispatch-submission wrappers live on the host too — the apply side's other writers.
 //!
-//! See [execution](../../../design/execution/README.md) and
-//! [memory-model](../../../design/memory-model.md).
+//! See [execution](../../../old_design/execution/README.md) and
+//! [memory-model](../../../old_design/memory-model.md).
 
 use crate::memory::AllocVec;
 use crate::memory::{Allocator, Global};
@@ -344,7 +344,7 @@ impl<'run> Host<'run> {
         let chain = anchor.payload.chain.clone();
         // The **step's coverage**: one bundle covering every re-anchor the open performs — the
         // scope operand and each dep cell — assembled before the open so it outlives `'b`. See
-        // [the step's coverage](../../../design/per-node-memory.md#the-steps-coverage).
+        // [the step's coverage](../../../old_design/per-node-memory.md#the-steps-coverage).
         let combined: FrameCoverage = FrameCoverage::of(Rc::clone(anchor.owner()));
         // Re-brand each delivered resident **once**, here, so every later read opens pin-free.
         let mut dep_sources: BumpVec<'_, Result<DepTerminal<'_>, KError>> =
@@ -412,7 +412,7 @@ impl<'run> Host<'run> {
                         };
                         // Drained here so the writes take a firm borrow and land before any edge
                         // an errored step would strand. See [the step's binding
-                        // writes](../../../design/execution/classify-and-apply.md#the-steps-binding-writes).
+                        // writes](../../../old_design/execution/classify-and-apply.md#the-steps-binding-writes).
                         let mut gate = WriteGate::for_run_loop();
                         let registries = host.ambient.registries();
                         let outcome = match step_effects

@@ -4,7 +4,7 @@
 //! seal, over its finite SCC presentation). Equality is one digest compare and hashing keys
 //! on the digest; the width is chosen so an accidental collision is less likely than a
 //! hardware fault, so digest equality is type equality with no repair path — the footing
-//! [design/typing/type-identity.md](../../../../design/typing/type-identity.md) pins.
+//! [old_design/typing/type-identity.md](../../../../old_design/typing/type-identity.md) pins.
 //!
 //! The digest is a pure function of type content, so two independently built types with the
 //! same content digest equal with no shared interner. Generativity is one explicit mechanism
@@ -351,7 +351,7 @@ fn constructor_apply_digest(ctor: TypeDigest, args: &Record<KType>) -> TypeDiges
 }
 
 /// A module-signature type's digest: its schema's content digest (identity by interface, not by
-/// mint — see [type-identity.md](../../../../design/typing/type-identity.md)). `WITH` pins fold
+/// mint — see [type-identity.md](../../../../old_design/typing/type-identity.md)). `WITH` pins fold
 /// into the schema before interning, so the schema content is the whole identity.
 fn signature_digest(content_digest: TypeDigest) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIGNATURE);
