@@ -1,0 +1,63 @@
+# Constructing circular values
+
+The value-language counterpart to the type language's mutual recursion: build a value
+that refers to itself or participates in a reference cycle.
+
+**Problem.** A *type* can be cyclic, but a *value* cannot. A module body's
+announcement co-declares a group of mutually-recursive nominals as interned
+[`TypeNode::SetMember`](../../src/machine/model/types/node.rs) nodes in the run-frame
+registry, each member's handle a `Copy` `(SCC digest, index)` and its sibling references
+ordinary cyclic composition edges — the registry does not reclaim by refcount, so a
+cycle in the type graph is not a leak hazard. The value language has no counterpart at
+all: there is no surface that knots a cycle and no representation that would hold one.
+
+Values are acyclic by construction. A constructor's arguments are already-finished
+values (the constructor path in
+[`constructors.rs`](../../src/machine/execute/decide/constructors.rs) materializes a
+[`KObject`](../../src/machine/model/values/kobject.rs) only once its parts are done), so
+a field cannot point back at a value that does not yet exist. The storage substrate holds
+that shut from the other side: no stored value owns an `Rc` back to a region — a substrate
+is a borrow and a reach's pins are holder-owned — so the region's allocator
+([`Region`](../../workgraph/src/witnessed/region.rs)) needs no cycle gate
+and offers no way to close one, which is what keeps the refcount-based reclamation the
+memory model assumes leak-free. So `NEWTYPE Node = :{next :Node}` types fine, yet
+no `Node` can be built whose `next` is itself, and two nodes cannot reference each
+other.
+
+**Acceptance criteria.**
+
+- A value can refer to itself or participate in a reference cycle (a self-referential
+  `Node`; two mutually-referential nodes), constructed through a declared surface.
+- The constructed cycle is reclaimed without leaking — the refcount cycle a naive `Rc`
+  graph would form is broken — so dropping the last external handle frees the whole
+  group.
+- Structural operations over a cyclic value terminate: rendering (`summarize`) and
+  equality do not recur unboundedly.
+
+**Directions.**
+
+- *Cycle representation — open.* Options: a value group whose internal back-edges are
+  indices into the group (no `Rc` on the edge, so no refcount cycle), versus `Weak`
+  back-references, versus a tracing cycle collector. The type side sidesteps the
+  question by owning nodes centrally in an insert-only registry that never reclaims by
+  refcount — a value group has no such central owner, so a value-side back-edge cannot
+  simply borrow that argument.
+- *Construction surface — open.* How a cyclic value is declared and knotted (a
+  self-naming recursive `LET`; an explicit knot-tying form). Surface syntax/semantics —
+  enumerate options and decide with the user.
+- *Cycle-gate interaction — decided.* The region cycle gate's redirect-on-self-anchor
+  behavior is the safety net the construction path must supersede; the chosen
+  representation must satisfy the gate without leaking.
+
+## Dependencies
+
+Builds on the shipped nominal type-cycle machinery (no roadmap prerequisite).
+A constructible cycle forces [value equality](../../old_design/execution/value-equality.md)
+and the renderer to be cycle-safe; the shipped `value_equal` walk assumes acyclic values,
+so coordinate that neither hangs on a cyclic value.
+Update [old_design/typing/user-types.md](../../old_design/typing/user-types.md) and
+[old_design/memory-model.md](../../old_design/memory-model.md) when it ships.
+
+**Requires:** none — foundation.
+
+**Unblocks:** none tracked yet.

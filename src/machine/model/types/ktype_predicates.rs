@@ -1,6 +1,6 @@
 //! Per-`ExpressionPart` admissibility, per-value type-tag checks, and specificity
 //! ordering for dispatch tie-breaking on `KType`. See
-//! [design/typing/ktype/README.md](../../../../design/typing/ktype/README.md).
+//! [old_design/typing/ktype/README.md](../../../../old_design/typing/ktype/README.md).
 //!
 //! A `KType` is a handle, so every predicate here reads its subject's content out of the run's
 //! [`TypeRegistry`] and matches on the [`TypeNode`]. Identity questions never need a node at
@@ -1406,7 +1406,7 @@ fn shape_slots_more_specific(
 
 /// Width/depth specificity for *record values* — the **dual** of
 /// [`param_record_more_specific`]. A record value's fields are covariant (the value is
-/// immutable — see [memory-model](../../../../design/memory-model.md)), and a *wider*
+/// immutable — see [memory-model](../../../../old_design/memory-model.md)), and a *wider*
 /// record is more specific: a `{x, y}` value fills an `{x}` slot. So `a` is strictly more
 /// specific than `b` iff:
 /// - width-superset: `b.keys() ⊆ a.keys()` (`a` declares every field `b` does, maybe
@@ -1449,7 +1449,7 @@ fn record_value_more_specific(
 ///   iff its surface shadow equals the candidate's; every other slot rejects, because a
 ///   deferred return is opaque until per-call elaboration and so refines nothing more
 ///   precise than its own shadow. See
-///   [ktype/parameterization-and-variance.md § Variance](../../../../design/typing/ktype/parameterization-and-variance.md#variance).
+///   [ktype/parameterization-and-variance.md § Variance](../../../../old_design/typing/ktype/parameterization-and-variance.md#variance).
 /// - Params contravariant with width-drop: every `Argument` the value declares must
 ///   appear in `params` (a value-required param the slot doesn't promise is a width
 ///   violation → `false`); for a shared name, the slot's param must be equal-or-more-

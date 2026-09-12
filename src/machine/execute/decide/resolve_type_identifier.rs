@@ -1,5 +1,5 @@
 //! Scope-bound resolution of a surface type name's [`TypeSymbol`] into an interned `KType` handle —
-//! Layer 2 of [design/typing/elaboration.md](../../../../design/typing/elaboration.md).
+//! Layer 2 of [old_design/typing/elaboration.md](../../../../old_design/typing/elaboration.md).
 //!
 //! Read-only consumer of the bindings façade: writes nothing, and of the tables reads only
 //! `types` — bound identities through the elaborator, claims through the finalize gate. That

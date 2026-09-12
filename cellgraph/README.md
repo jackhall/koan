@@ -22,7 +22,7 @@ The crate names no type from its embedders: the dependency direction is
 [koan](../README.md) sits above that.
 
 The crate is written off to one side of `workgraph`, which is rebuilt over it
-by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
+by [adopt-cellgraph.md](../workgraph/old_roadmap/adopt-cellgraph.md).
 
 ## Source layout
 
@@ -151,7 +151,7 @@ machinery and not the `alloc` within it.
   dependency order.
 
 Docs that state the *boundary* between the substrate and its embedders stay
-with the embedder: [dag-scheduler.md](../workgraph/design/dag-scheduler.md)
+with the embedder: [dag-scheduler.md](../workgraph/old_design/dag-scheduler.md)
 owns what `workgraph` adds above the cell, and
-[scheduler-library.md](../design/scheduler-library.md) owns koan's side of the
+[scheduler-library.md](../old_design/scheduler-library.md) owns koan's side of the
 stack.

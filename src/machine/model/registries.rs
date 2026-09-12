@@ -10,7 +10,7 @@
 //! digests, dispatch — none of which need label text); `&RunRegistries` is the currency for
 //! anything that renders text or constructs a record.
 //!
-//! See [design/label-interning.md](../../../design/label-interning.md).
+//! See [old_design/label-interning.md](../../../old_design/label-interning.md).
 
 use super::types::{TypeRegistry, display_label};
 use crate::machine::model::{Carried, Held};

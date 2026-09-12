@@ -11,7 +11,7 @@
 //! A `SigSchema` is what the `Signature` [`TypeNode`] owns; the node computes and stores the
 //! schema's content digest once at intern time, so the schema itself carries no digest field.
 //!
-//! See [design/typing/modules.md](../../../../design/typing/modules.md).
+//! See [old_design/typing/modules.md](../../../../old_design/typing/modules.md).
 
 use std::borrow::Cow;
 use std::collections::HashMap;

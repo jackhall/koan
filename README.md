@@ -7,22 +7,25 @@ A functional, graph-based language with a metaprogrammable expression syntax and
 Standard Cargo project, edition 2024.
 
 ```sh
-cargo build           # debug build
-cargo build --release # optimized build
+cargo build                                        # the modules the rewrite keeps
+cargo build --features pending_rewrite             # plus the old runtime and the `koan` binary
+cargo build --features pending_rewrite --release   # optimized
 ```
 
-The single binary target is `koan` (see [Cargo.toml](Cargo.toml)).
+The runtime is being rewritten from the ground up; the old one, and the single
+binary target `koan` that drives it, build only under the `pending_rewrite`
+feature (see [TEST.md](TEST.md#the-pending-rewrite)).
 
 ## Run
 
 The CLI reads source from a file (first argument) or from stdin:
 
 ```sh
-cargo run -- path/to/program.koan
-echo 'PRINT "hello"' | cargo run
+cargo run --features pending_rewrite -- path/to/program.koan
+echo 'PRINT "hello"' | cargo run --features pending_rewrite
 ```
 
-The builtins wired into the default scope include `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators (see [operators](design/operators.md)); `CLOSE OVER (<captures>) (<block>)`, which runs a block over a region of its own so the value it yields copies its captures instead of pinning the frames it was built in (see [lazy closures](design/lazy-closures.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [seed_builtins](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The builtins wired into the default scope include `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](old_design/expressions-and-parsing.md)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators (see [operators](old_design/operators.md)); `CLOSE OVER (<captures>) (<block>)`, which runs a block over a region of its own so the value it yields copies its captures instead of pinning the frames it was built in (see [lazy closures](old_design/lazy-closures.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [seed_builtins](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
 User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN :{arg :Arg} -> Out)` (a lambda type; the parameter list is a record type, so `:{}` is the nullary form), `:(EXPR (<head>) -> Out)` (an expression shape — the type of a keyworded definition, optionally under a `FOR ALL (<names>)` quantifier group), `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -42,8 +45,9 @@ For a walk-through of the language surface with runnable snippets, see the [tuto
 ## Test
 
 ```sh
-cargo test            # all unit tests
-cargo test parse::    # tests under one module
+cargo test                               # the kept modules' unit tests
+cargo test --features pending_rewrite    # the old runtime's suite as well
+cargo test parse::                       # tests under one module
 ```
 
 Each module keeps its tests in a `#[cfg(test)] mod tests` block alongside the code (parser, scheduler, dispatch, and interpreter all have suites). For the full testing and linting workflow — including the Miri audit slate that signs off the memory model under tree borrows — see [TEST.md](TEST.md).
@@ -77,7 +81,7 @@ The output is one [`KExpression`](src/parse/ast.rs) per top-level line: an order
 
 `parse` owns what it produces, not just the walk that produces it: [labels.rs](src/parse/labels.rs) mints and interns every symbol, [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [forms.rs](src/parse/forms.rs) holds `FORMS` — the one table spelling every builtin form's bucket key, tagged by a `FormId`, carrying the binder facts, the lazy slots and the reserved bit each form's readers ask for. A node probes that table once; the close-inference rules and the miss diagnostics name a form by its tag rather than respelling its key.
 
-`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [design/expressions-and-parsing.md](design/expressions-and-parsing.md).
+`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [old_design/expressions-and-parsing.md](old_design/expressions-and-parsing.md).
 
 ### dispatch — `KExpression` → `DispatchOutcome` against a `Scope`
 
@@ -85,11 +89,11 @@ A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, na
 
 Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, function references); the cross-cutting `Parseable` trait lives in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
 
-Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `Done(Err(KError))` outcome propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) along the scheduler's dependency edges, accumulating call-stack frames as it walks. `TRY (<expr>) WITH (<branches>)` catches in-language; uncaught errors short-circuit to the top level and the CLI formats them with frames. See [design/error-handling.md](design/error-handling.md) for the per-arm `it` shape and the privilege boundary that keeps builtin and user errors disjoint.
+Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `Done(Err(KError))` outcome propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) along the scheduler's dependency edges, accumulating call-stack frames as it walks. `TRY (<expr>) WITH (<branches>)` catches in-language; uncaught errors short-circuit to the top level and the CLI formats them with frames. See [old_design/error-handling.md](old_design/error-handling.md) for the per-arm `it` shape and the privilege boundary that keeps builtin and user errors disjoint.
 
 ### execute — run the DAG
 
-The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/README.md) crate's — holds a slot table of in-flight work plus a push/notify dependency graph over first-class edges, and its `drain` owns the pop loop; [`KoanRuntime`](src/machine/execute/harness.rs) owns the scheduler beside the koan-side `Host` whose `step` is the drain callback. Callers submit a top-level block via the harness's `enter_block`; each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a dep-finish until its deps terminalize. When a producer finalizes, a single walk delivers its terminal into every waiting edge's destination region and wakes any consumer whose pending count hits zero — no polling, no result-table sweep, and the producer's slot reclaims behind the walk. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [the execution model](design/execution/README.md).
+The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/README.md) crate's — holds a slot table of in-flight work plus a push/notify dependency graph over first-class edges, and its `drain` owns the pop loop; [`KoanRuntime`](src/machine/execute/harness.rs) owns the scheduler beside the koan-side `Host` whose `step` is the drain callback. Callers submit a top-level block via the harness's `enter_block`; each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a dep-finish until its deps terminalize. When a producer finalizes, a single walk delivers its terminal into every waiting edge's destination region and wakes any consumer whose pending count hits zero — no polling, no result-table sweep, and the producer's slot reclaims behind the walk. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [the execution model](old_design/execution/README.md).
 
 [`interpret`](src/machine/execute/interpret.rs) is the glue: parse the source, allocate the run-root scope and its `RunScope` child (`unseeded_scopes`), establish the run frame, seed the builtins against that frame's type registry (`seed_builtins`), hand the top-level block to `enter_block`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `KoanRegion` when `interpret` returns.
 
@@ -100,7 +104,7 @@ value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus t
 symbol, AST and form-table vocabulary that output is written in),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
-type nodes — see [design/typing/type-lattice.md](design/typing/type-lattice.md)),
+type nodes — see [old_design/typing/type-lattice.md](old_design/typing/type-lattice.md)),
 and [machine/](src/machine) (the execution engine that consumes a
 `KExpression`). `parse` splits into [ast/](src/parse/ast.rs) (the syntax types,
 the node cache and the eternal-tier program marker),
@@ -147,7 +151,7 @@ schema a signature node carries, and the canonical signature-subtyping relation)
 run-frame-owned store that memoizes subtype verdicts by digest pair),
 [registries.rs](src/machine/model/registries.rs) (`RunRegistries`, the run frame's
 owned bundle of that registry beside the label interner — see
-[design/label-interning.md](design/label-interning.md)),
+[old_design/label-interning.md](old_design/label-interning.md)),
 [builtins.rs](src/builtins.rs) (registry),
 [constructors.rs](src/machine/execute/decide/constructors.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
@@ -156,7 +160,7 @@ owned bundle of that registry beside the label interner — see
 its own path. The machine still reaches types through
 [types/](src/machine/model/types); pointing every caller at the lattice and
 deleting the files above is
-[integrate the type lattice](roadmap/refactor/type-lattice-integration.md).
+[integrate the type lattice](roadmap/old_refactor/type-lattice-integration.md).
 
 ```
 src/
@@ -325,34 +329,15 @@ src/
 
 ## Design and roadmap
 
-Design rationale lives under [design/](design/README.md) — one topical doc per
-concern, describing shipped behavior, with sections that run ahead of code where
-a decision has landed early. [design/](design/README.md) is the index:
-what each doc owns, the foundation-vs-seam heuristic the refactor analysis uses,
-and pointers to the analysis tooling.
-
-- [design/execution/](design/execution/README.md) — the dispatch-vs-execute
-  split, the deferred-dispatch scheduler, tail-call rewriting, and the per-call
-  region lifecycle.
-- [design/memory-model.md](design/memory-model.md) — value ownership, region
-  lifetime erasure, lifting, and lexical closures.
-- [design/per-call-region/](design/per-call-region/README.md) — the
-  single-owner contract for the per-call region anchor.
-- [design/typing/](design/typing/README.md) — `KType`, dispatch by signature,
-  records and tagged unions, plus the module language (`MODULE` / `SIG`,
-  ascription, functors, and the roadmapped implicit-search and axiom stages). A
-  subdirectory because the type and module systems share one scheduler-driven
-  elaborator and nominal-identity carrier.
-- [design/functional-programming.md](design/functional-programming.md) — function values, tail calls, signature-driven evaluation.
-- [design/expressions-and-parsing.md](design/expressions-and-parsing.md) — the parse pipeline and `KExpression` shape.
-- [design/operators.md](design/operators.md) — the `OP` / `GROUP` declaration surface: quoted symbols, chaining modes, the infix combiner, and type-gated shadowing.
-- [design/metaprogramming.md](design/metaprogramming.md) — quotation plus splicing: expression values, `EVAL` splicing in place, and the block-level EVAL barrier.
-- [design/error-handling.md](design/error-handling.md) — `KError`, propagation, and frame attribution.
-
-[design/effects.md](design/effects.md) captures one further cross-cutting design ahead of
-implementation: in-language monadic side effects — a `Monad` signature in Koan with concrete
-effect modules (`Random`, `IO`, `Time`) ascribing it. Implementation is tracked in
-[roadmap/foundation/monadic-side-effects.md](roadmap/foundation/monadic-side-effects.md).
+A module's design doc is the `README.md` in its directory — the rewrite's
+convention, tracked in
+[roadmap/rewrite/design-docs-in-modules.md](roadmap/rewrite/design-docs-in-modules.md)
+for the kept modules and written fresh by each rewrite item for its own. The
+topical tree the old runtime was documented under is retired at
+[old_design/](old_design/README.md): its docs describe the runtime behind
+`pending_rewrite` and stay as requirements reading, alongside the docs for kept
+modules until each moves into its module. The cell substrate's design tree,
+[cellgraph/design/](cellgraph/design/), migrates the same way.
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. Its [README](roadmap/README.md) groups work into project
@@ -360,14 +345,14 @@ subdirectories — each with its own README naming the project and listing its r
 items — and derives a "Next items" list, everything with no still-open prerequisite, from
 those cross-links (`tools/doclinks.py sync-next`).
 
-The [workgraph/](workgraph/README.md) crate — the scheduler and region-memory
-library Koan embeds — and the [cellgraph/](cellgraph/README.md) cell substrate
-beneath it each carry their own design and roadmap trees, so they read as
-standalone libraries rather than as Koan's internals. Work items cross-link
-across all three trees and `doclinks` gates them as one dependency graph, but
-each tree derives its own "Next items" list. The boundary between the stack and
-Koan — what is library, what is Koan — is
-[design/scheduler-library.md](design/scheduler-library.md).
+The [cellgraph/](cellgraph/README.md) cell substrate carries its own design and
+roadmap trees, so it reads as a standalone library rather than as Koan's
+internals; work items cross-link across the trees and `doclinks` gates them as
+one dependency graph, but each tree derives its own "Next items" list. The
+[workgraph/](workgraph/README.md) scheduler is the old runtime's and is replaced
+by a fresh crate ([roadmap/rewrite/scheduler-on-cellgraph.md](roadmap/rewrite/scheduler-on-cellgraph.md));
+its design and roadmap trees are retired under `old_` prefixes, as is the
+boundary doc [old_design/scheduler-library.md](old_design/scheduler-library.md).
 
 [sexlex/](sexlex/README.md) is the third crate Koan embeds: the layout half of
 the parser, with no vocabulary of its own. Unlike the other two it carries no

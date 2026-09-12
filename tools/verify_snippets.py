@@ -7,7 +7,7 @@ Runs every ```koan block that is immediately followed (whitespace only) by a
 runnable program, and is skipped. Output is compared line-by-line with trailing
 whitespace stripped. Exits non-zero on any mismatch.
 
-Usage (from the repo root, with the binary built — `cargo build`):
+Usage (from the repo root, with the binary built — `cargo build --features pending_rewrite`):
     python3 tools/verify_snippets.py                       # checks tutorial/
     python3 tools/verify_snippets.py tutorial/06-pattern-matching.md
 """

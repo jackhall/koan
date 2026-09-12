@@ -1,0 +1,96 @@
+# Type language
+
+> **Stale as work, kept as requirements.** Written against the old runtime,
+> now behind `pending_rewrite`; the items below record what the language needs
+> and are retired by the [rewrite](../rewrite/README.md) as it meets them.
+
+Engine-level type-language substrate — how modules, signatures, functors,
+deferred-return FNs, record-shaped parameter binding, and VAL-slot identity
+are represented in `KType` and routed through dispatch, over a
+content-addressed type identity whose subtype-match verdicts are memoized on
+the type's content digest ([old_design/typing/module-values-and-type-identity.md](../../old_design/typing/module-values-and-type-identity.md)).
+The substrate the predicate-typing stages and the stdlib's functor-heavy
+collections both build on.
+
+
+## Unplanned work
+
+Known gaps adjacent to this project's items, recorded so they aren't lost. **To start one,
+first promote it into its own `roadmap/old_type_language/<item>.md` file** with `**Problem.**` /
+`**Acceptance criteria.**` / `## Dependencies` sections (see the documentation skill's
+"When adding a new roadmap item"), then delete its prose entry here — a promoted item is
+planned work and appears under `## Next items`, not here. These paragraphs name the gap,
+not the fix.
+
+- **A parameter's token class is checked at the call, not the definition.** A parameter's name
+  picks its universe: a Type token names a type, a value token names a value
+  ([old_design/typing/tokens.md § Token class is a binding rule](../../old_design/typing/tokens.md)). A
+  parameter whose name contradicts what its slot admits — `EXPR (MAKETREE elt :Type)`, a
+  value-token name on a type-denoting slot — defines without complaint, and every call then fails
+  when the binding maps refuse the crossing. The diagnostic names the call site, not the
+  declaration that is actually wrong. A definition-time check comparing each parameter's token
+  class against its slot's channel would report the mistake where it was made.
+- **A binding cannot carry a type annotation.** `LET` has one overload — `LET <name> = <value>`,
+  its `name` a binder-position name token of either class
+  ([`let_binding.rs`](../../src/builtins/let_binding.rs)) — and it has no slot for a declared
+  type, so `LET empty :(LIST OF Number) = []` fails with `no matching function` and the postfix
+  spelling `LET empty = ([] :(LIST OF Number))` with `head is not callable`. A binding therefore
+  takes exactly the type its right-hand side reports and can never narrow it: `LET xs = []`
+  binds a `List<Never>`, which fills every list slot but is not the `List<Number>` the writer
+  meant to declare, and nothing at the binding site records the intent. An annotated binding is
+  the ML-family answer (OCaml's `let xs : int list = []`), and it would also give the kind check
+  a declaration site to reject `LET boxed :Wrapper = …` at.
+- **A type constructor cannot be passed as a constructor argument.** Every value type position
+  rejects an unapplied constructor, but the argument position of an application is unchecked:
+  `:(Wrapper {Elem = Pair})` elaborates with no kind check, and nothing downstream gives the
+  resulting type a meaning. The position is unruled rather than deliberately open. The two
+  language families answer differently. ML forbids it at the type level and routes the need
+  through the module system — which koan already has, as a SIG's abstract constructor member
+  (`TYPE (Elem AS Wrap)`, [old_design/typing/modules.md](../../old_design/typing/modules.md)) — so
+  abstraction happens at module granularity, never at value granularity. Haskell permits it and
+  buys polymorphism over the container or effect itself: one `Functor` / `Traversable` /
+  `Monad` interface across every container, bodies generic in their effect, transformer stacks,
+  recursion schemes, and the van Laarhoven lens encoding. Koan's application is name-keyed
+  rather than positional, so it starts without Haskell's constraint that only a constructor's
+  trailing parameters can be abstracted — `:(Result {Ok = …})` has no privileged last position.
+  Settling this needs a kind for each constructor parameter and a satisfaction rule for an
+  argument that is itself a constructor.
+- **An applied slot refuses an erased carrier at dispatch, though the predicate admits it.**
+  The two admission entry points disagree about a type application. `KType::matches_value`'s
+  `ConstructorApply` arm carries an erased fallback: a `Wrapped` whose `type_id` is still the
+  bare member handle admits when the constructor matches and the payload satisfies the argument
+  the member's own name keys. `KType::accepts_carried`, the dispatcher's arm, has no such
+  fallback — it admits only a value whose `ktype()` is *itself* a `ConstructorApply`. So
+  `EXPR (TAKE r :(Wrap {Elem = Number}))` works for a `NEWTYPE (Elem AS Wrap)` family, whose
+  construction stamps the application in, and fails with `no matching function` for a union
+  variant or a `CATCH` result, whose construction leaves the arguments erased —
+  `EXPR (TAKE r :(Result {Ok = Number, Error = Str}))` refuses `Result.Ok 1`, and the same slot
+  written as a `LET` ascription refuses it too. Which of the two rules is the intended one is
+  the open question; whichever it is, the two arms should share it rather than each carry a
+  copy.
+- **A nested signature's own abstract member reads at the source's representation.** A signature
+  standing in another's slot type participates in substitution, and a nested binder shadows the
+  enclosing one **by name** — every projected SIG canonicalizes its binders to
+  `ScopeId::SENTINEL`, so `source` cannot tell an inner binder from an outer one
+  ([old_design/typing/modules.md](../../old_design/typing/modules.md)). A member the nested signature
+  declares abstract is therefore named by nothing the enclosing signature can bind, so
+  [`coerce_module`](../../src/machine/model/values/coerce.rs) has no substitution to apply and
+  mints nothing of its own: `VAL subs :(LIST OF Shadowing)`, where `Shadowing` declares its own
+  `TYPE Elt`, surfaces each element's `Elt` at whatever concrete type the source module bound —
+  the one position an opaque view does not hide a representation. Minting a fresh identity there
+  would be a second, nested opaque ascription, with its own generativity and its own barrier;
+  whether a nested binder deserves one is the unruled question.
+- **A module-typed member is reachable only inside a container.** `VAL sub :Inner` does not
+  elaborate: `VAL`'s type slot is `KKind::ProperType` and a signature is `KKind::Signature`, so a
+  SIG can declare a list, dict or record of modules but not a bare module member. ML's module
+  system admits a submodule specification directly (`module Sub : sig … end`), and koan's own
+  functor surface already passes modules as values, so the restriction is a slot-kind accident
+  rather than a decision. Admitting a signature in a `VAL` slot needs a rule for what
+  `KKind::ProperType` means once a module inhabits a value position.
+
+## Items
+
+Every requirements doc in this retired project.
+
+- [Constructors as first-class function values](constructor-as-first-class-function.md)
+- [Cross-registry type-content transfer](cross-registry-type-content-transfer.md)

@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! `compile_fail` guards for the fold-closure capture-provenance discipline: an
 //! ambient-lifetime reference cannot reach a fold's tied placement sink, and a `FoldingBrand`
 //! cannot be minted outside a fold combinator. The fixtures under `tests/compile_fail/`

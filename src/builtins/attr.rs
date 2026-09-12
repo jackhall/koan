@@ -81,7 +81,7 @@ impl<'a> FieldName<'a> {
     }
 
     /// The bare digest for a runtime data-label probe. A record field is classless (see
-    /// [design/label-interning.md](../../design/label-interning.md)), so the lookup keys on the
+    /// [old_design/label-interning.md](../../old_design/label-interning.md)), so the lookup keys on the
     /// digest alone — reusing the classification's when the name has one, hashing the text when
     /// it does not.
     fn symbol(&self) -> Symbol {
@@ -132,7 +132,7 @@ fn read_dynamic_field_name<'a>(
 /// value channel's one derived-symbol door: [`BinderSymbol::declared`] classifies and interns in
 /// one step, so a spelling read off text keys the same symbol a bare token of that spelling would
 /// have minted. Interning here is what widens the label table past the run's source text — see
-/// [design/label-interning.md](../../design/label-interning.md). Text that classifies as neither
+/// [old_design/label-interning.md](../../old_design/label-interning.md). Text that classifies as neither
 /// channel names no binding, so it rides as a rendering — a digest-keyed record probe and an
 /// immediate module miss.
 fn classify_derived_field<'a>(text: &'a str, registries: &RunRegistries) -> FieldName<'a> {
@@ -169,7 +169,7 @@ pub fn body_identifier<'a>(
 }
 
 /// `ATTR <s:ProperType> <field:_>` — entry for a type-channel lhs, e.g. a first-class signature
-/// value (see [token classes](../../design/typing/tokens.md) for why such an lhs token is
+/// value (see [token classes](../../old_design/typing/tokens.md) for why such an lhs token is
 /// Type-classed). The Type-Type overload shares this body so a chained access whose field is itself
 /// a Type token reaches the same projection. Projects a member off the Type-classed `s`, which
 /// arrives resolved: the slot is a kind expectation, so the dispatch lane elaborates a bare lhs
@@ -332,7 +332,7 @@ fn module_lhs<'a>(
 /// A *type*-class field names a type in either context: `Maybe.Some` and `Ordered.Carrier` project
 /// bare and under the sigil alike, because the name that spells them is already a type name. A
 /// *value*-class field is the split. Token class is a binding rule
-/// ([tokens.md](../../design/typing/tokens.md)), so a value token names a type only where the
+/// ([tokens.md](../../old_design/typing/tokens.md)), so a value token names a type only where the
 /// surface says so, and `:(…)` is that surface: `:(Ordered.compare)` names the `VAL` slot's
 /// declared type, while bare `Ordered.compare` names no member at all.
 #[derive(Clone, Copy, PartialEq, Eq)]

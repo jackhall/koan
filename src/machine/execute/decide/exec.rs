@@ -126,7 +126,7 @@ fn invoke_builtin<'step>(
 /// **The tail hop's whole region crossing runs here, before the replace**: every read of
 /// `working_expr` and every argument adoption into the fresh cart happens while the retiring region
 /// is still this step's own, so no hold spans the hop
-/// ([tail-call-optimization.md § Soundness](../../../../design/tail-call-optimization.md#soundness)).
+/// ([tail-call-optimization.md § Soundness](../../../../old_design/tail-call-optimization.md#soundness)).
 fn enter_user_fn<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     picked: OpenedFunction<'step>,

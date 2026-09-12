@@ -29,7 +29,7 @@
 //! answerable without one.
 //!
 //! Two rules keep the retention graph acyclic, and neither alone suffices. The **self rule**
-//! ([design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins))
+//! ([old_design/reach.md § Composition](../../old_design/reach.md#composition-minting-a-description-and-retaining-its-pins))
 //! bounds a *mint*: the stored description keeps every composed member, `dest`'s own region
 //! included, so membership is exact, while the retained bundle drops any member whose region *is*
 //! `dest`'s, because a region owning a pin on itself is a reference cycle. The **eternal rule**
@@ -256,7 +256,7 @@ impl<F: PinsRegion> ReachDescription<F> {
 
     /// **The resident mint**: freeze the composed description into `dest`'s side table and
     /// establish its retention there in the same act
-    /// ([design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins)).
+    /// ([old_design/reach.md § Composition](../../old_design/reach.md#composition-minting-a-description-and-retaining-its-pins)).
     /// Returns the description alone — the value rests in `dest`, so `dest`'s region owns the pins
     /// that keep its reach alive and no caller ever holds them.
     ///
@@ -434,7 +434,7 @@ impl<F: PinsRegion> PinBundle<F> {
     }
 
     /// This bundle without any member whose region **is** `region` — the self rule
-    /// ([design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins)),
+    /// ([old_design/reach.md § Composition](../../old_design/reach.md#composition-minting-a-description-and-retaining-its-pins)),
     /// applied where a bundle is about to be owned by `region` itself: a region holding a pin on
     /// its own owner is a reference cycle that frees neither. Exact-region only, by pointer
     /// identity — an *ancestor* of `region` stays, since owning a pin on an outer frame closes no
@@ -456,7 +456,7 @@ impl<F: PinsRegion> PinBundle<F> {
 
     /// This bundle keeping only the members whose region satisfies `keep` — the **retention
     /// predicate**'s filter
-    /// ([design/reach.md § The library boundary](../../design/reach.md#the-library-boundary)). A
+    /// ([old_design/reach.md § The library boundary](../../old_design/reach.md#the-library-boundary)). A
     /// relocation verb *derives* a source claim, by running the embedder's `still_borrows` over the
     /// product against each member region in turn, so a claim is a checked property of the folded
     /// bytes rather than a bundle assembled by hand. No member reference escapes: `keep` sees each
@@ -576,7 +576,7 @@ unsafe impl<F: PinsRegion, B: Reattachable> ComposeWitness<B> for PinBundle<F> {
 
 /// The **embedder-facing** owned-coverage holder: a `PinBundle` an embedder may hold, clone,
 /// thread and drop — but not compute with. It is the "step's coverage" of
-/// [design/reach.md § Threading](../../design/reach.md#threading-how-pins-reach-each-holder), and
+/// [old_design/reach.md § Threading](../../old_design/reach.md#threading-how-pins-reach-each-holder), and
 /// the shape every owned pin crosses the library boundary in.
 ///
 /// The point is what it *lacks*. `PinBundle`'s arithmetic — `union`, `without_region`, `retaining`,

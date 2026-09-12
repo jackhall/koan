@@ -10,7 +10,7 @@ use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
 use crate::memory::{program_storage, run_root_storage};
 
-/// `SIG Monad` of [design/effects.md](../../../../design/effects.md): a wrapper member and the two
+/// `SIG Monad` of [old_design/effects.md](../../../../old_design/effects.md): a wrapper member and the two
 /// operations quantified over the element types they hold at.
 const MONAD: &str = concat!(
     "SIG Monad = (\n",

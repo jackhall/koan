@@ -12,14 +12,14 @@
 //! mid-token errors attach the enclosing token's span so the message names the
 //! offending char while the span pinpoints the token.
 //!
-//! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
+//! See [old_design/expressions-and-parsing.md](../../old_design/expressions-and-parsing.md).
 
 use std::iter::Peekable;
 use std::str::CharIndices;
 
 use smallvec::SmallVec;
 
-use crate::machine::core::KError;
+use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::{ExpressionPart, KLiteral};
 use crate::parse::labels::{
@@ -51,7 +51,7 @@ pub(super) fn classify<'a>(
     labels: &LabelInterner,
     text: &str,
     span: Span,
-) -> Result<Classified<'a>, KError> {
+) -> Result<Classified<'a>, ParseError> {
     let Some(first_colon) = text.find(':') else {
         return Ok(Classified {
             parts: smallvec::smallvec![classify_token(brand, labels, text, span.start)?],
@@ -96,7 +96,7 @@ pub(super) fn classify<'a>(
                 .chars()
                 .next()
                 .expect("name_start is inside the atom");
-            return Err(KError::parse(not_a_type_name(got), Some(span)));
+            return Err(ParseError::new(not_a_type_name(got), Some(span)));
         }
         parts.push(classify_token(
             brand,
@@ -131,7 +131,7 @@ pub fn classify_token<'a>(
     labels: &LabelInterner,
     tok: &str,
     start: u32,
-) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
     let token_span = Span {
         start,
         end: start + tok.len() as u32,
@@ -142,7 +142,7 @@ pub fn classify_token<'a>(
     let mut chars = tok.char_indices().peekable();
     let part = parse_compound(brand, labels, tok, &mut chars, start, token_span)?;
     if let Some(&(_, c)) = chars.peek() {
-        return Err(KError::parse(
+        return Err(ParseError::new(
             format!("unexpected {:?} in token {:?}", c, tok),
             Some(token_span),
         ));
@@ -209,7 +209,7 @@ fn take_digits(bytes: &[u8], at: &mut usize) -> usize {
 }
 
 /// Classify a sub-token per the token-class rules in
-/// [design/typing/tokens.md](../../design/typing/tokens.md). Capital-leading tokens
+/// [old_design/typing/tokens.md](../../old_design/typing/tokens.md). Capital-leading tokens
 /// that match neither the keyword nor the type shape are rejected rather than falling
 /// through to Identifier, so a stray `A` or `K9` can't silently shadow a future
 /// type-position binding. Types and Identifiers reject non-alphanumeric content so
@@ -219,7 +219,7 @@ fn classify_atom<'a>(
     labels: &LabelInterner,
     tok: &str,
     token_span: Span,
-) -> Result<ExpressionPart<'a>, KError> {
+) -> Result<ExpressionPart<'a>, ParseError> {
     if let Some(part) = try_literal(tok) {
         return Ok(part);
     }
@@ -231,7 +231,7 @@ fn classify_atom<'a>(
     }
     if is_type_name(tok) {
         if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric()) {
-            return Err(KError::parse(
+            return Err(ParseError::new(
                 format!(
                     "type name `{tok}` contains invalid character {bad:?}; \
                      type names use only letters and digits",
@@ -245,7 +245,7 @@ fn classify_atom<'a>(
         ));
     }
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-        return Err(KError::parse(
+        return Err(ParseError::new(
             format!(
                 "token `{tok}` starts with an uppercase letter but classifies as neither a \
                  keyword (needs ≥2 uppercase letters with no lowercase) nor a type name \
@@ -258,7 +258,7 @@ fn classify_atom<'a>(
         .chars()
         .find(|c| !c.is_ascii_alphanumeric() && *c != '_')
     {
-        return Err(KError::parse(
+        return Err(ParseError::new(
             format!(
                 "identifier `{tok}` contains invalid character {bad:?}; \
                  identifiers use letters, digits, and `_`",
@@ -282,7 +282,7 @@ fn parse_compound<'a>(
     chars: &mut Peekable<CharIndices>,
     start: u32,
     token_span: Span,
-) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
     let mut expr = read_atom(labels, tok, chars, start, token_span)?;
 
     while let Some(&(ci, c)) = chars.peek() {
@@ -318,11 +318,11 @@ fn read_atom<'a>(
     chars: &mut Peekable<CharIndices>,
     token_start: u32,
     token_span: Span,
-) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
     let atom_start_ci = match chars.peek() {
         Some(&(ci, _)) => ci,
         None => {
-            return Err(KError::parse(
+            return Err(ParseError::new(
                 "expected identifier, got end of token",
                 Some(token_span),
             ));
@@ -339,7 +339,7 @@ fn read_atom<'a>(
     let atom = &tok[atom_start_ci..end_ci];
     if atom.is_empty() {
         let next = chars.peek().map(|&(_, c)| c);
-        return Err(KError::parse(
+        return Err(ParseError::new(
             format!("expected identifier, got {:?}", next),
             Some(token_span),
         ));

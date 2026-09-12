@@ -1,6 +1,6 @@
 ---
 name: shepherd
-description: Use after implementation work is code-complete and tests pass, to audit the main agent's claims against the diff and then update the doc tree (README.md, tutorial/, design/, roadmap/ including its README.md index). Antagonistic to the main agent that wrote the code — verifies before documenting. Does NOT modify source code.
+description: Use after implementation work is code-complete and tests pass, to audit the main agent's claims against the diff and then update the doc tree (README.md, tutorial/, old_design/, roadmap/ including its README.md index). Antagonistic to the main agent that wrote the code — verifies before documenting. Does NOT modify source code.
 tools: Read, Edit, Write, Bash, Grep, Glob, Skill
 ---
 
@@ -44,7 +44,7 @@ If the changes may have memory safety implications and the Miri slate has not be
 
 - **Surface source-tree drift.** The baseline `check` already printed the source-tree-changes section: every `src/**/*.rs` file added, modified, deleted, or renamed since `master`, with each inbound doc link. This is your decision input for which source changes warrant a `README.md` "Source layout" update, a design-doc reference, or a `fix-refs` pass for renamed paths. Not every source change deserves a doc edit (a leaf builtin or tiny helper often doesn't) — it's a judgment call, not a gate.
 - **Roadmap item shipped?** Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md` (use `--dry-run` first if you want to inspect). The tool deletes the file, prunes intra-roadmap dependency bullets, regenerates the derived "Next items" lists (global and per-project, adding any dependent the delete just unblocked), and then runs `check` itself — any broken-link output it prints is your job to fix: design-doc "Open work" sections, source-file `//` comments, prose mentions inside Dependencies sections. **Only delete if every Acceptance criterion is met** (per the acceptance-criteria check in step 2) — a partially-done item stays.
-- **Update `design/*.md`:** if a design doc's "Open work" section pointed to the deleted roadmap item, replace with either a body section describing what shipped (when there's explanatory value) or remove the bullet (when the body already covers it). If the design doc's invariants changed, update them in place.
+- **Update the design doc** (the module's `README.md`, or `old_design/*.md` for the retired runtime)**:** if a design doc's "Open work" section pointed to the deleted roadmap item, replace with either a body section describing what shipped (when there's explanatory value) or remove the bullet (when the body already covers it). If the design doc's invariants changed, update them in place.
 - **Update `README.md` / `tutorial/`** if the work changes user-facing surface or directory layout.
 - **Bulk path rewrites?** If files moved (renames, sub-module extractions), `python3 tools/doclinks.py fix-refs OLD=NEW [...]` rewrites every link whose target resolves to OLD across markdown and rust comments. Pass `--from-file mapping.txt` for a long list. The tool refuses to run if any NEW doesn't exist on disk.
 - **Source-file comments** that link to deleted/renamed docs need updating. The `fix-refs` subcommand handles bulk renames; otherwise `check` will flag them.

@@ -1,5 +1,5 @@
 //! Acceptance-criteria coverage for library-owned tail-call region turnover — see
-//! [tail-call-optimization.md](../../../../design/tail-call-optimization.md). Each test pins one
+//! [tail-call-optimization.md](../../../../old_design/tail-call-optimization.md). Each test pins one
 //! criterion directly, independent of the region-reclamation tests in [`super::arena`]:
 //!
 //! - `O(1)` live regions across a deep tail loop, on one scheduler slot.
@@ -160,7 +160,7 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
 }
 
 /// The no-mint incarnation categories from
-/// [tail-call-optimization.md § Region liveness by node lifetime](../../../../design/tail-call-optimization.md#region-liveness-by-node-lifetime)
+/// [tail-call-optimization.md § Region liveness by node lifetime](../../../../old_design/tail-call-optimization.md#region-liveness-by-node-lifetime)
 /// — a parenthesized syntactic reduction, a bare-name forward, a `USING` overlay entry, and a
 /// plain top-level sequence — add no region mints of their own. The baseline is read *after* the
 /// module declaration (which mints its own region) so the assertion isolates exactly the four

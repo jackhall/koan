@@ -170,7 +170,7 @@ fn functor_admits_unascribed_module_structurally() {
     test_run.run("EXPR (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     // Type-classified binder so the auto-wrap pass triggers in the
     // `Signature { .. }` slot. The LET partition guard requires module carriers
-    // to ride Type-classified names (design/typing/elaboration.md § Binding-map
+    // to ride Type-classified names (old_design/typing/elaboration.md § Binding-map
     // partition).
     test_run.run("LET unascribed = int_ord");
     test_run.run("LET set_value = (MAKESET unascribed)");

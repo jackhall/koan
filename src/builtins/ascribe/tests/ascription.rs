@@ -104,7 +104,7 @@ fn transparent_ascription_does_not_mint_module_types() {
     assert!(v.type_members.is_empty());
 }
 
-/// End-to-end example from [design/typing/modules.md](../../../../design/typing/modules.md).
+/// End-to-end example from [old_design/typing/modules.md](../../../../old_design/typing/modules.md).
 #[test]
 fn roadmap_example_int_ord_with_ordered_sig() {
     let program = program_storage();

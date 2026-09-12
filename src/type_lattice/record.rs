@@ -26,7 +26,7 @@
 //! - **Names are unique** within a record. The parser rejects duplicate fields upstream, in
 //!   `STRUCT` / `SIG` declarations and in record literals alike, and the constructor asserts it.
 //!
-//! See [design/label-interning.md](../../design/label-interning.md).
+//! See [old_design/label-interning.md](../../old_design/label-interning.md).
 
 use crate::parse::{BinderSymbol, Symbol};
 

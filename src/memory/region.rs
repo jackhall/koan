@@ -8,9 +8,9 @@
 //! shell over a `FrameStorage` is [`frame`](super::frame); the program-text tier above the run root
 //! is [`program`](super::program).
 //!
-//! See [per-call-region/README.md](../../design/per-call-region/README.md) for the carrier
+//! See [per-call-region/README.md](../../old_design/per-call-region/README.md) for the carrier
 //! set, escaping-value retention, ancestor chain, and TCO frame reuse;
-//! [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure)
+//! [memory-model.md § Region lifetime erasure](../../old_design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
 use std::hash::BuildHasher;
@@ -30,7 +30,7 @@ use super::substrate::{
 /// a bumped run of `&str`, a `Module` with its path and member tables bump-hosted, and a
 /// [`Scope`](crate::machine::core::Scope) with its binding tables built over the same allocator and its own destructor
 /// structurally absent. See
-/// [value-substrates.md § Untyped arenas](../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
+/// [value-substrates.md § Untyped arenas](../../old_design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
 ///
 /// A [`TypeSymbol`](crate::parse::TypeSymbol) and a
 /// [`KType`](crate::machine::model::KType) need no storage at
@@ -80,6 +80,7 @@ impl<'a> RegionBrand<'a> {
     /// library's own `HasRegionHandle` impls for `RegionHandle`/`(RegionHandle, T)` discharge their
     /// obligation with no koan-side impl. A closure that needs the koan-typed `alloc_*` veneer back
     /// rewraps locally: `RegionBrand(handle)`.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn handle(self) -> RegionHandle<'a> {
         self.0
     }
@@ -93,6 +94,7 @@ impl<'a> RegionBrand<'a> {
     /// The residence facts a resident derives — its owner, its live frame, the pin a child frame
     /// chains — are all this brand's, which is why they live here and not on the lexical record
     /// that happens to hold one: a wrapper over the brand would carry no invariant the brand lacks.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn region_owner(self) -> Weak<FrameStorage> {
         self.0.host()
     }
@@ -108,6 +110,7 @@ impl<'a> RegionBrand<'a> {
     /// interpreter for the whole run). The single owner of this invariant's assertion;
     /// step-scoped callers should route through `DecideCtx::dest_frame` or a finish's
     /// `ctx.frame()` instead of upgrading directly.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn frame(self) -> Rc<FrameStorage> {
         self.region_owner()
             .upgrade()
@@ -122,6 +125,7 @@ impl<'a> RegionBrand<'a> {
     /// the region↔value `Rc` cycle the frame design excludes). The owner answers its own tier, so
     /// the two outcomes stay distinct: [`Self::frame`]'s `expect` reports a **dead owner**, which
     /// is a bug, while `None` reports the eternal-tier **policy**.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn parent_frame_pin(self) -> Option<Rc<FrameStorage>> {
         let owner = self.frame();
         (!owner.is_eternal()).then_some(owner)
@@ -132,6 +136,7 @@ impl<'a> RegionBrand<'a> {
     /// chain on, read from a brand instead of from an owner already in hand, so
     /// [`Frame::hosts`](super::frame::Frame::hosts) can answer `true` without consulting any pin
     /// chain and without upgrading a `Weak` of its own.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn is_eternal(self) -> bool {
         self.frame().is_eternal()
     }
@@ -173,6 +178,7 @@ impl<'a> RegionBrand<'a> {
     /// A value that *does* reach somewhere takes [`Self::seal_reaching`] with the description
     /// [`Scope::mint_retained`](crate::machine::core::Scope) derived for it. The brand is the
     /// capability marker: only a handle into the region the value lives in may seal it resident.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn seal_resident<'v: 'a, T: Reattachable + DropFree>(
         self,
         value: T::At<'v>,
@@ -191,6 +197,7 @@ impl<'a> RegionBrand<'a> {
     /// Forwards to the library door on the handle this brand wraps, which is the same handle the
     /// description was minted off: the value borrows for the frame lifetime `'a`, so a borrow that
     /// does not outlive the region cannot be sealed under it.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn seal_reaching<'v: 'a, T: Reattachable + DropFree>(
         self,
         value: T::At<'v>,
@@ -203,6 +210,7 @@ impl<'a> RegionBrand<'a> {
     /// the delivered twin, forwarded to the library door on the same handle. One door mints the
     /// description, seals the value under it and reads the home pin off the region, so nothing here
     /// pairs a value with a residence or a pin it did not derive.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn deliver_resident<'v: 'a, T: Reattachable + DropFree>(
         self,
         value: T::At<'v>,
@@ -220,6 +228,7 @@ impl<'a> RegionBrand<'a> {
     /// cannot lift it against the wrong home. [`Scope::lift_resident`](crate::machine::core::Scope)
     /// is the scope-side spelling, and a borrowed binding façade — whose region is the opened
     /// module's, not its window scope's — reaches this door through its own brand.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn lift_resident<T: Reattachable + DropFree>(
         self,
         sealed: Sealed<T>,
@@ -240,6 +249,7 @@ impl<'a> RegionBrand<'a> {
 #[derive(Clone, Copy)]
 pub struct FoldingBrand<'a> {
     brand: RegionBrand<'a>,
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     placement: FoldedPlacement<'a>,
 }
 
@@ -256,6 +266,7 @@ impl<'a> FoldingBrand<'a> {
     /// closure alongside the operands, and its `'a` brand keeps it confined there — so this
     /// constructor is callable only where the enclosing combinator already folds the operands' reach
     /// into the result.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn in_fold_closure(placement: FoldedPlacement<'a>) -> Self {
         FoldingBrand {
             brand: RegionBrand(placement.handle()),
@@ -283,12 +294,14 @@ impl<'a> FoldingBrand<'a> {
     /// chunk and runs no per-slot glue. The placement is what makes this a *residence* door rather
     /// than the untargeted [`RegionBrand::allocator`]: the brand's `'a` is the fold's own, so a value
     /// resident somewhere else cannot be written here.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn alloc_folded<T: Copy>(self, value: T) -> &'a T {
         self.placement.allocator().value(value)
     }
 
     /// This brand as a [`SubstrateDoor`] over `holder` — the coverage the enclosing fold's operand
     /// envelopes hold, which is the proof the door reads its cells' stored reach under.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn with_holder<'h>(self, holder: &'h FrameCoverage) -> SubstrateDoor<'a, 'h> {
         SubstrateDoor {
             brand: self,
@@ -317,6 +330,7 @@ impl<'a> FoldingBrand<'a> {
 #[derive(Clone, Copy)]
 pub struct SubstrateDoor<'a, 'h> {
     brand: FoldingBrand<'a>,
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     holder: &'h FrameCoverage,
 }
 
@@ -330,6 +344,7 @@ impl<'a> std::ops::Deref for SubstrateDoor<'a, '_> {
 impl SubstrateDoor<'_, '_> {
     /// The holder-rule proof this door reads stored cell reach under, as a coverage the door hands
     /// on to the alloc door per pinned cell — see the type's own doc.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn holder(&self) -> FrameCoverage {
         self.holder.clone()
     }
@@ -362,7 +377,8 @@ pub(crate) trait KoanRegionExt {
     /// bound. Naming the projection makes the bounds syntactically identical. An inline closure
     /// returning the concrete type still unifies fine at the call site.
     // Drives the object-family construction inversion
-    // (design/per-node-memory.md): a region-pure leaf builds its value inside this closure.
+    // (old_design/per-node-memory.md): a region-pure leaf builds its value inside this closure.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     fn fold_witnessed<T: Reattachable + DropFree>(
         owner: Rc<FrameStorage>,
         build: impl for<'b> FnOnce(FoldingBrand<'b>) -> T::At<'b>,
@@ -378,6 +394,7 @@ pub(crate) trait KoanRegionExt {
     /// `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
     /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
     /// co-location holds by construction and nothing branded escapes the closure.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     fn yoke_branded<T: Reattachable + DropFree, F>(
         owner: Rc<FrameStorage>,
         build: F,

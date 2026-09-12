@@ -8,7 +8,7 @@
 //! region shell and nothing more, which is why the run's lookup state lives here rather than as two
 //! `Option` fields every per-call frame carries `None` in.
 //!
-//! See [per-call-region/frames.md](../../../design/per-call-region/frames.md).
+//! See [per-call-region/frames.md](../../../old_design/per-call-region/frames.md).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -25,7 +25,7 @@ use crate::parse::LabelInterner;
 ///
 /// Write errors are dropped: `PRINT` is a statement with no error channel, so there is nothing for a
 /// caller to do with one. This is a stopgap — see
-/// [monadic side effects](../../../roadmap/foundation/monadic-side-effects.md), which replaces
+/// [monadic side effects](../../../roadmap/old_foundation/monadic-side-effects.md), which replaces
 /// direct writer plumbing with an effect the language expresses.
 pub struct RunWriter(RefCell<Box<dyn std::io::Write>>);
 

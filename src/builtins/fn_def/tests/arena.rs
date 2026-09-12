@@ -158,7 +158,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
 
 /// Recursive tail-call through a `MATCH` arm completes in constant space: the
 /// slot is reinstalled each hop and the library turns over its region; see
-/// [tail-call-optimization.md](../../../../design/tail-call-optimization.md).
+/// [tail-call-optimization.md](../../../../old_design/tail-call-optimization.md).
 #[test]
 fn match_driven_tail_recursion_completes() {
     let program = program_storage();

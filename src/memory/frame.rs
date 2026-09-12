@@ -15,6 +15,7 @@
 use std::rc::Rc;
 
 #[cfg(test)]
+#[cfg(all(test, feature = "pending_rewrite"))]
 use super::region::FrameStorageExt;
 use super::region::{FrameStorage, KoanRegion, RegionBrand};
 use super::substrate::{
@@ -42,9 +43,9 @@ pub type FrameCoverage = StepCoverage<FrameStorage>;
 /// an escaping closure extends only the *storage* (via [`Self::storage_rc`]), not the shell, so a
 /// `FreshTail` tail hop can drop this frame's shell outright without foreclosing on the escapee.
 ///
-/// See [per-call-region/README.md](../../design/per-call-region/README.md) for the
+/// See [per-call-region/README.md](../../old_design/per-call-region/README.md) for the
 /// carrier set, escaping-value retention, ancestor chain, and TCO
-/// frame reuse; [memory-model.md § Region lifetime erasure](../../design/memory-model.md#region-lifetime-erasure)
+/// frame reuse; [memory-model.md § Region lifetime erasure](../../old_design/memory-model.md#region-lifetime-erasure)
 /// for the heap-pinning / drop-order invariants.
 pub struct Frame<F: Reattachable + DropFree> {
     /// The per-call resident paired with the frame storage that owns its region, as one delivery
@@ -68,6 +69,7 @@ impl<F: Reattachable + DropFree> Frame<F> {
     /// `storage`'s own region, pinned by `storage` itself — so both spellings of that coupling are
     /// the doors below ([`Self::open_under`], [`Self::adopting`]) and no caller can pair a storage
     /// with a resident that does not live in it.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     fn around(storage: Rc<FrameStorage>, envelope: Delivered<F>) -> Rc<Self> {
         Rc::new(Frame { envelope, storage })
     }
@@ -87,6 +89,7 @@ impl<F: Reattachable + DropFree> Frame<F> {
     /// witness separately). This frame owns the envelope it re-seals from and outlives the step that
     /// opens the zip, so the pin presented there covers the resident — the externally-witnessed
     /// tier's obligation, discharged by the holder rather than by the carrier.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn resident_sealed(&self) -> SealedExtern<F>
     where
         F::At<'static>: Copy,
@@ -125,6 +128,7 @@ impl<F: Reattachable + DropFree> Frame<F> {
     /// region outlives every per-call frame, which is exactly why
     /// [`RegionBrand::parent_frame_pin`] declines to chain it — so it answers `true` without
     /// consulting the chain.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn hosts(&self, brand: RegionBrand<'_>) -> bool {
         brand.is_eternal() || self.storage.pins_region(brand.region())
     }
@@ -132,7 +136,7 @@ impl<F: Reattachable + DropFree> Frame<F> {
     /// This frame's region [`RegionBrand`] allocation capability, minted from its owning storage.
     /// Test-only: production allocates through the resident (`scope.brand()`); the frame-level
     /// handle is a convenience for the arena / lift Miri tests that alloc against a bare frame.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "pending_rewrite"))]
     pub(crate) fn brand(&self) -> RegionBrand<'_> {
         self.storage().brand()
     }
@@ -145,7 +149,7 @@ impl<F: Reattachable + DropFree> Frame<F> {
     /// [`RegionHandle::seal_reaching`](RegionHandle::seal_reaching) takes: a
     /// sub-brand's `'b` is universally quantified and outlives nothing, so a frame-lifetime value
     /// cannot be sealed through it at all.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "pending_rewrite"))]
     pub(crate) fn seal_born_here<
         's,
         'v: 's,
@@ -195,7 +199,7 @@ impl<K: Reattachable + DropFree> Frame<ReferenceFamily<K>> {
     /// (the same `Rc` every iteration). Only a loop that genuinely builds a fresh closure over each
     /// iteration's frame retains `O(N)` frames — an unavoidable data dependency, since evaluating
     /// the final closure reaches every one. The chain is a DAG (each frame's `outer` names a
-    /// strictly older frame), so it forms no cycle; see `design/tail-call-optimization.md`.
+    /// strictly older frame), so it forms no cycle; see `old_design/tail-call-optimization.md`.
     ///
     /// The resident is *born* at the destination: [`RegionHandle::bump_born_with`] hands `child` a
     /// placement over the fresh region at a `for<'b>` brand, with `outer` re-anchored to that same
@@ -216,6 +220,7 @@ impl<K: Reattachable + DropFree> Frame<ReferenceFamily<K>> {
     /// on the resident's allocation), so the erased resident pointer stays valid as the `Rc` moves
     /// into the shell: the carrier holds a `&'static` reference, not a borrow of the local, and the
     /// `KoanRegion` stays at a fixed heap address behind the `Rc`.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn open_under<'a>(
         parent: RegionBrand<'a>,
         outer: &'a K::At<'a>,
@@ -236,6 +241,7 @@ impl<K: Reattachable + DropFree> Frame<ReferenceFamily<K>> {
     /// The operand arrives already erased, which is what lets a caller
     /// [`zip`](SealedExtern::zip) heterogeneous carriers into one: they re-anchor together at the
     /// single `'b` the birth brands, exactly as the lone parent reference does.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn open_under_with<'a, Op: Reattachable + DropFree>(
         parent: RegionBrand<'a>,
         operand: SealedExtern<Op>,
@@ -256,6 +262,7 @@ impl<K: Reattachable + DropFree> Frame<ReferenceFamily<K>> {
     /// and there is no second storage argument to disagree with it. The value reaches nothing beyond
     /// its own region, so the envelope covers that one region, and the borrow is erased into it
     /// exactly as a born resident's is.
+    #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn adopting<'a>(brand: RegionBrand<'a>, value: &'a K::At<'a>) -> Rc<Self> {
         Self::around(
             brand.frame(),

@@ -1,6 +1,6 @@
 //! The dormant slot every resting carrier stores its lifetime-erased value in, and the owned
-//! resting tier built over it ([design/witnessed-memory.md § The dormant slot and the two resting
-//! tiers](../../design/witnessed-memory.md#the-dormant-slot-and-the-two-resting-tiers)).
+//! resting tier built over it ([old_design/witnessed-memory.md § The dormant slot and the two resting
+//! tiers](../../old_design/witnessed-memory.md#the-dormant-slot-and-the-two-resting-tiers)).
 //!
 //! The slot is a one-field union, [`Dormant<V>`], because a function-entry retag does not descend
 //! into unions: a resting value carries no protected tag, so a by-value carrier whose own pins
@@ -107,8 +107,8 @@ pub struct Within<'b, 'outer: 'b> {
 /// and the pins that cover the value are bundled at the erase door, so dropping the seal unopened
 /// is sound — the value's glue runs while the pins still hold every region it reads. Where
 /// [`SealedExtern`] is externally witnessed, its pin supplied at each open, a `SealedPinned` owns
-/// its pin for its whole dormant life ([design/witnessed-memory.md § What a droppable family
-/// accepts](../../design/witnessed-memory.md#what-a-droppable-family-accepts)).
+/// its pin for its whole dormant life ([old_design/witnessed-memory.md § What a droppable family
+/// accepts](../../old_design/witnessed-memory.md#what-a-droppable-family-accepts)).
 pub struct SealedPinned<T: Reattachable, W: Witness> {
     // Field order is load-bearing: struct fields drop in declaration order, so the value's drop
     // glue runs while `pins` is still alive — a droppable family's drop may freely dereference

@@ -288,7 +288,7 @@ fn decide_scope<'step, 'e>(
     };
     // Pending parks at its scope even over a finalized Pick: the pending sibling would shadow once
     // it finalizes, so resolve nothing until it does (Decision 5 in
-    // ../../../../design/typing/scheduler.md). The relaxed pass's parked producers union in so a
+    // ../../../../old_design/typing/scheduler.md). The relaxed pass's parked producers union in so a
     // single wake re-runs the full resolution.
     if let Some(pending) = lookup.pending {
         // The pending overload slot plus at most one distinct producer per part.
@@ -470,7 +470,7 @@ enum Lean {
 }
 
 /// Strict admission against the `bare_outcomes` cache. Rule table at
-/// [design/typing/elaboration.md § Strict admission rules](../../../../design/typing/elaboration.md#strict-admission-rules).
+/// [old_design/typing/elaboration.md § Strict admission rules](../../../../old_design/typing/elaboration.md#strict-admission-rules).
 fn signature_admits_strict<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &WorkingExpression<'e>,

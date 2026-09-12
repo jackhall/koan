@@ -1,7 +1,7 @@
 //! [`Carrier<F>`] — the reference-only carrier witness: a *reference* to a hosted reach description
 //! and nothing else, the same shape whether the value is resident in a region or walking between
 //! nodes. See
-//! [design/reach.md § The carrier states](../../design/reach.md#the-carrier-states).
+//! [old_design/reach.md § The carrier states](../../old_design/reach.md#the-carrier-states).
 //!
 //! The carrier **owns no pin**: cloning is a reference-copy, and a carrier's death releases nothing.
 //! What keeps its description (and the value it describes) alive is external — the home region's
@@ -175,7 +175,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
 /// The membership and residence queries, on the **in-use** carrier state: an [`Opened`] borrows at
 /// `'b`, bounded by the coverage it was opened under, and that borrow is exactly what re-anchoring
 /// the erased reach reference requires — so these need no `pin` argument, and there is no way to ask
-/// the question without one (design/reach.md § The carrier states).
+/// the question without one (old_design/reach.md § The carrier states).
 impl<'b, T: Reattachable + DropFree, F: PinsRegion + 'static> Opened<'b, T, Carrier<F>> {
     /// Whether the value's borrows reach `region` — home included when the borrows genuinely reach
     /// it, which is the question [`Self::borrows_home`] asks against the value's own residence.

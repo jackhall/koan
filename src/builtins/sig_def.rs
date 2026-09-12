@@ -1,6 +1,6 @@
 //! `SIG <name:ProperType> = <body:KExpression>` — declare a module signature (an
 //! interface a module can be ascribed to). See
-//! [design/typing/modules.md](../../design/typing/modules.md).
+//! [old_design/typing/modules.md](../../old_design/typing/modules.md).
 //!
 //! Routes [`await_body_in_scope`](super::await_body::await_body_in_scope) like
 //! `module_def`: body statements dispatch against a fresh child scope
@@ -202,7 +202,7 @@ mod tests {
     /// A SIG-body abstract member named `Type` collides with the builtin `Type`
     /// meta-type: `TYPE Type` raises `Rebind` naming `Type`, the same unshadowable-builtins
     /// rule that gates a MODULE body's `LET Type`. Signatures name their principal abstract
-    /// member `Carrier` (see [design/typing/modules.md](../../design/typing/modules.md)); this
+    /// member `Carrier` (see [old_design/typing/modules.md](../../old_design/typing/modules.md)); this
     /// pins that the `Type` spelling does not declare a member.
     #[test]
     fn sig_member_named_type_collides_with_builtin_type() {

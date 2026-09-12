@@ -19,7 +19,7 @@
 //! interner, reached by reference through the execution context — so there is no process-global
 //! state.
 //!
-//! See [design/typing/type-registry.md](../../../../design/typing/type-registry.md).
+//! See [old_design/typing/type-registry.md](../../../../old_design/typing/type-registry.md).
 
 use std::cell::RefCell;
 use std::collections::HashMap;

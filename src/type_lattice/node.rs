@@ -10,7 +10,7 @@
 //! Interning and node reads live on [`TypeRegistry`](super::registry::TypeRegistry); the digest
 //! recipe per variant lives in [`digest`](super::digest).
 //!
-//! See [design/typing/type-lattice.md](../../design/typing/type-lattice.md).
+//! See [old_design/typing/type-lattice.md](../../old_design/typing/type-lattice.md).
 
 use crate::memory::ScopeId;
 use crate::parse::TypeSymbol;

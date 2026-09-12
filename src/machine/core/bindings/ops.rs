@@ -19,15 +19,13 @@
 //! discipline and stays direct (`*_direct` on [`Scope`]), under the construction-door mint of the
 //! same gate.
 
-use smallvec::SmallVec;
-
 use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::seals::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{
     KType, ReductionMode, RunRegistries, render_label, render_untyped_key,
 };
-use crate::parse::{KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
+use crate::parse::{KeywordSymbol, TypeSymbol, ValueSymbol};
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
 /// present name is a `Rebind`), `UpsertEqual` admits a re-entry of the *same* declaration — the
@@ -74,7 +72,7 @@ pub(crate) enum WriteOp<'a> {
         builtin_shadow_guard: bool,
     },
     /// One operator-group registration, carrying every probe key it installs under — the per-group
-    /// powerset expansion happens where the op is built ([`powerset_probes`]) and apply stays a
+    /// powerset expansion happens where the op is built ([`powerset_probes`](crate::parse::powerset_probes)) and apply stays a
     /// loop. One op rather than one per key so the declaration's identity data is built once for
     /// the whole install, not cloned per subset. The group rides as its seal-time bundle, which is
     /// lifetime-free, so a `WriteOp` still names no region borrow.
@@ -182,37 +180,4 @@ impl<'a> WriteOp<'a> {
             }
         }
     }
-}
-
-/// The probe key of every nonempty subset of `members` — the powerset-key story
-/// [`crate::machine::model::operators`] describes, shared by the builtin seeds, the `GROUP` binder
-/// and the `OP` declaration. `members.len()` stays small, so the `2^n - 1` bitmask walk is cheap;
-/// each subset's key is minted through [`KeywordSymbol::declared_run`], the same run-digest
-/// constructor a live chain's probe (`operator_probe_for`) mints through, so a registration key and
-/// a real chain's probe agree by construction and neither side touches text.
-///
-/// Each key records the rendered join of its members as it is built, so an operator-conflict
-/// diagnostic can name the probe it stands for. One region-hosted record backs every key, so past
-/// that recording the whole install allocates nothing.
-pub(crate) fn powerset_probes(
-    members: &[KeywordSymbol],
-    labels: &LabelInterner,
-) -> Vec<KeywordSymbol> {
-    let subset_count = 1usize << members.len();
-    // One stack buffer, refilled per mask: the walk visits `2^n - 1` subsets, so materializing each
-    // one afresh would allocate once per registry entry.
-    let mut subset: SmallVec<[KeywordSymbol; 8]> = SmallVec::new();
-    (1..subset_count)
-        .map(|mask| {
-            subset.clear();
-            subset.extend(
-                members
-                    .iter()
-                    .enumerate()
-                    .filter(|(bit, _)| mask & (1 << bit) != 0)
-                    .map(|(_, op)| *op),
-            );
-            KeywordSymbol::declared_run(&subset, labels)
-        })
-        .collect()
 }

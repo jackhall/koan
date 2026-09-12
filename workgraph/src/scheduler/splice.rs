@@ -7,7 +7,7 @@
 //! pointer is the scheduler's to rewrite for exactly as long as the edge is unfilled. Post-delivery
 //! the resident value *is* the value, so the surgery window closes at delivery.
 //!
-//! See [design/dag-scheduler.md § Alias splice](../../design/dag-scheduler.md#alias-splice).
+//! See [old_design/dag-scheduler.md § Alias splice](../../old_design/dag-scheduler.md#alias-splice).
 
 use super::{NodeId, Scheduler, Workload};
 

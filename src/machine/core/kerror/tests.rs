@@ -1,6 +1,7 @@
 //! `Display`-rendering round-trip per `KErrorKind` variant. Pins format strings against
 //! accidental rewording — if you change a message, update the matching test here.
 use super::*;
+use crate::source::Span;
 
 fn render(kind: KErrorKind) -> String {
     format!("{}", KError::new(kind))
@@ -111,22 +112,22 @@ fn display_shape_error() {
 
 #[test]
 fn display_parse_error_without_location() {
-    let kind = KErrorKind::ParseError {
+    let kind = KErrorKind::ParseError(ParseError {
         message: "eof".into(),
         span: None,
         file: None,
-    };
+    });
     assert_eq!(render(kind), "parse error: eof");
 }
 
 #[test]
 fn display_parse_error_with_location_renders_path_line_col() {
     let id = source::register(source::SourceFile::new("<t>", "a\nbcd".to_string()));
-    let kind = KErrorKind::ParseError {
+    let kind = KErrorKind::ParseError(ParseError {
         message: "bad token".into(),
         span: Some(Span { start: 3, end: 4 }),
         file: Some(id),
-    };
+    });
     assert_eq!(render(kind), "parse error at <t>:2:2: bad token");
 }
 

@@ -13,7 +13,7 @@ automated drift check (that stays scoped to koan's own `src/`): this is plain
 documentation, kept current by hand, for a manual run per
 [.claude/skills/miri/SKILL.md](../../.claude/skills/miri/SKILL.md). Memory-model
 invariants the slate verifies live in
-[design/memory-model.md](../../design/memory-model.md).
+[old_design/memory-model.md](../../old_design/memory-model.md).
 
 ## The slate
 

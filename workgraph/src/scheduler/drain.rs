@@ -2,7 +2,7 @@
 //! loop, and [`StepVerdict`] is the closed set of things a step can decide. The embedder's whole
 //! contract is one callback: it receives a [`Step`] plus `&mut Scheduler` for the mid-step wiring a
 //! step legitimately does, and returns the verdict the drain applies.
-//! See [design/dag-scheduler.md § The drain protocol](../../design/dag-scheduler.md#the-drain-protocol).
+//! See [old_design/dag-scheduler.md § The drain protocol](../../old_design/dag-scheduler.md#the-drain-protocol).
 //!
 //! What owning the loop makes structural:
 //!

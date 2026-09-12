@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Run the koan build-verification slate: instrumented unit tests (cargo
 # llvm-cov), doctests (including `compile_fail` guards, which llvm-cov does not
-# run), lints, doclinks, tutorial-snippet output checks, the allocation audit,
-# and the modgraph fractal-complexity score.
+# run), lints, doclinks, and the modgraph fractal-complexity score.
 # Mirrors the `verify-koan` skill (.claude/skills/verify-koan/).
+#
+# Every cargo step builds the default feature set: the modules the rewrite keeps.
+# The old runtime behind `pending_rewrite` — and with it the interpreter binary the
+# tutorial-snippet check and the allocation audit read — is not part of the slate;
+# TEST.md § The pending rewrite lists the commands that run it on demand.
 #
 # One line per step, then one summary line. A step that passes is worth a count,
 # a score, or a delta — not its runner chatter — so the whole green slate reads
@@ -12,8 +16,8 @@
 # the only one to get its output back, replayed in full under its own banner.
 # Pass `KOAN_VERBOSE=1` to replay every step's output, passing or not.
 #
-# The modgraph, coverage, and allocation-audit steps print current readings. They
-# rebaseline `observe/complexity.txt` / `observe/coverage.txt` / `observe/alloc.txt` only when invoked with
+# The modgraph and coverage steps print current readings. They
+# rebaseline `observe/complexity.txt` / `observe/coverage.txt` only when invoked with
 # `KOAN_REBASELINE` set — pre-commit sets it; manual runs leave it unset,
 # since the trend logs should record one entry per commit, not one per
 # local sanity-check. Either way the reading is reported beside its delta.
@@ -256,26 +260,6 @@ fi
 # gating audits (links, deps, orphans, next-items) still run and still gate.
 run doclinks 'doclinks FAILED' python3 tools/doclinks.py check --gates-only
 ok doclinks '4 gates clean' 'doclinks ok'
-
-# The tutorial's runnable snippets (```koan blocks with an expected ```text output)
-# are diffed against the interpreter. Needs the plain debug binary — llvm-cov above
-# builds an instrumented one under a different profile, so build it explicitly.
-run snippets 'snippets FAILED (build)' cargo build --quiet
-run snippets 'snippets FAILED' python3 tools/verify_snippets.py
-matched="$(grep -oE '^[0-9]+/[0-9]+ runnable' <<<"$OUT" | cut -d' ' -f1)"
-ok snippets "$matched matched" "snippets $matched"
-
-# The allocation shapes in `audit/shapes/`, swept through the counting allocator
-# (`--features alloc-count`) and the bounded regression test's brackets. Reports each
-# shape's totals, the marginal terms differenced out of them, and the headroom left on
-# every bound in `tests/allocation_baseline.rs`. Never gating: the bounds themselves
-# are asserted by that test, which the tests step ran. `--quiet` keeps the rows that
-# moved against the recorded sweep and the bounds that drifted, dropping the rest.
-run alloc 'allocation audit FAILED' \
-    python3 tools/alloc_audit.py --quiet ${REBASELINE:+--baseline}
-alloc_head="$(head -1 <<<"$OUT")"
-ok alloc "${alloc_head#allocation audit: }" "allocation audit ${alloc_head##*; }"
-[ -n "$VERBOSE" ] || detail "$(tail -n +2 <<<"$OUT")"
 
 run coverage 'coverage FAILED' python3 tools/coverage.py --lcov "$LCOV" \
     ${REBASELINE:+--baseline observe/coverage.txt}

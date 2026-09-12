@@ -257,7 +257,7 @@ impl SlotFrame {
 /// The lexical-chain reshape the harness's `Continue` apply performs: decided at the
 /// [`Outcome::Continue`](super::outcome::Outcome::Continue) construction site while the contract is
 /// live, assembled in the apply against the post-step frame, so the anchor's stored chain names no
-/// lifetime ([frames.md § Lexical-chain reshape](../../../design/per-call-region/frames.md#lexical-chain-reshape-at-the-replace)).
+/// lifetime ([frames.md § Lexical-chain reshape](../../../old_design/per-call-region/frames.md#lexical-chain-reshape-at-the-replace)).
 pub(super) enum ChainOp {
     /// TCO in the same lexical block — chain unchanged.
     Unchanged,
@@ -320,7 +320,7 @@ impl ChainOp {
 /// Slot-stored scope handle. It names no lifetime, so the node it sits on pins no `'run` through its
 /// scope; both arms are cart-witnessed, re-projected from the slot's live frame at read time rather
 /// than re-anchored at a free `'run`, which is what keeps the borrow honest across a tail-call cart
-/// swap ([scope-handles.md § Slot-table scope handle](../../../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
+/// swap ([scope-handles.md § Slot-table scope handle](../../../old_design/per-call-region/scope-handles.md#slot-table-scope-handle)).
 #[derive(Clone, Copy)]
 pub(super) enum NodeScope {
     /// A scope in a region the cart holds a pin claim on, opened at read against the slot's frame

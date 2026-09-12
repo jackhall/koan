@@ -21,7 +21,7 @@
 //! are chaining defaults a declaring scope may override — a registry hit carries no operand
 //! types and so cannot type-gate the way a function bucket does. User modules populate the
 //! registry through the `OP` / `GROUP` declaration surface
-//! ([design/operators.md](../../../design/operators.md), `builtins::op_def` /
+//! ([old_design/operators.md](../../../old_design/operators.md), `builtins::op_def` /
 //! `builtins::group_def`). This module is the record and lookup keys only — the function-bucket
 //! keys [`binary_key`] / [`unary_key`] an operator's overloads live under; the registry's own probe
 //! key is [`KeywordSymbol::of_run`].

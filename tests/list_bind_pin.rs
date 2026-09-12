@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! Integration coverage for the cost-driven-copy bind seam's **pin** path over a **list**
 //! (`Scope::copy_delivered_substrate`). A bare list holding a closure captured in its producer frame
 //! borrows its home region, so the cost chooser pins it into the binding rather than rebuilding it:

@@ -1,6 +1,6 @@
 //! The **bump door**: the public path from an embedder's `Drop`-free value family into a
 //! [`Region`]'s byte arena, and the [`BumpAllocator`] write surface a constructor builds through
-//! ([design/witnessed-memory.md § The bump allocator](../../design/witnessed-memory.md#the-bump-allocator)).
+//! ([old_design/witnessed-memory.md § The bump allocator](../../old_design/witnessed-memory.md#the-bump-allocator)).
 //!
 //! A value stored here is *not* erased. The bump is lifetime-free, so `'b` enters only at the
 //! allocating call — which is why a bumped value may hold an `&'b` back into the very region it

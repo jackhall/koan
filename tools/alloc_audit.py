@@ -171,7 +171,8 @@ def bracket_shapes() -> dict[str, int]:
     measurement, which is exactly the run a rebaseline needs to read.
     """
     run = subprocess.run(
-        ["cargo", "test", "--quiet", "--test", "allocation_baseline", "--", "--nocapture"],
+        ["cargo", "test", "--quiet", "--features", "pending_rewrite",
+         "--test", "allocation_baseline", "--", "--nocapture"],
         cwd=REPO, capture_output=True, text=True)
     bracketed: dict[str, int] = {}
     # The harness interleaves its own progress dots with these lines under

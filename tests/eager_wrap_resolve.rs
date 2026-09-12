@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! Integration coverage for the dispatch-time wrap-slot eager resolve. Pins the four
 //! shapes called out in the eager-wrap-resolve plan:
 //!

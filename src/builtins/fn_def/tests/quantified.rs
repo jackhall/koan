@@ -10,7 +10,7 @@ use crate::machine::model::KObject;
 use crate::memory::{program_storage, run_root_storage};
 
 /// A `NEWTYPE (Type AS Wrap)` and the two quantified members of
-/// [design/effects.md](../../../../design/effects.md)'s `Monad`, defined at the top level so a
+/// [old_design/effects.md](../../../../old_design/effects.md)'s `Monad`, defined at the top level so a
 /// call reaches them by dispatch with no view in the way.
 const WRAPPED: &str = "NEWTYPE (Type AS Wrap)\n\
      EXPR FOR ALL (Elt) (PURE x :Elt) -> :(Elt AS Wrap) = (Wrap (x))\n";

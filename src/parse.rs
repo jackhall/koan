@@ -11,13 +11,18 @@
 //! dispatch driver, the scheduler's laziness decision, the close-inference walk, the miss
 //! diagnosis — reads a cached fact rather than re-walking the run.
 //!
-//! Outside `#[cfg(test)]` and doc comments this module reaches only [`source`], [`crate::memory`]
-//! and [`KError`]. The runtime operations on the types here — lowering a literal, resolving a part
-//! to a cell, installing a binder — are inherent impls under
-//! [`machine::model`](crate::machine::model), which imports them by name.
+//! Outside `#[cfg(test)]` and doc comments this module reaches only [`source`] and
+//! [`crate::memory`]; a failure is its own [`ParseError`]. The runtime operations on the types
+//! here — lowering a literal, resolving a part to a cell, installing a binder — are inherent impls
+//! in the runtime, which imports them by name.
 //!
-//! See [design/expressions-and-parsing.md](../design/expressions-and-parsing.md) and
-//! [design/label-interning.md](../design/label-interning.md).
+//! The runtime is this module's consumer, and the runtime is `pending_rewrite`: an item marked
+//! `cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))` — or an `unused_imports` twin on
+//! a crate-visible re-export — has no caller in a default build until the rewrite adopts it, and
+//! the marker comes off with the adoption.
+//!
+//! See [old_design/expressions-and-parsing.md](../old_design/expressions-and-parsing.md) and
+//! [old_design/label-interning.md](../old_design/label-interning.md).
 
 pub mod ast;
 pub mod forms;
@@ -25,14 +30,16 @@ pub mod labels;
 
 mod atom;
 mod brace;
+mod error;
 mod lower;
 mod operators;
 
 use std::rc::Rc;
 
-use crate::machine::core::KError;
 use crate::memory::ProgramBrand;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile};
+
+pub use error::ParseError;
 
 pub use ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, NodeCache, PartClass,
@@ -43,12 +50,14 @@ pub use forms::lazy::LazyKinds;
 pub use labels::{
     BindKind, BinderSymbol, ClassifiedSymbol, IdentityBuildHasher, IdentityHasher, KeywordSymbol,
     LabelDisplay, LabelInterner, StaticName, Symbol, TypeSymbol, ValueSymbol, WILDCARD,
-    is_keyword_token, is_type_name, snake_case_identifier, wrong_binder_class,
+    is_keyword_token, is_type_name, powerset_probes, snake_case_identifier, wrong_binder_class,
 };
 
+#[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
 pub(crate) use forms::binder::{
     OpArity, op_declaration_arity, symbol_from_parts, symbol_from_quote_body,
 };
+#[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
 pub(crate) use forms::layout::{SlotLayout, SlotLayoutRefFamily};
 #[cfg(feature = "alloc-count")]
 pub use labels::symbols_minted;
@@ -62,7 +71,7 @@ pub fn parse<'a>(
     program: ProgramBrand<'a>,
     labels: &LabelInterner,
     input: &str,
-) -> Result<Vec<KExpression<'a>>, KError> {
+) -> Result<Vec<KExpression<'a>>, ParseError> {
     parse_with_path(program, labels, input, "<input>")
 }
 
@@ -73,20 +82,20 @@ pub fn parse_with_path<'a>(
     labels: &LabelInterner,
     input: &str,
     path: impl Into<Rc<str>>,
-) -> Result<Vec<KExpression<'a>>, KError> {
+) -> Result<Vec<KExpression<'a>>, ParseError> {
     let id = source::register(SourceFile::new(path, input.to_string()));
     parse_with_source(program, labels, id)
 }
 
 /// Parse against a pre-registered `SourceFile`. Installs `id` as the active `CURRENT_FILE` via
-/// [`CurrentFileGuard`] so `KError::parse` sees the right file. Every name and every parts run the
+/// [`CurrentFileGuard`] so [`ParseError::new`] sees the right file. Every name and every parts run the
 /// products hold is bumped into `program`'s region, so the caller owns the storage the whole AST
 /// lives in.
 pub fn parse_with_source<'a>(
     program: ProgramBrand<'a>,
     labels: &LabelInterner,
     id: FileId,
-) -> Result<Vec<KExpression<'a>>, KError> {
+) -> Result<Vec<KExpression<'a>>, ParseError> {
     let _guard = CurrentFileGuard::push(id);
     source::with(id, |f| {
         lower::lower_source(program, labels, &f.text, Some(id))

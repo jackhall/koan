@@ -71,7 +71,7 @@ pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
 /// A `KFunction` is a bare borrow into its defining region; the regions an escaping
 /// closure reaches are named by its carrier's reach description
 /// ([`FrameReach`](crate::memory::FrameReach)) and pinned by the holder's owned
-/// [`FrameCoverage`](crate::memory::FrameCoverage) coverage, not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
+/// [`FrameCoverage`](crate::memory::FrameCoverage) coverage, not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../old_design/per-call-region/lifecycle.md#carriers).
 ///
 /// `Copy` because every arm is a scalar or a region borrow — the value owns no allocation, so it
 /// runs no `Drop` at region death. That is what lets a cell ride the `T: Copy` bump doors
@@ -533,7 +533,7 @@ impl<'a> KObject<'a> {
     /// Whether `self` is a substrate carrier — a `Record`, `List`, `Dict`, or `Wrapped`,
     /// each of which directly borrows a region-resident substrate. Purely structural: no residence
     /// is read here. A substrate is always a genuine region borrow into its own home (Ruling 5,
-    /// design/value-substrates.md), which is what makes this the shape question the adoption rules
+    /// old_design/value-substrates.md), which is what makes this the shape question the adoption rules
     /// turn on: a substrate carrier cannot move regions by a pointer copy, so a copying seam
     /// rebuilds it through the fold door.
     pub(crate) fn embeds_substrate(&self) -> bool {
@@ -774,7 +774,7 @@ fn alloc_payload<'a>(door: SubstrateDoor<'a, '_>, value: KObject<'a>) -> &'a Pay
 /// cell rebuilt owned); a scalar rebuilds owned; a `KFunction` / `Module` borrow rides verbatim as a
 /// born-borrowing seed naming its own scope; a `KExpression` rides verbatim as a pointer copy.
 /// Total or not at all — a partial spine copy would pay the copy *and* keep the pin. See
-/// [design/value-substrates.md § Escape](../../../../design/value-substrates.md#escape-pin-by-default).
+/// [old_design/value-substrates.md § Escape](../../../../old_design/value-substrates.md#escape-pin-by-default).
 pub(crate) fn copy_object_into<'b>(
     value: &KObject<'b>,
     dest: SubstrateDoor<'b, '_>,
@@ -980,12 +980,12 @@ impl<'a> FoldingBrand<'a> {
 
 /// Koan's **retention claim** for a copying relocation of `envelope`
 /// ([`Delivered::transfer_into`](crate::memory::Delivered::transfer_into),
-/// design/witness-hosting.md § Escape): whether `product` — what the fold just built at the
+/// old_design/witness-hosting.md § Escape): whether `product` — what the fold just built at the
 /// destination — still borrows `region`, one of the regions the envelope pins. Answered by
 /// [`retains_home`], a read over `product`'s stored reach; no probe walks its shape.
 ///
 /// A copy releases only the value's own home region
-/// ([value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach)).
+/// ([value-substrates.md § Sectioned reach](../../../../old_design/value-substrates.md#sectioned-reach)).
 /// `region` is home exactly when the value's own reach description names it as host — read off the
 /// carrier through the envelope's open, so residence is answered by identity against the value's own
 /// record rather than a side channel on the envelope. A non-home member is kept because it may be
@@ -1030,7 +1030,7 @@ pub(crate) enum RegionEscape {
     /// A `Module` reaching this verb declines before readiness is ever asked: a module's
     /// environment is its own child scope rather than a captured chain, and rebuilding the value
     /// around a copy of that scope is a surface the engine does not open, so it takes the verbatim
-    /// ride ([module-scope-consolidation](../../../../roadmap/foundation/module-scope-consolidation.md)).
+    /// ride ([module-scope-consolidation](../../../../roadmap/old_foundation/module-scope-consolidation.md)).
     ///
     /// Everything the verb claims about release is derived from the product, exactly as `Copy`'s
     /// is: the rebuild is total or it does not happen. An environment the engine cannot rebuild —
@@ -1067,7 +1067,7 @@ const ALPHA_DIVISOR: u64 = 4;
 ///   allocates anything: an environment it cannot rebuild rides verbatim under the pin instead.
 /// - A **foreign crossing** — the innermost captured region is not the crossing's host — pins,
 ///   mirroring the substrate rule. Pricing a consolidation out of an intermediate host is
-///   [callable-copy-tuning](../../../../roadmap/foundation/callable-copy-tuning.md)'s.
+///   [callable-copy-tuning](../../../../roadmap/old_foundation/callable-copy-tuning.md)'s.
 /// - An **unready** chain pins ([`Scope::chain_is_copy_ready`]). Never a wait: no edge of any kind
 ///   enters the finalize walk from here, so two mutually-referencing in-flight environments cannot
 ///   deadlock on each other — the cycle is unconstructible, not handled.
@@ -1120,7 +1120,7 @@ fn chain_retained_total<'a>(captured: &'a Scope<'a>) -> u64 {
 /// `substrate`) crossing out of producer `host`. O(1), every read a stored fact: the home-crossing
 /// test compares the home the substrate's own reach description records against `host` by region
 /// identity. Generic over the substrate's cell payload `C`. See
-/// [Cost-driven copy](../../../../design/value-substrates.md#cost-driven-copy-the-optimization).
+/// [Cost-driven copy](../../../../old_design/value-substrates.md#cost-driven-copy-the-optimization).
 pub(crate) fn copy_or_pin<C>(
     substrate: &ContainerSubstrate<'_, C>,
     host: &KoanRegion,

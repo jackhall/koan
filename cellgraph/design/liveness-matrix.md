@@ -47,7 +47,7 @@ retained. That is a coincidence of the merges' triggers, not a collection
 strategy: a ring an outside hold keeps above those triggers survives intact.
 Preventing rings is the embedder's crossing discipline (koan's is the
 anti-ring crossing rule of
-[destination-homed-construction.md](../../design/destination-homed-construction.md));
+[destination-homed-construction.md](../../old_design/destination-homed-construction.md));
 the substrate ships no mint-time reachability check and no detector. What it
 ships is `is_empty()`, the end-of-program alarm: a graph that is not empty
 after the last release either forgot a release or carries a ring. Naming the
@@ -351,7 +351,7 @@ buys the O(1) seal — and it is relieved rather than prevented:
 - **The consolidation lever.** Deep-copying a value out of a sealed region —
   the same transitive copy eternal escape and an explicit capture-severing
   `CLOSE OVER` perform in koan
-  ([lazy-closures.md § Lazy close](../../design/lazy-closures.md)) — severs
+  ([lazy-closures.md § Lazy close](../../old_design/lazy-closures.md)) — severs
   its reach and re-derives a precise mask. The aggregate prices the operation
   up front: an empty aggregate means nothing to do, and each entry names a
   region the copy would free the claim on.
@@ -424,7 +424,7 @@ tier, the bytes those sealed cells retain (a running total rather than a scan),
 and the destination region's own size. The substrate ships numbers and no
 threshold: whether the copy-versus-hold ramp is linear on occupancy or a step
 at a watermark is the embedder's
-([adopt-cellgraph.md](../../workgraph/roadmap/adopt-cellgraph.md)).
+([adopt-cellgraph.md](../../workgraph/old_roadmap/adopt-cellgraph.md)).
 
 **Every one of these queries is crate-private**, and so is the vocabulary they
 speak — the mask, the sealed id, the closure and occupancy answers. A price is
@@ -462,7 +462,7 @@ the lever there.
 
 - **The crossing rule keeps cells out of the tier.** The general crossing
   tier of
-  [destination-homed-construction.md](../../design/destination-homed-construction.md)
+  [destination-homed-construction.md](../../old_design/destination-homed-construction.md)
   — producer-born parts copy; references upward and sideways cross free —
   composes with the self rule: a caller-homed reference delivered back to
   its own region contributes the caller's own bit, which `mask & !bit(C)`
@@ -472,7 +472,7 @@ the lever there.
   reference escapes downward from — closures over locals and stored handles
   still seal, by design. Whether the rule applies at every adopt or only at
   yield deliveries is open per
-  [yielding-iterators.md](../../roadmap/foundation/yielding-iterators.md).
+  [yielding-iterators.md](../../roadmap/old_foundation/yielding-iterators.md).
 
 - **Destination-homed construction keeps loop hops out of the tier.** A
   value built directly into another live cell's region — the step context's
@@ -649,6 +649,6 @@ column scan it stands in for, at every query that reads it.
 ## Open work
 
 One koan-side primitive the model leans on is tracked on koan's own roadmap:
-[Yielding iterators](../../roadmap/foundation/yielding-iterators.md) —
+[Yielding iterators](../../roadmap/old_foundation/yielding-iterators.md) —
 producers that yield many values before dying, the surface family lazy
 admission belongs to.

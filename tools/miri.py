@@ -21,7 +21,8 @@ equals the slate count. A filter that matches nothing becomes a loud error
 instead of a silent pass.
 
 Usage:
-  python3 tools/miri.py                      # full slate
+  python3 tools/miri.py                      # full slate (the modules the rewrite keeps)
+  python3 tools/miri.py --pending-rewrite    # the old runtime's slate, under --features pending_rewrite
   python3 tools/miri.py --tests A B C        # triage specific tests
   python3 tools/miri.py --tests A --track 1234   # + -Zmiri-track-alloc-id=1234
   python3 tools/miri.py --log                # on a clean full-slate run, prepend
@@ -41,6 +42,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SLATE_MD = ROOT / "observe" / "miri_slate.md"
+# The old runtime's slate: frozen with the code it audits, which compiles only under
+# `pending_rewrite`, so selecting it also turns that feature on.
+PENDING_REWRITE_SLATE_MD = ROOT / "observe" / "miri_slate_pending_rewrite.md"
 MIRIFLAGS = "-Zmiri-tree-borrows"
 
 RESULT_RE = re.compile(
@@ -59,10 +63,10 @@ DURATIONS_BLOCK = re.compile(
 )
 
 
-def slate_names() -> list[str]:
+def slate_names(slate: Path) -> list[str]:
     """The slate test list — single source of truth is `observe_tests.py slate`."""
     out = subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "observe_tests.py"), "slate"],
+        [sys.executable, str(ROOT / "tools" / "observe_tests.py"), "slate", "--slate", str(slate)],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -159,18 +163,18 @@ def parse(output: str) -> dict:
     return {"passed": passed, "failed": failed, "leaks": leaks, "ub": ub}
 
 
-def update_duration_log(n: int, leaks: int, ub: int, seconds: float) -> None:
+def update_duration_log(slate: Path, n: int, leaks: int, ub: int, seconds: float) -> None:
     """Prepend today's entry to the slate-durations block, trimmed to five."""
     today = time.strftime("%Y-%m-%d")
     entry = f"- {today}: {seconds:.0f}s — {n} tests, {leaks} leaks, {ub} UB"
-    text = SLATE_MD.read_text()
+    text = slate.read_text()
     m = DURATIONS_BLOCK.search(text)
     if not m:
         print("warning: no slate-durations block found; skipping log update", file=sys.stderr)
         return
     existing = [ln for ln in m.group(2).splitlines() if ln.strip().startswith("- ")]
     trimmed = "\n".join([entry, *existing][:5])
-    SLATE_MD.write_text(text[: m.start(2)] + trimmed + text[m.end(2):])
+    slate.write_text(text[: m.start(2)] + trimmed + text[m.end(2):])
     print(f"logged: {entry}")
 
 
@@ -184,10 +188,15 @@ def main() -> int:
                     help="cargo features to enable; needed for slate tests behind a feature gate")
     ap.add_argument("--log", action="store_true",
                     help="on a clean full-slate run, prepend the duration entry to the slate doc")
+    ap.add_argument("--pending-rewrite", action="store_true",
+                    help="run the old runtime's slate (observe/miri_slate_pending_rewrite.md) "
+                         "with --features pending_rewrite")
     args = ap.parse_args()
 
+    slate = PENDING_REWRITE_SLATE_MD if args.pending_rewrite else SLATE_MD
+    features = ["pending_rewrite", *args.features] if args.pending_rewrite else args.features
     is_slate = args.tests is None
-    names = slate_names() if is_slate else args.tests
+    names = slate_names(slate) if is_slate else args.tests
     if not names:
         print("no tests to run", file=sys.stderr)
         return 2
@@ -195,12 +204,12 @@ def main() -> int:
     # fails fast (before the long Miri build) rather than as a post-run miscount; triage
     # keeps substring matching so a partial name still works interactively.
     if is_slate:
-        names = resolve_slate(names, args.features)
+        names = resolve_slate(names, features)
     expected = len(names)
 
     label = "slate" if is_slate else f"triage ({expected} test(s))"
     print(f"running Miri {label} under {MIRIFLAGS} (--lib)…", file=sys.stderr)
-    code, output, seconds = run_miri(names, args.track, exact=is_slate, features=args.features)
+    code, output, seconds = run_miri(names, args.track, exact=is_slate, features=features)
 
     log_path = ROOT / "observe" / "miri-last-run.log"
     log_path.write_text(output)
@@ -232,7 +241,7 @@ def main() -> int:
         print(f"ERROR: Miri reported {r['leaks']} leaked allocation(s) — see {log_path}.", file=sys.stderr)
 
     if ok and is_slate and args.log:
-        update_duration_log(r["passed"], r["leaks"], r["ub"], seconds)
+        update_duration_log(slate, r["passed"], r["leaks"], r["ub"], seconds)
 
     return 0 if ok else 1
 

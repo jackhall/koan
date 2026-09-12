@@ -5,7 +5,7 @@
 //!
 //! A member-less resident carrier (a region-pure value under a description hosted in its own
 //! region) pins nothing: it is sound only as a within-step transient, covered by
-//! [the step's coverage](../../../design/per-node-memory.md#the-steps-coverage) until
+//! [the step's coverage](../../../old_design/per-node-memory.md#the-steps-coverage) until
 //! [`StepCarried::seal_at_step`] folds the producing frame into its reach. [`StepCarried`] makes
 //! that transient a type: the carrier crossing the Done arm rides a brand lifetime `'step` that is
 //! the step's rank-2 open lifetime ([`Host::step`](super::harness::Host)), unnameable outside that

@@ -25,7 +25,7 @@ use crate::machine::core::SealedFunction;
 /// The callable arms carry the pick **at rest**, as the same [`SealedFunction`] the dispatch bucket
 /// holds: a tail chain outlives the step that picked, so nothing region-bound may ride it. A reader
 /// re-opens the seal under the step's own coverage — the callable's home is pinned by the frame
-/// `outer` chain for as long as its body runs (design/tail-call-optimization.md Lemma 3) — and the
+/// `outer` chain for as long as its body runs (old_design/tail-call-optimization.md Lemma 3) — and the
 /// sealed [`ReturnObligation`](crate::machine::execute) the chain actually keeps is region-free
 /// `Copy` data resolved once, at the first read.
 #[derive(Clone, Copy)]

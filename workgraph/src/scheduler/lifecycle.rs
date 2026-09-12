@@ -1,6 +1,6 @@
 //! **Delivery at finalize** — the walk that distributes a producer's terminal into every
 //! destination waiting on it, and the slot reclaim that follows it unconditionally. See
-//! [design/dag-scheduler.md § Delivery at finalize](../../design/dag-scheduler.md#delivery-at-finalize).
+//! [old_design/dag-scheduler.md § Delivery at finalize](../../old_design/dag-scheduler.md#delivery-at-finalize).
 
 use crate::witnessed::{BumpAllocator, BumpVec, Delivered, Retained};
 

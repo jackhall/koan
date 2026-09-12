@@ -1,7 +1,7 @@
 //! `MODULE <name:Identifier> = <body:KExpression>` — declare a structure (a bundle of
 //! type definitions, values, and functions). A module is a value, so it binds value-side under a
 //! snake_case name; a second overload takes the Type-token name and reports the respelling. See
-//! [design/typing/modules.md](../../design/typing/modules.md) for the surface design.
+//! [old_design/typing/modules.md](../../old_design/typing/modules.md) for the surface design.
 //!
 //! [`await_module_body`] is the body-dispatch-and-bind tail, shared with `GROUP`
 //! ([`super::group_def`]) — a group *is* a module, so it differs only in the child scope it mints.

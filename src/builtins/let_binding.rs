@@ -187,7 +187,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 /// Checked against [`is_type_name`], the one classifier the parser tags a `Type` part by, so the
 /// suggestion is always a spelling the writer can actually type: `t` capitalizes to `T`, which is
 /// one uppercase letter with no lowercase and so classifies as neither keyword nor type name (see
-/// [design/typing/tokens.md](../../design/typing/tokens.md)). A name that has no such rewrite is
+/// [old_design/typing/tokens.md](../../old_design/typing/tokens.md)). A name that has no such rewrite is
 /// reported with the rule alone.
 fn capitalize_identifier(name: &str) -> Option<String> {
     let mut chars = name.chars();

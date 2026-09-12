@@ -7,8 +7,8 @@
 //! split and so free to name concrete Koan types. The host brackets this context per step
 //! ([`Host::with_slot_step`]); step code reads it back through the methods below.
 //!
-//! See [per-call-region](../../../design/per-call-region/README.md) and
-//! [execution](../../../design/execution/README.md).
+//! See [per-call-region](../../../old_design/per-call-region/README.md) and
+//! [execution](../../../old_design/execution/README.md).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -26,7 +26,7 @@ use super::run_frame::{RunFrame, RunWriter};
 #[derive(Default)]
 pub(in crate::machine::execute) struct AmbientContext {
     /// Active per-call cart of the slot currently being executed. See
-    /// [per-call-region/frames.md § Active-frame propagation](../../../design/per-call-region/frames.md#active-frame-propagation).
+    /// [per-call-region/frames.md § Active-frame propagation](../../../old_design/per-call-region/frames.md#active-frame-propagation).
     active_frame: Option<Rc<CallFrame>>,
     /// The run's own frame and the run-lifetime state beside it, lazily minted on the first
     /// run-lifetime submission. Top-level slots carry its frame as their cart, so `active_frame` is
@@ -216,7 +216,7 @@ impl<'run> Host<'run> {
     ///
     /// The bracket installs the node's non-optional cart, so `active_frame` is `Some` for the whole
     /// step; it stays `Option` because it is legitimately `None` *between* steps
-    /// ([frames.md § Active-frame propagation](../../../design/per-call-region/frames.md#active-frame-propagation)).
+    /// ([frames.md § Active-frame propagation](../../../old_design/per-call-region/frames.md#active-frame-propagation)).
     pub(in crate::machine::execute) fn with_slot_step<R>(
         &mut self,
         node_frame: Rc<CallFrame>,

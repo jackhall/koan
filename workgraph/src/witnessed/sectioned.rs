@@ -2,7 +2,7 @@
 //! [`Sectioned`] holds its payload cells in semantic order, physically partitioned into contiguous
 //! **runs** that each pair a span of cells with one interned `&ReachDescription`, so a seam that
 //! parts a cell from its container reads reach in O(log runs) instead of re-deriving it by walking
-//! the value ([design/sectioned-reach.md](../../design/sectioned-reach.md) § Sectioned storage).
+//! the value ([old_design/sectioned-reach.md](../../old_design/sectioned-reach.md) § Sectioned storage).
 //!
 //! The cell type is the embedder's, named as a [`Reattachable`] family `K`; no embedder type enters
 //! this module. Everything a container is made of lives in the destination region and is anchored
@@ -84,7 +84,7 @@ impl<K> DropFree for CellRef<K> {}
 /// the same reach appearing in non-adjacent runs makes two run entries naming one interned
 /// description. That exactness is what makes projection release-exact: a cell parted from the
 /// container carries exactly its own reach, never the container's union
-/// ([design/sectioned-reach.md](../../design/sectioned-reach.md) § Sectioned storage).
+/// ([old_design/sectioned-reach.md](../../old_design/sectioned-reach.md) § Sectioned storage).
 pub struct Sectioned<'a, K: Reattachable + 'static, F: PinsRegion + 'static> {
     /// The index→cell mapping, in semantic order. Each cell is `&'a K::At<'a>` — the tight
     /// no-free-lifetime shape, so a projection out of it is `'a`-confined by its own type.

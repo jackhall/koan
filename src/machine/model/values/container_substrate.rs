@@ -13,7 +13,7 @@
 //! is non-empty", borrows-home is the description's own home-relative query. The cost memo is a
 //! read on the storage's own weight for the same reason — a stored construction-time fact, not a
 //! fold a door re-runs. See
-//! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
+//! [old_design/value-substrates.md § Sectioned reach](../../../../old_design/value-substrates.md#sectioned-reach).
 
 use crate::machine::model::{Held, KKey, KObject};
 use crate::memory::{BumpBackedMap, CellRef, FoldingBrand, FrameReach, Opened, Sectioned};

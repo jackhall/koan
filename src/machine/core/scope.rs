@@ -57,7 +57,7 @@ pub struct RegionScopeFamily;
 // A carrier holds a `&'a Scope<'a>` whose real lifetime the borrow checker can't track across the
 // region's `'static` storage. The reference is held outright as a thin pointer (layout-invariant in
 // `'a`) and re-anchored to the holder's `'a` as part of the holder's own substrate retype on read.
-// See [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
+// See [memory-model.md § Region lifetime erasure](../../../old_design/memory-model.md#region-lifetime-erasure)
 // for the soundness argument the carriers' pinning supplies.
 // `Scope`'s own erase/reattach registration — the stored form the region engine erases to
 // `'static` and re-anchors to the reader's `'r`. `Scope<'r>` is generic only in `'r`, so its layout

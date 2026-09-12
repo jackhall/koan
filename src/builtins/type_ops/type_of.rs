@@ -3,7 +3,7 @@
 //! `TYPE OF xs` is `LIST OF Number`. Applied to a module it yields that module's principal
 //! signature, which is how a module reaches type position: a module name is a value token, so it
 //! names no type on its own (see
-//! [design/typing/modules.md](../../../design/typing/modules.md)).
+//! [old_design/typing/modules.md](../../../old_design/typing/modules.md)).
 
 use crate::machine::model::Held;
 use crate::machine::{Action, BodyCtx};

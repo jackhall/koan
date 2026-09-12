@@ -194,7 +194,7 @@ impl<'a> KFunction<'a> {
     /// The store inside the fold is the plain bump verb
     /// ([`FoldingBrand::alloc_function_folded`]): a `KFunction` is `Copy`, so it lands in the region
     /// bump and region death frees it as a chunk with no destructor pass
-    /// ([value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+    /// ([value-substrates.md § Untyped arenas](../../../old_design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
     pub fn alloc_captured(
         captured: &'a Scope<'a>,
         return_type: ReturnType<'a>,
@@ -594,7 +594,7 @@ fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>], registries: &RunRegistrie
 /// A `Deferred(_)` source return projects into the confined `DeferredReturn` node, holding the
 /// hashable surface shadow of the deferred form, so equality and specificity read the deferred
 /// shape directly instead of seeing it coarsened to `Any`. See
-/// [ktype/records-and-limits.md § Record fields](../../../design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
+/// [ktype/records-and-limits.md § Record fields](../../../old_design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
 /// Intern the **shape** type a `KFunction` registers under: its signature read through the one
 /// shape derivation [`shape_type_of`] owns, with the same return projection
 /// [`function_value_ktype`] takes.

@@ -44,7 +44,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
 /// let node = koan::parse::KExpression::new(program.region(), &[]);
-/// let _marked = koan::machine::model::ast::program::ProgramExpression(node);
+/// let _marked = koan::parse::ProgramExpression(node);
 /// ```
 ///
 /// The door path is the only one that compiles:
@@ -52,8 +52,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// ```
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
-/// let marked = program.new_expression(&[]);
-/// let _cell = koan::machine::model::KObject::KExpression(marked);
+/// let _marked: koan::parse::ProgramExpression<'_> = program.new_expression(&[]);
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct ProgramExpression<'a>(KExpression<'a>);

@@ -89,7 +89,7 @@ pub(in crate::machine::execute) struct DecideCtx<'program: 'step, 'step, 'view> 
     /// entry.
     installer: Installer,
     /// The step's binding-write sink, owned and drained by the harness's step — see [the step's
-    /// binding writes](../../../../design/execution/classify-and-apply.md#the-steps-binding-writes).
+    /// binding writes](../../../../old_design/execution/classify-and-apply.md#the-steps-binding-writes).
     /// **Private**, with one `pub(in crate::machine::execute)` deposit method: a builtin receives
     /// a [`BodyCtx`](crate::machine::BodyCtx), which does not carry it, and nothing outside the
     /// execute layer can deposit. The sink rides the step arena, minted fresh inside the step
@@ -206,7 +206,7 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
 
     /// The step construction allocator wrapping [`Self::dest_frame`], branded at the step lifetime
     /// `'step` — its doors return a [`StepCarried`](crate::machine::execute::StepCarried) confined to
-    /// the step (`design/scheduler-library.md` guarantees 3 and 5), handed to a finish through
+    /// the step (`old_design/scheduler-library.md` guarantees 3 and 5), handed to a finish through
     /// [`FinishCtx`](crate::machine::core::FinishCtx).
     pub(in crate::machine::execute) fn step_ctx(&self) -> StepAllocator<'step> {
         StepAllocator::over_frame(self.dest_frame())

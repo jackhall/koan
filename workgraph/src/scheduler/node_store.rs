@@ -7,7 +7,7 @@
 //! nothing left to hold and reclaims immediately: `Free` is the only state a finished slot rests
 //! in, and a slot whose result *is* another producer's is spliced out rather than kept as an alias.
 //!
-//! See [design/dag-scheduler.md § Slots and the node-store lifecycle](../../design/dag-scheduler.md#slots-and-the-node-store-lifecycle).
+//! See [old_design/dag-scheduler.md § Slots and the node-store lifecycle](../../old_design/dag-scheduler.md#slots-and-the-node-store-lifecycle).
 //!
 //! ## Invariants
 //!

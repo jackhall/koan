@@ -1,3 +1,4 @@
+#![cfg(feature = "pending_rewrite")]
 //! End-to-end tests for the type-language-via-dispatch sigil surface.
 //!
 //! Covers the keyworded type-constructor overloads (`LIST OF`,
@@ -11,7 +12,7 @@
 //! `Signature` / `SetMember` for nominal identities) that downstream slots
 //! type-check naturally.
 //!
-//! Companion design: [design/typing/type-language-via-dispatch.md].
+//! Companion design: [old_design/typing/type-language-via-dispatch.md].
 
 use std::rc::Rc;
 

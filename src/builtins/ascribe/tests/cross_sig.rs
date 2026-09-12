@@ -1,6 +1,6 @@
 //! Cross-SIG dispatch specificity: two distinct `SIG`-declared signature slots become
 //! comparable when one structurally `sig_subtype`s the other. See
-//! [design/typing/modules.md](../../../../design/typing/modules.md).
+//! [old_design/typing/modules.md](../../../../old_design/typing/modules.md).
 
 use crate::builtins::test_support::{TestRun, lookup_module};
 use crate::machine::KErrorKind;

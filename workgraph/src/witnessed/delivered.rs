@@ -1,7 +1,7 @@
 //! [`Delivered<T, W, F>`] — the **delivery envelope**: a sealed carrier fused with the owned
 //! [`PinBundle`] that retains its value's backing *in transit*, from a scheduler pull to the point a
 //! consumer adopts or re-homes it. See
-//! [design/reach.md § Retention model](../../design/reach.md#retention-model).
+//! [old_design/reach.md § Retention model](../../old_design/reach.md#retention-model).
 //!
 //! Liveness *at rest* is the scheduler's retention table (a producer frame stays held while any
 //! consumer edge is undischarged). Liveness *in transit* is this envelope: an `Rc<F>` for every
@@ -17,7 +17,7 @@
 //! [`Delivered::transfer_into`] *derives* the source claim by running the site's retention predicate
 //! over the folded product against each pinned region in turn, so what the product still reaches is
 //! a checked property of the bytes rather than a promise made before they existed. See
-//! [design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins).
+//! [old_design/reach.md § Composition](../../old_design/reach.md#composition-minting-a-description-and-retaining-its-pins).
 //!
 //! The fusion holds on the way out. The exits to a bare [`Sealed`] — [`Delivered::rest_in`] and
 //! [`Delivered::rest_into`] — both take the destination and lodge the coverage there, so a cell is
@@ -433,7 +433,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     /// discharge; a `true` verdict keeps it, so the producer transfers by hold. The claim is
     /// therefore a checked property of the bytes that exist, and a predicate that answers
     /// conservatively costs retention, never soundness. See
-    /// [design/reach.md § Retention model](../../design/reach.md#retention-model).
+    /// [old_design/reach.md § Retention model](../../old_design/reach.md#retention-model).
     pub fn transfer_into<B: Reattachable + DropFree, P: Reattachable + DropFree, Pr>(
         &self,
         dest: Delivered<B, Carrier<F>, F>,

@@ -13,8 +13,8 @@
 //!   read list — the drain reads each dep's resident through these names at step start and releases
 //!   them there.
 //!
-//! See [design/dag-scheduler.md § The dep row and its
-//! invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants).
+//! See [old_design/dag-scheduler.md § The dep row and its
+//! invariants](../../old_design/dag-scheduler.md#the-dep-row-and-its-invariants).
 
 use allocator_api2::alloc::{Allocator, Global};
 use allocator_api2::vec::Vec as AllocVec;

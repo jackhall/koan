@@ -13,7 +13,7 @@
 //! keeps every position's from/to pair exact, and [`CoercionTables::substitutions`] is the fast
 //! path that stops the descent wherever the two substitutions agree.
 //!
-//! See [design/typing/modules.md](../../../../design/typing/modules.md).
+//! See [old_design/typing/modules.md](../../../../old_design/typing/modules.md).
 
 use std::collections::HashMap;
 

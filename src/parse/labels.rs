@@ -12,12 +12,14 @@
 //! symbol bits; the table is written only where a syntactic label is constructed and read only
 //! where one is rendered. Its growth is bounded by the run's source text.
 //!
-//! See [design/label-interning.md](../../design/label-interning.md).
+//! See [old_design/label-interning.md](../../old_design/label-interning.md).
 
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+
+use smallvec::SmallVec;
 
 /// A label's content identity: the low 128 bits of a BLAKE3 hash of its UTF-8 bytes.
 ///
@@ -178,7 +180,7 @@ impl std::fmt::Display for LabelDisplay<'_> {
 /// predicate for "this name classifies as a Type token" — the parser uses it to tag a
 /// `Type` part, the type-language partition (abstract-type members vs value slots in a SIG
 /// type table) reuses it, and [`TypeSymbol`] mints against it. See
-/// [design/typing/tokens.md](../../design/typing/tokens.md).
+/// [old_design/typing/tokens.md](../../old_design/typing/tokens.md).
 pub fn is_type_name(tok: &str) -> bool {
     let mut chars = tok.chars();
     let Some(first) = chars.next() else {
@@ -192,7 +194,7 @@ pub fn is_type_name(tok: &str) -> bool {
 
 /// Suggest a value-classified rewrite of a Type-classified binder name: `IntOrd` → `int_ord`. Each
 /// interior uppercase letter opens a new word (see
-/// [design/typing/tokens.md](../../design/typing/tokens.md)). Beside [`is_type_name`] because it
+/// [old_design/typing/tokens.md](../../old_design/typing/tokens.md)). Beside [`is_type_name`] because it
 /// is that classifier read backwards — the respelling every diagnostic offers when a value binds
 /// under a Type token.
 pub fn snake_case_identifier(name: &str) -> String {
@@ -321,7 +323,7 @@ impl KeywordSymbol {
     /// deduped, their 16-byte little-endian digests streamed through one hasher. The fragments are
     /// fixed-width, so no separator is needed to keep the feed unambiguous. An operator chain and
     /// the group registration whose powerset keys it must hit
-    /// (`crate::machine::core::bindings::ops::powerset_probes`) both mint here, so a registered key
+    /// ([`powerset_probes`]) both mint here, so a registered key
     /// and a live probe agree by construction and no probe path touches text.
     ///
     /// Keyword-class inputs witness the class of the product: a run of keyword-class tokens names
@@ -387,7 +389,7 @@ fn sorted_run(members: &[KeywordSymbol]) -> smallvec::SmallVec<[KeywordSymbol; 8
 ///
 /// Only `TypeSymbol` carries this: `WITH`'s pin walk and the union-variant probes are the sites
 /// where a bare record-field symbol meets a Type-class member table, and nothing probes the other
-/// classes by bits. See [design/label-interning.md](../../design/label-interning.md).
+/// classes by bits. See [old_design/label-interning.md](../../old_design/label-interning.md).
 impl Borrow<Symbol> for TypeSymbol {
     fn borrow(&self) -> &Symbol {
         &self.0
@@ -449,7 +451,7 @@ impl BinderSymbol {
 /// binds into: `wanted` is that channel, `name` the text as written. This is the token-class
 /// partition stated **at the text→symbol seam** — past it the classified key types make a crossing
 /// unrepresentable, so this is the one place the rule is a runtime disposition rather than a type.
-/// See [design/typing/tokens.md](../../design/typing/tokens.md).
+/// See [old_design/typing/tokens.md](../../old_design/typing/tokens.md).
 pub fn wrong_binder_class(name: &str, wanted: BindKind) -> String {
     match wanted {
         BindKind::Type => format!(
@@ -484,7 +486,7 @@ pub enum BindKind {
 }
 
 /// True iff `s` classifies as a keyword (fixed token). See
-/// [tokens.md](../../design/typing/tokens.md): pure-symbol tokens (no ASCII letters) are always
+/// [tokens.md](../../old_design/typing/tokens.md): pure-symbol tokens (no ASCII letters) are always
 /// keywords; alphabetic tokens are keywords iff they have at least two ASCII-uppercase letters and
 /// no ASCII-lowercase letters.
 pub fn is_keyword_token(s: &str) -> bool {
@@ -499,7 +501,7 @@ pub fn is_keyword_token(s: &str) -> bool {
 
 /// The hasher every 128-bit-digest-keyed table runs: the interner here, the type registry's node
 /// table, and the classified scope binding tables
-/// ([design/label-interning.md](../../design/label-interning.md)). A
+/// ([old_design/label-interning.md](../../old_design/label-interning.md)). A
 /// [`TypeDigest`](crate::machine::model::types::TypeDigest) and a [`Symbol`] are each the low 128
 /// bits of a BLAKE3 hash, so they
 /// are already uniformly distributed and re-hashing would only cost cycles: keep the low 64 bits
@@ -638,6 +640,36 @@ macro_rules! slots {
             )+
         };
     };
+}
+
+/// The probe key of every nonempty subset of `members` — the powerset-key story
+/// [`crate::machine::model::operators`] describes, shared by the builtin seeds, the `GROUP` binder
+/// and the `OP` declaration. `members.len()` stays small, so the `2^n - 1` bitmask walk is cheap;
+/// each subset's key is minted through [`KeywordSymbol::declared_run`], the same run-digest
+/// constructor a live chain's probe (`operator_probe_for`) mints through, so a registration key and
+/// a real chain's probe agree by construction and neither side touches text.
+///
+/// Each key records the rendered join of its members as it is built, so an operator-conflict
+/// diagnostic can name the probe it stands for. One region-hosted record backs every key, so past
+/// that recording the whole install allocates nothing.
+pub fn powerset_probes(members: &[KeywordSymbol], labels: &LabelInterner) -> Vec<KeywordSymbol> {
+    let subset_count = 1usize << members.len();
+    // One stack buffer, refilled per mask: the walk visits `2^n - 1` subsets, so materializing each
+    // one afresh would allocate once per registry entry.
+    let mut subset: SmallVec<[KeywordSymbol; 8]> = SmallVec::new();
+    (1..subset_count)
+        .map(|mask| {
+            subset.clear();
+            subset.extend(
+                members
+                    .iter()
+                    .enumerate()
+                    .filter(|(bit, _)| mask & (1 << bit) != 0)
+                    .map(|(_, op)| *op),
+            );
+            KeywordSymbol::declared_run(&subset, labels)
+        })
+        .collect()
 }
 
 #[cfg(test)]

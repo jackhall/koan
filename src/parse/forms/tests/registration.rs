@@ -8,9 +8,8 @@
 
 use std::collections::BTreeMap;
 
-use super::lazy::kind_of;
 use crate::builtins::test_support::TestRun;
-use crate::machine::model::{KType, SignatureElement, TypeNode};
+use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry};
 use crate::memory::{program_storage, run_root_storage};
 use crate::parse::UntypedKey;
 use crate::parse::forms::binder::BinderFacts;
@@ -49,12 +48,35 @@ fn live_registrations(run: &TestRun<'_>) -> Vec<LiveBucket> {
     live
 }
 
+/// The kind an exact raw-capture slot type stands for; `None` for a slot type that captures
+/// nothing raw. The runtime's own type handle, so this is `lazy.rs`'s derivation restated over it.
+fn exact_kind_of(ktype: KType) -> Option<LazyKinds> {
+    match ktype {
+        KType::KEXPRESSION => Some(LazyKinds::CODE),
+        KType::SIGILED_TYPE_EXPR => Some(LazyKinds::TYPE_EXPR),
+        KType::RECORD_TYPE => Some(LazyKinds::RECORD_TYPE),
+        _ => None,
+    }
+}
+
+/// The kinds a slot type stands for, distributed over union members.
+fn kind_of(ktype: KType, types: &TypeRegistry) -> Option<LazyKinds> {
+    if let Some(kind) = exact_kind_of(ktype) {
+        return Some(kind);
+    }
+    let kinds = types.with_node(ktype, |node| match node {
+        TypeNode::Union { members } => members
+            .iter()
+            .filter_map(|member| exact_kind_of(*member))
+            .fold(LazyKinds::EMPTY, LazyKinds::with),
+        _ => LazyKinds::EMPTY,
+    });
+    (!kinds.is_empty()).then_some(kinds)
+}
+
 /// The lazy slots a live bucket actually declares: per slot index, the union over its overloads of
 /// each raw-capture slot's kind. A bucket declaring none is absent from the map.
-fn declared_lazy_slots(
-    bucket: &LiveBucket,
-    types: &crate::machine::model::TypeRegistry,
-) -> BTreeMap<usize, LazyKinds> {
+fn declared_lazy_slots(bucket: &LiveBucket, types: &TypeRegistry) -> BTreeMap<usize, LazyKinds> {
     let mut slots: BTreeMap<usize, LazyKinds> = BTreeMap::new();
     for (index, ktypes) in &bucket.slot_types {
         for ktype in ktypes {
