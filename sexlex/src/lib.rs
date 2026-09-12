@@ -29,6 +29,10 @@
 //! Everything else — which atoms are keywords, which glued prefixes are sigils, what a comma means
 //! inside a brace — belongs to the layer above. The tree borrows the source it was read from, and
 //! every span is a byte range into that source.
+//!
+//! The design — why the crate refuses a token class, a sigil table and an expression shape, how
+//! the lexer and the reader split the work, and what each error's span points at — is
+//! [README.md](../README.md).
 
 #![forbid(unsafe_code)]
 
