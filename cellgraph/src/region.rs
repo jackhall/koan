@@ -12,6 +12,15 @@
 //! [`Writer`], a `Copy` handle a step receives at a brand it cannot widen: a build closure's own
 //! for a foreign destination, and the executing cell's `'cell` for its own region.
 //!
+//! **Every borrow of a region taken inside a step is shared, and a region is minted through a
+//! `&mut` that ends at the mint.** Two writers may name one bump — a placement into the executing
+//! cell is exactly that, the build's writer beside the step's own — and a bump's bytes are
+//! interior-mutable throughout, so shared borrows of it tolerate each other's reads and writes.
+//! An exclusive borrow anywhere in that chain would not: it is unique over those bytes whatever
+//! their type, so a foreign read would freeze it and a foreign write would disable it along with
+//! every writer descended from it. That is the rule `enter` follows for the step's own writer and
+//! every placement follows for its destination's.
+//!
 //! A region is a **bundle** of bumps: the one it writes into, plus the bumps of every region
 //! absorbed into it. Absorption is how a merge splices storage
 //! ([graph/README.md § Locality tactics](graph/README.md#locality-tactics)) —
@@ -99,6 +108,9 @@ impl Region {
         self.allocated_bytes() - before
     }
 
+    /// The write surface for as long as this borrow lasts — a placement's, for the length of its
+    /// build. Shared, per the module invariant: the destination may be a cell whose own `'cell`
+    /// writer is already out.
     pub(crate) fn writer(&self) -> Writer<'_> {
         Writer(&self.bump)
     }
@@ -109,8 +121,9 @@ impl Region {
     /// The `&self` is load-bearing beyond the borrow it widens: a bump is interior-mutable
     /// throughout, so a *shared* borrow of a region tolerates every read and write the graph's
     /// other paths make into the same bump while this writer is out. An exclusive borrow would
-    /// not — it is unique over those bytes whatever their type — so the first price query to walk
-    /// this region would end the writer's life.
+    /// not — the first price query to walk this region would end the writer's life — and the rule
+    /// runs both ways, which is the module invariant above: a write through this writer disables
+    /// any exclusive borrow of the region taken after it, and everything derived from one.
     ///
     /// # Safety
     ///

@@ -276,8 +276,12 @@ brand, and each has one of those two for the executing cell's whole life:
   so a view that leaves the build names storage the cell holds. Holds are
   monotone for the cell's life, so the keeping never lapses.
 
-Every movement storage makes under such a reference moves a `Bump` and not a
-chunk byte, so the addresses stand:
+Growth is not a movement: a bump claims a new chunk and never reallocates one
+it has handed out, so a run written earlier in the step stays where it was —
+including when a second writer is laying down runs into the same bump, which is
+what a placement whose destination is the executing cell is. And every movement
+storage does make under such a reference moves a `Bump` and not a chunk byte, so
+the addresses stand:
 
 - **The seal transition.** The executing cell's own region cannot seal in-step —
   it is the one executing — and a pinned home that seals between two of this

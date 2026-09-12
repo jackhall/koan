@@ -2415,7 +2415,9 @@ impl<C: Reattachable, const W: usize> CellGraph<C, W> {
         self.mint(dest.mint_slot, &reach);
         let value = {
             // Minted first, through an exclusive borrow that ends here. A destination entered for
-            // the first time has no region yet, and this is where it gets one.
+            // the first time has no region yet, and this is where it gets one. The executing cell
+            // is never that destination: `enter` mints its region before the step's writer is
+            // taken, so this finds one and installs nothing over the bump that writer names.
             match dest.home {
                 CellHome::Slab(slot) => {
                     self.slots[slot as usize]

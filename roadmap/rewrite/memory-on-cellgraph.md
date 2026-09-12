@@ -53,9 +53,9 @@ layer lands.
 
 ## Dependencies
 
-**Requires:**
-
-- [Cell brand and writer doors](../../cellgraph/roadmap/cell-brand-and-writer.md) — the slot array is written through `fill` at `'cell`.
+**Requires:** none — the substrate doors the module is written against ship in
+[cellgraph](../../cellgraph/README.md): `writer`, `fill` at `'cell`, the
+own-cell crossing and the carrier bridge.
 
 **Unblocks:**
 

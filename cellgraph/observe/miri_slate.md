@@ -117,14 +117,15 @@ build.
 `Region::writer_at` widens a shared borrow of a cell's bump to the step's `'cell` brand, so one
 writer minted at `enter` stays live across every door the step then takes through `&mut`. That is
 the shape Miri is the referee for: a `Bump` is entirely interior-mutable, so the shared reference
-tolerates the foreign writes those doors make, and no door may take the executing cell's `Region`
-itself through `&mut` while the writer is out. The first test is the load-bearing one — the writer
-is taken before every own-cell door and written through after all of them. The second is the shape
-where two writers name one bump: a placement whose destination is the executing cell, with the
-step's own writer used inside the build closure — which stands only because every borrow of a
-region in the chain is shared. The third and fourth are the re-anchor at the cell brand: a capture
-at `'cell` is read back a step later, once with the cell's own bundle grown by an absorption under
-it, and once with the pinned home sealed out of the slab entirely.
+tolerates the foreign writes those doors make, and no door may hold an exclusive borrow of a region
+while a writer into it is out — which is why a placement mints its destination through a `&mut`
+that ends at the mint and reaches it shared from then on. The first test is the load-bearing one —
+the writer is taken before every own-cell door and written through after all of them. The second is
+the shape where two writers name one bump: a placement whose destination is the executing cell,
+with the step's own writer used inside the build closure — which stands only because every borrow
+of a region in the chain is shared. The third and fourth are the re-anchor at the cell brand: a
+capture at `'cell` is read back a step later, once with the cell's own bundle grown by an
+absorption under it, and once with the pinned home sealed out of the slab entirely.
 
 - `graph::tests::values::a_writer_taken_at_entry_writes_after_every_own_cell_door`
 - `graph::tests::values::a_placement_into_the_executing_cell_writes_beside_the_steps_own_writer`

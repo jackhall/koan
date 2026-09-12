@@ -128,8 +128,10 @@ rule.
 
 **Two brands per step.** `'b` is the step: a carrier branded to it was built
 or redeemed by this step's doors and dies with the step. `'cell` is the
-executing cell's own region: invariant, quantified per `enter`, with no
-outlives relation to `'b`. A value built there is held as a plain `&'cell`
+executing cell's: invariant, quantified per `enter`, with no outlives relation
+to `'b`, and naming storage the cell's hold set covers for the cell's whole
+life — its own region, or a region a pinned crossing into this cell minted into
+its holds. A value built there is held as a plain `&'cell`
 reference and needs no carrier, because its reach is the cell itself and the
 cell's birth row already keeps it; the three carrier states are for a value
 homed in another cell or crossing a step. The continuation's captures are
@@ -336,7 +338,7 @@ Memory-safety sign-off for the retype seam is
 What a verb costs is measured per verb: the allocations one `create`, `enter`,
 `alloc_into` or `release` made, the bytes it asked for, and how long it took —
 each exclusive of the doors it ran inside it, so `enter` reports the step
-machinery and not the `alloc` within it.
+machinery and not the `alloc_into` within it.
 
 - [perf/](perf/) — the harness, a `[[bin]]` behind the `perf` cargo feature so
   the library build, its tests, and the Miri slate never compile it.
@@ -372,8 +374,6 @@ machinery and not the `alloc` within it.
 
 - [roadmap/](roadmap/README.md) — the crate's own tree. The substrate's
   build-out is complete; what is open is recorded there as unplanned gaps.
-- [Cell brand and writer doors](roadmap/cell-brand-and-writer.md) — the
-  `'cell` brand, `writer`, `fill` and the carrier bridge described above.
 - [Rebuilding workgraph over cellgraph](../workgraph/old_roadmap/adopt-cellgraph.md)
   — the first embedder's adoption.
 
