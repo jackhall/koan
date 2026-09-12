@@ -1,6 +1,6 @@
 [workspace]
 members = ["workgraph", "cellgraph", "sexlex"]
-default-members = [".", "workgraph", "cellgraph", "sexlex"]
+default-members = [".", "cellgraph", "sexlex"]
 resolver = "2"
 
 [package]

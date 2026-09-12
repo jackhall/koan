@@ -130,7 +130,7 @@ eponymous Koan-runtime type: [kobject.rs](src/machine/model/values/kobject.rs) d
 [ktype.rs](src/machine/model/types/ktype.rs) defines `KType`,
 [ktraits.rs](src/machine/model/types/ktraits.rs) holds the `K*`-typed core traits.
 Files without the prefix are infrastructure that don't introduce a single namesake type:
-`region.rs` (allocation),
+[bump.rs](src/memory/bump.rs) (allocation),
 [scope.rs](src/machine/core/scope.rs) (lexical environment),
 [resolve_dispatch.rs](src/machine/execute/decide/resolve_dispatch.rs) (the
 overload-resolution walk returning a `DispatchOutcome`),
@@ -168,14 +168,13 @@ src/
 ├── lib.rs               library facade — declares `memory`, `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph, and re-exports workgraph's DAG scheduler as `koan::scheduler`
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally fixed-cost measurements read
 ├── source.rs            source-span and provenance carrier for errors
-├── memory.rs            pub mod memory — where a value lives and how long: Koan's instantiation of workgraph's region substrate, and every substrate name Koan spells
+├── memory.rs            pub mod memory — where a value lives and how long, in two tiers: the cell tier over cellgraph and the bump tier outside the graph
 ├── memory/
-│   ├── substrate.rs        the crate's only import of workgraph::witnessed / hashbrown / allocator_api2 — one Koan-bound alias per library generic (Delivered / Sealed / Opened / Witnessed / Retained / RegionHandle / FoldedPlacement / Sectioned / StepContext …), plus a verbatim re-export of the names that take no Koan parameter
-│   ├── region.rs           KoanStorageProfile, KoanRegion (= Region<KoanStorageProfile>), FrameStorage (the per-call region owner), the RegionBrand / FoldingBrand / SubstrateDoor allocation veneer with the residence derivations off a brand (region_owner / frame / parent_frame_pin), run_root_storage and the bump-backed table constructor
-│   ├── frame.rs            Frame<F> — the per-call region shell (envelope + storage), generic over the resident family it seats, with the two doors (open_under / adopting) that are the only way a storage and a resident get paired — plus FrameReach / FrameCoverage, the reach-evidence aliases
-│   ├── slots.rs            SlotState / SlotArray — the layout-addressed counterpart of the bump-backed map: a fixed run of Empty | Claimed(P) | Bound(V) cells in one bump allocation, beside the live-claim counter that makes "nothing in flight" an O(1) read
+│   ├── substrate.rs        the crate's only import of cellgraph — a re-export block binding the liveness width once (WIDTH), with the width-bound Ready / Operand / CellGraph / StepContext aliases
+│   ├── bump.rs             the bump tier — Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap and bump_table; the crate's only import of bumpalo / hashbrown / allocator_api2
+│   ├── slots.rs            SlotState / SlotArray — a fixed run of Empty | Claimed(P) | Bound(V) Cell slots laid down by Writer::fill in a cell's region, a Copy array beside the in-region live-claim counter that makes "nothing in flight" an O(1) read
 │   ├── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
-│   └── program.rs          ProgramStorage / ProgramBrand — the eternal-tier region program text and its parsed AST are bumped into, above the run root
+│   └── program.rs          ProgramStorage / ProgramBrand — the bump program text and its parsed AST live in, outside the graph
 ├── parse.rs             pub mod parse — the parser and what it produces: the label vocabulary, the syntax AST, and the form table
 ├── parse/
 │   ├── lower.rs            layout tree → KExpressions: sigils, the redundant-wrapper peel, adjacency, spans

@@ -1,7 +1,7 @@
 # Values on memory
 
 The rewrite's foundation: Koan's runtime values, built over `src/memory`'s
-regions, frames and brands and nothing else.
+shapes in a cell's region and nothing else.
 
 **Problem.** The old runtime's values live in
 [machine/model/values](../../src/machine/model/values.rs): a universal
@@ -12,8 +12,8 @@ memory module, so a value's representation records the scheduler's delivery
 envelope, the escape seam's copy-or-pin cost model, and the dispatch layer's
 needs (`NamedPairs`, `coerce_function_cell`) alongside what the value *is*.
 `src/memory` ([memory.rs](../../src/memory.rs)) is the module the rewrite keeps
-— the slot array, program storage, `ScopeId` — and it imports nothing back,
-but nothing sits on it yet.
+— `cellgraph`'s names under Koan's spelling, the slot array, program storage,
+`ScopeId` — and it imports nothing back, but nothing sits on it yet.
 
 **Acceptance criteria.**
 
@@ -36,9 +36,11 @@ but nothing sits on it yet.
 
 **Directions.**
 
-- *`memory` rides `cellgraph`'s region — decided, and its own item.*
-  [Memory on cellgraph](memory-on-cellgraph.md) narrows the module to shapes
-  over the cell's own region; this item instantiates those shapes.
+- *`memory` rides `cellgraph`'s region — decided, per
+  [src/memory/README.md](../../src/memory/README.md).* The module is shapes
+  over the cell's own region; this item instantiates those shapes, and
+  whether program storage becomes a substrate region, if AST nodes are homed
+  in cells, is this item's call.
 - *One universal enum or per-kind types — open.* `KObject` made every
   consumer match on every variant; per-kind types with a small tagged union at
   the boundary is the alternative. Recommended: per-kind types, with the enum
@@ -50,9 +52,7 @@ but nothing sits on it yet.
 
 ## Dependencies
 
-**Requires:**
-
-- [Memory on cellgraph](memory-on-cellgraph.md) — a value is born through the narrowed module's doors.
+**Requires:** none — the narrowed [memory](../../src/memory/README.md) module ships.
 
 **Unblocks:**
 

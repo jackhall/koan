@@ -42,38 +42,45 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 ## The pending rewrite
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
-`memory`, `parse`, `source`, `type_lattice` and the embedded crates `cellgraph`,
-`sexlex` and `workgraph` — are what a default build compiles and a default
-`cargo test` runs. Everything above them — `machine`, `builtins`, the interpreter
-binary, the guard fixtures and every `tests/*.rs` integration binary — sits behind
-the `pending_rewrite` cargo feature, so the default slate spends nothing on code
-slated for replacement. Every other koan feature (`alloc-count`, `dhat`,
+`memory`, `parse`, `source`, `type_lattice` and the embedded crates `cellgraph`
+and `sexlex` — are what a default koan build compiles and a default `cargo test`
+runs. `workgraph` is no longer a koan dependency; it still builds and tests as a
+workspace member. Everything above the kept modules — `machine`, `builtins`, the
+interpreter binary, the guard fixtures and every `tests/*.rs` integration binary —
+sits behind the `pending_rewrite` cargo feature, and **that build no longer
+compiles**: `memory` is narrowed onto `cellgraph`, and the old runtime names the
+items it deleted. It is re-implemented layer by layer rather than kept building;
+[old_design/](old_design/) and
+[observe/miri_slate_pending_rewrite.md](observe/miri_slate_pending_rewrite.md) are
+its requirements record. Every other koan feature (`alloc-count`, `dhat`,
 `region-audit`, the two seam-force features) is a knob on the old runtime and
 turns it on.
 
 ```sh
-cargo test                                                        # the kept modules only
-cargo test --features pending_rewrite                             # the old runtime's suite as well
-cargo build --features pending_rewrite                            # the interpreter binary
-cargo clippy --all-targets --features pending_rewrite -- -D warnings
+cargo test --workspace --features workgraph/test-hooks   # every kept module and embedded crate
 ```
 
+`workgraph` is a workspace member but not a default one, so a bare `cargo test`
+or `cargo clippy` skips it. Its doctests read a fixture compiled only under its
+`test-hooks` feature, and no other crate turns it on, so a `--workspace` test or
+clippy run names the feature; `tools/verify.sh` passes it on every workspace
+step.
+
 The verify slate (`tools/verify.sh`), the pre-commit hook and CI run the default
-build. The tools that only mean something over the old runtime — `tools/alloc_audit.py`,
-`tools/seam_equivalence.sh` and `tools/observe_tests.py audit` — turn the feature on
-themselves; `tools/verify_snippets.py` reads a binary built with it, and
-`tools/miri.py --pending-rewrite` runs the old runtime's own Miri slate. A test in a kept module that reaches the old runtime — `memory`'s
-own suite, the form-table⟺registration law, the AST cache laws that ride a
-`WorkingExpression` — is gated with it and comes back as the rewrite replaces what
-it reached.
+build. The tools that only mean something over the old runtime —
+`tools/verify_snippets.py`, `tools/alloc_audit.py`, `tools/seam_equivalence.sh`
+and `tools/miri.py --pending-rewrite` — have no binary to run until the rewrite
+re-points them. A test in a kept module that reaches the old runtime — the
+form-table⟺registration law, the AST cache laws that ride a `WorkingExpression` —
+is gated with it and comes back as the rewrite replaces what it reached.
 
 ## Unit tests
 
 ```sh
-cargo test                  # the kept modules' unit tests, across the workspace
-cargo test parse::          # one module
-cargo test -p sexlex        # the layout crate alone
-cargo test -- --nocapture   # show stdout
+cargo test --workspace --features workgraph/test-hooks   # the kept modules' unit tests, across the workspace
+cargo test parse::                                       # one module
+cargo test -p sexlex                                     # the layout crate alone
+cargo test -- --nocapture                                # show stdout
 ```
 
 Each module keeps its tests in a `#[cfg(test)] mod tests` block alongside the
@@ -124,13 +131,10 @@ beside its sibling unit tests. Seven files hold the thirty properties:
 Every runnable code block in [`tutorial/`](tutorial/README.md) is checked against
 the interpreter by [`tools/verify_snippets.py`](tools/verify_snippets.py): it runs
 each `koan` block that is immediately followed by a `text` expected-output block
-and diffs the result. The interpreter is the old runtime's binary, so the check
-is not in the verify slate while that runtime is `pending_rewrite`; run it
-standalone after editing the tutorial:
-
-```sh
-cargo build --features pending_rewrite && python3 tools/verify_snippets.py
-```
+and diffs the result. The interpreter is the old runtime's binary, which no
+longer builds (see [The pending rewrite](#the-pending-rewrite)), so the check is
+not in the verify slate and has nothing to run against until the rewrite ships an
+interpreter.
 
 ## Linting and formatting
 
@@ -171,12 +175,10 @@ details and tuning lives in
 
 ## Miri audit slate
 
-The audit slate is the load-bearing memory-safety check. It runs every unsafe
-site the runtime reaches — the lifetime-erasure transmutes in `workgraph`'s
-witnessed substrate, the safe-code disciplines routing them (brand-confined
-construction doors, interior mutation under live shared borrows, region drop
-order), and the cycle gate that prevents self-referential `Rc<FrameStorage>`
-storage — under Miri's tree-borrows mode, with zero process-exit leaks and zero
+The audit slate is the load-bearing memory-safety check. It runs the safe
+koan code that drives every unsafe site the kept modules reach — `cellgraph`'s
+`Writer::fill` and reattach seam, and `bumpalo`'s allocator under the bump tier
+— under Miri's tree-borrows mode, with zero process-exit leaks and zero
 UB required for sign-off. `src/` carries no `unsafe` at all — koan's only
 `unsafe` is the counting global allocator in
 [`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding

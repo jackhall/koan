@@ -271,7 +271,7 @@ if [ "$TIER" = routine ]; then
     ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
 
     cellgraph_surface
-    clippy_step --all-targets --features workgraph/test-hooks
+    clippy_step --workspace --all-targets --features workgraph/test-hooks
     doclinks_step
 
     summary
@@ -292,14 +292,14 @@ ok tests "ok ($(passed) passed → $LCOV)" 'tests ok'
 # llvm-cov does not run doctests (instrumented doctests are nightly-only), so the `compile_fail`
 # escape guards on the lifetime-erasure accessors go unchecked above. Run them here: a
 # `compile_fail` doctest that *starts* compiling is a test failure.
-run doctests 'doctests FAILED' cargo test --doc --features workgraph/test-hooks --quiet
+run doctests 'doctests FAILED' cargo test --workspace --doc --features workgraph/test-hooks --quiet
 ok doctests "ok ($(passed) passed, compile_fail guards included)" 'doctests ok'
 
 cellgraph_surface
 # `cellgraph/perf` is the one feature in the workspace, and it gates the measurement binary the
 # perf step below runs. A default build hides that source from clippy, so the total tier's lint
 # turns it on — the same reason the cellgraph-only routine scope does.
-clippy_step --all-targets --features cellgraph/perf,workgraph/test-hooks
+clippy_step --workspace --all-targets --features cellgraph/perf,workgraph/test-hooks
 doclinks_step
 
 # The leak/UB audit over the slate the `slate-audit` step just proved current. Minutes, and the

@@ -11,11 +11,11 @@ slate passes when Miri reports zero process-exit leaks and zero UB across the
 whole list. It runs on the default build: `python3 tools/miri.py`.
 
 `src/` carries no `unsafe` of its own. Every `unsafe` these tests reach lives in
-`workgraph`'s witnessed substrate — the bump allocator, the branded re-anchor,
-the region release — and is pinned library-side by
-[workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md). What this
-slate pins is the *safe* koan code that drives that substrate: a bump-hosted
-table, a `ManuallyDrop` buffer of bump bytes, a scratch region shared with the
+`cellgraph` — `Writer::fill`, the reattach seam, the region release — pinned
+library-side by [cellgraph/observe/miri_slate.md](../cellgraph/observe/miri_slate.md),
+or in `bumpalo`'s allocator under the bump tier. What this slate pins is the
+*safe* koan code that drives them: a bump-hosted table, slots laid down in a
+cell's region and written through `Cell`, a scratch arena shared with the
 registry it serves. Each anchor file is therefore whitelisted below, and the
 fingerprint block stays empty.
 
@@ -41,13 +41,13 @@ silence the stale-anchor check; delete a redundant test instead.
 - `src/type_lattice/registry.rs` — the registry's node table is built over its region's bump
   (`bump_table`) and every interned node's slices are bumped into the same region, so nothing the
   lattice owns carries drop glue and the region releases it whole; the relations take a scratch
-  allocator from the caller. The backing `unsafe` is `BumpAllocator`'s in `witnessed.rs`.
-- `src/memory/slots.rs` — the slot array's buffer is a `ManuallyDrop` `BumpVec` whose bytes the
-  region releases whole, and its three-state cells are written in place through a live shared
-  array. No `unsafe` of its own; the buffer's is `BumpVec`'s.
+  allocator from the caller. The backing `unsafe` is `bumpalo`'s.
+- `src/memory/slots.rs` — the slot array's cells and its claim counter are laid down by
+  `Writer::fill` at `'cell` and written through `Cell` under the region's shared borrow, released
+  with the cell. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s.
 - `src/parse/ast/program.rs` — the program-region storage doors: plain bump allocations whose
-  destination brand discharges residence at compile time, over `BumpAllocator`'s `unsafe` in
-  `witnessed.rs`. No `unsafe` of its own.
+  destination brand discharges residence at compile time, over `bumpalo`'s `unsafe`. No `unsafe`
+  of its own.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -83,15 +83,16 @@ the storage releases the whole tree.
   the same form unquoted, so the top-level statement peel and the type-slot flip run over
   region-hosted parts.
 
-**Slot array over bump memory** ([src/memory/slots.rs](../src/memory/slots.rs)) — a fixed run of
-three-state cells in one bump allocation, released with the program region.
+**Slot array in a cell's region** ([src/memory/slots.rs](../src/memory/slots.rs)) — a fixed run
+of three-state `Cell` slots and a claim counter laid down by `Writer::fill` in a one-cell graph,
+released with the cell.
 
 - `a_commit_retires_its_own_claim`
   claim then bind in place: the two writes a binder makes to one
   cell, read back through the array.
 - `conflicts_name_what_stands`
   refused writes against standing claims and bindings, so a refusal
-  is proven to change nothing in the bump-hosted cell.
+  is proven to change nothing in the region-resident slot.
 
 ## Recent full-slate run durations
 
