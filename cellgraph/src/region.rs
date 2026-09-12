@@ -10,11 +10,11 @@
 //! Nothing stored in a region is ever dropped — a bump releases its chunks whole — which is why
 //! every family a region hosts is [`DropFree`](crate::DropFree). The write surface is
 //! [`Writer`], a `Copy` handle a step receives at a brand it cannot widen: a build closure's own
-//! for a foreign destination, and the executing cell's `'cell` for its own region.
+//! for a foreign destination, and the executing cell's `'here` for its own region.
 //!
 //! Every live cell's region sits in one table, [`Regions`], that a step borrows **shared** for
 //! its whole length while it holds the rest of the graph exclusively. The step's own writer is a
-//! plain `&'cell` into that table, and every placement's writer a shorter borrow of it: two
+//! plain `&'here` into that table, and every placement's writer a shorter borrow of it: two
 //! writers may name one bump — a placement into the executing cell is exactly that, the build's
 //! writer beside the step's own — and a bump's bytes are interior-mutable throughout, so shared
 //! borrows of it tolerate each other's reads and writes. Every verb that moves or drops a region
@@ -161,10 +161,10 @@ impl Region {
 /// Every live cell's region, slab and tree, in one table the graph keeps beside its cells.
 ///
 /// Held apart from the cells so a step can borrow the two differently: the table shared, at the
-/// step's `'cell` brand, and the cells exclusively. Every slot carries a region from the start —
+/// step's `'here` brand, and the cells exclusively. Every slot carries a region from the start —
 /// an empty bump claims no chunk, so a cell that never writes costs the table one small struct
 /// and nothing else — and a region leaves the table only through the `&mut` doors below, which
-/// the graph verbs that dispose of a cell take outside any step. A writer at `'cell` therefore
+/// the graph verbs that dispose of a cell take outside any step. A writer at `'here` therefore
 /// names a bump nothing can move or drop for as long as it is out, by the borrow checker's word;
 /// and since no `&mut` into the table exists inside a step, every write a step makes into a bump
 /// descends from a shared borrow, which a bump's interior-mutable bytes tolerate.
@@ -250,7 +250,7 @@ impl Regions {
 }
 
 /// The write surface into a region's bytes, at the brand the door that hands one out chose: a
-/// build closure's own, or the executing cell's `'cell`.
+/// build closure's own, or the executing cell's `'here`.
 ///
 /// `Copy` with a private field, so a writer exists only where the graph hands one out, and every
 /// verb returns a shared `&'r` rather than the `&mut` the bump itself yields: a written value is

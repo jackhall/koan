@@ -27,7 +27,7 @@ use crate::sealed::{IdBuffer, IdSet, ScratchSet};
 /// A door mints one only for a `T` with no drop glue, so nothing is lost by the reset that ends
 /// its life without running a destructor. Growth abandons the old buffer as dead region bytes, so
 /// a door with the final length to hand takes [`Scratch::run`] instead.
-pub(crate) type ScratchVec<'s, T> = allocator_api2::vec::Vec<T, &'s Bump>;
+pub(crate) type ScratchVec<'scratch, T> = allocator_api2::vec::Vec<T, &'scratch Bump>;
 
 /// One graph's scratch region, sized at construction and reset at every verb's entry.
 ///

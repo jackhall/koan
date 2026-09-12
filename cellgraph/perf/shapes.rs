@@ -49,7 +49,9 @@ fn graph() -> CellGraph<Work> {
 
 /// An operand priced above anything a pin can cost, so [`always_pin`] pins it whatever the slab is
 /// doing.
-fn pinned<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Ready<'b, V>) -> Operand<'a, 'b, V> {
+fn pinned<'a, 'step, V: Reattachable + DropFree>(
+    carrier: &'a Ready<'step, V>,
+) -> Operand<'a, 'step, V> {
     Operand {
         carrier,
         copy_bytes: usize::MAX,
@@ -66,11 +68,14 @@ fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
 
 /// A value homed in the executing cell: the own-region write, then the bridge that makes it a
 /// carrier. What every shape's `Verb::Alloc` row measures.
-fn number_here<'b>(context: &StepContext<'b, '_, Work>, value: u32) -> Ready<'b, Number> {
+fn number_here<'step>(context: &StepContext<'step, '_, Work>, value: u32) -> Ready<'step, Number> {
     context.lift::<Number>(one(context.writer(), value))
 }
 
-fn build_number<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Number>]) -> &'r u32 {
+fn build_number<'r, 'severed>(
+    writer: Writer<'r>,
+    views: &[CrossedOperand<'r, 'severed, Number>],
+) -> &'r u32 {
     match views[0] {
         CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => one(writer, *value),
     }
@@ -78,7 +83,10 @@ fn build_number<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Numb
 
 /// Written straight out of the views: the run is filled by index, so the build needs no buffer of
 /// its own and the placement is charged for nothing the harness did.
-fn build_slice<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Number>]) -> &'r [u32] {
+fn build_slice<'r, 'severed>(
+    writer: Writer<'r>,
+    views: &[CrossedOperand<'r, 'severed, Number>],
+) -> &'r [u32] {
     writer.fill(views.len(), |index| match views[index] {
         CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => *value,
     })

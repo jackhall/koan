@@ -17,10 +17,10 @@ pub use cellgraph::{
 pub type Ready<'home, T> = cellgraph::Ready<'home, T, WIDTH>;
 
 /// One operand of a placement: a ready carrier and how it crosses into the destination.
-pub type Operand<'a, 'b, V> = cellgraph::Operand<'a, 'b, V, WIDTH>;
+pub type Operand<'a, 'step, V> = cellgraph::Operand<'a, 'step, V, WIDTH>;
 
 /// The graph of cells, their regions and the liveness matrix over them.
 pub type CellGraph<C> = cellgraph::CellGraph<C, WIDTH>;
 
 /// What a step running in a cell holds: the cell's brand, its writer and the step's doors.
-pub type StepContext<'b, 'cell, C> = cellgraph::StepContext<'b, 'cell, C, WIDTH>;
+pub type StepContext<'step, 'here, C> = cellgraph::StepContext<'step, 'here, C, WIDTH>;

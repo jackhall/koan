@@ -17,9 +17,9 @@ use crate::tree::TreeState;
 
 /// An operand the embedder will never copy: at a cost above anything a pin can price, a verdict
 /// that weighs the two always pins it.
-fn kept_operand<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Ready<'b, V>,
-) -> Operand<'a, 'b, V> {
+fn kept_operand<'a, 'step, V: Reattachable + DropFree>(
+    carrier: &'a Ready<'step, V>,
+) -> Operand<'a, 'step, V> {
     operand_at(carrier, usize::MAX)
 }
 
@@ -41,10 +41,10 @@ fn recording(
 }
 
 /// Build a number in the cell the step is running in.
-fn number_in<'b, C: Reattachable>(
-    context: &mut StepContext<'b, '_, C>,
+fn number_in<'step, C: Reattachable>(
+    context: &mut StepContext<'step, '_, C>,
     value: u32,
-) -> Ready<'b, Number> {
+) -> Ready<'step, Number> {
     number_here(context, value)
 }
 

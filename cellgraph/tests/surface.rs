@@ -85,9 +85,9 @@ fn build_prose<'r>(writer: Writer<'r>) -> &'r str {
 /// An embedder's own helper over carriers, which is the one reason [`Erased`] is nameable from
 /// outside: the read door's `Copy` bound is on the erased form, so a caller that wants to be
 /// generic over the value family has to write that bound too.
-fn read_first<'s, 'b, V>(
-    context: &'s StepContext<'b, '_, Work>,
-    carrier: &'s Ready<'b, V>,
+fn read_first<'s, 'step, V>(
+    context: &'s StepContext<'step, '_, Work>,
+    carrier: &'s Ready<'step, V>,
 ) -> V::At<'s>
 where
     V: Reattachable + DropFree,
@@ -116,9 +116,9 @@ fn weigh(prices: Prices) -> Verdict {
 
 /// An operand the embedder is unwilling to copy: at a cost above anything a pin can price, the
 /// verdict above always pins it.
-fn pinned_operand<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Ready<'b, V>,
-) -> Operand<'a, 'b, V> {
+fn pinned_operand<'a, 'step, V: Reattachable + DropFree>(
+    carrier: &'a Ready<'step, V>,
+) -> Operand<'a, 'step, V> {
     Operand {
         carrier,
         copy_bytes: usize::MAX,
@@ -182,7 +182,7 @@ fn every_public_door_answers_from_outside_the_crate() {
         .enter(child, |context| {
             assert_eq!(context.cell(), CellHandle::Slab(child));
 
-            // The own-region write: the cell's own writer, at the cell brand, then the bridge that
+            // The own-region write: the cell's own writer, at `'here`, then the bridge that
             // makes each value a carrier.
             let number = context.lift::<Number>(build_number(context.writer()));
             let numbers = context.lift::<Numbers>(build_slice(context.writer()));
@@ -221,7 +221,7 @@ fn every_public_door_answers_from_outside_the_crate() {
             assert_eq!(context.hold(doomed).unwrap_err().name(), doomed);
 
             // The own-cell crossing: two operands of the same carrier, one the embedder refuses to
-            // copy and one it prices free. A pinned view arrives at the cell brand and may leave
+            // copy and one it prices free. A pinned view arrives at `'here` and may leave
             // the build, which is what the pin bought; a copied one is severed and can only be
             // read or written again.
             let (here, severed): (&u32, u32) = context.alloc_here(
@@ -299,7 +299,7 @@ fn every_public_door_answers_from_outside_the_crate() {
         .release(bystander, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
-    // The successor comes back re-anchored at the next step's cell brand.
+    // The successor comes back re-anchored at the next step's `'here`.
     let echoed = graph
         .enter(child, |context| context.continuation())
         .unwrap();
@@ -322,7 +322,7 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
     let other = graph.create(None, None).unwrap();
 
     // A capture out of the cell's own region: written through the cell's writer, stored through
-    // the one successor door, and handed back at the next step's cell brand.
+    // the one successor door, and handed back at the next step's `'here`.
     graph
         .enter(cell, |context| {
             context.store_successor(one(context.writer(), 11));
@@ -334,7 +334,7 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
     assert_eq!(own, 11);
 
     // And a capture homed elsewhere: the own-cell crossing prices it and mints its reach into this
-    // cell's holds, which is what makes the borrow nameable at the cell brand at all. The store
+    // cell's holds, which is what makes the borrow nameable at `'here` at all. The store
     // itself prices nothing.
     graph
         .enter(cell, |context| {

@@ -37,10 +37,10 @@ fn pin(_: Prices) -> Verdict {
 }
 
 /// An operand at a stated copy cost — the half of the price the substrate cannot know.
-fn operand_at<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Ready<'b, V>,
+fn operand_at<'a, 'step, V: Reattachable + DropFree>(
+    carrier: &'a Ready<'step, V>,
     copy_bytes: usize,
-) -> Operand<'a, 'b, V> {
+) -> Operand<'a, 'step, V> {
     Operand {
         carrier,
         copy_bytes,
@@ -48,7 +48,9 @@ fn operand_at<'a, 'b, V: Reattachable + DropFree>(
 }
 
 /// An operand at no stated copy cost — what a test that never expects a `Copy` verdict passes.
-fn operand<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Ready<'b, V>) -> Operand<'a, 'b, V> {
+fn operand<'a, 'step, V: Reattachable + DropFree>(
+    carrier: &'a Ready<'step, V>,
+) -> Operand<'a, 'step, V> {
     operand_at(carrier, 0)
 }
 
@@ -84,10 +86,10 @@ fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
 
 /// A `Number` carrier homed in the executing cell: the own-region write, then the bridge to a
 /// carrier. What a test that wants a value living where the step runs does.
-fn number_here<'b, C: Reattachable>(
-    context: &StepContext<'b, '_, C>,
+fn number_here<'step, C: Reattachable>(
+    context: &StepContext<'step, '_, C>,
     value: u32,
-) -> Ready<'b, Number> {
+) -> Ready<'step, Number> {
     context.lift::<Number>(one(context.writer(), value))
 }
 
