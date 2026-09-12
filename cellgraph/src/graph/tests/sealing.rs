@@ -56,7 +56,7 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
             .unwrap();
     }
     assert_eq!(
-        graph.slots[holder.slot() as usize].reaches.len() as usize,
+        graph.cells.slots[holder.slot() as usize].reaches.len() as usize,
         kept_by_holder
     );
 
@@ -65,10 +65,10 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
         .unwrap()
         .unwrap();
 
-    let before = graph.seal_work;
+    let before = graph.cells.seal_work;
     graph.release(producer, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(graph.sealed.len(), 1);
-    graph.seal_work - before
+    assert_eq!(graph.cells.sealed.len(), 1);
+    graph.cells.seal_work - before
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
     assert_eq!(reused.generation(), held.generation() + 1);
     // The sealed cell outlives the slot: sealed ids come from their own space and are never reused,
     // so the tier needs no generation of its own.
-    assert_eq!(graph.sealed.len(), 1);
+    assert_eq!(graph.cells.sealed.len(), 1);
 }
 
 #[test]
@@ -156,11 +156,11 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
             context.keep(bundled)
         })
         .unwrap();
-    assert!(graph.holds(consumer, producer));
+    assert!(graph.cells.holds(consumer, producer));
 
     graph.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let id = graph.sealed.ids().next().unwrap();
-    assert!(graph.sealed_holds[consumer.slot() as usize].contains(id));
+    let id = graph.cells.sealed.ids().next().unwrap();
+    assert!(graph.cells.sealed_holds[consumer.slot() as usize].contains(id));
 
     // The transition rewrote the consumer's stored mask in place: the dying slot's bit traded for
     // the sealed cell's id, and what that region reached lives on in the sealed cell's frozen
@@ -170,6 +170,7 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
     assert!(!stored.names(producer.slot()));
     assert!(
         graph
+            .cells
             .sealed
             .get(id)
             .unwrap()
@@ -217,7 +218,7 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
 
     graph.release(first, ReleaseAbsorption::Refused).unwrap();
     graph.release(second, ReleaseAbsorption::Refused).unwrap();
-    let mut minted: Vec<SealedId> = graph.sealed.ids().collect();
+    let mut minted: Vec<SealedId> = graph.cells.sealed.ids().collect();
     minted.sort();
     assert_eq!(minted.len(), 2);
 
@@ -254,16 +255,16 @@ fn reclaiming_a_sealed_cells_last_holder_cascades_through_its_aggregate() {
         .unwrap();
 
     graph.release(base, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(graph.sealed.len(), 1);
+    assert_eq!(graph.cells.sealed.len(), 1);
     // The middle cell's hold on the base is a sealed id by now, so its own aggregate carries it.
     graph.release(middle, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(graph.sealed.len(), 2);
+    assert_eq!(graph.cells.sealed.len(), 2);
 
     // One release retires both: the outer count reaches zero, and releasing its aggregate takes
     // the inner count with it.
     graph.release(top, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 #[test]
@@ -280,16 +281,16 @@ fn a_sealed_cell_survives_every_holder_but_the_last() {
             .unwrap();
     }
     graph.release(held, ReleaseAbsorption::IntoHolder).unwrap();
-    let id = graph.sealed.ids().next().unwrap();
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 2);
+    let id = graph.cells.sealed.ids().next().unwrap();
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 2);
 
     graph.release(first, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 1);
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 1);
     graph
         .release(second, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 #[test]
@@ -304,9 +305,9 @@ fn a_cell_that_only_a_birth_row_names_waits_in_the_slab_rather_than_sealing() {
         .release(parent, ReleaseAbsorption::IntoHolder)
         .unwrap();
     assert_eq!(super::state_of(&graph, parent), SlabState::Dead);
-    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.cells.sealed.len(), 0);
 
     graph.release(child, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert_eq!(graph.cells.free.len(), 4);
 }

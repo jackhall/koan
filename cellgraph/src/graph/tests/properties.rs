@@ -176,7 +176,7 @@ fn verb() -> impl Strategy<Value = Verb> {
 
 /// The tier's ids in id order, since a walk's answers must not depend on hash iteration order.
 fn sorted_ids(graph: &CellGraph<Borrowed>) -> Vec<SealedId> {
-    let mut ids: Vec<SealedId> = graph.sealed.ids().collect();
+    let mut ids: Vec<SealedId> = graph.cells.sealed.ids().collect();
     ids.sort();
     ids
 }
@@ -186,28 +186,31 @@ fn sorted_ids(graph: &CellGraph<Borrowed>) -> Vec<SealedId> {
 /// `Price` verb, an id outside that set carrying a memo is one a mint or a release left behind.
 fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, priced: bool) {
     let occupied: Vec<u32> = (0..CAP)
-        .filter(|slot| graph.slots[*slot as usize].state != SlabState::Free)
+        .filter(|slot| graph.cells.slots[*slot as usize].state != SlabState::Free)
         .collect();
 
     for slot in 0..CAP {
-        let by_birth = graph.birth.held_by_any(occupied.iter().copied(), slot);
-        let by_pins = graph.pins.held_by_any(occupied.iter().copied(), slot);
-        let by_aggregate = !graph.naming[slot as usize].is_empty();
-        match graph.slots[slot as usize].state {
+        let by_birth = graph
+            .cells
+            .birth
+            .held_by_any(occupied.iter().copied(), slot);
+        let by_pins = graph.cells.pins.held_by_any(occupied.iter().copied(), slot);
+        let by_aggregate = !graph.cells.naming[slot as usize].is_empty();
+        match graph.cells.slots[slot as usize].state {
             SlabState::Free => {
                 assert!(
                     !by_birth && !by_pins && !by_aggregate,
                     "slot {slot} is free but something still names it"
                 );
                 assert!(
-                    graph.sealed_holds[slot as usize].is_empty(),
+                    graph.cells.sealed_holds[slot as usize].is_empty(),
                     "slot {slot} is free but kept a sealed hold"
                 );
             }
             // Two relations keep a dead cell in place: a descendant's birth row, and an
             // undisposed tree child, which is the same relation counted rather than rowed.
             SlabState::Dead => assert!(
-                by_birth || graph.tree_children_of(graph.occupant(slot)) > 0,
+                by_birth || graph.cells.tree_children_of(graph.cells.occupant(slot)) > 0,
                 "slot {slot} is undisposed but nothing names it, so it should have left the slab"
             ),
             SlabState::Live => {}
@@ -219,22 +222,23 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
     // hunts.
     assert_eq!(
         graph.is_empty(),
-        occupied.is_empty() && graph.sealed.is_empty(),
+        occupied.is_empty() && graph.cells.sealed.is_empty(),
         "is_empty disagrees with the two tiers it summarizes"
     );
 
-    let sealed_ids: Vec<SealedId> = graph.sealed.ids().collect();
+    let sealed_ids: Vec<SealedId> = graph.cells.sealed.ids().collect();
     for id in &sealed_ids {
-        let sealed_cell = graph.sealed.get(*id).unwrap();
+        let sealed_cell = graph.cells.sealed.get(*id).unwrap();
         let from_cells = occupied
             .iter()
-            .filter(|slot| graph.sealed_holds[**slot as usize].contains(*id))
+            .filter(|slot| graph.cells.sealed_holds[**slot as usize].contains(*id))
             .count();
         let from_sealed = sealed_ids
             .iter()
             .filter(|other| *other != id)
             .filter(|other| {
                 graph
+                    .cells
                     .sealed
                     .get(**other)
                     .unwrap()
@@ -259,7 +263,7 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
         );
         for named in sealed_cell.aggregate.slab_slots() {
             assert!(
-                graph.naming[named as usize].contains(*id),
+                graph.cells.naming[named as usize].contains(*id),
                 "sealed cell {id:?} names slot {named} without registering in the naming index"
             );
         }
@@ -273,11 +277,12 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
 
     for slot in 0..CAP {
         assert!(
-            !graph.pins.test(slot, slot),
+            !graph.cells.pins.test(slot, slot),
             "slot {slot} holds itself, so its count could never reach zero"
         );
-        for id in graph.naming[slot as usize].iter() {
+        for id in graph.cells.naming[slot as usize].iter() {
             let sealed_cell = graph
+                .cells
                 .sealed
                 .get(id)
                 .expect("the naming index names a live sealed cell");
@@ -286,7 +291,7 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
                 "the naming index claims sealed cell {id:?} names slot {slot}"
             );
         }
-        for id in graph.sealed_holds[slot as usize].iter() {
+        for id in graph.cells.sealed_holds[slot as usize].iter() {
             assert!(
                 sealed_ids.contains(&id),
                 "slot {slot} holds a retired sealed cell"
@@ -294,14 +299,14 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
         }
         // Dormant carriers' masks are covered: every bit and id of every entry of the cell's
         // reach table names storage the cell is answerable for, so a read through one is sound.
-        for mask in graph.slots[slot as usize].reaches.iter() {
+        for mask in graph.cells.slots[slot as usize].reaches.iter() {
             for named in mask.slab_slots() {
                 assert!(
-                    graph.slots[named as usize].state != SlabState::Free,
+                    graph.cells.slots[named as usize].state != SlabState::Free,
                     "slot {slot} keeps a carrier naming the recycled slot {named}"
                 );
                 assert!(
-                    named == slot || graph.pins.test(slot, named),
+                    named == slot || graph.cells.pins.test(slot, named),
                     "slot {slot} keeps a carrier naming slot {named}, which it does not hold"
                 );
             }
@@ -311,7 +316,7 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
                     "slot {slot} keeps a carrier naming a retired sealed cell"
                 );
                 assert!(
-                    graph.sealed_holds[slot as usize].contains(named),
+                    graph.cells.sealed_holds[slot as usize].contains(named),
                     "slot {slot} keeps a carrier naming {named:?}, a sealed cell it does not hold"
                 );
             }
@@ -322,20 +327,20 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
     // there and answers for that key in turn, and every lineage entry a slot or a sealed cell
     // carries is a key of the map pointing back at it. A one-way break would strand a dormant
     // carrier or hand one storage that is not its own.
-    for (handle, location) in graph.relocation_entries() {
+    for (handle, location) in graph.cells.relocation_entries() {
         assert!(
             !graph.is_live(handle),
             "a live cell answers for its own dormant carriers, so it needs no relocation entry"
         );
         match location {
             SlabForward::Slab { slot, first_index } => {
-                let cell = &graph.slots[slot as usize];
+                let cell = &graph.cells.slots[slot as usize];
                 assert!(
                     cell.state != SlabState::Free,
                     "{handle:?} is relocated to the recycled slot {slot}"
                 );
                 assert!(
-                    graph.slot_lineage(slot).contains(&handle),
+                    graph.cells.slot_lineage(slot).contains(&handle),
                     "slot {slot} answers for {handle:?} without carrying it on its chain"
                 );
                 assert!(
@@ -345,32 +350,35 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
             }
             SlabForward::Sealed(id) => {
                 assert!(
-                    graph.sealed.get(id).is_some(),
+                    graph.cells.sealed.get(id).is_some(),
                     "a relocation entry names a retired sealed cell"
                 );
                 assert!(
-                    graph.lineage_of(id).contains(&handle),
+                    graph.cells.lineage_of(id).contains(&handle),
                     "sealed cell {id:?} answers for {handle:?} without carrying it on its chain"
                 );
             }
         }
     }
     for slot in 0..CAP {
-        for handle in graph.slot_lineage(slot) {
+        for handle in graph.cells.slot_lineage(slot) {
             assert_eq!(
-                graph.relocation_of(handle).map(|location| match location {
-                    SlabForward::Slab { slot, .. } => Some(slot),
-                    SlabForward::Sealed(_) => None,
-                }),
+                graph
+                    .cells
+                    .relocation_of(handle)
+                    .map(|location| match location {
+                        SlabForward::Slab { slot, .. } => Some(slot),
+                        SlabForward::Sealed(_) => None,
+                    }),
                 Some(Some(slot)),
                 "slot {slot} carries {handle:?} on its chain without the map pointing here"
             );
         }
     }
     for id in &sealed_ids {
-        for handle in graph.lineage_of(*id) {
+        for handle in graph.cells.lineage_of(*id) {
             assert_eq!(
-                graph.relocation_of(handle),
+                graph.cells.relocation_of(handle),
                 Some(SlabForward::Sealed(*id)),
                 "sealed cell {id:?} carries {handle:?} on its chain without the map pointing here"
             );
@@ -380,9 +388,9 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
     // The occupancy signal is a maintained total, not a scan, so it has to agree with one.
     let scanned: usize = sealed_ids
         .iter()
-        .map(|id| graph.sealed.get(*id).unwrap().retained_bytes())
+        .map(|id| graph.cells.sealed.get(*id).unwrap().retained_bytes())
         .sum();
-    let occupancy = graph.occupancy();
+    let occupancy = graph.cells.occupancy();
     assert_eq!(
         occupancy.retained_bytes, scanned,
         "the tier's running byte total drifted from what its sealed cells retain"
@@ -393,7 +401,7 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
 
     let mut now_memoized = Vec::new();
     for id in &sealed_ids {
-        let sealed_cell = graph.sealed.get(*id).unwrap();
+        let sealed_cell = graph.cells.sealed.get(*id).unwrap();
         let Some(memo) = sealed_cell.memo() else {
             continue;
         };
@@ -406,7 +414,7 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
         // names no live cell, spans the same sealed cells, and prices at the same bytes. Nothing
         // inside a frozen closure changes, and this is the check that says so for every
         // interleaving.
-        let fresh = graph.transitive_pins(GraphNode::Sealed(*id), false);
+        let fresh = graph.cells.transitive_pins(GraphNode::Sealed(*id), false);
         assert!(
             fresh.cells.is_empty(),
             "the memoized closure of {id:?} has since named a live cell"
@@ -417,10 +425,10 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
         memoized.sort();
         assert_eq!(walked, memoized, "the memoized closure of {id:?} drifted");
         assert_eq!(
-            graph.bytes_of(&fresh),
+            graph.cells.bytes_of(&fresh, &graph.regions),
             memoized
                 .iter()
-                .map(|id| graph.sealed_bytes(*id))
+                .map(|id| graph.cells.sealed_bytes(*id))
                 .sum::<usize>(),
             "the memoized closure of {id:?} no longer prices to the walked total"
         );
@@ -439,10 +447,10 @@ fn expected_redeem(
 ) -> Result<(), RedeemError> {
     let slab_home = match home {
         CellHandle::Slab(handle) => handle,
-        CellHandle::Tree(handle) => match graph.trees().resolve(handle) {
+        CellHandle::Tree(handle) => match graph.cells.trees().resolve(handle) {
             None => return Err(RedeemError::Gone),
             Some(crate::tree::TreeForward::Tree(index)) => {
-                return match graph.trees().root(index) == executing {
+                return match graph.cells.trees().root(index) == executing {
                     true => Ok(()),
                     false => Err(RedeemError::Unheld),
                 };
@@ -450,19 +458,19 @@ fn expected_redeem(
             Some(crate::tree::TreeForward::Slab(handle)) => handle,
         },
     };
-    match graph.locate(slab_home) {
+    match graph.cells.locate(slab_home) {
         None => Err(RedeemError::Gone),
         Some(SlabForward::Slab { slot, .. }) => {
             match slot == executing
-                || graph.pins.test(executing, slot)
-                || graph.birth.test(executing, slot)
+                || graph.cells.pins.test(executing, slot)
+                || graph.cells.birth.test(executing, slot)
             {
                 true => Ok(()),
                 false => Err(RedeemError::Unheld),
             }
         }
         Some(SlabForward::Sealed(id)) => {
-            match graph.sealed_holds[executing as usize].contains(id) {
+            match graph.cells.sealed_holds[executing as usize].contains(id) {
                 true => Ok(()),
                 false => Err(RedeemError::Unheld),
             }
@@ -493,7 +501,7 @@ fn check_redeem(
 
 /// The tree pool's own invariants, checked after every step beside the matrix ones.
 fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
-    let pool = graph.trees();
+    let pool = graph.cells.trees();
     let occupied: Vec<u32> = pool.occupied().collect();
     let alive = |index: u32| matches!(pool.state(index), TreeState::Live | TreeState::Dead);
 
@@ -512,7 +520,7 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
                 "tombstone {index} points at a recycled pool slot"
             ),
             CellHandle::Slab(handle) => assert!(
-                graph.locate(handle).is_some(),
+                graph.cells.locate(handle).is_some(),
                 "tombstone {index} points at a slab cell nothing answers for"
             ),
         }
@@ -520,9 +528,13 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
 
     // Every tombstone is on exactly one lineage list, and every lineage list holds only tombstones.
     let heads = graph
+        .cells
         .relocated_tree_tombstones()
         .into_iter()
-        .chain((0..graph.cap).filter_map(|slot| graph.tree_tombstones_of(graph.occupant(slot))))
+        .chain(
+            (0..graph.cells.cap)
+                .filter_map(|slot| graph.cells.tree_tombstones_of(graph.cells.occupant(slot))),
+        )
         .chain(
             occupied
                 .iter()
@@ -602,7 +614,7 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
     }
 
     // A root's tree-child count is the same tally, over the cells whose chain tops out at it.
-    for slot in 0..graph.cap {
+    for slot in 0..graph.cells.cap {
         let children = occupied
             .iter()
             .copied()
@@ -611,7 +623,7 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
             })
             .count();
         assert_eq!(
-            graph.tree_children_of(graph.occupant(slot)) as usize,
+            graph.cells.tree_children_of(graph.cells.occupant(slot)) as usize,
             children,
             "slot {slot} counts tree children that do not name it, or misses ones that do"
         );
@@ -798,7 +810,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     && !kept.is_empty()
                 {
                     let (home, dormant, carried) = kept[index % kept.len()];
-                    let root = graph.trees().root(cell.index());
+                    let root = graph.cells.trees().root(cell.index());
                     let expected = expected_redeem(&graph, root, home);
                     let outcome = graph
                         .enter(cell, |context| check_redeem(context, dormant, carried))
@@ -879,7 +891,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     );
                     // The slices partition part of one graph, so together they cannot outprice it.
                     assert!(
-                        total <= graph.occupancy().retained_bytes + live_bytes(&graph, CAP),
+                        total <= graph.cells.occupancy().retained_bytes + live_bytes(&graph, CAP),
                         "the unique slices together outprice both tiers"
                     );
                 }
@@ -900,25 +912,25 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
     }
     check_invariants(&graph, &mut memoized, false);
     assert!(
-        graph.trees().occupied().next().is_none(),
+        graph.cells.trees().occupied().next().is_none(),
         "a wound-down run left a tree cell or a tombstone in the pool"
     );
     for slot in 0..CAP {
-        assert_eq!(graph.slots[slot as usize].state, SlabState::Free);
+        assert_eq!(graph.cells.slots[slot as usize].state, SlabState::Free);
     }
     // Every surviving sealed cell is a ring by the invariants above; this says which rings can
     // survive. A region no more than one hold set ever named is one a merge reaches — its sole
     // holder either absorbs it, seals and folds it in, or drops the last hold — so a survivor was
     // shared once.
-    for id in graph.sealed.ids() {
-        let sealed_cell = graph.sealed.get(id).unwrap();
+    for id in graph.cells.sealed.ids() {
+        let sealed_cell = graph.cells.sealed.get(id).unwrap();
         assert!(
             sealed_cell.peak_holders >= 2,
             "sealed cell {id:?} survived the wind-down having never had a second holder"
         );
     }
-    assert_eq!(graph.is_empty(), graph.sealed.is_empty());
-    graph.merges
+    assert_eq!(graph.is_empty(), graph.cells.sealed.is_empty());
+    graph.cells.merges
 }
 
 proptest! {

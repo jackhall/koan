@@ -15,7 +15,6 @@
 
 use crate::handle::{CellHandle, SlabHandle, Stale, TreeHandle};
 use crate::reattach::{Erased, Reattachable};
-use crate::region::Region;
 use crate::scratch::Scratch;
 
 /// What one pool index currently holds.
@@ -114,7 +113,6 @@ struct Branch<C: Reattachable> {
     /// tombstone: no key can name it, so nothing will ever ask where its bytes went.
     kept: bool,
     continuation: Option<Erased<C>>,
-    region: Option<Region>,
 }
 
 /// A cell whose bytes have moved, kept only to answer for them.
@@ -153,15 +151,17 @@ impl<C: Reattachable> TreeCell<C> {
 ///
 /// No cap. The slab's is what bounds the matrix, and a tree cell is in no matrix; what bounds the
 /// pool is the depth of the call tree the embedder is running, which is the program's business.
+/// The slab's width is only where the pool starts: room for that many cells is claimed at birth,
+/// and growth doubles from there.
 pub(crate) struct TreePool<C: Reattachable> {
     slots: Vec<TreeCell<C>>,
     free: Vec<u32>,
 }
 
 impl<C: Reattachable> TreePool<C> {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(cap: u32) -> Self {
         TreePool {
-            slots: Vec::new(),
+            slots: Vec::with_capacity(cap as usize),
             free: Vec::new(),
         }
     }
@@ -210,7 +210,6 @@ impl<C: Reattachable> TreePool<C> {
             pledge: None,
             kept: false,
             continuation,
-            region: None,
         });
         match self.free.pop() {
             Some(index) => {
@@ -333,37 +332,6 @@ impl<C: Reattachable> TreePool<C> {
         let branch = self.branch_mut(index);
         debug_assert!(branch.children > 0, "a tree cell disposed under no parent");
         branch.children -= 1;
-    }
-
-    /// The cell's region, minted on first use — the write surface a placement into it wants.
-    pub(crate) fn region_mut(&mut self, index: u32) -> &mut Region {
-        self.branch_mut(index)
-            .region
-            .get_or_insert_with(Region::new)
-    }
-
-    /// The cell's region as a shared borrow, for a caller that has already minted it — the step's
-    /// own writer, which must not descend from an exclusive borrow.
-    pub(crate) fn region(&self, index: u32) -> Option<&Region> {
-        self.branch(index).region.as_ref()
-    }
-
-    /// Take the cell's storage off it, for the splice or the drop that disposal performs.
-    pub(crate) fn take_region(&mut self, index: u32) -> Option<Region> {
-        self.branch_mut(index).region.take()
-    }
-
-    /// Splice a departing cell's bump into this one's bundle.
-    pub(crate) fn splice_into(&mut self, index: u32, from: Option<Region>) {
-        Region::splice_optional(&mut self.branch_mut(index).region, from);
-    }
-
-    /// Chunk bytes this cell's region bundle occupies, `0` where it never allocated.
-    pub(crate) fn region_bytes(&self, index: u32) -> usize {
-        self.branch(index)
-            .region
-            .as_ref()
-            .map_or(0, Region::allocated_bytes)
     }
 
     /// Where `dest` sits relative to the cell in `home`, both under the same root.

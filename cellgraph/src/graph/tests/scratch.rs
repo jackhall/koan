@@ -40,7 +40,7 @@ fn dirtied() -> (CellGraph<Owned>, SlabHandle, SlabHandle) {
     let consumer = graph.create(None, None).unwrap();
     place_over(&mut graph, producer, consumer, WIDE);
     assert!(
-        graph.scratch_at_rest().in_use() > 0,
+        graph.cells.scratch_at_rest().in_use() > 0,
         "a placement over {WIDE} operands left nothing in the region"
     );
     (graph, producer, consumer)
@@ -54,10 +54,10 @@ fn dirtied() -> (CellGraph<Owned>, SlabHandle, SlabHandle) {
 /// cleared it — and a verb that builds transients of its own is held to the same statement as one
 /// that builds none, since its own bytes are counted on the low side.
 fn resets_at_its_entry(graph: &mut CellGraph<Owned>, verb: impl FnOnce(&mut CellGraph<Owned>)) {
-    let inherited = graph.scratch_at_rest().in_use();
+    let inherited = graph.cells.scratch_at_rest().in_use();
     verb(graph);
     assert!(
-        graph.scratch_at_rest().in_use() < inherited,
+        graph.cells.scratch_at_rest().in_use() < inherited,
         "a verb carried its predecessor's {inherited} occupied bytes past its entry"
     );
 }
@@ -119,10 +119,10 @@ fn a_warm_scratch_grows_no_chunk_across_repeated_verbs() {
     };
 
     round(&mut graph);
-    let warm = graph.scratch_at_rest().capacity();
+    let warm = graph.cells.scratch_at_rest().capacity();
     round(&mut graph);
     assert_eq!(
-        graph.scratch_at_rest().capacity(),
+        graph.cells.scratch_at_rest().capacity(),
         warm,
         "a second round of the same verbs grew the region"
     );
@@ -150,6 +150,6 @@ fn a_panicking_step_hands_the_region_back() {
         "the step's panic did not reach the caller"
     );
     // Back on the graph, and cleared by the entry of the step that then failed.
-    assert_eq!(graph.scratch_at_rest().in_use(), 0);
+    assert_eq!(graph.cells.scratch_at_rest().in_use(), 0);
     graph.create(None, None).unwrap();
 }

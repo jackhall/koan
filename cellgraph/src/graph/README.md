@@ -271,6 +271,10 @@ brand, and each has one of those two for the executing cell's whole life:
 - **The cell's own region.** The cell keeps it by being alive, and the brand is
   quantified per `enter`, so nothing at it outlives the step that wrote it
   unless the continuation carries it — and the cell is still there next step.
+  Within the step the brand is the shared borrow of the region table itself:
+  every door mutates the other half of the graph, so no `&mut` over the bump
+  can exist under the writer, and the verbs that move or drop a region — which
+  take the table exclusively — cannot run at all.
 - **A region a pinned crossing minted in.** The own-cell crossing prices the
   operand and folds its reach into this cell's hold set *before* the build runs,
   so a view that leaves the build names storage the cell holds. Holds are

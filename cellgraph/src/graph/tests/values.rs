@@ -19,25 +19,22 @@ fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
 
     assert_eq!(read, 41);
     // The self rule: a cell that held itself alive could never reach a zero hold count.
-    assert!(!graph.holds(cell, cell));
-    assert!(graph.slots[cell.slot() as usize].region.is_some());
+    assert!(!graph.cells.holds(cell, cell));
+    assert!(graph.regions.slab_bytes(cell.slot()) > 0);
 }
 
 #[test]
 fn a_cell_that_never_allocates_claims_no_chunk() {
     let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
     let cell = graph.create(None, None).unwrap();
-    // A cell that was never entered has no region at all.
-    assert!(graph.slots[cell.slot() as usize].region.is_none());
+    // A cell that was never entered has a region, since every slot carries one, but an empty bump
+    // claims no chunk: what the cell costs is nothing.
+    assert_eq!(graph.regions.slab_bytes(cell.slot()), 0);
 
-    // Entering mints one, since the step takes its writer at `enter`. An empty bump claims no
-    // chunk, so what the cell costs is still nothing.
+    // Entering takes the step's writer onto that region and writes nothing through it, so the
+    // cost is still nothing.
     graph.enter(cell, |context| context.cell()).unwrap();
-    let region = graph.slots[cell.slot() as usize]
-        .region
-        .as_ref()
-        .expect("a step's writer is minted at its cell's region");
-    assert_eq!(region.allocated_bytes(), 0);
+    assert_eq!(graph.regions.slab_bytes(cell.slot()), 0);
 }
 
 #[test]
@@ -63,9 +60,9 @@ fn placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach() {
         .unwrap();
 
     assert_eq!(read, 41);
-    assert!(graph.holds(consumer, producer));
-    assert!(!graph.holds(consumer, consumer));
-    assert!(!graph.holds(producer, consumer));
+    assert!(graph.cells.holds(consumer, producer));
+    assert!(!graph.cells.holds(consumer, consumer));
+    assert!(!graph.cells.holds(producer, consumer));
 }
 
 #[test]
@@ -78,21 +75,21 @@ fn a_held_cell_leaves_the_slab_at_its_death_and_its_sealed_cell_goes_with_its_ho
         .enter(holder, |context| context.hold(held))
         .unwrap()
         .unwrap();
-    assert!(graph.holds(holder, held));
+    assert!(graph.cells.holds(holder, held));
 
     // The slot comes straight back: retention lives in the sealed tier, never in the slab.
     graph.release(held, ReleaseAbsorption::Refused).unwrap();
     assert_eq!(state_of(&graph, held), SlabState::Free);
-    assert_eq!(graph.sealed.len(), 1);
-    let id = graph.sealed.ids().next().unwrap();
-    assert!(graph.sealed_holds[holder.slot() as usize].contains(id));
-    assert!(!graph.holds(holder, held));
+    assert_eq!(graph.cells.sealed.len(), 1);
+    let id = graph.cells.sealed.ids().next().unwrap();
+    assert!(graph.cells.sealed_holds[holder.slot() as usize].contains(id));
+    assert!(!graph.cells.holds(holder, held));
 
     graph
         .release(holder, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 /// Chunks enough to spill a fresh `Bump` past the one it starts with, so the growth the borrow
@@ -145,7 +142,7 @@ fn a_bare_hold_on_a_dead_cell_refuses() {
 
     let refusal = graph.enter(holder, |context| context.hold(other)).unwrap();
     assert_eq!(refusal, Err(Stale(other)));
-    assert!(!graph.holds(holder, other));
+    assert!(!graph.cells.holds(holder, other));
 }
 
 #[test]
@@ -175,6 +172,7 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
         .unwrap();
 
     let ring = graph
+        .cells
         .debug_ring_from(HoldNode::Slab(first))
         .expect("the hold graph has a cycle");
     assert_eq!(ring.len(), 2);
@@ -189,11 +187,12 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
     graph
         .release(bystander, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.free.len(), 4);
-    assert_eq!(graph.sealed.len(), 2);
+    assert_eq!(graph.cells.free.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 2);
 
     let sealed_ring = graph
-        .debug_ring_from(HoldNode::Sealed(graph.sealed.ids().next().unwrap()))
+        .cells
+        .debug_ring_from(HoldNode::Sealed(graph.cells.sealed.ids().next().unwrap()))
         .expect("the ring survives the seal");
     assert_eq!(sealed_ring.len(), 2);
     assert!(
@@ -219,7 +218,7 @@ fn an_acyclic_hold_graph_reports_no_ring() {
         .unwrap()
         .unwrap();
 
-    assert!(graph.debug_ring_from(HoldNode::Slab(first)).is_none());
+    assert!(graph.cells.debug_ring_from(HoldNode::Slab(first)).is_none());
 }
 
 // The doors a value crosses steps through: `keep` puts a carrier down in the reach table of its
@@ -228,7 +227,7 @@ fn an_acyclic_hold_graph_reports_no_ring() {
 
 /// The one entry a cell's reach table holds, by the index a key names.
 fn dormant_reach<C: Reattachable>(graph: &CellGraph<C>, slot: u32, index: u32) -> &GraphReach<1> {
-    graph.slots[slot as usize]
+    graph.cells.slots[slot as usize]
         .reaches
         .get(index)
         .expect("the entry the key names is in the reach table")
@@ -250,9 +249,9 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
             context.keep(placed)
         })
         .unwrap();
-    assert_eq!(graph.slots[consumer.slot() as usize].reaches.len(), 1);
+    assert_eq!(graph.cells.slots[consumer.slot() as usize].reaches.len(), 1);
     assert!(dormant_reach(&graph, consumer.slot(), 0).names(consumer.slot()));
-    assert_eq!(graph.relocations(), 0);
+    assert_eq!(graph.cells.relocations(), 0);
 
     // Nothing reaches the producer, so its death is a reclamation: the slot comes straight back
     // and the map it never entered stays empty.
@@ -260,7 +259,7 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
         .release(producer, ReleaseAbsorption::IntoHolder)
         .unwrap();
     assert_eq!(state_of(&graph, producer), SlabState::Free);
-    assert_eq!(graph.relocations(), 0);
+    assert_eq!(graph.cells.relocations(), 0);
 
     let read = graph
         .enter(consumer, |context| {
@@ -293,9 +292,12 @@ fn pull_completes_after_the_producer_seals() {
     // The pull shape: the producer dies still held, so its storage seals and the key it minted
     // forwards to the sealed cell rather than stopping resolving.
     graph.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let id = graph.sealed.ids().next().unwrap();
-    assert_eq!(graph.relocation_of(producer), Some(SlabForward::Sealed(id)));
-    assert_eq!(graph.lineage_of(id), vec![producer]);
+    let id = graph.cells.sealed.ids().next().unwrap();
+    assert_eq!(
+        graph.cells.relocation_of(producer),
+        Some(SlabForward::Sealed(id))
+    );
+    assert_eq!(graph.cells.lineage_of(id), vec![producer]);
 
     let read = graph
         .enter(consumer, |context| {
@@ -316,8 +318,8 @@ fn pull_completes_after_the_producer_seals() {
     graph
         .release(consumer, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert_eq!(graph.relocations(), 0);
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert_eq!(graph.cells.relocations(), 0);
 }
 
 #[test]
@@ -342,9 +344,9 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
     graph
         .release(producer, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.cells.sealed.len(), 0);
     assert_eq!(
-        graph.relocation_of(producer),
+        graph.cells.relocation_of(producer),
         Some(SlabForward::Slab {
             slot: consumer.slot(),
             first_index: 0,
@@ -400,8 +402,11 @@ fn a_dormant_carrier_forwarded_through_two_merges_is_still_found() {
     // chain of single-consumer producers costs the map one entry per merge and none per value.
     graph.release(head, ReleaseAbsorption::IntoHolder).unwrap();
     graph.release(middle, ReleaseAbsorption::Refused).unwrap();
-    let id = graph.sealed.ids().next().unwrap();
-    assert_eq!(graph.relocation_of(head), Some(SlabForward::Sealed(id)));
+    let id = graph.cells.sealed.ids().next().unwrap();
+    assert_eq!(
+        graph.cells.relocation_of(head),
+        Some(SlabForward::Sealed(id))
+    );
 
     let read = graph
         .enter(end, |context| {
@@ -413,9 +418,9 @@ fn a_dormant_carrier_forwarded_through_two_merges_is_still_found() {
     assert_eq!(read, 41);
 
     graph.release(end, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert_eq!(graph.relocations(), 0);
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert_eq!(graph.cells.relocations(), 0);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 #[test]
@@ -504,7 +509,7 @@ fn redeem_refuses_once_the_storage_is_gone() {
     graph
         .release(holder, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.cells.sealed.len(), 0);
 
     let gone = graph
         .enter(onlooker, |context| context.redeem(retired).err())
@@ -527,7 +532,7 @@ fn a_birth_hold_entitles_a_child_to_its_parents_dormant_carrier() {
 
     // The birth row is a claim on the parent's storage in its own right: the child took no pin
     // hold, and the parent's row names nothing of the child's.
-    assert!(!graph.holds(child, parent));
+    assert!(!graph.cells.holds(child, parent));
     let read = graph
         .enter(child, |context| {
             *context
@@ -575,7 +580,7 @@ fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
         })
         .unwrap();
     graph.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let sealed_id = graph.sealed.ids().next().unwrap();
+    let sealed_id = graph.cells.sealed.ids().next().unwrap();
 
     // A carrier redeemed out of a sealed cell is a carrier like any other: keeping it registers its
     // sealed-cell-only reach in the redeeming cell's own reach table.
@@ -599,7 +604,7 @@ fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
 
     // The re-keeping cell now seals in turn, and the key forwards to its sealed cell.
     graph.release(middle, ReleaseAbsorption::Refused).unwrap();
-    let outer = graph.sealed_holds[end.slot() as usize]
+    let outer = graph.cells.sealed_holds[end.slot() as usize]
         .iter()
         .next()
         .expect("the end holds the sealed cell the middle sealed into");
@@ -639,8 +644,8 @@ fn a_continuation_store_takes_no_reach_table_entry() {
     // By the time the store runs there is nothing left to appraise and nothing to record: the
     // cell's reach table stays empty.
     capturing(&mut graph, 41);
-    assert!(graph.holds(cell, over));
-    assert_eq!(graph.slots[cell.slot() as usize].reaches.len(), 0);
+    assert!(graph.cells.holds(cell, over));
+    assert_eq!(graph.cells.slots[cell.slot() as usize].reaches.len(), 0);
 
     // A continuation that captures nothing goes through the same door and records the same nothing.
     graph
@@ -649,7 +654,7 @@ fn a_continuation_store_takes_no_reach_table_entry() {
             context.store_successor(&ANCHOR);
         })
         .unwrap();
-    assert_eq!(graph.slots[cell.slot() as usize].reaches.len(), 0);
+    assert_eq!(graph.cells.slots[cell.slot() as usize].reaches.len(), 0);
 
     // Alternating for a whole run costs no entry either: the hold is monotone and was minted once.
     for value in 0..8 {
@@ -662,7 +667,7 @@ fn a_continuation_store_takes_no_reach_table_entry() {
             .unwrap();
     }
     assert_eq!(
-        graph.slots[cell.slot() as usize].reaches.len(),
+        graph.cells.slots[cell.slot() as usize].reaches.len(),
         0,
         "a continuation carries no mask, so no number of stores mints an entry"
     );
@@ -693,7 +698,7 @@ fn keeping_the_same_reach_twice_takes_one_entry_and_both_keys_redeem() {
     // Sixteen values, one reach: each is homed in the executing cell and reaches nothing else, so
     // every keep interns to the entry the first one minted.
     assert_eq!(
-        graph.slots[cell.slot() as usize].reaches.len(),
+        graph.cells.slots[cell.slot() as usize].reaches.len(),
         1,
         "keeps of one shape share one entry"
     );
@@ -815,7 +820,7 @@ fn a_pinned_view_at_the_cell_brand_survives_its_home_sealing() {
         .unwrap();
 
     graph.release(home, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(graph.sealed.len(), 1);
+    assert_eq!(graph.cells.sealed.len(), 1);
 
     // The storage detached unmoved into the sealed cell, so the capture re-anchors onto bytes that
     // are still where they were written.

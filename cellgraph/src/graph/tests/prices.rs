@@ -71,7 +71,7 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
 
     let seen = seen.borrow();
     assert_eq!(seen.len(), 2, "one consultation per operand, in order");
-    let occupancy = graph.occupancy();
+    let occupancy = graph.cells.occupancy();
     for prices in seen.iter() {
         assert_eq!(prices.occupied, occupancy.occupied);
         assert_eq!(prices.cap, occupancy.cap);
@@ -116,14 +116,20 @@ fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
             .unwrap();
 
         assert_eq!(names_producer, verdict == Verdict::Pin);
-        assert_eq!(graph.holds(destination, producer), verdict == Verdict::Pin);
+        assert_eq!(
+            graph.cells.holds(destination, producer),
+            verdict == Verdict::Pin
+        );
 
         // The whole point of the copy: the producer's column is zero, so its death is a reclamation
         // rather than a sealed cell the destination now retains. The slot comes back either way —
         // retention lives in the sealed tier, never in the slab.
         graph.release(producer, ReleaseAbsorption::Refused).unwrap();
         assert_eq!(super::state_of(&graph, producer), SlabState::Free);
-        assert_eq!(graph.sealed.len(), usize::from(verdict == Verdict::Pin));
+        assert_eq!(
+            graph.cells.sealed.len(),
+            usize::from(verdict == Verdict::Pin)
+        );
     }
 }
 
@@ -165,7 +171,7 @@ fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
     // The deep copy reads what it was copied from, and the embedded borrow reads the producer's
     // own storage — which the destination now holds.
     assert_eq!(read, (41, 41));
-    assert!(graph.holds(destination, producer));
+    assert!(graph.cells.holds(destination, producer));
     let seen = seen.borrow();
     assert_eq!(seen.len(), 2);
     assert!(
@@ -214,7 +220,7 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
         .unwrap()
         .unwrap();
     graph.release(doomed, ReleaseAbsorption::Refused).unwrap();
-    let sealed_id = graph.sealed.ids().next().unwrap();
+    let sealed_id = graph.cells.sealed.ids().next().unwrap();
 
     graph
         .enter(driver, |context| {
@@ -245,7 +251,7 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
         seen[1].pin_bytes,
         graph.region_bytes(head).unwrap()
             + graph.region_bytes(tail).unwrap()
-            + graph.sealed_retained_bytes(sealed_id).unwrap()
+            + graph.cells.sealed_retained_bytes(sealed_id).unwrap()
     );
 }
 
@@ -350,7 +356,7 @@ fn a_frozen_closure_prices_through_its_memo() {
         })
         .unwrap();
     graph.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let sealed_id = graph.sealed.ids().next().unwrap();
+    let sealed_id = graph.cells.sealed.ids().next().unwrap();
 
     // The closure is frozen, so its price is memoized once and never recomputed.
     let closure = graph.unique_retentions(&[sealed_id]).remove(0).unwrap();
@@ -386,7 +392,7 @@ fn a_frozen_closure_prices_through_its_memo() {
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].pin_bytes, closure.bytes);
     assert_eq!(seen[1].pin_bytes, 0);
-    assert!(graph.sealed_holds[destination.slot() as usize].contains(sealed_id));
+    assert!(graph.cells.sealed_holds[destination.slot() as usize].contains(sealed_id));
 }
 
 /// Hops the ruled loop shape runs. Miri takes the shortest run that still alternates the two hop
@@ -454,12 +460,23 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
             .release(running, ReleaseAbsorption::IntoHolder)
             .unwrap();
         assert_eq!(super::state_of(&graph, running), SlabState::Free);
-        assert_eq!(graph.sealed.len(), 0, "hop {hop} left a sealed cell behind");
-        assert_eq!(graph.merges, Merges::default(), "hop {hop} took a merge");
-        assert!(!graph.holds(cart, waiting));
+        assert_eq!(
+            graph.cells.sealed.len(),
+            0,
+            "hop {hop} left a sealed cell behind"
+        );
+        assert_eq!(
+            graph.cells.merges,
+            Merges::default(),
+            "hop {hop} took a merge"
+        );
+        assert!(!graph.cells.holds(cart, waiting));
 
         let fresh = graph.create(None, None).unwrap();
-        assert!(graph.occupancy().occupied <= 3, "hop {hop} grew the slab");
+        assert!(
+            graph.cells.occupancy().occupied <= 3,
+            "hop {hop} grew the slab"
+        );
         running = waiting;
         waiting = fresh;
     }
@@ -469,7 +486,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
     // is what keeps the seal transition's bound — work per holder's reach-table entry — a bound
     // on a run of any length rather than one that grows with it.
     assert_eq!(
-        graph.slots[cart.slot() as usize].reaches.len(),
+        graph.cells.slots[cart.slot() as usize].reaches.len(),
         1,
         "the cart took an entry per hop"
     );
@@ -525,7 +542,7 @@ fn captures_cross_through_the_same_verdict() {
         // A pinned capture is the host's own storage, so the cell holds the host across the gap; a
         // copied one lives in the keeper's region and the host is free to die. The hold is the
         // whole record: a continuation interns no mask of its own.
-        assert_eq!(graph.holds(keeper, host), verdict == Verdict::Pin);
+        assert_eq!(graph.cells.holds(keeper, host), verdict == Verdict::Pin);
 
         let read = graph
             .enter(keeper, |context| *context.continuation().unwrap())

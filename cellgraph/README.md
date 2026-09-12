@@ -131,7 +131,10 @@ or redeemed by this step's doors and dies with the step. `'cell` is the
 executing cell's: invariant, quantified per `enter`, with no outlives relation
 to `'b`, and naming storage the cell's hold set covers for the cell's whole
 life — its own region, or a region a pinned crossing into this cell minted into
-its holds. A value built there is held as a plain `&'cell`
+its holds. It is a real borrow, not a brand alone: the shared borrow of the
+graph's region table that `enter` holds for the whole step beside its exclusive
+borrow of everything else, so the step's own writer is a plain `&'cell` and the
+verbs that move or drop a region cannot run under it. A value built there is held as a plain `&'cell`
 reference and needs no carrier, because its reach is the cell itself and the
 cell's birth row already keeps it; the three carrier states are for a value
 homed in another cell or crossing a step. The continuation's captures are
@@ -286,7 +289,9 @@ exactly one decision.
 - [src/graph.rs](src/graph.rs) — the slab, the verbs, the step context's doors,
   the seal transition, the three locality merges, the disposal cascade, and the
   relocation map that forwards a dormant carrier through a merge. The embedder's
-  crossing verdict is taken here at construction.
+  crossing verdict is taken here at construction. The graph is two halves a
+  step borrows apart: the cells — identity, relations, holds, the sealed tier —
+  exclusively, and the region table shared.
 - [src/tree.rs](src/tree.rs) — the tree pool: chain links and depth, the
   undisposed-child count, the pledge, and the tombstone chain.
 - [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits, and the
@@ -297,9 +302,12 @@ exactly one decision.
   slab index, sparse sets, frozen aggregates, holder counts, and the dense slab
   with its free list.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
-  merge performs, `Writer` — the crate's one write surface: `fill`, a run laid
-  down by index under a compile-time no-destructor check, and `text`; every
-  simpler shape is the embedder's — and the sealed cell's frozen-closure memo.
+  merge performs, `Regions` — the table of every live cell's region, which a
+  step holds shared for its whole length so that nothing can move or drop a bump
+  under a writer into it — `Writer` — the crate's one write surface: `fill`, a
+  run laid down by index under a compile-time no-destructor check, and `text`;
+  every simpler shape is the embedder's — and the sealed cell's frozen-closure
+  memo.
 - [src/scratch.rs](src/scratch.rs) — the graph's one scratch region and the
   doors every verb's transients go through.
 - [src/carrier.rs](src/carrier.rs) — `Ready` and `Active`, the two carrier

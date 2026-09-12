@@ -106,9 +106,8 @@ fn number(view: &CrossedOperand<'_, '_, Number>) -> u32 {
 /// would mean storage flowed back out of the sealed tier, which no path may do.
 fn live_bytes<C: Reattachable>(graph: &CellGraph<C>, cap: u32) -> usize {
     (0..cap)
-        .filter(|slot| graph.slots[*slot as usize].state != SlabState::Free)
-        .filter_map(|slot| graph.slots[slot as usize].region.as_ref())
-        .map(Region::allocated_bytes)
+        .filter(|slot| graph.cells.slots[*slot as usize].state != SlabState::Free)
+        .map(|slot| graph.regions.slab_bytes(slot))
         .sum()
 }
 
@@ -125,10 +124,10 @@ fn kept_reach<'g, C: Reattachable, T: Reattachable + DropFree>(
     let CellHandle::Slab(home) = key.home else {
         panic!("a value homed in a tree cell interns no reach")
     };
-    let Some(SlabForward::Slab { slot, first_index }) = graph.locate(home) else {
+    let Some(SlabForward::Slab { slot, first_index }) = graph.cells.locate(home) else {
         panic!("the kept carrier's home is still in the slab")
     };
-    graph.slots[slot as usize]
+    graph.cells.slots[slot as usize]
         .reaches
         .get(first_index + key.index)
         .expect("a relocated key names an entry of the reach table it landed in")
@@ -137,7 +136,7 @@ fn kept_reach<'g, C: Reattachable, T: Reattachable + DropFree>(
 /// What a slot currently holds, by handle — the state assertions read the slab directly, since
 /// residence is not observable through the public verbs.
 fn state_of<C: Reattachable>(graph: &CellGraph<C>, handle: SlabHandle) -> SlabState {
-    graph.slots[handle.slot() as usize].state
+    graph.cells.slots[handle.slot() as usize].state
 }
 
 #[test]
@@ -163,7 +162,7 @@ fn a_cap_below_the_width_binds_admission_and_the_signal() {
     let _ = graph.create(None, None).unwrap();
     let _ = graph.create(None, None).unwrap();
     assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
-    assert_eq!(graph.occupancy().cap, 2);
+    assert_eq!(graph.cells.occupancy().cap, 2);
 }
 
 #[test]
@@ -186,21 +185,21 @@ fn a_two_word_graph_names_slots_across_the_chunk_boundary() {
     // A child born in the high chunk inherits the row of a parent in the low one.
     let high = cells[99];
     assert_eq!(high.slot(), 100);
-    assert!(graph.birth.test(high.slot(), root.slot()));
+    assert!(graph.cells.birth.test(high.slot(), root.slot()));
 
     // And a pin crosses the boundary the other way.
     let low = cells[2];
     graph
         .enter(low, |context| context.hold(high).unwrap())
         .unwrap();
-    assert!(graph.holds(low, high));
+    assert!(graph.cells.holds(low, high));
 
     // Releasing the holder drops the whole row, both chunks of it, so the held cell reclaims.
     graph.release(low, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(!graph.holds(low, high));
+    assert!(!graph.cells.holds(low, high));
     graph.release(high, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!graph.is_live(high));
-    assert_eq!(graph.occupancy().sealed_cells, 0);
+    assert_eq!(graph.cells.occupancy().sealed_cells, 0);
 }
 
 #[test]
@@ -234,25 +233,25 @@ fn a_birth_row_contains_the_parent_chain_and_outlives_the_middle_cell() {
     let b = graph.create(Some(a), None).unwrap();
     let c = graph.create(Some(b), None).unwrap();
 
-    assert!(graph.birth.row_contains(b.slot(), a.slot()));
-    assert!(graph.birth.test(b.slot(), a.slot()));
-    assert!(graph.birth.row_contains(c.slot(), b.slot()));
-    assert!(graph.birth.test(c.slot(), b.slot()));
-    assert!(graph.birth.test(c.slot(), a.slot()));
+    assert!(graph.cells.birth.row_contains(b.slot(), a.slot()));
+    assert!(graph.cells.birth.test(b.slot(), a.slot()));
+    assert!(graph.cells.birth.row_contains(c.slot(), b.slot()));
+    assert!(graph.cells.birth.test(c.slot(), b.slot()));
+    assert!(graph.cells.birth.test(c.slot(), a.slot()));
 
     graph.release(b, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!graph.is_live(b));
-    assert_eq!(graph.slots[b.slot() as usize].state, SlabState::Dead);
-    assert!(graph.birth.test(c.slot(), a.slot()));
+    assert_eq!(graph.cells.slots[b.slot() as usize].state, SlabState::Dead);
+    assert!(graph.cells.birth.test(c.slot(), a.slot()));
     assert!(graph.is_live(a));
 
     graph.release(c, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.slots[c.slot() as usize].state, SlabState::Free);
-    assert_eq!(graph.slots[b.slot() as usize].state, SlabState::Free);
+    assert_eq!(graph.cells.slots[c.slot() as usize].state, SlabState::Free);
+    assert_eq!(graph.cells.slots[b.slot() as usize].state, SlabState::Free);
     assert!(graph.is_live(a));
 
     graph.release(a, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 #[test]
@@ -303,9 +302,9 @@ fn a_cell_is_entered_by_one_step_at_a_time() {
     let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
     let cell = graph.create(None, None).unwrap();
 
-    graph.begin(CellHandle::Slab(cell)).unwrap();
+    graph.cells.begin(CellHandle::Slab(cell)).unwrap();
     assert_eq!(
-        graph.begin(CellHandle::Slab(cell)),
+        graph.cells.begin(CellHandle::Slab(cell)),
         Err(EnterError::AlreadyExecuting)
     );
     assert_eq!(
@@ -313,7 +312,7 @@ fn a_cell_is_entered_by_one_step_at_a_time() {
         Err(ReleaseError::Executing)
     );
 
-    graph.executing.clear(cell.slot());
+    graph.cells.executing.clear(cell.slot());
     assert!(graph.enter(cell, |_| ()).is_ok());
 }
 
@@ -330,7 +329,7 @@ fn the_executing_flag_falls_when_a_step_panics() {
     std::panic::set_hook(hook);
 
     assert!(outcome.is_err());
-    assert!(!graph.executing.test(cell.slot()));
+    assert!(!graph.cells.executing.test(cell.slot()));
     assert!(graph.enter(cell, |_| ()).is_ok());
 }
 
