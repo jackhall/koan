@@ -1,8 +1,11 @@
 ## Design tree
 
-Design rationale for Koan, partitioned by concern. Each doc owns one
-topic end-to-end; this index says which doc owns what so future edits
-land in the right place by partition rather than by intuition.
+**Retired and frozen.** Design rationale for the runtime behind
+`pending_rewrite`, read as requirements for the code the rewrite replaces.
+Nothing is added here and nothing is edited; a module the rewrite keeps states
+its design in its own `README.md` ([README.md](../README.md)). Each doc below
+owns one topic end-to-end, and this index says which owns what, so a reader
+looking for a requirement lands on it by partition rather than by intuition.
 
 The root-level docs cover the six cross-cutting concerns of the
 runtime (execution, memory, parsing, error handling, functional
