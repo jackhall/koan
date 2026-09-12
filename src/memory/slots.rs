@@ -1,38 +1,46 @@
-//! The **slot array**: a fixed run of three-state binding cells in one bump allocation, addressed
-//! by index rather than by key. The layout-addressed counterpart of [`BumpBackedMap`], for a table
-//! whose key set is fixed before its first write — a per-call frame's value bindings, sized by the
-//! body's own [`SlotLayout`](crate::parse::SlotLayout).
+//! The **slot array**: a fixed run of three-state binding cells laid down in a cell's region,
+//! addressed by index rather than by key — for a table whose key set is fixed before its first
+//! write, such as a call's value bindings, sized by the body's own
+//! `parse`'s `SlotLayout`.
 //!
-//! A cell is [`SlotState`]: `Empty`, `Claimed` on the in-flight binder's producer, or `Bound` to a
-//! payload. One cell answers both of a name's questions — "is it bound?" and "is a binder for it in
-//! flight?" — so a channel storing claims in its cells needs no second structure keyed on the same
-//! name, and the transitions between the three states live on the cell itself so a keyed table over
-//! the same cell type rules on a write exactly as this array does.
+//! A slot is [`SlotState`]: `Empty`, `Claimed` on the in-flight binder's producer, or `Bound` to a
+//! payload. One slot answers both of a name's questions — "is it bound?" and "is a binder for it in
+//! flight?" — so a channel storing claims in its slots needs no second structure keyed on the same
+//! name, and the transitions between the three states live on the state itself.
 //!
 //! Both type parameters are the embedder's: the array is the shape, and what a bound slot *holds*
 //! is a choice made where it is instantiated.
 //!
-//! **Drop-freeness.** The buffer wears its own `ManuallyDrop` for [`BumpVec`]'s reason — its bytes
-//! are bump memory the region releases whole, so the vec's destructor would only hand a
-//! bump-owned buffer back to an allocator that frees nothing. That wrapper would also swallow the
-//! element proof, so [`SlotArray::new`] restates it as a `const` assert against the cell type
-//! directly: a payload bringing drop glue with it fails the build at the instantiation site.
+//! **A value at rest in the region.** [`SlotArray::new`] lays the slots down through
+//! [`Writer::fill`], which hands back a shared `&'cell` borrow, never `&mut`; a continuation
+//! captures `'cell` borrows, so every write after construction goes through interior mutability.
+//! Each slot is a [`Cell`] — the zero-cost kind, with no borrow flag — and a `Cell` never lends a
+//! `&T`, so reads copy: `V` and `P` are `Copy`, reads return [`SlotState`] by value, and a
+//! transition is a by-value function the array applies with [`Cell::set`]. The array itself is two
+//! `'cell` borrows and `Copy`, so a continuation captures it by value; its live-claim counter lives
+//! in the region beside the slots, since a counter inside a `Copy` struct would diverge between
+//! copies.
+//!
+//! **Drop-freeness.** The region runs no destructor. `Writer::fill` asserts that for its element
+//! type at compile time, and [`SlotArray::new`] restates the assert against the slot type so a
+//! payload bringing drop glue fails the build with a message naming the slot array.
 
-use std::mem::ManuallyDrop;
+use std::cell::Cell;
 
-use super::substrate::{BumpAllocator, BumpVec};
+use super::substrate::Writer;
 
-/// One binding cell: unwritten, claimed by an in-flight binder, or bound.
+/// One binding slot: unwritten, claimed by an in-flight binder, or bound.
 ///
 /// `Claimed` and `Bound` are exclusive by construction rather than by a checked order — a commit
 /// *replaces* the claim it satisfies — which is what lets one probe answer a name's whole state.
+#[derive(Clone, Copy)]
 pub enum SlotState<V, P> {
     Empty,
     Claimed(P),
     Bound(V),
 }
 
-/// What a cell already holds when a write cannot proceed. Carries the standing producer on the
+/// What a slot already holds when a write cannot proceed. Carries the standing producer on the
 /// `Claimed` arm so a caller can rule on a same-producer re-entry without a second read.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SlotConflict<P> {
@@ -40,128 +48,130 @@ pub enum SlotConflict<P> {
     Bound,
 }
 
-impl<V, P: Copy> SlotState<V, P> {
-    /// The standing producer, if a binder for this cell is still in flight.
-    pub fn claimed_by(&self) -> Option<P> {
+impl<V: Copy, P: Copy> SlotState<V, P> {
+    /// The standing producer, if a binder for this slot is still in flight.
+    pub fn claimed_by(self) -> Option<P> {
         match self {
-            SlotState::Claimed(producer) => Some(*producer),
+            SlotState::Claimed(producer) => Some(producer),
             SlotState::Empty | SlotState::Bound(_) => None,
         }
     }
 
-    /// The bound payload, if the cell is committed.
-    pub fn bound(&self) -> Option<&V> {
+    /// The bound payload, if the slot is committed.
+    pub fn bound(self) -> Option<V> {
         match self {
             SlotState::Bound(payload) => Some(payload),
             SlotState::Empty | SlotState::Claimed(_) => None,
         }
     }
 
-    /// Stamp `producer`'s claim on an unwritten cell. `Ok(true)` says a claim was added — what a
-    /// live-claim counter beside the cells reads. A cell already claimed or bound conflicts, and
-    /// the caller rules on whether a standing claim is a re-entry of the same binder.
-    pub fn claim(&mut self, producer: P) -> Result<bool, SlotConflict<P>> {
+    /// Stamp `producer`'s claim on an unwritten slot: the next state, and whether a claim was
+    /// added — what a live-claim counter reads. A slot already claimed or bound conflicts, and the
+    /// caller rules on whether a standing claim is a re-entry of the same binder.
+    pub fn claim(self, producer: P) -> Result<(Self, bool), SlotConflict<P>> {
         match self {
-            SlotState::Empty => {
-                *self = SlotState::Claimed(producer);
-                Ok(true)
-            }
-            SlotState::Claimed(standing) => Err(SlotConflict::Claimed(*standing)),
+            SlotState::Empty => Ok((SlotState::Claimed(producer), true)),
+            SlotState::Claimed(standing) => Err(SlotConflict::Claimed(standing)),
             SlotState::Bound(_) => Err(SlotConflict::Bound),
         }
     }
 
-    /// Commit `payload`, **retiring the cell's own claim** by replacing it. `Ok(true)` says a claim
-    /// went away with the write. Binding is once: a committed cell conflicts.
-    pub fn bind(&mut self, payload: V) -> Result<bool, SlotConflict<P>> {
+    /// Commit `payload`, **retiring the slot's own claim** by replacing it: the next state, and
+    /// whether a claim went away with the write. Binding is once: a committed slot conflicts.
+    pub fn bind(self, payload: V) -> Result<(Self, bool), SlotConflict<P>> {
         match self {
             SlotState::Bound(_) => Err(SlotConflict::Bound),
-            SlotState::Empty | SlotState::Claimed(_) => {
-                let retired = matches!(self, SlotState::Claimed(_));
-                *self = SlotState::Bound(payload);
-                Ok(retired)
-            }
+            SlotState::Empty => Ok((SlotState::Bound(payload), false)),
+            SlotState::Claimed(_) => Ok((SlotState::Bound(payload), true)),
         }
     }
 
     /// Drop an unsatisfied claim — what a binder that terminalizes without committing leaves
-    /// behind. `true` if a claim was standing. A bound cell is untouched: the commit already
-    /// retired the claim it satisfied.
-    pub fn retire_claim(&mut self) -> bool {
+    /// behind: the next state, and whether a claim was standing. A bound slot is untouched: the
+    /// commit already retired the claim it satisfied.
+    pub fn retire_claim(self) -> (Self, bool) {
         match self {
-            SlotState::Claimed(_) => {
-                *self = SlotState::Empty;
-                true
-            }
-            SlotState::Empty | SlotState::Bound(_) => false,
+            SlotState::Claimed(_) => (SlotState::Empty, true),
+            SlotState::Empty | SlotState::Bound(_) => (self, false),
         }
     }
 }
 
-/// `len` binding cells in one bump allocation, beside the count of those currently claimed.
+/// `len` binding slots in a cell's region, beside the count of those currently claimed.
 ///
 /// The counter is what makes "no binder is still in flight here" an O(1) read rather than a walk —
 /// the half of a copy-readiness gate this channel owns.
-pub struct SlotArray<'a, V, P> {
-    cells: ManuallyDrop<BumpVec<'a, SlotState<V, P>>>,
-    claimed: usize,
+pub struct SlotArray<'cell, V, P> {
+    slots: &'cell [Cell<SlotState<V, P>>],
+    claimed: &'cell Cell<usize>,
 }
 
-impl<'a, V, P: Copy> SlotArray<'a, V, P> {
-    /// `len` empty cells over `alloc`'s bump — one allocation, sized exactly, never grown.
-    pub fn new(alloc: BumpAllocator<'a>, len: usize) -> Self {
+impl<V, P> Clone for SlotArray<'_, V, P> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<V, P> Copy for SlotArray<'_, V, P> {}
+
+impl<'cell, V: Copy, P: Copy> SlotArray<'cell, V, P> {
+    /// `len` empty slots and a zero counter, laid down in the region `writer` names.
+    pub fn new(writer: Writer<'cell>, len: usize) -> Self {
         const {
             assert!(
-                !std::mem::needs_drop::<SlotState<V, P>>(),
-                "a bump-hosted slot cell must carry no drop glue: the bump runs no destructor",
+                !std::mem::needs_drop::<Cell<SlotState<V, P>>>(),
+                "a region-resident slot must carry no drop glue: the region runs no destructor",
             )
         };
-        let mut cells = BumpVec::with_capacity_in(len, alloc);
-        cells.resize_with(len, || SlotState::Empty);
-        SlotArray {
-            cells: ManuallyDrop::new(cells),
-            claimed: 0,
-        }
+        let slots = writer.fill(len, |_| Cell::new(SlotState::Empty));
+        let claimed = &writer.fill(1, |_| Cell::new(0usize))[0];
+        SlotArray { slots, claimed }
     }
 
-    pub fn len(&self) -> usize {
-        self.cells.len()
+    pub fn len(self) -> usize {
+        self.slots.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
+    pub fn is_empty(self) -> bool {
+        self.slots.is_empty()
     }
 
-    /// The cell at `slot`.
-    pub fn get(&self, slot: usize) -> &SlotState<V, P> {
-        &self.cells[slot]
+    /// The state of the slot at `slot`.
+    pub fn get(self, slot: usize) -> SlotState<V, P> {
+        self.slots[slot].get()
     }
 
     /// [`SlotState::claim`] at `slot`, keeping the live-claim count.
-    pub fn claim(&mut self, slot: usize, producer: P) -> Result<(), SlotConflict<P>> {
-        self.claimed += usize::from(self.cells[slot].claim(producer)?);
+    pub fn claim(self, slot: usize, producer: P) -> Result<(), SlotConflict<P>> {
+        let (next, added) = self.slots[slot].get().claim(producer)?;
+        self.slots[slot].set(next);
+        self.claimed.set(self.claimed.get() + usize::from(added));
         Ok(())
     }
 
     /// [`SlotState::bind`] at `slot`, keeping the live-claim count.
-    pub fn bind(&mut self, slot: usize, payload: V) -> Result<(), SlotConflict<P>> {
-        self.claimed -= usize::from(self.cells[slot].bind(payload)?);
+    pub fn bind(self, slot: usize, payload: V) -> Result<(), SlotConflict<P>> {
+        let (next, retired) = self.slots[slot].get().bind(payload)?;
+        self.slots[slot].set(next);
+        self.claimed.set(self.claimed.get() - usize::from(retired));
         Ok(())
     }
 
     /// [`SlotState::retire_claim`] at `slot`, keeping the live-claim count.
-    pub fn retire_claim(&mut self, slot: usize) {
-        self.claimed -= usize::from(self.cells[slot].retire_claim());
+    pub fn retire_claim(self, slot: usize) {
+        let (next, retired) = self.slots[slot].get().retire_claim();
+        self.slots[slot].set(next);
+        self.claimed.set(self.claimed.get() - usize::from(retired));
     }
 
-    /// How many binders are still in flight into this array — one field read, no walk.
-    pub fn claimed_count(&self) -> usize {
-        self.claimed
+    /// How many binders are still in flight into this array — one read, no walk.
+    pub fn claimed_count(self) -> usize {
+        self.claimed.get()
     }
 
-    /// Every cell in slot order.
-    pub fn iter(&self) -> impl Iterator<Item = (usize, &SlotState<V, P>)> {
-        self.cells.iter().enumerate()
+    /// Every slot's state in slot order.
+    pub fn iter(self) -> impl Iterator<Item = (usize, SlotState<V, P>)> + 'cell {
+        self.slots.iter().map(Cell::get).enumerate()
     }
 }
 

@@ -18,9 +18,8 @@ pub mod builtins;
 pub mod fold_fixture;
 #[cfg(feature = "pending_rewrite")]
 pub mod machine;
-/// Koan's instantiation of the region substrate, and every substrate name Koan spells — the
-/// storage profile, the allocation brands, the per-call frame, program storage, the carrier
-/// aliases, the value-channel cells and the container substrates.
+/// The shape of things in storage: the cell tier over `cellgraph` — its names under Koan's
+/// spelling and the slot array — and the bump tier outside the graph, where program storage lives.
 pub mod memory;
 pub mod parse;
 pub mod source;

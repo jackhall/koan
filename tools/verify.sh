@@ -17,10 +17,11 @@
 # to override the tier's choice — `PROPTEST_CASES=16384 tools/verify.sh --total` for an overnight
 # sweep of the lattice laws.
 #
-# Every cargo step builds the default feature set: the modules the rewrite keeps. The old runtime
-# behind `pending_rewrite` — and with it the interpreter binary the tutorial-snippet check and the
-# allocation audit read — is not part of either tier; TEST.md § The pending rewrite lists the
-# commands that run it on demand.
+# Every cargo step builds the default feature set: the modules the rewrite keeps — plus
+# `workgraph/test-hooks` on a workspace-wide step, since workgraph's doctests read the fixture that
+# feature compiles and no other crate turns it on. The old runtime behind `pending_rewrite` — and
+# with it the interpreter binary the tutorial-snippet check and the allocation audit read — is not
+# part of either tier; TEST.md § The pending rewrite lists the commands that run it on demand.
 #
 # One line per step, then one summary line. A step that passes is worth a count, a score, or a
 # delta — not its runner chatter — so the whole green slate reads without scrolling, and the
@@ -266,11 +267,11 @@ if [ "$TIER" = routine ]; then
     # One pass: unit tests, integration binaries and doctests — including the `compile_fail`
     # escape guards, which are doctests. The total tier has to split these, since llvm-cov cannot
     # run doctests; here nothing instruments the build, so there is nothing to split.
-    run tests 'tests FAILED' cargo test --workspace --quiet
+    run tests 'tests FAILED' cargo test --workspace --features workgraph/test-hooks --quiet
     ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
 
     cellgraph_surface
-    clippy_step --all-targets
+    clippy_step --all-targets --features workgraph/test-hooks
     doclinks_step
 
     summary
@@ -285,20 +286,20 @@ slate_audit
 # `--workspace`, so the reading covers all three crates rather than the root one: the embedded
 # crates are koan's own code, and a slate that scored only `src/` would let a whole crate ship with
 # no coverage signal at all.
-run tests 'tests FAILED' cargo llvm-cov --quiet --workspace --lcov --output-path "$LCOV"
+run tests 'tests FAILED' cargo llvm-cov --quiet --workspace --features workgraph/test-hooks --lcov --output-path "$LCOV"
 ok tests "ok ($(passed) passed → $LCOV)" 'tests ok'
 
 # llvm-cov does not run doctests (instrumented doctests are nightly-only), so the `compile_fail`
 # escape guards on the lifetime-erasure accessors go unchecked above. Run them here: a
 # `compile_fail` doctest that *starts* compiling is a test failure.
-run doctests 'doctests FAILED' cargo test --doc --quiet
+run doctests 'doctests FAILED' cargo test --doc --features workgraph/test-hooks --quiet
 ok doctests "ok ($(passed) passed, compile_fail guards included)" 'doctests ok'
 
 cellgraph_surface
 # `cellgraph/perf` is the one feature in the workspace, and it gates the measurement binary the
 # perf step below runs. A default build hides that source from clippy, so the total tier's lint
 # turns it on — the same reason the cellgraph-only routine scope does.
-clippy_step --all-targets --features cellgraph/perf
+clippy_step --all-targets --features cellgraph/perf,workgraph/test-hooks
 doclinks_step
 
 # The leak/UB audit over the slate the `slate-audit` step just proved current. Minutes, and the

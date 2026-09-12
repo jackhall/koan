@@ -17,7 +17,7 @@
 use crate::source::{FileId, Span, Spanned};
 
 use crate::memory::reattachable;
-use crate::memory::{ProgramBrand, RegionBrand};
+use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::forms::binder::{StoredBinderKey, binder_plan_for};
 use crate::parse::forms::layout::SlotLayout;
 use crate::parse::forms::lazy::LazyKinds;
@@ -249,12 +249,12 @@ reattachable! { KExpression<'static> => KExpression<'r> }
 
 impl<'a> KExpression<'a> {
     /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.
-    pub fn new(brand: RegionBrand<'a>, parts: &[Spanned<ExpressionPart<'a>>]) -> Self {
+    pub fn new(brand: BumpAllocator<'a>, parts: &[Spanned<ExpressionPart<'a>>]) -> Self {
         Self::build(brand, parts, None, None)
     }
 
     /// [`new`](Self::new)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn new_from_iter<I>(brand: RegionBrand<'a>, parts: I) -> Self
+    pub fn new_from_iter<I>(brand: BumpAllocator<'a>, parts: I) -> Self
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
@@ -265,17 +265,17 @@ impl<'a> KExpression<'a> {
     /// Construction door for a borrowed run: copy it into `brand`'s region, then fill the
     /// structural cache.
     pub fn build(
-        brand: RegionBrand<'a>,
+        brand: BumpAllocator<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
-        Self::from_run(brand, brand.allocator().slice(parts), span, file)
+        Self::from_run(brand, brand.alloc_slice_copy(parts), span, file)
     }
 
     /// [`build`](Self::build)'s peer for a run whose slots are computed — see [`RunIter`].
     pub fn build_from_iter<I>(
-        brand: RegionBrand<'a>,
+        brand: BumpAllocator<'a>,
         parts: I,
         span: Option<Span>,
         file: Option<FileId>,
@@ -284,7 +284,7 @@ impl<'a> KExpression<'a> {
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        Self::from_run(brand, brand.allocator().slice_from_iter(parts), span, file)
+        Self::from_run(brand, brand.alloc_slice_fill_iter(parts), span, file)
     }
 
     /// Construction chokepoint, over a parts run **already resident** in `brand`'s region: fills the
@@ -292,7 +292,7 @@ impl<'a> KExpression<'a> {
     /// in how the run reached the region — so none ships with a stale or unfilled cache and no part
     /// run is mutated after it is frozen.
     fn from_run(
-        brand: RegionBrand<'a>,
+        brand: BumpAllocator<'a>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
@@ -311,7 +311,7 @@ impl<'a> KExpression<'a> {
     /// and freezes. The one place a `KExpression` is written, so neither door above can ship a node
     /// whose plan disagrees with its parts.
     fn seal(
-        brand: RegionBrand<'a>,
+        brand: BumpAllocator<'a>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
@@ -327,8 +327,7 @@ impl<'a> KExpression<'a> {
         // The extractors read the node, so the plan is filled once it stands. It is bumped behind a
         // reference rather than stored inline: it is the widest thing a node would carry, and
         // `KExpression` is copied on every part walk.
-        let plan = binder_plan_for(brand, cache.form(), &expression)
-            .map(|key| brand.allocator().value(key));
+        let plan = binder_plan_for(brand, cache.form(), &expression).map(|key| &*brand.alloc(key));
         expression.cache = cache.declaring(plan);
         // The value binders this node would open a frame over, read off the same statement plans
         // the claim stamp and the `CLOSE` capture walk read. Filled for every node — a node is a
@@ -341,19 +340,19 @@ impl<'a> KExpression<'a> {
     /// Build a node and bump it, for a part arm that nests one ([`ExpressionPart::Expression`] and
     /// its sigil siblings hold `&'a KExpression<'a>`).
     pub fn nested(
-        brand: RegionBrand<'a>,
+        brand: BumpAllocator<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
     ) -> &'a KExpression<'a> {
-        brand.allocator().value(Self::new(brand, parts))
+        brand.alloc(Self::new(brand, parts))
     }
 
     /// [`nested`](Self::nested)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn nested_from_iter<I>(brand: RegionBrand<'a>, parts: I) -> &'a KExpression<'a>
+    pub fn nested_from_iter<I>(brand: BumpAllocator<'a>, parts: I) -> &'a KExpression<'a>
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        brand.allocator().value(Self::new_from_iter(brand, parts))
+        brand.alloc(Self::new_from_iter(brand, parts))
     }
 
     /// The [`SlotLayout`] of this node **as a body**: the value binders its statements declare,

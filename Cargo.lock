@@ -317,6 +317,8 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "blake3",
+ "bumpalo",
+ "cellgraph",
  "dhat",
  "hashbrown",
  "imbl",
@@ -327,7 +329,6 @@ dependencies = [
  "smallvec",
  "stable_deref_trait",
  "trybuild",
- "workgraph",
 ]
 
 [[package]]

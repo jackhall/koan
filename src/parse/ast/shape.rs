@@ -13,7 +13,7 @@
 
 use smallvec::SmallVec;
 
-use crate::memory::RegionBrand;
+use crate::memory::BumpAllocator;
 use crate::parse::forms::binder::StoredBinderKey;
 use crate::parse::forms::lazy::LazyKinds;
 use crate::parse::forms::{Form, form_for};
@@ -224,10 +224,10 @@ pub fn operator_probe_for(key: &[KeyElement], shape: DispatchShape) -> Option<Ke
 /// so reading it is a slice borrow and nothing is hashed — the parse already minted every symbol in
 /// the run.
 pub fn stored_untyped_key<'a>(
-    brand: RegionBrand<'a>,
+    brand: BumpAllocator<'a>,
     elements: impl ExactSizeIterator<Item = KeyElement>,
 ) -> &'a [KeyElement] {
-    brand.allocator().slice_from_iter(elements)
+    brand.alloc_slice_fill_iter(elements)
 }
 
 /// The structural facts a node caches at construction: a function of its parts run and the form

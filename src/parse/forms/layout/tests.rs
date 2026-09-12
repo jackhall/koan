@@ -105,7 +105,7 @@ proptest! {
             .chain(std::iter::once(")".to_string()))
             .collect::<Vec<_>>()
             .join("");
-        let layout = SlotLayout::of_body(brand.region(), &body(brand, &source));
+        let layout = SlotLayout::of_body(brand.allocator(), &body(brand, &source));
 
         let slots = expected(
             statements
@@ -132,7 +132,7 @@ proptest! {
     fn redundant_paren_wrapping_is_transparent(name in "[a-z]{2,3}") {
         let program = program_storage();
         let brand = program.brand();
-        let bare = SlotLayout::of_body(brand.region(), &body(brand, &format!("(LET {name} = 1)")));
+        let bare = SlotLayout::of_body(brand.allocator(), &body(brand, &format!("(LET {name} = 1)")));
         prop_assert_eq!(pairs(bare), vec![(value(&name), 1)]);
         for depth in 1..3 {
             let source = format!(
@@ -140,7 +140,7 @@ proptest! {
                 "(".repeat(depth),
                 ")".repeat(depth),
             );
-            let wrapped = SlotLayout::of_body(brand.region(), &body(brand, &source));
+            let wrapped = SlotLayout::of_body(brand.allocator(), &body(brand, &source));
             prop_assert_eq!(pairs(wrapped), pairs(bare), "{}", source);
         }
     }
@@ -161,13 +161,13 @@ proptest! {
             .chain(std::iter::once(")".to_string()))
             .collect::<Vec<_>>()
             .join("");
-        let inner = SlotLayout::of_body(brand.region(), &body(brand, &source));
+        let inner = SlotLayout::of_body(brand.allocator(), &body(brand, &source));
 
         let typed: Vec<(BinderSymbol, KType)> = parameters
             .iter()
             .map(|binder| (*binder, KType::ANY))
             .collect();
-        let merged = SlotLayout::for_function(brand.region(), &typed, inner);
+        let merged = SlotLayout::for_function(brand.allocator(), &typed, inner);
 
         let mut entries: Vec<(ValueSymbol, usize)> = parameters
             .iter()
@@ -180,7 +180,7 @@ proptest! {
         prop_assert_eq!(pairs(merged), expected(entries));
 
         let other = program_storage();
-        let copy = merged.rehomed(other.brand().region());
+        let copy = merged.rehomed(other.brand().allocator());
         prop_assert_eq!(pairs(copy), pairs(merged));
         if !merged.is_empty() {
             prop_assert!(!std::ptr::eq(merged, copy));
@@ -194,7 +194,7 @@ fn binderless_body_is_empty() {
     let program = program_storage();
     let brand = program.brand();
     let plain = body(brand, "(a b)");
-    let layout = SlotLayout::of_body(brand.region(), &plain);
+    let layout = SlotLayout::of_body(brand.allocator(), &plain);
     assert!(layout.is_empty());
     assert!(std::ptr::eq(layout, SlotLayout::EMPTY));
 }

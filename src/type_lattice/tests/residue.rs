@@ -5,6 +5,7 @@
 //! that pins the *edge* of a law rather than the law itself. Each builds its own registry over a
 //! region of its own, which doubles as its scratch.
 
+use crate::memory::Bump;
 use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
 
 use crate::type_lattice::digest::{TypeDigest, empty_schema_digest};
@@ -19,15 +20,13 @@ use crate::type_lattice::shape::DispatchTokenElement;
 use crate::type_lattice::unify::{Collector, UnifyFailure, admits_with};
 use crate::type_lattice::walk::Variance;
 
-use super::generators::{allocator, fresh_cart};
-
 /// No law: a handle that names no interned node is a bug in whoever minted it, not a value the
 /// algebra relates. The panic is the contract.
 #[test]
 #[should_panic(expected = "names no interned node")]
 fn reading_an_uninterned_handle_panics() {
-    let cart = fresh_cart();
-    let types = TypeRegistry::in_region(allocator(&cart));
+    let bump = Bump::new();
+    let types = TypeRegistry::in_region(&bump);
     let stranger = KType::from_digest(TypeDigest(0xdead_beef));
     types.with_node(stranger, |_| ());
 }
@@ -36,8 +35,8 @@ fn reading_an_uninterned_handle_panics() {
 /// the bottom, which is what makes `Never` the join's identity.
 #[test]
 fn a_union_of_nothing_is_never() {
-    let cart = fresh_cart();
-    let region = allocator(&cart);
+    let bump = Bump::new();
+    let region = &bump;
     let types = TypeRegistry::in_region(region);
     assert_eq!(types.union_of(region, &[]), KType::NEVER);
     assert_eq!(
@@ -51,8 +50,8 @@ fn a_union_of_nothing_is_never() {
 /// share one content identity.
 #[test]
 fn the_empty_schema_digest_is_the_module_top() {
-    let cart = fresh_cart();
-    let region = allocator(&cart);
+    let bump = Bump::new();
+    let region = &bump;
     let types = TypeRegistry::in_region(region);
     let empty = types.signature(region, SchemaDraft::new(region));
     assert_eq!(empty, KType::EMPTY_SIGNATURE);
@@ -69,8 +68,8 @@ fn the_empty_schema_digest_is_the_module_top() {
 #[test]
 fn a_twice_used_variable_takes_the_maximum_or_fails() {
     let labels = LabelInterner::new();
-    let cart = fresh_cart();
-    let region = allocator(&cart);
+    let bump = Bump::new();
+    let region = &bump;
     let types = TypeRegistry::in_region(region);
     let keyword = KeywordSymbol::declared("PURE", &labels).expect("a keyword token");
     let element = types.quantified(0, KType::ANY);
@@ -132,8 +131,8 @@ fn a_twice_used_variable_takes_the_maximum_or_fails() {
 #[test]
 fn a_single_occurrence_takes_its_bound_or_never() {
     let labels = LabelInterner::new();
-    let cart = fresh_cart();
-    let region = allocator(&cart);
+    let bump = Bump::new();
+    let region = &bump;
     let types = TypeRegistry::in_region(region);
     let keyword = KeywordSymbol::declared("PURE", &labels).expect("a keyword token");
     let name = TypeSymbol::declared("Elt", &labels).expect("a Type token");
@@ -164,8 +163,8 @@ fn a_single_occurrence_takes_its_bound_or_never() {
 #[test]
 fn a_record_is_order_blind_in_identity_and_ordered_in_presentation() {
     let labels = LabelInterner::new();
-    let cart = fresh_cart();
-    let region = allocator(&cart);
+    let bump = Bump::new();
+    let region = &bump;
     let types = TypeRegistry::in_region(region);
     let x = BinderSymbol::declared("x", &labels).expect("a bindable token");
     let y = BinderSymbol::declared("y", &labels).expect("a bindable token");
@@ -189,8 +188,8 @@ fn a_record_is_order_blind_in_identity_and_ordered_in_presentation() {
 #[test]
 fn width_runs_the_way_each_arm_declares() {
     let labels = LabelInterner::new();
-    let cart = fresh_cart();
-    let region = allocator(&cart);
+    let bump = Bump::new();
+    let region = &bump;
     let types = TypeRegistry::in_region(region);
     let x = BinderSymbol::declared("x", &labels).expect("a bindable token");
     let y = BinderSymbol::declared("y", &labels).expect("a bindable token");

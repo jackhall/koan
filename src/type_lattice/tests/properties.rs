@@ -8,7 +8,7 @@
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 
-use crate::memory::{BumpAllocator, BumpVec, ScopeId};
+use crate::memory::{Bump, BumpAllocator, BumpVec, ScopeId};
 use crate::parse::TypeSymbol;
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
@@ -34,7 +34,7 @@ use crate::type_lattice::walk::Variance;
 use crate::type_lattice::walk::unary::{LEAF, Visit, visit};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
-use super::generators::{World, allocator, arb_arguments, arb_shape_type, arb_type, fresh_cart};
+use super::generators::{World, arb_arguments, arb_shape_type, arb_type};
 
 thread_local! {
     /// One live registry and one alphabet per test thread — proptest runs each `#[test]` on its
@@ -92,8 +92,8 @@ proptest! {
     #[test]
     fn join_and_meet_are_commutative_and_idempotent(a in one(), b in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         prop_assert_eq!(join(&types, scratch, a, b), join(&types, scratch, b, a));
         prop_assert_eq!(meet(&types, scratch, a, b), meet(&types, scratch, b, a));
         prop_assert_eq!(join(&types, scratch, a, a), a);
@@ -103,8 +103,8 @@ proptest! {
     #[test]
     fn join_and_meet_absorb_each_other(a in one(), b in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         prop_assert_eq!(join(&types, scratch, a, meet(&types, scratch, a, b)), a);
         prop_assert_eq!(meet(&types, scratch, a, join(&types, scratch, a, b)), a);
     }
@@ -112,8 +112,8 @@ proptest! {
     #[test]
     fn never_and_any_are_the_identities(a in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         prop_assert_eq!(join(&types, scratch, a, KType::NEVER), a);
         prop_assert_eq!(meet(&types, scratch, a, KType::ANY), a);
     }
@@ -125,8 +125,8 @@ proptest! {
     #[test]
     fn join_and_meet_are_associative(a in small(), b in small(), c in small()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         prop_assert_eq!(
             join(&types, scratch, join(&types, scratch, a, b), c),
             join(&types, scratch, a, join(&types, scratch, b, c))
@@ -146,8 +146,8 @@ proptest! {
     #[test]
     fn the_order_is_reflexive_and_bounded(a in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         prop_assert!(is_subtype_of(&types, scratch, a, a));
         prop_assert!(is_subtype_of(&types, scratch, KType::NEVER, a));
         prop_assert!(is_subtype_of(&types, scratch, a, KType::ANY));
@@ -157,8 +157,8 @@ proptest! {
     #[test]
     fn the_order_is_antisymmetric(a in one(), b in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         if is_subtype_of(&types, scratch, a, b) && is_subtype_of(&types, scratch, b, a) {
             prop_assert_eq!(a, b);
         }
@@ -167,8 +167,8 @@ proptest! {
     #[test]
     fn the_order_agrees_with_join_and_meet(a in one(), b in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let below = is_subtype_of(&types, scratch, a, b);
         prop_assert_eq!(below, join(&types, scratch, a, b) == b);
         prop_assert_eq!(below, meet(&types, scratch, a, b) == a);
@@ -179,8 +179,8 @@ proptest! {
     #[test]
     fn a_rigid_variable_has_only_itself_and_never_below_it(a in one(), b in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let rigid = matches!(
             types.node(b),
             TypeNode::Quantified { .. } | TypeNode::AbstractType { .. }
@@ -200,8 +200,8 @@ proptest! {
     #[test]
     fn the_order_is_transitive(a in small(), b in small(), c in small()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         if is_subtype_of(&types, scratch, a, b) && is_subtype_of(&types, scratch, b, c) {
             prop_assert!(is_subtype_of(&types, scratch, a, c));
         }
@@ -216,8 +216,8 @@ proptest! {
     #[test]
     fn union_of_is_canonical(members in prop::collection::vec(one(), 1..5)) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let union = types.union_of(scratch, &members);
         let mut reversed = members.clone();
         reversed.reverse();
@@ -260,8 +260,8 @@ proptest! {
     #[test]
     fn equal_content_interns_once(a in one(), b in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         prop_assert_eq!(types.list(a), types.list(a));
         prop_assert_eq!(types.dict(a, b), types.dict(a, b));
         // A node read back out and re-interned names the same handle.
@@ -275,8 +275,8 @@ proptest! {
     #[test]
     fn the_probe_flags_are_their_walks(a in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let quantified = visit(&types, scratch, a, LEAF, &mut |_, node, _| match node {
             TypeNode::ExpressionShape { .. } => Visit::Skip,
             TypeNode::Quantified { .. } => Visit::Stop,
@@ -299,8 +299,8 @@ proptest! {
     #[test]
     fn substitution_of_nothing_is_the_identity(a in one(), b in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         prop_assert_eq!(substitute_quantified(&types, scratch, a, &[]), a);
         if !types.contains_quantified(a) {
             prop_assert_eq!(substitute_quantified(&types, scratch, a, &[b, b, b]), a);
@@ -314,8 +314,8 @@ proptest! {
     #[test]
     fn erasing_is_instantiating_at_the_bounds(a in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let bounds = quantifier_bounds(&types, a);
         prop_assert_eq!(
             erase_quantified(&types, scratch, a),
@@ -326,8 +326,8 @@ proptest! {
     #[test]
     fn canonicalizing_a_binder_is_idempotent(a in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let once = canonicalize_binder(&types, scratch, a, ScopeId::SENTINEL);
         prop_assert_eq!(
             canonicalize_binder(&types, scratch, once, ScopeId::SENTINEL),
@@ -338,8 +338,8 @@ proptest! {
     #[test]
     fn the_slot_relations_are_their_definitions(a in one(), b in one(), c in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let world = world();
         let members = Members::from_pairs(scratch, [(world.type_names[0], c)]);
         let id = ScopeId::SENTINEL;
@@ -367,8 +367,8 @@ proptest! {
     #[test]
     fn canonical_shape_form_is_a_fixed_point(a in shape()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         if let TypeNode::ExpressionShape {
             quantifiers,
             elements,
@@ -386,8 +386,8 @@ proptest! {
     #[test]
     fn a_shape_stores_the_bounds_its_occurrences_carry(a in shape()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let stored = quantifier_bounds(&types, a);
         let mut carried: Vec<Option<KType>> = vec![None; stored.len()];
         visit(&types, scratch, a, LEAF, &mut |_, node, context| match *node {
@@ -409,8 +409,8 @@ proptest! {
     #[test]
     fn specificity_flips_when_its_arguments_swap(a in shape(), b in shape()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         prop_assert_eq!(
             shape_specificity(&types, scratch, a, a),
             Specificity::Equal,
@@ -433,8 +433,8 @@ proptest! {
     #[test]
     fn specificity_refuses_anything_that_is_not_a_shape(a in one(), b in shape()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         // Two things that are not both shapes share no bucket to rank under. The empty element run
         // a non-shape reads as would otherwise make every pair of leaves compare `Equal`.
         if !is_shape(a, &types) {
@@ -448,8 +448,8 @@ proptest! {
     #[test]
     fn monomorphic_specificity_is_the_pointwise_fold(a in shape(), b in shape()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let monomorphic = shape_quantifiers(a, &types).is_empty()
             && shape_quantifiers(b, &types).is_empty()
             && shape_return(a, &types).is_some()
@@ -480,8 +480,8 @@ proptest! {
     #[test]
     fn a_shape_below_another_admits_what_it_admits(a in shape(), b in shape()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let comparable = shape_return(a, &types).is_some()
             && shape_return(b, &types).is_some()
             && shape_quantifiers(a, &types).is_empty()
@@ -539,8 +539,8 @@ proptest! {
     #[test]
     fn admission_without_quantifiers_is_the_order(a in one(), b in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         if types.contains_quantified(a) {
             return Ok(());
         }
@@ -552,8 +552,8 @@ proptest! {
     #[test]
     fn a_solution_is_the_extremum_of_its_contributions(a in shape(), b in shape()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let bounds = quantifier_bounds(&types, a);
         if bounds.is_empty() {
             return Ok(());
@@ -628,8 +628,8 @@ proptest! {
     #[test]
     fn sealing_is_order_insensitive_and_idempotent(reprs in prop::collection::vec(small(), 1..4)) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let world = world();
         let names: Vec<_> = world.type_names[..reprs.len().min(3)].to_vec();
         let reprs = &reprs[..names.len()];
@@ -683,8 +683,8 @@ proptest! {
     #[test]
     fn schema_relations_bound_their_operands(a in one(), b in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let read = |kt: KType| match types.node(kt) {
             TypeNode::Signature { schema, .. } => Some(schema),
             _ => None,
@@ -707,8 +707,8 @@ proptest! {
     #[test]
     fn a_schema_is_stored_in_canonical_order(a in one()) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let TypeNode::Signature { schema, .. } = types.node(a) else {
             return Ok(());
         };
@@ -744,8 +744,8 @@ proptest! {
         overloads in prop::collection::vec(shape(), 1..4)
     ) {
         let types = registry();
-        let cart = fresh_cart();
-        let scratch = allocator(&cart);
+        let bump = Bump::new();
+        let scratch = &bump;
         let mut kept = BumpVec::with_capacity_in(overloads.len(), scratch);
         kept.extend_from_slice(&overloads);
         canonical_overloads(&types, scratch, &mut kept);

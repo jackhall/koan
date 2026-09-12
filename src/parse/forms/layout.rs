@@ -20,7 +20,7 @@
 //! callable's captured region at birth) and is plain `Copy` data with no drop glue, so a layout
 //! costs the holder a thin pointer and its region nothing at teardown.
 
-use crate::memory::{BumpVec, ReferenceFamily, RegionBrand, reattachable};
+use crate::memory::{BumpAllocator, BumpVec, reattachable};
 use crate::parse::ast::{ExpressionPart, KExpression};
 use crate::parse::labels::{BinderSymbol, ValueSymbol};
 
@@ -94,7 +94,7 @@ impl<'a> SlotLayout<'a> {
     ///
     /// Bumped into `brand`'s region — the node's own, since this runs from the construction door.
     /// A body that binds no value takes [`EMPTY`](Self::EMPTY) and bumps nothing.
-    pub(crate) fn of_body(brand: RegionBrand<'a>, body: &KExpression<'a>) -> &'a SlotLayout<'a> {
+    pub(crate) fn of_body(brand: BumpAllocator<'a>, body: &KExpression<'a>) -> &'a SlotLayout<'a> {
         // Counted before anything is staged: a body binding no value — every node that is not a
         // block of binders, which is nearly all of them — leaves this door having touched no
         // allocator at all.
@@ -104,7 +104,7 @@ impl<'a> SlotLayout<'a> {
         if binders == 0 {
             return SlotLayout::EMPTY;
         }
-        let mut entries = BumpVec::with_capacity_in(binders, brand.allocator());
+        let mut entries = BumpVec::with_capacity_in(binders, brand);
         entries.extend(statements_of(body).filter_map(|(statement, position)| {
             binder_of(statement).map(|name| (name, position as u32))
         }));
@@ -124,17 +124,15 @@ impl<'a> SlotLayout<'a> {
     /// hands its own pairs through without restating their type half.
     #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn for_function<T>(
-        brand: RegionBrand<'a>,
+        brand: BumpAllocator<'a>,
         params: &[(BinderSymbol, T)],
         body: &SlotLayout<'_>,
     ) -> &'a SlotLayout<'a> {
         let values = params
             .iter()
             .filter(|(binder, _)| matches!(binder, BinderSymbol::Value(_)));
-        let mut entries = BumpVec::with_capacity_in(
-            values.clone().count() + body.entries.len(),
-            brand.allocator(),
-        );
+        let mut entries =
+            BumpVec::with_capacity_in(values.clone().count() + body.entries.len(), brand);
         entries.extend(values.filter_map(|(binder, _)| match binder {
             BinderSymbol::Value(name) => Some((*name, 0)),
             BinderSymbol::Type(_) => None,
@@ -147,24 +145,24 @@ impl<'a> SlotLayout<'a> {
     /// submitted at a position the call site fixes rather than the body's own shape (`EVAL`).
     #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn single(
-        brand: RegionBrand<'a>,
+        brand: BumpAllocator<'a>,
         name: ValueSymbol,
         position: usize,
     ) -> &'a SlotLayout<'a> {
-        brand.allocator().value(SlotLayout {
-            entries: brand.allocator().slice(&[(name, position as u32)]),
+        brand.alloc(SlotLayout {
+            entries: brand.alloc_slice_copy(&[(name, position as u32)]),
         })
     }
 
     /// Re-home this layout into `brand`'s region — what a copied environment's scope takes, minted
     /// at the destination the way the copied callable's signature is.
     #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
-    pub(crate) fn rehomed<'b>(&self, brand: RegionBrand<'b>) -> &'b SlotLayout<'b> {
+    pub(crate) fn rehomed<'b>(&self, brand: BumpAllocator<'b>) -> &'b SlotLayout<'b> {
         if self.entries.is_empty() {
             return SlotLayout::EMPTY;
         }
-        brand.allocator().value(SlotLayout {
-            entries: brand.allocator().slice(self.entries),
+        brand.alloc(SlotLayout {
+            entries: brand.alloc_slice_copy(self.entries),
         })
     }
 
@@ -172,7 +170,7 @@ impl<'a> SlotLayout<'a> {
     /// ships the same sorted, position-carrying invariant. `entries` is staged in `brand`'s own
     /// bump, so the run is sorted where it sits and the frozen copy costs one more bump rather than
     /// a heap round trip.
-    fn seal(brand: RegionBrand<'a>, entries: &mut BumpVec<'a, Entry>) -> &'a SlotLayout<'a> {
+    fn seal(brand: BumpAllocator<'a>, entries: &mut BumpVec<'a, Entry>) -> &'a SlotLayout<'a> {
         if entries.is_empty() {
             return SlotLayout::EMPTY;
         }
@@ -180,8 +178,8 @@ impl<'a> SlotLayout<'a> {
         // lexically earliest binder of the name — the one the bind-once table would keep.
         entries.sort_unstable();
         entries.dedup_by_key(|(name, _)| *name);
-        brand.allocator().value(SlotLayout {
-            entries: brand.allocator().slice(entries),
+        brand.alloc(SlotLayout {
+            entries: brand.alloc_slice_copy(entries),
         })
     }
 }
@@ -212,11 +210,6 @@ fn binder_of(statement: &KExpression<'_>) -> Option<ValueSymbol> {
         Some(BinderSymbol::Type(_)) | None => None,
     }
 }
-
-/// `Reattachable` family for a **reference** to a [`SlotLayout`] — the library
-/// [`ReferenceFamily`] over the layout's own family, so a per-call frame door can carry the layout
-/// across its generative brand beside the lexical parent it brands with.
-pub type SlotLayoutRefFamily = ReferenceFamily<SlotLayout<'static>>;
 
 #[cfg(test)]
 mod tests;

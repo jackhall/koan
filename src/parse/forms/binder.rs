@@ -13,7 +13,7 @@
 
 use smallvec::SmallVec;
 
-use crate::memory::RegionBrand;
+use crate::memory::BumpAllocator;
 use crate::parse::ast::{ExpressionPart, KExpression, KeyElement};
 use crate::parse::forms::{Form, KEYWORDS, form_for};
 use crate::parse::labels::{BinderSymbol, KeywordSymbol, StaticName, WILDCARD};
@@ -42,7 +42,7 @@ pub type BinderNameFn = fn(&KExpression<'_>) -> Option<BinderSymbol>;
 ///
 /// A bucket key is synthesized rather than read straight out of the parts run, so the extractor
 /// takes the brand that bumps each key into the node's own region.
-pub type BinderBucketFn = for<'a> fn(RegionBrand<'a>, &KExpression<'a>) -> Option<BucketKeys<'a>>;
+pub type BinderBucketFn = for<'a> fn(BumpAllocator<'a>, &KExpression<'a>) -> Option<BucketKeys<'a>>;
 
 /// The bucket keys one binder's body registers overloads under: one for `FN` and binary `OP`, two
 /// for `UNARY OP` (the keyword-first list key plus the binary bridge key). Two is the maximum any
@@ -127,7 +127,7 @@ pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<BinderSymb
 /// registers exactly one overload, so the result names one key. Returns `None` only when the
 /// signature slot itself is missing.
 pub(crate) fn fn_def_binder_bucket<'a>(
-    brand: RegionBrand<'a>,
+    brand: BumpAllocator<'a>,
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
     let signature_expr = signature_expr_part(expr)?;
@@ -164,7 +164,7 @@ pub(crate) fn fn_def_binder_bucket<'a>(
             }
         }
     }
-    Some(BucketKeys::one(brand.allocator().slice_from_iter(key)))
+    Some(BucketKeys::one(brand.alloc_slice_fill_iter(key)))
 }
 
 /// True iff the part at `index` is a type ascription — the second half of a `<name> :<Type>` pair,
@@ -281,7 +281,7 @@ fn is_unary_form(expr: &KExpression<'_>) -> bool {
 /// statement using the operator parks on the `OP` slot instead of failing dispatch while the
 /// declaration is still finalizing. A `UNARY OP` registers two bodies, so it names two keys.
 pub(crate) fn op_def_binder_bucket<'a>(
-    brand: RegionBrand<'a>,
+    brand: BumpAllocator<'a>,
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
     // The glyph's symbol is already minted on the quoted part, so the park keys are read off it.
@@ -299,8 +299,8 @@ pub(crate) fn op_def_binder_bucket<'a>(
 /// Region-bumped twin of [`binary_key`](crate::machine::model::binary_key): the `[Slot,
 /// Keyword(sym), Slot]` run a reduced binary call computes. Agreeing with the owned builder on the
 /// symbol is what lets a park edge installed here be found by a later call's key.
-fn stored_binary_key<'a>(brand: RegionBrand<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
-    brand.allocator().slice(&[
+fn stored_binary_key<'a>(brand: BumpAllocator<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
+    brand.alloc_slice_copy(&[
         KeyElement::Slot,
         KeyElement::Keyword(symbol),
         KeyElement::Slot,
@@ -309,10 +309,8 @@ fn stored_binary_key<'a>(brand: RegionBrand<'a>, symbol: KeywordSymbol) -> &'a [
 
 /// Region-bumped twin of [`unary_key`](crate::machine::model::unary_key): the `[Keyword(sym),
 /// Slot]` run a reduced unary run computes.
-fn stored_unary_key<'a>(brand: RegionBrand<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
-    brand
-        .allocator()
-        .slice(&[KeyElement::Keyword(symbol), KeyElement::Slot])
+fn stored_unary_key<'a>(brand: BumpAllocator<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
+    brand.alloc_slice_copy(&[KeyElement::Keyword(symbol), KeyElement::Slot])
 }
 
 /// this; it exists so a consumer outside binder discovery can recognize a surface by *full bucket
@@ -454,7 +452,7 @@ pub enum OpArity {
 /// for a form with no binder facts, and for one whose extractors install nothing (`VAL`, and the
 /// anonymous `FN :{…}` whose signature part names no bucket).
 pub(crate) fn binder_plan_for<'a>(
-    brand: RegionBrand<'a>,
+    brand: BumpAllocator<'a>,
     form: Option<&'static Form>,
     expression: &KExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {

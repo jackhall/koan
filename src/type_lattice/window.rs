@@ -91,7 +91,7 @@ impl<'w> RelativeSchema<'w> {
         names.dedup();
         RelativeSchema::TypeConstructor {
             schema: schema.copied_into(host),
-            param_names: host.slice(&names),
+            param_names: host.alloc_slice_copy(&names),
         }
     }
 
@@ -281,7 +281,7 @@ impl<'w> RecursiveGroupWindow<'w> {
                 .map(|tag| PendingMember::new(*tag, Some(binder), KKind::NewType)),
         );
         let mut binders = BumpVec::with_capacity_in(1, host);
-        binders.push((binder, host.slice_from_iter(0..tags.len())));
+        binders.push((binder, &*host.alloc_slice_fill_iter(0..tags.len())));
         Self {
             host,
             members: RefCell::new(pending),
@@ -632,8 +632,8 @@ pub(super) fn seal_group<'w>(
         binder_types.push((*name, types.union_of(scratch, &owned_handles)));
     }
     SealedGroup {
-        members: host.slice(&sealed),
-        binder_types: host.slice(&binder_types),
+        members: host.alloc_slice_copy(&sealed),
+        binder_types: host.alloc_slice_copy(&binder_types),
     }
 }
 

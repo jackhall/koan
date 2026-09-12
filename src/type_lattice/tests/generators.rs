@@ -5,20 +5,18 @@
 //! value names — because the interesting collisions are structural, and a wide alphabet makes two
 //! generated types share a shape only by accident.
 //!
-//! A strategy is `'static`, so the registry it interns into lives over a region leaked for the rest
-//! of the test process. Everything transient — a generated value's scratch buffers, a sealed
-//! group's window — lives in a fresh region dropped as soon as the value is built
-//! ([`with_scratch`]), so generation keeps nothing but interned content.
+//! The registry and every scratch buffer live in the bump tier — storage outside the graph — so a
+//! test owns a bare arena. A strategy is `'static`, so the registry it interns into lives over an
+//! arena leaked for the rest of the test process. Everything transient — a generated value's
+//! scratch buffers, a sealed group's window — lives in a fresh arena dropped as soon as the value
+//! is built ([`with_scratch`]), so generation keeps nothing but interned content.
 
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use proptest::prelude::*;
-use workgraph::witnessed::RegionHandle;
-use workgraph::witnessed::doctest_fixture::RegionCart;
-pub use workgraph::witnessed::doctest_fixture::fresh_cart;
 
-use crate::memory::{BumpAllocator, ScopeId};
+use crate::memory::{Bump, BumpAllocator, ScopeId};
 use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 
 use crate::type_lattice::handle::KType;
@@ -29,21 +27,14 @@ use crate::type_lattice::schema::SchemaDraft;
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
-/// The allocator over `cart`'s region — a registry's home or a scratch, gone with the cart.
-pub fn allocator(cart: &RegionCart) -> BumpAllocator<'_> {
-    RegionHandle::from_owner(cart).allocator()
+/// An arena that lives for the rest of the test process, so a strategy can hold handles into it.
+fn leaked_arena() -> BumpAllocator<'static> {
+    Box::leak(Box::new(Bump::new()))
 }
 
-/// A region that lives for the rest of the test process, so a strategy can hold handles into it.
-fn leaked_region() -> BumpAllocator<'static> {
-    let cart: &'static Rc<RegionCart> = Box::leak(Box::new(fresh_cart()));
-    allocator(cart)
-}
-
-/// Run `build` over a fresh scratch region, dropped as soon as it returns.
+/// Run `build` over a fresh scratch arena, dropped as soon as it returns.
 pub fn with_scratch<R>(build: impl FnOnce(BumpAllocator<'_>) -> R) -> R {
-    let cart = fresh_cart();
-    build(allocator(&cart))
+    build(&Bump::new())
 }
 
 /// One registry, one interner and the alphabets, shared by every strategy in a `proptest!` block.
@@ -68,7 +59,7 @@ impl World {
         let declare_value =
             |text: &str| ValueSymbol::declared(text, &labels).expect("a value token");
         World {
-            types: Rc::new(TypeRegistry::in_region(leaked_region())),
+            types: Rc::new(TypeRegistry::in_region(leaked_arena())),
             binders: Rc::new(vec![
                 declare_binder("x"),
                 declare_binder("y"),
