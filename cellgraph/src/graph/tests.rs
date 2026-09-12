@@ -71,8 +71,24 @@ fn take<'r>(view: &CrossedOperand<'r, '_, Number>, writer: Writer<'r>) -> &'r u3
         // Pinned: the borrow itself, embedded in the destination's storage.
         CrossedOperand::Pinned(value) => value,
         // Copied: severed, so the only thing that typechecks is a fresh allocation.
-        CrossedOperand::Copied(value) => writer.value(**value),
+        CrossedOperand::Copied(value) => one(writer, **value),
     }
+}
+
+/// One value, laid down through the writer's single run verb — the shape an embedder derives its
+/// own one-value write from, and what these tests use in place of one.
+fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
+    let mut value = Some(value);
+    &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
+}
+
+/// A `Number` carrier homed in the executing cell: the own-region write, then the bridge to a
+/// carrier. What a test that wants a value living where the step runs does.
+fn number_here<'b, C: Reattachable>(
+    context: &StepContext<'b, '_, C>,
+    value: u32,
+) -> Ready<'b, Number> {
+    context.lift::<Number>(one(context.writer(), value))
 }
 
 /// What a view reads, whichever brand it arrived at — for a build that only needs the number.
@@ -90,31 +106,37 @@ fn number(view: &CrossedOperand<'_, '_, Number>) -> u32 {
 /// would mean storage flowed back out of the sealed tier, which no path may do.
 fn live_bytes<C: Reattachable>(graph: &CellGraph<C>, cap: u32) -> usize {
     (0..cap)
-        .filter(|slot| graph.slots[*slot as usize].state != SlabState::Free)
-        .filter_map(|slot| graph.slots[slot as usize].region.as_ref())
-        .map(Region::allocated_bytes)
+        .filter(|slot| graph.cells.slots[*slot as usize].state != SlabState::Free)
+        .map(|slot| graph.regions.slab_bytes(slot))
         .sum()
 }
 
-/// The reach of a cell's stored continuation, read out of the reach table entry it occupies. The
-/// continuation is a dormant carrier like any other, so this is the same lookup a redeem performs.
-fn continuation_reach_index<C: Reattachable>(
-    graph: &CellGraph<C>,
-    handle: SlabHandle,
-) -> &GraphReach<1> {
-    let cell = &graph.slots[handle.slot() as usize];
-    let index = cell
-        .continuation_reach_index
-        .expect("the cell stored a continuation over captures");
-    cell.reaches
-        .get(index)
-        .expect("the entry the continuation names is in the reach table")
+/// The reach a kept carrier interned, read out of the entry it landed in — the same lookup a
+/// redeem performs, minus the entitlement check.
+///
+/// A continuation carries no mask of its own, so a `keep` over the same storage is the specimen
+/// the seal transition's rewrite and every merge's mask maintenance are read through.
+fn kept_reach<'g, C: Reattachable, T: Reattachable + DropFree>(
+    graph: &'g CellGraph<C>,
+    dormant: &Dormant<T>,
+) -> &'g GraphReach<1> {
+    let key = dormant.key();
+    let CellHandle::Slab(home) = key.home else {
+        panic!("a value homed in a tree cell interns no reach")
+    };
+    let Some(SlabForward::Slab { slot, first_index }) = graph.cells.locate(home) else {
+        panic!("the kept carrier's home is still in the slab")
+    };
+    graph.cells.slots[slot as usize]
+        .reaches
+        .get(first_index + key.index)
+        .expect("a relocated key names an entry of the reach table it landed in")
 }
 
 /// What a slot currently holds, by handle — the state assertions read the slab directly, since
 /// residence is not observable through the public verbs.
 fn state_of<C: Reattachable>(graph: &CellGraph<C>, handle: SlabHandle) -> SlabState {
-    graph.slots[handle.slot() as usize].state
+    graph.cells.slots[handle.slot() as usize].state
 }
 
 #[test]
@@ -140,7 +162,7 @@ fn a_cap_below_the_width_binds_admission_and_the_signal() {
     let _ = graph.create(None, None).unwrap();
     let _ = graph.create(None, None).unwrap();
     assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
-    assert_eq!(graph.occupancy().cap, 2);
+    assert_eq!(graph.cells.occupancy().cap, 2);
 }
 
 #[test]
@@ -163,21 +185,21 @@ fn a_two_word_graph_names_slots_across_the_chunk_boundary() {
     // A child born in the high chunk inherits the row of a parent in the low one.
     let high = cells[99];
     assert_eq!(high.slot(), 100);
-    assert!(graph.birth.test(high.slot(), root.slot()));
+    assert!(graph.cells.birth.test(high.slot(), root.slot()));
 
     // And a pin crosses the boundary the other way.
     let low = cells[2];
     graph
         .enter(low, |context| context.hold(high).unwrap())
         .unwrap();
-    assert!(graph.holds(low, high));
+    assert!(graph.cells.holds(low, high));
 
     // Releasing the holder drops the whole row, both chunks of it, so the held cell reclaims.
     graph.release(low, ReleaseAbsorption::IntoHolder).unwrap();
-    assert!(!graph.holds(low, high));
+    assert!(!graph.cells.holds(low, high));
     graph.release(high, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!graph.is_live(high));
-    assert_eq!(graph.occupancy().sealed_cells, 0);
+    assert_eq!(graph.cells.occupancy().sealed_cells, 0);
 }
 
 #[test]
@@ -211,25 +233,25 @@ fn a_birth_row_contains_the_parent_chain_and_outlives_the_middle_cell() {
     let b = graph.create(Some(a), None).unwrap();
     let c = graph.create(Some(b), None).unwrap();
 
-    assert!(graph.birth.row_contains(b.slot(), a.slot()));
-    assert!(graph.birth.test(b.slot(), a.slot()));
-    assert!(graph.birth.row_contains(c.slot(), b.slot()));
-    assert!(graph.birth.test(c.slot(), b.slot()));
-    assert!(graph.birth.test(c.slot(), a.slot()));
+    assert!(graph.cells.birth.row_contains(b.slot(), a.slot()));
+    assert!(graph.cells.birth.test(b.slot(), a.slot()));
+    assert!(graph.cells.birth.row_contains(c.slot(), b.slot()));
+    assert!(graph.cells.birth.test(c.slot(), b.slot()));
+    assert!(graph.cells.birth.test(c.slot(), a.slot()));
 
     graph.release(b, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!graph.is_live(b));
-    assert_eq!(graph.slots[b.slot() as usize].state, SlabState::Dead);
-    assert!(graph.birth.test(c.slot(), a.slot()));
+    assert_eq!(graph.cells.slots[b.slot() as usize].state, SlabState::Dead);
+    assert!(graph.cells.birth.test(c.slot(), a.slot()));
     assert!(graph.is_live(a));
 
     graph.release(c, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.slots[c.slot() as usize].state, SlabState::Free);
-    assert_eq!(graph.slots[b.slot() as usize].state, SlabState::Free);
+    assert_eq!(graph.cells.slots[c.slot() as usize].state, SlabState::Free);
+    assert_eq!(graph.cells.slots[b.slot() as usize].state, SlabState::Free);
     assert!(graph.is_live(a));
 
     graph.release(a, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 #[test]
@@ -251,7 +273,7 @@ fn the_continuation_comes_back_re_anchored_at_the_step_brand() {
     let cell = graph.create(None, Some(&ANCHOR)).unwrap();
 
     let read = graph
-        .enter(cell, |context| *context.continuation().unwrap().value())
+        .enter(cell, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(read, 7);
 
@@ -271,11 +293,7 @@ fn a_step_stores_the_successor_the_next_step_receives() {
             context.store_successor(String::from("second"));
         })
         .unwrap();
-    let next = graph
-        .enter(cell, |context| {
-            context.continuation().map(|opened| opened.into_value())
-        })
-        .unwrap();
+    let next = graph.enter(cell, |context| context.continuation()).unwrap();
     assert_eq!(next.as_deref(), Some("second"));
 }
 
@@ -284,9 +302,9 @@ fn a_cell_is_entered_by_one_step_at_a_time() {
     let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
     let cell = graph.create(None, None).unwrap();
 
-    graph.begin(CellHandle::Slab(cell)).unwrap();
+    graph.cells.begin(CellHandle::Slab(cell)).unwrap();
     assert_eq!(
-        graph.begin(CellHandle::Slab(cell)),
+        graph.cells.begin(CellHandle::Slab(cell)),
         Err(EnterError::AlreadyExecuting)
     );
     assert_eq!(
@@ -294,7 +312,7 @@ fn a_cell_is_entered_by_one_step_at_a_time() {
         Err(ReleaseError::Executing)
     );
 
-    graph.executing.clear(cell.slot());
+    graph.cells.executing.clear(cell.slot());
     assert!(graph.enter(cell, |_| ()).is_ok());
 }
 
@@ -311,7 +329,7 @@ fn the_executing_flag_falls_when_a_step_panics() {
     std::panic::set_hook(hook);
 
     assert!(outcome.is_err());
-    assert!(!graph.executing.test(cell.slot()));
+    assert!(!graph.cells.executing.test(cell.slot()));
     assert!(graph.enter(cell, |_| ()).is_ok());
 }
 

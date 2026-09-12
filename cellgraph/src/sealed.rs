@@ -351,11 +351,10 @@ impl<const W: usize> SealedTier<W> {
 
     /// Splice storage into a sealed cell, keeping the running total in step. The one write into a
     /// sealed cell's storage after its construction, so the total needs no other maintenance point.
-    pub(crate) fn splice_storage(&mut self, id: SealedId, from: Option<Region>) {
-        self.bytes
-            .set(self.bytes.get() + from.as_ref().map_or(0, Region::allocated_bytes));
+    pub(crate) fn splice_storage(&mut self, id: SealedId, from: Region) {
+        self.bytes.set(self.bytes.get() + from.allocated_bytes());
         let sealed_cell = self.get_mut(id).expect("the fold target is present");
-        Region::splice(&mut sealed_cell.storage, from);
+        sealed_cell.storage.absorb(from);
     }
 
     /// Write `ids` into `id`'s own region as its frozen closure, once, and count the bytes that

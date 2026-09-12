@@ -499,17 +499,20 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         // claims those bundles carry are filtered individually inside the fold.
         let source_pins: SmallVec<[&PinBundle<F>; STAGED_INLINE]> =
             envelopes.iter().map(|envelope| envelope.pins()).collect();
-        let (product, bundle) = dest.cell.into_retained_inner().merge_staged_composed(
-            &staged,
-            &source_pins[..],
-            relocate_run_then_compose::<T, B, P, C, F, Pr>(
-                &envelopes,
-                &source_pins,
-                &dest_reach,
-                still_borrows,
-                relocate,
-            ),
-        );
+        let (product, bundle) = dest
+            .cell
+            .into_retained_inner()
+            .merge_staged_composed::<T, P, _, _>(
+                &staged,
+                &source_pins[..],
+                relocate_run_then_compose::<T, B, P, C, F, Pr>(
+                    &envelopes,
+                    &source_pins,
+                    &dest_reach,
+                    still_borrows,
+                    relocate,
+                ),
+            );
         Delivered::hosted(
             Retained::from_witnessed(product),
             dest_home,

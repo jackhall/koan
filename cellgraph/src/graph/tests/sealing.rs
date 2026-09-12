@@ -4,7 +4,7 @@
 //! tier.
 
 use super::super::*;
-use super::{Borrowed, Number, Owned, continuation_reach_index, operand, pin, pinned};
+use super::{Borrowed, Number, Owned, kept_reach, number_here, one, operand, pin, pinned};
 
 /// Two dormant-value counts far enough apart that a transition proportional to storage could not
 /// produce the same work for both. The Miri run takes the smaller pair — the shapes are what it
@@ -32,10 +32,10 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
     graph
         .enter(producer, |context| {
             for value in 0..stored {
-                context.alloc::<Number>(|writer| writer.value(value as u32));
+                number_here(context, value as u32);
             }
             for value in 0..kept_by_producer {
-                let carrier = context.alloc::<Number>(|writer| writer.value(value as u32));
+                let carrier = number_here(context, value as u32);
                 context.keep(carrier);
             }
         })
@@ -45,10 +45,10 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
         let source = graph.create(None, None).unwrap();
         graph
             .enter(source, |context| {
-                let local = context.alloc::<Number>(|writer| writer.value(value as u32));
+                let local = number_here(context, value as u32);
                 let carrier = context
                     .alloc_into::<Number, Number>(holder, &[operand(&local)], |writer, views| {
-                        writer.value(*pinned(&views[0]))
+                        one(writer, *pinned(&views[0]))
                     })
                     .unwrap();
                 context.keep(carrier);
@@ -56,7 +56,7 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
             .unwrap();
     }
     assert_eq!(
-        graph.slots[holder.slot() as usize].reaches.len() as usize,
+        graph.cells.slots[holder.slot() as usize].reaches.len() as usize,
         kept_by_holder
     );
 
@@ -65,10 +65,10 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
         .unwrap()
         .unwrap();
 
-    let before = graph.seal_work;
+    let before = graph.cells.seal_work;
     graph.release(producer, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(graph.sealed.len(), 1);
-    graph.seal_work - before
+    assert_eq!(graph.cells.sealed.len(), 1);
+    graph.cells.seal_work - before
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
     assert_eq!(reused.generation(), held.generation() + 1);
     // The sealed cell outlives the slot: sealed ids come from their own space and are never reused,
     // so the tier needs no generation of its own.
-    assert_eq!(graph.sealed.len(), 1);
+    assert_eq!(graph.cells.sealed.len(), 1);
 }
 
 #[test]
@@ -137,31 +137,40 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
         .unwrap()
         .unwrap();
 
-    // The consumer builds a value into the producer's region and keeps it as its continuation, so
-    // the consumer holds the producer and its stored mask names the producer's slot.
-    graph
+    // The consumer builds a value into the producer's region and pins it into its own holds as
+    // its continuation's capture, so the consumer holds the producer. It also bundles the same
+    // value into its own region and keeps it, which is the stored mask the transition rewrites.
+    let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(producer, &[], |writer, _| one(writer, 41))
                 .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            let captured =
+                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                    pinned(&views[0])
+                })
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
-    assert!(graph.holds(consumer, producer));
+    assert!(graph.cells.holds(consumer, producer));
 
     graph.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let id = graph.sealed.ids().next().unwrap();
-    assert!(graph.sealed_holds[consumer.slot() as usize].contains(id));
+    let id = graph.cells.sealed.ids().next().unwrap();
+    assert!(graph.cells.sealed_holds[consumer.slot() as usize].contains(id));
 
     // The transition rewrote the consumer's stored mask in place: the dying slot's bit traded for
     // the sealed cell's id, and what that region reached lives on in the sealed cell's frozen
     // aggregate.
-    let stored = continuation_reach_index(&graph, consumer);
+    let stored = kept_reach(&graph, &kept);
     assert!(stored.names_sealed(id));
     assert!(!stored.names(producer.slot()));
     assert!(
         graph
+            .cells
             .sealed
             .get(id)
             .unwrap()
@@ -171,7 +180,7 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
 
     // The storage detached unmoved, so the borrow the re-anchor hands back still reads it.
     let value = graph
-        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .enter(consumer, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 41);
 }
@@ -183,35 +192,42 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
     let first = graph.create(None, None).unwrap();
     let second = graph.create(None, None).unwrap();
 
-    graph
+    let kept = graph
         .enter(consumer, |context| {
-            let one = context
-                .alloc_into::<Number, Number>(first, &[], |writer, _| writer.value(1))
+            let from_first = context
+                .alloc_into::<Number, Number>(first, &[], |writer, _| one(writer, 1))
                 .unwrap();
-            let two = context
-                .alloc_into::<Number, Number>(second, &[], |writer, _| writer.value(2))
+            let from_second = context
+                .alloc_into::<Number, Number>(second, &[], |writer, _| one(writer, 2))
                 .unwrap();
-            context.store_successor_capturing(&[operand(&one), operand(&two)], |_writer, views| {
-                pinned(&views[1])
-            });
+            let captured = context.alloc_here(
+                &[operand(&from_first), operand(&from_second)],
+                |_writer, views| pinned(&views[1]),
+            );
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(
+                    consumer,
+                    &[operand(&from_first), operand(&from_second)],
+                    |_writer, views| pinned(&views[1]),
+                )
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
 
     graph.release(first, ReleaseAbsorption::Refused).unwrap();
     graph.release(second, ReleaseAbsorption::Refused).unwrap();
-    let mut minted: Vec<SealedId> = graph.sealed.ids().collect();
+    let mut minted: Vec<SealedId> = graph.cells.sealed.ids().collect();
     minted.sort();
     assert_eq!(minted.len(), 2);
 
-    let named: Vec<SealedId> = continuation_reach_index(&graph, consumer)
-        .sealed()
-        .iter()
-        .collect();
+    let named: Vec<SealedId> = kept_reach(&graph, &kept).sealed().iter().collect();
     // The sparse half unions by sorted merge, so the two ids arrive deduplicated and in id order.
     assert_eq!(named, minted);
 
     let value = graph
-        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .enter(consumer, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 2);
 }
@@ -239,16 +255,16 @@ fn reclaiming_a_sealed_cells_last_holder_cascades_through_its_aggregate() {
         .unwrap();
 
     graph.release(base, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(graph.sealed.len(), 1);
+    assert_eq!(graph.cells.sealed.len(), 1);
     // The middle cell's hold on the base is a sealed id by now, so its own aggregate carries it.
     graph.release(middle, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(graph.sealed.len(), 2);
+    assert_eq!(graph.cells.sealed.len(), 2);
 
     // One release retires both: the outer count reaches zero, and releasing its aggregate takes
     // the inner count with it.
     graph.release(top, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 #[test]
@@ -265,16 +281,16 @@ fn a_sealed_cell_survives_every_holder_but_the_last() {
             .unwrap();
     }
     graph.release(held, ReleaseAbsorption::IntoHolder).unwrap();
-    let id = graph.sealed.ids().next().unwrap();
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 2);
+    let id = graph.cells.sealed.ids().next().unwrap();
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 2);
 
     graph.release(first, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 1);
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 1);
     graph
         .release(second, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 #[test]
@@ -289,9 +305,9 @@ fn a_cell_that_only_a_birth_row_names_waits_in_the_slab_rather_than_sealing() {
         .release(parent, ReleaseAbsorption::IntoHolder)
         .unwrap();
     assert_eq!(super::state_of(&graph, parent), SlabState::Dead);
-    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.cells.sealed.len(), 0);
 
     graph.release(child, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert_eq!(graph.cells.free.len(), 4);
 }

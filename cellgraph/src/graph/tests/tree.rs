@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::super::*;
-use super::{Borrowed, Number, Owned, number, operand_at, pin, state_of, take};
+use super::{Borrowed, Number, Owned, number, number_here, one, operand_at, pin, state_of, take};
 use crate::tree::TreeState;
 
 /// An operand the embedder will never copy: at a cost above anything a pin can price, a verdict
@@ -42,10 +42,10 @@ fn recording(
 
 /// Build a number in the cell the step is running in.
 fn number_in<'b, C: Reattachable>(
-    context: &mut StepContext<'b, C>,
+    context: &mut StepContext<'b, '_, C>,
     value: u32,
 ) -> Ready<'b, Number> {
-    context.alloc::<Number>(move |writer| writer.value(value))
+    number_here(context, value)
 }
 
 #[test]
@@ -57,22 +57,17 @@ fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
     // The pool takes no cap, so the door has no full refusal to give.
     let tree = graph.create_tree(root, Some(String::from("next"))).unwrap();
     assert!(graph.is_live(tree));
-    assert_eq!(graph.tree_children_of(root), 1);
+    assert_eq!(graph.cells.tree_children_of(root), 1);
 
     let (cell, continuation) = graph
-        .enter(tree, |context| {
-            (
-                context.cell(),
-                context.continuation().map(Active::into_value),
-            )
-        })
+        .enter(tree, |context| (context.cell(), context.continuation()))
         .unwrap();
     assert_eq!(cell, CellHandle::Tree(tree));
     assert_eq!(continuation.as_deref(), Some("next"));
 
     graph.release_tree(tree).unwrap();
     assert!(!graph.is_live(tree));
-    assert_eq!(graph.tree_children_of(root), 0);
+    assert_eq!(graph.cells.tree_children_of(root), 0);
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
 }
@@ -133,18 +128,21 @@ fn a_tree_parent_released_first_disposes_when_its_last_child_does() {
 
     graph.release_tree(grandparent).unwrap();
     graph.release_tree(parent).unwrap();
-    assert_eq!(graph.trees().state(grandparent.index()), TreeState::Dead);
-    assert_eq!(graph.trees().state(parent.index()), TreeState::Dead);
     assert_eq!(
-        graph.trees().occupied().count(),
+        graph.cells.trees().state(grandparent.index()),
+        TreeState::Dead
+    );
+    assert_eq!(graph.cells.trees().state(parent.index()), TreeState::Dead);
+    assert_eq!(
+        graph.cells.trees().occupied().count(),
         3,
         "a dead-but-undisposed ancestor keeps its region until its children are gone"
     );
 
     // One release cascades through both dead-but-undisposed ancestors and into the root's own walk.
     graph.release_tree(child).unwrap();
-    assert_eq!(graph.trees().occupied().count(), 0);
-    assert_eq!(graph.tree_children_of(root), 0);
+    assert_eq!(graph.cells.trees().occupied().count(), 0);
+    assert_eq!(graph.cells.tree_children_of(root), 0);
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
 }
@@ -168,8 +166,8 @@ fn a_tree_cell_nothing_was_kept_in_leaves_no_tombstone() {
     // The cell pledged its bump to the root, so its bytes moved — but no key names it, so its
     // identity recycles rather than staying behind to answer for them.
     graph.release_tree(tree).unwrap();
-    assert_eq!(graph.trees().occupied().count(), 0);
-    assert_eq!(graph.tree_tombstones_of(root), None);
+    assert_eq!(graph.cells.trees().occupied().count(), 0);
+    assert_eq!(graph.cells.tree_tombstones_of(root), None);
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
 }
@@ -261,13 +259,13 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
         })
         .unwrap();
     assert_eq!(bytes, CellHandle::Tree(home));
-    let home_bytes = graph.trees().region_bytes(home.index());
+    let home_bytes = graph.regions.tree_bytes(home.index());
     assert!(home_bytes > 0);
 
     graph.release_tree(home).unwrap();
     // The home's bump landed in the root, not in the parent it passed through.
     assert_eq!(graph.region_bytes(root).unwrap(), home_bytes);
-    assert_eq!(graph.trees().region_bytes(parent.index()), 0);
+    assert_eq!(graph.regions.tree_bytes(parent.index()), 0);
 
     graph.release_tree(parent).unwrap();
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
@@ -318,10 +316,10 @@ fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
     );
     drop(seen);
 
-    let home_bytes = graph.trees().region_bytes(home.index());
+    let home_bytes = graph.regions.tree_bytes(home.index());
     graph.release_tree(home).unwrap();
     assert_eq!(graph.region_bytes(root).unwrap(), home_bytes);
-    assert_eq!(graph.trees().region_bytes(parent.index()), 0);
+    assert_eq!(graph.regions.tree_bytes(parent.index()), 0);
     graph.release_tree(parent).unwrap();
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
@@ -339,7 +337,7 @@ fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
             let value = number_in(context, 4);
             context
                 .alloc_into::<Number, Number>(tree, &[kept_operand(&value)], |writer, views| {
-                    writer.value(number(&views[0]) + 1)
+                    one(writer, number(&views[0]) + 1)
                 })
                 .unwrap();
         })
@@ -347,8 +345,8 @@ fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
 
     // No relation names the tree cell, so the hold the placement takes is the root's — and the
     // bytes went into the tree cell's own bundle, not the root's.
-    assert!(graph.holds(root, source));
-    assert!(graph.trees().region_bytes(tree.index()) > 0);
+    assert!(graph.cells.holds(root, source));
+    assert!(graph.regions.tree_bytes(tree.index()) > 0);
     assert_eq!(graph.region_bytes(root).unwrap(), 0);
 
     graph.release_tree(tree).unwrap();
@@ -426,7 +424,7 @@ fn a_dormant_carrier_whose_home_reclaimed_answers_gone() {
         .unwrap();
     graph.release_tree(home).unwrap();
     assert_eq!(
-        graph.trees().occupied().count(),
+        graph.cells.trees().occupied().count(),
         0,
         "a reclaim leaves no tombstone"
     );
@@ -474,12 +472,12 @@ fn a_dormant_carrier_whose_home_was_absorbed_redeems_from_the_destination() {
     graph.release_tree(home).unwrap();
     // The home is gone and something still names it, so its identity stays as a tombstone
     // pointing at the root, whose bundle now holds its bump.
-    assert_eq!(graph.trees().state(home.index()), TreeState::Absorbed);
+    assert_eq!(graph.cells.trees().state(home.index()), TreeState::Absorbed);
     assert_eq!(
-        graph.trees().tombstone_target(home.index()),
+        graph.cells.trees().tombstone_target(home.index()),
         Some(CellHandle::Slab(root))
     );
-    assert_eq!(graph.tree_tombstones_of(root), Some(home.index()));
+    assert_eq!(graph.cells.tree_tombstones_of(root), Some(home.index()));
 
     let read = graph
         .enter(root, |context| {
@@ -520,7 +518,7 @@ fn a_tree_value_spliced_into_a_root_survives_the_root_absorbing_into_its_holder(
         .release(holder, ReleaseAbsorption::IntoHolder)
         .unwrap();
     assert!(graph.is_empty());
-    assert_eq!(graph.relocations(), 0);
+    assert_eq!(graph.cells.relocations(), 0);
 }
 
 #[test]
@@ -553,7 +551,7 @@ fn a_tree_root_that_seals_carries_its_spliced_bumps() {
         .release(second, ReleaseAbsorption::IntoHolder)
         .unwrap();
     assert!(graph.is_empty());
-    assert_eq!(graph.relocations(), 0);
+    assert_eq!(graph.cells.relocations(), 0);
 }
 
 #[test]
@@ -659,7 +657,7 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
         .unwrap();
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty(), "the tombstones went with the root");
-    assert_eq!(graph.relocations(), 0);
+    assert_eq!(graph.cells.relocations(), 0);
 }
 
 #[test]
@@ -682,9 +680,10 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
     graph
         .enter(destination, |context| {
             let carrier = context.redeem(kept).unwrap();
-            context.store_successor_capturing(&[kept_operand(&carrier)], |writer, views| {
+            let captured = context.alloc_here(&[kept_operand(&carrier)], |writer, views| {
                 take(&views[0], writer)
             });
+            context.store_successor(captured);
         })
         .unwrap();
 
@@ -694,7 +693,6 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
             *context
                 .continuation()
                 .expect("the successor is still in the slot")
-                .value()
         })
         .unwrap();
     assert_eq!(read, 33);
@@ -731,7 +729,7 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
 
     graph.release_tree(hop).unwrap();
     assert_eq!(
-        graph.trees().occupied().count(),
+        graph.cells.trees().occupied().count(),
         1,
         "the old hop pledged nothing, so its bump went with it"
     );

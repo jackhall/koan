@@ -11,21 +11,20 @@ use proptest::prelude::*;
 
 use super::super::*;
 use super::{
-    Borrowed, Number, Owned, continuation_reach_index, live_bytes, operand, pin, pinned, state_of,
+    Borrowed, Number, Owned, kept_reach, live_bytes, number_here, one, operand, pin, pinned,
+    state_of,
 };
 
 /// Bytes a cell's region bundle occupies, or zero for a cell that never allocated.
 fn region_bytes<C: Reattachable>(graph: &CellGraph<C>, handle: SlabHandle) -> usize {
-    graph.slots[handle.slot() as usize]
-        .region
-        .as_ref()
-        .map_or(0, Region::allocated_bytes)
+    graph.regions.slab_bytes(handle.slot())
 }
 
 /// The one sealed cell in a graph that has exactly one.
 fn only_sealed_cell<C: Reattachable>(graph: &CellGraph<C>) -> SealedId {
-    assert_eq!(graph.sealed.len(), 1);
+    assert_eq!(graph.cells.sealed.len(), 1);
     graph
+        .cells
         .sealed
         .ids()
         .next()
@@ -68,7 +67,8 @@ fn an_empty_graph_is_quiescent_and_a_surviving_ring_is_not() {
 
     assert!(!graph.is_empty());
     let ring = graph
-        .debug_ring_from(HoldNode::Sealed(graph.sealed.ids().next().unwrap()))
+        .cells
+        .debug_ring_from(HoldNode::Sealed(graph.cells.sealed.ids().next().unwrap()))
         .expect("the survivors are a ring");
     assert_eq!(ring.len(), 2);
 }
@@ -79,18 +79,26 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
     let consumer = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
 
-    // The consumer keeps a continuation over a value living in the producer's region, so it is the
-    // producer's one holder and its stored mask names the producer's slot.
-    graph
+    // The consumer pins a value living in the producer's region into its own holds and keeps it
+    // as its continuation's capture, so it is the producer's one holder. It bundles the same value
+    // into its own region and keeps that, which is the stored mask the merge has to rewrite.
+    let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(producer, &[], |writer, _| one(writer, 41))
                 .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            let captured =
+                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                    pinned(&views[0])
+                })
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
-    assert!(graph.holds(consumer, producer));
+    assert!(graph.cells.holds(consumer, producer));
     let producer_bytes = region_bytes(&graph, producer);
     let consumer_bytes = region_bytes(&graph, consumer);
     assert!(producer_bytes > 0);
@@ -100,9 +108,9 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
         .unwrap();
 
     // No id, no index entry, no sealed cell: the storage is the consumer's own now.
-    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.cells.sealed.len(), 0);
     assert_eq!(state_of(&graph, producer), SlabState::Free);
-    assert!(!graph.holds(consumer, producer));
+    assert!(!graph.cells.holds(consumer, producer));
     assert_eq!(
         region_bytes(&graph, consumer),
         consumer_bytes + producer_bytes
@@ -110,7 +118,7 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
 
     // The merge rewrote the consumer's stored mask: the dead cell's bit became the holder's, and
     // nothing sealed, so the mask stays a plain slab row over live cells.
-    let stored = continuation_reach_index(&graph, consumer);
+    let stored = kept_reach(&graph, &kept);
     assert!(stored.names(consumer.slot()));
     assert!(!stored.names(producer.slot()));
     assert_eq!(stored.sealed().len(), 0);
@@ -118,7 +126,7 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
     // The bump moved into the consumer's bundle without moving a chunk byte, so the borrow reads
     // the same address.
     let value = graph
-        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .enter(consumer, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 41);
 }
@@ -152,24 +160,25 @@ fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
     let shared_id = only_sealed_cell(&graph);
     graph.release(alone, ReleaseAbsorption::Refused).unwrap();
     let alone_id = graph
+        .cells
         .sealed
         .ids()
         .find(|id| *id != shared_id)
         .expect("the second seal minted a sealed cell");
-    assert_eq!(graph.sealed.get(shared_id).unwrap().holders, 2);
-    assert_eq!(graph.sealed.get(alone_id).unwrap().holders, 1);
+    assert_eq!(graph.cells.sealed.get(shared_id).unwrap().holders, 2);
+    assert_eq!(graph.cells.sealed.get(alone_id).unwrap().holders, 1);
 
     graph
         .release(producer, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
     // The slab half arrives through the standard mint.
-    assert!(graph.pins.test(consumer.slot(), reached.slot()));
+    assert!(graph.cells.pins.test(consumer.slot(), reached.slot()));
     // The sparse half changes holder rather than count where the consumer did not already hold it,
     // and where it did, the dead cell's duplicate hold simply goes.
-    assert!(graph.sealed_holds[consumer.slot() as usize].contains(alone_id));
-    assert_eq!(graph.sealed.get(alone_id).unwrap().holders, 1);
-    assert_eq!(graph.sealed.get(shared_id).unwrap().holders, 1);
+    assert!(graph.cells.sealed_holds[consumer.slot() as usize].contains(alone_id));
+    assert_eq!(graph.cells.sealed.get(alone_id).unwrap().holders, 1);
+    assert_eq!(graph.cells.sealed.get(shared_id).unwrap().holders, 1);
 }
 
 #[test]
@@ -178,13 +187,20 @@ fn a_refused_release_seals_as_before() {
     let consumer = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
 
-    graph
+    let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(producer, &[], |writer, _| one(writer, 41))
                 .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            let captured =
+                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
+                    pinned(&views[0])
+                })
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
 
@@ -193,11 +209,11 @@ fn a_refused_release_seals_as_before() {
     // The very shape a merge would have collapsed, sealed instead: the embedder's refusal is the
     // whole difference.
     let id = only_sealed_cell(&graph);
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 1);
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 1);
 
-    assert!(continuation_reach_index(&graph, consumer).names_sealed(id));
+    assert!(kept_reach(&graph, &kept).names_sealed(id));
     let value = graph
-        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .enter(consumer, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 41);
 }
@@ -223,7 +239,7 @@ fn an_undisposed_dead_holder_absorbs_too() {
     assert_eq!(state_of(&graph, holder), SlabState::Dead);
 
     graph.release(held, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.cells.sealed.len(), 0);
     assert_eq!(state_of(&graph, held), SlabState::Free);
 
     // Absorbing into a dead-but-undisposed cell only brings forward the fold its own disposal would
@@ -250,15 +266,15 @@ fn a_two_cell_ring_dissolves_when_one_side_dies() {
     // The merge runs even though the source held its own target: the mint's and-not is where the
     // hold on itself lands, so what would have been a sealed ring is a cell holding nothing.
     graph.release(first, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 0);
-    assert!(!graph.holds(second, first));
-    assert!(!graph.holds(second, second));
+    assert_eq!(graph.cells.sealed.len(), 0);
+    assert!(!graph.cells.holds(second, first));
+    assert!(!graph.cells.holds(second, second));
 
     graph
         .release(second, ReleaseAbsorption::IntoHolder)
         .unwrap();
     assert!(graph.is_empty());
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 #[test]
@@ -272,14 +288,14 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
 
     graph
         .enter(base, |context| {
-            context.alloc::<Number>(|writer| writer.value(1));
+            number_here(context, 1);
             context.hold(reached)
         })
         .unwrap()
         .unwrap();
     graph
         .enter(middle, |context| {
-            context.alloc::<Number>(|writer| writer.value(2));
+            number_here(context, 2);
             context.hold(base)
         })
         .unwrap()
@@ -296,7 +312,7 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
 
     graph.release(base, ReleaseAbsorption::Refused).unwrap();
     let base_id = only_sealed_cell(&graph);
-    assert!(graph.naming[reached.slot() as usize].contains(base_id));
+    assert!(graph.cells.naming[reached.slot() as usize].contains(base_id));
 
     graph
         .release(middle, ReleaseAbsorption::IntoHolder)
@@ -306,18 +322,18 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
     // than leaving a chain of two sealed cells with one indirection each.
     let middle_id = only_sealed_cell(&graph);
     assert_ne!(middle_id, base_id);
-    let sealed_cell = graph.sealed.get(middle_id).unwrap();
+    let sealed_cell = graph.cells.sealed.get(middle_id).unwrap();
     assert_eq!(sealed_cell.holders, 2);
     assert!(sealed_cell.aggregate.names(reached.slot()));
     assert!(!sealed_cell.aggregate.names_sealed(base_id));
     assert_eq!(sealed_cell.retained_bytes(), base_bytes + middle_bytes);
-    assert!(!graph.naming[reached.slot() as usize].contains(base_id));
-    assert!(graph.naming[reached.slot() as usize].contains(middle_id));
+    assert!(!graph.cells.naming[reached.slot() as usize].contains(base_id));
+    assert!(graph.cells.naming[reached.slot() as usize].contains(middle_id));
 
     graph.release(top, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 1);
+    assert_eq!(graph.cells.sealed.len(), 1);
     graph.release(other, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 0);
+    assert_eq!(graph.cells.sealed.len(), 0);
     graph
         .release(reached, ReleaseAbsorption::IntoHolder)
         .unwrap();
@@ -356,12 +372,12 @@ fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
     graph.release(base, ReleaseAbsorption::Refused).unwrap();
     // Two holders, so the middle cell's own seal finds nothing to absorb.
     graph.release(middle, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(graph.sealed.len(), 2);
+    assert_eq!(graph.cells.sealed.len(), 2);
 
     // The extra holder goes, and the base's count drops to one — but nothing seals here, so the
     // candidate is only noticed at the next seal.
     graph.release(extra, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 2);
+    assert_eq!(graph.cells.sealed.len(), 2);
 
     graph.release(top, ReleaseAbsorption::IntoHolder).unwrap();
 
@@ -369,7 +385,7 @@ fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
     // sealed cell transfers the base's id onto the new one, where its count of one qualifies it in
     // turn.
     let id = only_sealed_cell(&graph);
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 2);
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 2);
 
     for keeper in [first_keeper, second_keeper] {
         graph
@@ -388,14 +404,14 @@ fn a_count_one_sealed_cell_held_by_a_live_cell_stays_sealed() {
 
     graph
         .enter(holder, |context| {
-            context.alloc::<Number>(|writer| writer.value(1));
+            number_here(context, 1);
             context.hold(held)
         })
         .unwrap()
         .unwrap();
     graph
         .enter(held, |context| {
-            context.alloc::<Number>(|writer| writer.value(2));
+            number_here(context, 2);
             context.hold(extra)
         })
         .unwrap()
@@ -407,9 +423,9 @@ fn a_count_one_sealed_cell_held_by_a_live_cell_stays_sealed() {
 
     graph.release(held, ReleaseAbsorption::Refused).unwrap();
     let id = only_sealed_cell(&graph);
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 2);
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 2);
     let holder_bytes = region_bytes(&graph, holder);
-    let sealed_bytes = graph.sealed.get(id).unwrap().retained_bytes();
+    let sealed_bytes = graph.cells.sealed.get(id).unwrap().retained_bytes();
     let slab_bytes = live_bytes(&graph, 4);
     assert!(sealed_bytes > 0);
 
@@ -420,8 +436,11 @@ fn a_count_one_sealed_cell_held_by_a_live_cell_stays_sealed() {
     // The provenance is read from the two tiers' byte totals rather than tracked through the
     // release — the sealed cell keeps every byte it had, and the whole slab tier is no larger than
     // it was.
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 1);
-    assert_eq!(graph.sealed.get(id).unwrap().retained_bytes(), sealed_bytes);
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 1);
+    assert_eq!(
+        graph.cells.sealed.get(id).unwrap().retained_bytes(),
+        sealed_bytes
+    );
     assert_eq!(region_bytes(&graph, holder), holder_bytes);
     assert!(live_bytes(&graph, 4) <= slab_bytes);
 
@@ -445,18 +464,25 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
         .enter(namer, |context| context.hold(dying))
         .unwrap()
         .unwrap();
-    graph
+    let kept = graph
         .enter(keeper, |context| {
             let value = context
-                .alloc_into::<Number, Number>(namer, &[], |writer, _| writer.value(41))
+                .alloc_into::<Number, Number>(namer, &[], |writer, _| one(writer, 41))
                 .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            let captured =
+                context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
+            context.store_successor(captured);
+            let bundled = context
+                .alloc_into::<Number, Number>(keeper, &[operand(&value)], |_writer, views| {
+                    pinned(&views[0])
+                })
+                .unwrap();
+            context.keep(bundled)
         })
         .unwrap();
     graph
         .enter(dying, |context| {
-            context.alloc::<Number>(|writer| writer.value(7));
+            number_here(context, 7);
             context.hold(reached)
         })
         .unwrap()
@@ -466,26 +492,34 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
 
     graph.release(namer, ReleaseAbsorption::Refused).unwrap();
     let id = only_sealed_cell(&graph);
-    assert!(graph.sealed.get(id).unwrap().aggregate.names(dying.slot()));
-    let namer_bytes = graph.sealed.get(id).unwrap().retained_bytes();
+    assert!(
+        graph
+            .cells
+            .sealed
+            .get(id)
+            .unwrap()
+            .aggregate
+            .names(dying.slot())
+    );
+    let namer_bytes = graph.cells.sealed.get(id).unwrap().retained_bytes();
 
     graph.release(dying, ReleaseAbsorption::IntoHolder).unwrap();
 
     // No second sealed cell: the dying cell's storage and holds go into the aggregate that already
     // named it, and the slots its row named trade its bit for the sealed cell's name.
-    assert_eq!(graph.sealed.len(), 1);
+    assert_eq!(graph.cells.sealed.len(), 1);
     assert_eq!(state_of(&graph, dying), SlabState::Free);
-    let sealed_cell = graph.sealed.get(id).unwrap();
+    let sealed_cell = graph.cells.sealed.get(id).unwrap();
     assert_eq!(sealed_cell.holders, 1);
     assert!(!sealed_cell.aggregate.names(dying.slot()));
     assert!(sealed_cell.aggregate.names(reached.slot()));
     assert_eq!(sealed_cell.retained_bytes(), namer_bytes + dying_bytes);
-    assert!(graph.naming[reached.slot() as usize].contains(id));
+    assert!(graph.cells.naming[reached.slot() as usize].contains(id));
 
     // The read still goes through the sealed cell, whose bundle grew a bump under the borrow.
-    assert!(continuation_reach_index(&graph, keeper).names_sealed(id));
+    assert!(kept_reach(&graph, &kept).names_sealed(id));
     let value = graph
-        .enter(keeper, |context| *context.continuation().unwrap().value())
+        .enter(keeper, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(value, 41);
 }
@@ -512,7 +546,7 @@ fn absorb_work_for(dormant: usize, reached: u32, shared: u32, alone: u32) -> u64
     graph
         .enter(producer, |context| {
             for value in 0..dormant {
-                context.alloc::<Number>(|writer| writer.value(value as u32));
+                number_here(context, value as u32);
             }
             for cell in reached_cells
                 .iter()
@@ -536,12 +570,12 @@ fn absorb_work_for(dormant: usize, reached: u32, shared: u32, alone: u32) -> u64
         graph.release(*cell, ReleaseAbsorption::Refused).unwrap();
     }
 
-    let before = graph.seal_work;
+    let before = graph.cells.seal_work;
     graph
         .release(producer, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.sealed.len(), (shared + alone) as usize);
-    graph.seal_work - before
+    assert_eq!(graph.cells.sealed.len(), (shared + alone) as usize);
+    graph.cells.seal_work - before
 }
 
 /// A dormant-value count large enough that work proportional to storage could not match the lean
@@ -602,13 +636,21 @@ fn a_sealed_ring_dissolves_through_its_last_namer() {
     // the sealed cell.
     graph.release(first, ReleaseAbsorption::IntoHolder).unwrap();
     let id = only_sealed_cell(&graph);
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 2);
-    assert!(graph.sealed.get(id).unwrap().aggregate.names(second.slot()));
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 2);
+    assert!(
+        graph
+            .cells
+            .sealed
+            .get(id)
+            .unwrap()
+            .aggregate
+            .names(second.slot())
+    );
 
     graph
         .release(bystander, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.sealed.get(id).unwrap().holders, 1);
+    assert_eq!(graph.cells.sealed.get(id).unwrap().holders, 1);
 
     // The second cell's only namer is the sealed cell it itself holds: the fold turns that hold
     // into a self-hold, the count reaches zero, and the ring is freed rather than leaked.
@@ -616,7 +658,7 @@ fn a_sealed_ring_dissolves_through_its_last_namer() {
         .release(second, ReleaseAbsorption::IntoHolder)
         .unwrap();
     assert!(graph.is_empty());
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.free.len(), 4);
 }
 
 #[test]
@@ -640,12 +682,12 @@ fn a_seal_that_absorbs_every_holder_it_had_reclaims_itself() {
             .unwrap();
         graph.release(namer, ReleaseAbsorption::Refused).unwrap();
     }
-    assert_eq!(graph.sealed.len(), 2);
+    assert_eq!(graph.cells.sealed.len(), 2);
 
     // Two namers and no slab holder, so this is a plain seal — and both namers are count-1 regions
     // the new sealed cell holds, so both fold in. Each fold turns a hold on the new sealed cell
     // into a self-hold, and the second takes its count to zero: the whole ring goes in one release.
     graph.release(held, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
-    assert_eq!(graph.free.len(), 4);
+    assert_eq!(graph.cells.free.len(), 4);
 }

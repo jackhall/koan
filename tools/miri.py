@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Miri (tree borrows) over the koan audit slate and return only the summary.
+"""Run Miri (tree borrows) over the koan audit slate and report what it found.
 
 Encapsulates the command of record so callers never hand-roll `cargo miri test`
 or — the recurring footgun — `tail` its output and misread a `0 passed`
@@ -29,8 +29,10 @@ Usage:
                                              # the duration entry to observe/miri_slate.md
 
 Exit code is 0 only when: 0 failed, 0 UB, 0 leaks, and (full slate) the run
-count equals the slate count. The full captured log path is printed so a
-triage run can be read in full when needed.
+count equals the slate count. A clean run prints the summary and the captured
+log's path, so a triage run can be read in full when needed; a failing one
+replays the whole captured log to stdout first, since a caller in CI has the
+transcript and not the file.
 """
 
 import argparse
@@ -220,6 +222,16 @@ def main() -> int:
     miscount = is_slate and r["passed"] + r["failed"] != expected
 
     ok = code == 0 and r["failed"] == 0 and r["ub"] == 0 and r["leaks"] == 0 and not miscount
+
+    # A failing run replays everything Miri said, in full and unfiltered. The log file is the
+    # record for a run on this machine; a run in CI leaves no file anyone reads, so the
+    # diagnostic — the UB site's borrow history, the leaked allocation's backtrace — has to be
+    # on stdout or it is lost. The summary and its ERROR lines print after it, so they stay the
+    # last thing a reader sees.
+    if not ok:
+        print(f"--- Miri output ({log_path}) ---")
+        print(output)
+        print("--- end Miri output ---")
 
     summary = (
         f"{'Slate' if is_slate else 'Miri'}: {r['passed']} passed, "

@@ -6,9 +6,10 @@
 #
 # The routine tier answers "did this change break anything": tests, doctests, lints, doc links.
 # It is meant to cost seconds, so it measures nothing — no coverage instrumentation, no module
-# graph, no Miri. The total tier is where the expensive readings live: coverage, the fractal
-# complexity score, the Miri leak/UB audit, and a property sweep an order of magnitude deeper
-# than the routine one. Only the total tier rebaselines the trend logs.
+# graph, no Miri, no benchmark sweep. The total tier is where the expensive readings live:
+# coverage, the fractal complexity score, the Miri leak/UB audit, the cellgraph verb sweep, and a
+# property sweep an order of magnitude deeper than the routine one. Only the total tier
+# rebaselines the trend logs.
 #
 # Property depth is one variable, `PROPTEST_CASES`, which `ProptestConfig::default()` reads: the
 # routine tier sets 64 and the total tier 2048, and every property module scales off that default
@@ -31,6 +32,7 @@
 #   - DOT graph from cargo-modules → observe/modules.dot   (`KOAN_DOT`)
 #   - llvm-cov lcov report          → observe/coverage.lcov (`KOAN_LCOV`)
 #     (workspace-wide: koan plus both embedded crates)
+#   - cellgraph verb readings       → cellgraph/observe/perf.csv, appended under `KOAN_REBASELINE`
 #
 # Not run by either tier (run on demand): `tools/seam_equivalence.sh`, the record-escape-seam
 # equivalence battery, which re-runs the suite under `--features seam-force-copy` and
@@ -293,7 +295,10 @@ run doctests 'doctests FAILED' cargo test --doc --quiet
 ok doctests "ok ($(passed) passed, compile_fail guards included)" 'doctests ok'
 
 cellgraph_surface
-clippy_step --all-targets
+# `cellgraph/perf` is the one feature in the workspace, and it gates the measurement binary the
+# perf step below runs. A default build hides that source from clippy, so the total tier's lint
+# turns it on — the same reason the cellgraph-only routine scope does.
+clippy_step --all-targets --features cellgraph/perf
 doclinks_step
 
 # The leak/UB audit over the slate the `slate-audit` step just proved current. Minutes, and the
@@ -306,6 +311,18 @@ run coverage 'coverage FAILED' python3 tools/coverage.py --lcov "$LCOV" \
     ${REBASELINE:+--baseline observe/coverage.txt}
 delta="$(compact "$(grep '^coverage: line' <<<"$OUT" | tail -1)")"
 ok coverage "line $delta" "coverage $delta"
+
+# What every public cellgraph verb cost, against the newest SHA in cellgraph/observe/perf.csv —
+# rebuilt and run beside this sweep, so the two readings share an afternoon. Only the deterministic
+# half gates: a verb that allocates more bytes, or more times, than it did at that SHA fails here.
+# Time is reported and never gated, because the bar a row would be held to is this machine's own
+# spread rather than anything about the change. Under KOAN_REBASELINE the sweep appends this HEAD's
+# rows to the record.
+run perf 'cellgraph perf: allocations or bytes ROSE' \
+    python3 tools/cellgraph_perf.py --gate --quiet ${REBASELINE:+--record}
+delta="$(sed -E 's/^cellgraph perf: //' <<<"$(grep -m1 '^cellgraph perf:' <<<"$OUT")")"
+ok perf "$delta" "perf $delta"
+[ -n "$VERBOSE" ] || detail "$(grep -v '^cellgraph perf:' <<<"$OUT")"
 
 run 'modgraph tests' 'modgraph tooling tests FAILED' python3 tools/modgraph/tests.py
 ok 'modgraph tests' "ok ($(awk '/^Ran [0-9]+ test/ {print $2}' <<<"$OUT") passed)" \

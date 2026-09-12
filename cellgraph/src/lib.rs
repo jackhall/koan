@@ -33,4 +33,4 @@ pub use graph::{
 };
 pub use handle::{CellHandle, SlabHandle, Stale, TreeHandle};
 pub use reattach::{DropFree, Erased, Reattachable};
-pub use region::Writer;
+pub use region::{Prose, Run, Writer};

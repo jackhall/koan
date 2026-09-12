@@ -7,13 +7,13 @@
 //! extra live holder, or a refused release — because a merge that fires leaves nothing to price.
 
 use super::super::*;
-use super::{Number, Owned, pin};
+use super::{Owned, number_here, pin};
 
 /// Give a cell a region of its own, so it prices at more than nothing.
 fn allocate(graph: &mut CellGraph<Owned>, cell: SlabHandle) {
     graph
         .enter(cell, |context| {
-            context.alloc::<Number>(|writer| writer.value(1));
+            number_here(context, 1);
         })
         .unwrap();
 }
@@ -36,6 +36,7 @@ fn closure(graph: &CellGraph<Owned>, id: SealedId) -> Option<RetentionPrice> {
 /// release just before the call produced.
 fn newest(graph: &CellGraph<Owned>) -> SealedId {
     graph
+        .cells
         .sealed
         .ids()
         .max()
@@ -44,6 +45,7 @@ fn newest(graph: &CellGraph<Owned>) -> SealedId {
 
 fn retained(graph: &CellGraph<Owned>, id: SealedId) -> usize {
     graph
+        .cells
         .sealed_retained_bytes(id)
         .expect("the sealed cell is present")
 }
@@ -75,7 +77,7 @@ fn sealed_chain(graph: &mut CellGraph<Owned>) -> (SealedId, SealedId, SealedId) 
     let a_id = newest(graph);
     graph.release(s, ReleaseAbsorption::Refused).unwrap();
     let s_id = newest(graph);
-    assert_eq!(graph.sealed.len(), 3);
+    assert_eq!(graph.cells.sealed.len(), 3);
     (s_id, a_id, b_id)
 }
 
@@ -129,7 +131,7 @@ fn a_shared_sub_tier_is_billed_once_within_one_closure() {
     let b_id = newest(&graph);
     graph.release(s, ReleaseAbsorption::Refused).unwrap();
     let s_id = newest(&graph);
-    assert_eq!(graph.sealed.len(), 4);
+    assert_eq!(graph.cells.sealed.len(), 4);
 
     // Price both arms first, so the walk from the head meets two memos that each contain `c`.
     let arm_a = closure(&graph, a_id).unwrap();
@@ -169,17 +171,24 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     let open = closure(&graph, s_id).unwrap();
     assert!(!open.frozen);
     assert_eq!(open.bytes, retained(&graph, s_id) + live_bytes);
-    assert!(graph.sealed.get(s_id).unwrap().memo().is_none());
+    assert!(graph.cells.sealed.get(s_id).unwrap().memo().is_none());
 
     // The cell's slab column is empty and its only namer is the sealed cell, so it seals into it.
     graph.release(live, ReleaseAbsorption::IntoHolder).unwrap();
-    assert_eq!(graph.sealed.len(), 1);
+    assert_eq!(graph.cells.sealed.len(), 1);
 
     let frozen = closure(&graph, s_id).unwrap();
     assert!(frozen.frozen);
     // The bytes moved within the closure, so the total did not move at all.
     assert_eq!(frozen.bytes, open.bytes);
-    let memo = graph.sealed.get(s_id).unwrap().memo().unwrap().to_vec();
+    let memo = graph
+        .cells
+        .sealed
+        .get(s_id)
+        .unwrap()
+        .memo()
+        .unwrap()
+        .to_vec();
     assert_eq!(memo, vec![s_id]);
     // The memo records the node set, and the set still prices to the same total.
     assert_eq!(
@@ -205,7 +214,7 @@ fn priming_a_memo_costs_the_sealed_cell_the_bytes_it_writes() {
     graph.release(bare, ReleaseAbsorption::Refused).unwrap();
     let id = newest(&graph);
     assert_eq!(retained(&graph, id), 0);
-    assert_eq!(graph.occupancy().retained_bytes, 0);
+    assert_eq!(graph.cells.occupancy().retained_bytes, 0);
 
     let priced = closure(&graph, id).unwrap();
     assert!(priced.frozen, "nothing live is left in the closure");
@@ -219,10 +228,16 @@ fn priming_a_memo_costs_the_sealed_cell_the_bytes_it_writes() {
     );
     assert_eq!(
         after,
-        graph.sealed.get(id).unwrap().storage.allocated_bytes()
+        graph
+            .cells
+            .sealed
+            .get(id)
+            .unwrap()
+            .storage
+            .allocated_bytes()
     );
-    assert_eq!(graph.occupancy().retained_bytes, after);
-    assert_eq!(graph.sealed.get(id).unwrap().memo(), Some(&[id][..]));
+    assert_eq!(graph.cells.occupancy().retained_bytes, after);
+    assert_eq!(graph.cells.sealed.get(id).unwrap().memo(), Some(&[id][..]));
 
     // A second query writes nothing, so the price does not move again.
     assert_eq!(closure(&graph, id).unwrap(), priced);
@@ -254,7 +269,7 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     let priced = closure(&graph, s_id).unwrap();
     assert!(priced.frozen);
     assert_eq!(
-        graph.sealed.get(s_id).unwrap().memo().unwrap(),
+        graph.cells.sealed.get(s_id).unwrap().memo().unwrap(),
         [s_id, a_id]
     );
 
@@ -265,14 +280,14 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     graph
         .release(keep_s, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.sealed.get(a_id).unwrap().holders, 2);
-    assert_eq!(graph.sealed.get(s_id).unwrap().holders, 1);
+    assert_eq!(graph.cells.sealed.get(a_id).unwrap().holders, 2);
+    assert_eq!(graph.cells.sealed.get(s_id).unwrap().holders, 1);
     assert_eq!(closure(&graph, s_id).unwrap(), priced);
 
     // And a walk that consults no memo at all agrees with what was recorded.
-    let fresh = graph.transitive_pins(GraphNode::Sealed(s_id), false);
+    let fresh = graph.cells.transitive_pins(GraphNode::Sealed(s_id), false);
     assert!(fresh.cells.is_empty());
-    assert_eq!(graph.bytes_of(&fresh), priced.bytes);
+    assert_eq!(graph.cells.bytes_of(&fresh, &graph.regions), priced.bytes);
 }
 
 #[test]
@@ -319,7 +334,7 @@ fn a_walk_that_reaches_a_memoized_sealed_cell_merges_its_set() {
     assert!(frozen.frozen);
     assert_eq!(frozen.bytes, open.bytes);
     assert_eq!(
-        graph.sealed.get(s_id).unwrap().memo().unwrap(),
+        graph.cells.sealed.get(s_id).unwrap().memo().unwrap(),
         [s_id, a_id, b_id]
     );
 }
@@ -428,7 +443,7 @@ fn an_absent_id_prices_as_none() {
         .release(keeper, ReleaseAbsorption::IntoHolder)
         .unwrap();
     assert_eq!(closure(&graph, gone_id), None);
-    assert_eq!(graph.sealed_retained_bytes(gone_id), None);
+    assert_eq!(graph.cells.sealed_retained_bytes(gone_id), None);
     let slices = graph.unique_retentions(&[gone_id, s_id]);
     assert_eq!(slices[0], None);
     assert_eq!(slices[1], closure(&graph, s_id));
@@ -449,7 +464,7 @@ fn occupancy_tracks_both_tiers() {
     let second_bytes = graph.region_bytes(second).unwrap();
 
     assert_eq!(
-        graph.occupancy(),
+        graph.cells.occupancy(),
         Occupancy {
             occupied: 3,
             cap: 4,
@@ -461,7 +476,7 @@ fn occupancy_tracks_both_tiers() {
     graph.release(first, ReleaseAbsorption::Refused).unwrap();
     let first_id = newest(&graph);
     assert_eq!(
-        graph.occupancy(),
+        graph.cells.occupancy(),
         Occupancy {
             occupied: 2,
             cap: 4,
@@ -475,7 +490,7 @@ fn occupancy_tracks_both_tiers() {
     // byte total grows while its sealed-cell count does not.
     graph.release(second, ReleaseAbsorption::Refused).unwrap();
     assert_eq!(
-        graph.occupancy(),
+        graph.cells.occupancy(),
         Occupancy {
             occupied: 1,
             cap: 4,
@@ -486,7 +501,7 @@ fn occupancy_tracks_both_tiers() {
 
     graph.release(third, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(
-        graph.occupancy(),
+        graph.cells.occupancy(),
         Occupancy {
             occupied: 0,
             cap: 4,
@@ -513,19 +528,19 @@ fn pricing_mutates_no_hold() {
     graph.release(open, ReleaseAbsorption::Refused).unwrap();
 
     let handles: Vec<SlabHandle> = (0..10)
-        .map(|slot| SlabHandle::new(slot, graph.slots[slot as usize].generation))
+        .map(|slot| SlabHandle::new(slot, graph.cells.slots[slot as usize].generation))
         .filter(|handle| graph.is_live(*handle))
         .collect();
-    let ids: Vec<SealedId> = graph.sealed.ids().collect();
+    let ids: Vec<SealedId> = graph.cells.sealed.ids().collect();
 
-    let pins: Vec<Bits<1>> = (0..10).map(|slot| *graph.pins.row(slot)).collect();
-    let births: Vec<Bits<1>> = (0..10).map(|slot| *graph.birth.row(slot)).collect();
-    let sealed_holds: Vec<SealedSet> = graph.sealed_holds.to_vec();
-    let naming: Vec<SealedSet> = graph.naming.to_vec();
+    let pins: Vec<Bits<1>> = (0..10).map(|slot| *graph.cells.pins.row(slot)).collect();
+    let births: Vec<Bits<1>> = (0..10).map(|slot| *graph.cells.birth.row(slot)).collect();
+    let sealed_holds: Vec<SealedSet> = graph.cells.sealed_holds.to_vec();
+    let naming: Vec<SealedSet> = graph.cells.naming.to_vec();
     let sealed_cells: Vec<(u32, GraphReach<1>)> = ids
         .iter()
         .map(|id| {
-            let sealed_cell = graph.sealed.get(*id).unwrap();
+            let sealed_cell = graph.cells.sealed.get(*id).unwrap();
             (sealed_cell.holders, sealed_cell.aggregate.clone())
         })
         .collect();
@@ -538,14 +553,15 @@ fn pricing_mutates_no_hold() {
     for handle in &handles {
         for other in &handles {
             let reach = GraphReach::from_parts(
-                *graph.pins.row(other.slot()),
-                graph.sealed_holds[other.slot() as usize].clone(),
+                *graph.cells.pins.row(other.slot()),
+                graph.cells.sealed_holds[other.slot() as usize].clone(),
             );
-            let _ = graph.pin_price(
+            let _ = graph.cells.pin_price(
                 handle.slot(),
                 &reach,
                 &GraphReach::empty(),
-                graph.scratch_at_rest(),
+                &graph.regions,
+                graph.cells.scratch_at_rest(),
             );
         }
     }
@@ -553,18 +569,21 @@ fn pricing_mutates_no_hold() {
         let _ = closure(&graph, *id).unwrap();
     }
     let _ = graph.unique_retentions(&ids);
-    let _ = graph.occupancy();
+    let _ = graph.cells.occupancy();
     assert!(closure(&graph, s_id).unwrap().frozen);
 
     // The memo is the only mark a price query leaves, and a memo is not a hold.
     for slot in 0..10 {
-        assert_eq!(graph.pins.row(slot).to_owned(), pins[slot as usize]);
-        assert_eq!(graph.birth.row(slot).to_owned(), births[slot as usize]);
+        assert_eq!(graph.cells.pins.row(slot).to_owned(), pins[slot as usize]);
+        assert_eq!(
+            graph.cells.birth.row(slot).to_owned(),
+            births[slot as usize]
+        );
     }
-    assert_eq!(graph.sealed_holds.to_vec(), sealed_holds);
-    assert_eq!(graph.naming.to_vec(), naming);
+    assert_eq!(graph.cells.sealed_holds.to_vec(), sealed_holds);
+    assert_eq!(graph.cells.naming.to_vec(), naming);
     for (id, (holders, aggregate)) in ids.iter().zip(&sealed_cells) {
-        let sealed_cell = graph.sealed.get(*id).unwrap();
+        let sealed_cell = graph.cells.sealed.get(*id).unwrap();
         assert_eq!(sealed_cell.holders, *holders);
         assert_eq!(&sealed_cell.aggregate, aggregate);
     }

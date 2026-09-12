@@ -10,13 +10,18 @@
 
 use cellgraph::{
     Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
-    Erased, Operand, Prices, Ready, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError,
-    ReleaseTreeError, SlabHandle, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
+    Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError, ReleaseAbsorption,
+    ReleaseError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext, TreeHandle, Verdict,
+    Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
 /// in a region.
 struct Work;
+
+/// A second continuation family, borrowing, so a successor can capture a reference at the cell
+/// brand and come back re-anchored at the next step's.
+struct Resumed;
 
 /// Three value families, each borrowing its cell's region storage through the one lifetime the
 /// [`reattachable`] contract allows.
@@ -26,6 +31,7 @@ struct Text;
 
 reattachable!(
     Work => String,
+    Resumed => &'r u32,
     Number => &'r u32,
     Numbers => &'r [u32],
     Text => &'r str,
@@ -35,22 +41,54 @@ impl DropFree for Number {}
 impl DropFree for Numbers {}
 impl DropFree for Text {}
 
+/// The writer's one run verb, at length one — the shape an embedder derives a single-value write
+/// from, since the substrate ships no such verb.
+fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
+    let mut value = Some(value);
+    &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
+}
+
 fn build_number<'r>(writer: Writer<'r>) -> &'r u32 {
-    writer.value(7)
+    one(writer, 7)
 }
 
 fn build_slice<'r>(writer: Writer<'r>) -> &'r [u32] {
-    writer.slice(&[1, 2, 3])
+    writer.fill(3, |index| index as u32 + 1)
 }
 
 fn build_text<'r>(writer: Writer<'r>) -> &'r str {
     writer.text("koan")
 }
 
+/// The producer-decided run: a filter settles the width only once the elements exist, so there is
+/// no length to hand `fill`.
+fn build_run<'r>(writer: Writer<'r>) -> &'r [u32] {
+    let mut run: Run<'r, u32> = writer.run();
+    run.extend((1..8u32).filter(|value| value % 3 == 0));
+    run.push(99);
+    assert!(!run.is_empty() && run.len() == 3);
+    run.finish()
+}
+
+/// The same shape for text: a rendering whose length no caller knows up front, formatted straight
+/// into the region.
+fn build_prose<'r>(writer: Writer<'r>) -> &'r str {
+    use std::fmt::Write;
+
+    let mut prose: Prose<'r> = writer.prose();
+    for value in build_run(writer) {
+        write!(prose, "{value};").expect("a region sink never fails");
+    }
+    prose.finish()
+}
+
 /// An embedder's own helper over carriers, which is the one reason [`Erased`] is nameable from
 /// outside: the read door's `Copy` bound is on the erased form, so a caller that wants to be
 /// generic over the value family has to write that bound too.
-fn read_first<'s, 'b, V>(context: &'s StepContext<'b, Work>, carrier: &'s Ready<'b, V>) -> V::At<'s>
+fn read_first<'s, 'b, V>(
+    context: &'s StepContext<'b, '_, Work>,
+    carrier: &'s Ready<'b, V>,
+) -> V::At<'s>
 where
     V: Reattachable + DropFree,
     Erased<V>: Copy,
@@ -144,15 +182,20 @@ fn every_public_door_answers_from_outside_the_crate() {
         .enter(child, |context| {
             assert_eq!(context.cell(), CellHandle::Slab(child));
 
-            // Placement: into the running cell, and into a named one with an operand embedded.
-            let number = context.alloc::<Number>(build_number);
-            let numbers = context.alloc::<Numbers>(build_slice);
-            let text = context.alloc::<Text>(build_text);
+            // The own-region write: the cell's own writer, at the cell brand, then the bridge that
+            // makes each value a carrier.
+            let number = context.lift::<Number>(build_number(context.writer()));
+            let numbers = context.lift::<Numbers>(build_slice(context.writer()));
+            let text = context.lift::<Text>(build_text(context.writer()));
+            let filtered = context.lift::<Numbers>(build_run(context.writer()));
+            let rendered = context.lift::<Text>(build_prose(context.writer()));
+            assert_eq!(read_first(context, &filtered), &[3, 6, 99]);
+            assert_eq!(read_first(context, &rendered), "3;6;99;");
             let pushed = context
                 .alloc_into::<Number, Number>(root, &[pinned_operand(&number)], |writer, views| {
                     match views[0] {
-                        CrossedOperand::Pinned(value) => writer.value(*value + 1),
-                        CrossedOperand::Copied(value) => writer.value(*value + 1),
+                        CrossedOperand::Pinned(value) => one(writer, *value + 1),
+                        CrossedOperand::Copied(value) => one(writer, *value + 1),
                     }
                 })
                 .unwrap();
@@ -166,8 +209,8 @@ fn every_public_door_answers_from_outside_the_crate() {
                         copy_bytes: 0,
                     }],
                     |writer, views| match views[0] {
-                        CrossedOperand::Copied(value) => writer.slice(&[*value, *value]),
-                        CrossedOperand::Pinned(value) => writer.slice(&[*value, *value]),
+                        CrossedOperand::Copied(value) => writer.fill(2, |_| *value),
+                        CrossedOperand::Pinned(value) => writer.fill(2, |_| *value),
                     },
                 )
                 .unwrap();
@@ -177,22 +220,45 @@ fn every_public_door_answers_from_outside_the_crate() {
             context.hold(root).unwrap();
             assert_eq!(context.hold(doomed).unwrap_err().name(), doomed);
 
+            // The own-cell crossing: two operands of the same carrier, one the embedder refuses to
+            // copy and one it prices free. A pinned view arrives at the cell brand and may leave
+            // the build, which is what the pin bought; a copied one is severed and can only be
+            // read or written again.
+            let (here, severed): (&u32, u32) = context.alloc_here(
+                &[
+                    pinned_operand(&pushed),
+                    Operand {
+                        carrier: &pushed,
+                        copy_bytes: 0,
+                    },
+                ],
+                |writer, views| {
+                    let here = match views[0] {
+                        CrossedOperand::Pinned(value) => value,
+                        CrossedOperand::Copied(value) => one(writer, *value),
+                    };
+                    let severed = match views[1] {
+                        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => *value,
+                    };
+                    (here, severed)
+                },
+            );
+            assert_eq!(*here, 8);
+            assert_eq!(severed, 8);
+
             // Reading, by copy and by move, directly and through the embedder's own helper.
-            assert_eq!(*context.read(&number).value(), 7);
+            let opened: Active<'_, Number> = context.read(&number);
+            assert_eq!(*opened.value(), 7);
             assert_eq!(read_first(context, &numbers), &[1, 2, 3]);
             assert_eq!(read_first(context, &text), "koan");
             assert_eq!(*read_first(context, &pushed), 8);
 
-            // The continuation slot: this cell was born without one, and leaves with one that
-            // captures a value living in another cell's region.
+            // The continuation slot: this cell was born without one, and leaves with one built
+            // over the reference the own-cell crossing pinned into its holds. One door, and
+            // storing twice keeps the last.
             assert!(context.continuation().is_none());
             context.store_successor(String::from("plain"));
-            context.store_successor_capturing(&[pinned_operand(&pushed)], |_writer, views| {
-                match views[0] {
-                    CrossedOperand::Pinned(value) => value.to_string(),
-                    CrossedOperand::Copied(value) => value.to_string(),
-                }
-            });
+            context.store_successor(here.to_string());
 
             // Put a value to rest, so it outlives the step that built it. What comes back is
             // opaque: a dormant carrier has no read, and the redeem door is its only exit.
@@ -233,26 +299,64 @@ fn every_public_door_answers_from_outside_the_crate() {
         .release(bystander, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
-    // The successor comes back re-anchored at the next step's brand.
+    // The successor comes back re-anchored at the next step's cell brand.
     let echoed = graph
-        .enter(child, |context| {
-            context.continuation().map(Active::into_value)
-        })
+        .enter(child, |context| context.continuation())
         .unwrap();
     assert_eq!(echoed.as_deref(), Some("8"));
 
     // The cell born with a continuation still has it.
-    let born_with = graph
-        .enter(root, |context| {
-            context.continuation().map(Active::into_value)
-        })
-        .unwrap();
+    let born_with = graph.enter(root, |context| context.continuation()).unwrap();
     assert_eq!(born_with.as_deref(), Some("root"));
 
     // Both dispositions of a death: fold into a unique holder, or seal rather than merge.
     graph.release(child, ReleaseAbsorption::IntoHolder).unwrap();
     graph.release(root, ReleaseAbsorption::Refused).unwrap();
     assert!(!graph.is_live(root));
+}
+
+#[test]
+fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
+    let mut graph: CellGraph<Resumed> = CellGraph::new(2, weigh);
+    let cell = graph.create(None, None).unwrap();
+    let other = graph.create(None, None).unwrap();
+
+    // A capture out of the cell's own region: written through the cell's writer, stored through
+    // the one successor door, and handed back at the next step's cell brand.
+    graph
+        .enter(cell, |context| {
+            context.store_successor(one(context.writer(), 11));
+        })
+        .unwrap();
+    let own = graph
+        .enter(cell, |context| *context.continuation().unwrap())
+        .unwrap();
+    assert_eq!(own, 11);
+
+    // And a capture homed elsewhere: the own-cell crossing prices it and mints its reach into this
+    // cell's holds, which is what makes the borrow nameable at the cell brand at all. The store
+    // itself prices nothing.
+    graph
+        .enter(cell, |context| {
+            let foreign = context
+                .alloc_into::<Number, Number>(other, &[], |writer, _| one(writer, 23))
+                .unwrap();
+            let held = context.alloc_here(&[pinned_operand(&foreign)], |writer, views| match views
+                [0]
+            {
+                CrossedOperand::Pinned(value) => value,
+                CrossedOperand::Copied(value) => one(writer, *value),
+            });
+            context.store_successor(held);
+        })
+        .unwrap();
+
+    // The held cell dies and seals rather than reclaiming, so the capture still reads it.
+    graph.release(other, ReleaseAbsorption::Refused).unwrap();
+    let across = graph
+        .enter(cell, |context| *context.continuation().unwrap())
+        .unwrap();
+    assert_eq!(across, 23);
 }
 
 #[test]
@@ -302,15 +406,15 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     let carried = graph
         .enter(inner, |context| {
             assert_eq!(context.cell(), CellHandle::Tree(inner));
-            let value = context.alloc::<Number>(build_number);
+            let value = context.lift::<Number>(build_number(context.writer()));
 
             // Into the cell's own tree parent: an upward pin, priced at the splice and pledging
             // this cell's bump to the parent's bundle.
             let up = context
                 .alloc_into::<Number, Number>(outer, &[pinned_operand(&value)], |writer, views| {
                     match views[0] {
-                        CrossedOperand::Pinned(value) => writer.value(*value + 1),
-                        CrossedOperand::Copied(value) => writer.value(*value + 1),
+                        CrossedOperand::Pinned(value) => one(writer, *value + 1),
+                        CrossedOperand::Copied(value) => one(writer, *value + 1),
                     }
                 })
                 .unwrap();
@@ -319,7 +423,7 @@ fn the_tree_pool_answers_from_outside_the_crate() {
             // A carrier homed in a tree cell reaches its root, so the root is what a hold from
             // inside the subtree lands on.
             context.hold(root).unwrap();
-            let resumed = context.continuation().map(Active::into_value);
+            let resumed = context.continuation();
             context.store_successor(String::from("done"));
             resumed
         })

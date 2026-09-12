@@ -64,7 +64,9 @@ macro_rules! reattachable {
 /// `transmute` can't prove `size_of::<T::At<'a>>() == size_of::<T::At<'b>>()` for an opaque
 /// associated-type projection, so this goes through `transmute_copy` (which assumes the size
 /// equality the contract guarantees) behind a `ManuallyDrop` so the source is not dropped after
-/// the move. A `const` assert restores the size check `transmute` would emit.
+/// the move. `const` asserts restore the size check `transmute` would emit and add the alignment
+/// one it would not, so a family whose layout does vary with its lifetime fails to compile at the
+/// retype rather than reading misaligned.
 ///
 /// # Safety
 ///
@@ -72,6 +74,7 @@ macro_rules! reattachable {
 /// layout and the source bytes are a valid `B`.
 unsafe fn retype<A, B>(value: A) -> B {
     const { assert!(size_of::<A>() == size_of::<B>()) };
+    const { assert!(align_of::<A>() == align_of::<B>()) };
     let value = ManuallyDrop::new(value);
     // SAFETY: by the caller's contract `A` and `B` share layout (size asserted above);
     // `ManuallyDrop` keeps the source from being dropped after the bitwise move out.

@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::super::*;
-use super::{Borrowed, Number, Owned, number, operand_at, take};
+use super::{Borrowed, Number, Owned, number, number_here, one, operand_at, take};
 
 /// A verdict that records every crossing it is shown and answers from `answer`.
 ///
@@ -56,9 +56,9 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
             // One operand homed in the destination and one homed elsewhere, at two stated copy
             // costs, in one placement.
             let there = context
-                .alloc_into::<Number, Number>(destination, &[], |writer, _| writer.value(1))
+                .alloc_into::<Number, Number>(destination, &[], |writer, _| one(writer, 1))
                 .unwrap();
-            let own = context.alloc::<Number>(|writer| writer.value(2));
+            let own = number_here(context, 2);
             context
                 .alloc_into::<Number, Number>(
                     destination,
@@ -71,7 +71,7 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
 
     let seen = seen.borrow();
     assert_eq!(seen.len(), 2, "one consultation per operand, in order");
-    let occupancy = graph.occupancy();
+    let occupancy = graph.cells.occupancy();
     for prices in seen.iter() {
         assert_eq!(prices.occupied, occupancy.occupied);
         assert_eq!(prices.cap, occupancy.cap);
@@ -102,7 +102,7 @@ fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
 
         let names_producer = graph
             .enter(producer, |context| {
-                let own = context.alloc::<Number>(|writer| writer.value(41));
+                let own = number_here(context, 41);
                 let placed = context
                     .alloc_into::<Number, Number>(
                         destination,
@@ -116,14 +116,20 @@ fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
             .unwrap();
 
         assert_eq!(names_producer, verdict == Verdict::Pin);
-        assert_eq!(graph.holds(destination, producer), verdict == Verdict::Pin);
+        assert_eq!(
+            graph.cells.holds(destination, producer),
+            verdict == Verdict::Pin
+        );
 
         // The whole point of the copy: the producer's column is zero, so its death is a reclamation
         // rather than a sealed cell the destination now retains. The slot comes back either way —
         // retention lives in the sealed tier, never in the slab.
         graph.release(producer, ReleaseAbsorption::Refused).unwrap();
         assert_eq!(super::state_of(&graph, producer), SlabState::Free);
-        assert_eq!(graph.sealed.len(), usize::from(verdict == Verdict::Pin));
+        assert_eq!(
+            graph.cells.sealed.len(),
+            usize::from(verdict == Verdict::Pin)
+        );
     }
 }
 
@@ -136,7 +142,7 @@ fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
 
     let read = graph
         .enter(producer, |context| {
-            let own = context.alloc::<Number>(|writer| writer.value(41));
+            let own = number_here(context, 41);
             // Cheap to copy, against a pin that would newly retain the producer's whole region.
             let copied = context
                 .alloc_into::<Number, Number>(
@@ -165,7 +171,7 @@ fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
     // The deep copy reads what it was copied from, and the embedded borrow reads the producer's
     // own storage — which the destination now holds.
     assert_eq!(read, (41, 41));
-    assert!(graph.holds(destination, producer));
+    assert!(graph.cells.holds(destination, producer));
     let seen = seen.borrow();
     assert_eq!(seen.len(), 2);
     assert!(
@@ -199,10 +205,10 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
     graph
         .enter(driver, |context| {
             context
-                .alloc_into::<Number, Number>(tail, &[], |writer, _| writer.value(1))
+                .alloc_into::<Number, Number>(tail, &[], |writer, _| one(writer, 1))
                 .unwrap();
             context
-                .alloc_into::<Number, Number>(doomed, &[], |writer, _| writer.value(2))
+                .alloc_into::<Number, Number>(doomed, &[], |writer, _| one(writer, 2))
                 .unwrap();
         })
         .unwrap();
@@ -214,15 +220,15 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
         .unwrap()
         .unwrap();
     graph.release(doomed, ReleaseAbsorption::Refused).unwrap();
-    let sealed_id = graph.sealed.ids().next().unwrap();
+    let sealed_id = graph.cells.sealed.ids().next().unwrap();
 
     graph
         .enter(driver, |context| {
             let near = context
-                .alloc_into::<Number, Number>(held, &[], |writer, _| writer.value(3))
+                .alloc_into::<Number, Number>(held, &[], |writer, _| one(writer, 3))
                 .unwrap();
             let far = context
-                .alloc_into::<Number, Number>(head, &[], |writer, _| writer.value(4))
+                .alloc_into::<Number, Number>(head, &[], |writer, _| one(writer, 4))
                 .unwrap();
             context
                 .alloc_into::<Number, Number>(
@@ -245,7 +251,7 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
         seen[1].pin_bytes,
         graph.region_bytes(head).unwrap()
             + graph.region_bytes(tail).unwrap()
-            + graph.sealed_retained_bytes(sealed_id).unwrap()
+            + graph.cells.sealed_retained_bytes(sealed_id).unwrap()
     );
 }
 
@@ -261,10 +267,10 @@ fn operands_from_one_source_are_priced_against_what_the_placement_has_already_pi
         .enter(driver, |context| {
             // Two values homed in the same cell, so both operands reach exactly `source`.
             let first = context
-                .alloc_into::<Number, Number>(source, &[], |writer, _| writer.value(1))
+                .alloc_into::<Number, Number>(source, &[], |writer, _| one(writer, 1))
                 .unwrap();
             let second = context
-                .alloc_into::<Number, Number>(source, &[], |writer, _| writer.value(2))
+                .alloc_into::<Number, Number>(source, &[], |writer, _| one(writer, 2))
                 .unwrap();
             context
                 .alloc_into::<Number, Number>(
@@ -305,10 +311,10 @@ fn a_copied_operand_leaves_the_next_one_the_whole_price() {
     graph
         .enter(driver, |context| {
             let first = context
-                .alloc_into::<Number, Number>(source, &[], |writer, _| writer.value(1))
+                .alloc_into::<Number, Number>(source, &[], |writer, _| one(writer, 1))
                 .unwrap();
             let second = context
-                .alloc_into::<Number, Number>(source, &[], |writer, _| writer.value(2))
+                .alloc_into::<Number, Number>(source, &[], |writer, _| one(writer, 2))
                 .unwrap();
             context
                 .alloc_into::<Number, Number>(
@@ -345,12 +351,12 @@ fn a_frozen_closure_prices_through_its_memo() {
         .unwrap();
     let kept = graph
         .enter(producer, |context| {
-            let value = context.alloc::<Number>(|writer| writer.value(41));
+            let value = number_here(context, 41);
             context.keep(value)
         })
         .unwrap();
     graph.release(producer, ReleaseAbsorption::Refused).unwrap();
-    let sealed_id = graph.sealed.ids().next().unwrap();
+    let sealed_id = graph.cells.sealed.ids().next().unwrap();
 
     // The closure is frozen, so its price is memoized once and never recomputed.
     let closure = graph.unique_retentions(&[sealed_id]).remove(0).unwrap();
@@ -386,7 +392,7 @@ fn a_frozen_closure_prices_through_its_memo() {
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].pin_bytes, closure.bytes);
     assert_eq!(seen[1].pin_bytes, 0);
-    assert!(graph.sealed_holds[destination.slot() as usize].contains(sealed_id));
+    assert!(graph.cells.sealed_holds[destination.slot() as usize].contains(sealed_id));
 }
 
 /// Hops the ruled loop shape runs. Miri takes the shortest run that still alternates the two hop
@@ -406,9 +412,9 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
     let (mut argument, mut accumulated) = graph
         .enter(cart, |context| {
             let first = context
-                .alloc_into::<Number, Number>(running, &[], |writer, _| writer.value(1))
+                .alloc_into::<Number, Number>(running, &[], |writer, _| one(writer, 1))
                 .unwrap();
-            let total = context.alloc::<Number>(|writer| writer.value(0));
+            let total = number_here(context, 0);
             (context.keep(first), context.keep(total))
         })
         .unwrap();
@@ -427,7 +433,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
                     .alloc_into::<Number, Number>(
                         waiting,
                         &[operand_at(&argument, 0)],
-                        |writer, views| writer.value(number(&views[0]) + 1),
+                        |writer, views| one(writer, number(&views[0]) + 1),
                     )
                     .unwrap();
                 // The accumulated result goes into the cart, over the cart's own value pinned —
@@ -439,7 +445,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
                             operand_at(&accumulated, usize::MAX),
                             operand_at(&argument, 0),
                         ],
-                        |writer, views| writer.value(number(&views[0]) + number(&views[1])),
+                        |writer, views| one(writer, number(&views[0]) + number(&views[1])),
                     )
                     .unwrap();
                 (context.keep(passed), context.keep(total))
@@ -454,12 +460,23 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
             .release(running, ReleaseAbsorption::IntoHolder)
             .unwrap();
         assert_eq!(super::state_of(&graph, running), SlabState::Free);
-        assert_eq!(graph.sealed.len(), 0, "hop {hop} left a sealed cell behind");
-        assert_eq!(graph.merges, Merges::default(), "hop {hop} took a merge");
-        assert!(!graph.holds(cart, waiting));
+        assert_eq!(
+            graph.cells.sealed.len(),
+            0,
+            "hop {hop} left a sealed cell behind"
+        );
+        assert_eq!(
+            graph.cells.merges,
+            Merges::default(),
+            "hop {hop} took a merge"
+        );
+        assert!(!graph.cells.holds(cart, waiting));
 
         let fresh = graph.create(None, None).unwrap();
-        assert!(graph.occupancy().occupied <= 3, "hop {hop} grew the slab");
+        assert!(
+            graph.cells.occupancy().occupied <= 3,
+            "hop {hop} grew the slab"
+        );
         running = waiting;
         waiting = fresh;
     }
@@ -469,7 +486,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
     // is what keeps the seal transition's bound — work per holder's reach-table entry — a bound
     // on a run of any length rather than one that grows with it.
     assert_eq!(
-        graph.slots[cart.slot() as usize].reaches.len(),
+        graph.cells.slots[cart.slot() as usize].reaches.len(),
         1,
         "the cart took an entry per hop"
     );
@@ -513,24 +530,22 @@ fn captures_cross_through_the_same_verdict() {
         graph
             .enter(keeper, |context| {
                 let value = context
-                    .alloc_into::<Number, Number>(host, &[], |writer, _| writer.value(41))
+                    .alloc_into::<Number, Number>(host, &[], |writer, _| one(writer, 41))
                     .unwrap();
-                context.store_successor_capturing(&[operand_at(&value, 0)], |writer, views| {
+                let captured = context.alloc_here(&[operand_at(&value, 0)], |writer, views| {
                     take(&views[0], writer)
                 });
+                context.store_successor(captured);
             })
             .unwrap();
 
         // A pinned capture is the host's own storage, so the cell holds the host across the gap; a
-        // copied one lives in the keeper's region and the host is free to die.
-        assert_eq!(graph.holds(keeper, host), verdict == Verdict::Pin);
-        assert_eq!(
-            super::continuation_reach_index(&graph, keeper).names(host.slot()),
-            verdict == Verdict::Pin
-        );
+        // copied one lives in the keeper's region and the host is free to die. The hold is the
+        // whole record: a continuation interns no mask of its own.
+        assert_eq!(graph.cells.holds(keeper, host), verdict == Verdict::Pin);
 
         let read = graph
-            .enter(keeper, |context| *context.continuation().unwrap().value())
+            .enter(keeper, |context| *context.continuation().unwrap())
             .unwrap();
         assert_eq!(read, 41);
     }
@@ -545,9 +560,9 @@ fn a_placement_over_no_operands_consults_nothing() {
 
     graph
         .enter(cell, |context| {
-            context.alloc::<Number>(|writer| writer.value(1));
+            number_here(context, 1);
             context
-                .alloc_into::<Number, Number>(other, &[], |writer, _| writer.value(2))
+                .alloc_into::<Number, Number>(other, &[], |writer, _| one(writer, 2))
                 .unwrap();
             context.store_successor(String::new());
         })

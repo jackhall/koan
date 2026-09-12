@@ -260,6 +260,51 @@ producer executes or read sealed later by a consumer holding the producer. A
 free-standing envelope owning pins of its own is not a thing the substrate can
 express.
 
+### References at the cell brand
+
+A reference at `'cell` — the brand a step's own writer, its own-cell crossing
+and its continuation all speak — carries no mask, so the argument above has
+nothing to rewrite for it. What stands in for a mask is an address that does
+not move and a hold that keeps the storage. Two kinds of storage reach the
+brand, and each has one of those two for the executing cell's whole life:
+
+- **The cell's own region.** The cell keeps it by being alive, and the brand is
+  quantified per `enter`, so nothing at it outlives the step that wrote it
+  unless the continuation carries it — and the cell is still there next step.
+  Within the step the brand is the shared borrow of the region table itself:
+  every door mutates the other half of the graph, so no `&mut` over the bump
+  can exist under the writer, and the verbs that move or drop a region — which
+  take the table exclusively — cannot run at all.
+- **A region a pinned crossing minted in.** The own-cell crossing prices the
+  operand and folds its reach into this cell's hold set *before* the build runs,
+  so a view that leaves the build names storage the cell holds. Holds are
+  monotone for the cell's life, so the keeping never lapses.
+
+Growth is not a movement: a bump claims a new chunk and never reallocates one
+it has handed out, so a run written earlier in the step stays where it was —
+including when a second writer is laying down runs into the same bump, which is
+what a placement whose destination is the executing cell is. And every movement
+storage does make under such a reference moves a `Bump` and not a chunk byte, so
+the addresses stand:
+
+- **The seal transition.** The executing cell's own region cannot seal in-step —
+  it is the one executing — and a pinned home that seals between two of this
+  cell's steps detaches its bump unmoved into the sealed cell. The holder's slab
+  bit trades for the id in the same pass, so the hold follows the storage into
+  the tier.
+- **Fold into a holder.** A dying cell this one uniquely holds absorbs into this
+  cell's bundle; the bundle grows under a borrow already minted into its own
+  chunks, which the absorb leaves where they are.
+- **Seal-time absorption.** A sealed cell taking in its count-one sealed holds
+  grows its bundle the same way, which is what keeps a capture pointing into the
+  absorbed region readable through the sealed cell that swallowed it.
+- **The tree splice.** A dying tree cell's whole bump goes up the chain into its
+  parent's bundle — the [splice](#locality-tactics), again a `Bump` move.
+
+So a continuation's captures re-anchor at the next step's brand with no check:
+the cell is live, its holds are monotone, and every chunk those holds cover is
+where it was written.
+
 ## Pool geometry
 
 The slab width is a constant of the graph's *type*: a row is `W` words held
