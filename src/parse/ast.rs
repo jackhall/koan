@@ -16,7 +16,6 @@
 
 use crate::source::{FileId, Span, Spanned};
 
-use crate::memory::reattachable;
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::forms::binder::{StoredBinderKey, binder_plan_for};
 use crate::parse::forms::layout::SlotLayout;
@@ -242,10 +241,6 @@ pub struct KExpression<'a> {
     cache: NodeCache<'a>,
     body_layout: &'a SlotLayout<'a>,
 }
-
-// Lifetimes do not affect layout, so this retype is a no-op transmute. The witness's `'b: 'w` bound
-// is what makes a reattach a shortening; nothing here weakens it.
-reattachable! { KExpression<'static> => KExpression<'cell> }
 
 impl<'a> KExpression<'a> {
     /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.

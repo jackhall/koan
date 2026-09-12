@@ -85,13 +85,13 @@ fn build_prose<'cell>(writer: Writer<'cell>) -> &'cell str {
 /// An embedder's own helper over carriers, which is the one reason [`Erased`] is nameable from
 /// outside: the read door's `Copy` bound is on the erased form, so a caller that wants to be
 /// generic over the value family has to write that bound too.
-fn read_first<'cell, 'step, V>(
-    context: &'cell StepContext<'step, '_, Work>,
-    carrier: &'cell Ready<'step, V>,
+fn read_first<'graph, 'cell, 'step, V>(
+    context: &'cell StepContext<'graph, 'step, '_, Work>,
+    carrier: &'cell Ready<'graph, 'step, V>,
 ) -> V::At<'cell>
 where
-    V: Reattachable + DropFree,
-    Erased<V>: Copy,
+    V: Reattachable<'graph> + DropFree,
+    Erased<'graph, V>: Copy,
 {
     context.read(carrier).into_value()
 }
@@ -116,9 +116,9 @@ fn weigh(prices: Prices) -> Verdict {
 
 /// An operand the embedder is unwilling to copy: at a cost above anything a pin can price, the
 /// verdict above always pins it.
-fn pinned_operand<'a, 'step, V: Reattachable + DropFree>(
-    carrier: &'a Ready<'step, V>,
-) -> Operand<'a, 'step, V> {
+fn pinned_operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree>(
+    carrier: &'a Ready<'graph, 'step, V>,
+) -> Operand<'graph, 'a, 'step, V> {
     Operand {
         carrier,
         copy_bytes: usize::MAX,
@@ -162,7 +162,7 @@ fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
 
 #[test]
 fn every_public_door_answers_from_outside_the_crate() {
-    let mut graph: CellGraph<Work> = CellGraph::new(4, weigh);
+    let mut graph: CellGraph<'static, Work> = CellGraph::new(4, weigh);
 
     // Creation, with and without a parent, and with or without a continuation at birth.
     let root: SlabHandle = graph.create(None, Some(String::from("root"))).unwrap();
@@ -177,7 +177,7 @@ fn every_public_door_answers_from_outside_the_crate() {
         .release(doomed, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
-    let mut kept: Option<Dormant<Number>> = None;
+    let mut kept: Option<Dormant<'static, Number>> = None;
     let carried = graph
         .enter(child, |context| {
             assert_eq!(context.cell(), CellHandle::Slab(child));
@@ -193,10 +193,10 @@ fn every_public_door_answers_from_outside_the_crate() {
             assert_eq!(read_first(context, &rendered), "3;6;99;");
             let pushed = context
                 .alloc_into::<Number, Number>(root, &[pinned_operand(&number)], |writer, views| {
-                    match views[0] {
+                    Active::new(match views[0] {
                         CrossedOperand::Pinned(value) => one(writer, *value + 1),
                         CrossedOperand::Copied(value) => one(writer, *value + 1),
-                    }
+                    })
                 })
                 .unwrap();
             // The same door under the other verdict: an operand the embedder prices cheap to copy
@@ -208,9 +208,11 @@ fn every_public_door_answers_from_outside_the_crate() {
                         carrier: &number,
                         copy_bytes: 0,
                     }],
-                    |writer, views| match views[0] {
-                        CrossedOperand::Copied(value) => writer.fill(2, |_| *value),
-                        CrossedOperand::Pinned(value) => writer.fill(2, |_| *value),
+                    |writer, views| {
+                        Active::new(match views[0] {
+                            CrossedOperand::Copied(value) => writer.fill(2, |_| *value),
+                            CrossedOperand::Pinned(value) => writer.fill(2, |_| *value),
+                        })
                     },
                 )
                 .unwrap();
@@ -247,7 +249,7 @@ fn every_public_door_answers_from_outside_the_crate() {
             assert_eq!(severed, 8);
 
             // Reading, by copy and by move, directly and through the embedder's own helper.
-            let opened: Active<'_, Number> = context.read(&number);
+            let opened: Active<'static, '_, Number> = context.read(&number);
             assert_eq!(*opened.value(), 7);
             assert_eq!(read_first(context, &numbers), &[1, 2, 3]);
             assert_eq!(read_first(context, &text), "koan");
@@ -317,7 +319,7 @@ fn every_public_door_answers_from_outside_the_crate() {
 
 #[test]
 fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
-    let mut graph: CellGraph<Resumed> = CellGraph::new(2, weigh);
+    let mut graph: CellGraph<'static, Resumed> = CellGraph::new(2, weigh);
     let cell = graph.create(None, None).unwrap();
     let other = graph.create(None, None).unwrap();
 
@@ -339,7 +341,7 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
     graph
         .enter(cell, |context| {
             let foreign = context
-                .alloc_into::<Number, Number>(other, &[], |writer, _| one(writer, 23))
+                .alloc_into::<Number, Number>(other, &[], |writer, _| Active::new(one(writer, 23)))
                 .unwrap();
             let held = context.alloc_here(&[pinned_operand(&foreign)], |writer, views| match views
                 [0]
@@ -361,7 +363,7 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
 
 #[test]
 fn the_refusals_hand_back_the_handle_that_went_stale() {
-    let mut full: CellGraph<Work> = CellGraph::new(1, weigh);
+    let mut full: CellGraph<'static, Work> = CellGraph::new(1, weigh);
     let taken = full.create(None, None).unwrap();
     assert_eq!(full.create(None, None), Err(CreateError::SlabFull));
 
@@ -389,7 +391,7 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
 
 #[test]
 fn the_tree_pool_answers_from_outside_the_crate() {
-    let mut graph: CellGraph<Work> = CellGraph::new(1, weigh);
+    let mut graph: CellGraph<'static, Work> = CellGraph::new(1, weigh);
     let root: SlabHandle = graph.create(None, None).unwrap();
     assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
 
@@ -402,7 +404,7 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     assert_eq!(inner.generation(), 0);
     assert!(graph.is_live(inner));
 
-    let mut kept: Option<Dormant<Number>> = None;
+    let mut kept: Option<Dormant<'static, Number>> = None;
     let carried = graph
         .enter(inner, |context| {
             assert_eq!(context.cell(), CellHandle::Tree(inner));
@@ -412,10 +414,10 @@ fn the_tree_pool_answers_from_outside_the_crate() {
             // this cell's bump to the parent's bundle.
             let up = context
                 .alloc_into::<Number, Number>(outer, &[pinned_operand(&value)], |writer, views| {
-                    match views[0] {
+                    Active::new(match views[0] {
                         CrossedOperand::Pinned(value) => one(writer, *value + 1),
                         CrossedOperand::Copied(value) => one(writer, *value + 1),
-                    }
+                    })
                 })
                 .unwrap();
             kept = Some(context.keep(up));

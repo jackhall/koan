@@ -79,9 +79,9 @@ enum Life {
 /// will go; a tombstone has none of those and knows only where they went. Splitting them is what
 /// makes [`entomb`](TreePool::entomb) one assignment rather than a list of fields to remember to
 /// clear.
-enum TreeSlot<C: Reattachable> {
+enum TreeSlot<'graph, C: Reattachable<'graph>> {
     Free,
-    InTree(Branch<C>),
+    InTree(Branch<'graph, C>),
     Tombstone(Tombstone),
 }
 
@@ -90,7 +90,7 @@ enum TreeSlot<C: Reattachable> {
 /// There is no reach table, no continuation reach and no hold set: a value homed here reaches its
 /// root and nothing else, and the root's row and sealed-hold set are where every mint from inside
 /// the subtree lands.
-struct Branch<C: Reattachable> {
+struct Branch<'graph, C: Reattachable<'graph>> {
     life: Life,
     /// The slab slot of the root at the top of this cell's chain. The root cannot recycle while a
     /// tree cell under it is undisposed — its own disposal waits on the child count — so the slot
@@ -112,7 +112,7 @@ struct Branch<C: Reattachable> {
     /// Whether any value homed here was ever put to rest. A cell nothing was kept in leaves no
     /// tombstone: no key can name it, so nothing will ever ask where its bytes went.
     kept: bool,
-    continuation: Option<Erased<C>>,
+    continuation: Option<Erased<'graph, C>>,
 }
 
 /// A cell whose bytes have moved, kept only to answer for them.
@@ -129,14 +129,14 @@ struct Tombstone {
 ///
 /// The generation outlives every occupant — it is what tells two of them apart — and a tombstone
 /// list can hang off a cell in either of the other two states, so both sit outside the variant.
-struct TreeCell<C: Reattachable> {
+struct TreeCell<'graph, C: Reattachable<'graph>> {
     generation: u32,
     /// The head of the list of tombstones whose bytes spliced into this slot's occupant.
     tombstones: Option<u32>,
-    slot: TreeSlot<C>,
+    slot: TreeSlot<'graph, C>,
 }
 
-impl<C: Reattachable> TreeCell<C> {
+impl<'graph, C: Reattachable<'graph>> TreeCell<'graph, C> {
     fn free(generation: u32) -> Self {
         TreeCell {
             generation,
@@ -153,12 +153,12 @@ impl<C: Reattachable> TreeCell<C> {
 /// pool is the depth of the call tree the embedder is running, which is the program's business.
 /// The slab's width is only where the pool starts: room for that many cells is claimed at birth,
 /// and growth doubles from there.
-pub(crate) struct TreePool<C: Reattachable> {
-    slots: Vec<TreeCell<C>>,
+pub(crate) struct TreePool<'graph, C: Reattachable<'graph>> {
+    slots: Vec<TreeCell<'graph, C>>,
     free: Vec<u32>,
 }
 
-impl<C: Reattachable> TreePool<C> {
+impl<'graph, C: Reattachable<'graph>> TreePool<'graph, C> {
     pub(crate) fn new(cap: u32) -> Self {
         TreePool {
             slots: Vec::with_capacity(cap as usize),
@@ -178,14 +178,14 @@ impl<C: Reattachable> TreePool<C> {
     /// answers for none of them: a tombstone parents nothing, is nobody's child and pledges
     /// nothing, and a free slot has no occupant at all. Reaching one means a caller held an index
     /// across the disposal that retired it.
-    fn branch(&self, index: u32) -> &Branch<C> {
+    fn branch(&self, index: u32) -> &Branch<'graph, C> {
         match &self.slots[index as usize].slot {
             TreeSlot::InTree(branch) => branch,
             _ => panic!("pool slot {index} is not a cell in the tree"),
         }
     }
 
-    fn branch_mut(&mut self, index: u32) -> &mut Branch<C> {
+    fn branch_mut(&mut self, index: u32) -> &mut Branch<'graph, C> {
         match &mut self.slots[index as usize].slot {
             TreeSlot::InTree(branch) => branch,
             _ => panic!("pool slot {index} is not a cell in the tree"),
@@ -198,7 +198,7 @@ impl<C: Reattachable> TreePool<C> {
         root: u32,
         parent: Ancestor,
         depth: u32,
-        continuation: Option<Erased<C>>,
+        continuation: Option<Erased<'graph, C>>,
     ) -> TreeHandle {
         let slot = TreeSlot::InTree(Branch {
             life: Life::Live,
@@ -314,11 +314,11 @@ impl<C: Reattachable> TreePool<C> {
         self.branch_mut(index).kept = true;
     }
 
-    pub(crate) fn take_continuation(&mut self, index: u32) -> Option<Erased<C>> {
+    pub(crate) fn take_continuation(&mut self, index: u32) -> Option<Erased<'graph, C>> {
         self.branch_mut(index).continuation.take()
     }
 
-    pub(crate) fn set_continuation(&mut self, index: u32, continuation: Option<Erased<C>>) {
+    pub(crate) fn set_continuation(&mut self, index: u32, continuation: Option<Erased<'graph, C>>) {
         self.branch_mut(index).continuation = continuation;
     }
 

@@ -13,14 +13,17 @@ pub use cellgraph::{
     SlabHandle, Stale, TreeHandle, Verdict, Writer, reattachable,
 };
 
-/// A carrier at rest in the region hosting it, branded by that region's `'home`.
-pub type Ready<'home, T> = cellgraph::Ready<'home, T, WIDTH>;
+/// A carrier at rest in the region hosting it, branded by that region's `'home`; `'graph` is the
+/// storage outliving the graph its value may borrow.
+pub type Ready<'graph, 'home, T> = cellgraph::Ready<'graph, 'home, T, WIDTH>;
 
 /// One operand of a placement: a ready carrier and how it crosses into the destination.
-pub type Operand<'a, 'step, V> = cellgraph::Operand<'a, 'step, V, WIDTH>;
+pub type Operand<'graph, 'a, 'step, V> = cellgraph::Operand<'graph, 'a, 'step, V, WIDTH>;
 
-/// The graph of cells, their regions and the liveness matrix over them.
-pub type CellGraph<C> = cellgraph::CellGraph<C, WIDTH>;
+/// The graph of cells, their regions and the liveness matrix over them, over storage `'graph` that
+/// outlives it.
+pub type CellGraph<'graph, C> = cellgraph::CellGraph<'graph, C, WIDTH>;
 
 /// What a step running in a cell holds: the cell's brand, its writer and the step's doors.
-pub type StepContext<'step, 'here, C> = cellgraph::StepContext<'step, 'here, C, WIDTH>;
+pub type StepContext<'graph, 'step, 'here, C> =
+    cellgraph::StepContext<'graph, 'step, 'here, C, WIDTH>;
