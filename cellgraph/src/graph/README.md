@@ -260,13 +260,14 @@ producer executes or read sealed later by a consumer holding the producer. A
 free-standing envelope owning pins of its own is not a thing the substrate can
 express.
 
-### References at the cell brand
+### References at `'here`
 
-A reference at `'cell` — the brand a step's own writer, its own-cell crossing
-and its continuation all speak — carries no mask, so the argument above has
-nothing to rewrite for it. What stands in for a mask is an address that does
-not move and a hold that keeps the storage. Two kinds of storage reach the
-brand, and each has one of those two for the executing cell's whole life:
+A reference at `'here` — the executing cell's brand, which a step's own writer,
+its own-cell crossing and its continuation all speak — carries no mask, so the
+argument above has nothing to rewrite for it. What stands in for a mask is an
+address that does not move and a hold that keeps the storage. Two kinds of
+storage reach the brand, and each has one of those two for the executing cell's
+whole life:
 
 - **The cell's own region.** The cell keeps it by being alive, and the brand is
   quantified per `enter`, so nothing at it outlives the step that wrote it
@@ -303,7 +304,9 @@ the addresses stand:
 
 So a continuation's captures re-anchor at the next step's brand with no check:
 the cell is live, its holds are monotone, and every chunk those holds cover is
-where it was written.
+where it was written. A borrow through `'graph` needs neither an address the
+substrate keeps nor a hold: it names storage the embedder owns outside the
+graph, which the graph cannot outlive.
 
 ## Pool geometry
 

@@ -34,7 +34,7 @@ resident carries.
   node be shared by every activation without any of them being able to
   outlive it.
 - **Cell storage** — everything else, laid down through cellgraph's `Writer`
-  at the executing cell's own brand, `'cell`. There is no run root and no
+  at the executing cell's own brand, `'here`. There is no run root and no
   per-call frame: what a frame shell would carry, a cell already is.
 
 ## Shapes, not instantiations
@@ -83,7 +83,7 @@ live on the cell itself, so a *keyed* table over the same cell type rules on a
 write exactly as the array does.
 
 **A value at rest in the region.** `fill` hands back a shared `&'cell` borrow,
-never `&mut`, and a continuation captures `'cell` borrows, so every write after
+never `&mut`, and a continuation captures `'here` borrows, so every write after
 construction goes through interior mutability. Each slot is a `Cell` — no
 borrow flag — and a `Cell` never lends a `&T`, so reads copy: both parameters
 are `Copy`, a read returns the slot state by value, and a transition is a

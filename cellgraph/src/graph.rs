@@ -2834,8 +2834,10 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
             }
             CellHandle::Tree(handle) => self.cells.trees.take_continuation(handle.index()),
         }?;
-        // SAFETY: the value came in through `store_successor` at some earlier step's `'here`, so
-        // its referents are storage that brand covers: this cell's own region, whose chunks are
+        // SAFETY: a value handed in at `create` or `create_tree` is at `'graph` and names no
+        // region, and a `'graph` borrow in any value outlives the graph and so this step. Otherwise
+        // the value came in through `store_successor` at some earlier step's `'here`, so its region
+        // referents are storage that brand covers: this cell's own region, whose chunks are
         // pointer-stable and which a seal detaches and a merge absorbs unmoved, or a region a
         // pinned crossing minted into this cell's hold set — a live cell, or a sealed cell the
         // hold has followed into the tier, both of which keep their chunks. The cell is live for

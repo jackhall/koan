@@ -75,10 +75,10 @@ Four absences are design statements rather than gaps:
   releases its chunks whole: every family a region hosts is `DropFree`. A
   region is a *bundle* — the bump it writes into, plus the bumps of everything
   absorbed into it. Inside a step the executing cell's own region is reachable
-  at its own brand, `'cell`, distinct from the step's.
+  at its own brand, `'here`, distinct from the step's.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and
-  **never calls**. It is stored at `'cell` and records no reach of its own: a
+  **never calls**. It is captured at `'here` and records no reach of its own: a
   cell holds what its continuation reads, and every reference the
   continuation can capture is one the cell's holds already cover — its own
   region, or storage a pinned crossing minted in when it arrived — so the
@@ -96,28 +96,31 @@ Four absences are design statements rather than gaps:
 Everything an embedder knows that the substrate does not rides in one of two
 type parameters.
 
-**Continuation** — the work. A one-lifetime reattachable family
-([src/reattach.rs](src/reattach.rs)): an erase-to-`'static` storage form and a
-single lifetime-retype back. A cell's name-resolution state, its semantic
-frame, any output obligation — all of it rides inside the continuation's
-captures, or as a value at rest in the cell's region.
+**Continuation** — the work. A reattachable family
+([src/reattach.rs](src/reattach.rs)) over one region lifetime, `'cell`, beside
+the graph lifetime `'graph`: an erased storage form at `'graph` and a single
+lifetime-retype that moves `'cell` alone. A cell's name-resolution state, its
+semantic frame, any output obligation — all of it rides inside the
+continuation's captures, or as a value at rest in the cell's region.
 
-**Value** — what passes between cells. Also a one-lifetime reattachable family,
+**Value** — what passes between cells. Also a reattachable family,
 carried witnessed: born in a region, duplicated per reader, read only under a
 hold. It is held in exactly three states, and **the type of each is what says
 which** — they are named in order of liveness:
 
-- **`Dormant`** ([src/dormant.rs](src/dormant.rs)), at rest — lifetime-free,
-  opaque, and the only state an embedder may keep across an `enter` scope. It
-  carries no reach: its mask lives in its home cell's reach table and it names
-  that entry by a private key. It carries no live *value* either — the bytes
-  rest parked, reconstituted only once a redeem has established a claim on the
-  storage they name, because a reference into freed chunks is invalid the moment
-  it is moved, read through or not.
+- **`Dormant`** ([src/dormant.rs](src/dormant.rs)), at rest — free of every
+  step brand, opaque, and the only state an embedder may keep across an `enter`
+  scope. It carries no reach: its mask lives in its home cell's reach table and
+  it names that entry by a private key. It carries no live *value* either — the
+  bytes rest parked, reconstituted only once a redeem has established a claim on
+  the storage they name, because a reference into freed chunks is invalid the
+  moment it is moved, read through or not.
 - **`Ready`** ([src/carrier.rs](src/carrier.rs)), in step — the value bundled
   with the reach the substrate composed for it, branded to the step that built
   or redeemed it. It dies with the step.
-- **`Active`** — the value alone, at a reading borrow strictly inside the step.
+- **`Active`** — the value alone, with no reach: at a reading borrow strictly
+  inside the step when a read hands it back, and at the destination's region
+  brand when a build closure hands back the value it built.
 
 `'home` is the brand that carries the whole safety argument: the cell whose
 region stores this value is live, and its storage fixed-address, for all of
@@ -126,39 +129,60 @@ liveness, and the brand a step's doors hand out is the step's own — so "a
 carrier is reachable only inside an `enter` scope" is a lifetime rather than a
 rule.
 
-**Two brands per step.** `'b` is the step: a carrier branded to it was built
-or redeemed by this step's doors and dies with the step. `'cell` is the
-executing cell's: invariant, quantified per `enter`, with no outlives relation
-to `'b`, and naming storage the cell's hold set covers for the cell's whole
-life — its own region, or a region a pinned crossing into this cell minted into
-its holds. It is a real borrow, not a brand alone: the shared borrow of the
-graph's region table that `enter` holds for the whole step beside its exclusive
-borrow of everything else, so the step's own writer is a plain `&'cell` and the
-verbs that move or drop a region cannot run under it. A value built there is held as a plain `&'cell`
-reference and needs no carrier, because its reach is the cell itself and the
-cell's birth row already keeps it; the three carrier states are for a value
-homed in another cell or crossing a step. The continuation's captures are
-`'cell` references, re-anchored at each step's brand, which is how per-cell
-embedder structure rides the cell without a frame type. A foreign carrier is
-read at a borrow strictly inside the step and can never coerce to `'cell`, so
-the only reference that lands in a cell's region without passing the verdict
-is one into that same region.
+**Two brands per step, under the graph's lifetime.** `'step` is the step: a
+carrier branded to it was built or redeemed by this step's doors and dies with
+the step. `'here` is the executing cell's: invariant, quantified per `enter`,
+with no outlives relation to `'step`, and naming storage the cell's hold set
+covers for the cell's whole life — its own region, or a region a pinned crossing
+into this cell minted into its holds. It is a real borrow, not a brand alone:
+the shared borrow of the graph's region table that `enter` holds for the whole
+step beside its exclusive borrow of everything else, so the step's own writer is
+a plain `&'here` and the verbs that move or drop a region cannot run under it. A
+value built there is held as a plain `&'here` reference and needs no carrier,
+because its reach is the cell itself and the cell's birth row already keeps it;
+the three carrier states are for a value homed in another cell or crossing a
+step. The continuation's captures are `'here` references, re-anchored at each
+step's brand, which is how per-cell embedder structure rides the cell without a
+frame type.
 
-**A value and its reach are never separable, and never forgeable.** Every
-carrier constructor is crate-private and the mask type is crate-private too, so
-there is nothing an embedder can assemble that would hand a value a reach of its
-own choosing. That single forgery is what the three states exist to prevent.
+`'graph` outlives both. It is the lifetime of storage the embedder owns outside
+the graph — program text, say — which the borrow checker keeps alive for as
+long as the graph is used; the graph is invariant in it, so it never shortens to
+a step's brand. Anything that outlives the graph may be borrowed through it: a
+continuation captures a `&'graph` borrow, a build embeds one, and a value's form
+may nest one under a region borrow (`&'cell Entry<'graph, 'cell>`). It is not a
+brand — nothing is confined to it — and it carries **no reach and no price**:
+the substrate neither keeps nor reclaims that storage, so a `'graph` borrow is
+minted into no hold set, weighed by no verdict, and crosses a copy as it is,
+since the retype never moves it. An embedder with no such storage writes
+`CellGraph<'static, C>`.
+
+A foreign carrier is read at a borrow strictly inside the step and can never
+coerce to `'here`, so the only references that land in a cell's region without
+passing the verdict are ones into that same region or through `'graph`.
+
+**A value and its reach are never separable, and never forgeable.** The
+constructors of `Ready` and `Dormant`, the two states that carry reach, are
+crate-private and the mask type is crate-private too, so there is nothing an
+embedder can assemble that would hand a value a reach of its own choosing. That
+single forgery is what the three states exist to prevent. `Active::new` is
+public, because an `Active` holds no reach and no door takes one as evidence of
+anything: a placement's build closure ends in one. It hands back an `Active`
+rather than the bare form because the build is quantified over the destination's
+`'cell`, where a bare family form cannot be normalized under `'graph: 'cell` —
+`Active`'s where-clause is what carries that bound.
 
 ## Verbs
 
-- **`create(parent?)`** hands back a handle, or refuses when the slab is at its
-  cap.
+- **`create(parent?, continuation?)`** hands back a handle, or refuses when the
+  slab is at its cap. A continuation handed in at birth is at `'graph`: it
+  borrows no region, so it reaches nothing.
 - **`enter(handle, step)`** sets the cell's executing bit for the scope of
   `step` and supplies a step context. A cell cannot be entered while it is
   already executing. Within the scope a step can take the cell's continuation
-  re-anchored at `'cell`; take a `Copy` writer onto its own region at `'cell`;
+  re-anchored at `'here`; take a `Copy` writer onto its own region at `'here`;
   allocate into any other live cell by handle (destination-homed placement),
-  or into itself at `'cell`; lift an own-region value to a carrier whose reach
+  or into itself at `'here`; lift an own-region value to a carrier whose reach
   is the cell itself; mint a bare hold on another cell; read a carrier it
   built; store a successor continuation, over captures or over nothing; `keep`
   a carrier it holds, which hands back the at-rest form; and `redeem` one a
@@ -255,13 +279,14 @@ is the embedder's.
 What comes back decides the shape the build closure receives, and the type
 system enforces it:
 
-- a **pinned** operand arrives at the destination's own region brand, so the
-  build may embed the borrow itself — and the mint has already folded the
+- a **pinned** operand arrives at the destination's own region brand, `'cell`,
+  so the build may embed the borrow itself — and the mint has already folded the
   operand's reach into the destination's holds;
-- a **copied** operand arrives **severed**, at a brand with no outlives relation
-  to the destination's region, and its reach is minted nowhere. Embedding it is
-  a compile error, so the only copy that typechecks is a deep one through the
-  destination's writer.
+- a **copied** operand arrives **severed**, at `'severed`, a brand with no
+  outlives relation to `'cell`, and its reach is minted nowhere. Embedding its
+  region part is a compile error, so the only copy that typechecks is a deep one
+  through the destination's writer. Severing is by lifetime and `'graph` is not
+  a region's, so a `'graph` borrow inside a copied view embeds as it is.
 
 Both shapes reach the build closure out of the scratch region and neither
 outlives the call: their brands are quantified over the call, so a caller has
@@ -272,8 +297,8 @@ to put: an operand homed in a tree cell crossing to a destination neither on
 that cell's chain nor under it is a **forced copy**
 ([src/tree/README.md](src/tree/README.md)).
 
-A `'cell` reference is not an operand: embedding it prices nothing because it
-crosses nothing.
+A `'here` reference is not an operand: embedding it prices nothing because it
+crosses nothing. Nor is a `'graph` borrow, for the same reason.
 
 There are no price *verbs*. The substrate computes what retention costs, but
 every one of those queries is crate-private, along with the vocabulary they
@@ -312,7 +337,7 @@ exactly one decision.
 - [src/scratch.rs](src/scratch.rs) — the graph's one scratch region and the
   doors every verb's transients go through.
 - [src/carrier.rs](src/carrier.rs) — `Ready` and `Active`, the two carrier
-  states that carry a lifetime.
+  states that carry a lifetime beside `'graph`.
 - [src/dormant.rs](src/dormant.rs) — `Dormant`, the private key naming its
   reach, and the per-cell reach table that reach lives in.
 - [src/reattach.rs](src/reattach.rs) — the reattachable contract and the single

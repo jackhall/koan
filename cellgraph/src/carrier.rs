@@ -1,7 +1,7 @@
-//! The two carrier states that carry a step lifetime. A value with reach passes through three, in
-//! order of liveness: [`Dormant`](crate::Dormant), at rest and free of every step brand, which lives in
-//! [`dormant`](crate::dormant); [`Ready`], the in-step form a door hands back; and [`Active`], the
-//! in-use form a step reads it out at. See [../README.md](../README.md) § The
+//! The two carrier states that carry a lifetime beside `'graph`. A value with reach passes through
+//! three, in order of liveness: [`Dormant`](crate::Dormant), at rest and free of every step brand,
+//! which lives in [`dormant`](crate::dormant); [`Ready`], the in-step form a door hands back; and
+//! [`Active`], the in-use form a step reads it out at. See [../README.md](../README.md) § The
 //! contract: two embedder types.
 //!
 //! [`Ready`] bundles the value with the mask describing what it reaches; [`Active`] is the value

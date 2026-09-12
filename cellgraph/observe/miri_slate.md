@@ -32,7 +32,7 @@ binary:
 MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p cellgraph --lib
 ```
 
-**`retype` primitive — `Erased<T>`** ([src/reattach.rs](../src/reattach.rs)) — the single audited
+**`retype` primitive — `Erased<'graph, T>`** ([src/reattach.rs](../src/reattach.rs)) — the single audited
 lifetime-retype, a `transmute_copy` behind a `ManuallyDrop` (the one site `transmute`'s
 associated-type size proof can't cover). It is reached through the two doors on `Erased`, and every
 call site shortens a stored form to a lifetime the referents outlive. The tests store a family value
@@ -46,7 +46,7 @@ family is the load-bearing one, since its erased form holds a real reference acr
 [src/graph.rs](../src/graph.rs)) — the same `retype` primitive, reached at the two doors a value
 with reach uses. `Erased::erase` forgets a region borrow at the alloc site and `Erased::reattach`
 hands it back at a shorter one, so a bumped value's borrow survives a round trip through a
-lifetime-free slot; the placement test is the load-bearing one, since its operand view is a real
+slot free of every step brand; the placement test is the load-bearing one, since its operand view is a real
 `&u32` into *another* cell's chunks that the built value keeps. The third covers the case where
 nothing detaches at all: a reattached borrow names a cell that is still live, and that cell keeps
 allocating under it, so what Miri checks is that the retag a region takes at every allocation
@@ -114,10 +114,10 @@ is that the retype moves the region borrow and leaves the `'graph` one naming th
 - `graph::tests::values::a_graph_borrow_in_a_kept_value_redeems_after_its_home_seals`
 
 **The own-region brand** ([src/region.rs](../src/region.rs), [src/graph.rs](../src/graph.rs)) —
-the same `retype` primitive at the two doors that re-anchor at `'cell`, the shared borrow of the
-region table a step holds for its whole length. A capture at `'cell` is read back a step later,
+the same `retype` primitive at the two doors that re-anchor at `'here`, the shared borrow of the
+region table a step holds for its whole length. A capture at `'here` is read back a step later,
 once with the cell's own bundle grown by an absorption under it, and once with the pinned home
-sealed out of the slab entirely: what Miri checks is that the storage a `'cell` reference names
+sealed out of the slab entirely: what Miri checks is that the storage a `'here` reference names
 stays where it was across the moves a region makes between two of the cell's steps.
 
 - `graph::tests::values::a_cell_reference_captured_by_the_continuation_reads_after_the_region_absorbs`
