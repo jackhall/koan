@@ -7,7 +7,7 @@
 //! part of the registry — is pre-sized, so any allocation inside the bracket is the lattice's own,
 //! and the test names it by failing.
 
-use crate::memory::{BumpAllocator, BumpVec, ScopeId};
+use crate::memory::{Bump, BumpAllocator, BumpVec, ScopeId};
 use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 use crate::tests::allocation_count;
 
@@ -30,8 +30,6 @@ use crate::type_lattice::unify::{Collector, UnifyFailure, admits_with};
 use crate::type_lattice::walk::Variance;
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
-use super::generators::{allocator, fresh_cart};
-
 /// Grow `region`'s bump to a chunk the whole battery fits in, then hand the bytes back, so nothing
 /// inside the bracket asks the heap for a chunk of its own. A dropped vector is its bump's newest
 /// allocation, which the bump takes back whole.
@@ -53,10 +51,10 @@ fn interning_and_relations_touch_no_heap() {
     let a = ValueSymbol::declared("a", &labels).expect("a value token");
 
     // The registry's region, the relations' scratch, and the declaring frame a window lives in.
-    let (registry_cart, scratch_cart, host_cart) = (fresh_cart(), fresh_cart(), fresh_cart());
-    let region = allocator(&registry_cart);
-    let scratch = allocator(&scratch_cart);
-    let host = allocator(&host_cart);
+    let (registry_bump, scratch_bump, host_bump) = (Bump::new(), Bump::new(), Bump::new());
+    let region = &registry_bump;
+    let scratch = &scratch_bump;
+    let host = &host_bump;
     for bump in [region, scratch, host] {
         warm(bump);
     }

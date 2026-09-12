@@ -1,6 +1,6 @@
 [workspace]
 members = ["workgraph", "cellgraph", "sexlex"]
-default-members = [".", "workgraph", "cellgraph", "sexlex"]
+default-members = [".", "cellgraph", "sexlex"]
 resolver = "2"
 
 [package]
@@ -35,9 +35,8 @@ seam-force-pin  = ["pending_rewrite"]   # escape seam always pins records
 
 # Reach-tightness auditing: the over-pinning report at the fold chokepoint
 # (`machine::core::reach_audit`). Off by default and absent from a release build; `cargo run
-# --features region-audit -- <program>` turns it on for a debug interpreter run. Pulls
-# workgraph's white-box reach readers in, which is what a tightness comparison reads.
-region-audit = ["pending_rewrite", "workgraph/test-hooks"]
+# --features region-audit -- <program>` turns it on for a debug interpreter run.
+region-audit = ["pending_rewrite"]
 
 # Whole-program instrument counts: wraps the binary's allocator in the delegating counter
 # at `audit/counting_alloc.rs` and arms the symbol-mint tally in `machine::model::labels`,
@@ -53,20 +52,23 @@ dhat = ["pending_rewrite", "dep:dhat"]
 indexmap = "2"
 mimalloc = { version = "0.1", default-features = false }
 stable_deref_trait = "1.2.1"
-workgraph = { path = "workgraph" }
+# The cell tier's substrate: cells, their regions, the carrier states and the liveness matrix.
+cellgraph = { path = "cellgraph" }
 # The layout half of the parser: whitespace-sensitive s-expressions with glue, no vocabulary.
 sexlex = { path = "sexlex" }
 blake3 = "1.8.5"
-# Hash table for the per-scope binding tables, built over workgraph's `BumpAllocator` so a scope's
-# buckets live in its region's bump. Same major as workgraph's, so `DefaultHashBuilder` and the
-# `Equivalent` probes are one trait across the two crates.
+# The bump tier's arena: storage outside the graph for the AST and the type lattice's registry and
+# scratch. `allocator-api2` turns on `impl Allocator for &Bump`, the seam the tier's growable
+# vector and hash table are built over. Same version cellgraph pins.
+bumpalo = { version = "3.20.3", features = ["allocator-api2"] }
+# The bump tier's hash table — the type lattice's registry node table rides it.
 hashbrown = "0.17"
-# The `Allocator` trait `BumpAllocator` implements, and the growable `Vec` a dispatch bucket takes
-# over it — `std::vec::Vec` has no stable custom-allocator seam.
+# The `Allocator` trait `&Bump` implements, and the growable `Vec` the bump tier builds over it —
+# `std::vec::Vec` has no stable custom-allocator seam.
 allocator-api2 = "0.2.21"
-# Inline-capacity vectors for the aggregate relocation's staging buffers, so a small literal
-# stages its cells on the stack. `union`: stores the inline slots in a union rather than an enum,
-# matching workgraph's own use — one version in the graph.
+# Inline-capacity vectors for the parser's short shapes, so a small form stays on the stack.
+# `union`: stores the inline slots in a union rather than an enum, matching cellgraph's own use —
+# one version in the graph.
 smallvec = { version = "1.15", features = ["union"] }
 # Persistent HAMT for the type registry's node table. No features: the optional `triomphe`
 # feature swaps the default shared pointer to an atomic one, and the registry is single-threaded
@@ -75,6 +77,5 @@ imbl = "7"
 dhat = { version = "0.3.3", optional = true }
 
 [dev-dependencies]
-workgraph = { path = "workgraph", features = ["test-hooks"] }
 trybuild = "1.0"
 proptest = "1"

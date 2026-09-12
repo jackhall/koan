@@ -16,15 +16,14 @@
 
 use std::ops::Deref;
 
-use crate::memory::{ProgramBrand, RegionBrand};
+use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::source::{FileId, Span, Spanned};
 
 use super::{ExpressionPart, KExpression, RunIter};
 
 /// A node whose parts run — and everything reachable from it — is hosted in eternal program
 /// storage. Minted only by [`ProgramBrand`]'s doors below; holding one **is** the proof the value
-/// channel's verdicts cite (`object_cell_reach` calling an expression cell `Owned`, `retains_home`
-/// answering `false`, and [`RegionBrand::alloc_expression`] sealing with no member).
+/// channel's verdicts cite.
 ///
 /// The field is private to this module, so the only way to obtain one is a door that took a
 /// `ProgramBrand` or an accessor on a value that already carries the proof. A node built at a
@@ -34,7 +33,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
 /// // A bare `KExpression`, whatever brand built it, is not a `ProgramExpression`.
-/// let node = koan::parse::KExpression::new(program.region(), &[]);
+/// let node = koan::parse::KExpression::new(program.allocator(), &[]);
 /// let _cell = koan::machine::model::KObject::KExpression(node);
 /// ```
 ///
@@ -43,7 +42,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// ```compile_fail
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
-/// let node = koan::parse::KExpression::new(program.region(), &[]);
+/// let node = koan::parse::KExpression::new(program.allocator(), &[]);
 /// let _marked = koan::parse::ProgramExpression(node);
 /// ```
 ///
@@ -96,8 +95,8 @@ impl<'a> ProgramExpression<'a> {
     /// touch: the bump copies the `Copy` struct (its `parts`, structural cache and binder cache all
     /// stay the program-storage borrows they were) into wherever `brand` allocates. What the
     /// resulting `ProgramNode` promises is unchanged — only the address of the node header moves.
-    pub fn rehost(self, brand: RegionBrand<'a>) -> ProgramNode<'a> {
-        ProgramNode(brand.allocator().value(self.0))
+    pub fn rehost(self, brand: BumpAllocator<'a>) -> ProgramNode<'a> {
+        ProgramNode(brand.alloc(self.0))
     }
 }
 
@@ -141,7 +140,7 @@ impl<'a> Deref for ProgramExpression<'a> {
 impl<'a> ProgramBrand<'a> {
     /// Spanless mint — [`KExpression::new`] with the tier proof attached.
     pub fn new_expression(self, parts: &[Spanned<ExpressionPart<'a>>]) -> ProgramExpression<'a> {
-        ProgramExpression(KExpression::new(self.region(), parts))
+        ProgramExpression(KExpression::new(self.allocator(), parts))
     }
 
     /// [`new_expression`](Self::new_expression)'s peer for a computed run —
@@ -151,7 +150,7 @@ impl<'a> ProgramBrand<'a> {
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        ProgramExpression(KExpression::new_from_iter(self.region(), parts))
+        ProgramExpression(KExpression::new_from_iter(self.allocator(), parts))
     }
 
     /// Full mint — [`KExpression::build`] with the tier proof attached.
@@ -161,7 +160,7 @@ impl<'a> ProgramBrand<'a> {
         span: Option<Span>,
         file: Option<FileId>,
     ) -> ProgramExpression<'a> {
-        ProgramExpression(KExpression::build(self.region(), parts, span, file))
+        ProgramExpression(KExpression::build(self.allocator(), parts, span, file))
     }
 
     /// [`build_expression`](Self::build_expression)'s peer for a computed run —
@@ -177,7 +176,7 @@ impl<'a> ProgramBrand<'a> {
         RunIter<I>: ExactSizeIterator,
     {
         ProgramExpression(KExpression::build_from_iter(
-            self.region(),
+            self.allocator(),
             parts,
             span,
             file,
@@ -186,13 +185,13 @@ impl<'a> ProgramBrand<'a> {
 
     /// Bump a marked node into program storage, yielding the reference an arm payload holds.
     pub fn alloc_node(self, expression: ProgramExpression<'a>) -> ProgramNode<'a> {
-        ProgramNode(self.region().allocator().value(expression.0))
+        ProgramNode(self.allocator().alloc(expression.0))
     }
 
     /// Build and bump in one step — the [`ExpressionPart::Expression`] analogue of
     /// [`KExpression::nested`], for the arm constructions that mint a fresh child node.
     pub fn nested_node(self, parts: &[Spanned<ExpressionPart<'a>>]) -> ProgramNode<'a> {
-        ProgramNode(KExpression::nested(self.region(), parts))
+        ProgramNode(KExpression::nested(self.allocator(), parts))
     }
 
     /// [`nested_node`](Self::nested_node)'s peer for a computed run —
@@ -202,6 +201,6 @@ impl<'a> ProgramBrand<'a> {
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        ProgramNode(KExpression::nested_from_iter(self.region(), parts))
+        ProgramNode(KExpression::nested_from_iter(self.allocator(), parts))
     }
 }

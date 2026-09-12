@@ -352,7 +352,7 @@ pub fn sig_subtype<'run, 's>(
                 return Err(SigSubtypeFailure::AmbiguousKeyworded {
                     head: declared,
                     candidates: scratch
-                        .slice_from_iter(satisfiers.iter().map(|index| candidates[*index])),
+                        .alloc_slice_fill_iter(satisfiers.iter().map(|index| candidates[*index])),
                 });
             }
         }

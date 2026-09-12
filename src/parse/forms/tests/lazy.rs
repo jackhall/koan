@@ -2,9 +2,8 @@
 //! obeys over union carriers.
 
 use proptest::prelude::*;
-use workgraph::witnessed::RegionHandle;
-use workgraph::witnessed::doctest_fixture::fresh_cart;
 
+use crate::memory::program_storage;
 use crate::parse::forms::lazy::LazyKinds;
 use crate::type_lattice::{KType, TypeNode, TypeRegistry};
 
@@ -61,8 +60,8 @@ proptest! {
     fn the_kind_derivation_distributes_over_union_members(
         chosen in prop::sample::subsequence(MEMBERS.to_vec(), 1..=MEMBERS.len()),
     ) {
-        let cart = fresh_cart();
-        let bump = RegionHandle::from_owner(&*cart).allocator();
+        let storage = program_storage();
+        let bump = storage.brand().allocator();
         let types = &TypeRegistry::in_region(bump);
 
         for (ktype, kind) in &chosen {

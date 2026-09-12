@@ -25,10 +25,11 @@ const PARSE_ITEMS: &[&str] = &[
 ];
 
 /// The path prefixes the lattice may name outside `parse`: `ScopeId` and its associated items, the
-/// region allocator with the vector and table shapes built over it and the door a writable table
-/// is built through, the macro that mints a static name, the lib-test allocation counter and the
-/// tier's property-case share beside it, and its own module path.
+/// bump tier's arena and allocator with the vector and table shapes built over it and the door a
+/// writable table is built through, the macro that mints a static name, the lib-test allocation
+/// counter and the tier's property-case share beside it, and its own module path.
 const PREFIXES: &[&str] = &[
+    "crate::memory::Bump",
     "crate::memory::BumpAllocator",
     "crate::memory::BumpBackedMap",
     "crate::memory::BumpVec",

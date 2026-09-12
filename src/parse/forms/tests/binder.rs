@@ -214,7 +214,7 @@ proptest! {
 
             // The redundant wrapper carries the child's plan through, with no aggregation.
             let wrapped = KExpression::new(
-                brand.region(),
+                brand.allocator(),
                 &[Spanned::bare(ExpressionPart::Expression(
                     brand.nested_node(statement.parts),
                 ))],
@@ -237,7 +237,7 @@ proptest! {
                 .map(|name| identifier_part(name)),
         );
         let user = KExpression::new_from_iter(
-            brand.region(),
+            brand.allocator(),
             run.into_iter().map(Spanned::bare),
         );
         prop_assume!(form_for(user.stored_key().iter().copied()).is_none());

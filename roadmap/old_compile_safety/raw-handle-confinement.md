@@ -4,7 +4,7 @@ Confine raw `RegionHandle` access to `memory`, so the veneer is the only
 door koan code stores through.
 
 **Problem.** `pub(crate)` `RegionBrand::handle()`
-([region.rs](../../src/memory/region.rs)) hands any koan crate code the raw
+(`region.rs`) hands any koan crate code the raw
 `RegionHandle`, bypassing every veneer door. `memory` owns the substrate and
 every Koan-bound name over it, so the brand door belongs to `memory` too —
 but twenty-nine production reaches sit outside it. Most are in

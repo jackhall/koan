@@ -57,7 +57,7 @@ pub(crate) use forms::binder::{
     OpArity, op_declaration_arity, symbol_from_parts, symbol_from_quote_body,
 };
 #[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
-pub(crate) use forms::layout::{SlotLayout, SlotLayoutRefFamily};
+pub(crate) use forms::layout::SlotLayout;
 #[cfg(feature = "alloc-count")]
 pub use labels::symbols_minted;
 

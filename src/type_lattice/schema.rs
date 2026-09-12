@@ -83,7 +83,7 @@ impl<'a, N: Copy> Members<'a, N> {
         if self.0.is_empty() {
             Members(&[])
         } else {
-            Members(bump.slice(self.0))
+            Members(bump.alloc_slice_copy(self.0))
         }
     }
 
@@ -94,7 +94,7 @@ impl<'a, N: Copy> Members<'a, N> {
         scratch: BumpAllocator<'b>,
         mut read: impl FnMut(KType) -> KType,
     ) -> Members<'b, N> {
-        Members(scratch.slice_from_iter(self.0.iter().map(|(name, kt)| (*name, read(*kt)))))
+        Members(scratch.alloc_slice_fill_iter(self.0.iter().map(|(name, kt)| (*name, read(*kt)))))
     }
 }
 
@@ -327,7 +327,7 @@ impl<'s> SchemaDraft<'s> {
         keyworded.extend_from_slice(schema.keyworded);
         let mut operators = BumpVec::with_capacity_in(schema.operators.len(), scratch);
         operators.extend(schema.operators.iter().map(|group| DeclaredGroup {
-            members: scratch.slice(group.members),
+            members: scratch.alloc_slice_copy(group.members),
             mode: group.mode,
         }));
         SchemaDraft {

@@ -4,7 +4,7 @@
 //! computes, and that no two node kinds share a domain tag. The first catches a recipe change that
 //! would silently re-identify a builtin leaf; the second catches a new variant added without one.
 
-use crate::memory::ScopeId;
+use crate::memory::{Bump, ScopeId};
 use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
 
 use crate::type_lattice::digest::node_digest;
@@ -16,12 +16,10 @@ use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{SchemaDraft, SigSchema};
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 
-use super::generators::{allocator, fresh_cart};
-
 #[test]
 fn constants_match_freshly_interned_nodes() {
-    let cart = fresh_cart();
-    let region = allocator(&cart);
+    let bump = Bump::new();
+    let region = &bump;
     let types = TypeRegistry::in_region(region);
     let pins: &[(&str, KType, TypeNode<'_>)] = &[
         ("NUMBER", KType::NUMBER, TypeNode::Number),
@@ -114,8 +112,8 @@ fn every_node_kind_has_its_own_tag() {
     let arguments = [(field, KType::STR)];
     let elements = [DispatchTokenElement::Keyword(keyword)];
     let members = [KType::NUMBER, KType::STR];
-    let cart = fresh_cart();
-    let region = allocator(&cart);
+    let bump = Bump::new();
+    let region = &bump;
     let types = TypeRegistry::in_region(region);
     // One representative per node kind, whose digests the distinctness assertion below reads. The
     // exhaustive match after the list is what makes a new variant a compile error here.

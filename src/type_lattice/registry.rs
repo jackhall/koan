@@ -248,7 +248,7 @@ impl<'run> TypeRegistry<'run> {
         if items.is_empty() {
             &[]
         } else {
-            self.bump.slice(items)
+            self.bump.alloc_slice_copy(items)
         }
     }
 
@@ -358,7 +358,7 @@ impl<'run> TypeRegistry<'run> {
             TypeNode::DeferredReturn(match surface {
                 DeferredReturnSurface::Type(name) => DeferredReturnSurface::Type(name),
                 DeferredReturnSurface::Expression(text) => {
-                    DeferredReturnSurface::Expression(self.bump.text(text))
+                    DeferredReturnSurface::Expression(self.bump.alloc_str(text))
                 }
             })
         })
@@ -514,7 +514,7 @@ impl<'run> TypeRegistry<'run> {
             return &[];
         }
         self.bump
-            .slice_from_iter(groups.iter().map(|group| DeclaredGroup {
+            .alloc_slice_fill_iter(groups.iter().map(|group| DeclaredGroup {
                 members: self.rehome(group.members),
                 mode: group.mode,
             }))

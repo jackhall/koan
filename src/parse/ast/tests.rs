@@ -132,7 +132,7 @@ fn build_part<'a>(
     shape: &PartShape,
     labels: &LabelInterner,
 ) -> ExpressionPart<'a> {
-    let allocator = brand.region().allocator();
+    let allocator = brand.allocator();
     match shape {
         PartShape::Keyword(text) => ExpressionPart::Keyword(
             KeywordSymbol::declared(text, labels).expect("keyword-class by construction"),
@@ -160,9 +160,10 @@ fn build_part<'a>(
             brand.nested_node_from_iter(build_run(brand, items, labels)),
         ),
         PartShape::List(items) => ExpressionPart::ListLiteral(
-            allocator.slice_from_iter(items.iter().map(|item| build_part(brand, item, labels))),
+            allocator
+                .alloc_slice_fill_iter(items.iter().map(|item| build_part(brand, item, labels))),
         ),
-        PartShape::Dict(pairs) => ExpressionPart::DictLiteral(allocator.slice_from_iter(
+        PartShape::Dict(pairs) => ExpressionPart::DictLiteral(allocator.alloc_slice_fill_iter(
             pairs.iter().map(|(key, value)| {
                 (
                     build_part(brand, key, labels),
@@ -170,14 +171,14 @@ fn build_part<'a>(
                 )
             }),
         )),
-        PartShape::Record(fields) => ExpressionPart::RecordLiteral(allocator.slice_from_iter(
-            fields.iter().map(|(name, value)| {
+        PartShape::Record(fields) => ExpressionPart::RecordLiteral(
+            allocator.alloc_slice_fill_iter(fields.iter().map(|(name, value)| {
                 (
                     BinderSymbol::declared(name, labels).expect("a value token by construction"),
                     build_part(brand, value, labels),
                 )
-            }),
-        )),
+            })),
+        ),
     }
 }
 
@@ -199,7 +200,7 @@ fn build<'a>(
     shapes: &[PartShape],
     labels: &LabelInterner,
 ) -> KExpression<'a> {
-    KExpression::new_from_iter(brand.region(), build_run(brand, shapes, labels))
+    KExpression::new_from_iter(brand.allocator(), build_run(brand, shapes, labels))
 }
 
 /// The bucket key a parts run spells, recomputed from the parts rather than read off the cache.
@@ -319,7 +320,7 @@ proptest! {
     fn the_cache_agrees_with_a_recompute_and_rides_a_copy_and_a_resplice(shapes in parts_run()) {
         let program = program_storage();
         let brand = program.brand();
-        let region = brand.region();
+        let region = brand.allocator();
         let labels = LabelInterner::new();
         let expression = build(brand, &shapes, &labels);
 
