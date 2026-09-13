@@ -169,8 +169,10 @@ single forgery is what the three states exist to prevent. `Active::new` is
 public, because an `Active` holds no reach and no door takes one as evidence of
 anything: a placement's build closure ends in one. It hands back an `Active`
 rather than the bare form because the build is quantified over the destination's
-`'cell`, where a bare family form cannot be normalized under `'graph: 'cell` —
-`Active`'s where-clause is what carries that bound.
+`'cell`, and a closure so quantified cannot prove `'graph: 'cell` of the type it
+returns. So `Active` holds the value erased beside an invariant `'cell` marker:
+its type needs no bound, and the bound sits on `Active::new`, which erases, and
+on the read out, which re-anchors at the same `'cell`.
 
 ## Verbs
 

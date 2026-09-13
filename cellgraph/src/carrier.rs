@@ -112,41 +112,69 @@ where
 }
 
 /// The value alone, at the lifetime it is used at. It reaches this state two ways: a
-/// [`read`](crate::StepContext::read) re-anchors a carrier's value at the reading borrow, which the
+/// [`read`](crate::StepContext::read) anchors a carrier's value at the reading borrow, which the
 /// borrow checker keeps inside the step; and a placement's build closure hands the value it built
 /// back in one, at the destination region's brand.
 ///
 /// The reach stays behind — in the reach table for a read, and in the placement that composes it for
 /// a build — so an `Active` carries nothing a door could take as evidence, and constructing one
 /// forges nothing. A build returns one rather than the bare form because the build is quantified
-/// over `'cell`: a bare `T::At<'cell>` cannot be normalized there under `'graph: 'cell`, and this
-/// type's where-clause is what carries that bound. Bounded only by [`Reattachable`], since a
-/// continuation's family is no different to it and rests in its cell's slot rather than a region,
-/// where drop glue is fine.
-pub struct Active<'graph, 'cell, T: Reattachable<'graph>>
+/// over `'cell`, and a type naming `T::At<'cell>` is well-formed only under `'graph: 'cell`, which a
+/// closure quantified over `'cell` cannot prove of its return type. So the value rests here in its
+/// erased form beside a `'cell` marker, the type carries no bound, and the bound sits on the doors
+/// that put a value in and take it out. Bounded only by [`Reattachable`], since a continuation's
+/// family is no different to it and rests in its cell's slot rather than a region, where drop glue
+/// is fine.
+pub struct Active<'graph, 'cell, T: Reattachable<'graph>> {
+    /// Held erased; every constructor establishes that its region referents outlive `'cell`.
+    value: Erased<'graph, T>,
+    /// Invariant, so an `Active` never moves to a `'cell` its constructor did not establish.
+    _cell: PhantomData<fn(&'cell ()) -> &'cell ()>,
+}
+
+impl<'graph, 'cell, T: Reattachable<'graph>> Active<'graph, 'cell, T>
 where
     'graph: 'cell,
 {
-    value: T::At<'cell>,
-}
-
-impl<'graph, 'cell, T: Reattachable<'graph>> Active<'graph, 'cell, T> {
     /// Hold a family value at `'cell` — what a build closure ends in.
     pub fn new(value: T::At<'cell>) -> Self {
-        Active { value }
+        Active {
+            value: Erased::erase(value),
+            _cell: PhantomData,
+        }
+    }
+
+    /// Hold an erased value at `'cell` — the read door's constructor. Crate-private, like the other
+    /// carrier states' constructors: a caller asserts that the value's region referents outlive
+    /// `'cell`, which [`into_value`](Active::into_value) relies on.
+    pub(crate) fn anchored(value: Erased<'graph, T>) -> Self {
+        Active {
+            value,
+            _cell: PhantomData,
+        }
     }
 
     /// The value.
     pub fn value(&self) -> T::At<'cell>
     where
-        T::At<'cell>: Copy,
+        Erased<'graph, T>: Copy,
     {
-        self.value
+        Active::<'graph, 'cell, T>::anchored(self.value).into_value()
     }
 
     /// The value, consuming the `Active` — the by-move twin of [`value`](Active::value) for a family
     /// whose live form is not `Copy`.
     pub fn into_value(self) -> T::At<'cell> {
+        // SAFETY: every `Active` holds a value whose region referents outlive `'cell`. `new` took it
+        // at `'cell`, so this is the same lifetime it was erased from; `anchored`'s one caller,
+        // `StepContext::read`, holds a carrier branded to its step, whose referents are live for the
+        // whole step, and `'cell` is its `&'cell self` borrow inside that step. `'cell` is
+        // invariant, so neither can be moved to a longer one.
+        unsafe { self.value.reattach::<'cell>() }
+    }
+
+    /// The erased form, for the placement that composes the value's reach beside it.
+    pub(crate) fn into_erased(self) -> Erased<'graph, T> {
         self.value
     }
 }

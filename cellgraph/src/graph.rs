@@ -2607,7 +2607,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
         dest: Destination,
         mut reach: GraphReach<W>,
         regions: &Regions,
-        build: impl for<'cell> FnOnce(Writer<'cell>) -> Active<'graph, 'cell, T>,
+        build: impl for<'cell> FnOnce(Writer<'cell>, &'cell &'graph ()) -> Active<'graph, 'cell, T>,
     ) -> Ready<'graph, 'step, T, W>
     where
         T: Reattachable<'graph> + DropFree,
@@ -2623,7 +2623,9 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
             CellHome::Slab(slot) => regions.slab(slot),
             CellHome::Tree(index) => regions.tree(index),
         };
-        let value = Erased::<T>::erase(build(region.writer()).into_value());
+        // The second argument is the `'graph: 'cell` bound as a value: a closure quantified over
+        // `'cell` assumes what its arguments' types imply, and nothing else would tell it.
+        let value = build(region.writer(), &&()).into_erased();
         // The mint slot, not the home: a value homed in a tree cell reaches its root, which is what
         // every hold on its behalf was minted into.
         reach.add(dest.mint_slot);
@@ -3021,13 +3023,15 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
             }
         };
         let (reach, verdicts) = cells.appraise_and_pledge(dest, operands, regions, scratch);
-        Ok(cells.mint_and_build(dest, reach, regions, move |writer| {
-            // SAFETY: see `reanchor_operands`. `mint_and_build` has already folded every pinned
-            // operand's reach into the destination's hold set before it calls this closure, so
-            // that storage outlives both `'cell` and the destination.
-            let views = unsafe { reanchor_operands(operands, verdicts, scratch) };
-            build(writer, views)
-        }))
+        Ok(
+            cells.mint_and_build(dest, reach, regions, move |writer, _| {
+                // SAFETY: see `reanchor_operands`. `mint_and_build` has already folded every pinned
+                // operand's reach into the destination's hold set before it calls this closure, so
+                // that storage outlives both `'cell` and the destination.
+                let views = unsafe { reanchor_operands(operands, verdicts, scratch) };
+                build(writer, views)
+            }),
+        )
     }
 
     /// The bridge from an own-region value to a carrier, reaching the executing cell.
@@ -3241,14 +3245,13 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
         T: Reattachable<'graph> + DropFree,
         Erased<'graph, T>: Copy,
     {
-        // SAFETY: `carrier` is branded to this step, so it was either built by a door of this step
-        // — whose mint folded its reach into the destination's hold set — or redeemed by one,
-        // which checked that the executing cell keeps the storage the reach names, in the slab or
-        // in the tier. Either way its referents are region storage that is live for the whole
-        // step: nothing dies inside one. So they are live for all of `'cell`, which the `&'cell self`
-        // borrow bounds inside the step brand, and the re-anchor shortens.
-        let value: T::At<'cell> = unsafe { carrier.erased().reattach::<'cell>() };
-        Active::new(value)
+        // What `Active::anchored` asks of its caller: `carrier` is branded to this step, so it was
+        // either built by a door of this step — whose mint folded its reach into the destination's
+        // hold set — or redeemed by one, which checked that the executing cell keeps the storage
+        // the reach names, in the slab or in the tier. Either way its referents are region storage
+        // that is live for the whole step: nothing dies inside one. So they are live for all of
+        // `'cell`, which the `&'cell self` borrow bounds inside the step brand.
+        Active::anchored(carrier.erased())
     }
 }
 

@@ -43,9 +43,10 @@ family is the load-bearing one, since its erased form holds a real reference acr
 - `graph::tests::a_step_stores_the_successor_the_next_step_receives`
 
 **Region storage and the operand re-anchor** ([src/region.rs](../src/region.rs),
-[src/graph.rs](../src/graph.rs)) — the same `retype` primitive, reached at the two doors a value
-with reach uses. `Erased::erase` forgets a region borrow at the alloc site and `Erased::reattach`
-hands it back at a shorter one, so a bumped value's borrow survives a round trip through a
+[src/carrier.rs](../src/carrier.rs), [src/graph.rs](../src/graph.rs)) — the same `retype` primitive,
+reached at the two doors a value with reach uses. `Erased::erase` forgets a region borrow where
+`Active::new` holds a built value and `Erased::reattach` hands it back at a shorter one, in
+`Active::into_value` for a read, so a bumped value's borrow survives a round trip through a
 slot free of every step brand; the placement test is the load-bearing one, since its operand view is a real
 `&u32` into *another* cell's chunks that the built value keeps. The third covers the case where
 nothing detaches at all: a reattached borrow names a cell that is still live, and that cell keeps
@@ -159,9 +160,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-13: 215.91s — 115 tests, 0 leaks, 0 UB
 - 2026-09-12: 172.91s — 115 tests, 0 leaks, 0 UB
 - 2026-09-12: 237.58s — 109 tests, 0 leaks, 0 UB
 - 2026-09-12: 132.37s — 109 tests, 0 leaks, 0 UB
 - 2026-09-12: 179.27s — 109 tests, 0 leaks, 0 UB
-- 2026-09-12: 155.60s — 108 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

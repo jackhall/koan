@@ -112,6 +112,7 @@ region it came from is released.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-13: 18s — 8 tests, 0 leaks, 0 UB
 - 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
 - 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
 - 2026-09-11: 40s — 7 tests, 0 leaks, 0 UB
