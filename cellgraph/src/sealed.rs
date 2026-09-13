@@ -100,7 +100,7 @@ pub(crate) struct IdSet<V> {
 pub(crate) type SealedSet = IdSet<SmallVec<[SealedId; 2]>>;
 
 /// A transient id set, living in the graph's scratch region for the length of one verb.
-pub(crate) type ScratchSet<'s> = IdSet<ScratchVec<'s, SealedId>>;
+pub(crate) type ScratchSet<'scratch> = IdSet<ScratchVec<'scratch, SealedId>>;
 
 impl SealedSet {
     pub(crate) const fn new() -> Self {
@@ -110,9 +110,9 @@ impl SealedSet {
     }
 }
 
-impl<'s> ScratchSet<'s> {
+impl<'scratch> ScratchSet<'scratch> {
     /// An empty set over a scratch buffer.
-    pub(crate) fn over(ids: ScratchVec<'s, SealedId>) -> Self {
+    pub(crate) fn over(ids: ScratchVec<'scratch, SealedId>) -> Self {
         debug_assert!(ids.is_empty(), "a set is built over an empty buffer");
         IdSet { ids }
     }
@@ -123,7 +123,10 @@ impl<'s> ScratchSet<'s> {
     /// already, so the sorted insert would re-derive at `k log k` what a copy settles at `k`.
     /// This is how a pricing walk seeds its seen set from the destination's hold set, which is
     /// the largest set it ever starts from.
-    pub(crate) fn copy_of(mut ids: ScratchVec<'s, SealedId>, other: &IdSet<impl IdBuffer>) -> Self {
+    pub(crate) fn copy_of(
+        mut ids: ScratchVec<'scratch, SealedId>,
+        other: &IdSet<impl IdBuffer>,
+    ) -> Self {
         debug_assert!(ids.is_empty(), "a set is built over an empty buffer");
         ids.extend_from_slice(other.as_slice());
         IdSet { ids }

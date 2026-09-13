@@ -175,7 +175,7 @@ fn verb() -> impl Strategy<Value = Verb> {
 }
 
 /// The tier's ids in id order, since a walk's answers must not depend on hash iteration order.
-fn sorted_ids(graph: &CellGraph<Borrowed>) -> Vec<SealedId> {
+fn sorted_ids(graph: &CellGraph<'static, Borrowed>) -> Vec<SealedId> {
     let mut ids: Vec<SealedId> = graph.cells.sealed.ids().collect();
     ids.sort();
     ids
@@ -184,7 +184,11 @@ fn sorted_ids(graph: &CellGraph<Borrowed>) -> Vec<SealedId> {
 /// `memoized` carries the ids that already held a memo before this step, and is refreshed to the
 /// current set on the way out. Only a price query may write one, so unless the step just run was a
 /// `Price` verb, an id outside that set carrying a memo is one a mint or a release left behind.
-fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, priced: bool) {
+fn check_invariants(
+    graph: &CellGraph<'static, Borrowed>,
+    memoized: &mut Vec<SealedId>,
+    priced: bool,
+) {
     let occupied: Vec<u32> = (0..CAP)
         .filter(|slot| graph.cells.slots[*slot as usize].state != SlabState::Free)
         .collect();
@@ -441,7 +445,7 @@ fn check_invariants(graph: &CellGraph<Borrowed>, memoized: &mut Vec<SealedId>, p
 /// executing cell's **root** — its own slot when it is a slab cell — against where the key's home
 /// resolves to now.
 fn expected_redeem(
-    graph: &CellGraph<Borrowed>,
+    graph: &CellGraph<'static, Borrowed>,
     executing: u32,
     home: CellHandle,
 ) -> Result<(), RedeemError> {
@@ -482,8 +486,8 @@ fn expected_redeem(
 /// was kept as, which is what says a mask forwarded through a merge — or a tombstone chain — still
 /// names the right storage.
 fn check_redeem(
-    context: &StepContext<'_, '_, Borrowed>,
-    dormant: Dormant<Number>,
+    context: &StepContext<'static, '_, '_, Borrowed>,
+    dormant: Dormant<'static, Number>,
     carried: u32,
 ) -> Result<(), RedeemError> {
     match context.redeem(dormant) {
@@ -500,7 +504,7 @@ fn check_redeem(
 }
 
 /// The tree pool's own invariants, checked after every step beside the matrix ones.
-fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
+fn check_tree_invariants(graph: &CellGraph<'static, Borrowed>) {
     let pool = graph.cells.trees();
     let occupied: Vec<u32> = pool.occupied().collect();
     let alive = |index: u32| matches!(pool.state(index), TreeState::Live | TreeState::Dead);
@@ -634,14 +638,14 @@ fn check_tree_invariants(graph: &CellGraph<Borrowed>) {
 /// checking the invariants after every step. Reports the merges the run performed, which is what
 /// tells a generated corpus that reaches all three shapes from one that only claims to.
 fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merges {
-    let mut graph: CellGraph<Borrowed> = CellGraph::new(CAP, verdict);
+    let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(CAP, verdict);
     let mut minted: Vec<SlabHandle> = Vec::new();
     // Every tree cell the run created, in creation order. A generated index may name one that has
     // since died, which is the point: the doors have to refuse it.
     let mut grown: Vec<TreeHandle> = Vec::new();
     // Every value put to rest, beside the cell it was kept in and the number it carries — so a
     // redeem that answers can be checked against what it was supposed to hand back.
-    let mut kept: Vec<(CellHandle, Dormant<Number>, u32)> = Vec::new();
+    let mut kept: Vec<(CellHandle, Dormant<'static, Number>, u32)> = Vec::new();
     let mut next_value: u32 = 0;
     // Nothing has been priced yet, so no sealed cell may carry a memo.
     let mut memoized: Vec<SealedId> = Vec::new();
@@ -673,7 +677,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                             .alloc_into::<Number, Number>(
                                 consumer,
                                 &[operand_at(&value, 1)],
-                                |writer, views| take(&views[0], writer),
+                                |writer, views| Active::new(take(&views[0], writer)),
                             )
                             .map(|_| ())
                     });
@@ -688,7 +692,9 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 {
                     let _ = graph.enter(cell, |context| {
                         if let Ok(value) =
-                            context.alloc_into::<Number, Number>(over, &[], |w, _| one(w, 1))
+                            context.alloc_into::<Number, Number>(over, &[], |w, _| {
+                                Active::new(one(w, 1))
+                            })
                         {
                             let captured = context
                                 .alloc_here(&[operand_at(&value, 1)], |writer, views| {
@@ -777,7 +783,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                             .alloc_into::<Number, Number>(
                                 consumer,
                                 &[operand_at(&value, 1)],
-                                |writer, views| take(&views[0], writer),
+                                |writer, views| Active::new(take(&views[0], writer)),
                             )
                             .map(|_| ())
                     });

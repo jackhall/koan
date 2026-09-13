@@ -16,12 +16,15 @@ use super::{
 };
 
 /// Bytes a cell's region bundle occupies, or zero for a cell that never allocated.
-fn region_bytes<C: Reattachable>(graph: &CellGraph<C>, handle: SlabHandle) -> usize {
+fn region_bytes<C: Reattachable<'static>>(
+    graph: &CellGraph<'static, C>,
+    handle: SlabHandle,
+) -> usize {
     graph.regions.slab_bytes(handle.slot())
 }
 
 /// The one sealed cell in a graph that has exactly one.
-fn only_sealed_cell<C: Reattachable>(graph: &CellGraph<C>) -> SealedId {
+fn only_sealed_cell<C: Reattachable<'static>>(graph: &CellGraph<'static, C>) -> SealedId {
     assert_eq!(graph.cells.sealed.len(), 1);
     graph
         .cells
@@ -33,7 +36,7 @@ fn only_sealed_cell<C: Reattachable>(graph: &CellGraph<C>) -> SealedId {
 
 #[test]
 fn an_empty_graph_is_quiescent_and_a_surviving_ring_is_not() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     assert!(graph.is_empty());
 
     let cell = graph.create(None, None).unwrap();
@@ -75,7 +78,7 @@ fn an_empty_graph_is_quiescent_and_a_surviving_ring_is_not() {
 
 #[test]
 fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
-    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
     let consumer = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
 
@@ -85,14 +88,16 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
     let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| one(writer, 41))
+                .alloc_into::<Number, Number>(producer, &[], |writer, _| {
+                    Active::new(one(writer, 41))
+                })
                 .unwrap();
             let captured =
                 context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
             context.store_successor(captured);
             let bundled = context
                 .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
-                    pinned(&views[0])
+                    Active::new(pinned(&views[0]))
                 })
                 .unwrap();
             context.keep(bundled)
@@ -133,7 +138,7 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
 
 #[test]
 fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(6, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(6, pin);
     let consumer = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
     let reached = graph.create(None, None).unwrap();
@@ -183,21 +188,23 @@ fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
 
 #[test]
 fn a_refused_release_seals_as_before() {
-    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
     let consumer = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
 
     let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| one(writer, 41))
+                .alloc_into::<Number, Number>(producer, &[], |writer, _| {
+                    Active::new(one(writer, 41))
+                })
                 .unwrap();
             let captured =
                 context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
             context.store_successor(captured);
             let bundled = context
                 .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
-                    pinned(&views[0])
+                    Active::new(pinned(&views[0]))
                 })
                 .unwrap();
             context.keep(bundled)
@@ -220,7 +227,7 @@ fn a_refused_release_seals_as_before() {
 
 #[test]
 fn an_undisposed_dead_holder_absorbs_too() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let holder = graph.create(None, None).unwrap();
     let child = graph.create(Some(holder), None).unwrap();
     let held = graph.create(None, None).unwrap();
@@ -250,7 +257,7 @@ fn an_undisposed_dead_holder_absorbs_too() {
 
 #[test]
 fn a_two_cell_ring_dissolves_when_one_side_dies() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let first = graph.create(None, None).unwrap();
     let second = graph.create(None, None).unwrap();
 
@@ -279,7 +286,7 @@ fn a_two_cell_ring_dissolves_when_one_side_dies() {
 
 #[test]
 fn a_seal_absorbs_its_count_one_sealed_holds() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(6, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(6, pin);
     let top = graph.create(None, None).unwrap();
     let other = graph.create(None, None).unwrap();
     let middle = graph.create(None, None).unwrap();
@@ -342,7 +349,7 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
 
 #[test]
 fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(6, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(6, pin);
     let first_keeper = graph.create(None, None).unwrap();
     let second_keeper = graph.create(None, None).unwrap();
     let top = graph.create(None, None).unwrap();
@@ -397,7 +404,7 @@ fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
 
 #[test]
 fn a_count_one_sealed_cell_held_by_a_live_cell_stays_sealed() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let holder = graph.create(None, None).unwrap();
     let extra = graph.create(None, None).unwrap();
     let held = graph.create(None, None).unwrap();
@@ -452,7 +459,7 @@ fn a_count_one_sealed_cell_held_by_a_live_cell_stays_sealed() {
 
 #[test]
 fn a_cell_with_a_single_sealed_namer_seals_into_it() {
-    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
     let keeper = graph.create(None, None).unwrap();
     let namer = graph.create(None, None).unwrap();
     let dying = graph.create(None, None).unwrap();
@@ -467,14 +474,14 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     let kept = graph
         .enter(keeper, |context| {
             let value = context
-                .alloc_into::<Number, Number>(namer, &[], |writer, _| one(writer, 41))
+                .alloc_into::<Number, Number>(namer, &[], |writer, _| Active::new(one(writer, 41)))
                 .unwrap();
             let captured =
                 context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
             context.store_successor(captured);
             let bundled = context
                 .alloc_into::<Number, Number>(keeper, &[operand(&value)], |_writer, views| {
-                    pinned(&views[0])
+                    Active::new(pinned(&views[0]))
                 })
                 .unwrap();
             context.keep(bundled)
@@ -531,7 +538,7 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
 /// and `alone` sealed regions only it holds — so the hold set varies in both halves and in whether
 /// each sealed id transfers or duplicates, while `dormant` varies what the region stores.
 fn absorb_work_for(dormant: usize, reached: u32, shared: u32, alone: u32) -> u64 {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2 + reached + shared + alone, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2 + reached + shared + alone, pin);
     let consumer = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
     let mut make = |count| {
@@ -614,7 +621,7 @@ proptest! {
 
 #[test]
 fn a_sealed_ring_dissolves_through_its_last_namer() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let first = graph.create(None, None).unwrap();
     let second = graph.create(None, None).unwrap();
     let bystander = graph.create(None, None).unwrap();
@@ -663,7 +670,7 @@ fn a_sealed_ring_dissolves_through_its_last_namer() {
 
 #[test]
 fn a_seal_that_absorbs_every_holder_it_had_reclaims_itself() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let held = graph.create(None, None).unwrap();
     let first = graph.create(None, None).unwrap();
     let second = graph.create(None, None).unwrap();

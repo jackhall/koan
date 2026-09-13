@@ -2,19 +2,19 @@
 //! in pointer-stable chunks that a sealing cell's storage detaches with unmoved. See
 //! [../README.md](../README.md) § The cell.
 //!
-//! The bump is lifetime-free, so a region borrow `'r` enters only at the allocating call. That is
-//! what lets a value written here hold an `&'r` back into the very region it lives in with no
+//! The bump is lifetime-free, so a region borrow `'cell` enters only at the allocating call. That is
+//! what lets a value written here hold an `&'cell` back into the very region it lives in with no
 //! residence check: a lifetime-*typed* slot would have to name a lifetime a region has no
 //! parameter for.
 //!
 //! Nothing stored in a region is ever dropped — a bump releases its chunks whole — which is why
 //! every family a region hosts is [`DropFree`](crate::DropFree). The write surface is
 //! [`Writer`], a `Copy` handle a step receives at a brand it cannot widen: a build closure's own
-//! for a foreign destination, and the executing cell's `'cell` for its own region.
+//! for a foreign destination, and the executing cell's `'here` for its own region.
 //!
 //! Every live cell's region sits in one table, [`Regions`], that a step borrows **shared** for
 //! its whole length while it holds the rest of the graph exclusively. The step's own writer is a
-//! plain `&'cell` into that table, and every placement's writer a shorter borrow of it: two
+//! plain `&'here` into that table, and every placement's writer a shorter borrow of it: two
 //! writers may name one bump — a placement into the executing cell is exactly that, the build's
 //! writer beside the step's own — and a bump's bytes are interior-mutable throughout, so shared
 //! borrows of it tolerate each other's reads and writes. Every verb that moves or drops a region
@@ -161,10 +161,10 @@ impl Region {
 /// Every live cell's region, slab and tree, in one table the graph keeps beside its cells.
 ///
 /// Held apart from the cells so a step can borrow the two differently: the table shared, at the
-/// step's `'cell` brand, and the cells exclusively. Every slot carries a region from the start —
+/// step's `'here` brand, and the cells exclusively. Every slot carries a region from the start —
 /// an empty bump claims no chunk, so a cell that never writes costs the table one small struct
 /// and nothing else — and a region leaves the table only through the `&mut` doors below, which
-/// the graph verbs that dispose of a cell take outside any step. A writer at `'cell` therefore
+/// the graph verbs that dispose of a cell take outside any step. A writer at `'here` therefore
 /// names a bump nothing can move or drop for as long as it is out, by the borrow checker's word;
 /// and since no `&mut` into the table exists inside a step, every write a step makes into a bump
 /// descends from a shared borrow, which a bump's interior-mutable bytes tolerate.
@@ -250,10 +250,10 @@ impl Regions {
 }
 
 /// The write surface into a region's bytes, at the brand the door that hands one out chose: a
-/// build closure's own, or the executing cell's `'cell`.
+/// build closure's own, or the executing cell's `'here`.
 ///
 /// `Copy` with a private field, so a writer exists only where the graph hands one out, and every
-/// verb returns a shared `&'r` rather than the `&mut` the bump itself yields: a written value is
+/// verb returns a shared `&'cell` rather than the `&mut` the bump itself yields: a written value is
 /// region state its holder names, never one it owns.
 ///
 /// A verb per shape a region cannot be given by an embedder, in two pairs. Known width, where the
@@ -265,9 +265,9 @@ impl Regions {
 /// copied slice, a run collected from an iterator of known length — is the embedder's, derived
 /// from these.
 #[derive(Clone, Copy)]
-pub struct Writer<'r>(&'r Bump);
+pub struct Writer<'cell>(&'cell Bump);
 
-impl<'r> Writer<'r> {
+impl<'cell> Writer<'cell> {
     /// Write a run of `len` values, each built from its index, and hand back the borrow of it that
     /// lives in the region.
     ///
@@ -275,13 +275,13 @@ impl<'r> Writer<'r> {
     /// The check is a `const` assert on `T` rather than a `T: Copy` bound: a bound would also
     /// refuse the interior mutability a cell-resident table needs (`Cell<u32>` is drop-free but
     /// not `Copy`), and the assert fires at the instantiation site either way.
-    pub fn fill<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'r [T] {
+    pub fn fill<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'cell [T] {
         const { assert!(!std::mem::needs_drop::<T>()) };
         self.0.alloc_slice_fill_with(len, fill)
     }
 
     /// Write text.
-    pub fn text(self, text: &str) -> &'r str {
+    pub fn text(self, text: &str) -> &'cell str {
         self.0.alloc_str(text)
     }
 
@@ -297,7 +297,7 @@ impl<'r> Writer<'r> {
     ///
     /// Where the length is known before the first element, [`fill`](Self::fill) costs no header
     /// and no growth path.
-    pub fn run<T>(self) -> Run<'r, T> {
+    pub fn run<T>(self) -> Run<'cell, T> {
         const { assert!(!std::mem::needs_drop::<T>()) };
         Run(allocator_api2::vec::Vec::new_in(self.0))
     }
@@ -305,7 +305,7 @@ impl<'r> Writer<'r> {
     /// Text whose length the producer decides: a [`fmt::Write`](std::fmt::Write) sink into the
     /// region, closed with [`Prose::finish`]. Same growth story as [`run`](Self::run), which it is
     /// a run of bytes over.
-    pub fn prose(self) -> Prose<'r> {
+    pub fn prose(self) -> Prose<'cell> {
         Prose(self.run())
     }
 }
@@ -315,9 +315,9 @@ impl<'r> Writer<'r> {
 /// No `Drop`: a run abandoned mid-build is dead region bytes, like every other buffer a bump
 /// outgrows. Nothing it holds runs a destructor either — [`Writer::run`] asserts that at the
 /// instantiation site, the way [`Writer::fill`] does.
-pub struct Run<'r, T>(allocator_api2::vec::Vec<T, &'r Bump>);
+pub struct Run<'cell, T>(allocator_api2::vec::Vec<T, &'cell Bump>);
 
-impl<'r, T> Run<'r, T> {
+impl<'cell, T> Run<'cell, T> {
     /// Append one element.
     pub fn push(&mut self, value: T) {
         self.0.push(value);
@@ -342,7 +342,7 @@ impl<'r, T> Run<'r, T> {
     ///
     /// The trim reclaims into the chunk only while the buffer is still the region's newest
     /// allocation; otherwise it is a no-op and the slack stays dead region bytes.
-    pub fn finish(mut self) -> &'r [T] {
+    pub fn finish(mut self) -> &'cell [T] {
         self.0.shrink_to_fit();
         self.0.leak()
     }
@@ -350,7 +350,7 @@ impl<'r, T> Run<'r, T> {
 
 /// Text under construction in a region: a [`fmt::Write`](std::fmt::Write) sink over a
 /// [`Run`] of bytes, so `write!` lands its output straight in the region's chunk.
-pub struct Prose<'r>(Run<'r, u8>);
+pub struct Prose<'cell>(Run<'cell, u8>);
 
 impl std::fmt::Write for Prose<'_> {
     fn write_str(&mut self, text: &str) -> std::fmt::Result {
@@ -359,7 +359,7 @@ impl std::fmt::Write for Prose<'_> {
     }
 }
 
-impl<'r> Prose<'r> {
+impl<'cell> Prose<'cell> {
     /// How many bytes — not characters — are down so far.
     pub fn len(&self) -> usize {
         self.0.len()
@@ -374,7 +374,7 @@ impl<'r> Prose<'r> {
     ///
     /// The bytes only ever arrived from a `&str`, so the check passes by construction; it is a
     /// linear pass the crate pays rather than take an `unsafe` it has no other need for.
-    pub fn finish(self) -> &'r str {
+    pub fn finish(self) -> &'cell str {
         std::str::from_utf8(self.0.finish()).expect("every byte came from a str")
     }
 }

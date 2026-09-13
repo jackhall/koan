@@ -11,8 +11,9 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    CellGraph, CellHandle, CrossedOperand, Dormant, DropFree, Operand, Prices, Ready, Reattachable,
-    ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict, Writer, reattachable,
+    Active, CellGraph, CellHandle, CrossedOperand, Dormant, DropFree, Operand, Prices, Ready,
+    Reattachable, ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict, Writer,
+    reattachable,
 };
 
 use crate::meter::{Verb, measure};
@@ -30,8 +31,8 @@ struct Numbers;
 
 reattachable!(
     Work => String,
-    Number => &'r u32,
-    Numbers => &'r [u32],
+    Number => &'cell u32,
+    Numbers => &'cell [u32],
 );
 
 impl DropFree for Number {}
@@ -43,13 +44,15 @@ fn always_pin(_: Prices) -> Verdict {
     Verdict::Pin
 }
 
-fn graph() -> CellGraph<Work> {
+fn graph() -> CellGraph<'static, Work> {
     CellGraph::new(CAP, always_pin)
 }
 
 /// An operand priced above anything a pin can cost, so [`always_pin`] pins it whatever the slab is
 /// doing.
-fn pinned<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Ready<'b, V>) -> Operand<'a, 'b, V> {
+fn pinned<'a, 'step, V: Reattachable<'static> + DropFree>(
+    carrier: &'a Ready<'static, 'step, V>,
+) -> Operand<'static, 'a, 'step, V> {
     Operand {
         carrier,
         copy_bytes: usize::MAX,
@@ -59,29 +62,38 @@ fn pinned<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Ready<'b, V>) -> Oper
 /// One value, laid down through the writer's single run verb — the shape every embedder derives
 /// its own one-value write from, since the substrate ships no such verb. No allocation of its own:
 /// the `Option` is a stack slot the run of one empties.
-fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
+fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
     let mut value = Some(value);
     &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
 }
 
 /// A value homed in the executing cell: the own-region write, then the bridge that makes it a
 /// carrier. What every shape's `Verb::Alloc` row measures.
-fn number_here<'b>(context: &StepContext<'b, '_, Work>, value: u32) -> Ready<'b, Number> {
+fn number_here<'step>(
+    context: &StepContext<'static, 'step, '_, Work>,
+    value: u32,
+) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))
 }
 
-fn build_number<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Number>]) -> &'r u32 {
-    match views[0] {
+fn build_number<'cell, 'severed>(
+    writer: Writer<'cell>,
+    views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
+) -> Active<'static, 'cell, Number> {
+    Active::new(match views[0] {
         CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => one(writer, *value),
-    }
+    })
 }
 
 /// Written straight out of the views: the run is filled by index, so the build needs no buffer of
 /// its own and the placement is charged for nothing the harness did.
-fn build_slice<'r, 'v>(writer: Writer<'r>, views: &[CrossedOperand<'r, 'v, Number>]) -> &'r [u32] {
-    writer.fill(views.len(), |index| match views[index] {
+fn build_slice<'cell, 'severed>(
+    writer: Writer<'cell>,
+    views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
+) -> Active<'static, 'cell, Numbers> {
+    Active::new(writer.fill(views.len(), |index| match views[index] {
         CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => *value,
-    })
+    }))
 }
 
 /// Per-step value cost in one cell: a value kept at the end of every step and redeemed at the head
@@ -128,7 +140,7 @@ fn keep_shapes(n: u32) {
     let mut graph = graph();
     let dest = measure(Verb::Create, || graph.create(None, None)).unwrap();
     let mut sources: Vec<SlabHandle> = Vec::with_capacity(n as usize);
-    let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
+    let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
         let source = measure(Verb::Create, || graph.create(None, None)).unwrap();
@@ -177,7 +189,7 @@ fn keep_shapes(n: u32) {
 fn push_chain(n: u32) {
     let mut graph = graph();
     let consumer = measure(Verb::Create, || graph.create(None, None)).unwrap();
-    let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
+    let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
         let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
@@ -224,7 +236,7 @@ fn push_chain(n: u32) {
 fn pull_chain(n: u32) {
     let mut graph = graph();
     let consumer = measure(Verb::Create, || graph.create(None, None)).unwrap();
-    let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
+    let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
         let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
@@ -295,11 +307,11 @@ fn birth_chain(n: u32) {
 
 /// One round of the fan-out: `m` values built in `source` and placed as one slice into `dest`.
 fn fan_out_round(
-    graph: &mut CellGraph<Work>,
+    graph: &mut CellGraph<'static, Work>,
     source: SlabHandle,
     dest: SlabHandle,
     m: u32,
-) -> Dormant<Numbers> {
+) -> Dormant<'static, Numbers> {
     measure(Verb::Enter, || {
         graph.enter(source, |context| {
             let mut values = measure(Verb::Harness, || Vec::with_capacity(m as usize));
@@ -307,7 +319,7 @@ fn fan_out_round(
                 let value = measure(Verb::Alloc, || number_here(context, i));
                 values.push(value);
             }
-            let operands: Vec<Operand<'_, '_, Number>> =
+            let operands: Vec<Operand<'static, '_, '_, Number>> =
                 measure(Verb::Harness, || values.iter().map(pinned).collect());
             let placed = measure(Verb::AllocInto, || {
                 context
@@ -369,7 +381,7 @@ fn shared_subtier(n: u32) {
         bases.push(measure(Verb::Create, || graph.create(None, None)).unwrap());
     }
 
-    let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
+    let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
     for (i, base) in bases.iter().enumerate() {
         let resting = measure(Verb::Enter, || {
             graph.enter(*base, |context| {
@@ -408,7 +420,7 @@ fn shared_subtier(n: u32) {
                 assert_eq!(value, i as u32);
                 carriers.push(carrier);
             }
-            let operands: Vec<Operand<'_, '_, Number>> =
+            let operands: Vec<Operand<'static, '_, '_, Number>> =
                 measure(Verb::Harness, || carriers.iter().map(pinned).collect());
             let placed = measure(Verb::AllocInto, || {
                 context
@@ -459,7 +471,7 @@ fn tree_chain(n: u32) {
 
     // Innermost outward: each level redeems what its child pinned into it, adds one, pins the
     // result into its own parent, and dies — so every level's bump splices one step up the chain.
-    let mut carried: Option<Dormant<Number>> = None;
+    let mut carried: Option<Dormant<'static, Number>> = None;
     for level in (0..n as usize).rev() {
         let cell = chain[level];
         let up = match level {

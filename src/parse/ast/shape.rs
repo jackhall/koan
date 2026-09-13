@@ -7,7 +7,7 @@
 //! construction, so the dispatch driver reads the cache rather than re-deriving per call.
 //!
 //! [`KExpression`](super::KExpression) holds raw AST parts and
-//! [`WorkingExpression`](crate::machine::model::ast::working::WorkingExpression) holds the
+//! [`WorkingExpression`](crate::values::WorkingExpression) holds the
 //! scheduler's per-call parts, but both answer these questions the same way, so both carry this
 //! one cache.
 

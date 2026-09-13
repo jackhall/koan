@@ -16,14 +16,19 @@ const WIDE: usize = 256;
 /// A placement of one value over `operands` copies of a source carrier, into another cell — the
 /// widest transient a step builds, since the crossed-operand list and the views are both sized by
 /// the operand count.
-fn place_over(graph: &mut CellGraph<Owned>, from: SlabHandle, into: SlabHandle, operands: usize) {
+fn place_over(
+    graph: &mut CellGraph<'static, Owned>,
+    from: SlabHandle,
+    into: SlabHandle,
+    operands: usize,
+) {
     graph
         .enter(from, |context| {
             let source = number_here(context, 1);
             let carriers: Vec<_> = (0..operands).map(|_| operand(&source)).collect();
             context
                 .alloc_into::<Number, Number>(into, &carriers, |writer, views| {
-                    one(writer, views.iter().map(|view| *pinned(view)).sum())
+                    Active::new(one(writer, views.iter().map(|view| *pinned(view)).sum()))
                 })
                 .unwrap();
         })
@@ -34,8 +39,8 @@ fn place_over(graph: &mut CellGraph<Owned>, from: SlabHandle, into: SlabHandle, 
 /// with. The assertion is the placement half of the criterion: a step's crossed operands and the
 /// views its build closure received are **in the region**, so a wide enough placement is readable
 /// in the region's own occupancy after the step returns.
-fn dirtied() -> (CellGraph<Owned>, SlabHandle, SlabHandle) {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+fn dirtied() -> (CellGraph<'static, Owned>, SlabHandle, SlabHandle) {
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let producer = graph.create(None, None).unwrap();
     let consumer = graph.create(None, None).unwrap();
     place_over(&mut graph, producer, consumer, WIDE);
@@ -53,7 +58,10 @@ fn dirtied() -> (CellGraph<Owned>, SlabHandle, SlabHandle) {
 /// below its occupancy at its entry. Lower than what the verb inherited therefore means the entry
 /// cleared it — and a verb that builds transients of its own is held to the same statement as one
 /// that builds none, since its own bytes are counted on the low side.
-fn resets_at_its_entry(graph: &mut CellGraph<Owned>, verb: impl FnOnce(&mut CellGraph<Owned>)) {
+fn resets_at_its_entry(
+    graph: &mut CellGraph<'static, Owned>,
+    verb: impl FnOnce(&mut CellGraph<'static, Owned>),
+) {
     let inherited = graph.cells.scratch_at_rest().in_use();
     verb(graph);
     assert!(
@@ -106,10 +114,10 @@ fn a_release_clears_the_region_at_its_entry() {
 /// disposal's nested worklists alike.
 #[test]
 fn a_warm_scratch_grows_no_chunk_across_repeated_verbs() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(8, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
     let consumer = graph.create(None, None).unwrap();
 
-    let round = |graph: &mut CellGraph<Owned>| {
+    let round = |graph: &mut CellGraph<'static, Owned>| {
         let producer = graph.create(None, None).unwrap();
         place_over(graph, producer, consumer, 8);
         graph

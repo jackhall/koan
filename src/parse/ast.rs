@@ -7,16 +7,14 @@
 //! form table, so a reader answers "which dispatch shape, which bucket key, which builtin form,
 //! what does this install" without walking the run again.
 //!
-//! The scheduler's own per-call form is `WorkingExpression`, a distinct type in
-//! [`machine::model::ast::working`](crate::machine::model::ast::working). A resolved sub-result and
-//! a staging hole live only there, which is what keeps this type structurally splice-free: an AST
-//! node names no producer region, so nothing here has a reach to describe. The runtime operations
-//! on these types — lowering a literal, resolving a part to a cell — are inherent impls in
-//! [`machine::model::ast`](crate::machine::model::ast).
+//! The scheduler's own per-dispatch form is `WorkingExpression`, a distinct type in
+//! [`values::working`](crate::values::working). A resolved sub-result and a staging hole live only
+//! there, which is what keeps this type structurally splice-free: an AST node names no producer
+//! region, so nothing here has a reach to describe. Lowering a literal part to a value is
+//! [`Value::lower_part`](crate::values::Value::lower_part).
 
 use crate::source::{FileId, Span, Spanned};
 
-use crate::memory::reattachable;
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::forms::binder::{StoredBinderKey, binder_plan_for};
 use crate::parse::forms::layout::SlotLayout;
@@ -80,7 +78,7 @@ pub enum ExpressionPart<'a> {
 /// A parts run on its way into a node's region, as a construction door takes it: either a borrowed
 /// run to copy in, or an exact-length iterator to fill the region's bytes straight from. One alias
 /// for both expression families — [`KExpression`] and
-/// [`WorkingExpression`](working::WorkingExpression) split their doors the same way.
+/// [`WorkingExpression`](crate::values::WorkingExpression) split their doors the same way.
 ///
 /// Both forms exist because both shapes of call site do. A fixed-length run — an operator chain's
 /// `[left, op, right]`, a wrapped single operand — is a stack array the door copies; a run whose
@@ -242,10 +240,6 @@ pub struct KExpression<'a> {
     cache: NodeCache<'a>,
     body_layout: &'a SlotLayout<'a>,
 }
-
-// Lifetimes do not affect layout, so this retype is a no-op transmute. The witness's `'b: 'w` bound
-// is what makes a reattach a shortening; nothing here weakens it.
-reattachable! { KExpression<'static> => KExpression<'r> }
 
 impl<'a> KExpression<'a> {
     /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.

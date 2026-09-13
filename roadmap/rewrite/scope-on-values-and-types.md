@@ -35,8 +35,9 @@ runtime.
   rather than a bind-time error.
 - A binding resolves by name through the scope walk at its use site; no
   binding stores a resolved reference into another scope.
-- The old runtime's tutorial programs run on the rewritten stack and print the
-  same output, and `tools/verify_snippets.py` reads the rewritten binary.
+- The old runtime's tutorial programs that declare no function and no module
+  run on the rewritten stack and print the same output, and
+  `tools/verify_snippets.py` reads the rewritten binary.
 - `src/scope/README.md` is the module's design doc, written fresh rather than
   migrated from `old_design/`, and the module's top-of-file comment links it
   ([the doc partition](../../.claude/skills/documentation/SKILL.md)).
@@ -61,7 +62,8 @@ runtime.
 
 **Requires:**
 
-- [Values on memory](values-on-memory.md) — a binding table holds values and their carried types.
 - [Scheduler on cellgraph](scheduler-on-cellgraph.md) — running a program through a scope needs the scheduler that drives it.
 
-**Unblocks:** none tracked yet — the layer the builtins are re-seeded onto.
+**Unblocks:**
+
+- [Callable values](callable-values.md) — a callable captures a scope.

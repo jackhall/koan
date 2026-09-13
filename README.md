@@ -81,7 +81,7 @@ The output is one [`KExpression`](src/parse/ast.rs) per top-level line: an order
 
 `parse` owns what it produces, not just the walk that produces it: [labels.rs](src/parse/labels.rs) mints and interns every symbol, [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [forms.rs](src/parse/forms.rs) holds `FORMS` — the one table spelling every builtin form's bucket key, tagged by a `FormId`, carrying the binder facts, the lazy slots and the reserved bit each form's readers ask for. A node probes that table once; the close-inference rules and the miss diagnostics name a form by its tag rather than respelling its key.
 
-`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [src/parse/README.md](src/parse/README.md).
+`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/values/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [src/parse/README.md](src/parse/README.md).
 
 ### dispatch — `KExpression` → `DispatchOutcome` against a `Scope`
 
@@ -99,9 +99,11 @@ The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/READ
 
 ## Source layout
 
-The crate splits into five top-level modules: [memory/](src/memory) (where a
+The crate splits into six top-level modules: [memory/](src/memory) (where a
 value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus the
 symbol, AST and form-table vocabulary that output is written in),
+[values/](src/values.rs) (the data values and the per-dispatch expression form,
+laid down in a cell's region — see [src/values/README.md](src/values/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
 type nodes — see [src/type_lattice/README.md](src/type_lattice/README.md)),
@@ -248,6 +250,20 @@ src/
 │   ├── sig_relations.rs  sig_subtype and its failure record, keyworded selection, meet_schemas, and shape_specificity
 │   ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
 │   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the label interner
+├── values.rs         pub mod values — Value, the 24-byte Copy sum over scalars, a region string, a quoted program node and a borrow of each per-kind resident struct; ValueFamily / ValueCarrier; the resident / collect / text helpers and the ascription retype
+├── values/
+│   ├── weight.rs         Weight — the saturating bytes a total rebuild writes, memoized on every composite
+│   ├── type_value.rs     TypeValue — a type in value position beside its memoized OfKind type
+│   ├── list.rs           List — one run of cells typed by the join of its elements
+│   ├── dict.rs           Dict / Key — sorted keys and aligned cells, a binary-search lookup, entry order key order
+│   ├── record.rs         Record — symbol-sorted names and aligned cells, typed by the record of its fields
+│   ├── tagged.rs         Tagged — the one nominal wrap: a payload under a type identity, held or peeled
+│   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part
+│   ├── crossing.rs       cross / cross_here over the placement doors, the deep copy, and the crossing verdict
+│   ├── working.rs        WorkingExpression / WorkingPart — the scheduler's per-dispatch node in the executing cell's region, carrying the parse's node cache
+│   ├── equality.rs       Value::equals — structural equality, containers gated on related memoized types
+│   ├── render.rs         Value::render — the surface PRINT writes
+│   └── lower.rs          Value::lower_part — a region-pure AST part straight to a value
 ├── machine.rs           pub mod core / model / execute
 └── machine/
     ├── model.rs            re-exports from model::types and model::values
@@ -338,6 +354,10 @@ from that module's top-of-file comment. The kept modules carry theirs:
 - [src/memory/README.md](src/memory/README.md) — the three storage tiers, the
   frame shell that names no Koan value, the one-place substrate alias layer, the
   two table shapes, and the drop-freeness the region discipline rests on.
+- [src/values/README.md](src/values/README.md) — the data values: per-kind
+  resident structs born through a `Writer`, the two lifetimes a quote crosses
+  every verdict on, the type memo `satisfies` reads, weight and the crossing
+  verb, dict key order, and working expressions.
 - [src/type_lattice/README.md](src/type_lattice/README.md) — the closed algebra:
   digest identity, the node vocabulary, the interning registry, the one order
   and the lattice operations over it, and the unifier that solves a quantified
