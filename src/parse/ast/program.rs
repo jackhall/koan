@@ -3,14 +3,14 @@
 //! storage" a type rather than a discipline.
 //!
 //! The claim is about the **parts slice**, not the node struct. [`KExpression`] is `Copy` and rides
-//! by value in a [`KObject::KExpression`](crate::machine::model::KObject) cell, so what a holder can
-//! outlive is the run of parts the node borrows — and, transitively, everything reachable from it.
-//! That is why the marker sits on the *references inside* the expression-holding
-//! [`ExpressionPart`](super::ExpressionPart) arms and on the value-channel cell, and why re-homing
-//! the node struct itself at any brand ([`ProgramExpression::rehost`]) is sound.
+//! by value, so what a holder can outlive is the run of parts the node borrows — and, transitively,
+//! everything reachable from it. That is why the marker sits on the *references inside* the
+//! expression-holding [`ExpressionPart`](super::ExpressionPart) arms and on a quoted-expression
+//! value ([`Value::Expression`](crate::values::Value::Expression)), and why re-homing the node
+//! struct itself at any brand ([`ProgramExpression::rehost`]) is sound.
 //!
 //! The marker is consumed only where the claim is used. The dispatch channel — `sub_dispatches`,
-//! [`WorkingExpression`](crate::machine::model::WorkingExpression), the classifier, the structural
+//! [`WorkingExpression`](crate::values::WorkingExpression), the classifier, the structural
 //! cache — keeps carrying bare [`KExpression`], so nothing here goes viral and there is no erase
 //! point to audit.
 
