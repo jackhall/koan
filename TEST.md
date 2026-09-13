@@ -42,8 +42,8 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 ## The pending rewrite
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
-`memory`, `parse`, `source`, `type_lattice` and the embedded crates `cellgraph`
-and `sexlex` — are what a default koan build compiles and a default `cargo test`
+`memory`, `parse`, `source`, `type_lattice`, `values` and the embedded crates
+`cellgraph` and `sexlex` — are what a default koan build compiles and a default `cargo test`
 runs. `workgraph` is no longer a koan dependency; it still builds and tests as a
 workspace member. Everything above the kept modules — `machine`, `builtins`, the
 interpreter binary, the guard fixtures and every `tests/*.rs` integration binary —

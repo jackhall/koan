@@ -2,7 +2,7 @@
 //! tests.
 //!
 //! The runtime is being rewritten from the ground up over the modules the rewrite keeps —
-//! [`memory`], [`parse`], [`source`], [`type_lattice`] and the embedded crates. Everything above
+//! [`memory`], [`parse`], [`source`], [`type_lattice`], [`values`] and the embedded crates. Everything above
 //! them — the machine, the builtins, the interpreter binary, the guard fixtures and the
 //! integration tests — is the old runtime, compiled only under the `pending_rewrite` feature, so
 //! the default build and test slate spend nothing on code slated for replacement. Under that
@@ -33,6 +33,9 @@ pub mod step_fixture;
 /// relations between types and the unifier — a closed algebra over labels and `ScopeId`, with no
 /// value, cell, AST or scope type reachable from it.
 pub mod type_lattice;
+/// Koan's data values and the per-dispatch expression form, laid down in a cell's region over
+/// `memory`'s shapes, typed by memoized `type_lattice` handles.
+pub mod values;
 /// The workload-generic DAG scheduler, re-exported from the `workgraph` crate so `machine` and
 /// integration tests keep resolving `koan::scheduler::…` paths unchanged. The carrier substrate
 /// beside it reaches Koan through [`memory`], never from here.

@@ -5,7 +5,7 @@
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for the
-modules the rewrite keeps — `memory`, `parse`, `source` and `type_lattice`.
+modules the rewrite keeps — `memory`, `parse`, `source`, `type_lattice` and `values`.
 Each test is a minimal-shape driver of one region-substrate discipline; the
 slate passes when Miri reports zero process-exit leaks and zero UB across the
 whole list. It runs on the default build: `python3 tools/miri.py`.
@@ -48,6 +48,10 @@ silence the stale-anchor check; delete a redundant test instead.
 - `src/parse/ast/program.rs` — the program-region storage doors: plain bump allocations whose
   destination brand discharges residence at compile time, over `bumpalo`'s `unsafe`. No `unsafe`
   of its own.
+- `src/values/crossing.rs` — the crossing verb's deep copy lays a value down through the
+  destination's `Writer`, nesting `fill` inside `fill` with `text` between and embedding program
+  nodes at `'graph`. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s placement doors
+  and reattach seam, whose pin and keep paths its own slate pins.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -94,10 +98,21 @@ released with the cell.
   refused writes against standing claims and bindings, so a refusal
   is proven to change nothing in the region-resident slot.
 
+**Values in a cell's region** ([src/values/crossing.rs](../src/values/crossing.rs)) — a composite
+value copied across a crossing is rebuilt through the destination's writer and read after the
+region it came from is released.
+
+- `a_copied_list_outlives_its_home`
+  a list of a string list, a string-keyed dict and a quote crosses under a copy verdict, is kept,
+  its home released, and redeemed in the destination's next step: every byte reads back and the
+  quote is the parsed node.
+
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
+- 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
 - 2026-09-11: 40s — 7 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

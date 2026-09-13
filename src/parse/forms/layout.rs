@@ -20,7 +20,7 @@
 //! callable's captured region at birth) and is plain `Copy` data with no drop glue, so a layout
 //! costs the holder a thin pointer and its region nothing at teardown.
 
-use crate::memory::{BumpAllocator, BumpVec, reattachable};
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::ast::{ExpressionPart, KExpression};
 use crate::parse::labels::{BinderSymbol, ValueSymbol};
 
@@ -35,11 +35,6 @@ type Entry = (ValueSymbol, u32);
 pub struct SlotLayout<'a> {
     entries: &'a [Entry],
 }
-
-// Lifetimes do not affect layout, so the retype is a no-op: `SlotLayout<'r>` is one thin slice
-// reference whatever `'r` is. The macro's `!needs_drop` backstop is the drop-freeness proof a
-// bump-hosted layout rests on.
-reattachable! { SlotLayout<'static> => SlotLayout<'r> }
 
 impl<'a> SlotLayout<'a> {
     /// The layout of a body that binds no value — the shared empty run, so a bodyless or

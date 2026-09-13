@@ -104,9 +104,9 @@ part, so there is no runtime quoting operation and the body never dispatches —
 quote behaves as a literal everywhere.
 
 The node here is structurally **splice-free**: an AST node names no producer
-region, so nothing in it has a reach to describe. The scheduler's per-call form
-is a distinct type in the runtime, and a resolved sub-result or a staging hole
-lives only there. That separation is what lets the same node be shared across
+region, so nothing in it has a reach to describe. The scheduler's per-dispatch
+form is a distinct type in [`values`](../values/README.md#working-expressions),
+and a resolved sub-result or a staging hole lives only there. That separation is what lets the same node be shared across
 activations without any of them being able to write into it.
 
 ### The eternal tier is a type, not a discipline

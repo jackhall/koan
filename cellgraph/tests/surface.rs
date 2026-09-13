@@ -8,6 +8,8 @@
 //! The test is an integration test on purpose. A unit test lives inside the crate, where
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
+use std::marker::PhantomData;
+
 use cellgraph::{
     Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
     Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError, ReleaseAbsorption,
@@ -19,51 +21,69 @@ use cellgraph::{
 /// in a region.
 struct Work;
 
-/// A second continuation family, borrowing, so a successor can capture a reference at the cell
-/// brand and come back re-anchored at the next step's.
+/// A second continuation family, borrowing, so a successor can capture a reference at `'here` and
+/// come back re-anchored at the next step's.
 struct Resumed;
 
-/// Three value families, each borrowing its cell's region storage through the one lifetime the
-/// [`reattachable`] contract allows.
+/// A third continuation family, naming the graph lifetime itself, so a successor can capture a
+/// borrow of storage the embedder owns outside the graph.
+struct Script<'graph>(PhantomData<&'graph str>);
+
+/// Three value families, each borrowing its cell's region storage through `'cell`, the lifetime the
+/// [`reattachable`] contract retypes.
 struct Number;
 struct Numbers;
 struct Text;
 
+/// A value nesting a borrow of storage the embedder owns outside the graph under a borrow of a
+/// cell's region — the shape `'graph` exists for.
+#[derive(Clone, Copy)]
+struct Entry<'graph, 'cell> {
+    program: &'graph str,
+    count: &'cell u32,
+}
+
+/// The family of an [`Entry`] behind a region borrow.
+struct Listing;
+
 reattachable!(
     Work => String,
-    Resumed => &'r u32,
-    Number => &'r u32,
-    Numbers => &'r [u32],
-    Text => &'r str,
+    Resumed => &'cell u32,
+    Script<'graph> => &'graph str,
+    Number => &'cell u32,
+    Numbers => &'cell [u32],
+    Text => &'cell str,
+    Listing => &'cell Entry<'graph, 'cell>,
 );
 
 impl DropFree for Number {}
 impl DropFree for Numbers {}
 impl DropFree for Text {}
+impl DropFree for Listing {}
 
 /// The writer's one run verb, at length one — the shape an embedder derives a single-value write
 /// from, since the substrate ships no such verb.
-fn one<'r, T>(writer: Writer<'r>, value: T) -> &'r T {
+fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
     let mut value = Some(value);
     &writer.fill(1, |_| value.take().expect("a run of one fills once"))[0]
 }
 
-fn build_number<'r>(writer: Writer<'r>) -> &'r u32 {
+fn build_number<'cell>(writer: Writer<'cell>) -> &'cell u32 {
     one(writer, 7)
 }
 
-fn build_slice<'r>(writer: Writer<'r>) -> &'r [u32] {
+fn build_slice<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
     writer.fill(3, |index| index as u32 + 1)
 }
 
-fn build_text<'r>(writer: Writer<'r>) -> &'r str {
+fn build_text<'cell>(writer: Writer<'cell>) -> &'cell str {
     writer.text("koan")
 }
 
 /// The producer-decided run: a filter settles the width only once the elements exist, so there is
 /// no length to hand `fill`.
-fn build_run<'r>(writer: Writer<'r>) -> &'r [u32] {
-    let mut run: Run<'r, u32> = writer.run();
+fn build_run<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
+    let mut run: Run<'cell, u32> = writer.run();
     run.extend((1..8u32).filter(|value| value % 3 == 0));
     run.push(99);
     assert!(!run.is_empty() && run.len() == 3);
@@ -72,10 +92,10 @@ fn build_run<'r>(writer: Writer<'r>) -> &'r [u32] {
 
 /// The same shape for text: a rendering whose length no caller knows up front, formatted straight
 /// into the region.
-fn build_prose<'r>(writer: Writer<'r>) -> &'r str {
+fn build_prose<'cell>(writer: Writer<'cell>) -> &'cell str {
     use std::fmt::Write;
 
-    let mut prose: Prose<'r> = writer.prose();
+    let mut prose: Prose<'cell> = writer.prose();
     for value in build_run(writer) {
         write!(prose, "{value};").expect("a region sink never fails");
     }
@@ -85,13 +105,13 @@ fn build_prose<'r>(writer: Writer<'r>) -> &'r str {
 /// An embedder's own helper over carriers, which is the one reason [`Erased`] is nameable from
 /// outside: the read door's `Copy` bound is on the erased form, so a caller that wants to be
 /// generic over the value family has to write that bound too.
-fn read_first<'s, 'b, V>(
-    context: &'s StepContext<'b, '_, Work>,
-    carrier: &'s Ready<'b, V>,
-) -> V::At<'s>
+fn read_first<'graph, 'cell, 'step, V>(
+    context: &'cell StepContext<'graph, 'step, '_, Work>,
+    carrier: &'cell Ready<'graph, 'step, V>,
+) -> V::At<'cell>
 where
-    V: Reattachable + DropFree,
-    Erased<V>: Copy,
+    V: Reattachable<'graph> + DropFree,
+    Erased<'graph, V>: Copy,
 {
     context.read(carrier).into_value()
 }
@@ -116,9 +136,9 @@ fn weigh(prices: Prices) -> Verdict {
 
 /// An operand the embedder is unwilling to copy: at a cost above anything a pin can price, the
 /// verdict above always pins it.
-fn pinned_operand<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Ready<'b, V>,
-) -> Operand<'a, 'b, V> {
+fn pinned_operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree>(
+    carrier: &'a Ready<'graph, 'step, V>,
+) -> Operand<'graph, 'a, 'step, V> {
     Operand {
         carrier,
         copy_bytes: usize::MAX,
@@ -162,7 +182,7 @@ fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
 
 #[test]
 fn every_public_door_answers_from_outside_the_crate() {
-    let mut graph: CellGraph<Work> = CellGraph::new(4, weigh);
+    let mut graph: CellGraph<'static, Work> = CellGraph::new(4, weigh);
 
     // Creation, with and without a parent, and with or without a continuation at birth.
     let root: SlabHandle = graph.create(None, Some(String::from("root"))).unwrap();
@@ -177,12 +197,12 @@ fn every_public_door_answers_from_outside_the_crate() {
         .release(doomed, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
-    let mut kept: Option<Dormant<Number>> = None;
+    let mut kept: Option<Dormant<'static, Number>> = None;
     let carried = graph
         .enter(child, |context| {
             assert_eq!(context.cell(), CellHandle::Slab(child));
 
-            // The own-region write: the cell's own writer, at the cell brand, then the bridge that
+            // The own-region write: the cell's own writer, at `'here`, then the bridge that
             // makes each value a carrier.
             let number = context.lift::<Number>(build_number(context.writer()));
             let numbers = context.lift::<Numbers>(build_slice(context.writer()));
@@ -193,10 +213,10 @@ fn every_public_door_answers_from_outside_the_crate() {
             assert_eq!(read_first(context, &rendered), "3;6;99;");
             let pushed = context
                 .alloc_into::<Number, Number>(root, &[pinned_operand(&number)], |writer, views| {
-                    match views[0] {
+                    Active::new(match views[0] {
                         CrossedOperand::Pinned(value) => one(writer, *value + 1),
                         CrossedOperand::Copied(value) => one(writer, *value + 1),
-                    }
+                    })
                 })
                 .unwrap();
             // The same door under the other verdict: an operand the embedder prices cheap to copy
@@ -208,9 +228,11 @@ fn every_public_door_answers_from_outside_the_crate() {
                         carrier: &number,
                         copy_bytes: 0,
                     }],
-                    |writer, views| match views[0] {
-                        CrossedOperand::Copied(value) => writer.fill(2, |_| *value),
-                        CrossedOperand::Pinned(value) => writer.fill(2, |_| *value),
+                    |writer, views| {
+                        Active::new(match views[0] {
+                            CrossedOperand::Copied(value) => writer.fill(2, |_| *value),
+                            CrossedOperand::Pinned(value) => writer.fill(2, |_| *value),
+                        })
                     },
                 )
                 .unwrap();
@@ -221,7 +243,7 @@ fn every_public_door_answers_from_outside_the_crate() {
             assert_eq!(context.hold(doomed).unwrap_err().name(), doomed);
 
             // The own-cell crossing: two operands of the same carrier, one the embedder refuses to
-            // copy and one it prices free. A pinned view arrives at the cell brand and may leave
+            // copy and one it prices free. A pinned view arrives at `'here` and may leave
             // the build, which is what the pin bought; a copied one is severed and can only be
             // read or written again.
             let (here, severed): (&u32, u32) = context.alloc_here(
@@ -247,7 +269,7 @@ fn every_public_door_answers_from_outside_the_crate() {
             assert_eq!(severed, 8);
 
             // Reading, by copy and by move, directly and through the embedder's own helper.
-            let opened: Active<'_, Number> = context.read(&number);
+            let opened: Active<'static, '_, Number> = context.read(&number);
             assert_eq!(*opened.value(), 7);
             assert_eq!(read_first(context, &numbers), &[1, 2, 3]);
             assert_eq!(read_first(context, &text), "koan");
@@ -299,7 +321,7 @@ fn every_public_door_answers_from_outside_the_crate() {
         .release(bystander, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
-    // The successor comes back re-anchored at the next step's cell brand.
+    // The successor comes back re-anchored at the next step's `'here`.
     let echoed = graph
         .enter(child, |context| context.continuation())
         .unwrap();
@@ -317,12 +339,12 @@ fn every_public_door_answers_from_outside_the_crate() {
 
 #[test]
 fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
-    let mut graph: CellGraph<Resumed> = CellGraph::new(2, weigh);
+    let mut graph: CellGraph<'static, Resumed> = CellGraph::new(2, weigh);
     let cell = graph.create(None, None).unwrap();
     let other = graph.create(None, None).unwrap();
 
     // A capture out of the cell's own region: written through the cell's writer, stored through
-    // the one successor door, and handed back at the next step's cell brand.
+    // the one successor door, and handed back at the next step's `'here`.
     graph
         .enter(cell, |context| {
             context.store_successor(one(context.writer(), 11));
@@ -334,12 +356,12 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
     assert_eq!(own, 11);
 
     // And a capture homed elsewhere: the own-cell crossing prices it and mints its reach into this
-    // cell's holds, which is what makes the borrow nameable at the cell brand at all. The store
+    // cell's holds, which is what makes the borrow nameable at `'here` at all. The store
     // itself prices nothing.
     graph
         .enter(cell, |context| {
             let foreign = context
-                .alloc_into::<Number, Number>(other, &[], |writer, _| one(writer, 23))
+                .alloc_into::<Number, Number>(other, &[], |writer, _| Active::new(one(writer, 23)))
                 .unwrap();
             let held = context.alloc_here(&[pinned_operand(&foreign)], |writer, views| match views
                 [0]
@@ -361,7 +383,7 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
 
 #[test]
 fn the_refusals_hand_back_the_handle_that_went_stale() {
-    let mut full: CellGraph<Work> = CellGraph::new(1, weigh);
+    let mut full: CellGraph<'static, Work> = CellGraph::new(1, weigh);
     let taken = full.create(None, None).unwrap();
     assert_eq!(full.create(None, None), Err(CreateError::SlabFull));
 
@@ -389,7 +411,7 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
 
 #[test]
 fn the_tree_pool_answers_from_outside_the_crate() {
-    let mut graph: CellGraph<Work> = CellGraph::new(1, weigh);
+    let mut graph: CellGraph<'static, Work> = CellGraph::new(1, weigh);
     let root: SlabHandle = graph.create(None, None).unwrap();
     assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
 
@@ -402,7 +424,7 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     assert_eq!(inner.generation(), 0);
     assert!(graph.is_live(inner));
 
-    let mut kept: Option<Dormant<Number>> = None;
+    let mut kept: Option<Dormant<'static, Number>> = None;
     let carried = graph
         .enter(inner, |context| {
             assert_eq!(context.cell(), CellHandle::Tree(inner));
@@ -412,10 +434,10 @@ fn the_tree_pool_answers_from_outside_the_crate() {
             // this cell's bump to the parent's bundle.
             let up = context
                 .alloc_into::<Number, Number>(outer, &[pinned_operand(&value)], |writer, views| {
-                    match views[0] {
+                    Active::new(match views[0] {
                         CrossedOperand::Pinned(value) => one(writer, *value + 1),
                         CrossedOperand::Copied(value) => one(writer, *value + 1),
-                    }
+                    })
                 })
                 .unwrap();
             kept = Some(context.keep(up));
@@ -472,5 +494,103 @@ fn the_tree_pool_answers_from_outside_the_crate() {
 
     graph.release_tree(outer).unwrap();
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
+    // Storage the embedder owns outside the graph, which the graph may borrow but not outlive.
+    let program = String::from("program text");
+    let mut graph: CellGraph<'_, Work> = CellGraph::new(1, weigh);
+    let root = graph.create(None, None).unwrap();
+    let left = graph.create_tree(root, None).unwrap();
+    let right = graph.create_tree(root, None).unwrap();
+    graph
+        .enter(left, |context| {
+            let count = one(context.writer(), 41);
+            let entry = one(
+                context.writer(),
+                Entry {
+                    program: &program,
+                    count,
+                },
+            );
+            let source = context.lift::<Listing>(entry);
+            // A sibling is neither on the home's chain nor under it: the crossing is a forced copy.
+            let copied = context
+                .alloc_into::<Listing, Listing>(
+                    right,
+                    &[pinned_operand(&source)],
+                    |writer, views| {
+                        let CrossedOperand::Copied(entry) = views[0] else {
+                            panic!("a sibling crossing is a forced copy");
+                        };
+                        // The `'graph` borrow embeds as it is; only the region part is written again.
+                        Active::new(one(
+                            writer,
+                            Entry {
+                                program: entry.program,
+                                count: one(writer, *entry.count),
+                            },
+                        ))
+                    },
+                )
+                .unwrap();
+            let read = read_first(context, &copied);
+            assert!(std::ptr::eq(read.program, program.as_str()));
+            assert!(!std::ptr::eq(read.count, count));
+            assert_eq!(*read.count, 41);
+        })
+        .unwrap();
+    graph.release_tree(right).unwrap();
+    graph.release_tree(left).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn a_graph_borrow_is_captured_kept_and_redeemed_after_its_home_is_released() {
+    let program = String::from("program text");
+    let mut graph: CellGraph<'_, Script<'_>> = CellGraph::new(2, weigh);
+    let producer = graph.create(None, None).unwrap();
+    let consumer = graph.create(None, None).unwrap();
+    let dormant: Dormant<'_, Listing> = graph
+        .enter(producer, |context| {
+            let count = one(context.writer(), 41);
+            let entry = one(
+                context.writer(),
+                Entry {
+                    program: &program,
+                    count,
+                },
+            );
+            let carrier = context.lift::<Listing>(entry);
+            context.keep(carrier)
+        })
+        .unwrap();
+    graph
+        .enter(consumer, |context| {
+            context.hold(producer).unwrap();
+            // The successor captures the borrow of storage outside the graph, and prices nothing.
+            context.store_successor(program.as_str());
+        })
+        .unwrap();
+    // The consumer holds the producer, so its region seals rather than reclaims.
+    graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+    graph
+        .enter(consumer, |context| {
+            let captured = context.continuation().expect("the successor was stored");
+            assert!(std::ptr::eq(captured, program.as_str()));
+            let redeemed = context
+                .redeem(dormant)
+                .expect("the consumer holds the sealed producer");
+            let read = context.read(&redeemed).value();
+            assert!(std::ptr::eq(read.program, program.as_str()));
+            assert_eq!(*read.count, 41);
+        })
+        .unwrap();
+    graph
+        .release(consumer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
     assert!(graph.is_empty());
 }

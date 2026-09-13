@@ -34,7 +34,7 @@ resident carries.
   node be shared by every activation without any of them being able to
   outlive it.
 - **Cell storage** — everything else, laid down through cellgraph's `Writer`
-  at the executing cell's own brand, `'cell`. There is no run root and no
+  at the executing cell's own brand, `'here`. There is no run root and no
   per-call frame: what a frame shell would carry, a cell already is.
 
 ## Shapes, not instantiations
@@ -49,7 +49,10 @@ every other module names a `crate::memory` item.
 The complement of that rule matters as much. **A name that binds a *payload*
 belongs with that payload, not here.** Each such binding is one line applying
 a `substrate` name, so the payload's own file is where a reader finds every
-state that payload travels in.
+state that payload travels in. Koan's data values are one such payload:
+[`values`](../values/README.md) binds `Ready` to its value family, lays every
+composite down through `Writer`, and prices its crossings over the placement
+doors, all in its own files.
 
 What *does* belong here is a payload-generic **shape**, because what it holds
 does not enter its definition: the slot array. A façade that instantiates one at koan's own vocabulary —
@@ -83,7 +86,7 @@ live on the cell itself, so a *keyed* table over the same cell type rules on a
 write exactly as the array does.
 
 **A value at rest in the region.** `fill` hands back a shared `&'cell` borrow,
-never `&mut`, and a continuation captures `'cell` borrows, so every write after
+never `&mut`, and a continuation captures `'here` borrows, so every write after
 construction goes through interior mutability. Each slot is a `Cell` — no
 borrow flag — and a `Cell` never lends a `&T`, so reads copy: both parameters
 are `Copy`, a read returns the slot state by value, and a transition is a
@@ -136,8 +139,3 @@ continues the counter and is none the worse for it.
 and `allocator_api2` named only by the bump tier, never by a cell-tier shape. It is a leaf under the rest
 of the tree, and anything not on the list above is a new edge rather than a
 detail.
-
-## Open work
-
-- [Values on memory](../../roadmap/rewrite/values-on-memory.md) — the
-  rewrite's foundation instantiates the shapes here.

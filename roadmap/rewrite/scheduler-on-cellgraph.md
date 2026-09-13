@@ -63,9 +63,7 @@ This item subsumes `workgraph`'s own
 [adopt-cellgraph.md](../../workgraph/old_roadmap/adopt-cellgraph.md), which stays
 as a requirements record for the fresh crate.
 
-**Requires:**
-
-- [Values on memory](values-on-memory.md) — a value is what a cell delivers, so the delivery protocol is shaped against it.
+**Requires:** none — [values](../../src/values/README.md), what a cell delivers, ships.
 
 **Unblocks:**
 

@@ -24,7 +24,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-22 tests, grouped by the unsafe site each pins down. Names below are the exact
+23 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -32,7 +32,7 @@ binary:
 MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p cellgraph --lib
 ```
 
-**`retype` primitive — `Erased<T>`** ([src/reattach.rs](../src/reattach.rs)) — the single audited
+**`retype` primitive — `Erased<'graph, T>`** ([src/reattach.rs](../src/reattach.rs)) — the single audited
 lifetime-retype, a `transmute_copy` behind a `ManuallyDrop` (the one site `transmute`'s
 associated-type size proof can't cover). It is reached through the two doors on `Erased`, and every
 call site shortens a stored form to a lifetime the referents outlive. The tests store a family value
@@ -46,7 +46,7 @@ family is the load-bearing one, since its erased form holds a real reference acr
 [src/graph.rs](../src/graph.rs)) — the same `retype` primitive, reached at the two doors a value
 with reach uses. `Erased::erase` forgets a region borrow at the alloc site and `Erased::reattach`
 hands it back at a shorter one, so a bumped value's borrow survives a round trip through a
-lifetime-free slot; the placement test is the load-bearing one, since its operand view is a real
+slot free of every step brand; the placement test is the load-bearing one, since its operand view is a real
 `&u32` into *another* cell's chunks that the built value keeps. The third covers the case where
 nothing detaches at all: a reattached borrow names a cell that is still live, and that cell keeps
 allocating under it, so what Miri checks is that the retag a region takes at every allocation
@@ -101,20 +101,23 @@ reclaimed, and one whose sealed cell has retired, are moved into the door and re
 a valid move because the value rests as bytes rather than as a reference. The sixth is the
 crossing's severing: a copied view is re-anchored at a brand unrelated to the destination's region
 and deep-copied through the writer, while a pinned one is embedded, so both re-anchors run in one
-build.
+build. The seventh carries two lifetimes through a keep and a redeem across a home that sealed: the
+value nests a borrow of heap storage outside the graph under a region borrow, and what Miri checks
+is that the retype moves the region borrow and leaves the `'graph` one naming the same live bytes.
 
 - `graph::tests::values::push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step`
 - `graph::tests::values::pull_completes_after_the_producer_seals`
 - `graph::tests::values::pull_completes_after_the_producer_is_absorbed_into_the_consumer`
 - `graph::tests::values::a_dormant_carrier_forwarded_through_two_merges_is_still_found`
 - `graph::tests::values::redeem_refuses_once_the_storage_is_gone`
-- `graph::tests::crossing::a_copied_view_is_readable_and_a_pinned_one_embeddable`
+- `graph::tests::prices::a_copied_view_is_readable_and_a_pinned_one_embeddable`
+- `graph::tests::values::a_graph_borrow_in_a_kept_value_redeems_after_its_home_seals`
 
 **The own-region brand** ([src/region.rs](../src/region.rs), [src/graph.rs](../src/graph.rs)) —
-the same `retype` primitive at the two doors that re-anchor at `'cell`, the shared borrow of the
-region table a step holds for its whole length. A capture at `'cell` is read back a step later,
+the same `retype` primitive at the two doors that re-anchor at `'here`, the shared borrow of the
+region table a step holds for its whole length. A capture at `'here` is read back a step later,
 once with the cell's own bundle grown by an absorption under it, and once with the pinned home
-sealed out of the slab entirely: what Miri checks is that the storage a `'cell` reference names
+sealed out of the slab entirely: what Miri checks is that the storage a `'here` reference names
 stays where it was across the moves a region makes between two of the cell's steps.
 
 - `graph::tests::values::a_cell_reference_captured_by_the_continuation_reads_after_the_region_absorbs`
@@ -156,9 +159,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-12: 172.91s — 115 tests, 0 leaks, 0 UB
 - 2026-09-12: 237.58s — 109 tests, 0 leaks, 0 UB
 - 2026-09-12: 132.37s — 109 tests, 0 leaks, 0 UB
 - 2026-09-12: 179.27s — 109 tests, 0 leaks, 0 UB
 - 2026-09-12: 155.60s — 108 tests, 0 leaks, 0 UB
-- 2026-09-07: 176.08s — 105 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

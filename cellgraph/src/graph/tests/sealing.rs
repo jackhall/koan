@@ -25,7 +25,7 @@ const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
 /// the holder and that one cell and matches no other.
 fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) -> u64 {
     let cap = 4 + kept_by_holder as u32;
-    let mut graph: CellGraph<Owned> = CellGraph::new(cap, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(cap, pin);
     let holder = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
 
@@ -48,7 +48,7 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
                 let local = number_here(context, value as u32);
                 let carrier = context
                     .alloc_into::<Number, Number>(holder, &[operand(&local)], |writer, views| {
-                        one(writer, *pinned(&views[0]))
+                        Active::new(one(writer, *pinned(&views[0])))
                     })
                     .unwrap();
                 context.keep(carrier);
@@ -100,7 +100,7 @@ fn the_seal_transition_is_bounded_by_the_holders_dormant_carriers_not_the_storag
 
 #[test]
 fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let holder = graph.create(None, None).unwrap();
     let held = graph.create(None, None).unwrap();
 
@@ -126,7 +126,7 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
 
 #[test]
 fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
-    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
     let consumer = graph.create(None, None).unwrap();
     let producer = graph.create(None, None).unwrap();
     let reached = graph.create(None, None).unwrap();
@@ -143,14 +143,16 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
     let kept = graph
         .enter(consumer, |context| {
             let value = context
-                .alloc_into::<Number, Number>(producer, &[], |writer, _| one(writer, 41))
+                .alloc_into::<Number, Number>(producer, &[], |writer, _| {
+                    Active::new(one(writer, 41))
+                })
                 .unwrap();
             let captured =
                 context.alloc_here(&[operand(&value)], |_writer, views| pinned(&views[0]));
             context.store_successor(captured);
             let bundled = context
                 .alloc_into::<Number, Number>(consumer, &[operand(&value)], |_writer, views| {
-                    pinned(&views[0])
+                    Active::new(pinned(&views[0]))
                 })
                 .unwrap();
             context.keep(bundled)
@@ -187,7 +189,7 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
 
 #[test]
 fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
-    let mut graph: CellGraph<Borrowed> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
     let consumer = graph.create(None, None).unwrap();
     let first = graph.create(None, None).unwrap();
     let second = graph.create(None, None).unwrap();
@@ -195,10 +197,10 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
     let kept = graph
         .enter(consumer, |context| {
             let from_first = context
-                .alloc_into::<Number, Number>(first, &[], |writer, _| one(writer, 1))
+                .alloc_into::<Number, Number>(first, &[], |writer, _| Active::new(one(writer, 1)))
                 .unwrap();
             let from_second = context
-                .alloc_into::<Number, Number>(second, &[], |writer, _| one(writer, 2))
+                .alloc_into::<Number, Number>(second, &[], |writer, _| Active::new(one(writer, 2)))
                 .unwrap();
             let captured = context.alloc_here(
                 &[operand(&from_first), operand(&from_second)],
@@ -209,7 +211,7 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
                 .alloc_into::<Number, Number>(
                     consumer,
                     &[operand(&from_first), operand(&from_second)],
-                    |_writer, views| pinned(&views[1]),
+                    |_writer, views| Active::new(pinned(&views[1])),
                 )
                 .unwrap();
             context.keep(bundled)
@@ -234,7 +236,7 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
 
 #[test]
 fn reclaiming_a_sealed_cells_last_holder_cascades_through_its_aggregate() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let top = graph.create(None, None).unwrap();
     let middle = graph.create(None, None).unwrap();
     let base = graph.create(None, None).unwrap();
@@ -269,7 +271,7 @@ fn reclaiming_a_sealed_cells_last_holder_cascades_through_its_aggregate() {
 
 #[test]
 fn a_sealed_cell_survives_every_holder_but_the_last() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let first = graph.create(None, None).unwrap();
     let second = graph.create(None, None).unwrap();
     let held = graph.create(None, None).unwrap();
@@ -295,7 +297,7 @@ fn a_sealed_cell_survives_every_holder_but_the_last() {
 
 #[test]
 fn a_cell_that_only_a_birth_row_names_waits_in_the_slab_rather_than_sealing() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let parent = graph.create(None, None).unwrap();
     let child = graph.create(Some(parent), None).unwrap();
 

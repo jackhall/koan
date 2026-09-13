@@ -10,7 +10,7 @@ use super::super::*;
 use super::{Owned, number_here, pin};
 
 /// Give a cell a region of its own, so it prices at more than nothing.
-fn allocate(graph: &mut CellGraph<Owned>, cell: SlabHandle) {
+fn allocate(graph: &mut CellGraph<'static, Owned>, cell: SlabHandle) {
     graph
         .enter(cell, |context| {
             number_here(context, 1);
@@ -19,7 +19,7 @@ fn allocate(graph: &mut CellGraph<Owned>, cell: SlabHandle) {
 }
 
 /// Mint a bare pin hold from one live cell onto another.
-fn hold(graph: &mut CellGraph<Owned>, holder: SlabHandle, held: SlabHandle) {
+fn hold(graph: &mut CellGraph<'static, Owned>, holder: SlabHandle, held: SlabHandle) {
     graph
         .enter(holder, |context| context.hold(held))
         .unwrap()
@@ -28,13 +28,13 @@ fn hold(graph: &mut CellGraph<Owned>, holder: SlabHandle, held: SlabHandle) {
 
 /// What a hold on one sealed cell keeps alive. A single candidate's slice is its whole closure, so
 /// one-id pricing goes through the same door the marginal query does.
-fn closure(graph: &CellGraph<Owned>, id: SealedId) -> Option<RetentionPrice> {
+fn closure(graph: &CellGraph<'static, Owned>, id: SealedId) -> Option<RetentionPrice> {
     graph.unique_retentions(&[id]).remove(0)
 }
 
 /// The sealed cell minted most recently — ids are monotone and never reused, so this is the one the
 /// release just before the call produced.
-fn newest(graph: &CellGraph<Owned>) -> SealedId {
+fn newest(graph: &CellGraph<'static, Owned>) -> SealedId {
     graph
         .cells
         .sealed
@@ -43,7 +43,7 @@ fn newest(graph: &CellGraph<Owned>) -> SealedId {
         .expect("the tier holds a sealed cell")
 }
 
-fn retained(graph: &CellGraph<Owned>, id: SealedId) -> usize {
+fn retained(graph: &CellGraph<'static, Owned>, id: SealedId) -> usize {
     graph
         .cells
         .sealed_retained_bytes(id)
@@ -55,7 +55,7 @@ fn retained(graph: &CellGraph<Owned>, id: SealedId) -> usize {
 ///
 /// Every link keeps a second live holder so the seal-time merge finds no count of one, and the head
 /// refuses death-time absorption so it seals rather than folding into its keeper.
-fn sealed_chain(graph: &mut CellGraph<Owned>) -> (SealedId, SealedId, SealedId) {
+fn sealed_chain(graph: &mut CellGraph<'static, Owned>) -> (SealedId, SealedId, SealedId) {
     let b = graph.create(None, None).unwrap();
     let a = graph.create(None, None).unwrap();
     let s = graph.create(None, None).unwrap();
@@ -83,7 +83,7 @@ fn sealed_chain(graph: &mut CellGraph<Owned>) -> (SealedId, SealedId, SealedId) 
 
 #[test]
 fn a_closure_prices_everything_a_hold_on_the_sealed_cell_reaches() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(8, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
     let (s_id, a_id, b_id) = sealed_chain(&mut graph);
 
     let whole = closure(&graph, s_id).unwrap();
@@ -104,7 +104,7 @@ fn a_closure_prices_everything_a_hold_on_the_sealed_cell_reaches() {
 
 #[test]
 fn a_shared_sub_tier_is_billed_once_within_one_closure() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(8, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
     let c = graph.create(None, None).unwrap();
     let a = graph.create(None, None).unwrap();
     let b = graph.create(None, None).unwrap();
@@ -152,7 +152,7 @@ fn a_shared_sub_tier_is_billed_once_within_one_closure() {
 
 #[test]
 fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let live = graph.create(None, None).unwrap();
     let s = graph.create(None, None).unwrap();
     let keep_s = graph.create(None, None).unwrap();
@@ -202,7 +202,7 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
 /// price query writes the memo, and then the sealed cell retains exactly what its region does.
 #[test]
 fn priming_a_memo_costs_the_sealed_cell_the_bytes_it_writes() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let bare = graph.create(None, None).unwrap();
     let keep = graph.create(None, None).unwrap();
     let keep_too = graph.create(None, None).unwrap();
@@ -246,7 +246,7 @@ fn priming_a_memo_costs_the_sealed_cell_the_bytes_it_writes() {
 
 #[test]
 fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(8, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
     let a = graph.create(None, None).unwrap();
     let s = graph.create(None, None).unwrap();
     let keep_a = graph.create(None, None).unwrap();
@@ -292,7 +292,7 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
 
 #[test]
 fn a_walk_that_reaches_a_memoized_sealed_cell_merges_its_set() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(8, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
     let b = graph.create(None, None).unwrap();
     let a = graph.create(None, None).unwrap();
     let s = graph.create(None, None).unwrap();
@@ -341,7 +341,7 @@ fn a_walk_that_reaches_a_memoized_sealed_cell_merges_its_set() {
 
 #[test]
 fn unique_slices_do_not_double_bill_a_shared_sub_tier() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(10, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(10, pin);
     let c = graph.create(None, None).unwrap();
     let a = graph.create(None, None).unwrap();
     let b = graph.create(None, None).unwrap();
@@ -404,7 +404,7 @@ fn unique_slices_do_not_double_bill_a_shared_sub_tier() {
 
 #[test]
 fn a_candidate_inside_another_candidates_closure_is_shared_throughout() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(8, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
     let (s_id, a_id, _) = sealed_chain(&mut graph);
 
     // Releasing the head buys back only the head: everything below it the other candidate reaches
@@ -426,7 +426,7 @@ fn a_candidate_inside_another_candidates_closure_is_shared_throughout() {
 
 #[test]
 fn an_absent_id_prices_as_none() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(8, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
     let (s_id, ..) = sealed_chain(&mut graph);
     let gone = graph.create(None, None).unwrap();
     let keeper = graph.create(None, None).unwrap();
@@ -451,7 +451,7 @@ fn an_absent_id_prices_as_none() {
 
 #[test]
 fn occupancy_tracks_both_tiers() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let first = graph.create(None, None).unwrap();
     let second = graph.create(None, None).unwrap();
     let third = graph.create(None, None).unwrap();
@@ -514,7 +514,7 @@ fn occupancy_tracks_both_tiers() {
 
 #[test]
 fn pricing_mutates_no_hold() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(10, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(10, pin);
     let (s_id, ..) = sealed_chain(&mut graph);
     // A sealed cell naming a live cell, so the sweep meets an unfrozen closure as well as a frozen
     // one.

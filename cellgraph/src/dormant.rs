@@ -1,7 +1,7 @@
 //! [`Dormant`] — the carrier at rest: a value put down in its home cell's region between steps,
-//! with no lifetime of its own. The least live of the three states a value with reach passes
-//! through ([../README.md](../README.md) § The contract: two embedder types), and
-//! the only one an embedder may hold across an `enter` scope.
+//! with no step brand — only `'graph`, the storage outliving the graph it may borrow. The least
+//! live of the three states a value with reach passes through ([../README.md](../README.md) § The
+//! contract: two embedder types), and the only one an embedder may hold across an `enter` scope.
 //!
 //! A dormant carrier carries **no reach**. Its mask lives in its home cell's reach table, where
 //! the seal transition can rewrite it as the slab bit it names becomes a sealed id; the dormant
@@ -34,24 +34,24 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 ///
 /// [`StepContext::redeem`]: crate::StepContext::redeem
 /// [`Ready`]: crate::Ready
-pub struct Dormant<T: Reattachable + DropFree> {
+pub struct Dormant<'graph, T: Reattachable<'graph> + DropFree> {
     /// The value parked. `MaybeUninit` is the whole point rather than an implementation detail: a
-    /// carrier at rest must be movable after its home's storage is gone, and a `T::At<'static>`
+    /// carrier at rest must be movable after its home's storage is gone, and a `T::At<'graph>`
     /// holding a reference into freed chunks is not. Parking asserts nothing about the referents,
     /// so a dormant carrier whose home has been reclaimed is an ordinary value the door refuses.
     ///
     /// Nothing is lost by never reconstituting one: [`DropFree`] is what the value doors bound on,
     /// and the assertion below is the check that the family really runs no destructor.
-    value: MaybeUninit<Erased<T>>,
+    value: MaybeUninit<Erased<'graph, T>>,
     key: DormantKey,
 }
 
-impl<T: Reattachable + DropFree> Dormant<T> {
-    pub(crate) fn new(value: Erased<T>, key: DormantKey) -> Self {
+impl<'graph, T: Reattachable<'graph> + DropFree> Dormant<'graph, T> {
+    pub(crate) fn new(value: Erased<'graph, T>, key: DormantKey) -> Self {
         // A parked value is never dropped, so a family with drop glue would leak whatever it owns
         // whenever a dormant carrier goes unredeemed. `DropFree` declares the absence; this is the
         // check.
-        const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
+        const { assert!(!std::mem::needs_drop::<T::At<'graph>>()) };
         Dormant {
             value: MaybeUninit::new(value),
             key,
@@ -74,23 +74,26 @@ impl<T: Reattachable + DropFree> Dormant<T> {
     /// sealed cell, and the executing cell holds it. A dormant carrier whose home resolves to
     /// neither must be refused rather than opened — the bytes are still bytes, but the references
     /// in them are not.
-    pub(crate) unsafe fn take(self) -> Erased<T> {
+    pub(crate) unsafe fn take(self) -> Erased<'graph, T> {
         // SAFETY: `new` is the only constructor and it always initializes; the caller's contract
         // is what makes the referents in those bytes valid again.
         unsafe { self.value.assume_init() }
     }
 }
 
-impl<T: Reattachable + DropFree> Clone for Dormant<T>
+impl<'graph, T: Reattachable<'graph> + DropFree> Clone for Dormant<'graph, T>
 where
-    Erased<T>: Copy,
+    Erased<'graph, T>: Copy,
 {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: Reattachable + DropFree> Copy for Dormant<T> where Erased<T>: Copy {}
+impl<'graph, T: Reattachable<'graph> + DropFree> Copy for Dormant<'graph, T> where
+    Erased<'graph, T>: Copy
+{
+}
 
 /// Which entry of which cell's reach table holds one dormant carrier's reach.
 ///

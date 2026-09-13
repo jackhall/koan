@@ -17,9 +17,9 @@ use crate::tree::TreeState;
 
 /// An operand the embedder will never copy: at a cost above anything a pin can price, a verdict
 /// that weighs the two always pins it.
-fn kept_operand<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Ready<'b, V>,
-) -> Operand<'a, 'b, V> {
+fn kept_operand<'a, 'step, V: Reattachable<'static> + DropFree>(
+    carrier: &'a Ready<'static, 'step, V>,
+) -> Operand<'static, 'a, 'step, V> {
     operand_at(carrier, usize::MAX)
 }
 
@@ -41,16 +41,16 @@ fn recording(
 }
 
 /// Build a number in the cell the step is running in.
-fn number_in<'b, C: Reattachable>(
-    context: &mut StepContext<'b, '_, C>,
+fn number_in<'step, C: Reattachable<'static>>(
+    context: &mut StepContext<'static, 'step, '_, C>,
     value: u32,
-) -> Ready<'b, Number> {
+) -> Ready<'static, 'step, Number> {
     number_here(context, value)
 }
 
 #[test]
 fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(1, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(1, pin);
     let root = graph.create(None, None).unwrap();
     assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
 
@@ -74,7 +74,7 @@ fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
 
 #[test]
 fn the_tree_doors_refuse_a_name_kept_past_a_declared_death() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let tree = graph.create_tree(root, None).unwrap();
     graph.release_tree(tree).unwrap();
@@ -105,7 +105,7 @@ fn the_tree_doors_refuse_a_name_kept_past_a_declared_death() {
 
 #[test]
 fn a_root_released_before_its_tree_child_waits_undisposed() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let tree = graph.create_tree(root, None).unwrap();
 
@@ -120,7 +120,7 @@ fn a_root_released_before_its_tree_child_waits_undisposed() {
 
 #[test]
 fn a_tree_parent_released_first_disposes_when_its_last_child_does() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let grandparent = graph.create_tree(root, None).unwrap();
     let parent = graph.create_tree(grandparent, None).unwrap();
@@ -149,7 +149,7 @@ fn a_tree_parent_released_first_disposes_when_its_last_child_does() {
 
 #[test]
 fn a_tree_cell_nothing_was_kept_in_leaves_no_tombstone() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let tree = graph.create_tree(root, None).unwrap();
     graph
@@ -157,7 +157,7 @@ fn a_tree_cell_nothing_was_kept_in_leaves_no_tombstone() {
             let value = number_in(context, 1);
             context
                 .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, views| {
-                    take(&views[0], writer)
+                    Active::new(take(&views[0], writer))
                 })
                 .unwrap();
         })
@@ -175,7 +175,7 @@ fn a_tree_cell_nothing_was_kept_in_leaves_no_tombstone() {
 #[test]
 fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, verdict);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, verdict);
     let root = graph.create(None, None).unwrap();
     let stranger = graph.create(None, None).unwrap();
     let other_root = graph.create(None, None).unwrap();
@@ -202,7 +202,7 @@ fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
                 context
                     .alloc_into::<Number, Number>(dest, &[kept_operand(&value)], |writer, views| {
                         copied.push(matches!(views[0], CrossedOperand::Copied(_)));
-                        take(&views[0], writer)
+                        Active::new(take(&views[0], writer))
                     })
                     .unwrap();
             }
@@ -240,7 +240,7 @@ fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
 
 #[test]
 fn an_upward_pin_pledges_the_home_and_every_intermediate() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let parent = graph.create_tree(root, None).unwrap();
     let home = graph.create_tree(parent, None).unwrap();
@@ -252,7 +252,7 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
             let value = number_in(context, 9);
             context
                 .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, views| {
-                    take(&views[0], writer)
+                    Active::new(take(&views[0], writer))
                 })
                 .unwrap();
             context.cell()
@@ -275,7 +275,7 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
 #[test]
 fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, verdict);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, verdict);
     let root = graph.create(None, None).unwrap();
     let parent = graph.create_tree(root, None).unwrap();
     let home = graph.create_tree(parent, None).unwrap();
@@ -290,14 +290,14 @@ fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
                 .alloc_into::<Number, Number>(
                     parent,
                     &[kept_operand(&first), kept_operand(&second)],
-                    |writer, views| take(&views[0], writer),
+                    |writer, views| Active::new(take(&views[0], writer)),
                 )
                 .unwrap();
             // And then a pin further up. The shallower destination wins, so the bump goes to the
             // root rather than stopping at the parent it was first pledged to.
             context
                 .alloc_into::<Number, Number>(root, &[kept_operand(&first)], |writer, views| {
-                    take(&views[0], writer)
+                    Active::new(take(&views[0], writer))
                 })
                 .unwrap();
         })
@@ -327,7 +327,7 @@ fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
 
 #[test]
 fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(3, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(3, pin);
     let root = graph.create(None, None).unwrap();
     let source = graph.create(None, None).unwrap();
     let tree = graph.create_tree(root, None).unwrap();
@@ -337,7 +337,7 @@ fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
             let value = number_in(context, 4);
             context
                 .alloc_into::<Number, Number>(tree, &[kept_operand(&value)], |writer, views| {
-                    one(writer, number(&views[0]) + 1)
+                    Active::new(one(writer, number(&views[0]) + 1))
                 })
                 .unwrap();
         })
@@ -359,7 +359,7 @@ fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
 
 #[test]
 fn a_dormant_carrier_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_root() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(3, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(3, pin);
     let root = graph.create(None, None).unwrap();
     let outsider = graph.create(None, None).unwrap();
     let home = graph.create_tree(root, None).unwrap();
@@ -411,7 +411,7 @@ fn a_dormant_carrier_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_ro
 
 #[test]
 fn a_dormant_carrier_whose_home_reclaimed_answers_gone() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let home = graph.create_tree(root, None).unwrap();
 
@@ -443,9 +443,9 @@ fn a_dormant_carrier_whose_home_reclaimed_answers_gone() {
 /// Build a two-level tree under `root`, keep a value in the deeper one, and splice both bumps into
 /// the root — the shape every tombstone-through-the-slab assertion starts from.
 fn spliced_into_root(
-    graph: &mut CellGraph<Owned>,
+    graph: &mut CellGraph<'static, Owned>,
     root: SlabHandle,
-) -> (Dormant<Number>, TreeHandle, TreeHandle) {
+) -> (Dormant<'static, Number>, TreeHandle, TreeHandle) {
     let parent = graph.create_tree(root, None).unwrap();
     let home = graph.create_tree(parent, None).unwrap();
     let kept = graph
@@ -454,7 +454,7 @@ fn spliced_into_root(
             let kept = context.keep(value.clone());
             context
                 .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, views| {
-                    take(&views[0], writer)
+                    Active::new(take(&views[0], writer))
                 })
                 .unwrap();
             kept
@@ -465,7 +465,7 @@ fn spliced_into_root(
 
 #[test]
 fn a_dormant_carrier_whose_home_was_absorbed_redeems_from_the_destination() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let (kept, parent, home) = spliced_into_root(&mut graph, root);
 
@@ -493,7 +493,7 @@ fn a_dormant_carrier_whose_home_was_absorbed_redeems_from_the_destination() {
 
 #[test]
 fn a_tree_value_spliced_into_a_root_survives_the_root_absorbing_into_its_holder() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(3, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(3, pin);
     let holder = graph.create(None, None).unwrap();
     let root = graph.create(None, None).unwrap();
     let (kept, parent, home) = spliced_into_root(&mut graph, root);
@@ -523,7 +523,7 @@ fn a_tree_value_spliced_into_a_root_survives_the_root_absorbing_into_its_holder(
 
 #[test]
 fn a_tree_root_that_seals_carries_its_spliced_bumps() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(4, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     let first = graph.create(None, None).unwrap();
     let second = graph.create(None, None).unwrap();
     let root = graph.create(None, None).unwrap();
@@ -556,7 +556,7 @@ fn a_tree_root_that_seals_carries_its_spliced_bumps() {
 
 #[test]
 fn a_tree_value_whose_root_reclaimed_answers_gone() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let (kept, parent, home) = spliced_into_root(&mut graph, root);
     graph.release_tree(home).unwrap();
@@ -583,7 +583,7 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
     // Deep enough to dwarf any slab, and trimmed under Miri, where every level is interpreted.
     const DEPTH: usize = if cfg!(miri) { 24 } else { 200 };
 
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let filler = graph.create(None, None).unwrap();
     assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
@@ -604,7 +604,7 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
 
     // Innermost first: build a number, pin it into the parent, keep it, and die. Each level up
     // redeems what its child left, adds one, and does the same.
-    let mut carried: Option<Dormant<Number>> = None;
+    let mut carried: Option<Dormant<'static, Number>> = None;
     let mut spliced = 0;
     for level in (0..DEPTH).rev() {
         let cell = chain[level];
@@ -628,7 +628,7 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
                         .alloc_into::<Number, Number>(
                             up,
                             &[kept_operand(&value)],
-                            |writer, views| take(&views[0], writer),
+                            |writer, views| Active::new(take(&views[0], writer)),
                         )
                         .unwrap();
                     context.keep(placed)
@@ -662,7 +662,7 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
 
 #[test]
 fn a_splice_keeps_a_borrow_the_destination_already_holds() {
-    let mut graph: CellGraph<Borrowed> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let destination = graph.create_tree(root, None).unwrap();
     let home = graph.create_tree(destination, None).unwrap();
@@ -704,7 +704,7 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
 
 #[test]
 fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
-    let mut graph: CellGraph<Owned> = CellGraph::new(2, pin);
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
     let root = graph.create(None, None).unwrap();
     let hop = graph.create_tree(root, None).unwrap();
     let next = graph.create_tree(root, None).unwrap();
@@ -720,7 +720,7 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
                         matches!(views[0], CrossedOperand::Copied(_)),
                         "a sibling is off the chain"
                     );
-                    take(&views[0], writer)
+                    Active::new(take(&views[0], writer))
                 })
                 .unwrap();
             context.keep(placed)

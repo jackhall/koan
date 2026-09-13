@@ -28,22 +28,28 @@ impl ProgramStorage {
 /// every call site rather than held by the discipline of one. The channel it keys admits only a
 /// `parse`'s `ProgramExpression`, which this brand alone mints.
 ///
+/// Its lifetime is `'graph`: program storage outlives every cell graph that runs the program, so
+/// what the AST lends a value is borrowed at the graph's lifetime and never at a cell's.
+///
 /// The distinction needs a type because `KExpression` is covariant: a node borrowing a shorter-lived
 /// bump coerces to any shorter lifetime, so the borrow checker sees nothing to object to. Widening
 /// through [`ProgramBrand::allocator`] is free; the reverse does not exist.
 ///
-/// The brand is **invariant** in `'a`, so a held brand never shortens either. A door call therefore
-/// pins its `parts` at the storage's own lifetime rather than at whatever shorter lifetime the
+/// The brand is **invariant** in `'graph`, so a held brand never shortens either. A door call
+/// therefore pins its `parts` at the storage's own lifetime rather than at whatever shorter lifetime the
 /// caller happens to run at — which is what carries the storage-tier obligation in the parameter
 /// types instead of in prose. The doors' *products* stay covariant, so program-hosted AST still
 /// reaches its readers by ordinary subtyping.
 #[derive(Clone, Copy)]
-pub struct ProgramBrand<'a>(BumpAllocator<'a>, PhantomData<fn(&'a ()) -> &'a ()>);
+pub struct ProgramBrand<'graph>(
+    BumpAllocator<'graph>,
+    PhantomData<fn(&'graph ()) -> &'graph ()>,
+);
 
-impl<'a> ProgramBrand<'a> {
+impl<'graph> ProgramBrand<'graph> {
     /// The plain allocation capability underneath — for the parser's own allocations, which need
     /// no more than a bump to allocate into.
-    pub fn allocator(self) -> BumpAllocator<'a> {
+    pub fn allocator(self) -> BumpAllocator<'graph> {
         self.0
     }
 }
