@@ -13,7 +13,10 @@ whole list. It runs on the default build: `python3 tools/miri.py`.
 `src/` carries no `unsafe` of its own. Every `unsafe` these tests reach lives in
 `cellgraph` — `Writer::fill`, the reattach seam, the region release — pinned
 library-side by [cellgraph/observe/miri_slate.md](../cellgraph/observe/miri_slate.md),
-or in `bumpalo`'s allocator under the bump tier. What this slate pins is the
+or in `bumpalo`'s allocator under the bump tier. `Writer::thin_run`, under
+`memory`'s knot, is pinned library-side only: the knot is safe indexing over
+the `ThinRun` handle, with no layout or retype of its own for this slate to
+drive. What this slate pins is the
 *safe* koan code that drives them: a bump-hosted table, slots laid down in a
 cell's region and written through `Cell`, a scratch arena shared with the
 registry it serves. Each anchor file is therefore whitelisted below, and the

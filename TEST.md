@@ -179,7 +179,11 @@ The audit slate is the load-bearing memory-safety check. It runs the safe
 koan code that drives every unsafe site the kept modules reach — `cellgraph`'s
 `Writer::fill` and reattach seam, and `bumpalo`'s allocator under the bump tier
 — under Miri's tree-borrows mode, with zero process-exit leaks and zero
-UB required for sign-off. `src/` carries no `unsafe` at all — koan's only
+UB required for sign-off. One site is left to the library's slate alone:
+`Writer::thin_run`, which `memory`'s knot lays its nodes down with, since the
+knot adds no layout or retype over it for a koan test to pin (cellgraph's slate
+runs it at every edge its arithmetic has, including a fill writing into the
+same region). `src/` carries no `unsafe` at all — koan's only
 `unsafe` is the counting global allocator in
 [`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding
 outside the tree the slate audit censuses (`tools/observe_tests.py` walks `src/`

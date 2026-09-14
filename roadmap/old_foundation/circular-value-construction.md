@@ -36,12 +36,10 @@ other.
 
 **Directions.**
 
-- *Cycle representation — open.* Options: a value group whose internal back-edges are
-  indices into the group (no `Rc` on the edge, so no refcount cycle), versus `Weak`
-  back-references, versus a tracing cycle collector. The type side sidesteps the
-  question by owning nodes centrally in an insert-only registry that never reclaims by
-  refcount — a value group has no such central owner, so a value-side back-edge cannot
-  simply borrow that argument.
+- *Cycle representation — decided* per [the knot](../../src/memory/README.md#the-knot).
+  A value group whose internal back-edges are indices into the group, laid down
+  together in a cell's region, over `Weak` back-references or a tracing cycle
+  collector.
 - *Construction surface — open.* How a cyclic value is declared and knotted (a
   self-naming recursive `LET`; an explicit knot-tying form). Surface syntax/semantics —
   enumerate options and decide with the user.
@@ -58,9 +56,7 @@ so coordinate that neither hangs on a cyclic value.
 Update [old_design/typing/user-types.md](../../old_design/typing/user-types.md) and
 [old_design/memory-model.md](../../old_design/memory-model.md) when it ships.
 
-**Requires:**
-
-- [Knot layout](../rewrite/knot-layout.md) — carried edge; the index-edged group
-  is this item's representation.
+**Requires:** none — the [knot](../../src/memory/README.md#the-knot) it is
+represented by ships.
 
 **Unblocks:** none tracked yet.

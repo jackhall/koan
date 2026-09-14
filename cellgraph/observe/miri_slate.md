@@ -175,9 +175,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-14: 222.81s — 123 tests, 0 leaks, 0 UB
 - 2026-09-13: 215.91s — 115 tests, 0 leaks, 0 UB
 - 2026-09-12: 172.91s — 115 tests, 0 leaks, 0 UB
 - 2026-09-12: 237.58s — 109 tests, 0 leaks, 0 UB
 - 2026-09-12: 132.37s — 109 tests, 0 leaks, 0 UB
-- 2026-09-12: 179.27s — 109 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

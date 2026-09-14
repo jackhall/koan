@@ -8,7 +8,8 @@ manages no cell storage: no frame, no region owner, no run root. A call's
 storage is a cell, and its resident is a value at rest in that cell's region,
 captured by the cell's continuation at the cell's own brand.
 [`substrate`](substrate.rs) is the one-place spelling of every substrate name,
-[`slots`](slots.rs) the layout-addressed table shape, [`bump`](bump.rs) the
+[`slots`](slots.rs) the layout-addressed table shape, [`knot`](knot.rs) the
+index-edged group of values that refer to each other, [`bump`](bump.rs) the
 arena tier outside the graph, [`program`](program.rs) the program-text owner
 over it, and [`scope_id`](scope_id.rs) the position-independent identity a
 resident carries.
@@ -55,7 +56,7 @@ composite down through `Writer`, and prices its crossings over the placement
 doors, all in its own files.
 
 What *does* belong here is a payload-generic **shape**, because what it holds
-does not enter its definition: the slot array. A façade that instantiates one at koan's own vocabulary —
+does not enter its definition: the slot array and the knot. A façade that instantiates one at koan's own vocabulary —
 a binding table keyed on koan symbols holding koan types — stays with that
 vocabulary. What is *storage* in a binding table is the table shape, and that
 lives here.
@@ -100,13 +101,78 @@ bound slot holds is a choice made where it is instantiated. Its constructor
 takes a `Writer` and never a step context, which is how the module stays free
 of the continuation family the step context is typed on.
 
+## The knot
+
+[`Knot`](knot.rs) is a group of values that refer to each other, laid down
+together in a cell's region as one run of nodes whose sibling references are
+indices into the run rather than pointers. A value is born from finished parts
+([values](../values/README.md#what-a-value-is)), so a field cannot point at a
+value that does not exist yet; an index exists before its node does, so a knot
+closes a cycle without a placeholder. It is the region counterpart of the type
+lattice's recursive group, whose members are `(SCC digest, index)` handles
+([type lattice](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)),
+and the shape both circular data and a group of mutually recursive functions
+are born in.
+
+**One pointer wide.** The nodes rest behind a length header in one allocation,
+written by cellgraph's `Writer::thin_run` and reached through its `ThinRun`, a
+`Copy` handle one pointer wide. `Knot` is that handle, and a node is read as a
+`Member` — the `(knot, index)` pair, 16 bytes with a `u32` index, so it fits
+beside a tag in a 24-byte value word where a fat slice would not. The header
+costs one allocation instead of two, and a resolve is arithmetic off the handle
+rather than a load through a header. The raw layout that buys this cannot be
+written in safe Rust, so it is a cellgraph verb pinned by cellgraph's Miri
+slate, and the knot itself is safe code.
+
+**Plan, then tie.** An `Edge` is a `u32` node index with no public
+constructor. A `KnotPlan` fixes the count before the first payload and mints
+edges below it; `KnotPlan::tie` consumes the plan and calls the consumer once
+per node, in index order, for a finished payload. A payload whose edges name a
+node not yet written is staged in the **consumer's** scratch and copied out by
+the tie — no placeholder, no interior mutability — and a payload may write its
+own sub-runs (a variable list of edges, say) through the same writer during the
+tie, since the node run is claimed first. A knot never grows. The plan is
+neither `Copy` nor `Clone`, so one plan ties exactly one knot.
+
+**Resolving an edge.** An edge is resolved only through a member (`follow`) or
+its knot (`member`), never against a bare run, and resolving one against a
+knot whose count it does not fit panics like a slice index. No node holds a
+pointer to a sibling, so a copy of the run carries every edge verbatim and a
+copier never follows one; a copy is the consumer's, rebuilt through the
+destination's writer payload by payload, and `memory` ships no crossing verb
+and no weight for it.
+
+**The case the knot cannot see.** An edge minted by one plan, placed in a
+payload tied by another whose count it happens to fit, resolves to the wrong
+node. That is a consumer bug of the same class as indexing one `Vec` with
+another's index, documented on `KnotPlan::edge`. A brand would not close it: a
+brand telling two knots apart is a fresh invariant lifetime per knot, which
+cannot follow a knot resting at `'cell` into continuations, where every knot
+in the cell shares one lifetime; and branding only the construction window
+would need a lifetime family per payload type and still leave an edge read out
+of a finished node unbranded. Consuming the plan at the tie and panicking on a
+count mismatch close the case as far as it can be closed.
+
+**Graphs built across steps.** A knot is tied once. A node of a later knot may
+hold a `Member` of a finished knot as an ordinary pointer-carrying payload
+field, which the knot neither mints nor sees. Knots therefore form a DAG and
+cycles live only inside one: a finished knot never gains an edge to a newer
+node, which is what write-once values already require.
+
+Knot identity and equality are not the shape's. A circular data value's
+equality — bisimulation over `(knot, index)` pairs — and a renderer that
+terminates on a cycle belong to [values](../values/README.md), and which
+sibling functions form a knot belongs to the callable layer.
+
 ## Drop-freeness is a compile-time fact
 
 A region releases its chunks whole and runs no destructor, so nothing stored
-in one may carry drop glue. `fill` checks that at the door; the slot array
-restates it as a `const` assert against the cell type at its own
+in one may carry drop glue. `fill` and `thin_run` check that at the door; the
+slot array and the knot each restate it as a `const` assert against the cell type at its own
 instantiation, so **a payload bringing drop glue with it fails the build at
-the instantiation site**, not at runtime and not in review.
+the instantiation site**, not at runtime and not in review. The knot's
+message names the knot, so the failure points at the shape rather than the
+cellgraph verb under it.
 
 The same discipline is why a cell's death is O(1): its region releases its
 chunks rather than walking a graph.
@@ -139,9 +205,3 @@ continues the counter and is none the worse for it.
 and `allocator_api2` named only by the bump tier, never by a cell-tier shape. It is a leaf under the rest
 of the tree, and anything not on the list above is a new edge rather than a
 detail.
-
-## Open work
-
-- [Knot layout](../../roadmap/rewrite/knot-layout.md) — a run of nodes whose
-  sibling references are indices into the run, for values that refer to each
-  other.
