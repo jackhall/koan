@@ -202,9 +202,8 @@ there is no chain of sealed cells for the pool to collapse into one.
 **Kind selection is the embedder's.** The substrate ships both kinds and no rule
 for choosing between them. Which cell a creation takes is an admission decision,
 made from the source edge's destination, and it belongs to the layer that knows
-the destination. A producer that delivers mid-life to an outside consumer — a
-yielding iterator — is a slab cell, because an outside consumer can pin it while
-it lives.
+the destination. A producer that delivers mid-life to an outside consumer is a
+slab cell, because an outside consumer can pin it while it lives.
 
 ## Open work
 

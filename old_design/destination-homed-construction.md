@@ -75,7 +75,7 @@ Nothing in the primitive is delivery-kind-specific; it is specified so each
 client adopts it without rework, in this order:
 
 1. **Yield deliveries** — the first client
-   ([roadmap/old_foundation/yielding-iterators.md](../roadmap/old_foundation/yielding-iterators.md)).
+   ([roadmap/old_foundation/yielding-iterators.md](../roadmap/rewrite/yielding-iterators.md)).
    A demand-driven generator gets the primitive's preconditions for free:
    the destination is *known* before construction (the generator resumes
    only after a consumer mints the demand edge), *stable* for the window (a
@@ -169,6 +169,6 @@ design adopts.
 - [roadmap/old_foundation/destination-homed-construction.md](../roadmap/old_foundation/destination-homed-construction.md)
   — the primitive itself: the foreign-region grant mechanism, the mark's
   carrier, the fan-out posture, and the client sequencing.
-- [roadmap/old_foundation/yielding-iterators.md](../roadmap/old_foundation/yielding-iterators.md)
+- [roadmap/old_foundation/yielding-iterators.md](../roadmap/rewrite/yielding-iterators.md)
   — the first client's substrate: the delivering park, demand edges, and
   the iterator surface.

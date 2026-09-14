@@ -47,7 +47,7 @@ values that provably end up at the destination.
 
 **Requires:**
 
-- [yielding-iterators.md](yielding-iterators.md) — the first client; the
+- [yielding-iterators.md](../rewrite/yielding-iterators.md) — the first client; the
   demand edge supplies the destination this primitive resolves.
 
 **Unblocks:** none tracked yet.

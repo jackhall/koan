@@ -25,4 +25,3 @@ Every requirements doc in this retired project.
 - [A module's retention answer is conservative](module-retention-answer.md)
 - [Module scope consolidation](module-scope-consolidation.md)
 - [Monadic side effects](monadic-side-effects.md)
-- [Yielding iterators](yielding-iterators.md)

@@ -23,8 +23,9 @@ value exists.
   crossing pins it; a forced copy of one is a refused crossing, not a panic.
 - Structural equality over a callable is an error the `==` builtin reports,
   never `false`.
-- The old runtime's tutorial programs that define functions and modules run
-  on the rewritten stack and print the same output.
+- A function value's closure bindings are born from its body's shape, and the
+  capture set the shape computes uses the scopes' visibility predicate
+  ([src/scopes/README.md](../../src/scopes/README.md#visibility)).
 
 **Directions.**
 
@@ -34,9 +35,22 @@ value exists.
   layer owning the two arms over a `Value` extension point of its own.
   Recommended: decide against the scope layer's binding-table shape once it
   stands.
-- *By-reference capture — decided.* A closure captures its scope, per
-  [lazy-closures.md](../../old_design/lazy-closures.md); by-value capture is
-  not on the table.
+- *Capture into closure bindings — decided.* A closure's bindings are a
+  shallow copy of the names its body reads from enclosing scopes, born once
+  none of them is a placeholder, per
+  [src/scopes/README.md](../../src/scopes/README.md#three-tiers).
+- *Whether a callable prices uncopyable — open.* Closure bindings hold value
+  words, and every data value has a deep copy, so a closure over data alone
+  could copy at a crossing; one over another callable reaches the same
+  question recursively. Recommended: settle it against the binding shape the
+  scope layer ships.
+- *Mutual recursion — open.* A body sees no later sibling of its definition,
+  so two functions that call each other need a definition window — implicit,
+  or a module body, as co-declared types have. The definition-site cutoff is
+  itself provisional until this is settled.
+- *`USING … SCOPE` over a module — decided.* The surfaced names come from the
+  module's signature, which must be known statically at the `USING` site; a
+  module whose signature is not requires an ascription there.
 
 ## Dependencies
 
@@ -44,4 +58,7 @@ value exists.
 
 - [Scope on values and types](scope-on-values-and-types.md) — a callable captures a scope.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Dispatch](dispatch.md) — there is nothing to dispatch on until functions exist.
+- [Yielding iterators](yielding-iterators.md) — a stream at rest holds a function value.

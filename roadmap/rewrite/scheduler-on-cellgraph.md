@@ -67,4 +67,5 @@ as a requirements record for the fresh crate.
 
 **Unblocks:**
 
-- [Scope on values and types](scope-on-values-and-types.md) — running a program through a scope needs the scheduler that drives it.
+- [Dispatch](dispatch.md) — running a program needs the scheduler that drives it.
+- [Yielding iterators](yielding-iterators.md) — a flat consumer loop is its tail call.

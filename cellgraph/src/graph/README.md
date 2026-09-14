@@ -578,8 +578,5 @@ subtree is not a group of slab cells at all but a chain of
 
 ## Open work
 
-- [Yielding iterators](../../../roadmap/old_foundation/yielding-iterators.md) —
-  producers that yield many values before dying, the surface family lazy
-  admission belongs to.
 - [The crate's roadmap](../../roadmap/README.md) — the unplanned gaps, including
   handle-generation wraparound and pricing against outside holders.
