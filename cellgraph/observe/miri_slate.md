@@ -24,7 +24,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-23 tests, grouped by the unsafe site each pins down. Names below are the exact
+29 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -89,6 +89,21 @@ what Miri checks is that moving the region and absorbing another one into it lea
 and that the chunk carrying it goes at the region's drop rather than outliving it.
 
 - `region::tests::a_memo_survives_its_region_moving_and_absorbing`
+
+**Thin runs** ([src/region.rs](../src/region.rs)) — `Writer::thin_run` lays a length header and
+its elements down in one raw allocation, and `ThinRun` reads both back through the one pointer it
+keeps. What Miri checks is the arithmetic and the provenance: the element pointer is derived from the
+allocation's own pointer, never from a reference to the header, so it may span the run; the offset
+lands elements aligned whatever the payload's alignment, including at length zero and for zero-sized
+payloads; a fill that writes into the same bump mid-run leaves the run intact; and a run stays
+readable after the region claims a new chunk.
+
+- `region::tests::a_thin_run_reads_back_what_the_fill_wrote`
+- `region::tests::a_thin_run_of_length_zero_is_empty`
+- `region::tests::a_thin_run_of_zero_sized_payloads_reads_every_unit`
+- `region::tests::a_thin_run_of_over_aligned_payloads_lands_them_aligned`
+- `region::tests::a_thin_run_whose_fill_writes_into_the_same_region`
+- `region::tests::a_thin_run_survives_the_region_growing_under_it`
 
 **The at-rest carrier and the crossing's two brands** ([src/dormant.rs](../src/dormant.rs),
 [src/graph.rs](../src/graph.rs)) — the same `retype` primitive at the doors a value crosses steps
