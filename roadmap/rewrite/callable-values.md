@@ -47,7 +47,7 @@ value exists.
 - *Mutual recursion — open.* A body sees no later sibling of its definition,
   so two functions that call each other need a definition window — implicit,
   or a module body, as co-declared types have. The window's functions are born
-  together as one [knot](knot-layout.md), since a closure's bindings copy only
+  together as one [knot](../../src/memory/README.md#the-knot), since a closure's bindings copy only
   once nothing they copy is pending; which siblings form the knot is the
   window's to compute. The definition-site cutoff is itself provisional until
   this is settled.
@@ -60,7 +60,6 @@ value exists.
 **Requires:**
 
 - [Scope on values and types](scope-on-values-and-types.md) — a callable captures a scope.
-- [Knot layout](knot-layout.md) — a definition window's mutually recursive functions are one knot.
 
 **Unblocks:**
 

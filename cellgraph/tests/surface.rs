@@ -13,8 +13,8 @@ use std::marker::PhantomData;
 use cellgraph::{
     Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
     Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError, ReleaseAbsorption,
-    ReleaseError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext, TreeHandle, Verdict,
-    Writer, reattachable,
+    ReleaseError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext, ThinRun, TreeHandle,
+    Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -74,6 +74,14 @@ fn build_number<'cell>(writer: Writer<'cell>) -> &'cell u32 {
 
 fn build_slice<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
     writer.fill(3, |index| index as u32 + 1)
+}
+
+/// The run behind one thin pointer: a handle a word wide, whose length rides at the front of the
+/// allocation instead of beside the pointer.
+fn build_thin_run<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
+    let run: ThinRun<'cell, u32> = writer.thin_run(4, |index| index as u32 * 2);
+    assert!(!run.is_empty() && run.len() == 4);
+    run.as_slice()
 }
 
 fn build_text<'cell>(writer: Writer<'cell>) -> &'cell str {
@@ -207,6 +215,8 @@ fn every_public_door_answers_from_outside_the_crate() {
             let number = context.lift::<Number>(build_number(context.writer()));
             let numbers = context.lift::<Numbers>(build_slice(context.writer()));
             let text = context.lift::<Text>(build_text(context.writer()));
+            let thin = context.lift::<Numbers>(build_thin_run(context.writer()));
+            assert_eq!(read_first(context, &thin), &[0, 2, 4, 6]);
             let filtered = context.lift::<Numbers>(build_run(context.writer()));
             let rendered = context.lift::<Text>(build_prose(context.writer()));
             assert_eq!(read_first(context, &filtered), &[3, 6, 99]);

@@ -10,7 +10,7 @@ pub const WIDTH: usize = 2;
 pub use cellgraph::{
     Active, CellHandle, CreateError, CrossedOperand, Dormant, DropFree, EnterError, Erased, Prices,
     Prose, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError, ReleaseTreeError, Run,
-    SlabHandle, Stale, TreeHandle, Verdict, Writer, reattachable,
+    SlabHandle, Stale, ThinRun, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// A carrier at rest in the region hosting it, branded by that region's `'home`; `'graph` is the

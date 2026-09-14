@@ -2,7 +2,7 @@
 //!
 //! The **cell tier** is `cellgraph`'s: a call's storage is a cell, and what rests in it is laid
 //! down through the cell's [`Writer`](crate::memory::Writer). [`substrate`](crate::memory::substrate) re-exports the library under Koan's spelling
-//! and binds its width; [`SlotArray`](crate::memory::SlotArray) is the one shape here built in a cell's region.
+//! and binds its width; [`SlotArray`](crate::memory::SlotArray) and [`Knot`](crate::memory::Knot) are the shapes here built in a cell's region.
 //!
 //! The **bump tier** is storage outside the graph — [`Bump`](crate::memory::Bump), [`BumpAllocator`](crate::memory::BumpAllocator), [`BumpVec`](crate::memory::BumpVec) and
 //! [`BumpBackedMap`](crate::memory::BumpBackedMap) — for the AST ([`program`](crate::memory::program)) and the type lattice's registry and scratch.
@@ -16,6 +16,7 @@
 //! See [memory/README.md](memory/README.md).
 
 mod bump;
+mod knot;
 pub mod program;
 pub mod scope_id;
 mod slots;
@@ -26,6 +27,7 @@ mod tests;
 
 pub(crate) use bump::bump_table;
 pub use bump::{Bump, BumpAllocator, BumpBackedMap, BumpVec};
+pub use knot::{Edge, Knot, KnotPlan, Member};
 pub use program::{ProgramBrand, ProgramStorage, program_storage};
 pub use scope_id::ScopeId;
 pub use slots::{SlotArray, SlotConflict, SlotState};

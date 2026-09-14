@@ -27,7 +27,9 @@
 //! a `Bump` moves without moving a chunk byte, so the pointer stability a detached seal already
 //! relies on carries a borrow across the merge unchanged.
 
+use std::alloc::Layout;
 use std::cell::OnceCell;
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use bumpalo::Bump;
@@ -256,10 +258,11 @@ impl Regions {
 /// verb returns a shared `&'cell` rather than the `&mut` the bump itself yields: a written value is
 /// region state its holder names, never one it owns.
 ///
-/// A verb per shape a region cannot be given by an embedder, in two pairs. Known width, where the
-/// count is settled before the first element: [`fill`](Writer::fill) lays down a run by index
-/// under a compile-time no-destructor check, and [`text`](Writer::text) writes a `str`, whose
-/// bytes have no `T` to index by. Producer-decided width, where only the elements settle it:
+/// A verb per shape a region cannot be given by an embedder. Known width, where the count is
+/// settled before the first element: [`fill`](Writer::fill) lays down a run by index under a
+/// compile-time no-destructor check, [`thin_run`](Writer::thin_run) lays one down behind its
+/// length for a handle that must be one pointer wide, and [`text`](Writer::text) writes a `str`,
+/// whose bytes have no `T` to index by. Producer-decided width, where only the elements settle it:
 /// [`run`](Writer::run) takes pushes and [`prose`](Writer::prose) takes formatted writes, each
 /// handing back the region borrow once the producer is done. Every simpler shape — one value, a
 /// copied slice, a run collected from an iterator of known length — is the embedder's, derived
@@ -278,6 +281,37 @@ impl<'cell> Writer<'cell> {
     pub fn fill<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'cell [T] {
         const { assert!(!std::mem::needs_drop::<T>()) };
         self.0.alloc_slice_fill_with(len, fill)
+    }
+
+    /// Write a run of `len` values behind a header holding `len`, in one allocation, and hand back
+    /// the handle one pointer wide that reaches both — for a shape whose handle cannot afford a
+    /// slice's second word. Same drop-glue assert as [`fill`](Self::fill).
+    ///
+    /// The allocation is claimed before the first element is built, and a bump's chunks never
+    /// move, so `fill` may itself write into this region — an element's own sub-run through this
+    /// writer — without disturbing the run it is filling.
+    pub fn thin_run<T>(self, len: usize, mut fill: impl FnMut(usize) -> T) -> ThinRun<'cell, T> {
+        const { assert!(!std::mem::needs_drop::<T>()) };
+        let base: NonNull<u8> = self.0.alloc_layout(ThinRun::<T>::layout(len));
+        let head = base.cast::<ThinHeader>();
+        // SAFETY: `base` is a fresh allocation of `layout(len)` bytes, aligned to the stricter of
+        // the header's and `T`'s alignment; the header sits at offset 0 and the `len` elements
+        // from `OFFSET`, inside the allocation by construction of the layout. Each element is
+        // written once, through a pointer derived from `base` rather than from a reference, so its
+        // provenance spans the whole allocation. A `fill` that panics leaves initialised bytes
+        // nothing reads and no destructor runs on (`T` is drop-free by the assert), like a run
+        // `fill` abandons; the header is written first, but no handle escapes to read it.
+        unsafe {
+            head.write(ThinHeader { len });
+            let run = base.add(ThinRun::<T>::OFFSET).cast::<T>();
+            for index in 0..len {
+                run.add(index).write(fill(index));
+            }
+        }
+        ThinRun {
+            head,
+            _run: PhantomData,
+        }
     }
 
     /// Write text.
@@ -307,6 +341,70 @@ impl<'cell> Writer<'cell> {
     /// a run of bytes over.
     pub fn prose(self) -> Prose<'cell> {
         Prose(self.run())
+    }
+}
+
+/// What sits at the front of a [`ThinRun`]'s allocation: its length. The elements follow at
+/// `ThinRun::<T>::OFFSET`.
+#[repr(C)]
+struct ThinHeader {
+    len: usize,
+}
+
+/// A run reached through one thin pointer: a length header with the elements laid down right after
+/// it at their own alignment, in one allocation a [`Writer::thin_run`] made.
+///
+/// `Copy` for any `T`, and read at `'cell` like every other written run.
+pub struct ThinRun<'cell, T> {
+    head: NonNull<ThinHeader>,
+    _run: PhantomData<&'cell [T]>,
+}
+
+impl<T> Clone for ThinRun<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for ThinRun<'_, T> {}
+
+impl<'cell, T> ThinRun<'cell, T> {
+    /// The element run's byte offset from the header: a constant per `T`, whatever the length.
+    const OFFSET: usize = size_of::<ThinHeader>().next_multiple_of(align_of::<T>());
+
+    /// The allocation for `len` elements. Never zero-sized, since the header is always there.
+    fn layout(len: usize) -> Layout {
+        let elements = size_of::<T>()
+            .checked_mul(len)
+            .and_then(|bytes| bytes.checked_add(Self::OFFSET))
+            .expect("a thin run's size fits usize");
+        Layout::from_size_align(elements, align_of::<ThinHeader>().max(align_of::<T>()))
+            .expect("a thin run's size fits isize")
+    }
+
+    /// How many elements the run holds.
+    pub fn len(self) -> usize {
+        // SAFETY: `head` came from `Writer::thin_run`, which wrote the header before handing the
+        // handle out. The bump is never reset and frees its chunks only when its region drops,
+        // which no step outlives a `'cell` borrow of, and moving a bump moves no chunk byte.
+        unsafe { self.head.as_ptr().read() }.len
+    }
+
+    /// Whether the run holds no element.
+    pub fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+
+    /// The elements, borrowed from the region.
+    pub fn as_slice(self) -> &'cell [T] {
+        // SAFETY: the element pointer is derived from `head`, the allocation's own pointer, so its
+        // provenance covers the run; `thin_run` wrote all `len` elements from `OFFSET` before the
+        // handle existed, aligned by the layout. The chunk lives for `'cell`, as in `len`. At
+        // length zero or for a zero-sized `T` the pointer is still non-null and aligned.
+        unsafe {
+            let run = self.head.cast::<u8>().add(Self::OFFSET).cast::<T>();
+            std::slice::from_raw_parts(run.as_ptr(), self.len())
+        }
     }
 }
 
