@@ -108,11 +108,17 @@ together in a cell's region as one run of nodes whose sibling references are
 indices into the run rather than pointers. A value is born from finished parts
 ([values](../values/README.md#what-a-value-is)), so a field cannot point at a
 value that does not exist yet; an index exists before its node does, so a knot
-closes a cycle without a placeholder. It is the region counterpart of the type
-lattice's recursive group, whose members are `(SCC digest, index)` handles
-([type lattice](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)),
-and the shape both circular data and a group of mutually recursive functions
-are born in.
+closes a cycle without a placeholder. It is the shape both circular data and a
+group of mutually recursive functions are born in.
+
+**Not the type lattice's recursive group.** A sealed group in the
+[type lattice](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)
+is never stored as a run: each member is its own entry in the bump-tier
+registry, keyed by the digest of `(SCC digest, index)`, and a sibling reference
+is an ordinary `KType` resolved through the registry's table. Its identity is
+content — a handle is lifetime-free, compares by digest, and interns equal
+across declarations — where a knot's is its place in a region. The lattice has
+no duplicated run to fold onto the knot, so it keeps its own addressing.
 
 **One pointer wide.** The nodes rest behind a length header in one allocation,
 written by cellgraph's `Writer::thin_run` and reached through its `ThinRun`, a

@@ -44,10 +44,3 @@ as surprises, not scheduled.
   `parse` sits below `values`, so a parse test naming `values` inverts the
   dependency, and `values`' suite has no access to the AST strategies they
   generate from.
-- **The type lattice keeps a twin of the knot.** A sealed recursive group in
-  [type_lattice](../../src/type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)
-  is a run of members with index edges — the
-  [knot](../../src/memory/README.md#the-knot)'s shape, held in its own storage.
-  Porting the lattice onto the knot is undecided; the recommendation is to
-  decide once a value-side consumer of the knot stands, so the shape is judged
-  against two users rather than one.
