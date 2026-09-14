@@ -46,8 +46,11 @@ value exists.
   scope layer ships.
 - *Mutual recursion — open.* A body sees no later sibling of its definition,
   so two functions that call each other need a definition window — implicit,
-  or a module body, as co-declared types have. The definition-site cutoff is
-  itself provisional until this is settled.
+  or a module body, as co-declared types have. The window's functions are born
+  together as one [knot](knot-layout.md), since a closure's bindings copy only
+  once nothing they copy is pending; which siblings form the knot is the
+  window's to compute. The definition-site cutoff is itself provisional until
+  this is settled.
 - *`USING … SCOPE` over a module — decided.* The surfaced names come from the
   module's signature, which must be known statically at the `USING` site; a
   module whose signature is not requires an ascription there.
@@ -57,6 +60,7 @@ value exists.
 **Requires:**
 
 - [Scope on values and types](scope-on-values-and-types.md) — a callable captures a scope.
+- [Knot layout](knot-layout.md) — a definition window's mutually recursive functions are one knot.
 
 **Unblocks:**
 

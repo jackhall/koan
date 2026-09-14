@@ -139,3 +139,9 @@ continues the counter and is none the worse for it.
 and `allocator_api2` named only by the bump tier, never by a cell-tier shape. It is a leaf under the rest
 of the tree, and anything not on the list above is a new edge rather than a
 detail.
+
+## Open work
+
+- [Knot layout](../../roadmap/rewrite/knot-layout.md) — a run of nodes whose
+  sibling references are indices into the run, for values that refer to each
+  other.

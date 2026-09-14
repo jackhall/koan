@@ -58,6 +58,9 @@ so coordinate that neither hangs on a cyclic value.
 Update [old_design/typing/user-types.md](../../old_design/typing/user-types.md) and
 [old_design/memory-model.md](../../old_design/memory-model.md) when it ships.
 
-**Requires:** none — foundation.
+**Requires:**
+
+- [Knot layout](../rewrite/knot-layout.md) — carried edge; the index-edged group
+  is this item's representation.
 
 **Unblocks:** none tracked yet.
