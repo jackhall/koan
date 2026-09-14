@@ -22,7 +22,7 @@ runtime.
 
 **Acceptance criteria.**
 
-- A `scopes` module depends on `values`, `type_lattice`, `memory` and `parse`,
+- A `scope` module depends on `values`, `type_lattice`, `memory` and `parse`,
   and on no scheduler type.
 - A body's shape is built once, in program storage, and resolves every name the
   body reads to a slot of its per-call bindings, a slot of its closure
@@ -44,7 +44,7 @@ runtime.
 - A by-name resolution from an activation picks the same binding as the
   coordinate the shape resolved for that name, and no binding stores a
   reference into another scope.
-- [`src/scopes/README.md`](../../src/scopes/README.md) describes the module as
+- [`src/scope/README.md`](../../src/scope/README.md) describes the module as
   shipped, and the module's top-of-file comment links it.
 
 **Directions.**

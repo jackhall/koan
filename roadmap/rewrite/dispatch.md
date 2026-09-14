@@ -13,7 +13,7 @@ register as functions through
 no function dispatches on every statement, and a reference to a binder that
 has dispatched but not yet bound parks through name placeholders
 ([name-placeholders.md](../../old_design/execution/name-placeholders.md)). The
-rewrite's [scopes](../../src/scopes/README.md) resolve value and type names
+rewrite's [scopes](../../src/scope/README.md) resolve value and type names
 only: nothing selects a callable for a keyworded expression, so no koan
 program runs on the rewritten stack.
 
@@ -42,7 +42,7 @@ program runs on the rewritten stack.
   unshadowable, so a builtin form resolves when the shape is built; a user
   bucket is shadowable and overloaded. Recommended: extend the shape's
   coordinate resolution to bucket keys, as value and type names resolve
-  ([src/scopes/README.md](../../src/scopes/README.md#resolution)).
+  ([src/scope/README.md](../../src/scope/README.md#resolution)).
 
 ## Dependencies
 

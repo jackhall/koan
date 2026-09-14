@@ -25,7 +25,7 @@ value exists.
   never `false`.
 - A function value's closure bindings are born from its body's shape, and the
   capture set the shape computes uses the scopes' visibility predicate
-  ([src/scopes/README.md](../../src/scopes/README.md#visibility)).
+  ([src/scope/README.md](../../src/scope/README.md#visibility)).
 
 **Directions.**
 
@@ -38,7 +38,7 @@ value exists.
 - *Capture into closure bindings — decided.* A closure's bindings are a
   shallow copy of the names its body reads from enclosing scopes, born once
   none of them is a placeholder, per
-  [src/scopes/README.md](../../src/scopes/README.md#three-tiers).
+  [src/scope/README.md](../../src/scope/README.md#three-tiers).
 - *Whether a callable prices uncopyable — open.* Closure bindings hold value
   words, and every data value has a deep copy, so a closure over data alone
   could copy at a crossing; one over another callable reaches the same
