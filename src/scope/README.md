@@ -22,11 +22,13 @@ A scope is built in three tiers, each at the moment its contents become known.
   scope is copied in shallowly: the binding's value word, not a deep copy of
   what it points at. A name that is a member of the callable's own
   [component](#visibility) is held as an edge into the knot the component is
-  born in, never as a copied value. A callable's birth waits on any captured
-  slot that is still pending, so a closure binding is never a placeholder.
+  born in, never as a copied value. A callable's birth reads every capture into
+  scratch first and lays the run down only once none is pending, so a closure
+  binding is never a placeholder and a refused birth writes nothing.
 - **Per-call bindings** — one activation per call, laid down in the call's
-  frame region: a pointer to the callable's closure bindings, and one slot for
-  each parameter and each local the shape declares. Nothing is copied out of
+  frame region: a pointer to the callable's closure bindings, the callable
+  itself, and one slot for each parameter and each local the shape declares.
+  Nothing is copied out of
   the closure bindings; a read of a capture goes through the pointer, one load
   more than a read of a local. Copying the captures in would cost a word per
   capture per call, multiplied by recursion depth, and a copied knot edge would
@@ -83,10 +85,15 @@ A name a callable body reads from outside is added to its capture layout once,
 however often the body reads it, with where the callable's birth reads it from:
 a coordinate of the enclosing activation, or — when the name is a fellow member
 of the component the callable's own binding belongs to — that member's place in
-the component, which the birth turns into a knot edge the caller mints. A
-capture read through a coordinate that is itself an enclosing callable's knot
-edge is resolved to a value at birth by the caller, since resolving an edge is
-the knot's owner's to do.
+the component, which the birth turns into a knot edge the caller mints.
+
+**No reader sees a bare edge.** The scope layer is generic over the callable a
+value holds — the parameter [`values`](../values/README.md#what-a-value-is)
+takes — and reads one only to resolve an edge. An activation of a callable
+holds the callable it runs, and a block inside it inherits that callable, so a
+read of a capture that is an edge resolves through it to the sibling callable
+the edge names, a bound value like any other. A capture read at birth through
+such a coordinate is therefore the sibling's value word.
 
 A search by symbol happens only where the shape is built and inside `EVAL`.
 How the shape's runs are searched — linear below some length, binary above —
@@ -161,10 +168,14 @@ and so is a function outside a module that is mutually recursive with one
 inside it, since a module body is an eager context — the two belong in one
 module.
 
-Which components are tied as knots, and how a deferred mention below a nested
-constructor is written into one, belong to the callable layer
-([Open work](#open-work)); the shape hands it each body's components and the
-class of every mention.
+The shape hands the layer above each body's components and the class of every
+mention, and two facts a tie reads: the callable body each binder births —
+`Shape::births`, set when the binder's right-hand side is a callable form at
+its root or its form is a combined one — and `Shape::form`, the form node a
+callable body sits in, where its signature is read. Tying a component of
+callable binders is [`function`](../function/README.md#the-tie)'s; a component
+with a data member, and a deferred mention below a nested constructor, are
+[Open work](#open-work).
 
 ## Two channels
 
@@ -252,15 +263,17 @@ label interner.
 An activation is `Drop`-free and laid down in its frame's region, so a frame's
 death releases it with the region. It is a header of four pointers — its shape,
 its closure bindings, the builtin table and, for a block, the enclosing
-activation — beside one slot array over the shape's slot count. It holds no
+activation — beside the callable it runs, if any, and one slot array over the
+shape's slot count. It holds no
 pointer into itself: its shape lives in program storage, its builtin table
 outlives every frame, its closure bindings live in the callable value, which
 the caller keeps alive across the call, an enclosing activation lives in the
 same frame, and its slots hold values. An activation is therefore copied by
 copying its bytes. Each kind of body has its own constructor — a program's
 with neither closure bindings nor an enclosing activation, a callable's or
-module's with closure bindings, a block's beside an enclosing activation whose
-builtin table it shares — so no other combination can be built.
+module's with the callable and its closure bindings, a block's beside an
+enclosing activation whose builtin table and callable it shares — so no other
+combination can be built.
 
 A shape and everything it holds — declared-name runs, mentions, captures,
 components, nested shapes — rest in program storage and are `Copy`. An
@@ -279,9 +292,6 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [Function values](../../roadmap/rewrite/function-values.md) — closure
-  bindings born into a function value, and tying a component of callables as a
-  knot.
 - [Circular values](../../roadmap/rewrite/circular-values.md) — tying a
   component with data members, including a deferred mention below a nested
   constructor.

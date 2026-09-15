@@ -16,6 +16,8 @@
 //! `crate::memory`, `crate::parse`, `crate::scope`, `crate::type_lattice` and `crate::values`, and
 //! nothing else in the crate; `tests::boundary` reads the source to hold it there. Neither `values`
 //! nor `scope` names this module.
+//!
+//! See [function/README.md](function/README.md).
 
 mod birth;
 mod copy;
@@ -85,6 +87,7 @@ pub struct Callable<'graph, 'cell>(Member<'cell, Node<'graph, 'cell>>);
 
 const _: () = assert!(size_of::<Callable<'static, 'static>>() == 16);
 const _: () = assert!(size_of::<KValue<'static, 'static>>() == 24);
+const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 72);
 
 impl<'graph, 'cell> Callable<'graph, 'cell> {
     /// The knot node this callable is.

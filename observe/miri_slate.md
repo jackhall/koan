@@ -14,12 +14,11 @@ whole list. It runs on the default build: `python3 tools/miri.py`.
 `cellgraph` — `Writer::fill`, the reattach seam, the region release — pinned
 library-side by [cellgraph/observe/miri_slate.md](../cellgraph/observe/miri_slate.md),
 or in `bumpalo`'s allocator under the bump tier. `Writer::thin_run`, under
-`memory`'s knot, is pinned library-side only: the knot is safe indexing over
-the `ThinRun` handle, with no layout or retype of its own for this slate to
-drive. What this slate pins is the
-*safe* koan code that drives them: a bump-hosted table, slots laid down in a
+`memory`'s knot, is pinned library-side: the knot is safe indexing over the
+`ThinRun` handle, with no layout or retype of its own. What this slate pins is
+the *safe* koan code that drives them: a bump-hosted table, slots laid down in a
 cell's region and written through `Cell`, a scratch arena shared with the
-registry it serves. Each anchor file is therefore whitelisted below, and the
+registry it serves, and a knot re-tied at a crossing's destination. Each anchor file is therefore whitelisted below, and the
 fingerprint block stays empty.
 
 The old runtime's slate is frozen beside this one in
@@ -55,6 +54,10 @@ silence the stale-anchor check; delete a redundant test instead.
   destination's `Writer`, nesting `fill` inside `fill` with `text` between and embedding program
   nodes at `'graph`. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s placement doors
   and reattach seam, whose pin and keep paths its own slate pins.
+- `src/function/copy.rs` — a callable's copy re-ties its whole knot through the destination's
+  `Writer`: `thin_run` fills the node run while each node's closure run and every captured value's
+  deep copy are written into the same region. No `unsafe` of its own; the backing `unsafe` is
+  `cellgraph`'s `thin_run`, `fill` and reattach seam.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -110,11 +113,21 @@ region it came from is released.
   its home released, and redeemed in the destination's next step: every byte reads back and the
   quote is the parsed node.
 
+**Knots in a cell's region** ([src/function/copy.rs](../src/function/copy.rs)) — a callable
+copied across a crossing re-ties its whole knot through the destination's writer, and is read
+through its edges after the region it came from is released.
+
+- `a_copied_knot_outlives_its_home`
+  a two-node knot of mutually recursive functions, whose closures capture a string and a string
+  list, crosses under a copy verdict, is kept, its home released, and redeemed in the destination's
+  next step: each edge names a node of the copy and every captured byte reads back.
+
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-15: 49s — 9 tests, 0 leaks, 0 UB
 - 2026-09-13: 18s — 8 tests, 0 leaks, 0 UB
 - 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
 - 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB

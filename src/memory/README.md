@@ -174,7 +174,8 @@ Knot identity and equality are not the shape's. A circular data value's
 equality — bisimulation over `(knot, index)` pairs — and a renderer that
 terminates on a cycle belong to [values](../values/README.md). Which bindings
 may form a knot is delimited by a [scope's shape](../scope/README.md#visibility),
-and tying one belongs to the callable layer.
+and tying a component of callables belongs to
+[`function`](../function/README.md#the-tie).
 
 ## Strongly connected components
 

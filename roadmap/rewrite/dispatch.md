@@ -48,7 +48,6 @@ program runs on the rewritten stack.
 
 **Requires:**
 
-- [Function values](function-values.md) — there is nothing to dispatch on until functions exist.
 - [Scheduler on cellgraph](scheduler-on-cellgraph.md) — running a program needs the scheduler that drives it.
 
 **Unblocks:**

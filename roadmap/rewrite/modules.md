@@ -10,13 +10,13 @@ the members its activation binds, and the shape builder reports `USING …
 SCOPE` unsupported because resolving a surfaced name statically needs the
 module's signature. The `:|` and `:!` ascription operators, and the
 constructor-application type expressions (`Pair {Key = Number}`, `Number AS
-Wrap`) that [`elaborate`](function-values.md) refuses, have no home either. The
+Wrap`) that [`elaborate`](../../src/elaborate/README.md#refusals) refuses, have no home either. The
 old runtime's [`Module`](../../src/machine/model/values/module.rs) holds a bare
 `&Scope` and a frozen member table, both of which the rewrite replaces.
 
 **Acceptance criteria.**
 
-- The callable parameter [functions](function-values.md) close gains a module
+- The callable parameter [functions](../../src/function/README.md) close gains a module
   node beside the function node, and the value word stays at twenty-four
   bytes.
 - A module value reports its memoized type handle: its self-signature,
@@ -53,7 +53,6 @@ old runtime's [`Module`](../../src/machine/model/values/module.rs) holds a bare
 
 **Requires:**
 
-- [Function values](function-values.md) — the callable parameter and the knot a module node joins.
 - [Dispatch](dispatch.md) — a module program runs only under dispatch.
 
 **Unblocks:** none — a leaf of the rewrite.

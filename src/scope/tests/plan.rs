@@ -1303,12 +1303,12 @@ struct Renderer<'p> {
     statement: u32,
 }
 
-/// A program's source: one line per statement.
 /// The source of the program `choices` plans — what a suite above `scope` runs a plan as.
 pub(crate) fn program_source(choices: &[u32]) -> String {
     render_program(&Generator::new(choices).program()).source
 }
 
+/// A program's source: one line per statement.
 pub(super) fn render_program(program: &Scope) -> Rendering<'_> {
     let mut renderer = Renderer::new(program, 0);
     for (index, statement) in program.statements.iter().enumerate() {

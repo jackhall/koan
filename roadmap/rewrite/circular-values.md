@@ -3,7 +3,7 @@
 Data values that refer to themselves, born in a knot beside the functions that
 capture them.
 
-**Problem.** [Function values](function-values.md) tie a deferred-only
+**Problem.** [`function`](../../src/function/README.md#the-tie) ties a deferred-only
 component as a [knot](../../src/memory/README.md#the-knot) only when every
 member is a callable binder. A component with a data member — `LET a = [f];
 LET f = FN <reads a>`, or a ring of containers — is refused, although the
@@ -38,8 +38,6 @@ member reference held inside a container's cell run.
 
 ## Dependencies
 
-**Requires:**
-
-- [Function values](function-values.md) — the tie this item extends.
+**Requires:** none — [functions](../../src/function/README.md) ship the tie this item extends.
 
 **Unblocks:** none — a leaf of the rewrite.

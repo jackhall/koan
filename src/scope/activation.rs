@@ -2,8 +2,8 @@
 //!
 //! Its header is four pointers — the shape in program storage, the callable's closure bindings, the
 //! builtin table, and the enclosing activation of a block — beside the callable the activation runs,
-//! and its body is one [`SlotArray`] over the shape's slots. Nothing points into the activation itself, it carries no
-//! drop glue, and it is `Copy`: a copy is its bytes.
+//! and its body is one [`SlotArray`] over the shape's slots. Nothing points into the activation
+//! itself, it carries no drop glue, and it is `Copy`: a copy is its bytes.
 //!
 //! A slot is `Empty` until its binder is submitted, `Claimed` by the binder's cell while it runs,
 //! and `Bound` once. A deferred mention reads at the body's end and so sees later siblings, so the

@@ -15,9 +15,24 @@ A [`Value`](../values.rs) is one `Copy` word of 24 bytes: a number, a bool,
 null, a string borrowed where its bytes live, a quoted expression borrowed where
 the parse put it, or a borrow of a **per-kind resident struct** —
 [`List`](list.rs), [`Dict`](dict.rs), [`Record`](record.rs),
-[`Tagged`](tagged.rs) or [`TypeValue`](type_value.rs). `Value` is the sum and
-the per-kind structs carry the methods, so a consumer that only reads lists
-names `List` and never matches on every kind.
+[`Tagged`](tagged.rs) or [`TypeValue`](type_value.rs) — or a **callable**.
+`Value` is the sum and the per-kind structs carry the methods, so a consumer
+that only reads lists names `List` and never matches on every kind.
+
+**A callable is a parameter.** A callable holds the environment it captured,
+which is the [scope layer's](../scope/README.md#three-tiers), and `values` may
+not name a scope. So `Value<'graph, 'cell, X>` has one arm, `Callable(X)`, over
+a type parameter a layer above closes — [`function`](../function/README.md)
+closes it with a sixteen-byte knot member, so the word stays at 24 bytes.
+`values` states what it asks of `X` as a trait pair
+([values.rs](../values.rs)): per value, `Callable` — a `Copy` type with its
+memoized type handle, its weight, its surface, and the fellow member an edge of
+its own knot names; per family, `CallableFamily` — the closed callable at each
+region lifetime, and the copy from one to another. The parameter defaults to
+the uninhabited `Nothing`, whose family is `NoCallable`, so a value spelled
+without it holds no callable and every arm that builds one is unreachable.
+Every container, the working expression, and every door and relation over
+them carry the same parameter.
 
 No type handle rides in the word. A `KType` is a `u128` aligned to 16 bytes, and
 one inline would more than double every cell; every handle lives in the resident
@@ -30,7 +45,8 @@ is no other constructor, no reference count, and no per-value reach
 description: a value built in a step is a plain reference whose reach is the
 executing cell, and a value crossing a step rides the substrate's carrier,
 [`ValueCarrier`](../values.rs), `memory`'s `Ready` bound to
-[`ValueFamily`](../values.rs). Every resident struct is `Copy`, so it is
+[`ValueFamily`](../values.rs) over a callable family. Every resident struct,
+and every callable, is `Copy`, so it is
 `Drop`-free by construction and a region releases it whole. Every door lays its
 struct down through `memory`'s `resident` and its runs through `collect`, the
 two shapes derived from `Writer::fill`; `text` is the one helper here, a string
@@ -59,8 +75,9 @@ is the same node on either side of every crossing** — a pin, a copy, and a
 forced tree-cell copy alike — and weighs its pointer. No AST node is ever homed
 in a cell.
 
-It is also why **no data value is uncopyable**: every region part has a deep
-copy and every program part has none to do, so the copy is total.
+It is also why **every value copies**: every region part has a deep copy,
+every program part has none to do, and a callable is rebuilt by its family, so
+the copy is total.
 
 ## The type memo and `satisfies`
 
@@ -68,7 +85,8 @@ Every composite stores its type as a memoized [`type_lattice`](../type_lattice/R
 handle, computed in the pass that lays its cells down: a list the join of its
 cells' types (`Never` when empty), a dict the joins over its keys and its
 cells, a record the record type of its fields in written order, a type value
-`OfKind` of the kind of the type it names, a tagged value its identity.
+`OfKind` of the kind of the type it names, a tagged value its identity, and a
+callable reports its own.
 `Value::ktype` copies that handle or names a leaf constant; it reads no registry
 and walks nothing.
 
@@ -100,8 +118,10 @@ total rebuild at a destination writes, saturating. A composite weighs its own
 resident struct plus every cell it lays down, and a cell weighs a whole `Value`
 word plus whatever that word points at in the region — a string its bytes, a
 dict key its key word and bytes, a record name its symbol. A tagged value holds
-its payload word inline, so it adds only what the payload points at. Program
-storage weighs nothing past the pointer. A crossing reads the weight off the
+its payload word inline, so it adds only what the payload points at. A
+callable weighs what its own rebuild writes, which its layer memoizes — for a
+function, the whole knot it sits in. Program storage weighs nothing past the
+pointer. A crossing reads the weight off the
 value rather than walking it; a retype shares the runs, so it shares the
 weight.
 
@@ -116,8 +136,10 @@ its weight, and both build the same way: a **pinned** operand arrives at the
 destination's brand and embeds as it is, and a **copied** one is rebuilt through
 `copy_into` — region parts written again through the destination's writer,
 program nodes embedded verbatim, memoized types and weights carried over
-unchanged. `copy_into` is private to the crossing: the two doors are the only
-way to a deep copy, so every copy is one the graph priced.
+unchanged, and a callable handed to its family's copy together with
+`copy_into` itself, so every value the callable holds is rebuilt by the same
+copy. `copy_into` is private to the crossing: the two doors are the only way
+to a deep copy, so every copy is one the graph priced.
 
 The graph consults an embedder closure for each operand's verdict, and this
 module owns it: [`verdict`](crossing.rs) copies when the copy costs less than a
@@ -155,10 +177,19 @@ contents **only when their memoized types are related**, one satisfied by the
 other in either direction — an empty list of strings and an empty list of
 numbers are unequal. That makes `==` intransitive across ascriptions by design.
 
+**A callable has no structural equality.** `equals` answers
+`Result<bool, Incomparable>`: a comparison with a callable on either side is
+`Incomparable`, which the `==` builtin reports as an error rather than
+`false`, and so is a pair of related containers whose aligned cells reach one.
+Every aligned pair is compared, so an unequal pair before a callable does not
+hide it. A container pair with unrelated types is still unequal without
+descending, whatever it holds.
+
 `Value::render` is the surface `PRINT` writes: a string bare, a dict key quoted
 so `{"1": x}` and `{1: x}` read apart, `[a, b]`, `{k: v}` in key order,
 `{x = 1}` in field-name order, a tagged value as its type's name around its
-payload, a type as its name, and a quote as its body's surface.
+payload, a type as its name, a quote as its body's surface, and a callable as
+its own layer renders it.
 
 `Value::lower_part` builds a value straight from a region-pure AST part — a
 scalar or string literal, a quote, or a container literal whose every element
@@ -200,9 +231,9 @@ a resolved sub-result or a staging hole exists only here.
 
 **Outside doc comments and `#[cfg(test)]`, `values` names `crate::memory`,
 `crate::parse`, `crate::source` and `crate::type_lattice`, and nothing else in
-the crate.** It names no scheduler type and no scope type, so it carries no
-function or module arm — a callable names the environment it captured, which is
-the scope layer's. The compiler cannot enforce a module boundary inside one
+the crate.** It names no scheduler type, no scope type and no function type,
+so its callable arm is a parameter rather than a function or module arm. The
+compiler cannot enforce a module boundary inside one
 crate, so [`tests::boundary`](tests/boundary.rs) reads this module's own source
 and fails on any other `crate::` path, on an owning heap type (`Rc`, `RefCell`,
 `Box`, `Vec`, `String`) outside the test files, and on a lifetime spelled with
@@ -221,9 +252,6 @@ pair with are `cellgraph`'s own slate.
 
 ## Open work
 
-- [Function values](../../roadmap/rewrite/function-values.md) — a callable arm
-  over a parameter the function layer closes, capturing a
-  [scope](../scope/README.md)'s closure bindings.
 - [Circular values](../../roadmap/rewrite/circular-values.md) — equality and
   rendering that terminate on a cycle.
 - [Scheduler on cellgraph](../../roadmap/rewrite/scheduler-on-cellgraph.md) —

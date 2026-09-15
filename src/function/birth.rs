@@ -2,10 +2,10 @@
 //!
 //! Everything a member needs is read first, into scratch, with no writer in reach — its body, its
 //! type elaborated from its signature, and its captures, a capture of a fellow member minted as an
-//! edge into the knot about to be tied. Any member that is not a callable binder, and any read still
-//! pending, refuses the tie before a byte is written. Only then are the closure runs laid down, the
-//! knot's weight summed, and the nodes tied in member order, so member `i` is the node edge `i`
-//! names.
+//! edge into the knot about to be tied. A member that is not a callable binder refuses the tie before
+//! any member is read, and a read still pending refuses it before a byte is written. Only then are
+//! the closure runs laid down, the knot's weight summed, and the nodes tied in member order, so
+//! member `i` is the node edge `i` names.
 
 use crate::elaborate::{Elaboration, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, CellHandle, Knot, KnotPlan, Writer};
@@ -85,10 +85,18 @@ fn stage<'graph, 'cell, 'x>(
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, Staged<'graph, 'cell, 'x>>, Untieable> {
     let shape = activation.shape();
+    if let Some(slot) = component
+        .members
+        .iter()
+        .find(|slot| shape.births(**slot).is_none())
+    {
+        return Err(Untieable::Data {
+            name: shape.slot_name(*slot),
+        });
+    }
     let mut staged = BumpVec::with_capacity_in(component.members.len(), scratch);
     for slot in component.members {
-        let name = shape.slot_name(*slot);
-        let body = shape.births(*slot).ok_or(Untieable::Data { name })?;
+        let body = shape.births(*slot).expect("every member births a callable");
         let form = body.form().expect("a callable body sits in its form");
         let ktype =
             callable_type(form, activation, types, scratch).map_err(|error| match error {
