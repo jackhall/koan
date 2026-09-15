@@ -11,8 +11,9 @@ captured by the cell's continuation at the cell's own brand.
 [`slots`](slots.rs) the layout-addressed table shape, [`knot`](knot.rs) the
 index-edged group of values that refer to each other, [`bump`](bump.rs) the
 arena tier outside the graph, [`program`](program.rs) the program-text owner
-over it, and [`scope_id`](scope_id.rs) the position-independent identity a
-resident carries.
+over it, [`components`](components.rs) the strongly-connected-component walk
+over an index graph, and [`scope_id`](scope_id.rs) the position-independent
+identity a resident carries.
 
 ## Two tiers, and why the boundary falls where it does
 
@@ -64,11 +65,10 @@ lives here.
 **No keyed table lives in a cell.** `memory` ships no name-to-value lookup
 table meant to rest in a cell's region. Its one hash table, `BumpBackedMap`,
 cannot: a hash table allocates and grows its buckets, and a cell's `Writer`
-never exposes an allocator. A cell-resident keyed table would be a
-fixed-capacity open-addressed array of slots laid down by `fill` and probed by
-hash, and its key type, capacity rule and interior-mutability needs are the
-scope layer's to know — so it is that layer's to add
-([Scope on values and types](../../roadmap/rewrite/scope-on-values-and-types.md)).
+never exposes an allocator. The [scope layer](../scope/README.md), which
+owns koan's name lookup, needs none either: a body's names resolve to slot
+indices where its shape is built in program storage, so a cell holds only a
+slot array.
 
 ## The slot array
 
@@ -167,8 +167,25 @@ node, which is what write-once values already require.
 
 Knot identity and equality are not the shape's. A circular data value's
 equality — bisimulation over `(knot, index)` pairs — and a renderer that
-terminates on a cycle belong to [values](../values/README.md), and which
-sibling functions form a knot belongs to the callable layer.
+terminates on a cycle belong to [values](../values/README.md). Which bindings
+may form a knot is delimited by a [scope's shape](../scope/README.md#visibility),
+and tying one belongs to the callable layer.
+
+## Strongly connected components
+
+[`strongly_connected_components`](components.rs) is Tarjan's walk over an index
+graph: `edges[i]` lists the nodes `i` references, and the components come back
+as runs of node indices, every buffer staged in a bump the caller passes. The
+emission order is reverse topological on the condensation — a component comes
+out only after every component it references — which is the order a caller
+that finishes each component against the ones below it relies on.
+
+It lives here because it names nothing of what a node stands for and has two
+callers above `memory` that must not depend on each other: the
+[type lattice](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)
+condenses a recursive group's members to digest them, and a
+[scope's shape](../scope/README.md#visibility) condenses a body's bindings to
+find the components a knot can tie and the eager cycles it refuses.
 
 ## Drop-freeness is a compile-time fact
 

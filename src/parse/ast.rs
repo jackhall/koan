@@ -391,6 +391,26 @@ impl<'a> KExpression<'a> {
         self.statement_spine().binder_plan()
     }
 
+    /// This node's statements **as a body**, beside the lexical position each submits at: statement
+    /// `i` of a statement block writes at `i + 1`, and a single-statement body is its own statement
+    /// at `1`.
+    pub(crate) fn body_statements<'n>(
+        &'n self,
+    ) -> impl Iterator<Item = (&'n KExpression<'a>, usize)> + Clone {
+        let block = self.is_statement_block().then_some(self.parts);
+        let statements = block.unwrap_or_default().iter().map(|part| {
+            let ExpressionPart::Expression(statement) = part.value else {
+                unreachable!("a statement block's parts are all expressions");
+            };
+            statement.reference()
+        });
+        let single = (!self.is_statement_block()).then_some(self);
+        statements
+            .chain(single)
+            .enumerate()
+            .map(|(i, statement)| (statement, i + 1))
+    }
+
     /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates. Read by the
     /// scheduler to decide which children submit.
     pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {

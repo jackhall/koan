@@ -22,6 +22,9 @@ pub mod machine;
 /// spelling and the slot array — and the bump tier outside the graph, where program storage lives.
 pub mod memory;
 pub mod parse;
+/// Lexical environments over values and types: the shape a body resolves its names through, the
+/// closure bindings a callable captures, and the activation a call reads and binds.
+pub mod scope;
 pub mod source;
 /// Guard-fixture surface for the step-brand `compile_fail` tests, which compile as external
 /// crates and so cannot name the `pub(crate)` `StepCarried` directly. Hidden from docs; not part

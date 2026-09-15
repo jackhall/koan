@@ -7,6 +7,9 @@
 //! The **bump tier** is storage outside the graph — [`Bump`](crate::memory::Bump), [`BumpAllocator`](crate::memory::BumpAllocator), [`BumpVec`](crate::memory::BumpVec) and
 //! [`BumpBackedMap`](crate::memory::BumpBackedMap) — for the AST ([`program`](crate::memory::program)) and the type lattice's registry and scratch.
 //!
+//! [`strongly_connected_components`](crate::memory::strongly_connected_components) is the index-graph
+//! walk a recursive group and a scope's bindings both condense by.
+//!
 //! [`scope_id`](crate::memory::scope_id) is the position-independent identity a resident carries so nothing depends on where
 //! it sits.
 //!
@@ -16,6 +19,7 @@
 //! See [memory/README.md](memory/README.md).
 
 mod bump;
+mod components;
 mod knot;
 pub mod program;
 pub mod scope_id;
@@ -27,6 +31,7 @@ mod tests;
 
 pub(crate) use bump::bump_table;
 pub use bump::{Bump, BumpAllocator, BumpBackedMap, BumpVec};
+pub use components::strongly_connected_components;
 pub use knot::{Edge, Knot, KnotPlan, Member};
 pub use program::{ProgramBrand, ProgramStorage, program_storage};
 pub use scope_id::ScopeId;

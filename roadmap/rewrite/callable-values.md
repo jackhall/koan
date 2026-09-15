@@ -44,22 +44,29 @@ value exists.
   could copy at a crossing; one over another callable reaches the same
   question recursively. Recommended: settle it against the binding shape the
   scope layer ships.
-- *Mutual recursion — open.* A body sees no later sibling of its definition,
-  so two functions that call each other need a definition window — implicit,
-  or a module body, as co-declared types have. The window's functions are born
-  together as one [knot](../../src/memory/README.md#the-knot), since a closure's bindings copy only
-  once nothing they copy is pending; which siblings form the knot is the
-  window's to compute. The definition-site cutoff is itself provisional until
-  this is settled.
+- *Mutual recursion — decided.* A callable body's mentions are deferred, so it
+  sees every sibling in its scope in any source order
+  ([src/scope/README.md](../../src/scope/README.md#visibility)); a strongly
+  connected component of bindings whose internal mentions are all deferred is
+  born together as one [knot](../../src/memory/README.md#the-knot), with a
+  closure binding that names a fellow member holding a knot edge.
+- *A module body's context — decided, provisionally.* Eager, per
+  [src/scope/README.md](../../src/scope/README.md#visibility): a function
+  outside a module mutually recursive with one inside is an eager-cycle error.
+  Relax it here only if a module must become a knot node.
+- *Nested deferred mentions — open.* A deferred mention below a nested
+  constructor (`LET a = {inner: [b]}` with `b` in `a`'s component) cannot be
+  a `Member` inside an ordinary sub-run, since a copy of the knot would not
+  rebase it. Either the tie writes each nested constructor on the path as an
+  anonymous node of the knot, which plan-then-tie permits, or the shape
+  classifies such a mention as eager and the program is rejected.
 - *`USING … SCOPE` over a module — decided.* The surfaced names come from the
   module's signature, which must be known statically at the `USING` site; a
   module whose signature is not requires an ascription there.
 
 ## Dependencies
 
-**Requires:**
-
-- [Scope on values and types](scope-on-values-and-types.md) — a callable captures a scope.
+**Requires:** none — [scopes](../../src/scope/README.md) ship.
 
 **Unblocks:**
 
