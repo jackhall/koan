@@ -14,6 +14,7 @@ const PREFIXES: &[&str] = &[
     "crate::parse",
     "crate::scope",
     "crate::static_name",
+    "crate::tests::case_share",
     "crate::type_lattice",
     "crate::values",
 ];
