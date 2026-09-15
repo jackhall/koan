@@ -12,6 +12,7 @@
 //! bracket. The process-wide tally is what the binary's `alloc-count` feature reports for a
 //! whole program run, where there is no concurrent traffic to exclude.
 
+pub(crate) mod boundary;
 #[path = "../audit/counting_alloc.rs"]
 mod counting_alloc;
 

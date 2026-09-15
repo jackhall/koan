@@ -276,6 +276,15 @@ impl<'graph> Shape<'graph> {
         self.mentions
     }
 
+    /// The mention recorded for the name part at `site`, if the part is one this shape reads.
+    pub fn mention(&self, site: Site) -> Option<&'graph Mention> {
+        let index = self
+            .mentions
+            .binary_search_by_key(&site, |mention| mention.site)
+            .ok()?;
+        Some(&self.mentions[index])
+    }
+
     /// The capture layout, in closure-slot order. Empty for a program and a block.
     pub fn captures(&self) -> &'graph [CaptureSpec] {
         self.captures
