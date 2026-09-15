@@ -279,10 +279,14 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [Callable values](../../roadmap/rewrite/callable-values.md) — closure
-  bindings born from a function value, and tying a component as a knot,
-  including a deferred mention below a nested constructor.
+- [Function values](../../roadmap/rewrite/function-values.md) — closure
+  bindings born into a function value, and tying a component of callables as a
+  knot.
+- [Circular values](../../roadmap/rewrite/circular-values.md) — tying a
+  component with data members, including a deferred mention below a nested
+  constructor.
+- [Modules](../../roadmap/rewrite/modules.md) — `USING … SCOPE` resolved
+  through a module's signature.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `USING …
-  SCOPE`, `CLOSE OVER`, and an `EVAL` retaining its defining scope across
-  frames.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
+  OVER`, and an `EVAL` retaining its defining scope across frames.

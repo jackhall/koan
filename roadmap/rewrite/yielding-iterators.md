@@ -33,12 +33,13 @@ elements a consumer takes lazily.
   parameters are the locals it reads; a yield reached through a non-tail call is
   what delegation covers.
 - *Delegation over continuation-passing — decided.* A closure retains what it
-  captures and a callable prices uncopyable
-  ([callable-values.md](callable-values.md)), so a continuation-passing stream
-  pins the producing call's storage into the consumer on every element, and a
-  tree-cell loop hop cannot carry it across a tail call at all. Delegation keeps
-  pending tails as data: bound calls whose function values rest in an enclosing
-  scope, pinned at zero marginal price, and whose arguments copy.
+  captures, and a callable copies only by re-tying its whole knot
+  ([Function values](function-values.md)), so a continuation-passing stream
+  either pins the producing call's storage into the consumer on every element
+  or copies every capture per element, and a tree-cell loop hop cannot carry
+  the pin across a tail call at all. Delegation keeps pending tails as data:
+  bound calls whose function values rest in an enclosing scope, pinned at zero
+  marginal price, and whose arguments copy.
 - *A stream at rest is a value, not a sleeping cell — decided.* A region
   releases whole and runs no destructor, so nothing signals when the last handle
   to a sleeping producer cell dies; a producer under another root delivers every
@@ -66,8 +67,8 @@ elements a consumer takes lazily.
   calls makes a demand one step and one child, and copies the O(depth) stack
   across each consumer hop.
 - *A bound call's shape — open.* A tagged record over a function value, or a
-  `Value` arm of its own — turns on how `Value` names a callable's environment,
-  open in [callable-values.md](callable-values.md).
+  node of the callable parameter [Function values](function-values.md) closes,
+  beside the function node.
 - *Buffered channels — deferred.* A policy layer for buffering and
   multi-producer merge, designed once streams ship.
 
@@ -75,7 +76,7 @@ elements a consumer takes lazily.
 
 **Requires:**
 
-- [Callable values](callable-values.md) — a bound call holds a function value.
+- [Function values](function-values.md) — a bound call holds a function value.
 - [Dispatch](dispatch.md) — a demand for an element is an ordinary dispatch.
 - [Scheduler on cellgraph](scheduler-on-cellgraph.md) — a flat consumer loop is its tail call.
 

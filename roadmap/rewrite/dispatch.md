@@ -29,8 +29,8 @@ program runs on the rewritten stack.
 - A reference to a visible binder that has not yet bound parks until it binds,
   and a dispatch placeholder keys on the full bucket key.
 - The old runtime's tutorial programs that use no feature beyond values,
-  scopes, functions and modules run on the rewritten stack and print the same
-  output, and `tools/verify_snippets.py` reads the rewritten binary.
+  scopes and functions run on the rewritten stack and print the same output,
+  and `tools/verify_snippets.py` reads the rewritten binary.
 - The module's design doc is the `README.md` in its source directory, and the
   module's top-of-file comment links it.
 
@@ -48,9 +48,10 @@ program runs on the rewritten stack.
 
 **Requires:**
 
-- [Callable values](callable-values.md) — there is nothing to dispatch on until functions exist.
+- [Function values](function-values.md) — there is nothing to dispatch on until functions exist.
 - [Scheduler on cellgraph](scheduler-on-cellgraph.md) — running a program needs the scheduler that drives it.
 
 **Unblocks:**
 
+- [Modules](modules.md) — a module program runs only under dispatch.
 - [Yielding iterators](yielding-iterators.md) — a demand for an element is an ordinary dispatch.

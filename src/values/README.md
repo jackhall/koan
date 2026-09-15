@@ -221,8 +221,11 @@ pair with are `cellgraph`'s own slate.
 
 ## Open work
 
-- [Callable values](../../roadmap/rewrite/callable-values.md) — function and
-  module arms, capturing a [scope](../scope/README.md).
+- [Function values](../../roadmap/rewrite/function-values.md) — a callable arm
+  over a parameter the function layer closes, capturing a
+  [scope](../scope/README.md)'s closure bindings.
+- [Circular values](../../roadmap/rewrite/circular-values.md) — equality and
+  rendering that terminate on a cycle.
 - [Scheduler on cellgraph](../../roadmap/rewrite/scheduler-on-cellgraph.md) —
   the scheduler that builds its graph with `verdict` and delivers values
   between cells.
