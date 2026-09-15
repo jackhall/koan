@@ -273,7 +273,9 @@ fn check(
         assert_eq!(shape.mentions().len(), reads.len(), "`{source}`");
         for (read, placed) in reads {
             let mention = shape
-                .mention(located.sites[read])
+                .mentions()
+                .iter()
+                .find(|mention| mention.site == located.sites[read])
                 .expect("a mention at the planned read's site");
             assert_eq!(mention.name, placed.read.name.symbol(labels), "`{source}`");
             assert_eq!(mention.statement, placed.statement, "`{source}`");
@@ -427,7 +429,9 @@ fn activate<'g, 'c>(
             Some(mention.coordinate)
         );
         assert_eq!(
-            activation.resolve_by_name(mention.name, at).map(observe),
+            activation
+                .coordinate_of(mention.name, at)
+                .map(|coordinate| observe(activation.read(coordinate))),
             Some(observe(activation.read(mention.coordinate)))
         );
     }
@@ -435,7 +439,7 @@ fn activate<'g, 'c>(
     for slot in 0..shape.slots() {
         let slot = Slot(slot as u32);
         let (_, declared) = shape.slot(shape.slot_name(slot)).unwrap();
-        for position in 0..=shape.end().get() {
+        for position in 0..=shape.end().0 {
             let at = Position(position);
             let local = Coordinate {
                 hops: 0,
@@ -738,7 +742,9 @@ proptest! {
                     if matches!(mention.coordinate, Coordinate { hops: 0, target: Target::Local(_) | Target::Capture(_) }) {
                         continue;
                     }
-                    let by_name = site.resolve_by_name(mention.name, position);
+                    let by_name = site
+                        .coordinate_of(mention.name, position)
+                        .map(|coordinate| site.read(coordinate));
                     assert_eq!(by_name.map(observe), Some(observe(evaluated.read(mention.coordinate))));
                 }
             })

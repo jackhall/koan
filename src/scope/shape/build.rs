@@ -15,11 +15,12 @@ use crate::memory::{
 };
 use crate::parse::forms::{FormId, KEYWORDS};
 use crate::parse::{
-    BinderSymbol, ExpressionPart, KExpression, SlotLayout, StaticName, TypeSymbol, ValueSymbol,
+    BinderSymbol, ExpressionPart, KExpression, StaticName, TypeSymbol, ValueSymbol,
 };
 
 use super::super::activation::Activation;
 use super::super::builtins::Builtins;
+use super::super::channels::Channels;
 use super::super::roles::{BodyKind, Heads, Role, SchemaKind, roles};
 use super::super::signature::{
     body_of, declare_parameters, declare_quantifiers, pair_name, signature_run,
@@ -148,41 +149,9 @@ impl Draft<'_> {
         Position(self.statements + 1)
     }
 
-    /// The slot and position of `name` in its own channel.
-    fn slot(&self, name: BinderSymbol) -> Option<(Slot, Position)> {
-        match name {
-            BinderSymbol::Value(name) => {
-                let index = self
-                    .values
-                    .binary_search_by_key(&name, |(symbol, _)| *symbol)
-                    .ok()?;
-                Some((Slot(index as u32), self.values[index].1))
-            }
-            BinderSymbol::Type(name) => {
-                let index = self
-                    .types
-                    .binary_search_by_key(&name, |(symbol, _)| *symbol)
-                    .ok()?;
-                Some((
-                    Slot((self.values.len() + index) as u32),
-                    self.types[index].1,
-                ))
-            }
-        }
-    }
-
-    fn slot_name(&self, slot: Slot) -> BinderSymbol {
-        match slot.index().checked_sub(self.values.len()) {
-            None => BinderSymbol::Value(self.values[slot.index()].0),
-            Some(ty) => BinderSymbol::Type(self.types[ty].0),
-        }
-    }
-
-    fn slot_position(&self, slot: Slot) -> Position {
-        match slot.index().checked_sub(self.values.len()) {
-            None => self.values[slot.index()].1,
-            Some(ty) => self.types[ty].1,
-        }
+    /// The declared names, once the binders pass has sorted them.
+    fn channels(&self) -> Channels<'_, Position> {
+        Channels::new(&self.values, &self.types)
     }
 
     /// Where the path into the nested draft being walked reads at this level.
@@ -311,7 +280,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         };
         for node in nodes {
             let name = node.statement_binder_plan().and_then(|plan| plan.name);
-            let slot = name.and_then(|name| draft.slot(name)).map(|(slot, _)| slot);
+            let slot = name.and_then(|name| draft.channels().find(name));
+            let slot = slot.map(|index| Slot(index as u32));
             draft.statement_binder.push(slot);
         }
         Ok(draft)
@@ -687,9 +657,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Option<Coordinate> {
         let draft = &self.chain[level];
         let kind = draft.kind;
-        let visible = draft.slot(name).filter(|(_, declared)| at.sees(*declared));
+        let names = draft.channels();
+        let visible = names
+            .find(name)
+            .filter(|index| at.sees(names.get(*index)))
+            .map(|index| Slot(index as u32));
         let captured = draft.captures.iter().position(|spec| spec.name == name);
-        if let Some((slot, _)) = visible {
+        if let Some(slot) = visible {
             self.edge(level, slot, reader);
             return Some(Coordinate {
                 hops: 0,
@@ -755,7 +729,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// of a fellow member as edges, and seal the nested drafts.
     fn components(&mut self, draft: &mut Draft<'x>) -> Result<(), ShapeError> {
         let scratch = self.scratch;
-        let count = draft.values.len() + draft.types.len();
+        let count = draft.channels().len();
         let mut adjacency: BumpVec<'x, BumpVec<'x, usize>> =
             BumpVec::with_capacity_in(count, scratch);
         adjacency.resize_with(count, || BumpVec::new_in(scratch));
@@ -795,10 +769,18 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             .zip(cyclic.iter())
             .filter(|((_, deferred_only), cyclic)| **cyclic && !*deferred_only)
             .map(|((members, _), _)| members)
-            .min_by_key(|members| members.iter().map(|slot| draft.slot_position(*slot)).min());
+            .min_by_key(|members| {
+                members
+                    .iter()
+                    .map(|slot| draft.channels().get(slot.index()))
+                    .min()
+            });
         if let Some(members) = refused {
             return Err(ShapeError::EagerCycle {
-                members: members.iter().map(|slot| draft.slot_name(*slot)).collect(),
+                members: members
+                    .iter()
+                    .map(|slot| draft.channels().name(slot.index()))
+                    .collect(),
             });
         }
 
@@ -850,14 +832,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         );
         storage.alloc(Shape {
             kind: draft.kind,
-            values: SlotLayout::from_entries(
-                storage,
-                draft
-                    .values
-                    .iter()
-                    .map(|(name, position)| (*name, position.0)),
+            names: Channels::new(
+                storage.alloc_slice_copy(&draft.values),
+                storage.alloc_slice_copy(&draft.types),
             ),
-            types: storage.alloc_slice_copy(&draft.types),
             statements: draft.statements,
             entered_at: draft.entered_at,
             component_of: storage.alloc_slice_copy(&draft.component_of),

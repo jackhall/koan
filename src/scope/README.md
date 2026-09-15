@@ -171,7 +171,9 @@ A value name and a type name are different key types, so the value channel and
 the type channel cannot collide by construction. A name whose text classifies
 as neither is rejected where the text is classified, before any scope sees it.
 The partition lives in the shape: each channel is its own run of declared
-names. An activation holds one run of slots over `Value`, since a type is a
+names, sorted by symbol, and the two share one index space — value names take
+the first slots and type names the slots after. The builtin table lays its two
+channels out the same way. An activation holds one run of slots over `Value`, since a type is a
 `Value` arm, and the shape's key types keep the two channels' indices apart.
 Keyword buckets are dispatch's to resolve.
 

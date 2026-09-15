@@ -16,7 +16,7 @@ use crate::values::Value;
 
 use super::builtins::Builtins;
 use super::closure::{Capture, ClosureBindings};
-use super::shape::{Coordinate, Position, Shape, ShapeKind, Site, Slot, Target};
+use super::shape::{Coordinate, Position, Shape, ShapeKind, Slot, Target};
 
 /// One body's bindings for one call or one block entry.
 #[derive(Clone, Copy)]
@@ -80,14 +80,6 @@ impl<'graph, 'cell> Activation<'graph, 'cell> {
         self.builtins
     }
 
-    pub fn closure(&self) -> &'cell ClosureBindings<'graph, 'cell> {
-        self.closure
-    }
-
-    pub fn enclosing(&self) -> Option<&'cell Activation<'graph, 'cell>> {
-        self.enclosing
-    }
-
     /// Mark `slot` as bound by the running cell `binder`.
     pub fn claim(&self, slot: Slot, binder: CellHandle) -> Result<(), SlotConflict<CellHandle>> {
         self.slots.claim(slot.index(), binder)
@@ -127,12 +119,6 @@ impl<'graph, 'cell> Activation<'graph, 'cell> {
         }
     }
 
-    /// The read the mention at `site` of this activation's shape makes.
-    pub fn read_site(&self, site: Site) -> Option<Binding<'graph, 'cell>> {
-        let mention = self.shape.mention(site)?;
-        Some(self.read(mention.coordinate))
-    }
-
     /// Where `name` read at `at` lands, found by name: a builtin, a local visible at `at`, a capture,
     /// then each enclosing block activation at the position its block was entered at.
     pub fn coordinate_of(&self, name: BinderSymbol, at: Position) -> Option<Coordinate> {
@@ -152,14 +138,5 @@ impl<'graph, 'cell> Activation<'graph, 'cell> {
             hops: outer.hops + 1,
             ..outer
         })
-    }
-
-    /// `EVAL`'s by-name read: [`coordinate_of`](Self::coordinate_of), then [`read`](Self::read).
-    pub fn resolve_by_name(
-        &self,
-        name: BinderSymbol,
-        at: Position,
-    ) -> Option<Binding<'graph, 'cell>> {
-        Some(self.read(self.coordinate_of(name, at)?))
     }
 }

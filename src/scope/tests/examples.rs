@@ -4,7 +4,7 @@
 use crate::parse::forms::FormId;
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression};
 use crate::scope::{
-    CaptureSource, Coordinate, MentionClass, Position, Shape, ShapeError, ShapeKind, Target,
+    CaptureSource, Coordinate, MentionClass, Position, Shape, ShapeError, ShapeKind, Slot, Target,
 };
 
 use super::{Fixture, builtins, type_name, value_name, with_fixture};
@@ -243,7 +243,12 @@ fn a_union_may_name_itself_and_types_take_slots_after_values() {
             let shape = shape.expect("the program shapes");
             let nat = BinderSymbol::Type(type_name("Nat", fixture.labels));
             let (slot, position) = shape.slot(nat).unwrap();
-            assert_eq!(slot.index(), shape.values().len());
+            let values = (0..shape.slots())
+                .filter(|index| {
+                    matches!(shape.slot_name(Slot(*index as u32)), BinderSymbol::Value(_))
+                })
+                .count();
+            assert_eq!(slot.index(), values);
             assert_eq!(position, Position::statement(0));
             assert_eq!(mention_of(shape, nat).class, MentionClass::Deferred);
             assert!(shape.component_of(slot).deferred_only);

@@ -9,8 +9,9 @@
 //!   the closure bindings, the builtin table's base pointer, the enclosing block activation, and one
 //!   slot per parameter and local.
 //!
-//! A read through a coordinate searches nothing by name; [`Activation::resolve_by_name`] is the
-//! walk `EVAL` runs, and it lands where the coordinate would.
+//! A read through a coordinate searches nothing by name. The walk `EVAL` runs is
+//! [`Shape::for_eval`], which resolves each free name through [`Activation::coordinate_of`] and lands
+//! where the coordinate would.
 //!
 //! **Imports.** This module may name `crate::memory`, `crate::parse`, `crate::type_lattice` and
 //! `crate::values`, and no scheduler type; outside `#[cfg(test)]` it names no `type_lattice` item.
@@ -20,6 +21,7 @@
 
 mod activation;
 mod builtins;
+mod channels;
 mod closure;
 mod roles;
 mod shape;

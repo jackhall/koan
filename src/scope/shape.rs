@@ -1,8 +1,9 @@
 //! The **shape**: one per body, built once into program storage and shared by every activation of
 //! that body.
 //!
-//! It holds the body's two declared-name runs — the value channel as `parse`'s [`SlotLayout`], the
-//! type channel as a sorted run laid out after it — every mention with its class and coordinate,
+//! It holds the body's declared names as one two-channel run — value names first, type names
+//! after, each channel sorted by symbol and each name at its slot — every mention with its class
+//! and coordinate,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
 //! components of the body's bindings, and the shapes nested in it by site. [`build`] is the one
 //! builder every kind goes through.
@@ -18,11 +19,11 @@ use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::forms::FormId;
-use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner, SlotLayout};
-use crate::parse::{TypeSymbol, ValueSymbol};
+use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
 
 use super::activation::Activation;
 use super::builtins::Builtins;
+use super::channels::Channels;
 
 mod build;
 
@@ -73,10 +74,6 @@ impl Position {
     /// visibility comparison.
     pub fn sees(self, declared: Position) -> bool {
         declared < self
-    }
-
-    pub fn get(self) -> u32 {
-        self.0
     }
 }
 
@@ -170,8 +167,8 @@ pub struct Component<'graph> {
 #[derive(Clone, Copy)]
 pub struct Shape<'graph> {
     kind: ShapeKind,
-    values: &'graph SlotLayout<'graph>,
-    types: &'graph [(TypeSymbol, Position)],
+    /// Each declared name at its slot, beside the position it writes at.
+    names: Channels<'graph, Position>,
     statements: u32,
     /// The position in the enclosing shape this one is entered at: the statement's for an eager
     /// boundary, the enclosing body's end for a deferred one, and `EVAL`'s own for an `EVAL` body.
@@ -215,7 +212,7 @@ impl<'graph> Shape<'graph> {
 
     /// How many slots an activation of this shape holds.
     pub fn slots(&self) -> usize {
-        self.values.len() + self.types.len()
+        self.names.len()
     }
 
     pub fn statements(&self) -> u32 {
@@ -231,61 +228,15 @@ impl<'graph> Shape<'graph> {
         self.entered_at
     }
 
-    /// The value channel's declared names.
-    pub fn values(&self) -> &'graph SlotLayout<'graph> {
-        self.values
-    }
-
-    /// The type channel's declared names, sorted; the name at index `i` takes slot
-    /// `values().len() + i`.
-    pub fn types(&self) -> &'graph [(TypeSymbol, Position)] {
-        self.types
-    }
-
-    /// The slot and declared position of the value name `name`.
-    pub fn value_slot(&self, name: ValueSymbol) -> Option<(Slot, Position)> {
-        let slot = self.values.slot_of(name)?;
-        Some((
-            Slot(slot as u32),
-            Position(self.values.position(slot) as u32),
-        ))
-    }
-
-    /// The slot and declared position of the type name `name`.
-    pub fn type_slot(&self, name: TypeSymbol) -> Option<(Slot, Position)> {
-        let index = self
-            .types
-            .binary_search_by_key(&name, |(symbol, _)| *symbol)
-            .ok()?;
-        Some((
-            Slot((self.values.len() + index) as u32),
-            self.types[index].1,
-        ))
-    }
-
     /// The slot and declared position of `name` in its own channel.
     pub fn slot(&self, name: BinderSymbol) -> Option<(Slot, Position)> {
-        match name {
-            BinderSymbol::Value(name) => self.value_slot(name),
-            BinderSymbol::Type(name) => self.type_slot(name),
-        }
+        let index = self.names.find(name)?;
+        Some((Slot(index as u32), self.names.get(index)))
     }
 
     /// The name declared at `slot`.
     pub fn slot_name(&self, slot: Slot) -> BinderSymbol {
-        match slot.index().checked_sub(self.values.len()) {
-            None => BinderSymbol::Value(self.values.name(slot.index())),
-            Some(ty) => BinderSymbol::Type(self.types[ty].0),
-        }
-    }
-
-    /// The mention at `site`, if this shape's own statements read a name there.
-    pub fn mention(&self, site: Site) -> Option<&'graph Mention> {
-        let index = self
-            .mentions
-            .binary_search_by_key(&site, |mention| mention.site)
-            .ok()?;
-        Some(&self.mentions[index])
+        self.names.name(slot.index())
     }
 
     /// Every mention, sorted by site.

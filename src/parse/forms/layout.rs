@@ -162,18 +162,6 @@ impl<'a> SlotLayout<'a> {
         })
     }
 
-    /// A layout over binders a caller has already enumerated, each at the position it writes at —
-    /// for a body whose statements are not one node, such as a program's top-level lines. The same
-    /// seal as every door above, so a repeated name keeps its lowest position.
-    pub(crate) fn from_entries(
-        brand: BumpAllocator<'a>,
-        entries: impl ExactSizeIterator<Item = (ValueSymbol, u32)>,
-    ) -> &'a SlotLayout<'a> {
-        let mut staged = BumpVec::with_capacity_in(entries.len(), brand);
-        staged.extend(entries);
-        Self::seal(brand, &mut staged)
-    }
-
     /// Sort, dedupe first-wins, and freeze — the one place a layout is written, so every door above
     /// ships the same sorted, position-carrying invariant. `entries` is staged in `brand`'s own
     /// bump, so the run is sorted where it sits and the frozen copy costs one more bump rather than

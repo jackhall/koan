@@ -54,14 +54,22 @@ fn the_builtin_table_sorts_each_channel_and_counts_types_after_values() {
         fixture.in_cell(|writer, _| {
             let table = builtins(fixture, writer);
             assert_eq!(table.len(), BUILTIN_VALUES.len() + BUILTIN_TYPES.len());
-            let origin = table.value(value_name("origin", fixture.labels)).unwrap();
+            let origin = table
+                .lookup(BinderSymbol::Value(value_name("origin", fixture.labels)))
+                .unwrap();
             assert!(matches!(table.get(origin), Value::Number(n) if n == 0.0));
             for name in BUILTIN_TYPES {
-                let index = table.ty(type_name(name, fixture.labels)).unwrap();
+                let index = table
+                    .lookup(BinderSymbol::Type(type_name(name, fixture.labels)))
+                    .unwrap();
                 assert!(index.index() >= BUILTIN_VALUES.len());
                 assert!(matches!(table.get(index), Value::Type(_)));
             }
-            assert!(table.value(value_name("nowhere", fixture.labels)).is_none());
+            assert!(
+                table
+                    .lookup(BinderSymbol::Value(value_name("nowhere", fixture.labels)))
+                    .is_none()
+            );
         });
     });
 }
