@@ -499,6 +499,21 @@ proptest! {
             })
         });
     }
+}
+
+/// The laws over shaped programs: most generated programs are refused and filtered out, so the
+/// reject budget grows with the case count.
+fn shaped_config() -> ProptestConfig {
+    let cases = crate::tests::case_share(1, 1);
+    ProptestConfig {
+        cases,
+        max_local_rejects: cases.saturating_mul(256),
+        ..ProptestConfig::default()
+    }
+}
+
+proptest! {
+    #![proptest_config(shaped_config())]
 
     /// Laws 4 and 6: over every activation of a shaped program, by-name resolution agrees with the
     /// coordinates, a local is visible exactly where its position is seen, and closure bindings
