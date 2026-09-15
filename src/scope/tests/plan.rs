@@ -9,8 +9,9 @@
 //! which can close no cycle — where it likes. So a plan's components, classes and resolutions are
 //! what the builder must find, and nothing about them is re-derived from the rendered source.
 //!
-//! A perturbation of a valid plan injects exactly one refusal; the shadowing perturbation re-declares
-//! an enclosing name inside a nested scope.
+//! A refused plan is generated with exactly one refusal injected into one of its scopes, where the
+//! refused read may be routed into a nested scope like any other; the shadowing perturbation
+//! re-declares an enclosing name inside a nested scope.
 
 use std::collections::BTreeSet;
 
@@ -199,13 +200,12 @@ pub(super) enum Carrier {
 impl Scope {
     /// Every parameter at `0` and every statement's binder at the statement's position.
     pub fn binders(&self) -> Vec<(Name, u32)> {
-        let parameters = self.parameters.iter().map(|name| (*name, 0));
-        let statements = self
+        let binders: Vec<Option<Name>> = self
             .statements
             .iter()
-            .enumerate()
-            .filter_map(|(index, statement)| Some((statement.binder?, index as u32 + 1)));
-        parameters.chain(statements).collect()
+            .map(|statement| statement.binder)
+            .collect();
+        declared(&binders, &self.parameters)
     }
 
     /// The nested scopes, in source order.
@@ -386,6 +386,11 @@ pub(super) struct Generator<'c> {
     values: u32,
     types: u32,
     scopes: usize,
+    /// How many scopes generation has entered.
+    entered: usize,
+    /// The refusal to inject, and the ordinal of the scope it goes in.
+    injection: Option<(Injection, usize)>,
+    refusal: Option<Refusal>,
 }
 
 impl<'c> Generator<'c> {
@@ -396,6 +401,9 @@ impl<'c> Generator<'c> {
             values: 0,
             types: 0,
             scopes: 0,
+            entered: 0,
+            injection: None,
+            refusal: None,
         }
     }
 
@@ -440,25 +448,28 @@ impl<'c> Generator<'c> {
         let obligations = (0..count)
             .map(|_| {
                 let (name, declared) = visible[self.pick(visible.len())];
-                (name, Some(declared))
+                (name, Owed::Declared(declared))
             })
             .collect();
         self.scope(Kind::Eval, depth, Vec::new(), visible, obligations)
     }
 
     /// One scope at `depth`. `visible` are the enclosing names it may read wherever it likes (each
-    /// with its declaring depth), and `obligations` the names it must read somewhere — an enclosing
-    /// binder with its declaring depth because the scope declaring it planned that read, or a
-    /// builtin.
+    /// with its declaring depth), and `obligations` the names it must read somewhere, each with
+    /// where the read lands.
     fn scope(
         &mut self,
         kind: Kind,
         depth: usize,
-        parameters: Vec<Name>,
+        mut parameters: Vec<Name>,
         visible: &[(Name, usize)],
-        obligations: Vec<(Name, Option<usize>)>,
+        obligations: Vec<(Name, Owed)>,
     ) -> Scope {
-        let count = 1 + self.pick(if kind == Kind::Program { 6 } else { 3 });
+        let injection = self.claim();
+        let mut count = 1 + self.pick(if kind == Kind::Program { 6 } else { 3 });
+        if matches!(injection, Some(Injection::EagerCycle | Injection::Rebind)) {
+            count = count.max(2);
+        }
         let mut drafts = Vec::with_capacity(count);
         for _ in 0..count {
             drafts.push(match self.pick(8) {
@@ -477,14 +488,20 @@ impl<'c> Generator<'c> {
         if needs_value && drafts.iter().all(|draft| *draft == Draft::Union) {
             drafts[count - 1] = Draft::Let;
         }
-        let binders: Vec<Option<Name>> = drafts
+        if let Some(injection) = injection {
+            make_room(injection, &mut drafts, &parameters);
+        }
+        let mut binders: Vec<Option<Name>> = drafts
             .iter()
-            .map(|draft| match draft {
-                Draft::Let | Draft::Function(_) => Some(self.fresh(false)),
-                Draft::Union => Some(self.fresh(true)),
-                Draft::Bare => None,
-            })
+            .map(|draft| declares(draft).map(|is_type| self.fresh(is_type)))
             .collect();
+        match injection {
+            Some(Injection::Rebind) => self.inject_rebind(&mut binders, &parameters),
+            Some(Injection::ShadowsBuiltin) => {
+                self.inject_shadow_builtin(&mut binders, &mut parameters)
+            }
+            _ => {}
+        }
 
         // The components, and one order of them.
         let mut groups: Vec<Vec<usize>> = Vec::new();
@@ -506,6 +523,28 @@ impl<'c> Generator<'c> {
             };
             groups[group].push(index);
             group_of[index] = group;
+        }
+        if injection == Some(Injection::EagerCycle) && cyclable(&groups, &drafts).is_empty() {
+            // Move a `LET` into the component of an earlier value binder.
+            let mut pairs = Vec::new();
+            for joining in 0..count {
+                for host in 0..joining {
+                    if drafts[joining] == Draft::Let && declares(&drafts[host]) == Some(false) {
+                        pairs.push((joining, host));
+                    }
+                }
+            }
+            let (joining, host) = pairs[self.pick(pairs.len())];
+            groups[group_of[joining]].retain(|member| *member != joining);
+            let into = &mut groups[group_of[host]];
+            let at = into.partition_point(|member| *member < joining);
+            into.insert(at, joining);
+            groups.retain(|members| !members.is_empty());
+            for (group, members) in groups.iter().enumerate() {
+                for member in members {
+                    group_of[*member] = group;
+                }
+            }
         }
         let order: Vec<(usize, usize)> = (0..groups.len())
             .map(|group| (self.pick(4), group))
@@ -529,6 +568,23 @@ impl<'c> Generator<'c> {
             } else if self.chance(3) {
                 reads[group[0]].push(Read::local(binder(group[0]), Class::Deferred));
             }
+        }
+        // The injected eager cycle: a `LET` of a component reading an earlier member eagerly.
+        if injection == Some(Injection::EagerCycle) {
+            let candidates = cyclable(&groups, &drafts);
+            let group = &groups[candidates[self.pick(candidates.len())]];
+            let readers: Vec<usize> = group[1..]
+                .iter()
+                .copied()
+                .filter(|member| drafts[*member] == Draft::Let)
+                .collect();
+            let reader = readers[self.pick(readers.len())];
+            let earlier: Vec<usize> = group.iter().copied().filter(|m| *m < reader).collect();
+            let bound = earlier[self.pick(earlier.len())];
+            let at = self.pick(reads[reader].len() + 1);
+            reads[reader].insert(at, Read::local(binder(bound), Class::Eager));
+            let members = group.iter().map(|member| binder(*member)).collect();
+            self.refusal = Some(Refusal::EagerCycle(members));
         }
         // Between components: toward a later one in the order, deferred when the bound is not yet
         // declared.
@@ -599,17 +655,18 @@ impl<'c> Generator<'c> {
             }
         }
         // The names this scope was handed.
-        for (name, declared) in obligations {
+        for (name, owed) in obligations {
             let hosts: Vec<usize> = (0..count)
                 .filter(|reader| may_read(&drafts[*reader], name))
                 .collect();
             let reader = hosts[self.pick(hosts.len())];
             let class = self.class(&drafts[reader], name, true);
-            let lands = match declared {
-                Some(declared) => Lands::Binder {
+            let lands = match owed {
+                Owed::Builtin => Lands::Builtin,
+                Owed::Declared(declared) => Lands::Binder {
                     up: depth - declared,
                 },
-                None => Lands::Builtin,
+                Owed::Nowhere => Lands::Nowhere,
             };
             reads[reader].push(Read {
                 name,
@@ -617,6 +674,44 @@ impl<'c> Generator<'c> {
                 lands,
                 eval: false,
             });
+        }
+        // The injected unbound read: eager at or before its binder's statement, or of a name
+        // nothing declares.
+        let unbound = match injection {
+            Some(Injection::ReadAhead) => {
+                let mut pairs = Vec::new();
+                for (reader, draft) in drafts.iter().enumerate() {
+                    for name in binders[reader..].iter().flatten() {
+                        if reads_eagerly(draft, name.is_type()) {
+                            pairs.push((reader, *name, Class::Eager));
+                        }
+                    }
+                }
+                Some(pairs[self.pick(pairs.len())])
+            }
+            Some(Injection::Undeclared) => {
+                let reader = self.pick(count);
+                let name = if drafts[reader] == Draft::Union || self.chance(2) {
+                    Name::Fixed("Tzz")
+                } else {
+                    Name::Fixed("zz")
+                };
+                let eager = reads_eagerly(&drafts[reader], name.is_type()) && self.chance(2);
+                let class = if eager { Class::Eager } else { Class::Deferred };
+                Some((reader, name, class))
+            }
+            _ => None,
+        };
+        if let Some((reader, name, class)) = unbound {
+            let at = self.pick(reads[reader].len() + 1);
+            let read = Read {
+                name,
+                class,
+                lands: Lands::Nowhere,
+                eval: false,
+            };
+            reads[reader].insert(at, read);
+            self.refusal = Some(Refusal::Unbound { name });
         }
         for (reader, own) in reads.iter_mut().enumerate() {
             if matches!(drafts[reader], Draft::Let | Draft::Bare) {
@@ -671,12 +766,7 @@ impl<'c> Generator<'c> {
     /// The class of a read of `name` by a statement drafted as `draft`: eager at random where the
     /// form can read it eagerly and `declared_before` the reader, deferred otherwise.
     fn class(&mut self, draft: &Draft, name: Name, declared_before: bool) -> Class {
-        let eager = declared_before
-            && match draft {
-                Draft::Union => false,
-                Draft::Function(_) => name.is_type(),
-                Draft::Let | Draft::Bare => true,
-            };
+        let eager = declared_before && reads_eagerly(draft, name.is_type());
         if eager && self.chance(2) {
             Class::Eager
         } else {
@@ -839,22 +929,163 @@ fn may_read(draft: &Draft, name: Name) -> bool {
     *draft != Draft::Union || name.is_type()
 }
 
-/// What reads routed out of a scope at `depth` hand the nested scope: each name, with the depth
-/// declaring it unless it is a builtin.
-fn obligations(depth: usize, routed: &[Read]) -> Vec<(Name, Option<usize>)> {
-    routed
+/// Whether a statement drafted as `draft` can read a name of the channel `is_type` eagerly.
+fn reads_eagerly(draft: &Draft, is_type: bool) -> bool {
+    match draft {
+        Draft::Union => false,
+        Draft::Function(_) => is_type,
+        Draft::Let | Draft::Bare => true,
+    }
+}
+
+/// The channel of the binder a statement drafted as `draft` declares, if it declares one.
+fn declares(draft: &Draft) -> Option<bool> {
+    match draft {
+        Draft::Let | Draft::Function(_) => Some(false),
+        Draft::Union => Some(true),
+        Draft::Bare => None,
+    }
+}
+
+/// Every parameter at `0` and every statement's binder at the statement's position.
+fn declared(binders: &[Option<Name>], parameters: &[Name]) -> Vec<(Name, u32)> {
+    let statements = binders
         .iter()
-        .map(|read| match read.lands {
-            Lands::Binder { up } => (read.name, Some(depth - up)),
-            Lands::Builtin => (read.name, None),
-            Lands::Nowhere => unreachable!("a valid plan routes no refused read"),
+        .enumerate()
+        .filter_map(|(index, binder)| Some(((*binder)?, index as u32 + 1)));
+    parameters
+        .iter()
+        .map(|name| (*name, 0))
+        .chain(statements)
+        .collect()
+}
+
+/// The components an eager cycle can be closed in: a value component with a `LET` after its first
+/// member.
+fn cyclable(groups: &[Vec<usize>], drafts: &[Draft]) -> Vec<usize> {
+    (0..groups.len())
+        .filter(|group| {
+            let members = &groups[*group];
+            declares(&drafts[members[0]]) == Some(false)
+                && members[1..]
+                    .iter()
+                    .any(|member| drafts[*member] == Draft::Let)
         })
         .collect()
 }
 
-// ---------- perturbations ----------
+/// Redraft a scope `injection` is claimed for until it can hold the refusal: forcing the last
+/// statement a `LET`, and the first one too where nothing else can pair with it.
+fn make_room(injection: Injection, drafts: &mut [Draft], parameters: &[Name]) {
+    let last = drafts.len() - 1;
+    let values_before = |drafts: &[Draft], index: usize| {
+        drafts[..index]
+            .iter()
+            .any(|draft| declares(draft) == Some(false))
+    };
+    match injection {
+        Injection::EagerCycle => {
+            let room =
+                (0..=last).any(|index| drafts[index] == Draft::Let && values_before(drafts, index));
+            if !room {
+                drafts[last] = Draft::Let;
+                if !values_before(drafts, last) {
+                    drafts[0] = Draft::Let;
+                }
+            }
+        }
+        Injection::Rebind => {
+            let room = (0..=last).any(|later| {
+                declares(&drafts[later]).is_some_and(|is_type| {
+                    (!is_type && !parameters.is_empty())
+                        || drafts[..later]
+                            .iter()
+                            .any(|draft| declares(draft) == Some(is_type))
+                })
+            });
+            if !room {
+                drafts[last] = Draft::Let;
+                if parameters.is_empty() && !values_before(drafts, last) {
+                    drafts[0] = Draft::Let;
+                }
+            }
+        }
+        Injection::ShadowsBuiltin => {
+            let named = parameters.iter().any(|name| *name != Name::It);
+            if !named && drafts.iter().all(|draft| declares(draft).is_none()) {
+                drafts[last] = Draft::Let;
+            }
+        }
+        Injection::ReadAhead => {
+            let room = (0..=last).any(|bound| {
+                declares(&drafts[bound]).is_some_and(|is_type| {
+                    drafts[..=bound]
+                        .iter()
+                        .any(|reader| reads_eagerly(reader, is_type))
+                })
+            });
+            if !room {
+                drafts[last] = Draft::Let;
+            }
+        }
+        Injection::Undeclared => {}
+    }
+}
 
-/// The refusal a perturbed plan must be refused with.
+/// Where a name a nested scope is handed resolves.
+#[derive(Clone, Copy, Debug)]
+enum Owed {
+    Builtin,
+    /// A binder of the scope at this depth.
+    Declared(usize),
+    /// Nowhere: the refused read, routed in.
+    Nowhere,
+}
+
+/// What reads routed out of a scope at `depth` hand the nested scope: each name, and where it
+/// resolves.
+fn obligations(depth: usize, routed: &[Read]) -> Vec<(Name, Owed)> {
+    routed
+        .iter()
+        .map(|read| {
+            let owed = match read.lands {
+                Lands::Binder { up } => Owed::Declared(depth - up),
+                Lands::Builtin => Owed::Builtin,
+                Lands::Nowhere => Owed::Nowhere,
+            };
+            (read.name, owed)
+        })
+        .collect()
+}
+
+// ---------- refusals ----------
+
+/// The kind of refusal a refused plan injects into one of its scopes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Injection {
+    /// A `LET` reads a fellow member of its component eagerly, directly or through a called lambda
+    /// or an arm.
+    EagerCycle,
+    /// A read eager where it sits, directly or through a called lambda or an arm, of a binder at or
+    /// after its statement.
+    ReadAhead,
+    /// A read of a name nothing declares.
+    Undeclared,
+    /// A later binder named after an earlier binder or parameter of its channel.
+    Rebind,
+    /// A binder or parameter named after a builtin.
+    ShadowsBuiltin,
+}
+
+const INJECTIONS: [Injection; 5] = [
+    Injection::EagerCycle,
+    Injection::ReadAhead,
+    Injection::Undeclared,
+    Injection::Rebind,
+    Injection::ShadowsBuiltin,
+];
+
+/// The refusal a refused plan must be refused with.
 #[derive(Clone, Debug)]
 pub(super) enum Refusal {
     Rebind {
@@ -866,237 +1097,88 @@ pub(super) enum Refusal {
         name: Name,
         at: u32,
     },
-    /// The read landing [`Lands::Nowhere`], in this statement of its scope.
+    /// The read landing [`Lands::Nowhere`].
     Unbound {
         name: Name,
-        statement: u32,
     },
     EagerCycle(BTreeSet<Name>),
 }
 
+/// A program generated from `stream` with refusal `which` (modulo the five kinds) injected into
+/// the scope entered `scope`-th (modulo the scopes the program enters), in source order.
+pub(super) fn refused(stream: &[u32], which: usize, scope: usize) -> (Scope, Refusal) {
+    let mut valid = Generator::new(stream);
+    valid.program();
+    // The scopes entered before the target are generated alike with or without the injection, so
+    // the target is entered.
+    let mut generator = Generator::new(stream);
+    generator.injection = Some((INJECTIONS[which % 5], scope % valid.entered));
+    let program = generator.program();
+    let refusal = generator
+        .refusal
+        .expect("the target scope injects its refusal");
+    (program, refusal)
+}
+
 impl Generator<'_> {
-    /// Inject refusal `which` (modulo the five kinds) into `program`.
-    pub fn refuse(&mut self, program: &mut Scope, which: usize) -> Refusal {
-        let mut paths = Vec::new();
-        program.paths(&mut Vec::new(), &mut paths);
-        match which % 5 {
-            0 => self.eager_cycle(program, &paths),
-            1 => self.read_ahead(program, &paths),
-            2 => self.undeclared(program, &paths),
-            3 => self.rebind(program, &paths),
-            _ => self.shadow_builtin(program, &paths),
-        }
+    /// Enter a scope: the injection, if this is the scope it targets.
+    fn claim(&mut self) -> Option<Injection> {
+        self.entered += 1;
+        let (injection, target) = self.injection?;
+        (target == self.entered - 1).then_some(injection)
     }
 
-    /// Make a deferred read closing a component's cycle eager.
-    fn eager_cycle(&mut self, program: &mut Scope, paths: &[Vec<usize>]) -> Refusal {
-        let mut candidates = Vec::new();
-        for path in paths {
-            let scope = program.at_path(path);
-            let binders = scope.binders();
-            let declared = |name: Name| {
-                binders
-                    .iter()
-                    .find(|(bound, _)| *bound == name)
-                    .map(|(_, at)| *at)
-            };
-            for (index, statement) in scope.statements.iter().enumerate() {
-                let (Some(reader), Form::Let(carriers)) = (statement.binder, &statement.form)
-                else {
-                    continue;
-                };
-                let component = scope
-                    .components
-                    .iter()
-                    .find(|component| component.contains(&reader))
-                    .expect("a binder sits in a component");
-                for (place, carrier) in carriers.iter().enumerate() {
-                    if let Carrier::Read(read) = carrier
-                        && read.lands == (Lands::Binder { up: 0 })
-                        && component.len() > 1
-                        && component.contains(&read.name)
-                        && declared(read.name).is_some_and(|at| at <= index as u32)
-                    {
-                        candidates.push((path.clone(), index, place, component.clone()));
-                    }
+    /// Name a later binder of a scope after an earlier binder or parameter of its channel.
+    fn inject_rebind(&mut self, binders: &mut [Option<Name>], parameters: &[Name]) {
+        let declared = declared(binders, parameters);
+        let mut pairs = Vec::new();
+        for (place, (first, _)) in declared.iter().enumerate() {
+            for (later, (second, at)) in declared.iter().enumerate().skip(place + 1) {
+                if *at > 0 && first.is_type() == second.is_type() {
+                    pairs.push((place, later));
                 }
             }
         }
-        if candidates.is_empty() {
-            let (first, second) = (self.fresh(false), self.fresh(false));
-            program.statements.push(Statement {
-                binder: Some(first),
-                form: Form::Let(vec![Carrier::Read(Read::local(second, Class::Deferred))]),
-            });
-            program.statements.push(Statement {
-                binder: Some(second),
-                form: Form::Let(vec![Carrier::Read(Read::local(first, Class::Eager))]),
-            });
-            let members = BTreeSet::from([first, second]);
-            program.components.push(members.clone());
-            return Refusal::EagerCycle(members);
-        }
-        let (path, index, place, members) = candidates.swap_remove(self.pick(candidates.len()));
-        let Form::Let(carriers) = &mut program.at_path(&path).statements[index].form else {
-            unreachable!("the candidate is a LET");
-        };
-        let Carrier::Read(read) = &mut carriers[place] else {
-            unreachable!("the candidate is a read");
-        };
-        read.class = Class::Eager;
-        read.eval = false;
-        Refusal::EagerCycle(members)
-    }
-
-    /// The statements of every scope a read can be added to: a `LET` or a bare one.
-    fn hosts(program: &mut Scope, paths: &[Vec<usize>]) -> Vec<(Vec<usize>, usize)> {
-        let mut hosts = Vec::new();
-        for path in paths {
-            for (index, statement) in program.at_path(path).statements.iter().enumerate() {
-                if matches!(statement.form, Form::Let(_) | Form::Bare(_)) {
-                    hosts.push((path.clone(), index));
-                }
-            }
-        }
-        hosts
-    }
-
-    fn inject(program: &mut Scope, path: &[usize], index: usize, read: Read) {
-        match &mut program.at_path(path).statements[index].form {
-            Form::Let(carriers) | Form::Bare(carriers) => carriers.push(Carrier::Read(read)),
-            Form::Function(_) | Form::Union(_) => unreachable!("reads are injected into a host"),
-        }
-    }
-
-    /// Read a binder eagerly at or before its own statement.
-    fn read_ahead(&mut self, program: &mut Scope, paths: &[Vec<usize>]) -> Refusal {
-        let mut candidates = Vec::new();
-        for (path, index) in Self::hosts(program, paths) {
-            let scope = program.at_path(&path);
-            for (later, statement) in scope.statements.iter().enumerate().skip(index) {
-                if let Some(binder) = statement.binder {
-                    candidates.push((path.clone(), index, later, binder));
-                }
-            }
-        }
-        if candidates.is_empty() {
-            return self.undeclared(program, paths);
-        }
-        let (path, index, _, name) = candidates.swap_remove(self.pick(candidates.len()));
-        let read = Read {
-            name,
-            class: Class::Eager,
-            lands: Lands::Nowhere,
-            eval: false,
-        };
-        Self::inject(program, &path, index, read);
-        Refusal::Unbound {
-            name,
-            statement: index as u32,
-        }
-    }
-
-    /// Read a name nothing declares.
-    fn undeclared(&mut self, program: &mut Scope, paths: &[Vec<usize>]) -> Refusal {
-        let name = if self.chance(2) {
-            Name::Fixed("Tzz")
-        } else {
-            Name::Fixed("zz")
-        };
-        let class = if self.chance(2) {
-            Class::Eager
-        } else {
-            Class::Deferred
-        };
-        let read = Read {
-            name,
-            class,
-            lands: Lands::Nowhere,
-            eval: false,
-        };
-        let hosts = Self::hosts(program, paths);
-        let (path, index) = if hosts.is_empty() {
-            program.statements.push(Statement {
-                binder: None,
-                form: Form::Bare(Vec::new()),
-            });
-            (Vec::new(), program.statements.len() - 1)
-        } else {
-            hosts[self.pick(hosts.len())].clone()
-        };
-        Self::inject(program, &path, index, read);
-        Refusal::Unbound {
-            name,
-            statement: index as u32,
-        }
-    }
-
-    /// Declare a later binder of a scope with an earlier one's name.
-    fn rebind(&mut self, program: &mut Scope, paths: &[Vec<usize>]) -> Refusal {
-        let mut candidates = Vec::new();
-        for path in paths {
-            let binders = program.at_path(path).binders();
-            for (place, (first, at)) in binders.iter().enumerate() {
-                for (second, again) in &binders[place + 1..] {
-                    let parameters = *at == 0 && *again == 0;
-                    let named = *first != Name::It && *second != Name::It;
-                    if first.is_type() == second.is_type() && !parameters && named {
-                        candidates.push((path.clone(), *first, *at, *second, *again));
-                    }
-                }
-            }
-        }
-        if candidates.is_empty() {
-            let name = self.fresh(false);
-            for _ in 0..2 {
-                program.statements.push(Statement {
-                    binder: Some(name),
-                    form: Form::Let(Vec::new()),
-                });
-            }
-            let at = program.statements.len() as u32;
-            return Refusal::Rebind {
-                name,
-                first: at - 1,
-                second: at,
-            };
-        }
-        let (path, name, first, renamed, second) =
-            candidates.swap_remove(self.pick(candidates.len()));
-        program.at_path(&path).rename_binder(renamed, name);
-        Refusal::Rebind {
+        let (place, later) = pairs[self.pick(pairs.len())];
+        let (name, first) = declared[place];
+        let second = declared[later].1;
+        binders[second as usize - 1] = Some(name);
+        self.refusal = Some(Refusal::Rebind {
             name,
             first,
             second,
-        }
+        });
     }
 
-    /// Declare a binder with a builtin's name.
-    fn shadow_builtin(&mut self, program: &mut Scope, paths: &[Vec<usize>]) -> Refusal {
-        let mut candidates = Vec::new();
-        for path in paths {
-            for (name, at) in program.at_path(path).binders() {
-                if name != Name::It {
-                    candidates.push((path.clone(), name, at));
+    /// Name a binder or parameter of a scope after a builtin of its channel.
+    fn inject_shadow_builtin(&mut self, binders: &mut [Option<Name>], parameters: &mut [Name]) {
+        let declared: Vec<(Name, u32)> = declared(binders, parameters)
+            .into_iter()
+            .filter(|(name, _)| *name != Name::It)
+            .collect();
+        let (renamed, at) = declared[self.pick(declared.len())];
+        let name = if renamed.is_type() {
+            BUILTIN_TYPES[self.pick(BUILTIN_TYPES.len())]
+        } else {
+            ORIGIN
+        };
+        match at {
+            0 => {
+                for parameter in parameters.iter_mut() {
+                    if *parameter == renamed {
+                        *parameter = name;
+                    }
                 }
             }
+            _ => binders[at as usize - 1] = Some(name),
         }
-        if candidates.is_empty() {
-            program.statements.push(Statement {
-                binder: Some(ORIGIN),
-                form: Form::Let(Vec::new()),
-            });
-            return Refusal::ShadowsBuiltin {
-                name: ORIGIN,
-                at: program.statements.len() as u32,
-            };
-        }
-        let (path, renamed, at) = candidates.swap_remove(self.pick(candidates.len()));
-        let name = if renamed.is_type() { NUMBER } else { ORIGIN };
-        program.at_path(&path).rename_binder(renamed, name);
-        Refusal::ShadowsBuiltin { name, at }
+        self.refusal = Some(Refusal::ShadowsBuiltin { name, at });
     }
+}
 
+// ---------- shadowing ----------
+
+impl Generator<'_> {
     /// Re-declare an enclosing name inside a nested scope: rename one of the nested scope's binders
     /// to it, and read it by that name both inside the nested scope and in the scope declaring the
     /// enclosing binder. Each read lands on the binder nearest it.

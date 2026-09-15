@@ -507,10 +507,12 @@ proptest! {
 
     /// A plan with one refusal injected is refused with exactly that refusal.
     #[test]
-    fn an_injected_refusal_is_the_one_reported(choices in plan::choices(), which in 0..5usize) {
-        let mut generator = Generator::new(&choices);
-        let mut program = generator.program();
-        let refusal = generator.refuse(&mut program, which);
+    fn an_injected_refusal_is_the_one_reported(
+        choices in plan::choices(),
+        which in 0..5usize,
+        scope in any::<usize>(),
+    ) {
+        let (program, refusal) = plan::refused(&choices, which, scope);
         let rendering = plan::render_program(&program);
         with_fixture(|fixture| {
             let lines = fixture.parse(&rendering.source);
@@ -531,7 +533,7 @@ proptest! {
                         name: name.symbol(labels),
                         at: Position(*at),
                     },
-                    Refusal::Unbound { name, statement } => {
+                    Refusal::Unbound { name } => {
                         let nodes: Vec<_> = lines.iter().collect();
                         let located = locate(&rendering, None, &nodes);
                         let read = rendering
@@ -542,7 +544,7 @@ proptest! {
                         ShapeError::Unbound {
                             name: name.symbol(labels),
                             site: located.sites[read],
-                            statement: *statement,
+                            statement: rendering.reads[read].statement,
                         }
                     }
                     Refusal::EagerCycle(members) => {
