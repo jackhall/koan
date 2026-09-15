@@ -1,10 +1,10 @@
-//! The laws: every shape built from a generated program agrees with the model's own analysis, and
-//! every activation of it reads what its coordinates name.
+//! The laws: a generated shape plan, rendered and parsed, shapes back into the plan; a plan with one
+//! refusal injected is refused with it; a re-declared name takes the reads nearest it; and every
+//! activation of a planned shape reads what its coordinates name.
 
 use std::collections::BTreeSet;
 
 use proptest::prelude::*;
-use proptest::sample::Index;
 
 use crate::memory::{CellHandle, KnotPlan, Writer};
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
@@ -12,173 +12,154 @@ use crate::scope::{
     Activation, Binding, Builtins, Capture, CaptureSource, ClosureBindings, ClosureRefused,
     Coordinate, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
 };
+use crate::type_lattice::KType;
 use crate::values::{Value, resident};
 
-use super::model::{self, Class, Expr, Kind, ModelError, ModelScope, READS, Resolved, Statement};
-use super::{builtins, value_name, with_fixture};
+use super::plan::{self, Class, Generator, Kind, Lands, Refusal, Rendering, Token};
+use super::{builtins, with_fixture};
 
-// ---------- names ----------
+// ---------- reading the rendering back ----------
 
-fn symbol(labels: &LabelInterner, text: &str) -> BinderSymbol {
-    BinderSymbol::Value(value_name(text, labels))
+/// A name part or a nested body met walking parsed parts in source order.
+enum Met<'g> {
+    Name(Site),
+    Open(&'g Shape<'g>),
+    Close,
 }
 
-/// The model's spelling of a value name the builder resolved.
-fn text(labels: &LabelInterner, name: BinderSymbol) -> &'static str {
-    READS
+/// Walk `part` in source order. With a shape chain, a part the innermost shape nests a body at opens
+/// that body's shape.
+fn walk<'g>(part: &ExpressionPart<'g>, shapes: &mut Vec<&'g Shape<'g>>, met: &mut Vec<Met<'g>>) {
+    match part {
+        ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
+            met.push(Met::Name(Site::of(part)))
+        }
+        ExpressionPart::Expression(node)
+        | ExpressionPart::SigiledTypeExpr(node)
+        | ExpressionPart::RecordType(node) => {
+            let nested = shapes.last().and_then(|shape| shape.nested(Site::of(part)));
+            if let Some(nested) = nested {
+                met.push(Met::Open(nested));
+                shapes.push(nested);
+            }
+            for inner in node.reference().parts {
+                walk(&inner.value, shapes, met);
+            }
+            if nested.is_some() {
+                shapes.pop();
+                met.push(Met::Close);
+            }
+        }
+        ExpressionPart::ListLiteral(items) => {
+            for item in items.iter() {
+                walk(item, shapes, met);
+            }
+        }
+        ExpressionPart::DictLiteral(pairs) => {
+            for (key, value) in pairs.iter() {
+                walk(key, shapes, met);
+                walk(value, shapes, met);
+            }
+        }
+        ExpressionPart::RecordLiteral(pairs) => {
+            for (_, value) in pairs.iter() {
+                walk(value, shapes, met);
+            }
+        }
+        ExpressionPart::Keyword(_)
+        | ExpressionPart::Literal(_)
+        | ExpressionPart::QuotedExpression(_) => {}
+    }
+}
+
+/// Where each planned read and each planned scope landed in the parsed source.
+struct Located<'g> {
+    sites: Vec<Site>,
+    shapes: Vec<Option<&'g Shape<'g>>>,
+}
+
+/// Pair the rendering's tokens with the names and bodies met walking `nodes`. Without a `root`
+/// shape, only the names are paired.
+fn locate<'g>(
+    rendering: &Rendering<'_>,
+    root: Option<&'g Shape<'g>>,
+    nodes: &[&KExpression<'g>],
+) -> Located<'g> {
+    let mut met = Vec::new();
+    let mut shapes: Vec<_> = root.into_iter().collect();
+    for node in nodes {
+        for part in node.parts {
+            walk(&part.value, &mut shapes, &mut met);
+        }
+    }
+    let tokens: Vec<Token> = rendering
+        .tokens
         .iter()
         .copied()
-        .find(|text| name == symbol(labels, text))
-        .expect("every value name is one the model reads")
+        .filter(|token| root.is_some() || matches!(token, Token::Mention(_) | Token::Other))
+        .collect();
+    let source = &rendering.source;
+    assert_eq!(
+        tokens.len(),
+        met.len(),
+        "`{source}` parsed out of step with its rendering"
+    );
+    let mut sites = vec![None; rendering.reads.len()];
+    let mut shapes = vec![None; rendering.scopes.len()];
+    shapes[0] = root;
+    for (token, met) in tokens.into_iter().zip(met) {
+        match (token, met) {
+            (Token::Mention(index), Met::Name(site)) => sites[index] = Some(site),
+            (Token::Other, Met::Name(_)) | (Token::Close, Met::Close) => {}
+            (Token::Open(index), Met::Open(shape)) => shapes[index] = Some(shape),
+            (token, _) => panic!("`{source}` parsed out of step with its rendering at {token:?}"),
+        }
+    }
+    Located {
+        sites: sites
+            .into_iter()
+            .map(|site| site.expect("every read is met"))
+            .collect(),
+        shapes,
+    }
 }
 
-fn kind(kind: ShapeKind) -> Kind {
+// ---------- the shape against its plan ----------
+
+fn kind(kind: Kind) -> ShapeKind {
     match kind {
-        ShapeKind::Program => Kind::Program,
-        ShapeKind::Callable => Kind::Callable,
-        ShapeKind::Block => Kind::Block,
-        ShapeKind::Module => panic!("the model renders no module"),
+        Kind::Program => ShapeKind::Program,
+        Kind::Callable => ShapeKind::Callable,
+        Kind::Arm | Kind::Eval => ShapeKind::Block,
     }
 }
 
-fn class(class: MentionClass) -> Class {
+fn class(class: Class) -> MentionClass {
     match class {
-        MentionClass::Eager => Class::Eager,
-        MentionClass::Deferred => Class::Deferred,
+        Class::Eager => MentionClass::Eager,
+        Class::Deferred => MentionClass::Deferred,
     }
 }
-
-fn model_error(labels: &LabelInterner, error: &ShapeError) -> ModelError {
-    match error {
-        ShapeError::Rebind { name, .. } => ModelError::Rebind(text(labels, *name)),
-        ShapeError::Unbound {
-            name, statement, ..
-        } => ModelError::Unbound(text(labels, *name), *statement),
-        ShapeError::EagerCycle { members } => {
-            ModelError::EagerCycle(members.iter().map(|member| text(labels, *member)).collect())
-        }
-        other => panic!("the model renders nothing refused as {other:?}"),
-    }
-}
-
-// ---------- sites ----------
-
-/// Where the walk stands in the parsed program: a part, or a node.
-#[derive(Clone, Copy)]
-enum At<'n, 'g> {
-    Part(&'n ExpressionPart<'g>),
-    Node(&'n KExpression<'g>),
-}
-
-/// Step through parentheses the renderer adds: a parenthesized part is its node, and a formless
-/// single-part node is its part.
-fn settle<'n, 'g: 'n>(mut at: At<'n, 'g>) -> At<'n, 'g> {
-    loop {
-        at = match at {
-            At::Part(ExpressionPart::Expression(node)) => At::Node(node.reference()),
-            At::Node(node) if node.cache().form().is_none() && node.parts.len() == 1 => {
-                At::Part(&node.parts[0].value)
-            }
-            settled => return settled,
-        }
-    }
-}
-
-/// The sites the model's walk meets in one body, in its own order: each mention's, and each nested
-/// body's with the body and the model statements it renders.
-struct Sites<'m, 'g> {
-    mentions: Vec<Site>,
-    bodies: Vec<(Site, &'g KExpression<'g>, &'m [Statement])>,
-}
-
-fn sites<'m, 'n, 'g: 'n>(
-    statements: &'m [Statement],
-    nodes: impl Iterator<Item = &'n KExpression<'g>>,
-) -> Sites<'m, 'g> {
-    let mut sites = Sites {
-        mentions: Vec::new(),
-        bodies: Vec::new(),
-    };
-    let nodes: Vec<_> = nodes.collect();
-    assert_eq!(nodes.len(), statements.len(), "one node per statement");
-    for (statement, node) in statements.iter().zip(nodes) {
-        match statement {
-            Statement::Let(_, rhs) => {
-                expression_sites(rhs, At::Part(&node.parts[3].value), &mut sites)
-            }
-            Statement::Function { body, .. } => body_site(&node.parts[9].value, body, &mut sites),
-            Statement::Bare(expr) => expression_sites(expr, At::Node(node), &mut sites),
-        }
-    }
-    sites
-}
-
-fn body_site<'m, 'g>(part: &ExpressionPart<'g>, body: &'m [Statement], sites: &mut Sites<'m, 'g>) {
-    let ExpressionPart::Expression(node) = part else {
-        panic!("a body is a parenthesized node");
-    };
-    sites.bodies.push((Site::of(part), node.reference(), body));
-}
-
-fn expression_sites<'m, 'n, 'g: 'n>(expr: &'m Expr, at: At<'n, 'g>, sites: &mut Sites<'m, 'g>) {
-    match (expr, settle(at)) {
-        (Expr::Name(_), At::Part(part @ ExpressionPart::Identifier(_))) => {
-            sites.mentions.push(Site::of(part))
-        }
-        (Expr::Number | Expr::Quote(_), _) => {}
-        (Expr::List(items), At::Part(ExpressionPart::ListLiteral(parts))) => {
-            assert_eq!(items.len(), parts.len());
-            for (item, part) in items.iter().zip(parts.iter()) {
-                expression_sites(item, At::Part(part), sites);
-            }
-        }
-        (Expr::Call(arguments), At::Node(node)) => {
-            assert_eq!(arguments.len() + 1, node.parts.len());
-            for (argument, part) in arguments.iter().zip(&node.parts[1..]) {
-                expression_sites(argument, At::Part(&part.value), sites);
-            }
-        }
-        (Expr::Lambda { body, .. }, At::Node(node)) => body_site(&node.parts[5].value, body, sites),
-        (Expr::Arm { scrutinee, body }, At::Node(node)) => {
-            expression_sites(scrutinee, At::Part(&node.parts[1].value), sites);
-            let ExpressionPart::Expression(branches) = node.parts[5].value else {
-                panic!("the branches are a parenthesized node");
-            };
-            body_site(&branches.reference().parts[2].value, body, sites);
-        }
-        (Expr::Eval(inner), At::Node(node)) => {
-            expression_sites(inner, At::Part(&node.parts[1].value), sites)
-        }
-        (expr, _) => panic!("the rendering of {expr:?} parsed to another shape"),
-    }
-}
-
-// ---------- law 1–3: the shape against the model ----------
 
 /// Where a coordinate lands: a builtin, or a binder of the shape at `level` of the chain.
 #[derive(PartialEq, Eq, Debug)]
 enum Found {
     Builtin,
-    Binder { level: usize, name: &'static str },
+    Binder { level: usize, name: BinderSymbol },
 }
 
 /// Follow `coordinate`, read at `level`, back through the chain's block steps and captures.
-fn follow(
-    labels: &LabelInterner,
-    chain: &[(&Shape<'_>, &ModelScope)],
-    level: usize,
-    coordinate: Coordinate,
-) -> Found {
+fn follow(chain: &[&Shape<'_>], level: usize, coordinate: Coordinate) -> Found {
     let mut at = level;
     for _ in 0..coordinate.hops {
         assert_eq!(
-            chain[at].0.kind(),
+            chain[at].kind(),
             ShapeKind::Block,
             "a hop steps out of a block"
         );
         at -= 1;
     }
-    let shape = chain[at].0;
+    let shape = chain[at];
     match coordinate.target {
         Target::Builtin(_) => {
             assert_eq!(
@@ -189,7 +170,7 @@ fn follow(
         }
         Target::Local(slot) => Found::Binder {
             level: at,
-            name: text(labels, shape.slot_name(slot)),
+            name: shape.slot_name(slot),
         },
         Target::Capture(slot) => {
             assert_eq!(
@@ -198,13 +179,13 @@ fn follow(
                 "only a callable captures"
             );
             match shape.captures()[slot.index()].source {
-                CaptureSource::Read(source) => follow(labels, chain, at - 1, source),
+                CaptureSource::Read(source) => follow(chain, at - 1, source),
                 CaptureSource::Member { component, index } => {
-                    let enclosing = chain[at - 1].0;
+                    let enclosing = chain[at - 1];
                     let member = enclosing.components()[component as usize].members[index as usize];
                     Found::Binder {
                         level: at - 1,
-                        name: text(labels, enclosing.slot_name(member)),
+                        name: enclosing.slot_name(member),
                     }
                 }
             }
@@ -212,127 +193,188 @@ fn follow(
     }
 }
 
-/// Check the chain's innermost shape against its model scope, then every shape nested in it.
-fn check<'m, 'n, 'g: 'n>(
+/// Check every planned scope's shape against its plan; `prefix` is the chain of shapes the root
+/// scope reads through.
+fn check(
     labels: &LabelInterner,
-    chain: &mut Vec<(&'g Shape<'g>, &'m ModelScope)>,
-    statements: &'m [Statement],
-    nodes: Vec<&'n KExpression<'g>>,
+    rendering: &Rendering<'_>,
+    located: &Located<'_>,
+    prefix: &[&Shape<'_>],
 ) {
-    let level = chain.len() - 1;
-    let (shape, scope) = chain[level];
-    assert_eq!(kind(shape.kind()), scope.kind);
-    assert_eq!(shape.statements(), scope.statements);
-    assert_eq!(shape.keeps_defining_scope(), scope.keeps_defining_scope);
-
-    // Law 2: value slots in symbol order at their binders' positions, and nothing else.
-    assert!(shape.types().is_empty());
-    assert_eq!(shape.slots(), scope.binders.len());
-    let mut layout: Vec<_> = scope
-        .binders
-        .iter()
-        .map(|(name, position)| (value_name(name, labels), *position))
-        .collect();
-    layout.sort();
-    for (index, (name, position)) in layout.into_iter().enumerate() {
-        assert_eq!(
-            shape.value_slot(name),
-            Some((Slot(index as u32), Position(position)))
-        );
-    }
-
-    // Law 3: the components partition, and which of them hold only deferred mentions.
-    let built: BTreeSet<(BTreeSet<&str>, bool)> = shape
-        .components()
-        .iter()
-        .map(|component| {
-            let members = component
-                .members
-                .iter()
-                .map(|slot| text(labels, shape.slot_name(*slot)))
-                .collect();
-            (members, component.deferred_only)
-        })
-        .collect();
-    let expected: BTreeSet<(BTreeSet<&str>, bool)> = scope
-        .components()
-        .into_iter()
-        .map(|(members, deferred_only, _)| (members, deferred_only))
-        .collect();
-    assert_eq!(built, expected);
-    for slot in 0..shape.slots() {
-        assert!(
-            shape
-                .component_of(Slot(slot as u32))
-                .members
-                .contains(&Slot(slot as u32))
-        );
-    }
-
-    // Law 1: one mention at each site the model reads, with its class and binder, and no other.
-    let sites = sites(statements, nodes.into_iter());
-    assert_eq!(sites.mentions.len(), scope.mentions.len());
-    let values = shape
-        .mentions()
-        .iter()
-        .filter(|mention| matches!(mention.name, BinderSymbol::Value(_)));
-    assert_eq!(values.count(), scope.mentions.len());
-    for mention in shape.mentions() {
-        if let BinderSymbol::Type(_) = mention.name {
-            assert!(matches!(mention.coordinate.target, Target::Builtin(_)));
+    let source = &rendering.source;
+    for (index, rendered) in rendering.scopes.iter().enumerate() {
+        let planned = rendered.scope;
+        let shape = located.shapes[index].expect("every planned scope has a shape");
+        let mut chain = Vec::new();
+        let mut at = Some(index);
+        while let Some(scope) = at {
+            chain.push(located.shapes[scope].expect("every planned scope has a shape"));
+            at = rendering.scopes[scope].parent;
         }
-    }
-    for (expected, site) in scope.mentions.iter().zip(&sites.mentions) {
-        let mention = shape.mention(*site).expect("a mention at the model's site");
-        assert_eq!(mention.name, symbol(labels, expected.name));
-        assert_eq!(mention.statement, expected.statement);
-        assert_eq!(class(mention.class), expected.class);
-        let found = match expected.resolved {
-            Resolved::Builtin => Found::Builtin,
-            Resolved::Binder { up, name } => Found::Binder {
-                level: level - up,
-                name,
-            },
-        };
-        assert_eq!(follow(labels, chain, level, mention.coordinate), found);
-    }
+        chain.extend(prefix.iter().rev());
+        chain.reverse();
+        let level = rendered.level;
+        assert_eq!(chain.len(), level + 1);
 
-    assert_eq!(shape.nested_shapes().len(), scope.children.len());
-    for (child, (site, body, statements)) in scope.children.iter().zip(sites.bodies) {
-        let nested = shape.nested(site).expect("a shape at the model's body");
-        let binder = scope.statement_binder[child.parent_statement as usize];
-        for capture in nested.captures() {
-            let fellow = binder.is_some_and(|binder| {
-                scope
-                    .component_of(binder)
-                    .contains(text(labels, capture.name))
-            });
-            match capture.source {
-                CaptureSource::Member { .. } => assert!(fellow, "a member capture is a fellow's"),
-                CaptureSource::Read(Coordinate {
-                    hops: 0,
-                    target: Target::Local(_),
-                }) => assert!(!fellow, "a fellow's capture is a member"),
-                CaptureSource::Read(_) => {}
+        assert_eq!(shape.kind(), kind(planned.kind), "`{source}`");
+        assert_eq!(shape.statements(), planned.statements.len() as u32);
+        assert_eq!(
+            shape.keeps_defining_scope(),
+            planned.keeps_defining_scope(),
+            "`{source}`"
+        );
+
+        // The layout: values in symbol order, then types in symbol order, each at its position.
+        let mut layout: Vec<_> = planned
+            .binders()
+            .into_iter()
+            .map(|(name, position)| (name.is_type(), name.symbol(labels), position))
+            .collect();
+        layout.sort();
+        assert_eq!(shape.slots(), layout.len(), "`{source}`");
+        for (slot, (_, name, position)) in layout.into_iter().enumerate() {
+            assert_eq!(
+                shape.slot(name),
+                Some((Slot(slot as u32), Position(position)))
+            );
+        }
+
+        // The components are the planned partition, each holding only deferred reads.
+        let components =
+            |sets: Vec<BTreeSet<BinderSymbol>>| sets.into_iter().collect::<BTreeSet<_>>();
+        let built: Vec<BTreeSet<BinderSymbol>> = shape
+            .components()
+            .iter()
+            .map(|component| {
+                assert!(component.deferred_only, "`{source}`");
+                component
+                    .members
+                    .iter()
+                    .map(|slot| shape.slot_name(*slot))
+                    .collect()
+            })
+            .collect();
+        let expected: Vec<BTreeSet<BinderSymbol>> = planned
+            .components
+            .iter()
+            .map(|members| members.iter().map(|name| name.symbol(labels)).collect())
+            .collect();
+        assert_eq!(built.len(), expected.len(), "`{source}`");
+        assert_eq!(components(built), components(expected), "`{source}`");
+
+        // One mention at each planned read's site, with its class, statement and landing, and no
+        // other.
+        let reads: Vec<_> = rendering
+            .reads
+            .iter()
+            .enumerate()
+            .filter(|(_, placed)| placed.scope == index)
+            .collect();
+        assert_eq!(shape.mentions().len(), reads.len(), "`{source}`");
+        for (read, placed) in reads {
+            let mention = shape
+                .mention(located.sites[read])
+                .expect("a mention at the planned read's site");
+            assert_eq!(mention.name, placed.read.name.symbol(labels), "`{source}`");
+            assert_eq!(mention.statement, placed.statement, "`{source}`");
+            assert_eq!(mention.class, class(placed.read.class), "`{source}`");
+            let expected = match placed.read.lands {
+                Lands::Builtin => Found::Builtin,
+                Lands::Binder { up } => Found::Binder {
+                    level: level - up,
+                    name: placed.read.name.symbol(labels),
+                },
+                Lands::Nowhere => unreachable!("a valid plan reads nowhere"),
+            };
+            assert_eq!(
+                follow(&chain, level, mention.coordinate),
+                expected,
+                "`{source}`"
+            );
+        }
+
+        // Each nested scope, and a capture of a fellow member of its statement's binder's component
+        // is a member, every other one a read.
+        let children: Vec<_> = rendering
+            .scopes
+            .iter()
+            .enumerate()
+            .filter(|(_, child)| child.parent == Some(index))
+            .collect();
+        assert_eq!(shape.nested_shapes().len(), children.len(), "`{source}`");
+        for (child, rendered) in children {
+            let binder = planned.statements[rendered.statement as usize].binder;
+            let fellows: BTreeSet<BinderSymbol> = planned
+                .components
+                .iter()
+                .find(|members| binder.is_some_and(|binder| members.contains(&binder)))
+                .map(|members| members.iter().map(|name| name.symbol(labels)).collect())
+                .unwrap_or_default();
+            let nested = located.shapes[child].expect("every planned scope has a shape");
+            for capture in nested.captures() {
+                match capture.source {
+                    CaptureSource::Member { .. } => {
+                        assert!(fellows.contains(&capture.name), "`{source}`")
+                    }
+                    CaptureSource::Read(Coordinate {
+                        hops: 0,
+                        target: Target::Local(_),
+                    }) => assert!(!fellows.contains(&capture.name), "`{source}`"),
+                    CaptureSource::Read(_) => {}
+                }
             }
         }
-        chain.push((nested, child));
-        check(
-            labels,
-            chain,
-            statements,
-            body.body_statements().map(|(node, _)| node).collect(),
-        );
-        chain.pop();
     }
 }
 
-// ---------- laws 4–7: activations ----------
+/// Build `program`'s rendering and hand the program's shape, its lines and where the plan landed
+/// to `test`.
+fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'_, 'g, 'c>)) {
+    let rendering = plan::render_program(program);
+    with_fixture(|fixture| {
+        let lines = fixture.parse(&rendering.source);
+        fixture.in_cell(|writer, handles| {
+            let table = builtins(fixture, writer);
+            let shape = Shape::of_program(fixture.program, &lines, table, fixture.scratch())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "`{}` shapes: {}",
+                        rendering.source,
+                        error.display(fixture.labels)
+                    )
+                });
+            let nodes: Vec<_> = lines.iter().collect();
+            let located = locate(&rendering, Some(shape), &nodes);
+            test(ShapedPlan {
+                labels: fixture.labels,
+                rendering: &rendering,
+                located,
+                shape,
+                writer,
+                table,
+                handles,
+            });
+        })
+    });
+}
+
+struct ShapedPlan<'p, 'g, 'c> {
+    labels: &'p LabelInterner,
+    rendering: &'p Rendering<'p>,
+    located: Located<'g>,
+    shape: &'g Shape<'g>,
+    writer: Writer<'c>,
+    table: &'c Builtins<'g, 'c>,
+    handles: &'p [CellHandle],
+}
+
+// ---------- activations ----------
 
 /// What a read observes, comparable.
 #[derive(PartialEq, Debug)]
 enum Observed {
     Number(u64),
+    Type(KType),
     Pending(CellHandle),
     Edge(u32),
 }
@@ -340,7 +382,8 @@ enum Observed {
 fn observe(binding: Binding<'_, '_>) -> Observed {
     match binding {
         Binding::Bound(Value::Number(number)) => Observed::Number(number.to_bits()),
-        Binding::Bound(other) => panic!("every value name is bound to a number, found {other:?}"),
+        Binding::Bound(Value::Type(ty)) => Observed::Type(ty.handle()),
+        Binding::Bound(other) => panic!("every slot is bound to a number, found {other:?}"),
         Binding::Pending(handle) => Observed::Pending(handle),
         Binding::Edge(edge) => Observed::Edge(edge.index()),
     }
@@ -375,9 +418,6 @@ fn activate<'g, 'c>(
 
     // Law 4: by name at the read's own position lands where the coordinate does.
     for mention in shape.mentions() {
-        if let BinderSymbol::Type(_) = mention.name {
-            continue;
-        }
         let at = match mention.class {
             MentionClass::Eager => Position::statement(mention.statement as usize),
             MentionClass::Deferred => shape.end(),
@@ -449,86 +489,95 @@ fn activate<'g, 'c>(
                 }
                 activate(writer, table, nested, bindings, None, next);
             }
-            ShapeKind::Program | ShapeKind::Module => panic!("the model nests no such shape"),
+            ShapeKind::Program | ShapeKind::Module => panic!("a plan nests no such shape"),
         }
     }
-}
-
-/// Every path from a program to a scope reached through arms alone, as child indices.
-fn block_paths(scope: &ModelScope, path: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
-    out.push(path.clone());
-    for (index, child) in scope.children.iter().enumerate() {
-        if child.kind == Kind::Block {
-            path.push(index);
-            block_paths(child, path, out);
-            path.pop();
-        }
-    }
-}
-
-fn body() -> impl Strategy<Value = Vec<Statement>> {
-    proptest::collection::vec(model::statement(), 1..3)
 }
 
 proptest! {
     #![proptest_config(ProptestConfig { cases: crate::tests::case_share(1, 1), ..ProptestConfig::default() })]
 
-    /// Laws 1–3: the builder refuses what the model refuses, first error first, and otherwise
-    /// agrees with it on every mention, layout, component and nested shape.
+    /// Laws 1–3: a planned program shapes back into its plan — every scope's kind, layout,
+    /// components and nested scopes, and every mention's site, class, statement and landing.
     #[test]
-    fn the_builder_agrees_with_the_model(program in model::program()) {
-        let source = model::render_program(&program);
-        let expected = model::analyze_program(&program);
+    fn a_planned_program_shapes_back_into_its_plan(choices in plan::choices()) {
+        let program = Generator::new(&choices).program();
+        shaped_plan(&program, |shaped| check(shaped.labels, shaped.rendering, &shaped.located, &[]));
+    }
+
+    /// A plan with one refusal injected is refused with exactly that refusal.
+    #[test]
+    fn an_injected_refusal_is_the_one_reported(choices in plan::choices(), which in 0..5usize) {
+        let mut generator = Generator::new(&choices);
+        let mut program = generator.program();
+        let refusal = generator.refuse(&mut program, which);
+        let rendering = plan::render_program(&program);
         with_fixture(|fixture| {
-            let lines = fixture.parse(&source);
+            let lines = fixture.parse(&rendering.source);
             fixture.in_cell(|writer, _| {
                 let table = builtins(fixture, writer);
-                let built = Shape::of_program(fixture.program, &lines, table, fixture.scratch());
-                match (built, &expected) {
-                    (Err(error), Err(expected)) => {
-                        assert_eq!(&model_error(fixture.labels, &error), expected, "`{source}`")
+                let source = &rendering.source;
+                let error = Shape::of_program(fixture.program, &lines, table, fixture.scratch())
+                    .err()
+                    .unwrap_or_else(|| panic!("`{source}` is refused with {refusal:?}"));
+                let labels = fixture.labels;
+                let expected = match &refusal {
+                    Refusal::Rebind { name, first, second } => ShapeError::Rebind {
+                        name: name.symbol(labels),
+                        first: Position(*first),
+                        second: Position(*second),
+                    },
+                    Refusal::ShadowsBuiltin { name, at } => ShapeError::ShadowsBuiltin {
+                        name: name.symbol(labels),
+                        at: Position(*at),
+                    },
+                    Refusal::Unbound { name, statement } => {
+                        let nodes: Vec<_> = lines.iter().collect();
+                        let located = locate(&rendering, None, &nodes);
+                        let read = rendering
+                            .reads
+                            .iter()
+                            .position(|placed| placed.read.lands == Lands::Nowhere)
+                            .expect("the refused read is placed");
+                        ShapeError::Unbound {
+                            name: name.symbol(labels),
+                            site: located.sites[read],
+                            statement: *statement,
+                        }
                     }
-                    (Ok(shape), Ok(scope)) => {
-                        check(fixture.labels, &mut vec![(shape, scope)], &program, lines.iter().collect())
+                    Refusal::EagerCycle(members) => {
+                        let ShapeError::EagerCycle { members: built } = &error else {
+                            panic!("`{source}` is refused with {refusal:?}, not {error:?}");
+                        };
+                        let built: BTreeSet<_> = built.iter().copied().collect();
+                        let members = members.iter().map(|name| name.symbol(labels)).collect();
+                        assert_eq!(built, members, "`{source}`");
+                        return;
                     }
-                    (built, expected) => panic!(
-                        "`{source}`: built {:?}, the model says {expected:?}",
-                        built.map(|_| ())
-                    ),
-                }
+                };
+                assert_eq!(error, expected, "`{source}`");
             })
         });
     }
-}
 
-/// The laws over shaped programs: most generated programs are refused and filtered out, so the
-/// reject budget grows with the case count.
-fn shaped_config() -> ProptestConfig {
-    let cases = crate::tests::case_share(1, 1);
-    ProptestConfig {
-        cases,
-        max_local_rejects: cases.saturating_mul(256),
-        ..ProptestConfig::default()
+    /// A name re-declared inside a nested scope takes the reads that see the nested binder, and the
+    /// enclosing binder keeps its own.
+    #[test]
+    fn a_redeclared_name_takes_the_reads_nearest_it(choices in plan::choices()) {
+        let mut generator = Generator::new(&choices);
+        let mut program = generator.program();
+        generator.shadow(&mut program);
+        shaped_plan(&program, |shaped| check(shaped.labels, shaped.rendering, &shaped.located, &[]));
     }
-}
 
-proptest! {
-    #![proptest_config(shaped_config())]
-
-    /// Laws 4 and 6: over every activation of a shaped program, by-name resolution agrees with the
+    /// Laws 4 and 6: over every activation of a planned program, by-name resolution agrees with the
     /// coordinates, a local is visible exactly where its position is seen, and closure bindings
     /// copy the enclosing words.
     #[test]
-    fn activations_read_what_their_coordinates_name(program in model::shaped_program()) {
-        let source = model::render_program(&program);
-        with_fixture(|fixture| {
-            let lines = fixture.parse(&source);
-            fixture.in_cell(|writer, _| {
-                let table = builtins(fixture, writer);
-                let shape = Shape::of_program(fixture.program, &lines, table, fixture.scratch())
-                    .expect("the model shapes the program");
-                activate(writer, table, shape, ClosureBindings::EMPTY, None, &mut 1.0);
-            })
+    fn activations_read_what_their_coordinates_name(choices in plan::choices()) {
+        let program = Generator::new(&choices).program();
+        shaped_plan(&program, |shaped| {
+            activate(shaped.writer, shaped.table, shaped.shape, ClosureBindings::EMPTY, None, &mut 1.0);
         });
     }
 
@@ -536,165 +585,159 @@ proptest! {
     /// every slot it reads is bound.
     #[test]
     fn a_pending_slot_names_its_binder_and_refuses_a_birth(
-        program in model::shaped_program(),
+        choices in plan::choices(),
         bound in proptest::collection::vec(any::<bool>(), 8),
     ) {
-        let source = model::render_program(&program);
-        with_fixture(|fixture| {
-            let lines = fixture.parse(&source);
-            fixture.in_cell(|writer, handles| {
-                let table = builtins(fixture, writer);
-                let shape = Shape::of_program(fixture.program, &lines, table, fixture.scratch())
-                    .expect("the model shapes the program");
-                let activation = Activation::new(writer, shape, ClosureBindings::EMPTY, table, None);
-                let is_bound = |slot: Slot| bound[slot.index() % bound.len()];
-                for slot in 0..shape.slots() {
-                    let slot = Slot(slot as u32);
-                    activation.claim(slot, handles[slot.index()]).unwrap();
-                    if is_bound(slot) {
-                        activation.bind(slot, Value::Number(slot.index() as f64)).unwrap();
+        let program = Generator::new(&choices).program();
+        shaped_plan(&program, |shaped| {
+            let ShapedPlan { writer, table, shape, handles, rendering, .. } = shaped;
+            let activation = Activation::new(writer, shape, ClosureBindings::EMPTY, table, None);
+            let is_bound = |slot: Slot| bound[slot.index() % bound.len()];
+            for slot in 0..shape.slots() {
+                let slot = Slot(slot as u32);
+                activation.claim(slot, handles[slot.index()]).unwrap();
+                if is_bound(slot) {
+                    activation.bind(slot, Value::Number(slot.index() as f64)).unwrap();
+                }
+            }
+            for mention in shape.mentions() {
+                let Target::Local(slot) = mention.coordinate.target else { continue };
+                let expected = if is_bound(slot) {
+                    Observed::Number((slot.index() as f64).to_bits())
+                } else {
+                    Observed::Pending(handles[slot.index()])
+                };
+                assert_eq!(observe(activation.read(mention.coordinate)), expected);
+            }
+            let plan = KnotPlan::new(64);
+            for (_, nested) in shape.nested_shapes() {
+                if nested.kind() != ShapeKind::Callable {
+                    continue;
+                }
+                let first_pending = nested.captures().iter().find_map(|capture| match capture.source {
+                    CaptureSource::Read(Coordinate { target: Target::Local(slot), .. })
+                        if !is_bound(slot) =>
+                    {
+                        Some(ClosureRefused { name: capture.name, pending: handles[slot.index()] })
                     }
-                }
-                for mention in shape.mentions() {
-                    let Target::Local(slot) = mention.coordinate.target else { continue };
-                    let expected = if is_bound(slot) {
-                        Observed::Number((slot.index() as f64).to_bits())
-                    } else {
-                        Observed::Pending(handles[slot.index()])
-                    };
-                    assert_eq!(observe(activation.read(mention.coordinate)), expected);
-                }
-                let plan = KnotPlan::new(64);
-                for (_, nested) in shape.nested_shapes() {
-                    if nested.kind() != ShapeKind::Callable {
-                        continue;
-                    }
-                    let first_pending = nested.captures().iter().find_map(|capture| match capture.source {
-                        CaptureSource::Read(Coordinate { target: Target::Local(slot), .. })
-                            if !is_bound(slot) =>
-                        {
-                            Some(ClosureRefused { name: capture.name, pending: handles[slot.index()] })
-                        }
-                        _ => None,
-                    });
-                    let born = ClosureBindings::born(
-                        writer,
-                        nested,
-                        &activation,
-                        |_, index| plan.edge(index).unwrap(),
-                        |edge| followed(edge.index()),
-                    );
-                    assert_eq!(born.err(), first_pending, "`{source}`");
-                }
-            })
+                    _ => None,
+                });
+                let born = ClosureBindings::born(
+                    writer,
+                    nested,
+                    &activation,
+                    |_, index| plan.edge(index).unwrap(),
+                    |edge| followed(edge.index()),
+                );
+                assert_eq!(born.err(), first_pending, "`{}`", rendering.source);
+            }
         });
     }
 
-    /// Law 7: an `EVAL` body read at a statement of a program or of an arm inside it shapes as the
-    /// model analyses it over that scope's chain, and each of its outer reads is the site's own
-    /// by-name read.
+    /// Law 7: an `EVAL` body planned over the names a statement of the program or of an arm inside
+    /// it sees shapes back into its plan over that scope's chain, and each of its enclosing reads is
+    /// the site's own by-name read.
     #[test]
-    fn an_eval_body_resolves_over_its_site(
-        program in model::shaped_program(),
-        body in body(),
-        scope_pick in any::<Index>(),
-        statement_pick in any::<Index>(),
-    ) {
-        let source = model::render_program(&program);
-        let quoted = format!("#{}", model::render_body(&body));
-        let program_scope = model::analyze_program(&program).expect("the model shapes the program");
-        let mut paths = Vec::new();
-        block_paths(&program_scope, &mut Vec::new(), &mut paths);
-        let path = scope_pick.get(&paths);
+    fn an_eval_body_resolves_over_its_site(choices in plan::choices()) {
+        let mut generator = Generator::new(&choices);
+        let program = generator.program();
+        let rendering = plan::render_program(&program);
+
+        // A site: the program, or an arm reached through arms alone, and one of its statements.
+        let chain_of = |index: usize| {
+            let mut chain = vec![index];
+            while let Some(parent) = rendering.scopes[*chain.last().unwrap()].parent {
+                chain.push(parent);
+            }
+            chain.reverse();
+            chain
+        };
+        let sites: Vec<usize> = (0..rendering.scopes.len())
+            .filter(|index| {
+                chain_of(*index)[1..]
+                    .iter()
+                    .all(|scope| rendering.scopes[*scope].scope.kind == Kind::Arm)
+            })
+            .collect();
+        let site_chain = chain_of(sites[generator.pick(sites.len())]);
+        let innermost = rendering.scopes[*site_chain.last().unwrap()].scope;
+        let at = generator.pick(innermost.statements.len()) as u32;
+
+        // What the site sees: each scope's parameters and the binders before the statement the
+        // chain reads it at, and only the innermost arm's `it`.
+        let mut visible = Vec::new();
+        let mut it_seen = false;
+        for (depth, scope) in site_chain.iter().enumerate().rev() {
+            let reads_at = match site_chain.get(depth + 1) {
+                Some(child) => rendering.scopes[*child].statement,
+                None => at,
+            };
+            for (name, position) in rendering.scopes[*scope].scope.binders() {
+                if name == plan::Name::It {
+                    if it_seen {
+                        continue;
+                    }
+                    it_seen = true;
+                }
+                if position <= reads_at {
+                    visible.push((name, depth));
+                }
+            }
+        }
+        let body = generator.eval_body(site_chain.len(), &visible);
+        let quoted = plan::render_eval(&body, site_chain.len());
+
         with_fixture(|fixture| {
-            let lines = fixture.parse(&source);
-            let eval_lines = fixture.parse(&quoted);
+            let lines = fixture.parse(&rendering.source);
+            let eval_lines = fixture.parse(&quoted.source);
             let ExpressionPart::QuotedExpression(quote) = eval_lines[0].parts[0].value else {
-                panic!("`{quoted}` is a quote");
+                panic!("`{}` is a quote", quoted.source);
             };
             let quote = quote.reference();
             fixture.in_cell(|writer, _| {
                 let table = builtins(fixture, writer);
                 let program_shape =
                     Shape::of_program(fixture.program, &lines, table, fixture.scratch())
-                        .expect("the model shapes the program");
+                        .expect("a planned program shapes");
+                let nodes: Vec<_> = lines.iter().collect();
+                let located = locate(&rendering, Some(program_shape), &nodes);
 
-                // Walk down the path, activating each scope beside the one it sits in.
+                // Activate each scope of the chain beside the one it sits in.
                 let mut next = 1.0;
-                let mut bind_all = |activation: &Activation<'_, '_>| {
-                    for slot in 0..activation.shape().slots() {
+                let mut site: Option<&Activation<'_, '_>> = None;
+                let mut shapes = Vec::new();
+                for scope in &site_chain {
+                    let shape = located.shapes[*scope].expect("every planned scope has a shape");
+                    let activation = resident(
+                        writer,
+                        Activation::new(writer, shape, ClosureBindings::EMPTY, table, site),
+                    );
+                    for slot in 0..shape.slots() {
                         activation.bind(Slot(slot as u32), Value::Number(next)).unwrap();
                         next += 1.0;
                     }
-                };
-                let mut site = resident(
-                    writer,
-                    Activation::new(writer, program_shape, ClosureBindings::EMPTY, table, None),
-                );
-                bind_all(site);
-                let mut chain: Vec<(&Shape<'_>, &ModelScope)> = vec![(program_shape, &program_scope)];
-                let mut statements: &[Statement] = &program;
-                let mut nodes: Vec<&KExpression<'_>> = lines.iter().collect();
-                for &step in path {
-                    let (shape, scope) = *chain.last().unwrap();
-                    let found = sites(statements, nodes.into_iter());
-                    let (at, body_node, body_statements) = found.bodies[step];
-                    let nested = shape.nested(at).unwrap();
-                    site = resident(
-                        writer,
-                        Activation::new(writer, nested, ClosureBindings::EMPTY, table, Some(site)),
-                    );
-                    bind_all(site);
-                    chain.push((nested, &scope.children[step]));
-                    statements = body_statements;
-                    nodes = body_node.body_statements().map(|(node, _)| node).collect();
+                    site = Some(activation);
+                    shapes.push(shape);
                 }
+                let site = site.expect("the chain holds the program");
+                let position = Position::statement(at as usize);
+                let shape = Shape::for_eval(fixture.program, quote, site, position, fixture.scratch())
+                    .unwrap_or_else(|error| panic!(
+                        "`{}` over `{}` shapes: {}",
+                        quoted.source,
+                        rendering.source,
+                        error.display(fixture.labels),
+                    ));
+                let located = locate(&quoted, Some(shape), &[quote]);
+                check(fixture.labels, &quoted, &located, &shapes);
 
-                let (_, innermost) = *chain.last().unwrap();
-                let at = statement_pick.index(innermost.statements as usize) as u32;
-                let mut outer: Vec<(&ModelScope, u32)> = chain
-                    .windows(2)
-                    .map(|pair| (pair[0].1, pair[1].1.parent_statement))
-                    .collect();
-                outer.push((innermost, at));
-                let expected = model::analyze_eval(&outer, &body);
-                let built = Shape::for_eval(
-                    fixture.program,
-                    quote,
-                    site,
-                    Position::statement(at as usize),
-                    fixture.scratch(),
-                );
-                match (built, &expected) {
-                    (Err(error), Err(expected)) => assert_eq!(
-                        &model_error(fixture.labels, &error),
-                        expected,
-                        "`{source}` / `{quoted}` at {path:?}:{at}"
-                    ),
-                    (Ok(shape), Ok(scope)) => {
-                        let evaluated =
-                            Activation::new(writer, shape, ClosureBindings::EMPTY, table, Some(site));
-                        for mention in shape.mentions() {
-                            if matches!(mention.name, BinderSymbol::Type(_))
-                                || matches!(mention.coordinate, Coordinate { hops: 0, target: Target::Local(_) | Target::Capture(_) })
-                            {
-                                continue;
-                            }
-                            let by_name = site.resolve_by_name(mention.name, Position::statement(at as usize));
-                            assert_eq!(by_name.map(observe), Some(observe(evaluated.read(mention.coordinate))));
-                        }
-                        chain.push((shape, scope));
-                        check(
-                            fixture.labels,
-                            &mut chain,
-                            &body,
-                            quote.body_statements().map(|(node, _)| node).collect(),
-                        );
+                let evaluated = Activation::new(writer, shape, ClosureBindings::EMPTY, table, Some(site));
+                for mention in shape.mentions() {
+                    if matches!(mention.coordinate, Coordinate { hops: 0, target: Target::Local(_) | Target::Capture(_) }) {
+                        continue;
                     }
-                    (built, expected) => panic!(
-                        "`{source}` / `{quoted}` at {path:?}:{at}: built {:?}, the model says {expected:?}",
-                        built.map(|_| ())
-                    ),
+                    let by_name = site.resolve_by_name(mention.name, position);
+                    assert_eq!(by_name.map(observe), Some(observe(evaluated.read(mention.coordinate))));
                 }
             })
         });

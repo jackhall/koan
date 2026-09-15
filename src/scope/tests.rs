@@ -4,7 +4,7 @@
 mod activation;
 mod boundary;
 mod examples;
-mod model;
+mod plan;
 mod properties;
 
 use crate::memory::{
