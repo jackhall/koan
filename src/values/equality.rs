@@ -7,14 +7,11 @@
 //! A function has no structural equality: a comparison that reaches one on either side is
 //! [`Incomparable`], which the `==` builtin reports, never `false`.
 //!
-//! **Circular values.** Two data nodes of knots compare as a bisimulation over `(knot, index)`
-//! pairs: a pair is recorded before its cells are compared, and a pair met again while recorded is
-//! taken as equal. That is the coinductive hypothesis — the greatest fixpoint, bisimilarity — and it
-//! is sound because every result is a conjunction: a hypothesis never turns an unequal pair equal,
-//! and every recorded pair is fully compared by the call that recorded it. A node against a plain
-//! value records nothing, since the plain side is finite and bounds the descent.
+//! Two data nodes of knots compare as a bisimulation: a node pair is recorded before its cells are
+//! compared, and a recorded pair met again counts as equal. See
+//! [README.md § Equality and rendering](README.md#equality-and-rendering) for why that is sound.
 
-use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpBackedSet, bump_set};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::type_lattice::{KType, TypeRegistry, satisfied_by};
 
@@ -40,7 +37,7 @@ impl<X: Knotted> Value<'_, '_, X> {
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<bool, Incomparable> {
-        let mut seen = BumpVec::new_in(scratch);
+        let mut seen = bump_set(scratch);
         self.equals_within(other, types, scratch, &mut seen)
     }
 
@@ -50,18 +47,17 @@ impl<X: Knotted> Value<'_, '_, X> {
         other: &Value<'_, '_, Y>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-        seen: &mut BumpVec<'_, (X, Y)>,
+        seen: &mut BumpBackedSet<'_, (X, Y)>,
     ) -> Result<bool, Incomparable> {
         if self.as_callable().is_some() || other.as_callable().is_some() {
             return Err(Incomparable);
         }
         Ok(match (self.composite(), other.composite()) {
             (Some((left_node, left)), Some((right_node, right))) => {
-                if let (Some(left_node), Some(right_node)) = (left_node, right_node) {
-                    if seen.contains(&(left_node, right_node)) {
-                        return Ok(true);
-                    }
-                    seen.push((left_node, right_node));
+                if let (Some(left_node), Some(right_node)) = (left_node, right_node)
+                    && !seen.insert((left_node, right_node))
+                {
+                    return Ok(true);
                 }
                 composite_equal(left, right, types, scratch, seen)?
             }
@@ -87,7 +83,7 @@ fn composite_equal<X: Knotted, Y: Knotted>(
     right: Composite<'_, Y>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    seen: &mut BumpVec<'_, (X, Y)>,
+    seen: &mut BumpBackedSet<'_, (X, Y)>,
 ) -> Result<bool, Incomparable> {
     let related = |left: KType, right: KType| {
         satisfied_by(types, scratch, left, right) || satisfied_by(types, scratch, right, left)
@@ -146,7 +142,7 @@ fn cells_equal<X: Knotted, Y: Knotted>(
     right: Cells<'_, Y>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    seen: &mut BumpVec<'_, (X, Y)>,
+    seen: &mut BumpBackedSet<'_, (X, Y)>,
 ) -> Result<bool, Incomparable> {
     if left.len() != right.len() {
         return Ok(false);

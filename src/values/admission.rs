@@ -1,11 +1,12 @@
 //! Slot admission: whether a type slot takes a value, a raw AST part, or a working part — the type
-//! dispatch reads off a raw part — and the one rule a newtype construction is checked by.
+//! dispatch reads off a raw part — the one rule a newtype construction is checked by, and the one
+//! rule each container kind's memo is derived by.
 //!
 //! A value is checked by the one lattice relation over its memoized type, never by walking its
 //! contents. A raw part is checked by shape, since an unevaluated literal has no value yet.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::{ExpressionPart, KLiteral};
+use crate::parse::{BinderSymbol, ExpressionPart, KLiteral};
 use crate::type_lattice::{
     Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with, join,
     satisfied_by,
@@ -88,22 +89,19 @@ pub fn part_ktype(
         ExpressionPart::Literal(KLiteral::String(_)) => KType::STR,
         ExpressionPart::Literal(KLiteral::Boolean(_)) => KType::BOOL,
         ExpressionPart::Literal(KLiteral::Null) => KType::NULL,
-        ExpressionPart::ListLiteral(items) => {
-            types.list(joined(items.iter().map(element), types, scratch))
-        }
-        ExpressionPart::DictLiteral(pairs) => types.dict(
-            joined(pairs.iter().map(|(key, _)| element(key)), types, scratch),
-            joined(
-                pairs.iter().map(|(_, value)| element(value)),
-                types,
-                scratch,
-            ),
+        ExpressionPart::ListLiteral(items) => list_type(types, scratch, items.iter().map(element)),
+        ExpressionPart::DictLiteral(pairs) => dict_type(
+            types,
+            scratch,
+            pairs
+                .iter()
+                .map(|(key, value)| (element(key), element(value))),
         ),
-        ExpressionPart::RecordLiteral(fields) => {
-            let mut field_types = BumpVec::with_capacity_in(fields.len(), scratch);
-            field_types.extend(fields.iter().map(|(name, value)| (*name, element(value))));
-            types.record(scratch, &field_types)
-        }
+        ExpressionPart::RecordLiteral(fields) => record_type(
+            types,
+            scratch,
+            fields.iter().map(|(name, value)| (*name, element(value))),
+        ),
         ExpressionPart::Identifier(_) => KType::IDENTIFIER,
         ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_) => KType::KEXPRESSION,
         ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
@@ -118,6 +116,45 @@ fn joined(
     scratch: BumpAllocator<'_>,
 ) -> KType {
     items.fold(KType::NEVER, |acc, item| join(types, scratch, acc, item))
+}
+
+/// The type a list over cells of types `elements` memoizes: the list of their join, `Never` for
+/// none. Every list's memo is derived here — [`List::new`](super::List::new)'s over its cells, and
+/// the tie's over a data node's staged cells.
+pub fn list_type(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    elements: impl Iterator<Item = KType>,
+) -> KType {
+    types.list(joined(elements, types, scratch))
+}
+
+/// The type a dict over entries of key and value types `entries` memoizes: the dict of each side's
+/// join. Every dict's memo is derived here, over the entries a repeated key leaves.
+pub fn dict_type(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    entries: impl Iterator<Item = (KType, KType)>,
+) -> KType {
+    let (keys, values) = entries.fold((KType::NEVER, KType::NEVER), |(keys, values), entry| {
+        (
+            join(types, scratch, keys, entry.0),
+            join(types, scratch, values, entry.1),
+        )
+    });
+    types.dict(keys, values)
+}
+
+/// The type a record over `fields` memoizes: the record of each field's type. Every record's memo
+/// is derived here.
+pub fn record_type(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    fields: impl ExactSizeIterator<Item = (BinderSymbol, KType)>,
+) -> KType {
+    let mut field_types = BumpVec::with_capacity_in(fields.len(), scratch);
+    field_types.extend(fields);
+    types.record(scratch, &field_types)
 }
 
 /// Whether `slot` takes a raw part, by shape. An unevaluated container literal admits on its kind

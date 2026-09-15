@@ -18,11 +18,12 @@ A scope is built in three tiers, each at the moment its contents become known.
   class of every mention and the components its bindings form, and it
   resolves every name the body reads.
 - **Closure bindings** — one run per callable, held in the callable value and
-  built when the callable is born. Each name the body reads from an enclosing
-  scope is copied in shallowly: the binding's value word, not a deep copy of
-  what it points at. A name that is a member of the callable's own
-  [component](#visibility) is held as an edge into the knot the component is
-  born in, never as a copied value. A callable's birth reads every capture into
+  built when the callable is born. Each slot is a `values::Link`, the one
+  value-or-edge type a knot's data node holds too. Each name the body reads
+  from an enclosing scope is copied in shallowly: the binding's value word, not
+  a deep copy of what it points at. A name that is a member of the callable's
+  own [component](#visibility) is held as an edge into the knot the component
+  is born in, never as a copied value. A callable's birth reads every capture into
   scratch first and lays the run down only once none is pending, so a closure
   binding is never a placeholder and a refused birth writes nothing.
 - **Per-call bindings** — one activation per call, laid down in the call's
@@ -87,12 +88,12 @@ a coordinate of the enclosing activation, or — when the name is a fellow membe
 of the component the callable's own binding belongs to — that member's place in
 the component, which the birth turns into a knot edge the caller mints.
 
-**No reader sees a bare edge.** The scope layer is generic over the callable a
-value holds — the parameter [`values`](../values/README.md#what-a-value-is)
+**No reader sees a bare edge.** The scope layer is generic over the knot member
+a value holds — the parameter [`values`](../values/README.md#what-a-value-is)
 takes — and reads one only to resolve an edge. An activation of a callable
-holds the callable it runs, and a block inside it inherits that callable, so a
-read of a capture that is an edge resolves through it to the sibling callable
-the edge names, a bound value like any other. A capture read at birth through
+holds the member it runs, and a block inside it inherits that member, so a
+read of a capture that is an edge resolves through it to the sibling the edge
+names — a function or a data node — a bound value like any other. A capture read at birth through
 such a coordinate is therefore the sibling's value word.
 
 A search by symbol happens only where the shape is built and inside `EVAL`.
@@ -114,7 +115,14 @@ down to the outermost callable-body boundary it crosses, is a constructor slot
 value is only stored in a container or captured by a callable, never
 inspected. A type declaration's schema — a `UNION`'s variants, a `SIG` or
 `NEWTYPE`'s fields — is a constructor slot too, so a type naming itself or a
-later sibling in its schema is a deferred mention. A callable body is opaque — nothing inside it changes the class,
+later sibling in its schema is a deferred mention. So is a nominal
+construction's payload: in a two-part node whose head is a type name,
+`(Ring {next = a})`, the head is an eager mention and the payload a constructor
+slot, so a tagged value naming itself reaches the tie rather than being an
+eager cycle. A type-constructor application written in value position has the
+same shape and is classified the same way; the tie, not the shape, refuses it
+when it closes a cycle. A union variant's construction (`Tree.Node x`) is a
+attribute form and stays eager. A callable body is opaque — nothing inside it changes the class,
 since none of it runs until the callable is called. Any other mention is
 **eager**: the value is needed at the point it is read. A call, a keyword
 form's slot, an operator's operand, a dict key, a type expression outside a
@@ -168,14 +176,20 @@ and so is a function outside a module that is mutually recursive with one
 inside it, since a module body is an eager context — the two belong in one
 module.
 
-The shape hands the layer above each body's components and the class of every
-mention, and two facts a tie reads: the callable body each binder births —
-`Shape::births`, set when the binder's right-hand side is a callable form at
-its root or its form is a combined one — and `Shape::form`, the form node a
-callable body sits in, where its signature is read. Tying a component of
-callable binders is [`function`](../function/README.md#the-tie)'s; a component
-with a data member, and a deferred mention below a nested constructor, are
-[Open work](#open-work).
+The shape hands the layer above each body's components — each with whether it
+is `deferred_only` and whether it is `cyclic`, holding more than one member or
+a member that reads itself — and the class of every mention, and three facts a
+tie reads: the callable body each binder births — `Shape::births`, set when the
+binder's right-hand side is a callable form at its root or its form is a
+combined one — `Shape::form`, the form node a callable body sits in, where its
+signature is read, and `Shape::rhs`, each `LET` binder's right-hand side part,
+where a data member is read. A caller ties a component of value binders when
+it is cyclic or every member births a callable; a non-cyclic data binder is an
+ordinary value, and a component of type binders is the elaborator's. A
+component never mixes the two channels: a schema names types only, so no
+mention leaves a type binder for a value binder. Tying is
+[`function`](../function/README.md#the-tie)'s, which writes a deferred mention
+below a nested constructor into the knot as an anonymous node.
 
 ## Two channels
 
@@ -292,9 +306,6 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [Circular values](../../roadmap/rewrite/circular-values.md) — tying a
-  component with data members, including a deferred mention below a nested
-  constructor.
 - [Modules](../../roadmap/rewrite/modules.md) — `USING … SCOPE` resolved
   through a module's signature.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.

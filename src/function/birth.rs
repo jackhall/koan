@@ -1,8 +1,8 @@
 //! The tie: one component of value binders born together as one knot.
 //!
-//! A member is a callable binder, whose node is a function, or a `LET` whose right-hand side is
-//! rooted at a constructor, whose node is data (see [`data`](super::data)); anything else refuses
-//! the tie before a member is read. Everything a member needs is then read into scratch with no
+//! A member is a callable binder, whose node is a function, or a `LET` of a value name whose
+//! right-hand side is rooted at a constructor, whose node is data (see [`data`](super::data));
+//! anything else refuses the tie before a member is read. Everything a member needs is then read into scratch with no
 //! writer in reach — a function's body, its type elaborated from its signature and its captures; a
 //! data member's cells, with a part only the caller can evaluate asked of its evaluator by site —
 //! every mention of a fellow member minted as an edge into the knot about to be tied. Container
@@ -32,8 +32,8 @@ pub enum Untieable<'x> {
     },
     /// A member's signature did not elaborate.
     Type(Elaboration),
-    /// A member that is neither a callable binder nor a `LET` whose right-hand side, through
-    /// one-part groups, is a list, dict or record literal or a nominal construction.
+    /// A member that is neither a callable binder nor a `LET` of a value name whose right-hand side,
+    /// through one-part groups, is a list, dict or record literal or a nominal construction.
     Opaque { name: BinderSymbol },
     /// Data member `name`'s right-hand side has a part at `site` the caller must evaluate first.
     Eager { name: BinderSymbol, site: Site },
@@ -88,7 +88,12 @@ pub fn tie<'graph, 'cell, 'x>(
             roots.push(None);
             continue;
         }
-        match shape.rhs(*slot).and_then(|part| data::root(shape, part)) {
+        let value_binder = matches!(shape.slot_name(*slot), BinderSymbol::Value(_));
+        match shape
+            .rhs(*slot)
+            .filter(|_| value_binder)
+            .and_then(|part| data::root(shape, part))
+        {
             Some(root) => roots.push(Some(root)),
             None => {
                 return Err(Untieable::Opaque {

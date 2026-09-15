@@ -45,11 +45,12 @@ pub mod working;
 mod tests;
 
 pub use admission::{
-    ConstructionRefused, admits, admits_part, construction, part_ktype, satisfies,
+    ConstructionRefused, admits, admits_part, construction, dict_type, list_type, part_ktype,
+    record_type, satisfies,
 };
 pub use circular::{Circular, Resolved};
 pub use crossing::{COPY_RATIO, cross, cross_here, verdict};
-pub use dict::{Dict, Key, KeyRejected};
+pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use equality::Incomparable;
 pub use link::Link;
 pub use list::List;
@@ -59,6 +60,7 @@ pub use type_value::TypeValue;
 pub use weight::Weight;
 pub use working::{WorkingExpression, WorkingPart};
 
+use std::hash::Hash;
 use std::marker::PhantomData;
 
 use crate::memory::{DropFree, Edge, Ready, Writer, reattachable};
@@ -68,8 +70,8 @@ use crate::type_lattice::{KType, TypeNode, TypeRegistry};
 /// What `values` asks of a knot member at one region lifetime — a function or a data node of a
 /// knot: its memoized type, what rebuilding its knot at a destination writes, the fellow member an
 /// edge of its own names, and what the node holds. A member is `Copy`, so it carries no drop glue
-/// and may rest in a region, and its equality is node identity.
-pub trait Knotted: Copy + PartialEq {
+/// and may rest in a region, and its equality and hash are node identity.
+pub trait Knotted: Copy + Eq + Hash {
     fn ktype(&self) -> KType;
 
     /// The bytes a rebuild of this member's knot at a destination writes, past the value word
@@ -112,7 +114,7 @@ pub type DeepCopy<'copy, 'graph, 'from, 'to, X, Y> =
     dyn FnMut(&Value<'graph, 'from, X>) -> Value<'graph, 'to, Y> + 'copy;
 
 /// The knot member of a value that holds none: uninhabited, so its arm cannot be built.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Nothing {}
 
 impl Knotted for Nothing {

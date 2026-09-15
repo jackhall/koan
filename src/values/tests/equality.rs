@@ -143,7 +143,7 @@ fn quotes_compare_as_syntax() {
 }
 
 /// A stand-in function: `values` compares none, so all it needs is a type.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Opaque;
 
 impl crate::values::Knotted for Opaque {

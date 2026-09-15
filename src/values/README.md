@@ -15,24 +15,43 @@ A [`Value`](../values.rs) is one `Copy` word of 24 bytes: a number, a bool,
 null, a string borrowed where its bytes live, a quoted expression borrowed where
 the parse put it, or a borrow of a **per-kind resident struct** —
 [`List`](list.rs), [`Dict`](dict.rs), [`Record`](record.rs),
-[`Tagged`](tagged.rs) or [`TypeValue`](type_value.rs) — or a **callable**.
+[`Tagged`](tagged.rs) or [`TypeValue`](type_value.rs) — or a **knot member**.
 `Value` is the sum and the per-kind structs carry the methods, so a consumer
 that only reads lists names `List` and never matches on every kind.
 
-**A callable is a parameter.** A callable holds the environment it captured,
-which is the [scope layer's](../scope/README.md#three-tiers), and `values` may
-not name a scope. So `Value<'graph, 'cell, X>` has one arm, `Callable(X)`, over
-a type parameter a layer above closes — [`function`](../function/README.md)
-closes it with a sixteen-byte knot member, so the word stays at 24 bytes.
-`values` states what it asks of `X` as a trait pair
-([values.rs](../values.rs)): per value, `Callable` — a `Copy` type with its
-memoized type handle, its weight, its surface, and the fellow member an edge of
-its own knot names; per family, `CallableFamily` — the closed callable at each
-region lifetime, and the copy from one to another. The parameter defaults to
-the uninhabited `Nothing`, whose family is `NoCallable`, so a value spelled
-without it holds no callable and every arm that builds one is unreachable.
-Every container, the working expression, and every door and relation over
-them carry the same parameter.
+**A knot member is a parameter.** A group of values that refer to one another —
+mutually recursive functions, a ring of tagged values, a list holding a
+function that captures it — is born together as one
+[knot](../memory/README.md#the-knot), and a function holds the environment it
+captured, which is the [scope layer's](../scope/README.md#three-tiers), which
+`values` may not name. So `Value<'graph, 'cell, X>` has one arm, `Knotted(X)`,
+over a type parameter a layer above closes — [`function`](../function/README.md)
+closes it with a sixteen-byte `(knot, index)` member, so the word stays at 24
+bytes. `values` states what it asks of `X` as a trait pair
+([values.rs](../values.rs)): per value, `Knotted` — a `Copy` type whose
+equality is node identity, with its memoized type handle, its knot's weight,
+the fellow member an edge of its own knot names, and what the node holds; per
+family, `KnottedFamily` — the member at each region lifetime, and the copy of
+its knot from one to another. The parameter defaults to the uninhabited
+`Nothing`, whose family is `NoKnot`, so a value spelled without it holds no
+knot member and every arm that builds one is unreachable. Every container, the
+working expression, and every door and relation over them carry the same
+parameter.
+
+**What a member holds** is the one total answer `Knotted::resolve` gives, a
+[`Resolved`](circular.rs): a **function**, opaque to `values`, or a **data
+node**, a [`Circular`](circular.rs). `Value::as_callable` answers only for the
+first and `Value::as_circular` only for the second, so no arm's meaning rests
+on an invariant `values` cannot check. A data node is a list, dict, record or
+tagged resident whose cells are [`Link`](link.rs)s instead of value words: a
+link is a value word or an `Edge` naming a sibling node of the same knot, since
+a sibling has no address until the knot is tied. A link is read only through
+the member holding it, which resolves an edge to `Value::Knotted` of the
+sibling. The four residents take the cell type as a parameter defaulting to the
+value word, so their accessors and deep-copy doors are written once; each has
+a `linked` door that lays a data node down under a memo its caller already
+derived, and the plain doors stay on value cells. A function's closure
+bindings are the same `Link` run.
 
 No type handle rides in the word. A `KType` is a `u128` aligned to 16 bytes, and
 one inline would more than double every cell; every handle lives in the resident
@@ -45,8 +64,8 @@ is no other constructor, no reference count, and no per-value reach
 description: a value built in a step is a plain reference whose reach is the
 executing cell, and a value crossing a step rides the substrate's carrier,
 [`ValueCarrier`](../values.rs), `memory`'s `Ready` bound to
-[`ValueFamily`](../values.rs) over a callable family. Every resident struct,
-and every callable, is `Copy`, so it is
+[`ValueFamily`](../values.rs) over a knot-member family. Every resident struct,
+and every knot member, is `Copy`, so it is
 `Drop`-free by construction and a region releases it whole. Every door lays its
 struct down through `memory`'s `resident` and its runs through `collect`, the
 two shapes derived from `Writer::fill`; `text` is the one helper here, a string
@@ -56,6 +75,17 @@ A tagged value is the one nominal wrap — a newtype construction, a union
 variant, a lowered error — and its identity *is* its type, so no tag symbol
 rides beside the payload. `Tagged::hold` keeps every layer of a payload that is
 itself tagged; `Tagged::peel` replaces one, so a re-tag never nests.
+
+**A newtype construction has one rule.** [`construction`](admission.rs) takes
+the handle a construction's head names and the type of its payload, and answers
+the identity the tagged value takes — the head itself — or a
+`ConstructionRefused`: `NotNewType` when the head is not a newtype (a scalar
+type, or a type constructor), `Misfit` when the payload's type does not satisfy
+the newtype's representation. `Tagged::construct` is the checked door over it;
+`hold` stays the raw wrap for a union variant, a lowered error and a retype.
+Every construction goes through the rule — an ordinary one through `construct`,
+a knot's tagged node by the tie over the payload type it derived — so there is
+nothing to keep in agreement.
 
 ## Two lifetimes
 
@@ -76,7 +106,7 @@ forced tree-cell copy alike — and weighs its pointer. No AST node is ever home
 in a cell.
 
 It is also why **every value copies**: every region part has a deep copy,
-every program part has none to do, and a callable is rebuilt by its family, so
+every program part has none to do, and a knot member is rebuilt by its family, so
 the copy is total.
 
 ## The type memo and `satisfies`
@@ -86,9 +116,20 @@ handle, computed in the pass that lays its cells down: a list the join of its
 cells' types (`Never` when empty), a dict the joins over its keys and its
 cells, a record the record type of its fields in written order, a type value
 `OfKind` of the kind of the type it names, a tagged value its identity, and a
-callable reports its own.
+knot member reports its own.
 `Value::ktype` copies that handle or names a leaf constant; it reads no registry
 and walks nothing.
+
+**A data node's memo is exact and finite.** The lattice has no structural
+recursive type, so recursion in a value's type goes through a declared memo: a
+function's is its signature type and a tagged node's its newtype, both known
+before the knot exists. A container node's memo is derived by the one rule
+of its kind — `list_type`, `dict_type` or `record_type`, which the plain doors
+use too — from its cells, an edge contributing its target's memo, so
+the layer that ties a knot derives it — and refuses a cycle of containers
+alone, which no finite type describes
+([the tie](../function/README.md#the-tie)). `satisfies` over a circular value
+is therefore the same one relation against that memo.
 
 A type check against a value — [`satisfies`](admission.rs) — is therefore one
 lattice relation between the slot and that handle. A slot that reads a
@@ -99,7 +140,8 @@ value to type it, so a value's precision is whatever its type says, and **an
 ascription changes it**: `Value::retyped` stamps a container checked against a
 declared node of its own kind with the declared handle over the same shared
 runs, and a tagged value checked against a union with the member that names its
-constructor. Downstream dispatch then sees the contract rather than the
+constructor. A knot member is never restamped, since a knot never grows a
+node. Downstream dispatch then sees the contract rather than the
 contents' incidental precision.
 
 The same module answers the question for what is not yet a value.
@@ -118,9 +160,11 @@ total rebuild at a destination writes, saturating. A composite weighs its own
 resident struct plus every cell it lays down, and a cell weighs a whole `Value`
 word plus whatever that word points at in the region — a string its bytes, a
 dict key its key word and bytes, a record name its symbol. A tagged value holds
-its payload word inline, so it adds only what the payload points at. A
-callable weighs what its own rebuild writes, which its layer memoizes — for a
-function, the whole knot it sits in. Program storage weighs nothing past the
+its payload word inline, so it adds only what the payload points at. A link
+weighs its word plus what a value word points at; an edge points at nothing. A
+knot member weighs what its own rebuild writes, which its layer memoizes — the
+whole knot it sits in, since a member copies by re-tying its knot, and a data
+node's resident weighs only its own struct and links. Program storage weighs nothing past the
 pointer. A crossing reads the weight off the
 value rather than walking it; a retype shares the runs, so it shares the
 weight.
@@ -136,9 +180,11 @@ its weight, and both build the same way: a **pinned** operand arrives at the
 destination's brand and embeds as it is, and a **copied** one is rebuilt through
 `copy_into` — region parts written again through the destination's writer,
 program nodes embedded verbatim, memoized types and weights carried over
-unchanged, and a callable handed to its family's copy together with
-`copy_into` itself, so every value the callable holds is rebuilt by the same
-copy. `copy_into` is private to the crossing: the two doors are the only way
+unchanged, and a knot member handed to its family's copy together with
+`copy_into` itself, so every value its knot holds is rebuilt by the same
+copy. A data node rebuilds through `Circular::copied`: each value link through
+that copy, each edge verbatim — an edge names a node by index, so it means the
+same node in the copy — and its memo and weight carried over. `copy_into` is private to the crossing: the two doors are the only way
 to a deep copy, so every copy is one the graph priced.
 
 The graph consults an embedder closure for each operand's verdict, and this
@@ -177,19 +223,44 @@ contents **only when their memoized types are related**, one satisfied by the
 other in either direction — an empty list of strings and an empty list of
 numbers are unequal. That makes `==` intransitive across ascriptions by design.
 
-**A callable has no structural equality.** `equals` answers
-`Result<bool, Incomparable>`: a comparison with a callable on either side is
+**A function has no structural equality.** `equals` answers
+`Result<bool, Incomparable>`: a comparison with a function on either side is
 `Incomparable`, which the `==` builtin reports as an error rather than
 `false`, and so is a pair of related containers whose aligned cells reach one.
-Every aligned pair is compared, so an unequal pair before a callable does not
+Every aligned pair is compared, so an unequal pair before a function does not
 hide it. A container pair with unrelated types is still unequal without
 descending, whatever it holds.
+
+**Circular values compare as a bisimulation.** A data node compares as the
+plain value of its kind would, its links resolved through it, so a node and a
+plain value of the same kind and contents are equal. Two nodes compare under a
+set of `(member, member)` pairs already entered: a pair is recorded before its
+cells are compared, and a pair met again while recorded counts as equal. That
+is the coinductive hypothesis — the greatest fixpoint, bisimilarity — and it is
+sound because every result is a conjunction: a hypothesis never turns an
+unequal pair equal, and every recorded pair is fully compared by the call that
+recorded it. So a one-node ring and a two-node ring with the same contents are
+equal. A node against a plain value records nothing, since the plain side is
+finite and bounds the descent. Plain and linked composites share one reading,
+the private `Composite` view in [circular.rs](circular.rs), so equality,
+rendering and the mark pass below are written once over both.
 
 `Value::render` is the surface `PRINT` writes: a string bare, a dict key quoted
 so `{"1": x}` and `{1: x}` read apart, `[a, b]`, `{k: v}` in key order,
 `{x = 1}` in field-name order, a tagged value as its type's name around its
-payload, a type as its name, a quote as its body's surface, and a callable as
-its own layer renders it.
+payload, a type as its name, a quote as its body's surface, a function as its
+type's name — its closure bindings are program state and never print — and a
+data node as the plain value of its kind.
+
+**A cycle prints with labels.** A mark pass walks depth first from the first
+data node the write meets that no earlier pass entered, entering each node
+once, and records every node reached again while it is still being entered;
+every cycle holds such a back edge, so every cycle holds a recorded target, and
+a plain value with no data node is walked once. The write labels a target at
+its first occurrence, `@0 = …`, and writes every later occurrence as `@0`, so
+it stops wherever a cycle closes: `LET a = (Ring {next = a})` prints
+`@0 = Ring({next = @0})`. Labels count from zero per render in order of first
+appearance, and a node that is no target prints inline each time it is reached.
 
 `Value::lower_part` builds a value straight from a region-pure AST part — a
 scalar or string literal, a quote, or a container literal whose every element
@@ -232,7 +303,7 @@ a resolved sub-result or a staging hole exists only here.
 **Outside doc comments and `#[cfg(test)]`, `values` names `crate::memory`,
 `crate::parse`, `crate::source` and `crate::type_lattice`, and nothing else in
 the crate.** It names no scheduler type, no scope type and no function type,
-so its callable arm is a parameter rather than a function or module arm. The
+so its knot-member arm is a parameter rather than a function or module arm. The
 compiler cannot enforce a module boundary inside one
 crate, so [`tests::boundary`](tests/boundary.rs) reads this module's own source
 and fails on any other `crate::` path, on an owning heap type (`Rc`, `RefCell`,
@@ -243,7 +314,15 @@ a name the rest of the stack retired.
 
 The unit suite ([tests.rs](tests.rs)) runs every door, crossing and relation
 over a fixture that owns program storage with a type registry built in it, and a
-cell graph over that storage to run steps in. One test joins the koan
+cell graph over that storage to run steps in. Circular values are exercised
+without `function`: the fixture closes the parameter with a test-only member
+whose every node is a data node, tied through `KnotPlan` with memos supplied
+by hand, and the suites cover the `linked` doors and the construction rule
+([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
+([tests/equality.rs](tests/equality.rs)), labelled and shared-inline renders
+([tests/render.rs](tests/render.rs)), a ring crossed under a copy and a pin
+([tests/crossing.rs](tests/crossing.rs)), and `satisfies` by a node's memo
+([tests/satisfaction.rs](tests/satisfaction.rs)). One test joins the koan
 [Miri slate](../../observe/miri_slate.md): `a_copied_list_outlives_its_home`,
 the one path only `values` drives — a deep copy nesting `fill` inside `fill`
 with string writes between and a program node embedded, read after the region
@@ -252,8 +331,6 @@ pair with are `cellgraph`'s own slate.
 
 ## Open work
 
-- [Circular values](../../roadmap/rewrite/circular-values.md) — equality and
-  rendering that terminate on a cycle.
 - [Scheduler on cellgraph](../../roadmap/rewrite/scheduler-on-cellgraph.md) —
   the scheduler that builds its graph with `verdict` and delivers values
   between cells.

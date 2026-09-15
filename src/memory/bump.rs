@@ -1,7 +1,7 @@
 //! The **bump tier**: storage outside the graph, for the AST and the type lattice's registry and
 //! scratch. A bump here has no reach and no cell; it is released whole when its owner drops.
 //!
-//! The tier is a collections arena — growable vectors and a hash table over `&Bump` as an
+//! The tier is a collections arena — growable vectors and a hash table and hash set over `&Bump` as an
 //! [`Allocator`](allocator_api2::alloc::Allocator) — which a cell's
 //! [`Writer`](super::substrate::Writer) has no verbs for, so it does not pretend to be a region.
 //! Callers use bumpalo's own verbs (`alloc`, `alloc_slice_copy`, `alloc_slice_fill_iter`,
@@ -29,6 +29,10 @@ pub type BumpVec<'a, T> = allocator_api2::vec::Vec<T, BumpAllocator<'a>>;
 pub type BumpBackedMap<'a, K, V, S = hashbrown::DefaultHashBuilder> =
     hashbrown::HashMap<K, V, S, BumpAllocator<'a>>;
 
+/// A hash set whose buckets live in a bump. Built through `bump_set`.
+pub type BumpBackedSet<'a, T, S = hashbrown::DefaultHashBuilder> =
+    hashbrown::HashSet<T, S, BumpAllocator<'a>>;
+
 /// Build a table over `bump`, **proving at compile time** that its entries carry no drop glue. The
 /// bump runs no destructor, so a `Drop`-bearing key or value would silently leak whatever it owns;
 /// the assert is monomorphization-checked, so an entry field that brings glue in is a build error
@@ -43,4 +47,18 @@ pub(crate) fn bump_table<'a, K, V, S: BuildHasher + Default>(
         )
     };
     hashbrown::HashMap::with_hasher_in(S::default(), bump)
+}
+
+/// Build a set over `bump`, proving at compile time that its members carry no drop glue, as
+/// [`bump_table`] does for a table's entries.
+pub(crate) fn bump_set<'a, T, S: BuildHasher + Default>(
+    bump: BumpAllocator<'a>,
+) -> BumpBackedSet<'a, T, S> {
+    const {
+        assert!(
+            !std::mem::needs_drop::<T>(),
+            "a bump-backed set's members must carry no drop glue: the bump runs no destructor",
+        )
+    };
+    hashbrown::HashSet::with_hasher_in(S::default(), bump)
 }

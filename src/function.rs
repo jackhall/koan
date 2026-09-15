@@ -1,16 +1,17 @@
-//! Functions as values: the layer that closes [`Value`](crate::values::Value)'s callable parameter.
+//! Functions and circular data as values: the layer that closes
+//! [`Value`](crate::values::Value)'s knot-member parameter.
 //!
-//! A callable is one node of a [`Knot`](crate::memory::Knot) laid down in a cell's region. A
+//! A knot member is one node of a [`Knot`](crate::memory::Knot) laid down in a cell's region. A
 //! function's node holds its type, the body shape it runs, its closure bindings — the scope layer's
-//! run of value words and edges — and the rebuild weight of the whole knot it sits in. A function
-//! that names no fellow is a one-node knot; a strongly connected component of callable binders is
-//! born together as one knot by [`tie`], each capture of a fellow member an edge into it.
+//! run of links — and the rebuild weight of the whole knot it sits in; a data node holds a
+//! [`Circular`](crate::values::Circular) over links and the same weight. A function that names no
+//! fellow is a one-node knot; a deferred-only component of value binders is born together as one
+//! knot by [`tie`], each mention of a fellow member an edge into it.
 //!
-//! [`Knotted`] is sixteen bytes — a knot member — so a value holding one stays one twenty-four-byte
-//! word. A callable copies at a crossing by re-tying its whole knot at the destination, each closure
-//! binding deep-copied and each edge carried verbatim, priced by the knot's memoized weight under
-//! the ordinary verdict. Structural equality over a callable is
-//! [`Incomparable`](crate::values::Incomparable).
+//! [`Knotted`] is sixteen bytes, so a value holding one stays one twenty-four-byte word. A member
+//! copies at a crossing by re-tying its whole knot at the destination, each held value deep-copied
+//! and each edge carried verbatim, priced by the knot's memoized weight under the ordinary verdict.
+//! Structural equality over a function is [`Incomparable`](crate::values::Incomparable).
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::elaborate`,
 //! `crate::memory`, `crate::parse`, `crate::scope`, `crate::type_lattice` and `crate::values`, and
@@ -88,8 +89,8 @@ pub enum Node<'graph, 'cell> {
 
 const _: () = assert!(!std::mem::needs_drop::<Node<'static, 'static>>());
 
-/// A knot member: one node of a knot, a function or a data node. Its equality is node identity.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// A knot member: one node of a knot, a function or a data node. Its equality and hash are node identity.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Knotted<'graph, 'cell>(Member<'cell, Node<'graph, 'cell>>);
 
 const _: () = assert!(size_of::<Knotted<'static, 'static>>() == 16);

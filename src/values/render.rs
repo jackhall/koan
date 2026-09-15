@@ -1,15 +1,13 @@
 //! The surface rendering of a value — what `PRINT` writes.
 //!
-//! **Circular values.** A render is two passes. The mark pass walks the value depth first, entering
-//! each data node once, and records every node an edge reaches while that node is still being
-//! entered: every cycle holds such a back edge, so every cycle holds a recorded target. The write
-//! pass labels a target at its first occurrence, `@0 = …`, and writes every later occurrence as its
-//! label, so it stops wherever a cycle closes; a node that is no target writes inline each time.
-//! Labels count from zero in order of first appearance.
+//! A plain value is written in one walk. At the first data node the walk meets, a mark pass from
+//! that node records every node a cycle returns to; the write then labels each at its first
+//! occurrence, `@0 = …`, and writes `@0` after. See
+//! [README.md § Equality and rendering](README.md#equality-and-rendering).
 
 use std::fmt;
 
-use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, bump_set, bump_table};
 use crate::parse::LabelInterner;
 use crate::type_lattice::{TypeRegistry, display_name};
 
@@ -30,40 +28,36 @@ impl<X: Knotted> Value<'_, '_, X> {
         labels: &LabelInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {
-        let mut marks = Marks {
-            entering: BumpVec::new_in(scratch),
-            entered: BumpVec::new_in(scratch),
-            targets: BumpVec::new_in(scratch),
-        };
-        self.mark(&mut marks);
-        let mut writer = Render {
+        Render {
             out,
             types,
             labels,
             scratch,
-            targets: &marks.targets,
-            labelled: BumpVec::new_in(scratch),
-        };
-        writer.value(self)
+            marks: Marks {
+                entering: bump_set(scratch),
+                entered: bump_set(scratch),
+                targets: bump_set(scratch),
+            },
+            labelled: bump_table(scratch),
+        }
+        .value(self)
     }
 
-    /// The mark pass: record every node reached again while it is being entered.
+    /// The mark pass from this value: enter every node it reaches that no earlier pass entered, and
+    /// record each node reached again while it is being entered.
     fn mark(&self, marks: &mut Marks<'_, X>) {
         let Some((node, composite)) = self.composite() else {
             return;
         };
         if let Some(node) = node {
             if marks.entering.contains(&node) {
-                if !marks.targets.contains(&node) {
-                    marks.targets.push(node);
-                }
+                marks.targets.insert(node);
                 return;
             }
-            if marks.entered.contains(&node) {
+            if !marks.entered.insert(node) {
                 return;
             }
-            marks.entered.push(node);
-            marks.entering.push(node);
+            marks.entering.insert(node);
         }
         match composite {
             Composite::List { cells, .. }
@@ -75,31 +69,35 @@ impl<X: Knotted> Value<'_, '_, X> {
             }
             Composite::Tagged { payload, .. } => payload.mark(marks),
         }
-        if node.is_some() {
-            marks.entering.pop();
+        if let Some(node) = node {
+            marks.entering.remove(&node);
         }
     }
 }
 
 /// The mark pass's state: the nodes on the current path, every node entered, and the targets.
+///
+/// A mark pass runs from a node no earlier pass entered, and enters everything that node reaches.
+/// A cycle through a fresh node and an entered one would have entered the fresh node too, so the
+/// passes together make the marks one depth-first pass over the whole value would.
 struct Marks<'x, X> {
-    entering: BumpVec<'x, X>,
-    entered: BumpVec<'x, X>,
-    targets: BumpVec<'x, X>,
+    entering: BumpBackedSet<'x, X>,
+    entered: BumpBackedSet<'x, X>,
+    targets: BumpBackedSet<'x, X>,
 }
 
-/// The write pass's state.
-struct Render<'o, 'env, 'run, 'm, 'x, O, X> {
+/// The write's state.
+struct Render<'o, 'env, 'run, 'x, O, X> {
     out: &'o mut O,
     types: &'env TypeRegistry<'run>,
     labels: &'env LabelInterner,
     scratch: BumpAllocator<'x>,
-    targets: &'m [X],
-    /// Each target already written, in label order.
-    labelled: BumpVec<'x, X>,
+    marks: Marks<'x, X>,
+    /// Each target already written, under its label.
+    labelled: BumpBackedMap<'x, X, usize>,
 }
 
-impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, '_, O, X> {
+impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, O, X> {
     fn value(&mut self, value: &Value<'_, '_, X>) -> fmt::Result {
         let (types, labels) = (self.types, self.labels);
         if let Some(function) = value.as_callable() {
@@ -110,14 +108,17 @@ impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, '_, O, X> {
             );
         }
         if let Some((node, composite)) = value.composite() {
-            if let Some(node) = node
-                && self.targets.contains(&node)
-            {
-                if let Some(label) = self.labelled.iter().position(|seen| *seen == node) {
-                    return write!(self.out, "@{label}");
+            if let Some(node) = node {
+                if !self.marks.entered.contains(&node) {
+                    value.mark(&mut self.marks);
                 }
-                write!(self.out, "@{} = ", self.labelled.len())?;
-                self.labelled.push(node);
+                if self.marks.targets.contains(&node) {
+                    if let Some(label) = self.labelled.get(&node) {
+                        return write!(self.out, "@{label}");
+                    }
+                    write!(self.out, "@{} = ", self.labelled.len())?;
+                    self.labelled.insert(node, self.labelled.len());
+                }
             }
             return self.composite(composite);
         }

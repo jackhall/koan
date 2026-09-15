@@ -6,9 +6,9 @@ use std::fmt;
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
-use crate::type_lattice::{KType, TypeRegistry, join};
+use crate::type_lattice::{KType, TypeRegistry};
 
-use super::{Knotted, Link, Nothing, Value, Weight};
+use super::{Knotted, Link, Nothing, Value, Weight, dict_type};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
 /// normalises — NaN is refused and `-0` folds to `0` — so the order and equality below agree with
@@ -161,28 +161,26 @@ impl<'graph, 'cell, X: Knotted> Dict<'graph, 'cell, X> {
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'graph, 'cell, X> {
-        let kept = kept(entries, scratch);
-        let (mut key_type, mut value_type) = (KType::NEVER, KType::NEVER);
+        let kept = kept_entries(entries, scratch);
         let mut weight = Weight::flat::<Self>();
         let keys = writer.fill(kept.len(), |at| {
             let key = entries[kept[at]].0;
-            key_type = join(types, scratch, key_type, key.ktype());
             weight = weight.plus(key.weight());
             key.rehomed(writer)
         });
         let cells = writer.fill(kept.len(), |at| {
             let cell = entries[kept[at]].1;
-            value_type = join(types, scratch, value_type, cell.ktype());
             weight = weight.plus(cell.weight());
             cell
         });
-        Self::from_runs(
-            writer,
-            keys,
-            cells,
-            types.dict(key_type, value_type),
-            weight,
-        )
+        let ktype = dict_type(
+            types,
+            scratch,
+            keys.iter()
+                .zip(cells)
+                .map(|(key, cell)| (key.ktype(), cell.ktype())),
+        );
+        Self::from_runs(writer, keys, cells, ktype, weight)
     }
 }
 
@@ -195,7 +193,7 @@ impl<'graph, 'cell, X: Knotted> Dict<'graph, 'cell, X, Link<'graph, 'cell, X>> {
         ktype: KType,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Self {
-        let kept = kept(entries, scratch);
+        let kept = kept_entries(entries, scratch);
         let mut weight = Weight::flat::<Self>();
         let keys = writer.fill(kept.len(), |at| {
             let key = entries[kept[at]].0;
@@ -212,8 +210,11 @@ impl<'graph, 'cell, X: Knotted> Dict<'graph, 'cell, X, Link<'graph, 'cell, X>> {
 }
 
 /// The indices of `entries` that stay, in key order: where a key repeats, only its last occurrence.
-/// Staged over `scratch`.
-fn kept<'x, C>(entries: &[(Key<'_>, C)], scratch: BumpAllocator<'x>) -> BumpVec<'x, usize> {
+/// Every dict keeps its entries by this rule. Staged over `scratch`.
+pub fn kept_entries<'x, C>(
+    entries: &[(Key<'_>, C)],
+    scratch: BumpAllocator<'x>,
+) -> BumpVec<'x, usize> {
     let mut order: BumpVec<'_, usize> = BumpVec::with_capacity_in(entries.len(), scratch);
     order.extend(0..entries.len());
     order.sort_unstable_by(|left, right| {

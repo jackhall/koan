@@ -23,7 +23,7 @@ reattachable!(Step => ());
 
 /// A stand-in function: the index of the knot member it is, so a read through an edge capture is
 /// observable without a function layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct Probe(pub u32);
 
 impl Knotted for Probe {

@@ -138,8 +138,9 @@ and nothing is re-derived from the source. `MODULE` and operator bodies are not 
 [`src/scope/tests/examples.rs`](src/scope/tests/examples.rs) covers `MODULE` by example.
 [`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds six laws:
 
-- a planned program shapes back into its plan: kinds, layouts, components, one mention per planned
-  read with its class, statement and landing, nested scopes, and which captures are knot edges;
+- a planned program shapes back into its plan: kinds, layouts, components and whether each is
+  cyclic, one mention per planned read with its class, statement and landing, nested scopes, and
+  which captures are knot edges;
 - a plan with exactly one refusal injected (an eager cycle, an eager read ahead, an undeclared
   name, a rebind, a shadowed builtin) is refused with that refusal;
 - a name re-declared inside a nested scope takes the reads nearest it;
@@ -206,8 +207,8 @@ under the bump tier — under Miri's tree-borrows mode, with zero process-exit
 leaks and zero UB required for sign-off. `memory`'s knot adds no layout or
 retype over `thin_run` (cellgraph's slate runs it at every edge its arithmetic
 has, including a fill writing into the same region); what koan's slate pins is
-`function`'s copy of a knot, whose node run is filled while closure runs and
-deep copies are written into the same region. `src/` carries no `unsafe` at all — koan's only
+`function`'s copy of a knot, whose node run is filled while closure runs, data
+node residents and deep copies are written into the same region. `src/` carries no `unsafe` at all — koan's only
 `unsafe` is the counting global allocator in
 [`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding
 outside the tree the slate audit censuses (`tools/observe_tests.py` walks `src/`

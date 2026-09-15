@@ -7,7 +7,7 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::parse::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::{Knotted, Link, Nothing, Value, Weight};
+use super::{Knotted, Link, Nothing, Value, Weight, record_type};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
 /// nominal identity, only its fields; equality over two is blind to the order they were written in.
@@ -33,9 +33,6 @@ impl<'graph, 'cell, X: Knotted> Record<'graph, 'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> &'cell Record<'graph, 'cell, X> {
         let order = symbol_order(fields, scratch);
-        let mut field_types: BumpVec<'_, (BinderSymbol, KType)> =
-            BumpVec::with_capacity_in(fields.len(), scratch);
-        field_types.extend(fields.iter().map(|(name, cell)| (*name, cell.ktype())));
         let mut weight = Weight::flat::<Self>();
         let names = writer.fill(order.len(), |at| {
             weight = weight.plus(Weight::flat::<Symbol>());
@@ -46,13 +43,12 @@ impl<'graph, 'cell, X: Knotted> Record<'graph, 'cell, X> {
             weight = weight.plus(cell.weight());
             cell
         });
-        Self::from_runs(
-            writer,
-            names,
-            cells,
-            types.record(scratch, &field_types),
-            weight,
-        )
+        let ktype = record_type(
+            types,
+            scratch,
+            fields.iter().map(|(name, cell)| (*name, cell.ktype())),
+        );
+        Self::from_runs(writer, names, cells, ktype, weight)
     }
 }
 

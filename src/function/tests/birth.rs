@@ -589,3 +589,20 @@ fn a_type_declaration_member_is_opaque() {
         });
     });
 }
+
+#[test]
+fn a_type_binder_over_a_container_literal_is_opaque() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse("LET Wrap = [1]");
+        fixture.in_cell(pin, |context, binder| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, binder, &["Wrap"]);
+            assert_eq!(
+                tie_of(fixture, writer, activation, "Wrap").err(),
+                Some(Untieable::Opaque {
+                    name: fixture.name("Wrap"),
+                })
+            );
+        });
+    });
+}

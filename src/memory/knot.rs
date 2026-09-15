@@ -29,6 +29,8 @@
 //!
 //! See [README.md § The knot](README.md#the-knot).
 
+use std::hash::{Hash, Hasher};
+
 use super::substrate::{ThinRun, Writer};
 
 /// A node index inside one knot: minted only by a [`KnotPlan`] against its count, and resolved only
@@ -112,6 +114,13 @@ impl<T> PartialEq for Knot<'_, T> {
 
 impl<T> Eq for Knot<'_, T> {}
 
+/// A knot hashes as the run it is, agreeing with its equality.
+impl<T> Hash for Knot<'_, T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.run.as_slice(), state);
+    }
+}
+
 impl<'cell, T> Knot<'cell, T> {
     /// How many nodes the knot holds.
     pub fn len(self) -> u32 {
@@ -171,6 +180,14 @@ impl<T> PartialEq for Member<'_, T> {
 }
 
 impl<T> Eq for Member<'_, T> {}
+
+/// A member hashes as its knot and index, agreeing with its equality.
+impl<T> Hash for Member<'_, T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.knot.hash(state);
+        self.index.hash(state);
+    }
+}
 
 impl<'cell, T> Member<'cell, T> {
     /// The knot this node belongs to.

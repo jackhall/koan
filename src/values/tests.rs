@@ -115,7 +115,7 @@ pub(super) fn copy(_: Prices) -> Verdict {
 }
 
 /// A test-only knot member: every node is a data node, and its memo is the node's own.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct Node<'graph, 'cell>(Member<'cell, Circular<'graph, 'cell, Node<'graph, 'cell>>>);
 
 impl Knotted for Node<'_, '_> {

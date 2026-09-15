@@ -1,17 +1,17 @@
-//! A knot'stage data members: a `LET` whose right-hand side, through one-part groups, is a list, dict or
+//! A knot's data members: a `LET` whose right-hand side, through one-part groups, is a list, dict or
 //! record literal or a nominal construction `(Head payload)`.
 //!
-//! **Staging** reads a member'stage right-hand side into scratch with no writer in reach. A literal waits
+//! **Staging** reads a member's right-hand side into scratch with no writer in reach. A literal waits
 //! to be lowered; a mention of a fellow member is an edge; any other mention is the word the
 //! activation reads, or a refusal while its binder runs; a part the walk cannot build itself — a
-//! call, a keyword form, a `FN` — is asked of the caller'stage evaluator by site. Every constructor on
-//! the path from a member'stage root to a fellow mention is an anonymous node of the same knot, indexed
+//! call, a keyword form, a `FN` — is asked of the caller's evaluator by site. Every constructor on
+//! the path from a member's root to a fellow mention is an anonymous node of the same knot, indexed
 //! after the members in the order the walk meets it, and the cell that held it holds an edge; a
 //! nested constructor with no fellow mention below it stays an ordinary value.
 //!
-//! **Memos** follow the nominal cut. A function'stage memo is its signature type and a tagged node'stage is
-//! the newtype its head names, both known before the knot exists; a container node'stage memo is what
-//! the plain door of its kind would memoize, an edge contributing its target'stage memo. So container
+//! **Memos** follow the nominal cut. A function's memo is its signature type and a tagged node's is
+//! the newtype its head names, both known before the knot exists; a container node's memo is what
+//! the plain door of its kind would memoize, an edge contributing its target's memo. So container
 //! memos are derived in reverse topological order over the edges between container nodes, and a
 //! cycle of containers alone has no finite type and refuses the tie.
 //!
@@ -21,15 +21,15 @@
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected_components};
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, KLiteral};
 use crate::scope::{Binding, Component, Coordinate, Shape, Site, Target};
-use crate::type_lattice::{KType, TypeRegistry, join};
+use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{
     Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged, TypeValue, Value,
-    construction, part_ktype,
+    construction, dict_type, kept_entries, list_type, part_ktype, record_type,
 };
 
 use super::{KActivation, KValue, Knotted, Untieable};
 
-/// One part of a data member'stage right-hand side, read and not yet written.
+/// One part of a data member's right-hand side, read and not yet written.
 pub(super) enum Staged<'graph, 'cell, 'x> {
     /// A scalar or string literal, or a quote, lowered where it is written.
     Literal(&'graph ExpressionPart<'graph>),
@@ -57,7 +57,7 @@ pub(super) struct Node<'graph, 'cell, 'x> {
 /// Every knot node by index: a data node staged, or `None` for a function member.
 pub(super) type Nodes<'graph, 'cell, 'x> = BumpVec<'x, Option<Node<'graph, 'cell, 'x>>>;
 
-/// The constructor a data member'stage right-hand side is rooted at, through one-part groups: a list,
+/// The constructor a data member's right-hand side is rooted at, through one-part groups: a list,
 /// dict or record literal, or a nominal construction. `None` for anything else.
 pub(super) fn root<'graph>(
     shape: &Shape<'graph>,
@@ -78,7 +78,7 @@ pub(super) fn root<'graph>(
     }
 }
 
-/// A nominal construction'stage head and payload: a formless two-part node whose head is a type name
+/// A nominal construction's head and payload: a formless two-part node whose head is a type name
 /// the shape reads.
 fn construction_parts<'graph>(
     shape: &Shape<'graph>,
@@ -147,7 +147,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         self.activation.shape().slot_name(slot)
     }
 
-    /// `part` staged; at a member'stage `root`, a constructor is returned as the member'stage own node.
+    /// `part` staged; at a member's `root`, a constructor is returned as the member's own node.
     fn part(
         &mut self,
         part: &'graph ExpressionPart<'graph>,
@@ -187,7 +187,9 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
                             refused: ConstructionRefused::NotNewType(other.ktype()),
                         });
                     }
-                    _ => unreachable!("a type name reads no value binder of the component"),
+                    _ => unreachable!(
+                        "a type name reads no member of the component: `tie` admits value binders alone"
+                    ),
                 };
                 let payload = self.part(payload, false)?;
                 Staged::Tagged {
@@ -206,14 +208,13 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
             ExpressionPart::DictLiteral(pairs) => {
                 let mut keys = BumpVec::with_capacity_in(pairs.len(), scratch);
                 for (key, _) in pairs.iter() {
-                    keys.push(self.key(key)?);
+                    keys.push((self.key(key)?, ()));
                 }
-                let mut entries = BumpVec::with_capacity_in(pairs.len(), scratch);
-                for (at, (_, value)) in pairs.iter().enumerate() {
-                    if keys[at + 1..].contains(&keys[at]) {
-                        continue;
-                    }
-                    entries.push((keys[at], self.part(value, false)?));
+                let mut kept = kept_entries(&keys, scratch);
+                kept.sort_unstable();
+                let mut entries = BumpVec::with_capacity_in(kept.len(), scratch);
+                for at in kept {
+                    entries.push((keys[at].0, self.part(&pairs[at].1, false)?));
                 }
                 Staged::Dict(entries)
             }
@@ -241,7 +242,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         Ok(Staged::Edge(index))
     }
 
-    /// A mention read: an edge for a member of the component, the activation'stage word otherwise.
+    /// A mention read: an edge for a member of the component, the activation's word otherwise.
     fn read(
         &self,
         name: BinderSymbol,
@@ -304,7 +305,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
     }
 }
 
-/// Visit a staged constructor'stage direct children: list items, dict and record values, a payload.
+/// Visit a staged constructor's direct children: list items, dict and record values, a payload.
 fn each_child<'a, 'graph, 'cell, 'x>(
     staged: &'a Staged<'graph, 'cell, 'x>,
     mut visit: impl FnMut(&'a Staged<'graph, 'cell, 'x>),
@@ -326,8 +327,8 @@ fn is_container(staged: &Staged<'_, '_, '_>) -> bool {
     )
 }
 
-/// Every node'stage memo: `memos[i]` is `Some` for a function member on entry, and on success every
-/// node'stage memo is `Some`. A cycle of container nodes refuses with the members holding it.
+/// Every node's memo: `memos[i]` is `Some` for a function member on entry, and on success every
+/// node's memo is `Some`. A cycle of container nodes refuses with the members holding it.
 pub(super) fn memos<'x>(
     nodes: &Nodes<'_, '_, '_>,
     memos: &mut [Option<KType>],
@@ -390,8 +391,9 @@ pub(super) fn memos<'x>(
     Ok(())
 }
 
-/// The type a staged part'stage value memoizes — what the plain door of its kind would, an edge its
-/// target'stage memo, which is derived first.
+/// The type a staged part's value memoizes, by the rule the plain door of its kind derives its memo
+/// by — so a nested construction checked here is the one [`write`] builds — an edge its target's
+/// memo, which is derived first.
 fn staged_type(
     staged: &Staged<'_, '_, '_>,
     memos: &[Option<KType>],
@@ -403,33 +405,24 @@ fn staged_type(
         Staged::Literal(part) => part_ktype(part, types, scratch).expect("a literal has a type"),
         Staged::Value(value) => value.ktype(),
         Staged::Edge(target) => {
-            memos[*target as usize].expect("a referent'stage memo is derived first")
+            memos[*target as usize].expect("a referent's memo is derived first")
         }
-        Staged::List(items) => types.list(items.iter().fold(KType::NEVER, |element, item| {
-            join(types, scratch, element, of(item))
-        })),
-        Staged::Dict(entries) => {
-            let (keys, values) = entries.iter().fold(
-                (KType::NEVER, KType::NEVER),
-                |(keys, values), (key, value)| {
-                    (
-                        join(types, scratch, keys, key.ktype()),
-                        join(types, scratch, values, of(value)),
-                    )
-                },
-            );
-            types.dict(keys, values)
-        }
-        Staged::Record(fields) => {
-            let mut field_types = BumpVec::with_capacity_in(fields.len(), scratch);
-            field_types.extend(fields.iter().map(|(name, value)| (*name, of(value))));
-            types.record(scratch, &field_types)
-        }
+        Staged::List(items) => list_type(types, scratch, items.iter().map(of)),
+        Staged::Dict(entries) => dict_type(
+            types,
+            scratch,
+            entries.iter().map(|(key, value)| (key.ktype(), of(value))),
+        ),
+        Staged::Record(fields) => record_type(
+            types,
+            scratch,
+            fields.iter().map(|(name, value)| (*name, of(value))),
+        ),
         Staged::Tagged { head, .. } => head.handle(),
     }
 }
 
-/// Check every construction the nodes hold — a tagged node over its payload'stage memo, and every
+/// Check every construction the nodes hold — a tagged node over its payload's memo, and every
 /// ordinary construction below — in node order, depth first.
 pub(super) fn check(
     nodes: &Nodes<'_, '_, '_>,
@@ -474,7 +467,7 @@ pub(super) fn check(
     Ok(())
 }
 
-/// A checked staged part laid down as a value in `writer`'stage region.
+/// A checked staged part laid down as a value in `writer`'s region.
 fn write<'graph, 'cell>(
     writer: Writer<'cell>,
     staged: &Staged<'graph, 'cell, '_>,
@@ -510,7 +503,7 @@ fn write<'graph, 'cell>(
     }
 }
 
-/// A node'stage cell: an edge through `plan`, or a staged value written.
+/// A node's cell: an edge through `plan`, or a staged value written.
 fn link<'graph, 'cell>(
     writer: Writer<'cell>,
     staged: &Staged<'graph, 'cell, '_>,
@@ -521,13 +514,13 @@ fn link<'graph, 'cell>(
     match staged {
         Staged::Edge(target) => Link::Edge(
             plan.edge(*target)
-                .expect("a node index is below the knot'stage count"),
+                .expect("a node index is below the knot's count"),
         ),
         other => Link::Value(write(writer, other, types, scratch)),
     }
 }
 
-/// A checked data node laid down in `writer`'stage region under its memo.
+/// A checked data node laid down in `writer`'s region under its memo.
 pub(super) fn lay_down<'graph, 'cell>(
     writer: Writer<'cell>,
     node: &Node<'graph, 'cell, '_>,

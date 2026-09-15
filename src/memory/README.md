@@ -22,11 +22,11 @@ identity a resident carries.
   the [type lattice](../type_lattice/README.md)'s registry and scratch. It is a
   *collections* arena: `BumpAllocator` is `&Bump`, both bumpalo's verb receiver
   and the `Allocator` its growable `BumpVec` and its hashbrown `BumpBackedMap`
-  are built over. A cell's `Writer` has no verb that grows a buffer, so the
+  and `BumpBackedSet` are built over. A cell's `Writer` has no verb that grows a buffer, so the
   tier does not pretend to be a region, and it carries no door of its own:
   callers use bumpalo's `alloc`, `alloc_slice_copy`, `alloc_slice_fill_iter`
   and `alloc_str`. Bumpalo runs no destructor, so nothing with drop glue goes
-  in; `bump_table` asserts that for a table's entries at compile time, and a
+  in; `bump_table` and `bump_set` assert that for their entries at compile time, and a
   slice or a single value is the caller's to keep `Copy`.
 - **Program storage** ([program.rs](program.rs)) — program text and the raw
   AST, a bump the storage owns, because an AST needs no reach. It is its own
@@ -63,8 +63,8 @@ vocabulary. What is *storage* in a binding table is the table shape, and that
 lives here.
 
 **No keyed table lives in a cell.** `memory` ships no name-to-value lookup
-table meant to rest in a cell's region. Its one hash table, `BumpBackedMap`,
-cannot: a hash table allocates and grows its buckets, and a cell's `Writer`
+table meant to rest in a cell's region. Its hash tables, `BumpBackedMap` and
+`BumpBackedSet`, cannot: a hash table allocates and grows its buckets, and a cell's `Writer`
 never exposes an allocator. The [scope layer](../scope/README.md), which
 owns koan's name lookup, needs none either: a body's names resolve to slot
 indices where its shape is built in program storage, so a cell holds only a
@@ -170,11 +170,13 @@ field, which the knot neither mints nor sees. Knots therefore form a DAG and
 cycles live only inside one: a finished knot never gains an edge to a newer
 node, which is what write-once values already require.
 
-Knot identity and equality are not the shape's. A circular data value's
-equality — bisimulation over `(knot, index)` pairs — and a renderer that
-terminates on a cycle belong to [values](../values/README.md). Which bindings
+A `Knot` equals another when they are the same run, and a `Member` equals
+another when it is the same node — one knot, one index; that node identity is
+all the shape says about equality. A circular data value's equality — a
+bisimulation over member pairs — and a renderer that terminates on a cycle
+belong to [values](../values/README.md#equality-and-rendering). Which bindings
 may form a knot is delimited by a [scope's shape](../scope/README.md#visibility),
-and tying a component of callables belongs to
+and tying a component of value binders — functions and data nodes — belongs to
 [`function`](../function/README.md#the-tie).
 
 ## Strongly connected components

@@ -4,9 +4,9 @@
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, Writer, resident};
-use crate::type_lattice::{KType, TypeRegistry, join};
+use crate::type_lattice::{KType, TypeRegistry};
 
-use super::{Knotted, Link, Nothing, Value, Weight};
+use super::{Knotted, Link, Nothing, Value, Weight, list_type};
 
 /// A list value, resident in the region its cells live in.
 #[derive(Clone, Copy, Debug)]
@@ -28,17 +28,16 @@ impl<'graph, 'cell, X: Knotted> List<'graph, 'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> &'cell List<'graph, 'cell, X> {
         let mut items = items;
-        let mut element = KType::NEVER;
         let mut weight = Weight::flat::<Self>();
         let cells = writer.fill(items.len(), |_| {
             let cell = items
                 .next()
                 .expect("an exact-size iterator yields its reported length");
-            element = join(types, scratch, element, cell.ktype());
             weight = weight.plus(cell.weight());
             cell
         });
-        Self::from_run(writer, cells, types.list(element), weight)
+        let ktype = list_type(types, scratch, cells.iter().map(Value::ktype));
+        Self::from_run(writer, cells, ktype, weight)
     }
 }
 
