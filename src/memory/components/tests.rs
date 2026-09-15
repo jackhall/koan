@@ -33,6 +33,8 @@ fn reachability(edges: &[Vec<usize>]) -> Vec<Vec<bool>> {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig { cases: crate::tests::case_share(1, 1), ..ProptestConfig::default() })]
+
     #[test]
     fn components_are_the_mutual_reachability_classes_in_reverse_topological_order(
         edges in digraph()

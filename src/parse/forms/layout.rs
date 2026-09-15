@@ -21,7 +21,7 @@
 //! costs the holder a thin pointer and its region nothing at teardown.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::ast::{ExpressionPart, KExpression};
+use crate::parse::ast::KExpression;
 use crate::parse::labels::{BinderSymbol, ValueSymbol};
 
 /// One layout entry: a value binder's name and the lexical position its binder writes at.
@@ -93,14 +93,15 @@ impl<'a> SlotLayout<'a> {
         // Counted before anything is staged: a body binding no value — every node that is not a
         // block of binders, which is nearly all of them — leaves this door having touched no
         // allocator at all.
-        let binders = statements_of(body)
+        let binders = body
+            .body_statements()
             .filter(|(statement, _)| binder_of(statement).is_some())
             .count();
         if binders == 0 {
             return SlotLayout::EMPTY;
         }
         let mut entries = BumpVec::with_capacity_in(binders, brand);
-        entries.extend(statements_of(body).filter_map(|(statement, position)| {
+        entries.extend(body.body_statements().filter_map(|(statement, position)| {
             binder_of(statement).map(|name| (name, position as u32))
         }));
         Self::seal(brand, &mut entries)
@@ -161,6 +162,18 @@ impl<'a> SlotLayout<'a> {
         })
     }
 
+    /// A layout over binders a caller has already enumerated, each at the position it writes at —
+    /// for a body whose statements are not one node, such as a program's top-level lines. The same
+    /// seal as every door above, so a repeated name keeps its lowest position.
+    pub(crate) fn from_entries(
+        brand: BumpAllocator<'a>,
+        entries: impl ExactSizeIterator<Item = (ValueSymbol, u32)>,
+    ) -> &'a SlotLayout<'a> {
+        let mut staged = BumpVec::with_capacity_in(entries.len(), brand);
+        staged.extend(entries);
+        Self::seal(brand, &mut staged)
+    }
+
     /// Sort, dedupe first-wins, and freeze — the one place a layout is written, so every door above
     /// ships the same sorted, position-carrying invariant. `entries` is staged in `brand`'s own
     /// bump, so the run is sorted where it sits and the frozen copy costs one more bump rather than
@@ -177,25 +190,6 @@ impl<'a> SlotLayout<'a> {
             entries: brand.alloc_slice_copy(entries),
         })
     }
-}
-
-/// A body's statements beside the lexical position each submits at: statement `i` of a statement
-/// block writes at `i + 1`, and a single-statement body is its own statement at `1`.
-fn statements_of<'b, 'a>(
-    body: &'b KExpression<'a>,
-) -> impl Iterator<Item = (&'b KExpression<'a>, usize)> + Clone {
-    let block = body.is_statement_block().then_some(body.parts);
-    let statements = block.unwrap_or_default().iter().map(|part| {
-        let ExpressionPart::Expression(statement) = part.value else {
-            unreachable!("a statement block's parts are all expressions");
-        };
-        statement.reference()
-    });
-    let single = (!body.is_statement_block()).then_some(body);
-    statements
-        .chain(single)
-        .enumerate()
-        .map(|(i, statement)| (statement, i + 1))
 }
 
 /// `statement`'s own value binder, if it declares one.

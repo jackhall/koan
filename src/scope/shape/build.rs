@@ -1,0 +1,871 @@
+//! The **shape builder**: one recursive walk that every kind of shape goes through.
+//!
+//! A body is built in three passes over a draft kept in scratch. The binders pass lays out the
+//! declared names and refuses a repeated name or a builtin's. The mention pass walks each statement
+//! from its root, carrying the class a mention met there would take, resolving each mention as it
+//! is met and building each nested body or arm as a draft of its own on top of the chain of
+//! enclosing drafts. The components pass condenses the bindings' reference graph, refuses a
+//! component with an eager internal mention, turns a nested callable's capture of a fellow member
+//! into a knot edge, and seals the nested drafts into program storage.
+//!
+//! See [README.md § Visibility](../README.md#visibility).
+
+use crate::memory::{
+    BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, strongly_connected_components,
+};
+use crate::parse::forms::{FormId, KEYWORDS};
+use crate::parse::{
+    BinderSymbol, ExpressionPart, KExpression, SlotLayout, StaticName, TypeSymbol, ValueSymbol,
+};
+
+use super::super::activation::Activation;
+use super::super::builtins::Builtins;
+use super::super::roles::{BodyKind, Heads, Role, SchemaKind, roles};
+use super::super::signature::{
+    body_of, declare_parameters, declare_quantifiers, pair_name, signature_run,
+};
+use super::{
+    BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, Coordinate, Mention,
+    MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
+};
+
+/// The names a body declares without a binder statement.
+struct ImplicitNames {
+    /// An arm's matched value.
+    it: StaticName<ValueSymbol>,
+    /// A binary operator's operands.
+    left: StaticName<ValueSymbol>,
+    right: StaticName<ValueSymbol>,
+    /// A unary operator's operand run.
+    operands: StaticName<ValueSymbol>,
+}
+
+static IMPLICIT: ImplicitNames = ImplicitNames {
+    it: crate::static_name!(ValueSymbol, "it"),
+    left: crate::static_name!(ValueSymbol, "left"),
+    right: crate::static_name!(ValueSymbol, "right"),
+    operands: crate::static_name!(ValueSymbol, "operands"),
+};
+
+/// The shape of a program's top-level statements.
+pub(super) fn program<'graph>(
+    brand: ProgramBrand<'graph>,
+    statements: &[KExpression<'graph>],
+    builtins: &Builtins<'_, '_>,
+    scratch: BumpAllocator<'_>,
+) -> Result<&'graph Shape<'graph>, ShapeError> {
+    let lookup = |name| builtins.lookup(name);
+    let mut builder = Builder::new(brand, scratch, &lookup, None);
+    let statements = statements
+        .iter()
+        .enumerate()
+        .map(|(index, statement)| (statement, index + 1));
+    let draft = builder.draft(ShapeKind::Program, Position::PARAMETER, &[], statements)?;
+    Ok(builder.seal(draft))
+}
+
+/// An `EVAL` body's block shape over `site`'s chain, reading at `at`.
+pub(super) fn eval<'graph>(
+    brand: ProgramBrand<'graph>,
+    body: &KExpression<'graph>,
+    site: &Activation<'graph, '_>,
+    at: Position,
+    scratch: BumpAllocator<'_>,
+) -> Result<&'graph Shape<'graph>, ShapeError> {
+    let lookup = |name| site.builtins().lookup(name);
+    let outer = |name, position| site.coordinate_of(name, position);
+    let mut builder = Builder::new(brand, scratch, &lookup, Some((&outer, at)));
+    let draft = builder.draft(ShapeKind::Block, at, &[], body.body_statements())?;
+    Ok(builder.seal(draft))
+}
+
+/// The class a mention met in this context takes, before the context's own role applies.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum State {
+    /// A binding's right-hand side, before any context: a mention here is the root and eager.
+    Root,
+    /// Under constructor slots and at most one callable-body boundary.
+    Deferred,
+    /// Under any other context.
+    Eager,
+}
+
+impl State {
+    /// Entering a constructor slot: a list element, a dict value, a record field, a schema.
+    fn constructor(self) -> State {
+        match self {
+            State::Root | State::Deferred => State::Deferred,
+            State::Eager => State::Eager,
+        }
+    }
+
+    fn class(self) -> MentionClass {
+        match self {
+            State::Deferred => MentionClass::Deferred,
+            State::Root | State::Eager => MentionClass::Eager,
+        }
+    }
+}
+
+/// The reading end of a resolution: the level and statement a mention sits in, and its class.
+#[derive(Clone, Copy)]
+struct Reader {
+    level: usize,
+    statement: u32,
+    class: MentionClass,
+}
+
+type Lookup<'e> = &'e dyn Fn(BinderSymbol) -> Option<BuiltinIndex>;
+type Outer<'e> = &'e dyn Fn(BinderSymbol, Position) -> Option<Coordinate>;
+
+/// One body under construction, in scratch.
+struct Draft<'x> {
+    kind: ShapeKind,
+    entered_at: Position,
+    /// The statement of the enclosing draft this body sits in.
+    parent_statement: u32,
+    statements: u32,
+    values: BumpVec<'x, (ValueSymbol, Position)>,
+    types: BumpVec<'x, (TypeSymbol, Position)>,
+    /// The slot each statement binds, if it binds one.
+    statement_binder: BumpVec<'x, Option<Slot>>,
+    mentions: BumpVec<'x, Mention>,
+    captures: BumpVec<'x, CaptureSpec>,
+    /// `(binder, bound, class)`: the binder's statement reads the bound slot.
+    edges: BumpVec<'x, (Slot, Slot, MentionClass)>,
+    /// Finished nested drafts, waiting on this draft's components to settle their captures.
+    children: BumpVec<'x, (Site, Draft<'x>)>,
+    component_of: BumpVec<'x, u32>,
+    components: BumpVec<'x, (BumpVec<'x, Slot>, bool)>,
+    keeps_defining_scope: bool,
+    /// The statement being walked when a nested draft was entered, and the class that path takes
+    /// at this level.
+    current: (u32, MentionClass),
+}
+
+impl Draft<'_> {
+    fn end(&self) -> Position {
+        Position(self.statements + 1)
+    }
+
+    /// The slot and position of `name` in its own channel.
+    fn slot(&self, name: BinderSymbol) -> Option<(Slot, Position)> {
+        match name {
+            BinderSymbol::Value(name) => {
+                let index = self
+                    .values
+                    .binary_search_by_key(&name, |(symbol, _)| *symbol)
+                    .ok()?;
+                Some((Slot(index as u32), self.values[index].1))
+            }
+            BinderSymbol::Type(name) => {
+                let index = self
+                    .types
+                    .binary_search_by_key(&name, |(symbol, _)| *symbol)
+                    .ok()?;
+                Some((
+                    Slot((self.values.len() + index) as u32),
+                    self.types[index].1,
+                ))
+            }
+        }
+    }
+
+    fn slot_name(&self, slot: Slot) -> BinderSymbol {
+        match slot.index().checked_sub(self.values.len()) {
+            None => BinderSymbol::Value(self.values[slot.index()].0),
+            Some(ty) => BinderSymbol::Type(self.types[ty].0),
+        }
+    }
+
+    fn slot_position(&self, slot: Slot) -> Position {
+        match slot.index().checked_sub(self.values.len()) {
+            None => self.values[slot.index()].1,
+            Some(ty) => self.types[ty].1,
+        }
+    }
+
+    /// Where the path into the nested draft being walked reads at this level.
+    fn boundary(&self) -> Position {
+        match self.current.1 {
+            MentionClass::Deferred => self.end(),
+            MentionClass::Eager => Position::statement(self.current.0 as usize),
+        }
+    }
+}
+
+struct Builder<'graph, 'x, 'e> {
+    brand: ProgramBrand<'graph>,
+    scratch: BumpAllocator<'x>,
+    builtins: Lookup<'e>,
+    /// For an `EVAL` body: the by-name resolver over the site's chain, and `EVAL`'s position.
+    outer: Option<(Outer<'e>, Position)>,
+    chain: BumpVec<'x, Draft<'x>>,
+}
+
+impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
+    fn new(
+        brand: ProgramBrand<'graph>,
+        scratch: BumpAllocator<'x>,
+        builtins: Lookup<'e>,
+        outer: Option<(Outer<'e>, Position)>,
+    ) -> Self {
+        Builder {
+            brand,
+            scratch,
+            builtins,
+            outer,
+            chain: BumpVec::new_in(scratch),
+        }
+    }
+
+    /// Build one body: its binders, its mentions (and every nested body, depth first), and its
+    /// components. The draft comes back unsealed, since whether a capture is a knot edge is
+    /// settled by the enclosing draft's components.
+    fn draft<'n>(
+        &mut self,
+        kind: ShapeKind,
+        entered_at: Position,
+        parameters: &[BinderSymbol],
+        statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
+    ) -> Result<Draft<'x>, ShapeError>
+    where
+        'graph: 'n,
+    {
+        let mut nodes: BumpVec<'x, &'n KExpression<'graph>> = BumpVec::new_in(self.scratch);
+        nodes.extend(statements.map(|(node, _)| node));
+        let parent_statement = self
+            .chain
+            .last()
+            .map_or(u32::MAX, |parent| parent.current.0);
+        let draft = self.binders(kind, entered_at, parent_statement, parameters, &nodes)?;
+        self.chain.push(draft);
+        let level = self.chain.len() - 1;
+        for (statement, node) in nodes.iter().enumerate() {
+            if let Err(error) = self.walk_node(level, statement as u32, node, State::Root, &[]) {
+                self.chain.pop();
+                return Err(error);
+            }
+        }
+        let mut draft = self.chain.pop().expect("this draft was pushed above");
+        self.components(&mut draft)?;
+        Ok(draft)
+    }
+
+    /// The binders pass: every parameter at `0` and every statement's binder at its position, a
+    /// repeated name and a builtin's name refused in that order.
+    fn binders(
+        &self,
+        kind: ShapeKind,
+        entered_at: Position,
+        parent_statement: u32,
+        parameters: &[BinderSymbol],
+        nodes: &[&KExpression<'graph>],
+    ) -> Result<Draft<'x>, ShapeError> {
+        let scratch = self.scratch;
+        let declared = parameters
+            .iter()
+            .map(|name| (Some(*name), Position::PARAMETER))
+            .chain(nodes.iter().enumerate().map(|(index, node)| {
+                let name = node.statement_binder_plan().and_then(|plan| plan.name);
+                (name, Position::statement(index))
+            }));
+        let mut seen: BumpBackedMap<BinderSymbol, Position> = bump_table(scratch);
+        let mut values = BumpVec::new_in(scratch);
+        let mut types = BumpVec::new_in(scratch);
+        for (name, position) in declared {
+            let Some(name) = name else { continue };
+            if let Some(first) = seen.insert(name, position) {
+                return Err(ShapeError::Rebind {
+                    name,
+                    first,
+                    second: position,
+                });
+            }
+            if (self.builtins)(name).is_some() {
+                return Err(ShapeError::ShadowsBuiltin { name, at: position });
+            }
+            match name {
+                BinderSymbol::Value(name) => values.push((name, position)),
+                BinderSymbol::Type(name) => types.push((name, position)),
+            }
+        }
+        values.sort_unstable_by_key(|(name, _)| *name);
+        types.sort_unstable_by_key(|(name, _)| *name);
+        let mut draft = Draft {
+            kind,
+            entered_at,
+            parent_statement,
+            statements: nodes.len() as u32,
+            values,
+            types,
+            statement_binder: BumpVec::with_capacity_in(nodes.len(), scratch),
+            mentions: BumpVec::new_in(scratch),
+            captures: BumpVec::new_in(scratch),
+            edges: BumpVec::new_in(scratch),
+            children: BumpVec::new_in(scratch),
+            component_of: BumpVec::new_in(scratch),
+            components: BumpVec::new_in(scratch),
+            keeps_defining_scope: false,
+            current: (0, MentionClass::Eager),
+        };
+        for node in nodes {
+            let name = node.statement_binder_plan().and_then(|plan| plan.name);
+            let slot = name.and_then(|name| draft.slot(name)).map(|(slot, _)| slot);
+            draft.statement_binder.push(slot);
+        }
+        Ok(draft)
+    }
+
+    /// Walk a node's parts under `state`, by its form's roles. A formless node is a call or a
+    /// grouping: every part of a call is eager, and a single-part group is transparent.
+    fn walk_node(
+        &mut self,
+        level: usize,
+        statement: u32,
+        node: &KExpression<'graph>,
+        state: State,
+        skip: &[TypeSymbol],
+    ) -> Result<(), ShapeError> {
+        let Some(form) = node.cache().form() else {
+            if let [only] = node.parts {
+                return self.walk_part(level, statement, &only.value, state, skip);
+            }
+            for part in node.parts {
+                self.walk_part(level, statement, &part.value, State::Eager, skip)?;
+            }
+            return Ok(());
+        };
+        let roles = roles(form.id);
+        if roles == [Role::Unsupported] {
+            return Err(ShapeError::Unsupported {
+                form: form.id,
+                statement,
+            });
+        }
+        debug_assert_eq!(
+            roles.len(),
+            node.parts.len(),
+            "a form's parts match its key"
+        );
+        if form.id == FormId::Eval {
+            for draft in self.chain.iter_mut() {
+                draft.keeps_defining_scope = true;
+            }
+        }
+
+        // A callable's parameters are declared before any part is read, so a type parameter a
+        // signature names is never taken for a mention of the enclosing shape.
+        let mut parameters = BumpVec::new_in(self.scratch);
+        for (role, part) in roles.iter().zip(node.parts) {
+            match role {
+                Role::Signature => declare_parameters(&part.value, &mut parameters),
+                Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
+                _ => {}
+            }
+        }
+        let mut own_skip = BumpVec::with_capacity_in(skip.len(), self.scratch);
+        own_skip.extend_from_slice(skip);
+        own_skip.extend(parameters.iter().filter_map(|name| match name {
+            BinderSymbol::Type(name) => Some(*name),
+            BinderSymbol::Value(_) => None,
+        }));
+
+        for (role, part) in roles.iter().zip(node.parts) {
+            let part = &part.value;
+            match *role {
+                Role::Keyword | Role::Name | Role::Data | Role::Label | Role::Quantifiers => {}
+                Role::Rhs => self.walk_part(level, statement, part, state, &own_skip)?,
+                Role::Argument | Role::TypeExpression => {
+                    self.walk_part(level, statement, part, State::Eager, &own_skip)?
+                }
+                Role::Signature => self.walk_signature(level, statement, part, &own_skip)?,
+                Role::Body(kind) => {
+                    self.enter_body(level, statement, form.id, part, kind, &parameters, state)?
+                }
+                Role::Branches(heads) => self.enter_arms(level, statement, form.id, part, heads)?,
+                Role::Schema(kind) => {
+                    self.walk_schema(level, statement, part, kind, state.constructor())?
+                }
+                Role::Unsupported => unreachable!("an unsupported form returned above"),
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_part(
+        &mut self,
+        level: usize,
+        statement: u32,
+        part: &ExpressionPart<'graph>,
+        state: State,
+        skip: &[TypeSymbol],
+    ) -> Result<(), ShapeError> {
+        match part {
+            ExpressionPart::Identifier(name) => {
+                self.mention(level, statement, part, BinderSymbol::Value(*name), state)
+            }
+            ExpressionPart::Type(name) if !skip.contains(name) => {
+                self.mention(level, statement, part, BinderSymbol::Type(*name), state)
+            }
+            ExpressionPart::Expression(node) => {
+                self.walk_node(level, statement, node.reference(), state, skip)
+            }
+            ExpressionPart::SigiledTypeExpr(node) => {
+                self.walk_node(level, statement, node.reference(), State::Eager, skip)
+            }
+            ExpressionPart::RecordType(node) => {
+                self.walk_fields(level, statement, node.reference(), State::Eager, skip)
+            }
+            ExpressionPart::ListLiteral(items) => {
+                for item in items.iter() {
+                    self.walk_part(level, statement, item, state.constructor(), skip)?;
+                }
+                Ok(())
+            }
+            ExpressionPart::DictLiteral(pairs) => {
+                for (key, value) in pairs.iter() {
+                    self.walk_part(level, statement, key, State::Eager, skip)?;
+                    self.walk_part(level, statement, value, state.constructor(), skip)?;
+                }
+                Ok(())
+            }
+            ExpressionPart::RecordLiteral(pairs) => {
+                for (_, value) in pairs.iter() {
+                    self.walk_part(level, statement, value, state.constructor(), skip)?;
+                }
+                Ok(())
+            }
+            ExpressionPart::Type(_)
+            | ExpressionPart::Keyword(_)
+            | ExpressionPart::Literal(_)
+            | ExpressionPart::QuotedExpression(_) => Ok(()),
+        }
+    }
+
+    /// A field list or a signature run: each pair's name is a label, its type is read under
+    /// `state`.
+    fn walk_fields(
+        &mut self,
+        level: usize,
+        statement: u32,
+        run: &KExpression<'graph>,
+        state: State,
+        skip: &[TypeSymbol],
+    ) -> Result<(), ShapeError> {
+        let mut index = 0;
+        while index < run.parts.len() {
+            if pair_name(run, index).is_some() {
+                self.walk_part(level, statement, &run.parts[index + 1].value, state, skip)?;
+                index += 2;
+            } else {
+                self.walk_part(level, statement, &run.parts[index].value, state, skip)?;
+                index += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_signature(
+        &mut self,
+        level: usize,
+        statement: u32,
+        part: &ExpressionPart<'graph>,
+        skip: &[TypeSymbol],
+    ) -> Result<(), ShapeError> {
+        match signature_run(part) {
+            Some(run) => self.walk_fields(level, statement, run, State::Eager, skip),
+            None => self.walk_part(level, statement, part, State::Eager, skip),
+        }
+    }
+
+    /// A type's schema, under the constructor state: labels and the schema's own `TYPE`
+    /// declarations are not mentions, and every other type name is.
+    fn walk_schema(
+        &mut self,
+        level: usize,
+        statement: u32,
+        part: &ExpressionPart<'graph>,
+        kind: SchemaKind,
+        state: State,
+    ) -> Result<(), ShapeError> {
+        let mut own = BumpVec::new_in(self.scratch);
+        if let ExpressionPart::Expression(run) = part {
+            own.extend(run.body_statements().filter_map(|(node, _)| {
+                let form = node.statement_spine().cache().form()?;
+                (form.id == FormId::TypeDeclaration)
+                    .then(|| node.statement_binder_plan()?.name)
+                    .flatten()
+                    .and_then(|name| match name {
+                        BinderSymbol::Type(name) => Some(name),
+                        BinderSymbol::Value(_) => None,
+                    })
+            }));
+        }
+        self.walk_schema_part(level, statement, part, kind, state, &own)
+    }
+
+    fn walk_schema_part(
+        &mut self,
+        level: usize,
+        statement: u32,
+        part: &ExpressionPart<'graph>,
+        kind: SchemaKind,
+        state: State,
+        own: &[TypeSymbol],
+    ) -> Result<(), ShapeError> {
+        let run = match part {
+            ExpressionPart::Type(name) if !own.contains(name) => {
+                return self.mention(level, statement, part, BinderSymbol::Type(*name), state);
+            }
+            ExpressionPart::Expression(run)
+            | ExpressionPart::SigiledTypeExpr(run)
+            | ExpressionPart::RecordType(run) => run.reference(),
+            ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_) => {
+                return self.walk_part(level, statement, part, state, own);
+            }
+            ExpressionPart::Type(_)
+            | ExpressionPart::Identifier(_)
+            | ExpressionPart::Keyword(_)
+            | ExpressionPart::Literal(_)
+            | ExpressionPart::QuotedExpression(_) => return Ok(()),
+        };
+        for (index, inner) in run.parts.iter().enumerate() {
+            let tag = kind == SchemaKind::Union && index % 2 == 0;
+            if tag && matches!(inner.value, ExpressionPart::Type(_)) {
+                continue;
+            }
+            self.walk_schema_part(
+                level,
+                statement,
+                &inner.value,
+                SchemaKind::Plain,
+                state,
+                own,
+            )?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enter_body(
+        &mut self,
+        level: usize,
+        statement: u32,
+        form: FormId,
+        part: &ExpressionPart<'graph>,
+        kind: BodyKind,
+        signature: &[BinderSymbol],
+        state: State,
+    ) -> Result<(), ShapeError> {
+        let Some(body) = body_of(part) else {
+            return Err(ShapeError::Malformed { form, statement });
+        };
+        let (shape_kind, class) = match kind {
+            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => (
+                ShapeKind::Callable,
+                match state {
+                    State::Eager => MentionClass::Eager,
+                    State::Root | State::Deferred => MentionClass::Deferred,
+                },
+            ),
+            BodyKind::Module => (ShapeKind::Module, MentionClass::Eager),
+        };
+        let operator = [
+            BinderSymbol::Value(IMPLICIT.left.symbol()),
+            BinderSymbol::Value(IMPLICIT.right.symbol()),
+        ];
+        let unary = [BinderSymbol::Value(IMPLICIT.operands.symbol())];
+        let parameters: &[BinderSymbol] = match kind {
+            BodyKind::Lambda => signature,
+            BodyKind::Operator => &operator,
+            BodyKind::UnaryOperator => &unary,
+            BodyKind::Module => &[],
+        };
+        let parent = &mut self.chain[level];
+        parent.current = (statement, class);
+        let entered_at = parent.boundary();
+        let child = self.draft(shape_kind, entered_at, parameters, body.body_statements())?;
+        self.chain[level].children.push((Site::of(part), child));
+        Ok(())
+    }
+
+    fn enter_arms(
+        &mut self,
+        level: usize,
+        statement: u32,
+        form: FormId,
+        part: &ExpressionPart<'graph>,
+        heads: Heads,
+    ) -> Result<(), ShapeError> {
+        let malformed = ShapeError::Malformed { form, statement };
+        let Some(branches) = body_of(part) else {
+            return Err(malformed);
+        };
+        let parts = branches.parts;
+        let arrow = KEYWORDS.arrow.symbol();
+        if !parts.len().is_multiple_of(3) {
+            return Err(malformed);
+        }
+        for arm in parts.chunks_exact(3) {
+            let (head, separator, body_part) = (&arm[0].value, &arm[1].value, &arm[2].value);
+            let (ExpressionPart::Keyword(symbol), Some(body)) = (separator, body_of(body_part))
+            else {
+                return Err(malformed);
+            };
+            if *symbol != arrow {
+                return Err(malformed);
+            }
+            if heads == Heads::Types {
+                self.walk_part(level, statement, head, State::Eager, &[])?;
+            }
+            let parent = &mut self.chain[level];
+            parent.current = (statement, MentionClass::Eager);
+            let entered_at = parent.boundary();
+            let it = [BinderSymbol::Value(IMPLICIT.it.symbol())];
+            let child = self.draft(ShapeKind::Block, entered_at, &it, body.body_statements())?;
+            self.chain[level]
+                .children
+                .push((Site::of(body_part), child));
+        }
+        Ok(())
+    }
+
+    /// Resolve and record the mention of `name` at `part`.
+    fn mention(
+        &mut self,
+        level: usize,
+        statement: u32,
+        part: &ExpressionPart<'graph>,
+        name: BinderSymbol,
+        state: State,
+    ) -> Result<(), ShapeError> {
+        let class = state.class();
+        let at = match class {
+            MentionClass::Eager => Position::statement(statement as usize),
+            MentionClass::Deferred => self.chain[level].end(),
+        };
+        let reader = Reader {
+            level,
+            statement,
+            class,
+        };
+        let site = Site::of(part);
+        let coordinate = match (self.builtins)(name) {
+            Some(index) => Coordinate {
+                hops: 0,
+                target: Target::Builtin(index),
+            },
+            None => self
+                .resolve(level, name, at, reader)
+                .ok_or(ShapeError::Unbound {
+                    name,
+                    site,
+                    statement,
+                })?,
+        };
+        self.chain[level].mentions.push(Mention {
+            site,
+            name,
+            statement,
+            class,
+            coordinate,
+        });
+        Ok(())
+    }
+
+    /// `name` read at `at` in the draft at `level`: a visible local, else outward — a capturing
+    /// draft captures what it finds there, a block steps one activation out.
+    fn resolve(
+        &mut self,
+        level: usize,
+        name: BinderSymbol,
+        at: Position,
+        reader: Reader,
+    ) -> Option<Coordinate> {
+        let draft = &self.chain[level];
+        let kind = draft.kind;
+        let visible = draft.slot(name).filter(|(_, declared)| at.sees(*declared));
+        let captured = draft.captures.iter().position(|spec| spec.name == name);
+        if let Some((slot, _)) = visible {
+            self.edge(level, slot, reader);
+            return Some(Coordinate {
+                hops: 0,
+                target: Target::Local(slot),
+            });
+        }
+        let outer = |builder: &mut Self| match level.checked_sub(1) {
+            Some(parent) => {
+                let at = builder.chain[parent].boundary();
+                builder.resolve(parent, name, at, reader)
+            }
+            None => builder
+                .outer
+                .and_then(|(outer, position)| outer(name, position)),
+        };
+        match kind {
+            ShapeKind::Program => None,
+            ShapeKind::Callable | ShapeKind::Module => {
+                if let Some(index) = captured {
+                    return Some(Coordinate {
+                        hops: 0,
+                        target: Target::Capture(CaptureSlot(index as u32)),
+                    });
+                }
+                let source = outer(self)?;
+                let captures = &mut self.chain[level].captures;
+                captures.push(CaptureSpec {
+                    name,
+                    source: CaptureSource::Read(source),
+                });
+                Some(Coordinate {
+                    hops: 0,
+                    target: Target::Capture(CaptureSlot(captures.len() as u32 - 1)),
+                })
+            }
+            ShapeKind::Block => {
+                let found = outer(self)?;
+                Some(match found.target {
+                    Target::Builtin(_) => found,
+                    Target::Local(_) | Target::Capture(_) => Coordinate {
+                        hops: found.hops + 1,
+                        ..found
+                    },
+                })
+            }
+        }
+    }
+
+    /// Record that the binder of the reading path's statement at `level` reads `slot`.
+    fn edge(&mut self, level: usize, slot: Slot, reader: Reader) {
+        let draft = &mut self.chain[level];
+        let (statement, class) = if level == reader.level {
+            (reader.statement, reader.class)
+        } else {
+            draft.current
+        };
+        if let Some(binder) = draft.statement_binder[statement as usize] {
+            draft.edges.push((binder, slot, class));
+        }
+    }
+
+    /// The components pass: condense, refuse an eager cycle, settle each nested draft's captures
+    /// of a fellow member as edges, and seal the nested drafts.
+    fn components(&mut self, draft: &mut Draft<'x>) -> Result<(), ShapeError> {
+        let scratch = self.scratch;
+        let count = draft.values.len() + draft.types.len();
+        let mut adjacency: BumpVec<'x, BumpVec<'x, usize>> =
+            BumpVec::with_capacity_in(count, scratch);
+        adjacency.resize_with(count, || BumpVec::new_in(scratch));
+        for (binder, bound, _) in draft.edges.iter() {
+            adjacency[binder.index()].push(bound.index());
+        }
+        let mut borrowed = BumpVec::with_capacity_in(count, scratch);
+        borrowed.extend(adjacency.iter().map(|edges| edges.as_slice()));
+        let condensed = strongly_connected_components(scratch, &borrowed);
+
+        draft.component_of.resize(count, 0);
+        for (index, members) in condensed.iter().enumerate() {
+            let mut slots = BumpVec::with_capacity_in(members.len(), scratch);
+            slots.extend(members.iter().map(|member| Slot(*member as u32)));
+            slots.sort_unstable();
+            for slot in slots.iter() {
+                draft.component_of[slot.index()] = index as u32;
+            }
+            draft.components.push((slots, true));
+        }
+        let mut cyclic = BumpVec::new_in(scratch);
+        cyclic.resize(draft.components.len(), false);
+        for (binder, bound, class) in draft.edges.iter() {
+            let component = draft.component_of[binder.index()];
+            if component != draft.component_of[bound.index()] {
+                continue;
+            }
+            cyclic[component as usize] |=
+                binder == bound || draft.components[component as usize].0.len() > 1;
+            if *class == MentionClass::Eager {
+                draft.components[component as usize].1 = false;
+            }
+        }
+        let refused = draft
+            .components
+            .iter()
+            .zip(cyclic.iter())
+            .filter(|((_, deferred_only), cyclic)| **cyclic && !*deferred_only)
+            .map(|((members, _), _)| members)
+            .min_by_key(|members| members.iter().map(|slot| draft.slot_position(*slot)).min());
+        if let Some(members) = refused {
+            return Err(ShapeError::EagerCycle {
+                members: members.iter().map(|slot| draft.slot_name(*slot)).collect(),
+            });
+        }
+
+        for (_, child) in draft.children.iter_mut() {
+            let binder = draft.statement_binder[child.parent_statement as usize];
+            for capture in child.captures.iter_mut() {
+                let CaptureSource::Read(Coordinate {
+                    hops: 0,
+                    target: Target::Local(bound),
+                }) = capture.source
+                else {
+                    continue;
+                };
+                let component = draft.component_of[bound.index()];
+                if binder.is_some_and(|binder| draft.component_of[binder.index()] == component) {
+                    let members = &draft.components[component as usize].0;
+                    let index = members
+                        .binary_search(&bound)
+                        .expect("a slot sits in its own component");
+                    capture.source = CaptureSource::Member {
+                        component,
+                        index: index as u32,
+                    };
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Lay a finished draft down in program storage, its nested drafts first.
+    fn seal(&self, draft: Draft<'x>) -> &'graph Shape<'graph> {
+        let storage = self.brand.allocator();
+        let mut nested = BumpVec::with_capacity_in(draft.children.len(), self.scratch);
+        for (site, child) in draft.children {
+            nested.push((site, self.seal(child)));
+        }
+        nested.sort_unstable_by_key(|(site, _)| *site);
+        let mut mentions = draft.mentions;
+        mentions.sort_unstable_by_key(|mention| mention.site);
+        let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
+        components.extend(
+            draft
+                .components
+                .iter()
+                .map(|(members, deferred_only)| Component {
+                    members: storage.alloc_slice_copy(members),
+                    deferred_only: *deferred_only,
+                }),
+        );
+        storage.alloc(Shape {
+            kind: draft.kind,
+            values: SlotLayout::from_entries(
+                storage,
+                draft
+                    .values
+                    .iter()
+                    .map(|(name, position)| (*name, position.0)),
+            ),
+            types: storage.alloc_slice_copy(&draft.types),
+            statements: draft.statements,
+            entered_at: draft.entered_at,
+            component_of: storage.alloc_slice_copy(&draft.component_of),
+            components: storage.alloc_slice_copy(&components),
+            mentions: storage.alloc_slice_copy(&mentions),
+            captures: storage.alloc_slice_copy(&draft.captures),
+            nested: storage.alloc_slice_copy(&nested),
+            keeps_defining_scope: draft.keeps_defining_scope,
+        })
+    }
+}
