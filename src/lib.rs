@@ -1,9 +1,9 @@
 //! Library facade for the koan interpreter, exposing the module graph to integration
 //! tests.
 //!
-//! The runtime is being rewritten from the ground up over the modules the rewrite keeps —
-//! [`memory`], [`parse`], [`source`], [`type_lattice`], [`values`] and the embedded crates. Everything above
-//! them — the machine, the builtins, the interpreter binary, the guard fixtures and the
+//! The runtime is being rewritten from the ground up over the modules the rewrite keeps — every
+//! module below not gated on `pending_rewrite`, and the embedded crates. Everything above them —
+//! the machine, the builtins, the interpreter binary, the guard fixtures and the
 //! integration tests — is the old runtime, compiled only under the `pending_rewrite` feature, so
 //! the default build and test slate spend nothing on code slated for replacement. Under that
 //! feature the canonical entry points are `machine::interpret` and `machine::interpret_with_writer`.

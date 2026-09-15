@@ -10,7 +10,7 @@
 ## Project Context
 - Koan is a pre-release language with NO users; do not invent backward-compatibility concerns or migration paths in design proposals.
 - Write documentation (tutorial/, README.md) from the user's perspective, not the implementer's.
-- The runtime is being rewritten from the ground up. The kept modules are `cellgraph`, `sexlex`, `src/parse`, `src/memory`, `src/source.rs` and `src/type_lattice`; `src/machine`, `src/builtins`, the binary and `tests/` are the old runtime behind the `pending_rewrite` feature. The default build, test and lint slate excludes it; do not spend effort improving it.
+- The runtime is being rewritten from the ground up. The kept modules are listed in [TEST.md § The pending rewrite](TEST.md#the-pending-rewrite); `src/machine`, `src/builtins`, the binary and `tests/` are the old runtime behind the `pending_rewrite` feature. The default build, test and lint slate excludes it; do not spend effort improving it.
 
 # Rust Conventions
 - When refactoring types/lifetimes, verify with `cargo build` after each step rather than batching multiple type changes.

@@ -5,7 +5,7 @@
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for the
-modules the rewrite keeps — `memory`, `parse`, `source`, `type_lattice` and `values`.
+modules the rewrite keeps ([TEST.md § The pending rewrite](../TEST.md#the-pending-rewrite)).
 Each test is a minimal-shape driver of one region-substrate discipline; the
 slate passes when Miri reports zero process-exit leaks and zero UB across the
 whole list. It runs on the default build: `python3 tools/miri.py`.

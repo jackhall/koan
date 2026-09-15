@@ -6,17 +6,17 @@ the binary and `tests/`, now behind the `pending_rewrite` feature
 ([TEST.md](../../TEST.md#the-pending-rewrite)) — settled the general shape of
 the language: which features it needs, how they relate, and which substrate
 each rests on. It also accumulated the bugs and architecture decisions that
-shape carried with it. The rewrite keeps `cellgraph`, `sexlex`, `src/parse`,
-`src/memory`, `src/source.rs` and `src/type_lattice`, and builds the runtime
-back up in three layers, each one item here, after `memory` is narrowed onto
-the cell substrate with the two `cellgraph` doors it needs: values on the
-memory module first, since a value is what every layer above passes around; a scheduler on
-the cell substrate, written as a fresh crate that replaces `workgraph`; and
-scopes on values and types over both. Callable values and dispatch complete
-the path to running a program, over `memory`'s
-[knot](../../src/memory/README.md#the-knot), the shape circular values and
-mutually recursive functions are born in. A fourth item moves each kept module's design doc into the module as its `README.md`,
-the convention the three layers write their own docs under. What it buys the language: one runtime whose
+shape carried with it. The rewrite builds the runtime back up in layers, each a
+module over the ones below it that carries its design doc as its own
+`README.md`; [TEST.md](../../TEST.md#the-pending-rewrite) lists the modules in
+place. [Values](../../src/values/README.md) sit on `memory`, since a value is
+what every layer above passes around, and [scopes](../../src/scope/README.md)
+sit on values and types. The items here complete the path to running a
+program: a scheduler on the cell substrate, written as a fresh crate that
+replaces `workgraph`; callable values, whose captured environment is a scope,
+over `memory`'s [knot](../../src/memory/README.md#the-knot), the shape circular
+values and mutually recursive functions are born in; dispatch over both; and
+yielding iterators above dispatch. What it buys the language: one runtime whose
 every layer was designed knowing the layers above it, with the old runtime's
 workarounds left behind rather than carried forward.
 

@@ -20,10 +20,9 @@ required-features = ["pending_rewrite"]
 
 [features]
 # The pre-rewrite runtime: `machine`, `builtins`, the interpreter binary, the integration tests
-# and every test that reaches a value or a scope. Off by default so the default build, test and
-# lint slate covers only the modules the rewrite keeps — `memory`, `parse`, `source`,
-# `type_lattice` and the embedded crates. `cargo test --features pending_rewrite` runs the whole
-# old suite. Every other feature below is a knob on the old runtime, so each turns this one on.
+# and every kept-module test that reaches the old runtime. Off by default so the default build,
+# test and lint slate covers only the modules the rewrite keeps (TEST.md § The pending rewrite).
+# `cargo test --features pending_rewrite` runs the whole old suite. Every other feature below is a knob on the old runtime, so each turns this one on.
 pending_rewrite = []
 
 # Escape-seam verification builds — mutually exclusive (a `compile_error!` guards the pair).
