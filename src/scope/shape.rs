@@ -5,8 +5,9 @@
 //! after, each channel sorted by symbol and each name at its slot — every mention with its class
 //! and coordinate,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
-//! components of the body's bindings, and the shapes nested in it by site. [`build`] is the one
-//! builder every kind goes through.
+//! components of the body's bindings, the shapes nested in it by site, the form node a callable's
+//! body sits in, the callable body each binder births, and each `LET` binder's right-hand side. [`build`] is the one builder every kind
+//! goes through.
 //!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
 //! position is strictly greater than the binding's own. A parameter writes at `0`, statement `i` at
@@ -20,6 +21,7 @@ use std::fmt;
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::forms::FormId;
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
+use crate::values::Knotted;
 
 use super::activation::Activation;
 use super::builtins::Builtins;
@@ -187,6 +189,12 @@ pub struct Component<'graph> {
     pub members: &'graph [Slot],
     /// Whether every mention between members is deferred — the component a knot can tie.
     pub deferred_only: bool,
+    /// Whether the component holds more than one member or a member reads itself. A caller ties a
+    /// component of value binders when it is cyclic or when every member births a callable; a
+    /// non-cyclic data binder is an ordinary value, and a component of type binders is the
+    /// elaborator's. A component never mixes the two channels: a schema names types only, so no
+    /// mention leaves a type binder for a value binder.
+    pub cyclic: bool,
 }
 
 /// One body's resolved lexical structure. See the module documentation.
@@ -204,6 +212,12 @@ pub struct Shape<'graph> {
     mentions: &'graph [Mention],
     captures: &'graph [CaptureSpec],
     nested: &'graph [(Site, &'graph Shape<'graph>)],
+    /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
+    form: Option<&'graph KExpression<'graph>>,
+    /// Each binder whose right-hand side births a callable, beside that callable's body, by slot.
+    births: &'graph [(Slot, &'graph Shape<'graph>)],
+    /// Each `LET` binder beside its right-hand side part, by slot.
+    rhs: &'graph [(Slot, &'graph ExpressionPart<'graph>)],
     keeps_defining_scope: bool,
 }
 
@@ -211,10 +225,10 @@ const _: () = assert!(!std::mem::needs_drop::<Shape<'static>>());
 
 impl<'graph> Shape<'graph> {
     /// The shape of a program's top-level statements.
-    pub fn of_program(
+    pub fn of_program<X: Knotted>(
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
-        builtins: &Builtins<'_, '_>,
+        builtins: &Builtins<'_, '_, X>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph Shape<'graph>, ShapeError> {
         build::program(brand, statements, builtins, scratch)
@@ -222,10 +236,10 @@ impl<'graph> Shape<'graph> {
 
     /// The block shape of `body` evaluated by an `EVAL` reading at `at` in `site`: every free name
     /// resolves by name over `site`'s chain, and a binder in `body` binds in this block.
-    pub fn for_eval(
+    pub fn for_eval<X: Knotted>(
         brand: ProgramBrand<'graph>,
         body: &KExpression<'graph>,
-        site: &Activation<'graph, '_>,
+        site: &Activation<'graph, '_, X>,
         at: Position,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph Shape<'graph>, ShapeError> {
@@ -270,6 +284,15 @@ impl<'graph> Shape<'graph> {
         self.mentions
     }
 
+    /// The mention recorded for the name part at `site`, if the part is one this shape reads.
+    pub fn mention(&self, site: Site) -> Option<&'graph Mention> {
+        let index = self
+            .mentions
+            .binary_search_by_key(&site, |mention| mention.site)
+            .ok()?;
+        Some(&self.mentions[index])
+    }
+
     /// The capture layout, in closure-slot order. Empty for a program and a block.
     pub fn captures(&self) -> &'graph [CaptureSpec] {
         self.captures
@@ -300,6 +323,34 @@ impl<'graph> Shape<'graph> {
     /// Every nested shape by site.
     pub fn nested_shapes(&self) -> &'graph [(Site, &'graph Shape<'graph>)] {
         self.nested
+    }
+
+    /// The `FN`, `EXPR` or `OP` node whose body this shape is — where a callable's signature and
+    /// return type are read. `None` for every other kind.
+    pub fn form(&self) -> Option<&'graph KExpression<'graph>> {
+        self.form
+    }
+
+    /// The callable body the binder at `slot` births: `Some` for a binder whose right-hand side is a
+    /// callable form at its root (`LET f = FN …`) and for a combined form (`LET f = FN EXPR …`,
+    /// `LET f = OP …`); `None` for a data binder, a parameter, and a callable nested under anything
+    /// else.
+    pub fn births(&self, slot: Slot) -> Option<&'graph Shape<'graph>> {
+        let index = self
+            .births
+            .binary_search_by_key(&slot, |(binder, _)| *binder)
+            .ok()?;
+        Some(self.births[index].1)
+    }
+
+    /// The right-hand side part of the `LET` binder at `slot`, the part a knot's data member is built
+    /// from. `None` for a parameter, a type declaration and a module binder.
+    pub fn rhs(&self, slot: Slot) -> Option<&'graph ExpressionPart<'graph>> {
+        let index = self
+            .rhs
+            .binary_search_by_key(&slot, |(binder, _)| *binder)
+            .ok()?;
+        Some(self.rhs[index].1)
     }
 
     /// Whether this shape holds an `EVAL` or encloses a shape that does, so its activation must

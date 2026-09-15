@@ -6,17 +6,17 @@ use std::collections::BTreeSet;
 
 use proptest::prelude::*;
 
-use crate::memory::{CellHandle, KnotPlan, Writer, resident};
+use crate::memory::{BumpAllocator, CellHandle, KnotPlan, Writer, resident};
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
 use crate::scope::{
-    Activation, Binding, Builtins, Capture, CaptureSource, ClosureBindings, ClosureRefused,
-    Coordinate, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
+    Activation, Binding, Builtins, CaptureSource, ClosureBindings, ClosureRefused, Coordinate,
+    MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
 };
 use crate::type_lattice::KType;
-use crate::values::Value;
+use crate::values::{Link, Value};
 
 use super::plan::{self, Class, Generator, Kind, Lands, Refusal, Rendering, Token};
-use super::{builtins, with_fixture};
+use super::{Probe, builtins, with_fixture};
 
 // ---------- reading the rendering back ----------
 
@@ -190,6 +190,40 @@ fn follow(chain: &[&Shape<'_>], level: usize, coordinate: Coordinate) -> Found {
     }
 }
 
+/// Every binder of scope `index` a planned read in its own statement reads — directly, or from a
+/// scope nested in that statement.
+fn self_reads(
+    labels: &LabelInterner,
+    rendering: &Rendering<'_>,
+    index: usize,
+) -> BTreeSet<BinderSymbol> {
+    let target = rendering.scopes[index].level;
+    let statements = &rendering.scopes[index].scope.statements;
+    let mut found = BTreeSet::new();
+    for placed in &rendering.reads {
+        let Lands::Binder { up } = placed.read.lands else {
+            continue;
+        };
+        let (mut scope, mut statement) = (placed.scope, placed.statement);
+        if rendering.scopes[scope].level < target + up
+            || rendering.scopes[scope].level - up != target
+        {
+            continue;
+        }
+        while rendering.scopes[scope].level > target {
+            statement = rendering.scopes[scope].statement;
+            let Some(parent) = rendering.scopes[scope].parent else {
+                break;
+            };
+            scope = parent;
+        }
+        if scope == index && statements[statement as usize].binder == Some(placed.read.name) {
+            found.insert(placed.read.name.symbol(labels));
+        }
+    }
+    found
+}
+
 /// Check every planned scope's shape against its plan; `prefix` is the chain of shapes the root
 /// scope reads through.
 fn check(
@@ -236,7 +270,9 @@ fn check(
             );
         }
 
-        // The components are the planned partition, each holding only deferred reads.
+        // The components are the planned partition, each holding only deferred reads, and cyclic
+        // exactly when it holds more than one member or a member reads itself.
+        let self_reads = self_reads(labels, rendering, index);
         let components =
             |sets: Vec<BTreeSet<BinderSymbol>>| sets.into_iter().collect::<BTreeSet<_>>();
         let built: Vec<BTreeSet<BinderSymbol>> = shape
@@ -244,11 +280,15 @@ fn check(
             .iter()
             .map(|component| {
                 assert!(component.deferred_only, "`{source}`");
-                component
+                let members: BTreeSet<BinderSymbol> = component
                     .members
                     .iter()
                     .map(|slot| shape.slot_name(*slot))
-                    .collect()
+                    .collect();
+                let cyclic =
+                    members.len() > 1 || members.iter().any(|name| self_reads.contains(name));
+                assert_eq!(component.cyclic, cyclic, "`{source}`");
+                members
             })
             .collect();
         let expected: Vec<BTreeSet<BinderSymbol>> = planned
@@ -350,6 +390,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
             let located = locate(&rendering, Some(shape), &nodes);
             test(ShapedPlan {
                 labels: fixture.labels,
+                scratch: fixture.scratch(),
                 rendering: &rendering,
                 located,
                 shape,
@@ -363,11 +404,12 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
 
 struct ShapedPlan<'p, 'g, 'c> {
     labels: &'p LabelInterner,
+    scratch: BumpAllocator<'p>,
     rendering: &'p Rendering<'p>,
     located: Located<'g>,
     shape: &'g Shape<'g>,
     writer: Writer<'c>,
-    table: &'c Builtins<'g, 'c>,
+    table: &'c Builtins<'g, 'c, Probe>,
     handles: &'p [CellHandle],
 }
 
@@ -379,30 +421,28 @@ enum Observed {
     Number(u64),
     Type(KType),
     Pending(CellHandle),
+    /// The sibling a read through an edge capture resolves to, by member index.
     Edge(u32),
 }
 
-fn observe(binding: Binding<'_, '_>) -> Observed {
+fn observe(binding: Binding<'_, '_, Probe>) -> Observed {
     match binding {
         Binding::Bound(Value::Number(number)) => Observed::Number(number.to_bits()),
         Binding::Bound(Value::Type(ty)) => Observed::Type(ty.handle()),
+        Binding::Bound(Value::Knotted(Probe(index))) => Observed::Edge(index),
         Binding::Bound(other) => panic!("every slot is bound to a number, found {other:?}"),
         Binding::Pending(handle) => Observed::Pending(handle),
-        Binding::Edge(edge) => Observed::Edge(edge.index()),
     }
 }
 
-/// What `follow` turns a capture of an enclosing knot edge into.
-fn followed(index: u32) -> Value<'static, 'static> {
-    Value::Number(-1.0 - f64::from(index))
-}
-
 /// Activate `shape` with every slot bound to a fresh number, check its by-name and capture laws, and
-/// activate every shape nested in it the way a call or an arm would.
+/// activate every shape nested in it the way a call or an arm would — a callable's activation run
+/// by a probe standing for itself.
 fn activate<'g, 'c>(
     writer: Writer<'c>,
-    table: &'c Builtins<'g, 'c>,
-    activation: Activation<'g, 'c>,
+    scratch: BumpAllocator<'_>,
+    table: &'c Builtins<'g, 'c, Probe>,
+    activation: Activation<'g, 'c, Probe>,
     next: &mut f64,
 ) {
     let plan = KnotPlan::new(64);
@@ -458,34 +498,28 @@ fn activate<'g, 'c>(
         match nested.kind() {
             ShapeKind::Block => activate(
                 writer,
+                scratch,
                 table,
                 Activation::of_block(writer, nested, activation),
                 next,
             ),
             ShapeKind::Callable => {
-                let bindings = ClosureBindings::born(
-                    writer,
-                    nested,
-                    activation,
-                    |_, index| plan.edge(index).unwrap(),
-                    |edge| followed(edge.index()),
-                )
-                .expect("every enclosing slot is bound");
-                // A captured value is the enclosing binding's word; a fellow is an edge.
+                let captures =
+                    ClosureBindings::read_captures(nested, activation, scratch, |index| {
+                        plan.edge(index).unwrap()
+                    })
+                    .expect("every enclosing slot is bound");
+                let bindings = ClosureBindings::of(writer, &captures);
+                // A captured value is the enclosing binding's word — the sibling a capture of the
+                // enclosing knot names — and a fellow is an edge.
                 for (index, capture) in nested.captures().iter().enumerate() {
                     let held = bindings.get(crate::scope::CaptureSlot(index as u32));
                     match (capture.source, held) {
-                        (CaptureSource::Read(source), Capture::Value(value)) => {
-                            let expected = match activation.read(source) {
-                                Binding::Bound(bound) => observe(Binding::Bound(bound)),
-                                Binding::Edge(edge) => {
-                                    observe(Binding::Bound(followed(edge.index())))
-                                }
-                                Binding::Pending(_) => panic!("every enclosing slot is bound"),
-                            };
+                        (CaptureSource::Read(source), Link::Value(value)) => {
+                            let expected = observe(activation.read(source));
                             assert_eq!(observe(Binding::Bound(value)), expected);
                         }
-                        (CaptureSource::Member { index, .. }, Capture::Edge(edge)) => {
+                        (CaptureSource::Member { index, .. }, Link::Edge(edge)) => {
                             assert_eq!(edge.index(), index)
                         }
                         (source, _) => panic!("the binding does not follow its source {source:?}"),
@@ -493,8 +527,9 @@ fn activate<'g, 'c>(
                 }
                 activate(
                     writer,
+                    scratch,
                     table,
-                    Activation::of_callable(writer, nested, bindings, table),
+                    Activation::of_callable(writer, nested, Probe(u32::MAX), bindings, table),
                     next,
                 );
             }
@@ -526,7 +561,7 @@ proptest! {
         with_fixture(|fixture| {
             let lines = fixture.parse(&rendering.source);
             fixture.in_cell(|writer, _| {
-                let table = builtins(fixture, writer);
+                let table: &Builtins = builtins(fixture, writer);
                 let source = &rendering.source;
                 let error = Shape::of_program(fixture.program, &lines, table, fixture.scratch())
                     .err()
@@ -589,7 +624,7 @@ proptest! {
         let program = Generator::new(&choices).program();
         shaped_plan(&program, |shaped| {
             let activation = Activation::of_program(shaped.writer, shaped.shape, shaped.table);
-            activate(shaped.writer, shaped.table, activation, &mut 1.0);
+            activate(shaped.writer, shaped.scratch, shaped.table, activation, &mut 1.0);
         });
     }
 
@@ -602,7 +637,7 @@ proptest! {
     ) {
         let program = Generator::new(&choices).program();
         shaped_plan(&program, |shaped| {
-            let ShapedPlan { writer, table, shape, handles, rendering, .. } = shaped;
+            let ShapedPlan { writer, scratch, table, shape, handles, rendering, .. } = shaped;
             let activation = Activation::of_program(writer, shape, table);
             let is_bound = |slot: Slot| bound[slot.index() % bound.len()];
             for slot in 0..shape.slots() {
@@ -636,14 +671,10 @@ proptest! {
                     }
                     _ => None,
                 });
-                let born = ClosureBindings::born(
-                    writer,
-                    nested,
-                    &activation,
-                    |_, index| plan.edge(index).unwrap(),
-                    |edge| followed(edge.index()),
-                );
-                assert_eq!(born.err(), first_pending, "`{}`", rendering.source);
+                let read = ClosureBindings::read_captures(nested, &activation, scratch, |index| {
+                    plan.edge(index).unwrap()
+                });
+                assert_eq!(read.err(), first_pending, "`{}`", rendering.source);
             }
         });
     }
@@ -718,7 +749,8 @@ proptest! {
 
                 // Activate each scope of the chain beside the one it sits in.
                 let mut next = 1.0;
-                let mut site: Option<&Activation<'_, '_>> = None;
+                let table: &Builtins<'_, '_, Probe> = table;
+                let mut site: Option<&Activation<'_, '_, Probe>> = None;
                 let mut shapes = Vec::new();
                 for scope in &site_chain {
                     let shape = located.shapes[*scope].expect("every planned scope has a shape");

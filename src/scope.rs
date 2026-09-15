@@ -6,8 +6,11 @@
 //! - [`ClosureBindings`] — one run per callable, born from the enclosing activation through the
 //!   shape's capture layout: a value word per capture, or an edge into the callable's own knot.
 //! - An [`Activation`] — one per call or block entry, laid down in the frame's region: a pointer to
-//!   the closure bindings, the builtin table's base pointer, the enclosing block activation, and one
-//!   slot per parameter and local.
+//!   the closure bindings, the builtin table's base pointer, the enclosing block activation, the
+//!   callable it runs, and one slot per parameter and local.
+//!
+//! Every tier is generic over the callable a value may hold, the parameter [`crate::values::Value`]
+//! takes; `scope` threads it through and reads a callable only to resolve an edge capture.
 //!
 //! A read through a coordinate searches nothing by name. The walk `EVAL` runs is
 //! [`Shape::for_eval`], which resolves each free name through [`Activation::coordinate_of`] and lands
@@ -28,11 +31,14 @@ mod shape;
 mod signature;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
+
+pub(crate) use roles::{BodyKind, Role, roles};
+pub(crate) use signature::pair_name;
 
 pub use activation::{Activation, Binding};
 pub use builtins::Builtins;
-pub use closure::{Capture, ClosureBindings, ClosureRefused};
+pub use closure::{ClosureBindings, ClosureRefused};
 pub use shape::{
     BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate,
     Mention, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,

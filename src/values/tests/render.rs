@@ -2,9 +2,9 @@
 
 use crate::parse::{BinderSymbol, ExpressionPart};
 use crate::type_lattice::KType;
-use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, text};
+use crate::values::{Key, TypeValue};
 
-use super::{Fixture, pin, with_fixture};
+use super::{Dict, Fixture, List, Record, Tagged, Value, pin, text, with_fixture};
 
 fn rendered(fixture: &Fixture<'_, '_>, value: Value<'_, '_>) -> String {
     let mut out = String::new();
@@ -64,6 +64,61 @@ fn types_tags_and_quotes_render_their_surface() {
             let tagged = Value::Tagged(Tagged::hold(writer, text(writer, "x"), KType::STR));
             assert_eq!(rendered(fixture, tagged), "Str(x)");
             assert_eq!(rendered(fixture, Value::Expression(node)), "a b");
+        })
+    });
+}
+
+#[test]
+fn a_cycle_labels_its_target_and_a_shared_node_prints_inline() {
+    use super::{Holding, Link, ring, tie};
+    use crate::values::Circular;
+    with_fixture(|fixture| {
+        let (types, labels, scratch) = (fixture.types, fixture.labels, fixture.scratch());
+        let ring_type = fixture.ring_type("Ring", "next");
+        let next = BinderSymbol::declared("next", labels).unwrap();
+        let rendered = |value: Holding<'_, '_>| {
+            let mut out = String::new();
+            value.render(&mut out, types, labels, scratch).unwrap();
+            out
+        };
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let one = ring(fixture, writer, ring_type, &[None])[0];
+            assert_eq!(rendered(Holding::Knotted(one)), "@0 = Ring({next = @0})");
+            let pair = ring(fixture, writer, ring_type, &[None, None]);
+            assert_eq!(
+                rendered(Holding::Knotted(pair[0])),
+                "@0 = Ring({next = Ring({next = @0})})"
+            );
+            let held = crate::values::List::new(
+                writer,
+                [Holding::Knotted(one)].into_iter(),
+                types,
+                scratch,
+            );
+            assert_eq!(rendered(Holding::List(held)), "[@0 = Ring({next = @0})]");
+
+            let record_type = types.record(scratch, &[(next, KType::NULL)]);
+            let shared = tie(writer, 2, |index, edges| {
+                if index == 0 {
+                    Circular::List(crate::values::List::linked(
+                        writer,
+                        &[Link::Edge(edges[1]), Link::Edge(edges[1])],
+                        types.list(record_type),
+                    ))
+                } else {
+                    Circular::Record(crate::values::Record::linked(
+                        writer,
+                        &[(next, Link::Value(Holding::Null))],
+                        record_type,
+                        scratch,
+                    ))
+                }
+            });
+            assert_eq!(
+                rendered(Holding::Knotted(shared[0])),
+                "[{next = null}, {next = null}]"
+            );
         })
     });
 }

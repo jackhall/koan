@@ -4,7 +4,8 @@
 use crate::parse::forms::FormId;
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression};
 use crate::scope::{
-    CaptureSource, Coordinate, MentionClass, Position, Shape, ShapeError, ShapeKind, Slot, Target,
+    Builtins, CaptureSource, Coordinate, MentionClass, Position, Shape, ShapeError, ShapeKind,
+    Slot, Target,
 };
 
 use super::{Fixture, builtins, type_name, value_name, with_fixture};
@@ -25,7 +26,7 @@ fn shaped<R>(
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(|writer, _| {
-            let table = builtins(fixture, writer);
+            let table: &Builtins = builtins(fixture, writer);
             let shape = Shape::of_program(fixture.program, &lines, table, fixture.scratch());
             check(fixture, &lines, shape)
         })
@@ -388,6 +389,111 @@ fn a_quantifier_read_in_its_body_is_a_mention_of_the_body_parameter() {
                     target: Target::Local(slot),
                 }
             );
+        },
+    );
+}
+
+#[test]
+fn a_binder_births_the_callable_at_its_root_and_the_body_knows_its_form() {
+    let source = "\
+LET f = (FN :{x :Number} -> Number = (x))
+LET wrapped = [(FN :{} -> Number = (1))]
+LET e = FN EXPR (TWICE x :Number) -> Number = (x)
+LET plus = OP \"+\" OVER Number = (left)
+LET k = 1";
+    shaped(source, |fixture, lines, shape| {
+        let shape = shape.expect("the program shapes");
+        let slot = |name| shape.slot(value(fixture, name)).unwrap().0;
+        let f = shape.births(slot("f")).expect("a root FN is a birth");
+        assert_eq!(f.kind(), ShapeKind::Callable);
+        assert_eq!(
+            f.form()
+                .and_then(|form| form.cache().form())
+                .map(|form| form.id),
+            Some(FormId::Lambda)
+        );
+        assert!(std::ptr::eq(f, nested_at(shape, &lines[0], 3, 5)));
+        let e = shape.births(slot("e")).expect("a combined EXPR is a birth");
+        assert_eq!(
+            e.form()
+                .and_then(|form| form.cache().form())
+                .map(|form| form.id),
+            Some(FormId::CombinedExpression)
+        );
+        let plus = shape
+            .births(slot("plus"))
+            .expect("a combined OP is a birth");
+        assert_eq!(
+            plus.form()
+                .and_then(|form| form.cache().form())
+                .map(|form| form.id),
+            Some(FormId::CombinedOperator)
+        );
+        assert!(
+            shape.births(slot("wrapped")).is_none(),
+            "a FN in a list is not at the root"
+        );
+        assert!(shape.births(slot("k")).is_none());
+        assert!(shape.form().is_none(), "the program sits in no form");
+    });
+}
+
+#[test]
+fn a_nominal_construction_reads_its_head_eagerly_and_its_payload_as_a_constructor_slot() {
+    shaped(
+        "LET a = (Ring {next = a})\nLET k = [1]",
+        |fixture, _, shape| {
+            let shape = shape.expect("a tagged self-reference shapes");
+            let a = value(fixture, "a");
+            assert_eq!(mention_of(shape, a).class, MentionClass::Deferred);
+            let ring = BinderSymbol::Type(type_name("Ring", fixture.labels));
+            assert_eq!(mention_of(shape, ring).class, MentionClass::Eager);
+            let (slot, _) = shape.slot(a).unwrap();
+            let component = shape.component_of(slot);
+            assert_eq!(component.members, &[slot]);
+            assert!(component.deferred_only && component.cyclic);
+            let (k, _) = shape.slot(value(fixture, "k")).unwrap();
+            assert!(
+                !shape.component_of(k).cyclic,
+                "a data binder reading nothing of its own"
+            );
+        },
+    );
+    shaped("LET b = [a]\nLET a = (Ring {next = b})", |_, _, shape| {
+        let shape = shape.expect("a tagged ring through an earlier binder shapes");
+        assert!(
+            shape
+                .components()
+                .iter()
+                .any(|component| component.members.len() == 2)
+        );
+    });
+    shaped(
+        "LET f = 1\nLET b = [a]\nLET a = (f {next = b})",
+        |fixture, _, shape| {
+            let Err(ShapeError::EagerCycle { mut members }) = shape else {
+                panic!("a call headed by a name reads every part eagerly");
+            };
+            members.sort();
+            let mut expected = vec![value(fixture, "a"), value(fixture, "b")];
+            expected.sort();
+            assert_eq!(members, expected);
+        },
+    );
+}
+
+#[test]
+fn a_let_binder_records_its_right_hand_side() {
+    shaped(
+        "LET a = [1 2]\nNEWTYPE Distance = Number",
+        |fixture, lines, shape| {
+            let shape = shape.expect("the program shapes");
+            let (a, _) = shape.slot(value(fixture, "a")).unwrap();
+            let rhs = shape.rhs(a).expect("a LET has a right-hand side");
+            assert!(std::ptr::eq(rhs, &lines[0].parts[3].value));
+            let distance = BinderSymbol::Type(type_name("Distance", fixture.labels));
+            let (declared, _) = shape.slot(distance).unwrap();
+            assert!(shape.rhs(declared).is_none(), "a NEWTYPE has none");
         },
     );
 }

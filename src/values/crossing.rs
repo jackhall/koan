@@ -3,14 +3,16 @@
 //!
 //! A pinned operand arrives at the destination's region lifetime and is embedded as it is. A copied
 //! one arrives at an unrelated lifetime, so the only rebuild that typechecks is [`copy_into`]'s deep
-//! one through the destination's writer; its program nodes are `'graph` borrows and embed verbatim.
+//! one through the destination's writer; its program nodes are `'graph` borrows and embed verbatim,
+//! and a knot member rebuilds its whole knot through its family, handed this same copy for every
+//! value the knot holds.
 
 use crate::memory::{
     Active, CellHandle, CrossedOperand, Operand, Prices, Reattachable, Stale, StepContext, Verdict,
     Writer, collect,
 };
 
-use super::{Dict, List, Record, Tagged, Value, ValueCarrier, ValueFamily, text};
+use super::{Dict, KnottedFamily, List, Record, Tagged, Value, ValueCarrier, ValueFamily, text};
 
 /// How many copy bytes one pin byte is worth: an operand copies while its copy costs less than a
 /// `COPY_RATIO`th of what pinning it would newly retain.
@@ -28,13 +30,13 @@ pub fn verdict(prices: Prices) -> Verdict {
 
 /// Build `carrier`'s value into `dest`'s region and hand back the carrier resting there: the value
 /// as it is under a pin, rebuilt deep under a copy.
-pub fn cross<'graph, 'step, 'here, C: Reattachable<'graph>>(
+pub fn cross<'graph, 'step, 'here, C: Reattachable<'graph>, XF: KnottedFamily<'graph>>(
     context: &mut StepContext<'graph, 'step, 'here, C>,
     dest: impl Into<CellHandle>,
-    carrier: &ValueCarrier<'graph, 'step>,
-) -> Result<ValueCarrier<'graph, 'step>, Stale<CellHandle>> {
+    carrier: &ValueCarrier<'graph, 'step, XF>,
+) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>> {
     let weight = context.read(carrier).value().weight();
-    context.alloc_into::<ValueFamily, ValueFamily>(
+    context.alloc_into::<ValueFamily<XF>, ValueFamily<XF>>(
         dest,
         &[Operand {
             carrier,
@@ -43,7 +45,7 @@ pub fn cross<'graph, 'step, 'here, C: Reattachable<'graph>>(
         |writer, views| {
             Active::new(match views[0] {
                 CrossedOperand::Pinned(value) => value,
-                CrossedOperand::Copied(value) => copy_into(writer, &value),
+                CrossedOperand::Copied(value) => copy_into::<XF>(writer, &value),
             })
         },
     )
@@ -51,10 +53,10 @@ pub fn cross<'graph, 'step, 'here, C: Reattachable<'graph>>(
 
 /// The own-cell crossing: `carrier`'s value made reachable at the executing cell's `'here`, where it
 /// may be embedded in what the step builds or captured by its continuation.
-pub fn cross_here<'graph, 'step, 'here, C: Reattachable<'graph>>(
+pub fn cross_here<'graph, 'step, 'here, C: Reattachable<'graph>, XF: KnottedFamily<'graph>>(
     context: &mut StepContext<'graph, 'step, 'here, C>,
-    carrier: &ValueCarrier<'graph, 'step>,
-) -> Value<'graph, 'here> {
+    carrier: &ValueCarrier<'graph, 'step, XF>,
+) -> Value<'graph, 'here, XF::Closed<'here>> {
     let weight = context.read(carrier).value().weight();
     context.alloc_here(
         &[Operand {
@@ -63,20 +65,21 @@ pub fn cross_here<'graph, 'step, 'here, C: Reattachable<'graph>>(
         }],
         |writer, views| match views[0] {
             CrossedOperand::Pinned(value) => value,
-            CrossedOperand::Copied(value) => copy_into(writer, &value),
+            CrossedOperand::Copied(value) => copy_into::<XF>(writer, &value),
         },
     )
 }
 
 /// The deep copy: every region part of `value` rebuilt through `writer`, every program node
-/// embedded as the same node, every memoized type and weight carried over. Total. Reached only
-/// through the two doors above, so every copy is one the graph priced.
-fn copy_into<'graph, 'cell>(
-    writer: Writer<'cell>,
-    value: &Value<'graph, '_>,
-) -> Value<'graph, 'cell>
+/// embedded as the same node, every memoized type and weight carried over, a knot member rebuilt by
+/// its family. Total. Reached only through the two doors above, so every copy is one the graph priced.
+fn copy_into<'graph, 'from, 'to, XF: KnottedFamily<'graph>>(
+    writer: Writer<'to>,
+    value: &Value<'graph, 'from, XF::Closed<'from>>,
+) -> Value<'graph, 'to, XF::Closed<'to>>
 where
-    'graph: 'cell,
+    'graph: 'from,
+    'graph: 'to,
 {
     match *value {
         Value::Number(number) => Value::Number(number),
@@ -87,14 +90,14 @@ where
         Value::Type(type_value) => Value::Type(type_value.copied(writer)),
         Value::List(list) => {
             let source = list.cells();
-            let cells = writer.fill(source.len(), |at| copy_into(writer, &source[at]));
+            let cells = writer.fill(source.len(), |at| copy_into::<XF>(writer, &source[at]));
             Value::List(List::from_run(writer, cells, list.ktype(), list.weight()))
         }
         Value::Dict(dict) => {
             let (source_keys, source_cells) = (dict.keys(), dict.cells());
             let keys = writer.fill(source_keys.len(), |at| source_keys[at].rehomed(writer));
             let cells = writer.fill(source_cells.len(), |at| {
-                copy_into(writer, &source_cells[at])
+                copy_into::<XF>(writer, &source_cells[at])
             });
             Value::Dict(Dict::from_runs(
                 writer,
@@ -107,7 +110,7 @@ where
         Value::Record(record) => {
             let source = record.cells();
             let names = collect(writer, record.names().iter().copied());
-            let cells = writer.fill(source.len(), |at| copy_into(writer, &source[at]));
+            let cells = writer.fill(source.len(), |at| copy_into::<XF>(writer, &source[at]));
             Value::Record(Record::from_runs(
                 writer,
                 names,
@@ -118,8 +121,11 @@ where
         }
         Value::Tagged(tagged) => Value::Tagged(Tagged::hold(
             writer,
-            copy_into(writer, tagged.payload()),
+            copy_into::<XF>(writer, tagged.payload()),
             tagged.ktype(),
         )),
+        Value::Knotted(member) => Value::Knotted(XF::copy_into(writer, &member, &mut |value| {
+            copy_into::<XF>(writer, value)
+        })),
     }
 }

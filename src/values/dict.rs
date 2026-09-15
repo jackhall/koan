@@ -3,11 +3,12 @@
 
 use std::cmp::Ordering;
 use std::fmt;
+use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
-use crate::type_lattice::{KType, TypeRegistry, join};
+use crate::type_lattice::{KType, TypeRegistry};
 
-use super::{Value, Weight};
+use super::{Knotted, Link, Nothing, Value, Weight, dict_type};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
 /// normalises — NaN is refused and `-0` folds to `0` — so the order and equality below agree with
@@ -23,7 +24,7 @@ enum Scalar<'cell> {
 }
 
 /// Why a value cannot be a key.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KeyRejected {
     /// Only a string, a number or a bool keys a dict; this is the type that was offered.
     NotAScalar(KType),
@@ -32,7 +33,7 @@ pub enum KeyRejected {
 
 impl<'cell> Key<'cell> {
     /// The key a value makes, borrowing its bytes where they already live.
-    pub fn of(value: &Value<'_, 'cell>) -> Result<Key<'cell>, KeyRejected> {
+    pub fn of<X: Knotted>(value: &Value<'_, 'cell, X>) -> Result<Key<'cell>, KeyRejected> {
         match *value {
             Value::Str(text) => Ok(Key::str(text)),
             Value::Number(number) => Key::number(number),
@@ -59,7 +60,7 @@ impl<'cell> Key<'cell> {
     }
 
     /// The key as the value it was made from.
-    pub fn value<'graph>(&self) -> Value<'graph, 'cell> {
+    pub fn value<'graph, X>(&self) -> Value<'graph, 'cell, X> {
         match self.0 {
             Scalar::Str(text) => Value::Str(text),
             Scalar::Number(number) => Value::Number(number),
@@ -138,74 +139,112 @@ impl fmt::Display for Key<'_> {
     }
 }
 
-/// A dict value, resident in the region its keys and cells live in.
+/// A dict value, resident in the region its keys and cells live in. Its cells are value words, or
+/// [`Link`]s when the dict is a knot's data node.
 #[derive(Clone, Copy, Debug)]
-pub struct Dict<'graph, 'cell> {
+pub struct Dict<'graph, 'cell, X = Nothing, C = Value<'graph, 'cell, X>> {
     keys: &'cell [Key<'cell>],
-    cells: &'cell [Value<'graph, 'cell>],
+    cells: &'cell [C],
     ktype: KType,
     weight: Weight,
+    /// The knot member a cell's word may hold, which a link cell names only through `C`.
+    member: PhantomData<Value<'graph, 'cell, X>>,
 }
 
-impl<'graph, 'cell> Dict<'graph, 'cell> {
+impl<'graph, 'cell, X: Knotted> Dict<'graph, 'cell, X> {
     /// Lay down `entries` sorted by key; where a key repeats, its last occurrence wins. Keys are
     /// written into `writer`'s region wherever they borrowed from, and the key and value types are
     /// the joins over what stays. The sort is staged over `scratch`.
     pub fn new(
         writer: Writer<'cell>,
-        entries: &[(Key<'_>, Value<'graph, 'cell>)],
+        entries: &[(Key<'_>, Value<'graph, 'cell, X>)],
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> &'cell Dict<'graph, 'cell> {
-        let mut order: BumpVec<'_, usize> = BumpVec::with_capacity_in(entries.len(), scratch);
-        order.extend(0..entries.len());
-        order.sort_unstable_by(|left, right| {
-            entries[*left]
-                .0
-                .cmp(&entries[*right].0)
-                .then(left.cmp(right))
-        });
-        let mut kept: BumpVec<'_, usize> = BumpVec::with_capacity_in(entries.len(), scratch);
-        for (position, index) in order.iter().enumerate() {
-            let superseded = order
-                .get(position + 1)
-                .is_some_and(|next| entries[*next].0 == entries[*index].0);
-            if !superseded {
-                kept.push(*index);
-            }
-        }
-        let (mut key_type, mut value_type) = (KType::NEVER, KType::NEVER);
+    ) -> &'cell Dict<'graph, 'cell, X> {
+        let kept = kept_entries(entries, scratch);
         let mut weight = Weight::flat::<Self>();
         let keys = writer.fill(kept.len(), |at| {
             let key = entries[kept[at]].0;
-            key_type = join(types, scratch, key_type, key.ktype());
             weight = weight.plus(key.weight());
             key.rehomed(writer)
         });
         let cells = writer.fill(kept.len(), |at| {
             let cell = entries[kept[at]].1;
-            value_type = join(types, scratch, value_type, cell.ktype());
             weight = weight.plus(cell.weight());
             cell
         });
-        Self::from_runs(
-            writer,
-            keys,
-            cells,
-            types.dict(key_type, value_type),
-            weight,
-        )
+        let ktype = dict_type(
+            types,
+            scratch,
+            keys.iter()
+                .zip(cells)
+                .map(|(key, cell)| (key.ktype(), cell.ktype())),
+        );
+        Self::from_runs(writer, keys, cells, ktype, weight)
     }
+}
 
+impl<'graph, 'cell, X: Knotted> Dict<'graph, 'cell, X, Link<'graph, 'cell, X>> {
+    /// Lay down `entries` as a knot's data node under the finished memo `ktype`, sorted by key with
+    /// the last of a repeated key kept, as [`Dict::new`] does; the sort is staged over `scratch`.
+    pub fn linked(
+        writer: Writer<'cell>,
+        entries: &[(Key<'_>, Link<'graph, 'cell, X>)],
+        ktype: KType,
+        scratch: BumpAllocator<'_>,
+    ) -> &'cell Self {
+        let kept = kept_entries(entries, scratch);
+        let mut weight = Weight::flat::<Self>();
+        let keys = writer.fill(kept.len(), |at| {
+            let key = entries[kept[at]].0;
+            weight = weight.plus(key.weight());
+            key.rehomed(writer)
+        });
+        let cells = writer.fill(kept.len(), |at| {
+            let cell = entries[kept[at]].1;
+            weight = weight.plus(cell.weight());
+            cell
+        });
+        Self::from_runs(writer, keys, cells, ktype, weight)
+    }
+}
+
+/// The indices of `entries` that stay, in key order: where a key repeats, only its last occurrence.
+/// Every dict keeps its entries by this rule. Staged over `scratch`.
+pub fn kept_entries<'x, C>(
+    entries: &[(Key<'_>, C)],
+    scratch: BumpAllocator<'x>,
+) -> BumpVec<'x, usize> {
+    let mut order: BumpVec<'_, usize> = BumpVec::with_capacity_in(entries.len(), scratch);
+    order.extend(0..entries.len());
+    order.sort_unstable_by(|left, right| {
+        entries[*left]
+            .0
+            .cmp(&entries[*right].0)
+            .then(left.cmp(right))
+    });
+    let mut kept = BumpVec::with_capacity_in(entries.len(), scratch);
+    for (position, index) in order.iter().enumerate() {
+        let superseded = order
+            .get(position + 1)
+            .is_some_and(|next| entries[*next].0 == entries[*index].0);
+        if !superseded {
+            kept.push(*index);
+        }
+    }
+    kept
+}
+
+impl<'graph, 'cell, X: Copy, C: Copy> Dict<'graph, 'cell, X, C> {
     /// A dict over sorted keys and aligned cells already resident in `writer`'s region, under a type
     /// and weight the caller already knows — the deep copy's arm.
     pub(crate) fn from_runs(
         writer: Writer<'cell>,
         keys: &'cell [Key<'cell>],
-        cells: &'cell [Value<'graph, 'cell>],
+        cells: &'cell [C],
         ktype: KType,
         weight: Weight,
-    ) -> &'cell Dict<'graph, 'cell> {
+    ) -> &'cell Self {
         resident(
             writer,
             Dict {
@@ -213,17 +252,18 @@ impl<'graph, 'cell> Dict<'graph, 'cell> {
                 cells,
                 ktype,
                 weight,
+                member: PhantomData,
             },
         )
     }
 
     /// The same entries under `ktype` — an ascription's retype, sharing both runs.
-    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Dict<'graph, 'cell> {
+    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Self {
         Self::from_runs(writer, self.keys, self.cells, ktype, self.weight)
     }
 
     /// The cell under `key`, found by binary search; `key` may borrow anywhere.
-    pub fn get(&self, key: &Key<'_>) -> Option<&'cell Value<'graph, 'cell>> {
+    pub fn get(&self, key: &Key<'_>) -> Option<&'cell C> {
         let cells = self.cells;
         self.keys
             .binary_search_by(|probe| probe.cmp(key))
@@ -234,8 +274,8 @@ impl<'graph, 'cell> Dict<'graph, 'cell> {
     /// The entries in key order.
     pub fn entries(
         &self,
-    ) -> impl ExactSizeIterator<Item = (&'cell Key<'cell>, &'cell Value<'graph, 'cell>)>
-    + use<'graph, 'cell> {
+    ) -> impl ExactSizeIterator<Item = (&'cell Key<'cell>, &'cell C)> + use<'graph, 'cell, X, C>
+    {
         self.keys.iter().zip(self.cells.iter())
     }
 
@@ -243,7 +283,7 @@ impl<'graph, 'cell> Dict<'graph, 'cell> {
         self.keys
     }
 
-    pub fn cells(&self) -> &'cell [Value<'graph, 'cell>] {
+    pub fn cells(&self) -> &'cell [C] {
         self.cells
     }
 

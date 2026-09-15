@@ -156,3 +156,21 @@ fn members_visit_every_node_in_index_order() {
         assert_eq!(read, [(0, 0), (1, 1), (2, 4), (3, 9), (4, 16)]);
     });
 }
+
+#[test]
+fn a_member_is_equal_only_to_its_own_node() {
+    in_cell(|writer| {
+        let tie = |pairs: &[(u32, u32)]| {
+            let plan = KnotPlan::new(pairs.len() as u32);
+            let links = staged(&plan, pairs);
+            plan.tie(writer, |edge| links[edge.index() as usize])
+        };
+        let knot = tie(&[(1, 1), (2, 0)]);
+        let other = tie(&[(1, 1), (2, 0)]);
+        let (first, second) = (knot.member(Edge(0)), knot.member(Edge(1)));
+        assert!(first != second, "two indices of one knot");
+        assert!(first != other.member(Edge(0)), "one index of two knots");
+        assert!(first == second.follow(second.payload().next));
+        assert!(knot == first.knot() && knot != other);
+    });
+}

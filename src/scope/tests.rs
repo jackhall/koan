@@ -4,22 +4,45 @@
 mod activation;
 mod boundary;
 mod examples;
-mod plan;
+pub(crate) mod plan;
 mod properties;
 
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, CellHandle, ProgramBrand, ReleaseAbsorption, SlabHandle,
+    Bump, BumpAllocator, CellGraph, CellHandle, Edge, ProgramBrand, ReleaseAbsorption, SlabHandle,
     Verdict, Writer, program_storage, reattachable,
 };
 use crate::parse::{KExpression, LabelInterner, TypeSymbol, ValueSymbol, parse};
 use crate::type_lattice::{KType, TypeRegistry};
-use crate::values::{TypeValue, Value};
+use crate::values::{Knotted, Resolved, TypeValue, Value, Weight};
 
 use super::Builtins;
 
 /// A continuation family for a graph whose cells only store.
 struct Step;
 reattachable!(Step => ());
+
+/// A stand-in function: the index of the knot member it is, so a read through an edge capture is
+/// observable without a function layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct Probe(pub u32);
+
+impl Knotted for Probe {
+    fn ktype(&self) -> KType {
+        KType::ANY
+    }
+
+    fn weight(&self) -> Weight {
+        Weight::ZERO
+    }
+
+    fn sibling(&self, edge: Edge) -> Self {
+        Probe(edge.index())
+    }
+
+    fn resolve<'a>(&self) -> Resolved<'a, Self> {
+        Resolved::Function
+    }
+}
 
 /// How many cells a fixture's graph stands up — one to run in, the rest as binder handles.
 const CELLS: u32 = 64;
@@ -81,7 +104,7 @@ pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
 pub(super) const BUILTIN_VALUES: &[&str] = &["origin"];
 
 /// The type builtins every suite's table holds.
-pub(super) const BUILTIN_TYPES: &[&str] = &["Number", "Str", "Bool", "Null", "Any"];
+pub(super) const BUILTIN_TYPES: &[&str] = &["Number", "Str", "Bool", "Null", "Any", "Ring"];
 
 pub(super) fn value_name(text: &str, labels: &LabelInterner) -> ValueSymbol {
     ValueSymbol::declared(text, labels).expect("a value token")
@@ -92,10 +115,10 @@ pub(super) fn type_name(text: &str, labels: &LabelInterner) -> TypeSymbol {
 }
 
 /// The suites' builtin table: `origin = 0` and the scalar types, laid down in `writer`'s region.
-pub(super) fn builtins<'graph, 'cell>(
+pub(super) fn builtins<'graph, 'cell, X: Knotted>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
-) -> &'cell Builtins<'graph, 'cell> {
+) -> &'cell Builtins<'graph, 'cell, X> {
     let labels = fixture.labels;
     let values: Vec<_> = BUILTIN_VALUES
         .iter()
@@ -106,6 +129,7 @@ pub(super) fn builtins<'graph, 'cell>(
         KType::STR,
         KType::BOOL,
         KType::NULL,
+        KType::ANY,
         KType::ANY,
     ];
     let types: Vec<_> = BUILTIN_TYPES

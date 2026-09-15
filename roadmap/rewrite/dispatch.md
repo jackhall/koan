@@ -38,6 +38,9 @@ program runs on the rewritten stack.
 
 - *Builtins as function values — decided.* A builtin registers through the same
   bucket a user function does, as a function value whose body is native.
+- *Newtype construction — decided.* An ordinary construction `(Head payload)`
+  is `Tagged::construct`, the one construction rule the tie checks a knot's
+  tagged nodes by too ([src/values/README.md](../../src/values/README.md#what-a-value-is)).
 - *Keyword reads resolved in the shape — open.* Builtin buckets are
   unshadowable, so a builtin form resolves when the shape is built; a user
   bucket is shadowable and overloaded. Recommended: extend the shape's
@@ -48,7 +51,6 @@ program runs on the rewritten stack.
 
 **Requires:**
 
-- [Function values](function-values.md) — there is nothing to dispatch on until functions exist.
 - [Scheduler on cellgraph](scheduler-on-cellgraph.md) — running a program needs the scheduler that drives it.
 
 **Unblocks:**

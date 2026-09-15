@@ -99,7 +99,7 @@ The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/READ
 
 ## Source layout
 
-The crate splits into seven top-level modules: [memory/](src/memory) (where a
+The crate splits into nine top-level modules: [memory/](src/memory) (where a
 value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus the
 symbol, AST and form-table vocabulary that output is written in),
 [values/](src/values.rs) (the data values and the per-dispatch expression form,
@@ -107,6 +107,10 @@ laid down in a cell's region — see [src/values/README.md](src/values/README.md
 [scope/](src/scope.rs) (lexical environments: the shape a body resolves its names
 through, closure bindings and activations — see
 [src/scope/README.md](src/scope/README.md)),
+[elaborate/](src/elaborate.rs) (type expressions elaborated into lattice handles
+where they are read — see [src/elaborate/README.md](src/elaborate/README.md)),
+[function/](src/function.rs) (functions and circular data as values: the knot
+nodes a function or a data node is, their tie and their copy — see [src/function/README.md](src/function/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
 type nodes — see [src/type_lattice/README.md](src/type_lattice/README.md)),
@@ -171,7 +175,7 @@ deleting the files above is
 src/
 ├── main.rs              CLI entry point — reads source, calls interpret_with_writer_path
 ├── lib.rs               library facade — declares `memory`, `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph, and re-exports workgraph's DAG scheduler as `koan::scheduler`
-├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally fixed-cost measurements read
+├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally fixed-cost measurements read; tests/boundary.rs is the source scanner every rewrite module's boundary test hands its import lists to
 ├── source.rs            source-span and provenance carrier for errors
 ├── memory.rs            pub mod memory — where a value lives and how long, in two tiers: the cell tier over cellgraph and the bump tier outside the graph
 ├── memory/
@@ -256,27 +260,38 @@ src/
 │   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the label interner
 ├── scope.rs          pub mod scope — koan's lexical environments over values and types, in three tiers: the shape, closure bindings and the activation
 ├── scope/
-│   ├── shape.rs          Shape — one body's declared-name runs, classified mentions with their coordinates, capture layout, components and nested shapes, in program storage; Position / Coordinate / Site and ShapeError
-│   ├── shape/build.rs    the one shape builder: the binders pass, the mention walk with its eager/deferred state, nested bodies and arms, and the components pass
+│   ├── shape.rs          Shape — one body's declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the form a callable body sits in, the body each binder births and each LET binder's right-hand side, in program storage; Position / Coordinate / Site and ShapeError
+│   ├── shape/build.rs    the one shape builder: the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies and arms, and the components pass
 │   ├── roles.rs          the exhaustive FormId → part-role table name resolution walks a form by
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
 │   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types
-│   ├── closure.rs        ClosureBindings — a callable's captures, born from the enclosing activation: a value word or a knot edge each
-│   └── activation.rs     Activation — one call's or block's Copy, Drop-free header and slot array: claim, bind, read by coordinate, and EVAL's by-name walk
-├── values.rs         pub mod values — Value, the 24-byte Copy sum over scalars, a region string, a quoted program node and a borrow of each per-kind resident struct; ValueFamily / ValueCarrier; the resident / collect / text helpers and the ascription retype
+│   ├── closure.rs        ClosureBindings — a callable's captures, read from the enclosing activation into scratch then laid down: a Link, a value word or a knot edge, each; the run's copy and weight
+│   └── activation.rs     Activation — one call's or block's Copy, Drop-free header, the knot member it runs and its slot array: claim, bind, read by coordinate (an edge capture as its sibling member), and EVAL's by-name walk
+├── values.rs         pub mod values — Value, the 24-byte Copy sum over scalars, a region string, a quoted program node, a borrow of each per-kind resident struct and a knot-member parameter; the Knotted / KnottedFamily trait pair and its vacuous Nothing / NoKnot default; ValueFamily / ValueCarrier; the text helper and the ascription retype
 ├── values/
 │   ├── weight.rs         Weight — the saturating bytes a total rebuild writes, memoized on every composite
 │   ├── type_value.rs     TypeValue — a type in value position beside its memoized OfKind type
 │   ├── list.rs           List — one run of cells typed by the join of its elements
 │   ├── dict.rs           Dict / Key — sorted keys and aligned cells, a binary-search lookup, entry order key order
 │   ├── record.rs         Record — symbol-sorted names and aligned cells, typed by the record of its fields
-│   ├── tagged.rs         Tagged — the one nominal wrap: a payload under a type identity, held or peeled
-│   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part
+│   ├── tagged.rs         Tagged — the one nominal wrap: a payload under a type identity, constructed through the checked door, held or peeled
+│   ├── link.rs           Link — a value word or an edge into the holder's own knot: a data node's cell, a closure binding
+│   ├── circular.rs       Circular / Resolved — a knot's data node over link cells, and the Composite view equality and rendering share over plain and linked composites
+│   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part, and construction, the one newtype-construction rule
 │   ├── crossing.rs       cross / cross_here over the placement doors, the deep copy, and the crossing verdict
 │   ├── working.rs        WorkingExpression / WorkingPart — the scheduler's per-dispatch node in the executing cell's region, carrying the parse's node cache
-│   ├── equality.rs       Value::equals — structural equality, containers gated on related memoized types
-│   ├── render.rs         Value::render — the surface PRINT writes
+│   ├── equality.rs       Value::equals — structural equality, containers gated on related memoized types, a bisimulation over knot data nodes, Incomparable when a function is reached
+│   ├── render.rs         Value::render — the surface PRINT writes, a mark pass then a write pass labelling where a cycle closes
 │   └── lower.rs          Value::lower_part — a region-pure AST part straight to a value
+├── elaborate.rs      pub mod elaborate — type expressions elaborated into lattice handles through the activation they are read in; Elaboration, why one did not
+├── elaborate/
+│   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups, Union.Tag
+│   └── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the form node its body sits in
+├── function.rs       pub mod function — Function, the knot Node (a function or a data node), the 16-byte Knotted member that closes Value's parameter; the KValue / KActivation aliases
+├── function/
+│   ├── birth.rs          tie — a component of value binders staged into scratch, memos derived and constructions checked, then laid down as one knot; Untieable
+│   ├── data.rs           a knot's data members: the staging walk with its anonymous nodes and evaluator by site, container memos by the nominal cut, the construction check, and the node write
+│   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
 ├── machine.rs           pub mod core / model / execute
 └── machine/
     ├── model.rs            re-exports from model::types and model::values

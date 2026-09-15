@@ -12,15 +12,13 @@ pub(crate) struct Channels<'a, P> {
     types: &'a [(TypeSymbol, P)],
 }
 
-impl<P: Copy + 'static> Channels<'static, P> {
+impl<'a, P: Copy> Channels<'a, P> {
     /// The run with no entry in either channel.
-    pub(crate) const EMPTY: Channels<'static, P> = Channels {
+    pub(crate) const EMPTY: Self = Channels {
         values: &[],
         types: &[],
     };
-}
 
-impl<'a, P: Copy> Channels<'a, P> {
     /// A view over two runs, each already sorted by symbol with no name repeated.
     pub(crate) fn new(values: &'a [(ValueSymbol, P)], types: &'a [(TypeSymbol, P)]) -> Self {
         debug_assert!(values.is_sorted_by(|left, right| left.0 < right.0));

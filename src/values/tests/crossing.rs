@@ -8,11 +8,10 @@ use std::ptr;
 
 use crate::memory::{CellGraph, Prices, ReleaseAbsorption, Verdict};
 use crate::parse::{BinderSymbol, ExpressionPart, ProgramNode};
-use crate::values::{
-    COPY_RATIO, Dict, Key, List, Record, Value, ValueFamily, cross, cross_here, text, verdict,
-};
+use crate::type_lattice::KType;
+use crate::values::{COPY_RATIO, Key, ValueFamily, cross, cross_here, verdict};
 
-use super::{Fixture, Step, copy, pin, with_fixture};
+use super::{Dict, Fixture, List, Record, Step, Value, copy, pin, text, with_fixture};
 
 fn quote<'graph>(fixture: &Fixture<'_, 'graph>, source: &str) -> ProgramNode<'graph> {
     match fixture.part(source) {
@@ -239,4 +238,61 @@ fn verdict_pins_the_large() {
 fn verdict_copies_the_small() {
     assert_eq!(verdict(prices(4096, 4096 / COPY_RATIO - 1)), Verdict::Copy);
     assert_eq!(verdict(prices(usize::MAX, 1)), Verdict::Copy);
+}
+
+#[test]
+fn a_circular_value_copies_as_the_same_graph_and_pins_as_the_same_node() {
+    use super::{Holding, Link, NodeFamily, ring};
+    use crate::values::{Circular, Knotted as _};
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        for (verdict, copies) in [(copy as fn(Prices) -> Verdict, true), (pin, false)] {
+            let mut graph: CellGraph<'_, Step> = CellGraph::new(2, verdict);
+            let home = graph.create(None, None).unwrap();
+            let dest = graph.create(None, None).unwrap();
+            graph
+                .enter(home, |context| {
+                    let writer = context.writer();
+                    let source = ring(fixture, writer, KType::STR, &[Some(text_in(writer)), None]);
+                    let carrier =
+                        context.lift::<ValueFamily<NodeFamily>>(Holding::Knotted(source[0]));
+                    let crossed = cross(context, dest, &carrier).unwrap();
+                    let Holding::Knotted(copied) = context.read(&crossed).value() else {
+                        panic!("a knot member crosses as a knot member");
+                    };
+                    let equal = Holding::Knotted(copied).equals(
+                        &Holding::Knotted(source[0]),
+                        types,
+                        scratch,
+                    );
+                    assert_eq!(equal, Ok(true));
+                    if !copies {
+                        assert!(copied == source[0], "a pin is the same node");
+                        return;
+                    }
+                    assert!(copied != source[0], "a copy is a new knot");
+                    let edge = |member: super::Node<'_, '_>| {
+                        let Some((_, Circular::Tagged(tagged))) =
+                            Holding::Knotted(member).as_circular()
+                        else {
+                            panic!("a ring member is a tagged node");
+                        };
+                        match tagged.payload() {
+                            Link::Edge(edge) => *edge,
+                            Link::Value(_) => panic!("a ring payload is an edge"),
+                        }
+                    };
+                    assert_eq!(edge(copied), edge(source[0]), "edges carry verbatim");
+                    assert_eq!(copied.ktype(), source[0].ktype());
+                })
+                .unwrap();
+            graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+            graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+            assert!(graph.is_empty());
+        }
+    });
+}
+
+fn text_in<'graph, 'cell>(writer: crate::memory::Writer<'cell>) -> super::Holding<'graph, 'cell> {
+    crate::values::text(writer, "held")
 }

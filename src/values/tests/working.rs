@@ -6,9 +6,9 @@ use std::ptr;
 use crate::parse::{BinderSymbol, ExpressionPart, KeyElement, PartClass, classify_dispatch_shape};
 use crate::source::{Span, Spanned};
 use crate::type_lattice::{KKind, KType};
-use crate::values::{WorkingExpression, WorkingPart, admits, admits_part, part_ktype, text};
+use crate::values::{admits, admits_part, part_ktype};
 
-use super::{pin, with_fixture};
+use super::{WorkingExpression, WorkingPart, pin, text, with_fixture};
 
 #[test]
 fn a_working_copy_carries_the_parsed_cache() {

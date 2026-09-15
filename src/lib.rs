@@ -10,12 +10,18 @@
 
 #[cfg(feature = "pending_rewrite")]
 pub mod builtins;
+/// Type expressions elaborated into lattice handles where they are read, and a callable's type
+/// read off its signature where it is born.
+pub mod elaborate;
 /// Guard-fixture surface for the fold-provenance `compile_fail` tests, which compile as
 /// external crates and so cannot name the `pub(crate)` fold machinery directly. Hidden from
 /// docs; not part of koan's real API.
 #[cfg(feature = "pending_rewrite")]
 #[doc(hidden)]
 pub mod fold_fixture;
+/// Functions as values: the callable a value's parameter closes over, a knot node born by the tie
+/// of its component and copied by re-tying its knot.
+pub mod function;
 #[cfg(feature = "pending_rewrite")]
 pub mod machine;
 /// The shape of things in storage: the cell tier over `cellgraph` — its names under Koan's

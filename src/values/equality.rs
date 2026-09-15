@@ -3,69 +3,155 @@
 //! Containers compare their contents only when their memoized types are related, one satisfied by
 //! the other in either direction; an unrelated pair is unequal without descending. That makes `==`
 //! intransitive across ascriptions by design.
+//!
+//! A function has no structural equality: a comparison that reaches one on either side is
+//! [`Incomparable`], which the `==` builtin reports, never `false`.
+//!
+//! Two data nodes of knots compare as a bisimulation: a node pair is recorded before its cells are
+//! compared, and a recorded pair met again counts as equal. See
+//! [README.md § Equality and rendering](README.md#equality-and-rendering) for why that is sound.
 
-use crate::memory::BumpAllocator;
+use crate::memory::{BumpAllocator, BumpBackedSet, bump_set};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::type_lattice::{KType, TypeRegistry, satisfied_by};
 
-use super::Value;
+use super::circular::{Cells, Composite};
+use super::{Knotted, Value};
 
-impl Value<'_, '_> {
+/// A comparison reached a function.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Incomparable;
+
+impl<X: Knotted> Value<'_, '_, X> {
     /// Whether two values are equal. Numbers follow IEEE (`NaN != NaN`, `-0 == 0`); a tagged value
     /// compares its identity first, so it never equals its bare payload; two types are equal when
     /// they are the same handle; two quoted expressions compare as syntax, part by part with spans
-    /// ignored. The two sides may live at unrelated lifetimes.
-    pub fn equals(
+    /// ignored; a knot's data node compares as the plain value of its kind would, its cells read
+    /// through it. The two sides may live at unrelated lifetimes. A function on either side is
+    /// [`Incomparable`], and so is a pair of containers whose contents reach one; a container pair
+    /// with unrelated types is unequal without descending, whatever it holds. The node pairs a
+    /// comparison has entered are staged over `scratch`.
+    pub fn equals<Y: Knotted>(
         &self,
-        other: &Value<'_, '_>,
+        other: &Value<'_, '_, Y>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> bool {
-        let related = |left: KType, right: KType| {
-            satisfied_by(types, scratch, left, right) || satisfied_by(types, scratch, right, left)
-        };
-        match (self, other) {
-            (Value::Number(left), Value::Number(right)) => left == right,
-            (Value::Bool(left), Value::Bool(right)) => left == right,
-            (Value::Null, Value::Null) => true,
-            (Value::Str(left), Value::Str(right)) => left == right,
-            (Value::Expression(left), Value::Expression(right)) => expression_equal(left, right),
-            (Value::Type(left), Value::Type(right)) => left.handle() == right.handle(),
-            (Value::List(left), Value::List(right)) => {
-                related(left.ktype(), right.ktype())
-                    && cells_equal(left.cells(), right.cells(), types, scratch)
-            }
-            (Value::Dict(left), Value::Dict(right)) => {
-                related(left.ktype(), right.ktype())
-                    && left.keys() == right.keys()
-                    && cells_equal(left.cells(), right.cells(), types, scratch)
-            }
-            (Value::Record(left), Value::Record(right)) => {
-                related(left.ktype(), right.ktype())
-                    && left.names() == right.names()
-                    && cells_equal(left.cells(), right.cells(), types, scratch)
-            }
-            (Value::Tagged(left), Value::Tagged(right)) => {
-                left.ktype() == right.ktype()
-                    && left.payload().equals(right.payload(), types, scratch)
-            }
-            _ => false,
+    ) -> Result<bool, Incomparable> {
+        let mut seen = bump_set(scratch);
+        self.equals_within(other, types, scratch, &mut seen)
+    }
+
+    /// [`equals`](Self::equals) under the node pairs already entered.
+    fn equals_within<Y: Knotted>(
+        &self,
+        other: &Value<'_, '_, Y>,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        seen: &mut BumpBackedSet<'_, (X, Y)>,
+    ) -> Result<bool, Incomparable> {
+        if self.as_callable().is_some() || other.as_callable().is_some() {
+            return Err(Incomparable);
         }
+        Ok(match (self.composite(), other.composite()) {
+            (Some((left_node, left)), Some((right_node, right))) => {
+                if let (Some(left_node), Some(right_node)) = (left_node, right_node)
+                    && !seen.insert((left_node, right_node))
+                {
+                    return Ok(true);
+                }
+                composite_equal(left, right, types, scratch, seen)?
+            }
+            (Some(_), None) | (None, Some(_)) => false,
+            (None, None) => match (self, other) {
+                (Value::Number(left), Value::Number(right)) => left == right,
+                (Value::Bool(left), Value::Bool(right)) => left == right,
+                (Value::Null, Value::Null) => true,
+                (Value::Str(left), Value::Str(right)) => left == right,
+                (Value::Expression(left), Value::Expression(right)) => {
+                    expression_equal(left, right)
+                }
+                (Value::Type(left), Value::Type(right)) => left.handle() == right.handle(),
+                _ => false,
+            },
+        })
     }
 }
 
-/// Two aligned runs of cells, equal in length and pairwise.
-fn cells_equal(
-    left: &[Value<'_, '_>],
-    right: &[Value<'_, '_>],
+/// Two composites of one kind: related types, then keys, names or identity, then the cells.
+fn composite_equal<X: Knotted, Y: Knotted>(
+    left: Composite<'_, X>,
+    right: Composite<'_, Y>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(left, right)| left.equals(right, types, scratch))
+    seen: &mut BumpBackedSet<'_, (X, Y)>,
+) -> Result<bool, Incomparable> {
+    let related = |left: KType, right: KType| {
+        satisfied_by(types, scratch, left, right) || satisfied_by(types, scratch, right, left)
+    };
+    Ok(match (left, right) {
+        (
+            Composite::List { ktype, cells },
+            Composite::List {
+                ktype: other,
+                cells: others,
+            },
+        ) => related(ktype, other) && cells_equal(cells, others, types, scratch, seen)?,
+        (
+            Composite::Dict { ktype, keys, cells },
+            Composite::Dict {
+                ktype: other,
+                keys: other_keys,
+                cells: others,
+            },
+        ) => {
+            related(ktype, other)
+                && keys == other_keys
+                && cells_equal(cells, others, types, scratch, seen)?
+        }
+        (
+            Composite::Record {
+                ktype,
+                names,
+                cells,
+            },
+            Composite::Record {
+                ktype: other,
+                names: other_names,
+                cells: others,
+            },
+        ) => {
+            related(ktype, other)
+                && names == other_names
+                && cells_equal(cells, others, types, scratch, seen)?
+        }
+        (
+            Composite::Tagged { ktype, payload },
+            Composite::Tagged {
+                ktype: other,
+                payload: other_payload,
+            },
+        ) => ktype == other && payload.equals_within(&other_payload, types, scratch, seen)?,
+        _ => false,
+    })
+}
+
+/// Two aligned runs of cells, equal in length and pairwise. The first incomparable pair decides,
+/// even past an unequal one, so whether a comparison reaches a function does not depend on order.
+fn cells_equal<X: Knotted, Y: Knotted>(
+    left: Cells<'_, X>,
+    right: Cells<'_, Y>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    seen: &mut BumpBackedSet<'_, (X, Y)>,
+) -> Result<bool, Incomparable> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    let mut equal = true;
+    for (left, right) in left.iter().zip(right.iter()) {
+        equal &= left.equals_within(&right, types, scratch, seen)?;
+    }
+    Ok(equal)
 }
 
 /// Quoted code as syntax: the same parts in the same order. A literal compares by what was written

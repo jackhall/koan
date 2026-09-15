@@ -42,9 +42,9 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 ## The pending rewrite
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
-`memory`, `parse`, `scope`, `source`, `type_lattice`, `values` and the embedded crates
-`cellgraph` and `sexlex` — are what a default koan build compiles and a default `cargo test`
-runs. `workgraph` is no longer a koan dependency; it still builds and tests as a
+`memory`, `parse`, `scope`, `source`, `type_lattice`, `values`, `elaborate`,
+`function` and the embedded crates `cellgraph` and `sexlex` — are what a default
+koan build compiles and a default `cargo test` runs. `workgraph` is no longer a koan dependency; it still builds and tests as a
 workspace member. Everything above the kept modules — `machine`, `builtins`, the
 interpreter binary, the guard fixtures and every `tests/*.rs` integration binary —
 sits behind the `pending_rewrite` cargo feature, and **that build no longer
@@ -138,8 +138,9 @@ and nothing is re-derived from the source. `MODULE` and operator bodies are not 
 [`src/scope/tests/examples.rs`](src/scope/tests/examples.rs) covers `MODULE` by example.
 [`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds six laws:
 
-- a planned program shapes back into its plan: kinds, layouts, components, one mention per planned
-  read with its class, statement and landing, nested scopes, and which captures are knot edges;
+- a planned program shapes back into its plan: kinds, layouts, components and whether each is
+  cyclic, one mention per planned read with its class, statement and landing, nested scopes, and
+  which captures are knot edges;
 - a plan with exactly one refusal injected (an eager cycle, an eager read ahead, an undeclared
   name, a rebind, a shadowed builtin) is refused with that refusal;
 - a name re-declared inside a nested scope takes the reads nearest it;
@@ -201,13 +202,13 @@ details and tuning lives in
 
 The audit slate is the load-bearing memory-safety check. It runs the safe
 koan code that drives every unsafe site the kept modules reach — `cellgraph`'s
-`Writer::fill` and reattach seam, and `bumpalo`'s allocator under the bump tier
-— under Miri's tree-borrows mode, with zero process-exit leaks and zero
-UB required for sign-off. One site is left to the library's slate alone:
-`Writer::thin_run`, which `memory`'s knot lays its nodes down with, since the
-knot adds no layout or retype over it for a koan test to pin (cellgraph's slate
-runs it at every edge its arithmetic has, including a fill writing into the
-same region). `src/` carries no `unsafe` at all — koan's only
+`Writer::fill`, `Writer::thin_run` and reattach seam, and `bumpalo`'s allocator
+under the bump tier — under Miri's tree-borrows mode, with zero process-exit
+leaks and zero UB required for sign-off. `memory`'s knot adds no layout or
+retype over `thin_run` (cellgraph's slate runs it at every edge its arithmetic
+has, including a fill writing into the same region); what koan's slate pins is
+`function`'s copy of a knot, whose node run is filled while closure runs, data
+node residents and deep copies are written into the same region. `src/` carries no `unsafe` at all — koan's only
 `unsafe` is the counting global allocator in
 [`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding
 outside the tree the slate audit censuses (`tools/observe_tests.py` walks `src/`

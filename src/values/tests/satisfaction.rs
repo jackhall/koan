@@ -2,9 +2,9 @@
 //! reads a quantifier.
 
 use crate::type_lattice::{KKind, KType};
-use crate::values::{List, Tagged, TypeValue, Value, satisfies, text};
+use crate::values::{TypeValue, satisfies};
 
-use super::{pin, with_fixture};
+use super::{List, Tagged, Value, pin, text, with_fixture};
 
 #[test]
 fn leaves_any_and_never_answer_by_the_order() {
@@ -131,6 +131,21 @@ fn a_quantified_slot_admits_by_unification() {
                 types,
                 scratch
             ));
+        })
+    });
+}
+
+#[test]
+fn a_circular_value_satisfies_by_its_node_memo() {
+    use super::{Holding, ring};
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let ring_type = fixture.ring_type("Ring", "next");
+        fixture.in_cell(pin, |context| {
+            let member = Holding::Knotted(ring(fixture, context.writer(), ring_type, &[None])[0]);
+            assert!(satisfies(ring_type, &member, types, scratch));
+            assert!(satisfies(KType::ANY, &member, types, scratch));
+            assert!(!satisfies(KType::NUMBER, &member, types, scratch));
         })
     });
 }

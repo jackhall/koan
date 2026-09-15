@@ -29,8 +29,8 @@ pub mod substrate;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use bump::bump_table;
-pub use bump::{Bump, BumpAllocator, BumpBackedMap, BumpVec};
+pub use bump::{Bump, BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec};
+pub(crate) use bump::{bump_set, bump_table};
 pub use components::strongly_connected_components;
 pub use knot::{Edge, Knot, KnotPlan, Member};
 pub use program::{ProgramBrand, ProgramStorage, program_storage};

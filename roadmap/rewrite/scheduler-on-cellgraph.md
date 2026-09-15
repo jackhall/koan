@@ -39,10 +39,11 @@ rewrite can restate; it is a record of what the old substrate required.
 - A deferred-only component of a body's bindings
   ([src/scope/README.md](../../src/scope/README.md#visibility)) is one unit of
   work: one cell claims every member's slot at submission, a refused tie
-  ([Function values](function-values.md)) naming a pending binder becomes a
-  dep edge on that binder's cell and the step re-runs when it delivers, and
-  the one tie that succeeds binds every member's slot from the knot it hands
-  back.
+  ([src/function/README.md](../../src/function/README.md#the-tie)) naming a pending binder becomes a
+  dep edge on that binder's cell and the step re-runs when it delivers, a
+  refused tie naming an eager part of a data member becomes a sub-dispatch
+  whose value the step supplies to the tie by site when it re-runs, and the
+  one tie that succeeds binds every member's slot from the knot it hands back.
 - The embedder contract names no Koan type: the scheduler's tests exercise it
   with a workload of its own, and its Miri slate is clean.
 

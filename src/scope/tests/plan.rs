@@ -23,7 +23,7 @@ use super::{type_name, value_name};
 
 /// A plan's generated choices. An exhausted stream always chooses `0`, the simplest option, so
 /// shrinking the stream shrinks the plan.
-pub(super) fn choices() -> impl Strategy<Value = Vec<u32>> {
+pub(crate) fn choices() -> impl Strategy<Value = Vec<u32>> {
     proptest::collection::vec(any::<u32>(), 0..512)
 }
 
@@ -1301,6 +1301,11 @@ struct Renderer<'p> {
     out: Rendering<'p>,
     scope: usize,
     statement: u32,
+}
+
+/// The source of the program `choices` plans — what a suite above `scope` runs a plan as.
+pub(crate) fn program_source(choices: &[u32]) -> String {
+    render_program(&Generator::new(choices).program()).source
 }
 
 /// A program's source: one line per statement.
