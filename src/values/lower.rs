@@ -4,9 +4,9 @@ use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::parse::{ExpressionPart, KLiteral};
 use crate::type_lattice::TypeRegistry;
 
-use super::{Callable, Dict, Key, List, Record, Value, text};
+use super::{Dict, Key, Knotted, List, Record, Value, text};
 
-impl<'graph, 'cell, X: Callable> Value<'graph, 'cell, X> {
+impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
     /// The value a region-pure part denotes: a scalar or string literal, a quote, or a container
     /// literal whose every element lowers and whose every dict key is a scalar literal. `None` for a
     /// part that needs dispatch or a scope — a name, a parenthesized expression, a sigiled type
@@ -46,7 +46,7 @@ fn lowers(part: &ExpressionPart<'_>) -> bool {
 }
 
 /// The value of a part [`lowers`] took.
-fn lower<'graph, 'cell, X: Callable>(
+fn lower<'graph, 'cell, X: Knotted>(
     writer: Writer<'cell>,
     part: &ExpressionPart<'graph>,
     types: &TypeRegistry<'_>,

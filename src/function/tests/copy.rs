@@ -8,18 +8,18 @@ use std::ptr;
 
 use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::scope::{Capture, CaptureSlot};
-use crate::values::{Callable as _, Value, cross};
+use crate::values::{Knotted as _, Value, cross};
 
-use super::super::{Callable, KValue, KValueFamily};
+use super::super::{KValue, KValueFamily, Knotted};
 use super::{Fixture, Step, callable, copy, with_fixture};
 
 /// The capture `name` of `callable`'s closure.
 fn capture<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
-    callable: Callable<'graph, 'cell>,
+    callable: Knotted<'graph, 'cell>,
     name: &str,
-) -> Capture<'graph, 'cell, Callable<'graph, 'cell>> {
-    let function = callable.function();
+) -> Capture<'graph, 'cell, Knotted<'graph, 'cell>> {
+    let function = callable.function().expect("a function");
     let name = fixture.name(name);
     let index = function
         .shape()
@@ -32,7 +32,7 @@ fn capture<'graph, 'cell>(
 
 fn captured_value<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
-    callable: Callable<'graph, 'cell>,
+    callable: Knotted<'graph, 'cell>,
     name: &str,
 ) -> KValue<'graph, 'cell> {
     match capture(fixture, callable, name) {
@@ -43,9 +43,9 @@ fn captured_value<'graph, 'cell>(
 
 fn captured_sibling<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
-    callable: Callable<'graph, 'cell>,
+    callable: Knotted<'graph, 'cell>,
     name: &str,
-) -> Callable<'graph, 'cell> {
+) -> Knotted<'graph, 'cell> {
     match capture(fixture, callable, name) {
         Capture::Edge(edge) => callable.sibling(edge),
         Capture::Value(_) => panic!("`{name}` is captured as an edge"),
@@ -70,9 +70,9 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
             .enter(home, |context| {
                 let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
                 let g = callable(fixture, activation, "g");
-                let source = context.lift::<KValueFamily>(Value::Callable(g));
+                let source = context.lift::<KValueFamily>(Value::Knotted(g));
                 let crossed = cross(context, dest, &source).unwrap();
-                let Value::Callable(copied) = context.read(&crossed).value() else {
+                let Value::Knotted(copied) = context.read(&crossed).value() else {
                     panic!("a callable crosses as a callable");
                 };
                 assert!(!ptr::eq(copied.node(), g.node()), "a copy is a new knot");
@@ -80,7 +80,10 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                 assert_eq!(copied.member().index(), g.member().index());
                 assert_eq!(copied.ktype(), g.ktype());
                 assert_eq!(copied.weight(), g.weight());
-                assert!(ptr::eq(copied.function().shape(), g.function().shape()));
+                assert!(ptr::eq(
+                    copied.function().expect("a function").shape(),
+                    g.function().expect("a function").shape()
+                ));
 
                 let (f, copied_f) = (
                     captured_sibling(fixture, g, "f"),
@@ -133,7 +136,7 @@ fn a_copied_knot_outlives_its_home() {
             .enter(home, |context| {
                 let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
                 let f = callable(fixture, activation, "f");
-                let source = context.lift::<KValueFamily>(Value::Callable(f));
+                let source = context.lift::<KValueFamily>(Value::Knotted(f));
                 let crossed = cross(context, dest, &source).unwrap();
                 context.keep(crossed)
             })
@@ -142,7 +145,7 @@ fn a_copied_knot_outlives_its_home() {
         graph
             .enter(dest, |context| {
                 let carrier = context.redeem(dormant).unwrap();
-                let Value::Callable(f) = context.read(&carrier).value() else {
+                let Value::Knotted(f) = context.read(&carrier).value() else {
                     panic!("the kept callable redeems as a callable");
                 };
                 let g = captured_sibling(fixture, f, "g");

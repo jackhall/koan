@@ -134,3 +134,18 @@ fn a_quantified_slot_admits_by_unification() {
         })
     });
 }
+
+#[test]
+fn a_circular_value_satisfies_by_its_node_memo() {
+    use super::{Holding, ring};
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let ring_type = fixture.ring_type("Ring", "next");
+        fixture.in_cell(pin, |context| {
+            let member = Holding::Knotted(ring(fixture, context.writer(), ring_type, &[None])[0]);
+            assert!(satisfies(ring_type, &member, types, scratch));
+            assert!(satisfies(KType::ANY, &member, types, scratch));
+            assert!(!satisfies(KType::NUMBER, &member, types, scratch));
+        })
+    });
+}

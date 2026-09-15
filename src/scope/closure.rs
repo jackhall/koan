@@ -8,7 +8,7 @@
 
 use crate::memory::{BumpAllocator, BumpVec, CellHandle, Edge, Writer, collect, resident};
 use crate::parse::BinderSymbol;
-use crate::values::{Callable, Value, Weight};
+use crate::values::{Knotted, Value, Weight};
 
 use super::activation::{Activation, Binding};
 use super::shape::{CaptureSlot, CaptureSource, Shape};
@@ -33,7 +33,7 @@ pub struct ClosureRefused {
     pub pending: CellHandle,
 }
 
-impl<'graph, 'cell, X: Callable> ClosureBindings<'graph, 'cell, X> {
+impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
     /// The bindings of a shape that captures nothing — a program's, a block's.
     pub fn empty() -> &'cell ClosureBindings<'graph, 'cell, X> {
         &ClosureBindings { slots: &[] }
@@ -81,7 +81,7 @@ impl<'graph, 'cell, X: Callable> ClosureBindings<'graph, 'cell, X> {
 
     /// These bindings rebuilt in `writer`'s region: each value through `copy`, each edge verbatim —
     /// an edge names a node by index, so it means the same in a copy of its knot.
-    pub fn copied<'to, Y: Callable>(
+    pub fn copied<'to, Y: Knotted>(
         &self,
         writer: Writer<'to>,
         mut copy: impl FnMut(&Value<'graph, 'cell, X>) -> Value<'graph, 'to, Y>,

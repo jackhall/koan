@@ -1,5 +1,5 @@
-//! Slot admission: whether a type slot takes a value, a raw AST part, or a working part — and the
-//! type dispatch reads off a raw part.
+//! Slot admission: whether a type slot takes a value, a raw AST part, or a working part — the type
+//! dispatch reads off a raw part — and the one rule a newtype construction is checked by.
 //!
 //! A value is checked by the one lattice relation over its memoized type, never by walking its
 //! contents. A raw part is checked by shape, since an unevaluated literal has no value yet.
@@ -7,16 +7,17 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KLiteral};
 use crate::type_lattice::{
-    Collector, KKind, KType, TypeNode, TypeRegistry, Variance, admits_with, join, satisfied_by,
+    Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with, join,
+    satisfied_by,
 };
 
-use super::{Callable, Value, WorkingPart};
+use super::{Knotted, Value, WorkingPart};
 
 /// Whether `slot` takes `value`: one relation over the value's memoized type. A slot reading a
 /// quantifier admits by unification against that type under a fresh collector, which checks the
 /// shape alone: a variable's bound, and two slots of one call agreeing on it, are what the caller's
 /// own collector checks when it solves.
-pub fn satisfies<X: Callable>(
+pub fn satisfies<X: Knotted>(
     slot: KType,
     value: &Value<'_, '_, X>,
     types: &TypeRegistry<'_>,
@@ -28,6 +29,45 @@ pub fn satisfies<X: Callable>(
         return admits_with(types, scratch, slot, carried, Variance::Co, &mut collector).is_ok();
     }
     satisfied_by(types, scratch, slot, carried)
+}
+
+/// What a newtype construction `(Head payload)` refuses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstructionRefused {
+    /// The head names no newtype: not a declared nominal, or one whose schema is a type constructor.
+    NotNewType(KType),
+    /// The payload's type does not satisfy the newtype's representation.
+    Misfit {
+        identity: KType,
+        representation: KType,
+    },
+}
+
+/// The identity a construction whose head denotes `head` produces over a payload of type `payload`:
+/// `head` itself, when it is a newtype whose representation `payload` satisfies. Every construction
+/// is checked here — an ordinary one through [`Tagged::construct`](super::Tagged::construct), a
+/// knot's tagged node by the tie over its derived payload type.
+pub fn construction(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    head: KType,
+    payload: KType,
+) -> Result<KType, ConstructionRefused> {
+    let TypeNode::SetMember {
+        schema: NodeSchema::NewType(representation),
+        ..
+    } = types.node(head)
+    else {
+        return Err(ConstructionRefused::NotNewType(head));
+    };
+    if satisfied_by(types, scratch, representation, payload) {
+        Ok(head)
+    } else {
+        Err(ConstructionRefused::Misfit {
+            identity: head,
+            representation,
+        })
+    }
 }
 
 /// The type dispatch matches a raw part on, and the one a diagnostic naming the slot renders. `None`
@@ -130,7 +170,7 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
 
 /// Whether `slot` takes a working part: an AST part by shape, a spliced value by its type. A node
 /// the scheduler synthesized and a staging hole denote no value yet, so only an `Any` slot takes one.
-pub fn admits<X: Callable>(
+pub fn admits<X: Knotted>(
     slot: KType,
     part: &WorkingPart<'_, '_, X>,
     types: &TypeRegistry<'_>,

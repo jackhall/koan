@@ -247,3 +247,100 @@ fn lowering_builds_nested_literals_and_quotes_and_refuses_names() {
         })
     });
 }
+
+#[test]
+fn each_linked_door_stores_its_memo_and_weighs_its_links() {
+    use super::{Link, Node};
+    use crate::memory::KnotPlan;
+    type LinkedList =
+        crate::values::List<'static, 'static, Node<'static, 'static>, Link<'static, 'static>>;
+    type LinkedTagged =
+        crate::values::Tagged<'static, 'static, Node<'static, 'static>, Link<'static, 'static>>;
+    with_fixture(|fixture| {
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
+            let edge = Link::Edge(KnotPlan::new(1).edge(0).unwrap());
+            let link = Weight::flat::<Link<'static, 'static>>();
+            let word = Link::Value(crate::values::text(writer, "abc"));
+            let memo = types.list(KType::STR);
+
+            let list = crate::values::List::linked(writer, &[word, edge], memo);
+            assert_eq!(list.ktype(), memo);
+            assert_eq!(
+                list.weight(),
+                Weight::flat::<LinkedList>()
+                    .plus(link)
+                    .plus(link)
+                    .plus(Weight::text(3))
+            );
+
+            let entries = [(Key::str("k"), edge), (Key::str("k"), word)];
+            let dict = crate::values::Dict::linked(writer, &entries, memo, scratch);
+            assert_eq!((dict.ktype(), dict.len()), (memo, 1));
+            assert!(
+                matches!(dict.get(&Key::str("k")), Some(Link::Value(_))),
+                "the last key wins"
+            );
+
+            let (y, x) = (
+                BinderSymbol::declared("y", labels).unwrap(),
+                BinderSymbol::declared("x", labels).unwrap(),
+            );
+            let record =
+                crate::values::Record::linked(writer, &[(y, edge), (x, word)], memo, scratch);
+            assert!(record.names().is_sorted());
+            assert!(matches!(record.field(y.symbol()), Some(Link::Edge(_))));
+
+            let tagged = crate::values::Tagged::linked(writer, word, KType::STR);
+            assert_eq!(tagged.ktype(), KType::STR);
+            assert_eq!(
+                tagged.weight(),
+                Weight::flat::<LinkedTagged>().plus(Weight::text(3))
+            );
+        })
+    });
+}
+
+#[test]
+fn a_newtype_construction_is_checked_against_its_representation() {
+    use crate::values::{ConstructionRefused, construction};
+    with_fixture(|fixture| {
+        let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
+        let ring = fixture.ring_type("Ring", "next");
+        let distance = fixture.newtype("Distance", KType::NUMBER);
+        let next = BinderSymbol::declared("next", labels).unwrap();
+        let other = BinderSymbol::declared("other", labels).unwrap();
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let head = |handle| TypeValue::new(writer, handle, types);
+            let inner = Value::Tagged(Tagged::hold(writer, Value::Null, ring));
+            let fitting = Value::Record(Record::new(writer, &[(next, inner)], types, scratch));
+            let built = Tagged::construct(writer, head(ring), fitting, types, scratch).unwrap();
+            assert_eq!(built.ktype(), ring);
+            assert_eq!(
+                construction(types, scratch, ring, fitting.ktype()),
+                Ok(ring)
+            );
+            let three =
+                Tagged::construct(writer, head(distance), Value::Number(3.0), types, scratch);
+            assert_eq!(three.map(|tagged| tagged.ktype()), Ok(distance));
+
+            assert_eq!(
+                Tagged::construct(writer, head(KType::NUMBER), fitting, types, scratch).err(),
+                Some(ConstructionRefused::NotNewType(KType::NUMBER))
+            );
+            let misfit = Value::Record(Record::new(writer, &[(other, inner)], types, scratch));
+            let Err(ConstructionRefused::Misfit { identity, .. }) =
+                Tagged::construct(writer, head(ring), misfit, types, scratch)
+            else {
+                panic!("a payload of another record type misfits");
+            };
+            assert_eq!(identity, ring);
+            assert!(matches!(
+                construction(types, scratch, distance, KType::STR),
+                Err(ConstructionRefused::Misfit { .. })
+            ));
+        })
+    });
+}

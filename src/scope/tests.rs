@@ -7,15 +7,13 @@ mod examples;
 pub(crate) mod plan;
 mod properties;
 
-use std::fmt;
-
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, CellHandle, Edge, ProgramBrand, ReleaseAbsorption, SlabHandle,
     Verdict, Writer, program_storage, reattachable,
 };
 use crate::parse::{KExpression, LabelInterner, TypeSymbol, ValueSymbol, parse};
 use crate::type_lattice::{KType, TypeRegistry};
-use crate::values::{Callable, TypeValue, Value, Weight};
+use crate::values::{Knotted, Resolved, TypeValue, Value, Weight};
 
 use super::Builtins;
 
@@ -23,12 +21,12 @@ use super::Builtins;
 struct Step;
 reattachable!(Step => ());
 
-/// A stand-in callable: the index of the knot member it is, so a read through an edge capture is
+/// A stand-in function: the index of the knot member it is, so a read through an edge capture is
 /// observable without a function layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Probe(pub u32);
 
-impl Callable for Probe {
+impl Knotted for Probe {
     fn ktype(&self) -> KType {
         KType::ANY
     }
@@ -37,17 +35,12 @@ impl Callable for Probe {
         Weight::ZERO
     }
 
-    fn render(
-        &self,
-        out: &mut impl fmt::Write,
-        _: &TypeRegistry<'_>,
-        _: &LabelInterner,
-    ) -> fmt::Result {
-        write!(out, "probe {}", self.0)
-    }
-
     fn sibling(&self, edge: Edge) -> Self {
         Probe(edge.index())
+    }
+
+    fn resolve<'a>(&self) -> Resolved<'a, Self> {
+        Resolved::Function
     }
 }
 
@@ -122,7 +115,7 @@ pub(super) fn type_name(text: &str, labels: &LabelInterner) -> TypeSymbol {
 }
 
 /// The suites' builtin table: `origin = 0` and the scalar types, laid down in `writer`'s region.
-pub(super) fn builtins<'graph, 'cell, X: Callable>(
+pub(super) fn builtins<'graph, 'cell, X: Knotted>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
 ) -> &'cell Builtins<'graph, 'cell, X> {

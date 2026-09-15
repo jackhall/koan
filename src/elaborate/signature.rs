@@ -7,7 +7,7 @@ use crate::parse::forms::binder::symbol_from_quote_body;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{Activation, BodyKind, Role, Site, roles};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
-use crate::values::Callable;
+use crate::values::Knotted;
 
 use super::Elaboration;
 use super::expression::{Elaborator, Groups, quantifiers};
@@ -20,7 +20,7 @@ use super::expression::{Elaborator, Groups, quantifiers};
 /// `FOR ALL` names. A binary `OP` is the shape `operand <symbol> operand`, returning its declared
 /// result or else its operand, since a chain of it folds; a `UNARY OP` is the shape `<symbol>
 /// operands`, over a list of its operand, since its body takes the whole run.
-pub fn callable_type<'graph, X: Callable>(
+pub fn callable_type<'graph, X: Knotted>(
     form: &KExpression<'graph>,
     reader: &Activation<'graph, '_, X>,
     types: &TypeRegistry<'_>,

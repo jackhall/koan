@@ -14,7 +14,7 @@ use crate::scope::{Capture, ClosureBindings, ClosureRefused, Component, Shape};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::Weight;
 
-use super::{Callable, Function, KActivation, Node};
+use super::{Function, KActivation, Knotted, Node};
 
 /// Why a component could not be tied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,7 +35,7 @@ pub enum Untieable {
 struct Staged<'graph, 'cell, 'x> {
     shape: &'graph Shape<'graph>,
     ktype: KType,
-    captures: BumpVec<'x, Capture<'graph, 'cell, Callable<'graph, 'cell>>>,
+    captures: BumpVec<'x, Capture<'graph, 'cell, Knotted<'graph, 'cell>>>,
 }
 
 /// Tie `component` of `activation`'s shape as one knot in `writer`'s region: every member born
@@ -123,10 +123,10 @@ fn stage<'graph, 'cell, 'x>(
     Ok(staged)
 }
 
-impl<'graph, 'cell> Callable<'graph, 'cell> {
+impl<'graph, 'cell> Knotted<'graph, 'cell> {
     /// The callable at node `index` of a knot [`tie`] laid down — member `index` of its component.
     pub fn of(knot: Knot<'cell, Node<'graph, 'cell>>, index: usize) -> Self {
-        Callable(
+        Knotted(
             knot.members()
                 .nth(index)
                 .expect("a member index is below the knot's count"),

@@ -11,9 +11,9 @@ use crate::memory::{CellGraph, Edge, ReleaseAbsorption, Writer, resident};
 use crate::parse::BinderSymbol;
 use crate::scope::{Binding, Capture, CaptureSlot, CaptureSource, ShapeKind, Slot};
 use crate::type_lattice::KType;
-use crate::values::{Callable as _, TypeValue, Value, cross};
+use crate::values::{Knotted as _, TypeValue, Value, cross};
 
-use super::super::{Callable, KActivation, KValue, KValueFamily, Untieable, tie};
+use super::super::{KActivation, KValue, KValueFamily, Knotted, Untieable, tie};
 use super::{Fixture, Step, copy, with_fixture};
 use crate::scope::tests::plan;
 
@@ -22,7 +22,7 @@ fn same(left: KValue<'_, '_>, right: KValue<'_, '_>) -> bool {
     match (left, right) {
         (Value::Number(left), Value::Number(right)) => left.to_bits() == right.to_bits(),
         (Value::Type(left), Value::Type(right)) => left.handle() == right.handle(),
-        (Value::Callable(left), Value::Callable(right)) => ptr::eq(left.node(), right.node()),
+        (Value::Knotted(left), Value::Knotted(right)) => ptr::eq(left.node(), right.node()),
         (left, right) => {
             panic!("a planned binding is a number, a type or a callable: {left:?}, {right:?}")
         }
@@ -33,9 +33,11 @@ fn same(left: KValue<'_, '_>, right: KValue<'_, '_>) -> bool {
 /// same node of a knot of the same body.
 fn rebuilt(original: KValue<'_, '_>, copied: KValue<'_, '_>) -> bool {
     match (original, copied) {
-        (Value::Callable(original), Value::Callable(copied)) => {
-            ptr::eq(original.function().shape(), copied.function().shape())
-                && original.member().index() == copied.member().index()
+        (Value::Knotted(original), Value::Knotted(copied)) => {
+            ptr::eq(
+                original.function().expect("a function").shape(),
+                copied.function().expect("a function").shape(),
+            ) && original.member().index() == copied.member().index()
                 && original.member().knot().len() == copied.member().knot().len()
         }
         (original, copied) => same(original, copied),
@@ -66,10 +68,10 @@ fn run<'graph, 'cell>(
     writer: Writer<'cell>,
     activation: &'cell KActivation<'graph, 'cell>,
     next: &mut f64,
-    tied: &mut Vec<Callable<'graph, 'cell>>,
+    tied: &mut Vec<Knotted<'graph, 'cell>>,
 ) {
     let shape = activation.shape();
-    let mut born: Vec<(Slot, Callable<'graph, 'cell>)> = Vec::new();
+    let mut born: Vec<(Slot, Knotted<'graph, 'cell>)> = Vec::new();
     for component in shape.components() {
         let births = component
             .members
@@ -98,9 +100,9 @@ fn run<'graph, 'cell>(
         let knot = outcome.expect("a component of callable binders ties");
         assert_eq!(knot.len() as usize, component.members.len());
         for (index, slot) in component.members.iter().enumerate() {
-            let callable = Callable::of(knot, index);
+            let callable = Knotted::of(knot, index);
             let body = shape.births(*slot).expect("every member births");
-            let function = callable.function();
+            let function = callable.function().expect("a function");
             assert!(ptr::eq(function.shape(), body));
             assert_eq!(function.closure().len(), body.captures().len());
             for (at, spec) in body.captures().iter().enumerate() {
@@ -124,7 +126,7 @@ fn run<'graph, 'cell>(
         }
         for (slot, callable) in &born[born.len() - component.members.len()..] {
             activation
-                .bind(*slot, Value::Callable(*callable))
+                .bind(*slot, Value::Knotted(*callable))
                 .expect("a fresh slot binds");
         }
     }
@@ -133,14 +135,13 @@ fn run<'graph, 'cell>(
         let nested_activation = match nested.kind() {
             ShapeKind::Block => KActivation::of_block(writer, nested, activation),
             ShapeKind::Callable => {
-                let Some((_, callable)) = born
-                    .iter()
-                    .find(|(_, callable)| ptr::eq(callable.function().shape(), *nested))
-                else {
+                let Some((_, callable)) = born.iter().find(|(_, callable)| {
+                    ptr::eq(callable.function().expect("a function").shape(), *nested)
+                }) else {
                     // A function value that is no binder's right-hand side: born by no tie.
                     continue;
                 };
-                let function = callable.function();
+                let function = callable.function().expect("a function");
                 KActivation::of_callable(
                     writer,
                     nested,
@@ -187,22 +188,22 @@ proptest! {
                     run(fixture, writer, activation, &mut 0.0, &mut tied);
 
                     for original in tied {
-                        let carrier = context.lift::<KValueFamily>(Value::Callable(original));
+                        let carrier = context.lift::<KValueFamily>(Value::Knotted(original));
                         let crossed = cross(context, dest, &carrier).unwrap();
-                        let Value::Callable(copied) = context.read(&crossed).value() else {
+                        let Value::Knotted(copied) = context.read(&crossed).value() else {
                             panic!("a callable crosses as a callable");
                         };
                         assert!(!ptr::eq(copied.node(), original.node()), "`{source}`");
-                        assert!(rebuilt(Value::Callable(original), Value::Callable(copied)));
+                        assert!(rebuilt(Value::Knotted(original), Value::Knotted(copied)));
                         assert_eq!(copied.weight(), original.weight());
                         for node in 0..original.member().knot().len() {
-                            let edge = |callable: Callable<'_, '_>| {
+                            let edge = |callable: Knotted<'_, '_>| {
                                 callable.member().knot().members().nth(node as usize).unwrap().index()
                             };
                             let (before, after): (Edge, Edge) = (edge(original), edge(copied));
                             let (before, after) = (original.sibling(before), copied.sibling(after));
                             assert_eq!(before.ktype(), after.ktype());
-                            let (before, after) = (before.function().closure(), after.function().closure());
+                            let (before, after) = (before.function().expect("a function").closure(), after.function().expect("a function").closure());
                             assert_eq!(before.len(), after.len());
                             for at in 0..before.len() {
                                 match (before.get(CaptureSlot(at as u32)), after.get(CaptureSlot(at as u32))) {

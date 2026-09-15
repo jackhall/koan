@@ -2,9 +2,12 @@
 //!
 //! A [`Value`] is one `Copy` word: a scalar, a string or a quoted expression borrowed where it lives,
 //! or a borrow of a per-kind resident struct — [`List`], [`Dict`], [`Record`], [`Tagged`],
-//! [`TypeValue`] — or a callable, which `values` does not define: the arm holds a type parameter a
-//! layer above closes, and [`Callable`] and [`CallableFamily`] are what `values` asks of it. The
-//! parameter defaults to [`Nothing`], so a value spelled without it holds no callable. Every
+//! [`TypeValue`] — or a member of a knot, which `values` does not define: the arm holds a type
+//! parameter a layer above closes, and [`Knotted`] and [`KnottedFamily`] are what `values` asks of
+//! it. A member is a function, opaque here, or a data node — a [`Circular`] container or tagged
+//! value whose cells are [`Link`]s, each a value word or an edge to a sibling — which equality,
+//! rendering and the deep copy read through. The parameter defaults to [`Nothing`], so a value
+//! spelled without it holds no knot member. Every
 //! composite is born through a door that takes the region's
 //! [`Writer`](crate::memory::Writer), stores its type as a memoized lattice handle and its copy
 //! [`Weight`], and is `Drop`-free, so a region releases it whole.
@@ -24,9 +27,11 @@
 //! See [values/README.md](values/README.md).
 
 mod admission;
+mod circular;
 mod crossing;
 mod dict;
 mod equality;
+mod link;
 mod list;
 mod lower;
 mod record;
@@ -39,10 +44,14 @@ pub mod working;
 #[cfg(test)]
 mod tests;
 
-pub use admission::{admits, admits_part, part_ktype, satisfies};
+pub use admission::{
+    ConstructionRefused, admits, admits_part, construction, part_ktype, satisfies,
+};
+pub use circular::{Circular, Resolved};
 pub use crossing::{COPY_RATIO, cross, cross_here, verdict};
 pub use dict::{Dict, Key, KeyRejected};
 pub use equality::Incomparable;
+pub use link::Link;
 pub use list::List;
 pub use record::Record;
 pub use tagged::Tagged;
@@ -50,47 +59,47 @@ pub use type_value::TypeValue;
 pub use weight::Weight;
 pub use working::{WorkingExpression, WorkingPart};
 
-use std::fmt;
 use std::marker::PhantomData;
 
 use crate::memory::{DropFree, Edge, Ready, Writer, reattachable};
-use crate::parse::{LabelInterner, ProgramNode};
+use crate::parse::ProgramNode;
 use crate::type_lattice::{KType, TypeNode, TypeRegistry};
 
-/// What `values` asks of a closed callable at one region lifetime: its memoized type, what
-/// rebuilding it at a destination writes, its surface, and the fellow member an edge of its own
-/// names. A callable is `Copy`, so it carries no drop glue and may rest in a region.
-pub trait Callable: Copy {
+/// What `values` asks of a knot member at one region lifetime — a function or a data node of a
+/// knot: its memoized type, what rebuilding its knot at a destination writes, the fellow member an
+/// edge of its own names, and what the node holds. A member is `Copy`, so it carries no drop glue
+/// and may rest in a region, and its equality is node identity.
+pub trait Knotted: Copy + PartialEq {
     fn ktype(&self) -> KType;
 
-    /// The bytes a rebuild of this callable at a destination writes, past the value word holding it.
+    /// The bytes a rebuild of this member's knot at a destination writes, past the value word
+    /// holding it.
     fn weight(&self) -> Weight;
 
-    fn render(
-        &self,
-        out: &mut impl fmt::Write,
-        types: &TypeRegistry<'_>,
-        labels: &LabelInterner,
-    ) -> fmt::Result;
-
-    /// The callable `edge` names among this one's own siblings.
+    /// The member `edge` names among this one's own siblings.
     fn sibling(&self, edge: Edge) -> Self;
+
+    /// What the node holds: a function, opaque to `values`, or a data node read through its cells.
+    fn resolve<'a>(&self) -> Resolved<'a, Self>
+    where
+        Self: 'a;
 }
 
-/// A closed callable across region lifetimes: its form at each, and the copy from one to another.
+/// A knot member across region lifetimes: its form at each, and the copy from one to another.
 ///
-/// The copy is handed the deep copy of a value, so a callable holding values rebuilds them through
+/// The copy is handed the deep copy of a value, so a member holding values rebuilds them through
 /// the one copy a crossing priced.
-pub trait CallableFamily<'graph> {
-    /// The closed callable at `'cell`: one type up to `'cell`, as an associated type is.
-    type Closed<'cell>: Callable + 'cell
+pub trait KnottedFamily<'graph> {
+    /// The member at `'cell`: one type up to `'cell`, as an associated type is.
+    type Closed<'cell>: Knotted + 'cell
     where
         'graph: 'cell;
 
-    /// `callable` rebuilt in `writer`'s region, each value it holds through `copy`.
+    /// `member`'s knot rebuilt in `writer`'s region, each value it holds through `copy`, and the
+    /// member at its own index.
     fn copy_into<'from, 'to>(
         writer: Writer<'to>,
-        callable: &Self::Closed<'from>,
+        member: &Self::Closed<'from>,
         copy: &mut DeepCopy<'_, 'graph, 'from, 'to, Self::Closed<'from>, Self::Closed<'to>>,
     ) -> Self::Closed<'to>
     where
@@ -98,15 +107,15 @@ pub trait CallableFamily<'graph> {
         'graph: 'to;
 }
 
-/// The deep copy of a value from `'from` to `'to`, as a callable's family is handed it.
+/// The deep copy of a value from `'from` to `'to`, as a member's family is handed it.
 pub type DeepCopy<'copy, 'graph, 'from, 'to, X, Y> =
     dyn FnMut(&Value<'graph, 'from, X>) -> Value<'graph, 'to, Y> + 'copy;
 
-/// The callable of a value that holds none: uninhabited, so its arm cannot be built.
-#[derive(Clone, Copy, Debug)]
+/// The knot member of a value that holds none: uninhabited, so its arm cannot be built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Nothing {}
 
-impl Callable for Nothing {
+impl Knotted for Nothing {
     fn ktype(&self) -> KType {
         match *self {}
     }
@@ -115,24 +124,19 @@ impl Callable for Nothing {
         match *self {}
     }
 
-    fn render(
-        &self,
-        _: &mut impl fmt::Write,
-        _: &TypeRegistry<'_>,
-        _: &LabelInterner,
-    ) -> fmt::Result {
+    fn sibling(&self, _: Edge) -> Self {
         match *self {}
     }
 
-    fn sibling(&self, _: Edge) -> Self {
+    fn resolve<'a>(&self) -> Resolved<'a, Self> {
         match *self {}
     }
 }
 
 /// The family of [`Nothing`].
-pub struct NoCallable;
+pub struct NoKnot;
 
-impl<'graph> CallableFamily<'graph> for NoCallable {
+impl<'graph> KnottedFamily<'graph> for NoKnot {
     type Closed<'cell>
         = Nothing
     where
@@ -140,31 +144,31 @@ impl<'graph> CallableFamily<'graph> for NoCallable {
 
     fn copy_into<'from, 'to>(
         _: Writer<'to>,
-        callable: &Nothing,
+        member: &Nothing,
         _: &mut DeepCopy<'_, 'graph, 'from, 'to, Nothing, Nothing>,
     ) -> Nothing
     where
         'graph: 'from,
         'graph: 'to,
     {
-        match *callable {}
+        match *member {}
     }
 }
 
 /// The value family the cell graph carries: [`Value`] at a region lifetime, beside the graph's,
-/// closed over the callables of `XF`.
-pub struct ValueFamily<XF = NoCallable>(PhantomData<XF>);
+/// closed over the knot members of `XF`.
+pub struct ValueFamily<XF = NoKnot>(PhantomData<XF>);
 
-reattachable!(ValueFamily<XF: CallableFamily<'graph>> => Value<'graph, 'cell, XF::Closed<'cell>>);
+reattachable!(ValueFamily<XF: KnottedFamily<'graph>> => Value<'graph, 'cell, XF::Closed<'cell>>);
 
-/// A callable is `Copy`, so no value carries drop glue.
+/// A knot member is `Copy`, so no value carries drop glue.
 impl<XF> DropFree for ValueFamily<XF> {}
 
 /// A value carrier at rest in `'home` — what a placement door hands back and a step reads.
-pub type ValueCarrier<'graph, 'home, XF = NoCallable> = Ready<'graph, 'home, ValueFamily<XF>>;
+pub type ValueCarrier<'graph, 'home, XF = NoKnot> = Ready<'graph, 'home, ValueFamily<XF>>;
 
 /// Koan's value: 24 bytes, `Copy`, with no type handle inline — every handle lives in the resident
-/// struct an arm points at, or in the callable. The size is asserted below, so an arm that widens
+/// struct an arm points at, or in the knot member. The size is asserted below, so an arm that widens
 /// the word fails to compile.
 #[derive(Clone, Copy, Debug)]
 pub enum Value<'graph, 'cell, X = Nothing> {
@@ -181,13 +185,14 @@ pub enum Value<'graph, 'cell, X = Nothing> {
     Dict(&'cell Dict<'graph, 'cell, X>),
     Record(&'cell Record<'graph, 'cell, X>),
     Tagged(&'cell Tagged<'graph, 'cell, X>),
-    /// A callable, which a layer above `values` defines.
-    Callable(X),
+    /// A member of a knot a layer above `values` ties: a function, or a data node whose cells may
+    /// name its siblings. [`Knotted::resolve`] says which.
+    Knotted(X),
 }
 
 const _: () = assert!(size_of::<Value<'static, 'static>>() == 24);
 
-impl<'graph, 'cell, X: Callable> Value<'graph, 'cell, X> {
+impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
     /// The value's type: a constant for a leaf, the stored handle for everything else. Reads no
     /// registry and walks nothing.
     pub fn ktype(&self) -> KType {
@@ -202,7 +207,7 @@ impl<'graph, 'cell, X: Callable> Value<'graph, 'cell, X> {
             Value::Dict(dict) => dict.ktype(),
             Value::Record(record) => record.ktype(),
             Value::Tagged(tagged) => tagged.ktype(),
-            Value::Callable(callable) => callable.ktype(),
+            Value::Knotted(member) => member.ktype(),
         }
     }
 
@@ -222,7 +227,7 @@ impl<'graph, 'cell, X: Callable> Value<'graph, 'cell, X> {
             Value::Dict(dict) => dict.weight(),
             Value::Record(record) => record.weight(),
             Value::Tagged(tagged) => tagged.weight(),
-            Value::Callable(callable) => callable.weight(),
+            Value::Knotted(member) => member.weight(),
         }
     }
 
@@ -231,7 +236,8 @@ impl<'graph, 'cell, X: Callable> Value<'graph, 'cell, X> {
     /// as its handle over the same cells, so downstream dispatch sees the contract rather than the
     /// contents' incidental precision. A tagged value against a union takes the member it inhabits —
     /// the member naming the same constructor — and keeps its own handle when the union declares
-    /// none. Everything else, and a value already of the declared type, passes through unwritten.
+    /// none. Everything else, and a value already of the declared type, passes through unwritten —
+    /// a knot member among them: a knot never grows a node, so a data node is never restamped.
     pub fn retyped(
         self,
         writer: Writer<'cell>,
@@ -319,10 +325,29 @@ impl<'graph, 'cell, X: Copy> Value<'graph, 'cell, X> {
             _ => None,
         }
     }
+}
 
+impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
+    /// The function this value is, if it is one.
     pub fn as_callable(&self) -> Option<X> {
         match self {
-            Value::Callable(callable) => Some(*callable),
+            Value::Knotted(member) if matches!(member.resolve(), Resolved::Function) => {
+                Some(*member)
+            }
+            _ => None,
+        }
+    }
+
+    /// The data node this value is, if it is one, beside the member it is read through.
+    pub fn as_circular(&self) -> Option<(X, Circular<'cell, 'cell, X>)>
+    where
+        X: 'cell,
+    {
+        match self {
+            Value::Knotted(member) => match member.resolve() {
+                Resolved::Circular(circular) => Some((*member, circular)),
+                Resolved::Function => None,
+            },
             _ => None,
         }
     }

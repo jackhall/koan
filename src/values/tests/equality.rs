@@ -142,11 +142,11 @@ fn quotes_compare_as_syntax() {
     });
 }
 
-/// A stand-in callable: `values` compares none, so all it needs is a type.
-#[derive(Clone, Copy, Debug)]
+/// A stand-in function: `values` compares none, so all it needs is a type.
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Opaque;
 
-impl crate::values::Callable for Opaque {
+impl crate::values::Knotted for Opaque {
     fn ktype(&self) -> KType {
         KType::ANY
     }
@@ -155,17 +155,12 @@ impl crate::values::Callable for Opaque {
         crate::values::Weight::ZERO
     }
 
-    fn render(
-        &self,
-        out: &mut impl std::fmt::Write,
-        _: &crate::type_lattice::TypeRegistry<'_>,
-        _: &crate::parse::LabelInterner,
-    ) -> std::fmt::Result {
-        out.write_str("opaque")
-    }
-
     fn sibling(&self, _: crate::memory::Edge) -> Self {
         *self
+    }
+
+    fn resolve<'a>(&self) -> crate::values::Resolved<'a, Self> {
+        crate::values::Resolved::Function
     }
 }
 
@@ -176,7 +171,7 @@ fn a_comparison_reaching_a_callable_is_incomparable() {
         let (types, scratch) = (fixture.types, fixture.scratch());
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let callable = Holding::Callable(Opaque);
+            let callable = Holding::Knotted(Opaque);
             let list = |items: &[_]| {
                 Holding::List(crate::values::List::new(
                     writer,
@@ -210,6 +205,74 @@ fn a_comparison_reaching_a_callable_is_incomparable() {
                 numbers.equals(&bools, types, scratch),
                 Ok(false),
                 "unrelated container types are unequal without descending"
+            );
+        })
+    });
+}
+
+#[test]
+fn circular_values_compare_as_a_bisimulation() {
+    use super::{Holding, ring};
+    with_fixture(|fixture| {
+        let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
+        let next = BinderSymbol::declared("next", labels).unwrap();
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let equal = |left: Holding<'_, '_>, right: Holding<'_, '_>| {
+                left.equals(&right, types, scratch).expect("no function")
+            };
+            let one = |cell| ring(fixture, writer, KType::STR, &[cell])[0];
+            let (first, second) = (one(None), one(None));
+            assert!(first != second, "two knots");
+            assert!(equal(Holding::Knotted(first), Holding::Knotted(second)));
+            let pair = ring(fixture, writer, KType::STR, &[None, None]);
+            assert!(
+                equal(Holding::Knotted(pair[0]), Holding::Knotted(first)),
+                "a two-member ring unrolls to the one-member ring"
+            );
+            assert!(!equal(
+                Holding::Knotted(one(Some(Holding::Number(1.0)))),
+                Holding::Knotted(one(Some(Holding::Number(2.0)))),
+            ));
+
+            let tagged =
+                |payload| Holding::Tagged(crate::values::Tagged::hold(writer, payload, KType::STR));
+            let record = |cell| {
+                Holding::Record(crate::values::Record::new(
+                    writer,
+                    &[(next, cell)],
+                    types,
+                    scratch,
+                ))
+            };
+            let finite = tagged(record(tagged(record(Holding::Null))));
+            assert!(!equal(Holding::Knotted(first), finite));
+            assert!(!equal(finite, Holding::Knotted(first)));
+
+            let nodes = super::tie(writer, 2, |index, edges| {
+                if index == 0 {
+                    crate::values::Circular::List(crate::values::List::linked(
+                        writer,
+                        &[super::Link::Edge(edges[1])],
+                        types.list(KType::STR),
+                    ))
+                } else {
+                    crate::values::Circular::Tagged(crate::values::Tagged::linked(
+                        writer,
+                        super::Link::Edge(edges[0]),
+                        KType::STR,
+                    ))
+                }
+            });
+            let bools = Holding::List(crate::values::List::new(
+                writer,
+                [Holding::Bool(true)].into_iter(),
+                types,
+                scratch,
+            ));
+            assert!(
+                !equal(Holding::Knotted(nodes[0]), bools),
+                "a list node and a list of an unrelated type are unequal without descending"
             );
         })
     });

@@ -6,7 +6,7 @@
 //! that names no fellow is a one-node knot; a strongly connected component of callable binders is
 //! born together as one knot by [`tie`], each capture of a fellow member an edge into it.
 //!
-//! [`Callable`] is sixteen bytes — a knot member — so a value holding one stays one twenty-four-byte
+//! [`Knotted`] is sixteen bytes — a knot member — so a value holding one stays one twenty-four-byte
 //! word. A callable copies at a crossing by re-tying its whole knot at the destination, each closure
 //! binding deep-copied and each edge carried verbatim, priced by the knot's memoized weight under
 //! the ordinary verdict. Structural equality over a callable is
@@ -30,10 +30,9 @@ pub use birth::{Untieable, tie};
 use std::fmt;
 
 use crate::memory::{DropFree, Edge, Member, reattachable};
-use crate::parse::LabelInterner;
 use crate::scope::{Activation, ClosureBindings, Shape};
-use crate::type_lattice::{KType, TypeRegistry, display_name};
-use crate::values::{self, Value, ValueCarrier, ValueFamily, Weight};
+use crate::type_lattice::KType;
+use crate::values::{self, Circular, Resolved, Value, ValueCarrier, ValueFamily, Weight};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
@@ -76,21 +75,28 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 /// The payload of a knot node.
 #[derive(Clone, Copy)]
 pub enum Node<'graph, 'cell> {
-    Function(Function<'graph, 'cell, Callable<'graph, 'cell>>),
+    Function(Function<'graph, 'cell, Knotted<'graph, 'cell>>),
+    /// A data node: a member's right-hand side, or an anonymous constructor below one on the path to
+    /// a sibling mention.
+    Data {
+        circular: Circular<'graph, 'cell, Knotted<'graph, 'cell>>,
+        /// What rebuilding the whole knot this node sits in writes, the same on every node.
+        knot_weight: Weight,
+    },
 }
 
 const _: () = assert!(!std::mem::needs_drop::<Node<'static, 'static>>());
 
-/// The closed callable: one node of a knot.
-#[derive(Clone, Copy)]
-pub struct Callable<'graph, 'cell>(Member<'cell, Node<'graph, 'cell>>);
+/// A knot member: one node of a knot, a function or a data node. Its equality is node identity.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Knotted<'graph, 'cell>(Member<'cell, Node<'graph, 'cell>>);
 
-const _: () = assert!(size_of::<Callable<'static, 'static>>() == 16);
+const _: () = assert!(size_of::<Knotted<'static, 'static>>() == 16);
 const _: () = assert!(size_of::<KValue<'static, 'static>>() == 24);
 const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 72);
 
-impl<'graph, 'cell> Callable<'graph, 'cell> {
-    /// The knot node this callable is.
+impl<'graph, 'cell> Knotted<'graph, 'cell> {
+    /// The knot node this member is.
     pub fn member(self) -> Member<'cell, Node<'graph, 'cell>> {
         self.0
     }
@@ -99,66 +105,69 @@ impl<'graph, 'cell> Callable<'graph, 'cell> {
         self.0.payload()
     }
 
-    /// The function this callable runs.
-    pub fn function(self) -> &'cell Function<'graph, 'cell, Self> {
+    /// The function this member runs, if it is a function's node.
+    pub fn function(self) -> Option<&'cell Function<'graph, 'cell, Self>> {
         match self.node() {
-            Node::Function(function) => function,
+            Node::Function(function) => Some(function),
+            Node::Data { .. } => None,
         }
     }
 }
 
-impl fmt::Debug for Callable<'_, '_> {
+impl fmt::Debug for Knotted<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Callable")
+        f.debug_struct("Knotted")
             .field("knot", &self.0.knot().len())
             .field("index", &self.0.index().index())
             .finish()
     }
 }
 
-impl values::Callable for Callable<'_, '_> {
+impl values::Knotted for Knotted<'_, '_> {
     fn ktype(&self) -> KType {
-        self.function().ktype
+        match self.node() {
+            Node::Function(function) => function.ktype,
+            Node::Data { circular, .. } => circular.ktype(),
+        }
     }
 
     fn weight(&self) -> Weight {
-        self.function().knot_weight
-    }
-
-    /// A callable renders as its type does: its closure bindings are program state.
-    fn render(
-        &self,
-        out: &mut impl fmt::Write,
-        types: &TypeRegistry<'_>,
-        labels: &LabelInterner,
-    ) -> fmt::Result {
-        write!(
-            out,
-            "{}",
-            display_name(self.function().ktype, types, labels)
-        )
+        match self.node() {
+            Node::Function(function) => function.knot_weight,
+            Node::Data { knot_weight, .. } => *knot_weight,
+        }
     }
 
     fn sibling(&self, edge: Edge) -> Self {
-        Callable(self.0.follow(edge))
+        Knotted(self.0.follow(edge))
+    }
+
+    fn resolve<'a>(&self) -> Resolved<'a, Self>
+    where
+        Self: 'a,
+    {
+        match self.node() {
+            Node::Function(_) => Resolved::Function,
+            Node::Data { circular, .. } => Resolved::Circular(*circular),
+        }
     }
 }
 
-/// The family of [`Callable`], which `values` crosses a callable through.
-pub struct CallableFamily;
+/// The family of [`Knotted`], which `values` crosses a callable through.
+pub struct KnottedFamily;
 
-reattachable!(CallableFamily => Callable<'graph, 'cell>);
+reattachable!(KnottedFamily => Knotted<'graph, 'cell>);
 
-impl DropFree for CallableFamily {}
+impl DropFree for KnottedFamily {}
 
 /// A value that may hold a function.
-pub type KValue<'graph, 'cell> = Value<'graph, 'cell, Callable<'graph, 'cell>>;
+pub type KValue<'graph, 'cell> = Value<'graph, 'cell, Knotted<'graph, 'cell>>;
 
 /// The family of [`KValue`].
-pub type KValueFamily = ValueFamily<CallableFamily>;
+pub type KValueFamily = ValueFamily<KnottedFamily>;
 
 /// A carrier of a [`KValue`].
-pub type KValueCarrier<'graph, 'home> = ValueCarrier<'graph, 'home, CallableFamily>;
+pub type KValueCarrier<'graph, 'home> = ValueCarrier<'graph, 'home, KnottedFamily>;
 
 /// An activation whose values may hold functions.
-pub type KActivation<'graph, 'cell> = Activation<'graph, 'cell, Callable<'graph, 'cell>>;
+pub type KActivation<'graph, 'cell> = Activation<'graph, 'cell, Knotted<'graph, 'cell>>;

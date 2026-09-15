@@ -15,7 +15,7 @@
 
 use crate::memory::{CellHandle, SlotArray, SlotConflict, SlotState, Writer};
 use crate::parse::BinderSymbol;
-use crate::values::{Callable, Nothing, Value};
+use crate::values::{Knotted, Nothing, Value};
 
 use super::builtins::Builtins;
 use super::closure::{Capture, ClosureBindings};
@@ -49,7 +49,7 @@ pub enum Binding<'graph, 'cell, X = Nothing> {
     Pending(CellHandle),
 }
 
-impl<'graph, 'cell, X: Callable> Activation<'graph, 'cell, X> {
+impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
     /// A fresh activation of the program shape `shape`, every slot `Empty`.
     pub fn of_program(
         writer: Writer<'cell>,
@@ -163,7 +163,7 @@ impl<'graph, 'cell, X: Callable> Activation<'graph, 'cell, X> {
             },
             Target::Capture(slot) => match activation.closure.get(slot) {
                 Capture::Value(value) => Binding::Bound(value),
-                Capture::Edge(edge) => Binding::Bound(Value::Callable(
+                Capture::Edge(edge) => Binding::Bound(Value::Knotted(
                     activation
                         .callable
                         .expect("an edge capture is a callable's, read in its own activation")

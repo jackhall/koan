@@ -19,7 +19,7 @@ use crate::scope::{Binding, Builtins, Component, Shape, Slot};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{TypeValue, Value};
 
-use super::{Callable, KActivation, KValue, tie};
+use super::{KActivation, KValue, Knotted, tie};
 
 /// A continuation family for a graph whose cells only store.
 pub(super) struct Step;
@@ -90,7 +90,7 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn builtins<'cell>(
         &self,
         writer: Writer<'cell>,
-    ) -> &'cell Builtins<'graph, 'cell, Callable<'graph, 'cell>> {
+    ) -> &'cell Builtins<'graph, 'cell, Knotted<'graph, 'cell>> {
         let origin = ValueSymbol::declared("origin", self.labels).expect("a value token");
         let types: Vec<_> = [
             ("Number", KType::NUMBER),
@@ -165,7 +165,7 @@ impl<'graph> Fixture<'_, 'graph> {
                 .expect("a component of callables ties");
             for (index, slot) in component.members.iter().enumerate() {
                 activation
-                    .bind(*slot, Value::Callable(Callable::of(knot, index)))
+                    .bind(*slot, Value::Knotted(Knotted::of(knot, index)))
                     .expect("a claimed slot binds");
             }
             return;
@@ -210,7 +210,7 @@ pub(super) fn read<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
-) -> Binding<'graph, 'cell, Callable<'graph, 'cell>> {
+) -> Binding<'graph, 'cell, Knotted<'graph, 'cell>> {
     let shape = activation.shape();
     let (slot, _) = shape.slot(fixture.name(name)).expect("a declared binder");
     activation.read(crate::scope::Coordinate::Activation {
@@ -236,7 +236,7 @@ pub(super) fn callable<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
-) -> Callable<'graph, 'cell> {
+) -> Knotted<'graph, 'cell> {
     bound(fixture, activation, name)
         .as_callable()
         .unwrap_or_else(|| panic!("`{name}` is bound to a callable"))

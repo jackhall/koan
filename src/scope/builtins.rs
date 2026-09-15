@@ -7,7 +7,7 @@
 
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
-use crate::values::{Callable, Nothing, Value};
+use crate::values::{Knotted, Nothing, Value};
 
 use super::channels::Channels;
 use super::shape::BuiltinIndex;
@@ -18,7 +18,7 @@ pub struct Builtins<'graph, 'cell, X = Nothing> {
     names: Channels<'cell, Value<'graph, 'cell, X>>,
 }
 
-impl<'graph, 'cell, X: Callable> Builtins<'graph, 'cell, X> {
+impl<'graph, 'cell, X: Knotted> Builtins<'graph, 'cell, X> {
     /// The table with no builtin in it.
     pub fn empty() -> &'cell Builtins<'graph, 'cell, X> {
         &Builtins {

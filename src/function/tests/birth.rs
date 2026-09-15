@@ -4,9 +4,9 @@
 use crate::elaborate::Elaboration;
 use crate::scope::{Binding, Capture, CaptureSlot, Coordinate, Target};
 use crate::type_lattice::KType;
-use crate::values::{Callable as _, Value, Weight};
+use crate::values::{Knotted as _, Value, Weight};
 
-use super::super::{Callable, KActivation, Node, Untieable, tie};
+use super::super::{KActivation, Knotted, Node, Untieable, tie};
 use super::{Fixture, bound, callable, pin, read, with_fixture};
 
 /// The component `name` belongs to, tied again — a refusal the runner left for the test to see.
@@ -35,7 +35,7 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
             let activation = fixture.run(context.writer(), &lines, binder, &[]);
             let f = callable(fixture, activation, "f");
             assert_eq!(f.member().knot().len(), 1);
-            assert!(f.function().closure().is_empty());
+            assert!(f.function().expect("a function").closure().is_empty());
             let x = fixture.name("x");
             let scratch = fixture.scratch();
             assert_eq!(
@@ -45,7 +45,7 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
                     .function_type(scratch, &[(x, KType::NUMBER)], KType::NUMBER)
             );
             assert!(std::ptr::eq(
-                f.function().shape(),
+                f.function().expect("a function").shape(),
                 activation
                     .shape()
                     .births(activation.shape().slot(fixture.name("f")).unwrap().0)
@@ -56,7 +56,7 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
                 f.weight(),
                 Weight::flat::<usize>()
                     .plus(Weight::flat::<Node<'static, 'static>>())
-                    .plus(f.function().closure().weight())
+                    .plus(f.function().expect("a function").closure().weight())
             );
         });
     });
@@ -69,7 +69,11 @@ fn a_closure_captures_the_enclosing_value_word() {
         fixture.in_cell(pin, |context, binder| {
             let activation = fixture.run(context.writer(), &lines, binder, &[]);
             let f = callable(fixture, activation, "f");
-            let Capture::Value(Value::Str(captured)) = f.function().closure().get(CaptureSlot(0))
+            let Capture::Value(Value::Str(captured)) = f
+                .function()
+                .expect("a function")
+                .closure()
+                .get(CaptureSlot(0))
             else {
                 panic!("`k` is captured as its value word");
             };
@@ -85,11 +89,11 @@ fn a_closure_captures_the_enclosing_value_word() {
 fn capture_read<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: crate::memory::Writer<'cell>,
-    callable: Callable<'graph, 'cell>,
-    builtins: &'cell crate::scope::Builtins<'graph, 'cell, Callable<'graph, 'cell>>,
+    callable: Knotted<'graph, 'cell>,
+    builtins: &'cell crate::scope::Builtins<'graph, 'cell, Knotted<'graph, 'cell>>,
     name: &str,
-) -> Binding<'graph, 'cell, Callable<'graph, 'cell>> {
-    let function = callable.function();
+) -> Binding<'graph, 'cell, Knotted<'graph, 'cell>> {
+    let function = callable.function().expect("a function");
     let name = fixture.name(name);
     let mention = function
         .shape()
@@ -131,8 +135,9 @@ fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
                 f.member().knot().member(g.member().index()).payload(),
                 g.node()
             ));
-            let edge = |callable: Callable<'_, '_>| match callable
+            let edge = |callable: Knotted<'_, '_>| match callable
                 .function()
+                .expect("a function")
                 .closure()
                 .get(CaptureSlot(0))
             {
@@ -142,7 +147,7 @@ fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
             assert_eq!(edge(f), g.member().index().index());
             assert_eq!(edge(g), f.member().index().index());
             let builtins = activation.builtins();
-            let Binding::Bound(Value::Callable(sibling)) =
+            let Binding::Bound(Value::Knotted(sibling)) =
                 capture_read(fixture, writer, f, builtins, "g")
             else {
                 panic!("an edge capture reads as the sibling callable");
@@ -161,7 +166,7 @@ fn a_self_recursive_function_edges_itself() {
             let activation = fixture.run(writer, &lines, binder, &[]);
             let looped = callable(fixture, activation, "loop");
             assert_eq!(looped.member().knot().len(), 1);
-            let Binding::Bound(Value::Callable(itself)) =
+            let Binding::Bound(Value::Knotted(itself)) =
                 capture_read(fixture, writer, looped, activation.builtins(), "loop")
             else {
                 panic!("a self capture reads as the callable itself");
@@ -180,7 +185,7 @@ fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, binder, &[]);
             let f = callable(fixture, activation, "f");
-            let function = f.function();
+            let function = f.function().expect("a function");
             let call = crate::memory::resident(
                 writer,
                 KActivation::of_callable(
@@ -192,9 +197,12 @@ fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
                 ),
             );
             let knot = tie_of(fixture, writer, call, "h").expect("the inner function ties");
-            let h = Callable::of(knot, 0);
-            let Capture::Value(Value::Callable(captured)) =
-                h.function().closure().get(CaptureSlot(0))
+            let h = Knotted::of(knot, 0);
+            let Capture::Value(Value::Knotted(captured)) = h
+                .function()
+                .expect("a function")
+                .closure()
+                .get(CaptureSlot(0))
             else {
                 panic!("a capture of the enclosing knot's edge is the sibling's value");
             };

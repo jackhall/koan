@@ -21,7 +21,7 @@ use std::fmt;
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::forms::FormId;
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
-use crate::values::Callable;
+use crate::values::Knotted;
 
 use super::activation::Activation;
 use super::builtins::Builtins;
@@ -217,7 +217,7 @@ const _: () = assert!(!std::mem::needs_drop::<Shape<'static>>());
 
 impl<'graph> Shape<'graph> {
     /// The shape of a program's top-level statements.
-    pub fn of_program<X: Callable>(
+    pub fn of_program<X: Knotted>(
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
         builtins: &Builtins<'_, '_, X>,
@@ -228,7 +228,7 @@ impl<'graph> Shape<'graph> {
 
     /// The block shape of `body` evaluated by an `EVAL` reading at `at` in `site`: every free name
     /// resolves by name over `site`'s chain, and a binder in `body` binds in this block.
-    pub fn for_eval<X: Callable>(
+    pub fn for_eval<X: Knotted>(
         brand: ProgramBrand<'graph>,
         body: &KExpression<'graph>,
         site: &Activation<'graph, '_, X>,

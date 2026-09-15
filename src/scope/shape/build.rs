@@ -21,7 +21,7 @@ use crate::parse::forms::{FormId, KEYWORDS};
 use crate::parse::{
     BinderSymbol, ExpressionPart, KExpression, StaticName, TypeSymbol, ValueSymbol,
 };
-use crate::values::Callable;
+use crate::values::Knotted;
 
 use super::super::activation::Activation;
 use super::super::builtins::Builtins;
@@ -55,7 +55,7 @@ static IMPLICIT: ImplicitNames = ImplicitNames {
 };
 
 /// The shape of a program's top-level statements.
-pub(super) fn program<'graph, X: Callable>(
+pub(super) fn program<'graph, X: Knotted>(
     brand: ProgramBrand<'graph>,
     statements: &[KExpression<'graph>],
     builtins: &Builtins<'_, '_, X>,
@@ -72,7 +72,7 @@ pub(super) fn program<'graph, X: Callable>(
 }
 
 /// An `EVAL` body's block shape over `site`'s chain, reading at `at`.
-pub(super) fn eval<'graph, X: Callable>(
+pub(super) fn eval<'graph, X: Knotted>(
     brand: ProgramBrand<'graph>,
     body: &KExpression<'graph>,
     site: &Activation<'graph, '_, X>,

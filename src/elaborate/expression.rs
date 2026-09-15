@@ -6,7 +6,7 @@ use crate::parse::forms::{FormId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression, KeywordSymbol, StaticName, TypeSymbol};
 use crate::scope::{Activation, Binding, Site, pair_name};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
-use crate::values::{Callable, Value};
+use crate::values::{Knotted, Value};
 
 use super::Elaboration;
 
@@ -28,7 +28,7 @@ static CONNECTORS: Connectors = Connectors {
 /// `part` as a type, its names read through `reader`: a name in `quantifiers` is that group's
 /// quantifier at its position, and every other name is the mention `reader`'s shape recorded at its
 /// site, which must read as a type.
-pub fn type_expression<'graph, X: Callable>(
+pub fn type_expression<'graph, X: Knotted>(
     part: &ExpressionPart<'graph>,
     reader: &Activation<'graph, '_, X>,
     quantifiers: &[TypeSymbol],
@@ -87,7 +87,7 @@ pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, X> {
     pub(super) scratch: BumpAllocator<'x>,
 }
 
-impl<'graph, X: Callable> Elaborator<'_, '_, 'graph, '_, '_, X> {
+impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
     pub(super) fn part(
         &self,
         part: &ExpressionPart<'graph>,

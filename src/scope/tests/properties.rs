@@ -389,7 +389,7 @@ fn observe(binding: Binding<'_, '_, Probe>) -> Observed {
     match binding {
         Binding::Bound(Value::Number(number)) => Observed::Number(number.to_bits()),
         Binding::Bound(Value::Type(ty)) => Observed::Type(ty.handle()),
-        Binding::Bound(Value::Callable(Probe(index))) => Observed::Edge(index),
+        Binding::Bound(Value::Knotted(Probe(index))) => Observed::Edge(index),
         Binding::Bound(other) => panic!("every slot is bound to a number, found {other:?}"),
         Binding::Pending(handle) => Observed::Pending(handle),
     }

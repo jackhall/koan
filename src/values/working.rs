@@ -18,7 +18,7 @@ use crate::parse::{
 use crate::source::{FileId, SourceRef, Span, Spanned};
 use crate::type_lattice::{TypeRegistry, display_name};
 
-use super::{Callable, Nothing, Value, part_ktype};
+use super::{Knotted, Nothing, Value, part_ktype};
 
 /// One slot of a working expression.
 #[derive(Clone, Copy, Debug)]
@@ -45,7 +45,7 @@ pub enum WorkingPart<'graph, 'cell, X = Nothing> {
     StagedSlot,
 }
 
-impl<'graph, 'cell, X: Callable> WorkingPart<'graph, 'cell, X> {
+impl<'graph, 'cell, X: Knotted> WorkingPart<'graph, 'cell, X> {
     /// The structural family this part belongs to — what dispatch-shape classification reads.
     pub fn class(&self) -> PartClass {
         match self {
@@ -136,7 +136,7 @@ pub struct WorkingExpression<'graph, 'cell, X = Nothing> {
     under_type_sigil: bool,
 }
 
-impl<'graph, 'cell, X: Callable> WorkingExpression<'graph, 'cell, X> {
+impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     /// The working copy of a parsed node: its parts wrapped as [`WorkingPart::Ast`] in one run, the
     /// cache carried over whole. Shallow — a nested node stays AST until it is itself dispatched.
     pub fn from_ast(writer: Writer<'cell>, ast: &KExpression<'graph>) -> Self {
