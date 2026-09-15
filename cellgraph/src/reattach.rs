@@ -43,12 +43,18 @@ pub trait DropFree {}
 /// expands to the trait impl for every `'graph`; write the form with a literal `'cell`, and name
 /// `'graph` where it borrows storage outside the graph (`Continuation => Step<'cell>`,
 /// `Owned => String`, `Program => &'graph str`). A family that names the graph lifetime itself
-/// takes the `Family<'graph> => At` arm, and implements the trait for that lifetime alone.
+/// takes the `Family<'graph> => At` arm, and implements the trait for that lifetime alone. A family
+/// generic over another type takes the `Family<Inner: Bound> => At` arm, alone in its invocation:
+/// the impl holds for every `Inner` meeting `Bound`, a trait over `'graph`, and the form names one
+/// of that trait's region-generic associated types — `Inner::At<'cell>` — wherever it nests it.
 ///
 /// The `unsafe` obligation — that `Family`'s `At<'cell>` is one type up to `'cell`, per
 /// [`Reattachable`]'s contract — is discharged **once** here, so embedder families carry no
 /// open-coded `unsafe impl`. The macro cannot *check* layout-invariance, so only invoke it with
-/// families that genuinely satisfy the contract. A family is named by a plain identifier.
+/// families that genuinely satisfy the contract. A family is named by a plain identifier. A generic
+/// family's form meets the contract when every lifetime-dependent part of it is a plain lifetime or
+/// an associated type of `Inner` generic in `'cell` alone: a type has one impl of a trait, and an
+/// impl cannot choose a type by lifetime, so that associated type is one type up to `'cell` too.
 ///
 /// ```
 /// use std::marker::PhantomData;
@@ -62,6 +68,9 @@ pub trait DropFree {}
 ///     Program => &'graph str,
 ///     Script<'graph> => &'graph str,
 /// );
+///
+/// struct Tagged<Inner>(PhantomData<Inner>);
+/// reattachable!(Tagged<Inner: cellgraph::Reattachable<'graph>> => (u8, Inner::At<'cell>));
 /// ```
 #[macro_export]
 macro_rules! reattachable {
@@ -74,6 +83,15 @@ macro_rules! reattachable {
     (@family $family:ident => $at:ty) => {
         // SAFETY: see the macro docs — `$family`'s `At<'cell>` is layout-invariant in `'cell`.
         unsafe impl<'graph> $crate::Reattachable<'graph> for $family {
+            type At<'cell> = $at where 'graph: 'cell;
+        }
+    };
+    ($family:ident <$inner:ident : $bound:path> => $at:ty $(,)?) => {
+        // SAFETY: see the macro docs — `$family`'s `At<'cell>` is layout-invariant in `'cell` for
+        // every `$inner`, since an impl cannot choose an associated type by lifetime.
+        unsafe impl<'graph, $inner: $bound> $crate::Reattachable<'graph>
+            for $family<$inner>
+        {
             type At<'cell> = $at where 'graph: 'cell;
         }
     };

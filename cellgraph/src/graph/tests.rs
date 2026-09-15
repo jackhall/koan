@@ -40,6 +40,12 @@ struct Listing;
 crate::reattachable!(Listing => &'cell Entry<'graph, 'cell>);
 impl DropFree for Listing {}
 
+/// A family generic over another: a region count beside the inner family's form, so the generic
+/// arm's retype moves a borrow of its own and one the inner family names.
+struct Paired<V>(std::marker::PhantomData<V>);
+crate::reattachable!(Paired<V: Reattachable<'graph>> => (&'cell u32, V::At<'cell>));
+impl<V: DropFree> DropFree for Paired<V> {}
+
 const ANCHOR: u32 = 7;
 
 /// The crossing verdict every test that is not about the crossing itself passes: pin, always. It

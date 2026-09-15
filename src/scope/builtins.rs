@@ -7,22 +7,24 @@
 
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
-use crate::values::Value;
+use crate::values::{Callable, Nothing, Value};
 
 use super::channels::Channels;
 use super::shape::BuiltinIndex;
 
 /// The builtin names and what they are bound to.
 #[derive(Clone, Copy)]
-pub struct Builtins<'graph, 'cell> {
-    names: Channels<'cell, Value<'graph, 'cell>>,
+pub struct Builtins<'graph, 'cell, X = Nothing> {
+    names: Channels<'cell, Value<'graph, 'cell, X>>,
 }
 
-impl<'graph, 'cell> Builtins<'graph, 'cell> {
+impl<'graph, 'cell, X: Callable> Builtins<'graph, 'cell, X> {
     /// The table with no builtin in it.
-    pub const EMPTY: &'static Builtins<'static, 'static> = &Builtins {
-        names: Channels::EMPTY,
-    };
+    pub fn empty() -> &'cell Builtins<'graph, 'cell, X> {
+        &Builtins {
+            names: Channels::EMPTY,
+        }
+    }
 
     /// Lay a table down in `writer`'s region, sorting each channel in `scratch` first.
     ///
@@ -31,9 +33,9 @@ impl<'graph, 'cell> Builtins<'graph, 'cell> {
     pub fn new(
         writer: Writer<'cell>,
         scratch: BumpAllocator<'_>,
-        values: &[(ValueSymbol, Value<'graph, 'cell>)],
-        types: &[(TypeSymbol, Value<'graph, 'cell>)],
-    ) -> &'cell Builtins<'graph, 'cell> {
+        values: &[(ValueSymbol, Value<'graph, 'cell, X>)],
+        types: &[(TypeSymbol, Value<'graph, 'cell, X>)],
+    ) -> &'cell Builtins<'graph, 'cell, X> {
         let names = Channels::sorted_in(writer, scratch, values, types);
         resident(writer, Builtins { names })
     }
@@ -46,7 +48,7 @@ impl<'graph, 'cell> Builtins<'graph, 'cell> {
     }
 
     /// What `index` is bound to. Panics past the table's end, like a slice index.
-    pub fn get(&self, index: BuiltinIndex) -> Value<'graph, 'cell> {
+    pub fn get(&self, index: BuiltinIndex) -> Value<'graph, 'cell, X> {
         self.names.get(index.index())
     }
 

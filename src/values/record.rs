@@ -5,28 +5,28 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::parse::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::{Value, Weight};
+use super::{Callable, Nothing, Value, Weight};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
 /// nominal identity, only its fields; equality over two is blind to the order they were written in.
 #[derive(Clone, Copy, Debug)]
-pub struct Record<'graph, 'cell> {
+pub struct Record<'graph, 'cell, X = Nothing> {
     names: &'cell [Symbol],
-    cells: &'cell [Value<'graph, 'cell>],
+    cells: &'cell [Value<'graph, 'cell, X>],
     ktype: KType,
     weight: Weight,
 }
 
-impl<'graph, 'cell> Record<'graph, 'cell> {
+impl<'graph, 'cell, X: Callable> Record<'graph, 'cell, X> {
     /// Lay down `fields`, whose names are distinct, sorted by symbol. The type is the record over
     /// each field's type in the order the fields were written; the sort and the field-type run are
     /// staged over `scratch`.
     pub fn new(
         writer: Writer<'cell>,
-        fields: &[(BinderSymbol, Value<'graph, 'cell>)],
+        fields: &[(BinderSymbol, Value<'graph, 'cell, X>)],
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> &'cell Record<'graph, 'cell> {
+    ) -> &'cell Record<'graph, 'cell, X> {
         let mut order: BumpVec<'_, usize> = BumpVec::with_capacity_in(fields.len(), scratch);
         order.extend(0..fields.len());
         order.sort_unstable_by_key(|at| fields[*at].0.symbol());
@@ -57,16 +57,18 @@ impl<'graph, 'cell> Record<'graph, 'cell> {
             weight,
         )
     }
+}
 
+impl<'graph, 'cell, X: Copy> Record<'graph, 'cell, X> {
     /// A record over sorted names and aligned cells already resident in `writer`'s region, under a
     /// type and weight the caller already knows — the deep copy's arm.
     pub(crate) fn from_runs(
         writer: Writer<'cell>,
         names: &'cell [Symbol],
-        cells: &'cell [Value<'graph, 'cell>],
+        cells: &'cell [Value<'graph, 'cell, X>],
         ktype: KType,
         weight: Weight,
-    ) -> &'cell Record<'graph, 'cell> {
+    ) -> &'cell Record<'graph, 'cell, X> {
         resident(
             writer,
             Record {
@@ -79,12 +81,16 @@ impl<'graph, 'cell> Record<'graph, 'cell> {
     }
 
     /// The same fields under `ktype` — an ascription's retype, sharing both runs.
-    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Record<'graph, 'cell> {
+    pub fn with_type(
+        &self,
+        writer: Writer<'cell>,
+        ktype: KType,
+    ) -> &'cell Record<'graph, 'cell, X> {
         Self::from_runs(writer, self.names, self.cells, ktype, self.weight)
     }
 
     /// The cell under `name`, found by binary search.
-    pub fn field(&self, name: Symbol) -> Option<&'cell Value<'graph, 'cell>> {
+    pub fn field(&self, name: Symbol) -> Option<&'cell Value<'graph, 'cell, X>> {
         let cells = self.cells;
         self.names.binary_search(&name).ok().map(|at| &cells[at])
     }
@@ -92,7 +98,7 @@ impl<'graph, 'cell> Record<'graph, 'cell> {
     /// The fields in symbol order.
     pub fn fields(
         &self,
-    ) -> impl ExactSizeIterator<Item = (Symbol, &'cell Value<'graph, 'cell>)> + use<'graph, 'cell>
+    ) -> impl ExactSizeIterator<Item = (Symbol, &'cell Value<'graph, 'cell, X>)> + use<'graph, 'cell, X>
     {
         self.names.iter().copied().zip(self.cells.iter())
     }
@@ -101,7 +107,7 @@ impl<'graph, 'cell> Record<'graph, 'cell> {
         self.names
     }
 
-    pub fn cells(&self) -> &'cell [Value<'graph, 'cell>] {
+    pub fn cells(&self) -> &'cell [Value<'graph, 'cell, X>] {
         self.cells
     }
 

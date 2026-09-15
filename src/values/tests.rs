@@ -16,6 +16,24 @@ use crate::memory::{
 use crate::parse::{ExpressionPart, KExpression, LabelInterner, parse};
 use crate::type_lattice::TypeRegistry;
 
+/// A value holding no callable — what every suite here builds, spelled once so a literal arm
+/// needs no annotation. The containers and the working form follow it.
+pub(super) type Value<'graph, 'cell> = crate::values::Value<'graph, 'cell>;
+pub(super) type List<'graph, 'cell> = crate::values::List<'graph, 'cell>;
+pub(super) type Dict<'graph, 'cell> = crate::values::Dict<'graph, 'cell>;
+pub(super) type Record<'graph, 'cell> = crate::values::Record<'graph, 'cell>;
+pub(super) type Tagged<'graph, 'cell> = crate::values::Tagged<'graph, 'cell>;
+pub(super) type WorkingExpression<'graph, 'cell> = crate::values::WorkingExpression<'graph, 'cell>;
+pub(super) type WorkingPart<'graph, 'cell> = crate::values::WorkingPart<'graph, 'cell>;
+
+/// [`crate::values::text`] at [`Value`].
+pub(super) fn text<'graph, 'cell>(
+    writer: crate::memory::Writer<'cell>,
+    text: &str,
+) -> Value<'graph, 'cell> {
+    crate::values::text(writer, text)
+}
+
 /// A continuation family for a graph whose cells only store.
 pub(super) struct Step;
 reattachable!(Step => ());

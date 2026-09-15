@@ -8,6 +8,10 @@
 //! component with an eager internal mention, turns a nested callable's capture of a fellow member
 //! into a knot edge, and seals the nested drafts into program storage.
 //!
+//! A callable body records the form node holding it, and a binder whose right-hand side is a
+//! callable form at its root — or a combined form that is one — records the body it births, so a
+//! component's tie reads each member's signature and body off the shape.
+//!
 //! See [README.md § Visibility](../README.md#visibility).
 
 use crate::memory::{
@@ -17,6 +21,7 @@ use crate::parse::forms::{FormId, KEYWORDS};
 use crate::parse::{
     BinderSymbol, ExpressionPart, KExpression, StaticName, TypeSymbol, ValueSymbol,
 };
+use crate::values::Callable;
 
 use super::super::activation::Activation;
 use super::super::builtins::Builtins;
@@ -50,10 +55,10 @@ static IMPLICIT: ImplicitNames = ImplicitNames {
 };
 
 /// The shape of a program's top-level statements.
-pub(super) fn program<'graph>(
+pub(super) fn program<'graph, X: Callable>(
     brand: ProgramBrand<'graph>,
     statements: &[KExpression<'graph>],
-    builtins: &Builtins<'_, '_>,
+    builtins: &Builtins<'_, '_, X>,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph Shape<'graph>, ShapeError> {
     let lookup = |name| builtins.lookup(name);
@@ -63,14 +68,14 @@ pub(super) fn program<'graph>(
         .enumerate()
         .map(|(index, statement)| (statement, index + 1));
     let draft = builder.draft(ShapeKind::Program, Position::PARAMETER, &[], statements)?;
-    Ok(builder.seal(draft))
+    Ok(builder.seal(draft, None))
 }
 
 /// An `EVAL` body's block shape over `site`'s chain, reading at `at`.
-pub(super) fn eval<'graph>(
+pub(super) fn eval<'graph, X: Callable>(
     brand: ProgramBrand<'graph>,
     body: &KExpression<'graph>,
-    site: &Activation<'graph, '_>,
+    site: &Activation<'graph, '_, X>,
     at: Position,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph Shape<'graph>, ShapeError> {
@@ -78,7 +83,7 @@ pub(super) fn eval<'graph>(
     let outer = |name, position| site.through_chain(name, position);
     let mut builder = Builder::new(brand, scratch, &lookup, Some((&outer, at)));
     let draft = builder.draft(ShapeKind::Block, at, &[], body.body_statements())?;
-    Ok(builder.seal(draft))
+    Ok(builder.seal(draft, None))
 }
 
 /// The class a mention met in this context takes, before the context's own role applies.
@@ -137,6 +142,8 @@ struct Draft<'x> {
     edges: BumpVec<'x, (Slot, Slot, MentionClass)>,
     /// Finished nested drafts, waiting on this draft's components to settle their captures.
     children: BumpVec<'x, (Site, Draft<'x>)>,
+    /// `(binder, body)`: the binder's right-hand side births the callable whose body sits at `body`.
+    births: BumpVec<'x, (Slot, Site)>,
     component_of: BumpVec<'x, ComponentIndex>,
     /// Every component's members, one run after another, each run sorted.
     members: BumpVec<'x, Slot>,
@@ -195,6 +202,8 @@ struct Builder<'graph, 'x, 'e> {
     /// For an `EVAL` body: the by-name resolver over the site's chain, and `EVAL`'s position.
     outer: Option<(Outer<'e>, Position)>,
     chain: BumpVec<'x, Draft<'x>>,
+    /// Each callable body's site beside the form node holding it, in program storage.
+    forms: BumpBackedMap<'x, Site, &'graph KExpression<'graph>>,
     /// Type parameters of the forms enclosing the current walk path: never mentions.
     skip: BumpVec<'x, TypeSymbol>,
     /// Where the current draft's own entries in `skip` start; a nested body declares its enclosing
@@ -215,6 +224,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             builtins,
             outer,
             chain: BumpVec::new_in(scratch),
+            forms: bump_table(scratch),
             skip: BumpVec::new_in(scratch),
             skip_floor: 0,
         }
@@ -317,6 +327,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             captures: BumpVec::new_in(scratch),
             edges: BumpVec::new_in(scratch),
             children: BumpVec::new_in(scratch),
+            births: BumpVec::new_in(scratch),
             component_of: BumpVec::new_in(scratch),
             members: BumpVec::new_in(scratch),
             components: BumpVec::new_in(scratch),
@@ -409,7 +420,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 Role::Signature => self.walk_signature(level, statement, part)?,
                 Role::Body(kind) => {
-                    self.enter_body(level, statement, form, part, kind, parameters, state)?
+                    self.enter_body(level, statement, node, part, kind, parameters, state)?
                 }
                 Role::Branches(heads) => self.enter_arms(level, statement, form, part, heads)?,
                 Role::Schema(kind) => {
@@ -575,7 +586,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        form: FormId,
+        node: &KExpression<'graph>,
         part: &ExpressionPart<'graph>,
         kind: BodyKind,
         signature: &[BinderSymbol],
@@ -583,10 +594,20 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Result<(), ShapeError> {
         let Some(body) = body_of(part) else {
             return Err(ShapeError::Malformed {
-                form,
+                form: node.cache().form().expect("a body role is a form's").id,
                 at: Position::statement(statement as usize),
             });
         };
+        if kind != BodyKind::Module {
+            let site = Site::of(part);
+            self.forms.insert(site, self.brand.allocator().alloc(*node));
+            let draft = &mut self.chain[level];
+            if state == State::Root
+                && let Some(binder) = draft.statement_binder[statement as usize]
+            {
+                draft.births.push((binder, site));
+            }
+        }
         let (shape_kind, class) = match kind {
             BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => {
                 (ShapeKind::Callable, state.constructor().class())
@@ -891,14 +912,28 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         Ok(())
     }
 
-    /// Lay a finished draft down in program storage, its nested drafts first.
-    fn seal(&self, draft: Draft<'x>) -> &'graph Shape<'graph> {
+    /// Lay a finished draft down in program storage, its nested drafts first; `form` is the node
+    /// holding a callable draft's body.
+    fn seal(
+        &self,
+        draft: Draft<'x>,
+        form: Option<&'graph KExpression<'graph>>,
+    ) -> &'graph Shape<'graph> {
         let storage = self.brand.allocator();
         let mut nested = BumpVec::with_capacity_in(draft.children.len(), self.scratch);
         for (site, child) in draft.children {
-            nested.push((site, self.seal(child)));
+            let form = self.forms.get(&site).copied();
+            nested.push((site, self.seal(child, form)));
         }
         nested.sort_unstable_by_key(|(site, _)| *site);
+        let mut births = BumpVec::with_capacity_in(draft.births.len(), self.scratch);
+        births.extend(draft.births.iter().map(|(binder, site)| {
+            let index = nested
+                .binary_search_by_key(site, |(nested, _)| *nested)
+                .expect("a birth's body is a nested shape");
+            (*binder, nested[index].1)
+        }));
+        births.sort_unstable_by_key(|(binder, _)| *binder);
         let mut mentions = draft.mentions;
         mentions.sort_unstable_by_key(|mention| mention.site);
         let members = storage.alloc_slice_copy(&draft.members);
@@ -920,6 +955,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             mentions: storage.alloc_slice_copy(&mentions),
             captures: storage.alloc_slice_copy(&draft.captures),
             nested: storage.alloc_slice_copy(&nested),
+            form,
+            births: storage.alloc_slice_copy(&births),
             keeps_defining_scope: draft.keeps_defining_scope,
         })
     }

@@ -4,24 +4,24 @@
 use crate::memory::{Writer, resident};
 use crate::type_lattice::KType;
 
-use super::{Value, Weight};
+use super::{Callable, Nothing, Value, Weight};
 
 /// A tagged value. The identity is its type, so no tag symbol rides beside the payload.
 #[derive(Clone, Copy, Debug)]
-pub struct Tagged<'graph, 'cell> {
-    payload: Value<'graph, 'cell>,
+pub struct Tagged<'graph, 'cell, X = Nothing> {
+    payload: Value<'graph, 'cell, X>,
     ktype: KType,
     weight: Weight,
 }
 
-impl<'graph, 'cell> Tagged<'graph, 'cell> {
+impl<'graph, 'cell, X: Callable> Tagged<'graph, 'cell, X> {
     /// A construction: the payload rides verbatim, nested tagged layers included, so a newtype over
     /// another keeps every layer.
     pub fn hold(
         writer: Writer<'cell>,
-        payload: Value<'graph, 'cell>,
+        payload: Value<'graph, 'cell, X>,
         identity: KType,
-    ) -> &'cell Tagged<'graph, 'cell> {
+    ) -> &'cell Tagged<'graph, 'cell, X> {
         let weight = Weight::flat::<Self>().plus(payload.referent_weight());
         resident(
             writer,
@@ -37,21 +37,27 @@ impl<'graph, 'cell> Tagged<'graph, 'cell> {
     /// itself tagged.
     pub fn peel(
         writer: Writer<'cell>,
-        value: Value<'graph, 'cell>,
+        value: Value<'graph, 'cell, X>,
         identity: KType,
-    ) -> &'cell Tagged<'graph, 'cell> {
+    ) -> &'cell Tagged<'graph, 'cell, X> {
         match value {
             Value::Tagged(tagged) => tagged.with_type(writer, identity),
             other => Self::hold(writer, other, identity),
         }
     }
+}
 
+impl<'graph, 'cell, X: Copy> Tagged<'graph, 'cell, X> {
     /// The same payload under another identity.
-    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Tagged<'graph, 'cell> {
+    pub fn with_type(
+        &self,
+        writer: Writer<'cell>,
+        ktype: KType,
+    ) -> &'cell Tagged<'graph, 'cell, X> {
         resident(writer, Tagged { ktype, ..*self })
     }
 
-    pub fn payload(&self) -> &Value<'graph, 'cell> {
+    pub fn payload(&self) -> &Value<'graph, 'cell, X> {
         &self.payload
     }
 

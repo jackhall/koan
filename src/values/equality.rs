@@ -3,28 +3,38 @@
 //! Containers compare their contents only when their memoized types are related, one satisfied by
 //! the other in either direction; an unrelated pair is unequal without descending. That makes `==`
 //! intransitive across ascriptions by design.
+//!
+//! A callable has no structural equality: a comparison that reaches one on either side is
+//! [`Incomparable`], which the `==` builtin reports, never `false`.
 
 use crate::memory::BumpAllocator;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::type_lattice::{KType, TypeRegistry, satisfied_by};
 
-use super::Value;
+use super::{Callable, Value};
 
-impl Value<'_, '_> {
+/// A comparison reached a callable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Incomparable;
+
+impl<X: Callable> Value<'_, '_, X> {
     /// Whether two values are equal. Numbers follow IEEE (`NaN != NaN`, `-0 == 0`); a tagged value
     /// compares its identity first, so it never equals its bare payload; two types are equal when
     /// they are the same handle; two quoted expressions compare as syntax, part by part with spans
-    /// ignored. The two sides may live at unrelated lifetimes.
-    pub fn equals(
+    /// ignored. The two sides may live at unrelated lifetimes. A callable on either side is
+    /// [`Incomparable`], and so is a pair of containers whose contents reach one; a container pair
+    /// with unrelated types is unequal without descending, whatever it holds.
+    pub fn equals<Y: Callable>(
         &self,
-        other: &Value<'_, '_>,
+        other: &Value<'_, '_, Y>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> bool {
+    ) -> Result<bool, Incomparable> {
         let related = |left: KType, right: KType| {
             satisfied_by(types, scratch, left, right) || satisfied_by(types, scratch, right, left)
         };
-        match (self, other) {
+        Ok(match (self, other) {
+            (Value::Callable(_), _) | (_, Value::Callable(_)) => return Err(Incomparable),
             (Value::Number(left), Value::Number(right)) => left == right,
             (Value::Bool(left), Value::Bool(right)) => left == right,
             (Value::Null, Value::Null) => true,
@@ -33,39 +43,43 @@ impl Value<'_, '_> {
             (Value::Type(left), Value::Type(right)) => left.handle() == right.handle(),
             (Value::List(left), Value::List(right)) => {
                 related(left.ktype(), right.ktype())
-                    && cells_equal(left.cells(), right.cells(), types, scratch)
+                    && cells_equal(left.cells(), right.cells(), types, scratch)?
             }
             (Value::Dict(left), Value::Dict(right)) => {
                 related(left.ktype(), right.ktype())
                     && left.keys() == right.keys()
-                    && cells_equal(left.cells(), right.cells(), types, scratch)
+                    && cells_equal(left.cells(), right.cells(), types, scratch)?
             }
             (Value::Record(left), Value::Record(right)) => {
                 related(left.ktype(), right.ktype())
                     && left.names() == right.names()
-                    && cells_equal(left.cells(), right.cells(), types, scratch)
+                    && cells_equal(left.cells(), right.cells(), types, scratch)?
             }
             (Value::Tagged(left), Value::Tagged(right)) => {
                 left.ktype() == right.ktype()
-                    && left.payload().equals(right.payload(), types, scratch)
+                    && left.payload().equals(right.payload(), types, scratch)?
             }
             _ => false,
-        }
+        })
     }
 }
 
-/// Two aligned runs of cells, equal in length and pairwise.
-fn cells_equal(
-    left: &[Value<'_, '_>],
-    right: &[Value<'_, '_>],
+/// Two aligned runs of cells, equal in length and pairwise. The first incomparable pair decides,
+/// even past an unequal one, so whether a comparison reaches a callable does not depend on order.
+fn cells_equal<X: Callable, Y: Callable>(
+    left: &[Value<'_, '_, X>],
+    right: &[Value<'_, '_, Y>],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(left, right)| left.equals(right, types, scratch))
+) -> Result<bool, Incomparable> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    let mut equal = true;
+    for (left, right) in left.iter().zip(right) {
+        equal &= left.equals(right, types, scratch)?;
+    }
+    Ok(equal)
 }
 
 /// Quoted code as syntax: the same parts in the same order. A literal compares by what was written

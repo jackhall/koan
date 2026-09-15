@@ -2,9 +2,9 @@
 //! reads a quantifier.
 
 use crate::type_lattice::{KKind, KType};
-use crate::values::{List, Tagged, TypeValue, Value, satisfies, text};
+use crate::values::{TypeValue, satisfies};
 
-use super::{pin, with_fixture};
+use super::{List, Tagged, Value, pin, text, with_fixture};
 
 #[test]
 fn leaves_any_and_never_answer_by_the_order() {

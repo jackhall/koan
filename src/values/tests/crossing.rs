@@ -8,11 +8,9 @@ use std::ptr;
 
 use crate::memory::{CellGraph, Prices, ReleaseAbsorption, Verdict};
 use crate::parse::{BinderSymbol, ExpressionPart, ProgramNode};
-use crate::values::{
-    COPY_RATIO, Dict, Key, List, Record, Value, ValueFamily, cross, cross_here, text, verdict,
-};
+use crate::values::{COPY_RATIO, Key, ValueFamily, cross, cross_here, verdict};
 
-use super::{Fixture, Step, copy, pin, with_fixture};
+use super::{Dict, Fixture, List, Record, Step, Value, copy, pin, text, with_fixture};
 
 fn quote<'graph>(fixture: &Fixture<'_, 'graph>, source: &str) -> ProgramNode<'graph> {
     match fixture.part(source) {

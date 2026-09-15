@@ -18,26 +18,26 @@ use crate::parse::{
 use crate::source::{FileId, SourceRef, Span, Spanned};
 use crate::type_lattice::{TypeRegistry, display_name};
 
-use super::{Value, part_ktype};
+use super::{Callable, Nothing, Value, part_ktype};
 
 /// One slot of a working expression.
 #[derive(Clone, Copy, Debug)]
-pub enum WorkingPart<'graph, 'cell> {
+pub enum WorkingPart<'graph, 'cell, X = Nothing> {
     /// A part of the AST this node was made from — a pointer copy, never a rebuild.
     Ast(ExpressionPart<'graph>),
     /// A nested node the scheduler synthesized, as an operator-chain fold's accumulator is. Distinct
     /// from an `Ast` expression part, which points at a parsed sub-node.
-    Expression(&'cell WorkingExpression<'graph, 'cell>),
+    Expression(&'cell WorkingExpression<'graph, 'cell, X>),
     /// A `:{…}` record-type body whose co-declared references are threaded. Its own arm because a
     /// record-type body is a field list its handler elaborates, never an expression to dispatch, so
     /// the slot keeps classifying as a record type.
-    RecordType(&'cell WorkingExpression<'graph, 'cell>),
+    RecordType(&'cell WorkingExpression<'graph, 'cell, X>),
     /// A resolved sub-result: a value reachable at this node's cell. `from_name` is the bare name the
     /// slot held before the splice — `Some` for a wrapped operand or a threaded sibling reference,
     /// `None` for a sub-dispatch's result — so a diagnostic quotes the operand as the source spelled
     /// it.
     Spliced {
-        value: Value<'graph, 'cell>,
+        value: Value<'graph, 'cell, X>,
         from_name: Option<BinderSymbol>,
     },
     /// A positional slot whose eager value a sibling dispatch is producing. It keeps the run's length
@@ -45,7 +45,7 @@ pub enum WorkingPart<'graph, 'cell> {
     StagedSlot,
 }
 
-impl<'graph, 'cell> WorkingPart<'graph, 'cell> {
+impl<'graph, 'cell, X: Callable> WorkingPart<'graph, 'cell, X> {
     /// The structural family this part belongs to — what dispatch-shape classification reads.
     pub fn class(&self) -> PartClass {
         match self {
@@ -74,7 +74,7 @@ impl<'graph, 'cell> WorkingPart<'graph, 'cell> {
     }
 
     /// The value this slot was spliced with, if it was.
-    pub fn as_value(&self) -> Option<&Value<'graph, 'cell>> {
+    pub fn as_value(&self) -> Option<&Value<'graph, 'cell, X>> {
         match self {
             WorkingPart::Spliced { value, .. } => Some(value),
             _ => None,
@@ -126,8 +126,8 @@ impl<'graph, 'cell> WorkingPart<'graph, 'cell> {
 /// One fact is not structural: [`under_type_sigil`](Self::under_type_sigil), the stamp the `:(…)`
 /// handler sets on the body it re-dispatches, which a splice leaves unchanged for the same reason.
 #[derive(Clone, Copy)]
-pub struct WorkingExpression<'graph, 'cell> {
-    pub parts: &'cell [Spanned<WorkingPart<'graph, 'cell>>],
+pub struct WorkingExpression<'graph, 'cell, X = Nothing> {
+    pub parts: &'cell [Spanned<WorkingPart<'graph, 'cell, X>>],
     pub span: Option<Span>,
     pub file: Option<FileId>,
     /// At `'cell`: a cache carried over from the AST shortens from `'graph`, one built here borrows
@@ -136,7 +136,7 @@ pub struct WorkingExpression<'graph, 'cell> {
     under_type_sigil: bool,
 }
 
-impl<'graph, 'cell> WorkingExpression<'graph, 'cell> {
+impl<'graph, 'cell, X: Callable> WorkingExpression<'graph, 'cell, X> {
     /// The working copy of a parsed node: its parts wrapped as [`WorkingPart::Ast`] in one run, the
     /// cache carried over whole. Shallow — a nested node stays AST until it is itself dispatched.
     pub fn from_ast(writer: Writer<'cell>, ast: &KExpression<'graph>) -> Self {
@@ -158,7 +158,7 @@ impl<'graph, 'cell> WorkingExpression<'graph, 'cell> {
     /// A run the scheduler built, copied into the region, its cache computed from the key.
     pub fn build(
         writer: Writer<'cell>,
-        parts: &[Spanned<WorkingPart<'graph, 'cell>>],
+        parts: &[Spanned<WorkingPart<'graph, 'cell, X>>],
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
@@ -173,7 +173,7 @@ impl<'graph, 'cell> WorkingExpression<'graph, 'cell> {
         file: Option<FileId>,
     ) -> Self
     where
-        I: IntoIterator<Item = Spanned<WorkingPart<'graph, 'cell>>>,
+        I: IntoIterator<Item = Spanned<WorkingPart<'graph, 'cell, X>>>,
         RunIter<I>: ExactSizeIterator,
     {
         Self::from_run(writer, collect(writer, parts.into_iter()), span, file)
@@ -183,8 +183,8 @@ impl<'graph, 'cell> WorkingExpression<'graph, 'cell> {
     /// file and the extent its own parts span, or `origin`'s extent when no part carries one.
     pub fn synthesized(
         writer: Writer<'cell>,
-        parts: &[Spanned<WorkingPart<'graph, 'cell>>],
-        origin: &WorkingExpression<'graph, 'cell>,
+        parts: &[Spanned<WorkingPart<'graph, 'cell, X>>],
+        origin: &WorkingExpression<'graph, 'cell, X>,
     ) -> Self {
         let extent = parts
             .iter()
@@ -200,7 +200,7 @@ impl<'graph, 'cell> WorkingExpression<'graph, 'cell> {
     /// cache built from the key and the head.
     fn from_run(
         writer: Writer<'cell>,
-        parts: &'cell [Spanned<WorkingPart<'graph, 'cell>>],
+        parts: &'cell [Spanned<WorkingPart<'graph, 'cell, X>>],
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
@@ -219,7 +219,7 @@ impl<'graph, 'cell> WorkingExpression<'graph, 'cell> {
     /// is read again.
     pub fn respliced<I>(&self, writer: Writer<'cell>, parts: I) -> Self
     where
-        I: IntoIterator<Item = Spanned<WorkingPart<'graph, 'cell>>>,
+        I: IntoIterator<Item = Spanned<WorkingPart<'graph, 'cell, X>>>,
         RunIter<I>: ExactSizeIterator,
     {
         let parts = collect(writer, parts.into_iter());
@@ -306,7 +306,7 @@ impl<'graph, 'cell> WorkingExpression<'graph, 'cell> {
     }
 }
 
-impl fmt::Debug for WorkingExpression<'_, '_> {
+impl<X: fmt::Debug> fmt::Debug for WorkingExpression<'_, '_, X> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WorkingExpression")
             .field("parts", &self.parts)

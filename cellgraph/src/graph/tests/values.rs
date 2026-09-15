@@ -3,8 +3,8 @@
 
 use super::super::*;
 use super::{
-    ANCHOR, Borrowed, Entry, Listing, Number, Owned, number_here, one, operand, pin, pinned,
-    state_of,
+    ANCHOR, Borrowed, Entry, Listing, Number, Owned, Paired, number_here, one, operand, pin,
+    pinned, state_of,
 };
 
 #[test]
@@ -325,6 +325,44 @@ fn a_graph_borrow_in_a_kept_value_redeems_after_its_home_seals() {
             assert!(std::ptr::eq(read.program, &*program));
             assert_eq!(*read.program, ANCHOR);
             assert_eq!(*read.count, ANCHOR + 1);
+        })
+        .unwrap();
+
+    graph
+        .release(consumer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn a_generic_family_redeems_both_its_borrows_after_its_home_seals() {
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
+    let consumer = graph.create(None, None).unwrap();
+    let producer = graph.create(None, None).unwrap();
+
+    graph
+        .enter(consumer, |context| context.hold(producer))
+        .unwrap()
+        .unwrap();
+    let kept = graph
+        .enter(producer, |context| {
+            let outer = one(context.writer(), ANCHOR);
+            let inner = one(context.writer(), ANCHOR + 1);
+            let carrier = context.lift::<Paired<Number>>((outer, inner));
+            context.keep(carrier)
+        })
+        .unwrap();
+
+    graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+    assert_eq!(state_of(&graph, producer), SlabState::Free);
+
+    graph
+        .enter(consumer, |context| {
+            let carrier = context
+                .redeem(kept)
+                .expect("the consumer holds the sealed cell");
+            let (outer, inner) = context.read(&carrier).value();
+            assert_eq!((*outer, *inner), (ANCHOR, ANCHOR + 1));
         })
         .unwrap();
 

@@ -6,13 +6,14 @@ use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::LabelInterner;
 use crate::type_lattice::{TypeRegistry, display_name};
 
-use super::Value;
+use super::{Callable, Value};
 
-impl Value<'_, '_> {
+impl<X: Callable> Value<'_, '_, X> {
     /// Render the value into `out`. A string writes its text bare, a dict key quoted; a list reads
     /// `[a, b]`, a dict `{k: v}` in key order, a record `{x = 1}` in field-name order; a tagged value
-    /// reads as its type's name around its payload, a type as its name, and a quote as its body's
-    /// surface. Sorting a record's fields by name is staged over `scratch`.
+    /// reads as its type's name around its payload, a type as its name, a quote as its body's
+    /// surface, and a callable as its own [`render`](Callable::render) writes it. Sorting a
+    /// record's fields by name is staged over `scratch`.
     pub fn render(
         &self,
         out: &mut impl fmt::Write,
@@ -72,6 +73,7 @@ impl Value<'_, '_> {
                 tagged.payload().render(out, types, labels, scratch)?;
                 out.write_str(")")
             }
+            Value::Callable(callable) => callable.render(out, types, labels),
         }
     }
 }

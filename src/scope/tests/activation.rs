@@ -16,7 +16,7 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer, handles| {
-            let table = builtins(fixture, writer);
+            let table: &Builtins = builtins(fixture, writer);
             let shape = Shape::of_program(fixture.program, &lines, table, fixture.scratch()).unwrap();
             let activation =
                 Activation::of_program(writer, shape, table);
@@ -38,10 +38,10 @@ fn reading_an_unclaimed_slot_breaks_the_scheduler_invariant() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer, _| {
+            let table: &Builtins = Builtins::empty();
             let shape =
-                Shape::of_program(fixture.program, &lines, Builtins::EMPTY, fixture.scratch())
-                    .unwrap();
-            let activation = Activation::of_program(writer, shape, Builtins::EMPTY);
+                Shape::of_program(fixture.program, &lines, table, fixture.scratch()).unwrap();
+            let activation = Activation::of_program(writer, shape, table);
             activation.read(shape.mentions()[0].coordinate);
         });
     });
@@ -51,7 +51,7 @@ fn reading_an_unclaimed_slot_breaks_the_scheduler_invariant() {
 fn the_builtin_table_sorts_each_channel_and_counts_types_after_values() {
     with_fixture(|fixture| {
         fixture.in_cell(|writer, _| {
-            let table = builtins(fixture, writer);
+            let table: &Builtins = builtins(fixture, writer);
             assert_eq!(table.len(), BUILTIN_VALUES.len() + BUILTIN_TYPES.len());
             let origin = table
                 .lookup(BinderSymbol::Value(value_name("origin", fixture.labels)))

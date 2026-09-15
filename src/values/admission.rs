@@ -10,15 +10,15 @@ use crate::type_lattice::{
     Collector, KKind, KType, TypeNode, TypeRegistry, Variance, admits_with, join, satisfied_by,
 };
 
-use super::{Value, WorkingPart};
+use super::{Callable, Value, WorkingPart};
 
 /// Whether `slot` takes `value`: one relation over the value's memoized type. A slot reading a
 /// quantifier admits by unification against that type under a fresh collector, which checks the
 /// shape alone: a variable's bound, and two slots of one call agreeing on it, are what the caller's
 /// own collector checks when it solves.
-pub fn satisfies(
+pub fn satisfies<X: Callable>(
     slot: KType,
-    value: &Value<'_, '_>,
+    value: &Value<'_, '_, X>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> bool {
@@ -130,9 +130,9 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
 
 /// Whether `slot` takes a working part: an AST part by shape, a spliced value by its type. A node
 /// the scheduler synthesized and a staging hole denote no value yet, so only an `Any` slot takes one.
-pub fn admits(
+pub fn admits<X: Callable>(
     slot: KType,
-    part: &WorkingPart<'_, '_>,
+    part: &WorkingPart<'_, '_, X>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> bool {

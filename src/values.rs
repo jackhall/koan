@@ -2,7 +2,10 @@
 //!
 //! A [`Value`] is one `Copy` word: a scalar, a string or a quoted expression borrowed where it lives,
 //! or a borrow of a per-kind resident struct — [`List`], [`Dict`], [`Record`], [`Tagged`],
-//! [`TypeValue`]. Every composite is born through a door that takes the region's
+//! [`TypeValue`] — or a callable, which `values` does not define: the arm holds a type parameter a
+//! layer above closes, and [`Callable`] and [`CallableFamily`] are what `values` asks of it. The
+//! parameter defaults to [`Nothing`], so a value spelled without it holds no callable. Every
+//! composite is born through a door that takes the region's
 //! [`Writer`](crate::memory::Writer), stores its type as a memoized lattice handle and its copy
 //! [`Weight`], and is `Drop`-free, so a region releases it whole.
 //!
@@ -39,6 +42,7 @@ mod tests;
 pub use admission::{admits, admits_part, part_ktype, satisfies};
 pub use crossing::{COPY_RATIO, cross, cross_here, verdict};
 pub use dict::{Dict, Key, KeyRejected};
+pub use equality::Incomparable;
 pub use list::List;
 pub use record::Record;
 pub use tagged::Tagged;
@@ -46,25 +50,124 @@ pub use type_value::TypeValue;
 pub use weight::Weight;
 pub use working::{WorkingExpression, WorkingPart};
 
-use crate::memory::{DropFree, Ready, Writer, reattachable};
-use crate::parse::ProgramNode;
+use std::fmt;
+use std::marker::PhantomData;
+
+use crate::memory::{DropFree, Edge, Ready, Writer, reattachable};
+use crate::parse::{LabelInterner, ProgramNode};
 use crate::type_lattice::{KType, TypeNode, TypeRegistry};
 
-/// The value family the cell graph carries: [`Value`] at a region lifetime, beside the graph's.
-pub struct ValueFamily;
+/// What `values` asks of a closed callable at one region lifetime: its memoized type, what
+/// rebuilding it at a destination writes, its surface, and the fellow member an edge of its own
+/// names. A callable is `Copy`, so it carries no drop glue and may rest in a region.
+pub trait Callable: Copy {
+    fn ktype(&self) -> KType;
 
-reattachable!(ValueFamily => Value<'graph, 'cell>);
+    /// The bytes a rebuild of this callable at a destination writes, past the value word holding it.
+    fn weight(&self) -> Weight;
 
-impl DropFree for ValueFamily {}
+    fn render(
+        &self,
+        out: &mut impl fmt::Write,
+        types: &TypeRegistry<'_>,
+        labels: &LabelInterner,
+    ) -> fmt::Result;
+
+    /// The callable `edge` names among this one's own siblings.
+    fn sibling(&self, edge: Edge) -> Self;
+}
+
+/// A closed callable across region lifetimes: its form at each, and the copy from one to another.
+///
+/// The copy is handed the deep copy of a value, so a callable holding values rebuilds them through
+/// the one copy a crossing priced.
+pub trait CallableFamily<'graph> {
+    /// The closed callable at `'cell`: one type up to `'cell`, as an associated type is.
+    type Closed<'cell>: Callable + 'cell
+    where
+        'graph: 'cell;
+
+    /// `callable` rebuilt in `writer`'s region, each value it holds through `copy`.
+    fn copy_into<'from, 'to>(
+        writer: Writer<'to>,
+        callable: &Self::Closed<'from>,
+        copy: &mut DeepCopy<'_, 'graph, 'from, 'to, Self::Closed<'from>, Self::Closed<'to>>,
+    ) -> Self::Closed<'to>
+    where
+        'graph: 'from,
+        'graph: 'to;
+}
+
+/// The deep copy of a value from `'from` to `'to`, as a callable's family is handed it.
+pub type DeepCopy<'copy, 'graph, 'from, 'to, X, Y> =
+    dyn FnMut(&Value<'graph, 'from, X>) -> Value<'graph, 'to, Y> + 'copy;
+
+/// The callable of a value that holds none: uninhabited, so its arm cannot be built.
+#[derive(Clone, Copy, Debug)]
+pub enum Nothing {}
+
+impl Callable for Nothing {
+    fn ktype(&self) -> KType {
+        match *self {}
+    }
+
+    fn weight(&self) -> Weight {
+        match *self {}
+    }
+
+    fn render(
+        &self,
+        _: &mut impl fmt::Write,
+        _: &TypeRegistry<'_>,
+        _: &LabelInterner,
+    ) -> fmt::Result {
+        match *self {}
+    }
+
+    fn sibling(&self, _: Edge) -> Self {
+        match *self {}
+    }
+}
+
+/// The family of [`Nothing`].
+pub struct NoCallable;
+
+impl<'graph> CallableFamily<'graph> for NoCallable {
+    type Closed<'cell>
+        = Nothing
+    where
+        'graph: 'cell;
+
+    fn copy_into<'from, 'to>(
+        _: Writer<'to>,
+        callable: &Nothing,
+        _: &mut DeepCopy<'_, 'graph, 'from, 'to, Nothing, Nothing>,
+    ) -> Nothing
+    where
+        'graph: 'from,
+        'graph: 'to,
+    {
+        match *callable {}
+    }
+}
+
+/// The value family the cell graph carries: [`Value`] at a region lifetime, beside the graph's,
+/// closed over the callables of `XF`.
+pub struct ValueFamily<XF = NoCallable>(PhantomData<XF>);
+
+reattachable!(ValueFamily<XF: CallableFamily<'graph>> => Value<'graph, 'cell, XF::Closed<'cell>>);
+
+/// A callable is `Copy`, so no value carries drop glue.
+impl<XF> DropFree for ValueFamily<XF> {}
 
 /// A value carrier at rest in `'home` — what a placement door hands back and a step reads.
-pub type ValueCarrier<'graph, 'home> = Ready<'graph, 'home, ValueFamily>;
+pub type ValueCarrier<'graph, 'home, XF = NoCallable> = Ready<'graph, 'home, ValueFamily<XF>>;
 
 /// Koan's value: 24 bytes, `Copy`, with no type handle inline — every handle lives in the resident
-/// struct an arm points at. The size is asserted below, so an arm that widens the word fails to
-/// compile.
+/// struct an arm points at, or in the callable. The size is asserted below, so an arm that widens
+/// the word fails to compile.
 #[derive(Clone, Copy, Debug)]
-pub enum Value<'graph, 'cell> {
+pub enum Value<'graph, 'cell, X = Nothing> {
     Number(f64),
     Bool(bool),
     Null,
@@ -74,15 +177,17 @@ pub enum Value<'graph, 'cell> {
     Expression(ProgramNode<'graph>),
     /// A first-class type: the handle and its own `OfKind` type.
     Type(&'cell TypeValue),
-    List(&'cell List<'graph, 'cell>),
-    Dict(&'cell Dict<'graph, 'cell>),
-    Record(&'cell Record<'graph, 'cell>),
-    Tagged(&'cell Tagged<'graph, 'cell>),
+    List(&'cell List<'graph, 'cell, X>),
+    Dict(&'cell Dict<'graph, 'cell, X>),
+    Record(&'cell Record<'graph, 'cell, X>),
+    Tagged(&'cell Tagged<'graph, 'cell, X>),
+    /// A callable, which a layer above `values` defines.
+    Callable(X),
 }
 
 const _: () = assert!(size_of::<Value<'static, 'static>>() == 24);
 
-impl<'graph, 'cell> Value<'graph, 'cell> {
+impl<'graph, 'cell, X: Callable> Value<'graph, 'cell, X> {
     /// The value's type: a constant for a leaf, the stored handle for everything else. Reads no
     /// registry and walks nothing.
     pub fn ktype(&self) -> KType {
@@ -97,12 +202,13 @@ impl<'graph, 'cell> Value<'graph, 'cell> {
             Value::Dict(dict) => dict.ktype(),
             Value::Record(record) => record.ktype(),
             Value::Tagged(tagged) => tagged.ktype(),
+            Value::Callable(callable) => callable.ktype(),
         }
     }
 
     /// What rebuilding this value at a destination writes: the word itself and what it points at.
     pub fn weight(&self) -> Weight {
-        Weight::flat::<Value<'static, 'static>>().plus(self.referent_weight())
+        Weight::flat::<Self>().plus(self.referent_weight())
     }
 
     /// The part of [`weight`](Self::weight) past the word — what a holder that stores the word
@@ -116,55 +222,7 @@ impl<'graph, 'cell> Value<'graph, 'cell> {
             Value::Dict(dict) => dict.weight(),
             Value::Record(record) => record.weight(),
             Value::Tagged(tagged) => tagged.weight(),
-        }
-    }
-
-    pub fn as_str(&self) -> Option<&'cell str> {
-        match self {
-            Value::Str(text) => Some(text),
-            _ => None,
-        }
-    }
-
-    pub fn as_expression(&self) -> Option<ProgramNode<'graph>> {
-        match self {
-            Value::Expression(node) => Some(*node),
-            _ => None,
-        }
-    }
-
-    pub fn as_type(&self) -> Option<&'cell TypeValue> {
-        match self {
-            Value::Type(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    pub fn as_list(&self) -> Option<&'cell List<'graph, 'cell>> {
-        match self {
-            Value::List(list) => Some(list),
-            _ => None,
-        }
-    }
-
-    pub fn as_dict(&self) -> Option<&'cell Dict<'graph, 'cell>> {
-        match self {
-            Value::Dict(dict) => Some(dict),
-            _ => None,
-        }
-    }
-
-    pub fn as_record(&self) -> Option<&'cell Record<'graph, 'cell>> {
-        match self {
-            Value::Record(record) => Some(record),
-            _ => None,
-        }
-    }
-
-    pub fn as_tagged(&self) -> Option<&'cell Tagged<'graph, 'cell>> {
-        match self {
-            Value::Tagged(tagged) => Some(tagged),
-            _ => None,
+            Value::Callable(callable) => callable.weight(),
         }
     }
 
@@ -179,7 +237,7 @@ impl<'graph, 'cell> Value<'graph, 'cell> {
         writer: Writer<'cell>,
         declared: KType,
         types: &TypeRegistry<'_>,
-    ) -> Value<'graph, 'cell> {
+    ) -> Value<'graph, 'cell, X> {
         if declared == self.ktype() {
             return self;
         }
@@ -212,7 +270,65 @@ impl<'graph, 'cell> Value<'graph, 'cell> {
     }
 }
 
+impl<'graph, 'cell, X: Copy> Value<'graph, 'cell, X> {
+    pub fn as_str(&self) -> Option<&'cell str> {
+        match self {
+            Value::Str(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    pub fn as_expression(&self) -> Option<ProgramNode<'graph>> {
+        match self {
+            Value::Expression(node) => Some(*node),
+            _ => None,
+        }
+    }
+
+    pub fn as_type(&self) -> Option<&'cell TypeValue> {
+        match self {
+            Value::Type(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn as_list(&self) -> Option<&'cell List<'graph, 'cell, X>> {
+        match self {
+            Value::List(list) => Some(list),
+            _ => None,
+        }
+    }
+
+    pub fn as_dict(&self) -> Option<&'cell Dict<'graph, 'cell, X>> {
+        match self {
+            Value::Dict(dict) => Some(dict),
+            _ => None,
+        }
+    }
+
+    pub fn as_record(&self) -> Option<&'cell Record<'graph, 'cell, X>> {
+        match self {
+            Value::Record(record) => Some(record),
+            _ => None,
+        }
+    }
+
+    pub fn as_tagged(&self) -> Option<&'cell Tagged<'graph, 'cell, X>> {
+        match self {
+            Value::Tagged(tagged) => Some(tagged),
+            _ => None,
+        }
+    }
+
+    pub fn as_callable(&self) -> Option<X> {
+        match self {
+            Value::Callable(callable) => Some(*callable),
+            _ => None,
+        }
+    }
+}
+
 /// A string value whose bytes are written into the region.
-pub fn text<'graph, 'cell>(writer: Writer<'cell>, text: &str) -> Value<'graph, 'cell> {
+pub fn text<'graph, 'cell, X>(writer: Writer<'cell>, text: &str) -> Value<'graph, 'cell, X> {
     Value::Str(writer.text(text))
 }

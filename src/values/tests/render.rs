@@ -2,9 +2,9 @@
 
 use crate::parse::{BinderSymbol, ExpressionPart};
 use crate::type_lattice::KType;
-use crate::values::{Dict, Key, List, Record, Tagged, TypeValue, Value, text};
+use crate::values::{Key, TypeValue};
 
-use super::{Fixture, pin, with_fixture};
+use super::{Dict, Fixture, List, Record, Tagged, Value, pin, text, with_fixture};
 
 fn rendered(fixture: &Fixture<'_, '_>, value: Value<'_, '_>) -> String {
     let mut out = String::new();

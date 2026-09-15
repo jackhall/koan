@@ -7,7 +7,7 @@ use std::fmt;
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry, join};
 
-use super::{Value, Weight};
+use super::{Callable, Nothing, Value, Weight};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
 /// normalises — NaN is refused and `-0` folds to `0` — so the order and equality below agree with
@@ -32,7 +32,7 @@ pub enum KeyRejected {
 
 impl<'cell> Key<'cell> {
     /// The key a value makes, borrowing its bytes where they already live.
-    pub fn of(value: &Value<'_, 'cell>) -> Result<Key<'cell>, KeyRejected> {
+    pub fn of<X: Callable>(value: &Value<'_, 'cell, X>) -> Result<Key<'cell>, KeyRejected> {
         match *value {
             Value::Str(text) => Ok(Key::str(text)),
             Value::Number(number) => Key::number(number),
@@ -59,7 +59,7 @@ impl<'cell> Key<'cell> {
     }
 
     /// The key as the value it was made from.
-    pub fn value<'graph>(&self) -> Value<'graph, 'cell> {
+    pub fn value<'graph, X>(&self) -> Value<'graph, 'cell, X> {
         match self.0 {
             Scalar::Str(text) => Value::Str(text),
             Scalar::Number(number) => Value::Number(number),
@@ -140,23 +140,23 @@ impl fmt::Display for Key<'_> {
 
 /// A dict value, resident in the region its keys and cells live in.
 #[derive(Clone, Copy, Debug)]
-pub struct Dict<'graph, 'cell> {
+pub struct Dict<'graph, 'cell, X = Nothing> {
     keys: &'cell [Key<'cell>],
-    cells: &'cell [Value<'graph, 'cell>],
+    cells: &'cell [Value<'graph, 'cell, X>],
     ktype: KType,
     weight: Weight,
 }
 
-impl<'graph, 'cell> Dict<'graph, 'cell> {
+impl<'graph, 'cell, X: Callable> Dict<'graph, 'cell, X> {
     /// Lay down `entries` sorted by key; where a key repeats, its last occurrence wins. Keys are
     /// written into `writer`'s region wherever they borrowed from, and the key and value types are
     /// the joins over what stays. The sort is staged over `scratch`.
     pub fn new(
         writer: Writer<'cell>,
-        entries: &[(Key<'_>, Value<'graph, 'cell>)],
+        entries: &[(Key<'_>, Value<'graph, 'cell, X>)],
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> &'cell Dict<'graph, 'cell> {
+    ) -> &'cell Dict<'graph, 'cell, X> {
         let mut order: BumpVec<'_, usize> = BumpVec::with_capacity_in(entries.len(), scratch);
         order.extend(0..entries.len());
         order.sort_unstable_by(|left, right| {
@@ -196,16 +196,18 @@ impl<'graph, 'cell> Dict<'graph, 'cell> {
             weight,
         )
     }
+}
 
+impl<'graph, 'cell, X: Copy> Dict<'graph, 'cell, X> {
     /// A dict over sorted keys and aligned cells already resident in `writer`'s region, under a type
     /// and weight the caller already knows — the deep copy's arm.
     pub(crate) fn from_runs(
         writer: Writer<'cell>,
         keys: &'cell [Key<'cell>],
-        cells: &'cell [Value<'graph, 'cell>],
+        cells: &'cell [Value<'graph, 'cell, X>],
         ktype: KType,
         weight: Weight,
-    ) -> &'cell Dict<'graph, 'cell> {
+    ) -> &'cell Dict<'graph, 'cell, X> {
         resident(
             writer,
             Dict {
@@ -218,12 +220,12 @@ impl<'graph, 'cell> Dict<'graph, 'cell> {
     }
 
     /// The same entries under `ktype` — an ascription's retype, sharing both runs.
-    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Dict<'graph, 'cell> {
+    pub fn with_type(&self, writer: Writer<'cell>, ktype: KType) -> &'cell Dict<'graph, 'cell, X> {
         Self::from_runs(writer, self.keys, self.cells, ktype, self.weight)
     }
 
     /// The cell under `key`, found by binary search; `key` may borrow anywhere.
-    pub fn get(&self, key: &Key<'_>) -> Option<&'cell Value<'graph, 'cell>> {
+    pub fn get(&self, key: &Key<'_>) -> Option<&'cell Value<'graph, 'cell, X>> {
         let cells = self.cells;
         self.keys
             .binary_search_by(|probe| probe.cmp(key))
@@ -234,8 +236,8 @@ impl<'graph, 'cell> Dict<'graph, 'cell> {
     /// The entries in key order.
     pub fn entries(
         &self,
-    ) -> impl ExactSizeIterator<Item = (&'cell Key<'cell>, &'cell Value<'graph, 'cell>)>
-    + use<'graph, 'cell> {
+    ) -> impl ExactSizeIterator<Item = (&'cell Key<'cell>, &'cell Value<'graph, 'cell, X>)>
+    + use<'graph, 'cell, X> {
         self.keys.iter().zip(self.cells.iter())
     }
 
@@ -243,7 +245,7 @@ impl<'graph, 'cell> Dict<'graph, 'cell> {
         self.keys
     }
 
-    pub fn cells(&self) -> &'cell [Value<'graph, 'cell>] {
+    pub fn cells(&self) -> &'cell [Value<'graph, 'cell, X>] {
         self.cells
     }
 

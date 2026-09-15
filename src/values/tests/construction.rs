@@ -4,9 +4,9 @@ use std::ptr;
 
 use crate::parse::{BinderSymbol, ExpressionPart};
 use crate::type_lattice::{KKind, KType, TypeNode};
-use crate::values::{Dict, Key, KeyRejected, List, Record, Tagged, TypeValue, Value, Weight, text};
+use crate::values::{Key, KeyRejected, TypeValue, Weight};
 
-use super::{pin, with_fixture};
+use super::{Dict, List, Record, Tagged, Value, pin, text, with_fixture};
 
 const WORD: Weight = Weight::flat::<Value<'static, 'static>>();
 
