@@ -24,7 +24,7 @@ enum Scalar<'cell> {
 }
 
 /// Why a value cannot be a key.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KeyRejected {
     /// Only a string, a number or a bool keys a dict; this is the type that was offered.
     NotAScalar(KType),

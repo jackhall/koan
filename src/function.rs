@@ -21,6 +21,7 @@
 
 mod birth;
 mod copy;
+mod data;
 
 #[cfg(test)]
 mod tests;

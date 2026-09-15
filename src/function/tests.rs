@@ -1,7 +1,8 @@
 //! Shared scaffolding for `function`'s suites: program storage with a registry and an interner, a
 //! builtin table, and a runner that activates a program in a cell and brings every binding it can
-//! into being — each data binder whose right-hand side lowers, each type binder whose right-hand
-//! side elaborates, each component of callable binders through the tie.
+//! into being — each lone data binder whose right-hand side lowers, each type binder whose
+//! right-hand side elaborates, each cyclic component of value binders and each component of
+//! callable binders through the tie — beside helpers that seal the newtypes a program constructs.
 
 mod birth;
 mod boundary;
@@ -16,7 +17,7 @@ use crate::memory::{
 };
 use crate::parse::{BinderSymbol, KExpression, LabelInterner, TypeSymbol, ValueSymbol, parse};
 use crate::scope::{Binding, Builtins, Component, Shape, Slot};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry};
 use crate::values::{TypeValue, Value};
 
 use super::{KActivation, KValue, Knotted, tie};
@@ -86,10 +87,11 @@ impl<'graph> Fixture<'_, 'graph> {
         BinderSymbol::declared(text, self.labels).expect("a binder name")
     }
 
-    /// `origin = 0` and the scalar types, laid down in `writer`'s region.
+    /// `origin = 0`, the scalar types and `nominals`, laid down in `writer`'s region.
     pub fn builtins<'cell>(
         &self,
         writer: Writer<'cell>,
+        nominals: &[(&str, KType)],
     ) -> &'cell Builtins<'graph, 'cell, Knotted<'graph, 'cell>> {
         let origin = ValueSymbol::declared("origin", self.labels).expect("a value token");
         let types: Vec<_> = [
@@ -100,6 +102,7 @@ impl<'graph> Fixture<'_, 'graph> {
             ("Any", KType::ANY),
         ]
         .into_iter()
+        .chain(nominals.iter().copied())
         .map(|(name, handle)| {
             let name = TypeSymbol::declared(name, self.labels).expect("a Type token");
             (
@@ -126,7 +129,19 @@ impl<'graph> Fixture<'_, 'graph> {
         binder: CellHandle,
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
-        let builtins = self.builtins(writer);
+        self.run_with(writer, lines, binder, leave, &[])
+    }
+
+    /// [`run`](Self::run) with `nominals` in the builtin table beside the scalar types.
+    pub fn run_with<'cell>(
+        &self,
+        writer: Writer<'cell>,
+        lines: &[KExpression<'graph>],
+        binder: CellHandle,
+        leave: &[&str],
+        nominals: &[(&str, KType)],
+    ) -> &'cell KActivation<'graph, 'cell> {
+        let builtins = self.builtins(writer, nominals);
         let shape = Shape::of_program(self.program, lines, builtins, self.scratch)
             .unwrap_or_else(|error| panic!("the program shapes: {}", error.display(self.labels)));
         let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
@@ -146,8 +161,9 @@ impl<'graph> Fixture<'_, 'graph> {
         activation
     }
 
-    /// Bring one component into being, if the runner can: tie it when every member births a
-    /// callable, else bind each member whose right-hand side lowers or elaborates.
+    /// Bring one component into being, if the runner can: tie a component of value binders when it
+    /// is cyclic or every member births a callable, else bind each member whose right-hand side
+    /// lowers or elaborates.
     fn bring<'cell>(
         &self,
         writer: Writer<'cell>,
@@ -156,13 +172,24 @@ impl<'graph> Fixture<'_, 'graph> {
         component: &Component<'graph>,
     ) {
         let shape = activation.shape();
-        if component
+        let values = component
             .members
             .iter()
-            .all(|slot| shape.births(*slot).is_some())
-        {
-            let knot = tie(writer, activation, component, self.types, self.scratch)
-                .expect("a component of callables ties");
+            .all(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Value(_)));
+        let births = component
+            .members
+            .iter()
+            .all(|slot| shape.births(*slot).is_some());
+        if values && (component.cyclic || births) {
+            let knot = tie(
+                writer,
+                activation,
+                component,
+                self.types,
+                self.scratch,
+                &mut |_| None,
+            )
+            .expect("the component ties");
             for (index, slot) in component.members.iter().enumerate() {
                 activation
                     .bind(*slot, Value::Knotted(Knotted::of(knot, index)))
@@ -192,6 +219,27 @@ impl<'graph> Fixture<'_, 'graph> {
                 activation.bind(*slot, value).expect("a claimed slot binds");
             }
         }
+    }
+}
+
+impl Fixture<'_, '_> {
+    /// `NEWTYPE <name> = :{<field> :<name>}`, sealed as a singleton recursive group.
+    pub fn ring_type(&self, name: &str, field: &str) -> KType {
+        let (types, scratch) = (self.types, self.scratch());
+        let representation = types.record(scratch, &[(self.name(field), types.sibling(0))]);
+        self.newtype(name, representation)
+    }
+
+    /// `NEWTYPE <name> = <representation>`, sealed as a singleton recursive group.
+    pub fn newtype(&self, name: &str, representation: KType) -> KType {
+        RecursiveGroupWindow::seal_singleton(
+            self.scratch(),
+            TypeSymbol::declared(name, self.labels).expect("a Type token"),
+            RelativeSchema::NewType(representation),
+            None,
+            self.types,
+            self.scratch(),
+        )
     }
 }
 
