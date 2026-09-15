@@ -18,7 +18,7 @@ use crate::memory::{
 use crate::parse::{BinderSymbol, KExpression, LabelInterner, TypeSymbol, ValueSymbol, parse};
 use crate::scope::{Binding, Builtins, Component, Shape, Slot};
 use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry};
-use crate::values::{TypeValue, Value};
+use crate::values::{Circular, Knotted as _, Link, TypeValue, Value};
 
 use super::{KActivation, KValue, Knotted, tie};
 
@@ -288,4 +288,25 @@ pub(super) fn callable<'graph, 'cell>(
     bound(fixture, activation, name)
         .as_callable()
         .unwrap_or_else(|| panic!("`{name}` is bound to a callable"))
+}
+
+/// The data node `value` is, which must be one.
+pub(super) fn circular<'graph, 'cell>(
+    value: KValue<'graph, 'cell>,
+) -> (
+    Knotted<'graph, 'cell>,
+    Circular<'cell, 'cell, Knotted<'graph, 'cell>>,
+) {
+    value.as_circular().expect("a data node")
+}
+
+/// The link at the edge `link` names, resolved through `holder` to the data node it is.
+pub(super) fn follow<'graph, 'cell>(
+    holder: Knotted<'graph, 'cell>,
+    link: Link<'_, '_, Knotted<'graph, 'cell>>,
+) -> Knotted<'graph, 'cell> {
+    match link {
+        Link::Edge(edge) => holder.sibling(edge),
+        Link::Value(_) => panic!("an edge"),
+    }
 }

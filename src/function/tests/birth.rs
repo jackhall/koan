@@ -10,7 +10,7 @@ use crate::values::{Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
 use super::super::{KActivation, KValue, Knotted, Node, Untieable, tie};
-use super::{Fixture, bound, callable, pin, read, with_fixture};
+use super::{Fixture, bound, callable, circular, follow, pin, read, with_fixture};
 
 /// The component `name` belongs to, tied again with `eager` — a refusal the runner left for the
 /// test to see.
@@ -280,27 +280,6 @@ fn an_unsupported_signature_is_a_type_refusal() {
             ));
         });
     });
-}
-
-/// The data node `value` is, which must be one.
-fn circular<'graph, 'cell>(
-    value: KValue<'graph, 'cell>,
-) -> (
-    Knotted<'graph, 'cell>,
-    Circular<'cell, 'cell, Knotted<'graph, 'cell>>,
-) {
-    value.as_circular().expect("a data node")
-}
-
-/// The link at the edge `link` names, resolved through `holder` to the data node it is.
-fn follow<'graph, 'cell>(
-    holder: Knotted<'graph, 'cell>,
-    link: Link<'_, '_, Knotted<'graph, 'cell>>,
-) -> Knotted<'graph, 'cell> {
-    match link {
-        Link::Edge(edge) => holder.sibling(edge),
-        Link::Value(_) => panic!("an edge"),
-    }
 }
 
 #[test]

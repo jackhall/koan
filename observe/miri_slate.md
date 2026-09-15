@@ -54,10 +54,10 @@ silence the stale-anchor check; delete a redundant test instead.
   destination's `Writer`, nesting `fill` inside `fill` with `text` between and embedding program
   nodes at `'graph`. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s placement doors
   and reattach seam, whose pin and keep paths its own slate pins.
-- `src/function/copy.rs` — a callable's copy re-ties its whole knot through the destination's
-  `Writer`: `thin_run` fills the node run while each node's closure run and every captured value's
-  deep copy are written into the same region. No `unsafe` of its own; the backing `unsafe` is
-  `cellgraph`'s `thin_run`, `fill` and reattach seam.
+- `src/function/copy.rs` — a knot member's copy re-ties its whole knot through the destination's
+  `Writer`: `thin_run` fills the node run while each function's closure run, each data node's
+  resident and cell runs, and every held value's deep copy are written into the same region. No
+  `unsafe` of its own; the backing `unsafe` is `cellgraph`'s `thin_run`, `fill` and reattach seam.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -113,23 +113,27 @@ region it came from is released.
   its home released, and redeemed in the destination's next step: every byte reads back and the
   quote is the parsed node.
 
-**Knots in a cell's region** ([src/function/copy.rs](../src/function/copy.rs)) — a callable
-copied across a crossing re-ties its whole knot through the destination's writer, and is read
-through its edges after the region it came from is released.
+**Knots in a cell's region** ([src/function/copy.rs](../src/function/copy.rs)) — a knot
+member copied across a crossing, a function or a data node, re-ties its whole knot through the
+destination's writer, and is read through its edges after the region it came from is released.
 
 - `a_copied_knot_outlives_its_home`
   a two-node knot of mutually recursive functions, whose closures capture a string and a string
   list, crosses under a copy verdict, is kept, its home released, and redeemed in the destination's
   next step: each edge names a node of the copy and every captured byte reads back.
+- `a_copied_ring_outlives_its_home`
+  a self-referencing tagged value whose record holds a string cell and an anonymous list node
+  naming the ring crosses under a copy verdict, is kept, its home released, and redeemed: every
+  edge names a node of the copy and the string reads back.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-15: 38s — 10 tests, 0 leaks, 0 UB
 - 2026-09-15: 49s — 9 tests, 0 leaks, 0 UB
 - 2026-09-13: 18s — 8 tests, 0 leaks, 0 UB
 - 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
 - 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
-- 2026-09-11: 40s — 7 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
