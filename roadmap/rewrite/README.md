@@ -47,6 +47,12 @@ as surprises, not scheduled.
   binder whose right-hand side is a callable form at its root, or a combined
   form; a `FN` inside a list literal, or one called where it is written, has no
   birth path, and which item gives it one is undecided.
+- **Anonymous structural recursion in types.** A data cycle ties only through
+  a callable or a tagged nominal value
+  ([circular values](circular-values.md)), so `LET a = [1 a]` or a ring of
+  plain records needs a nominal declaration. Structural `μ`-types in the
+  [type lattice](../../src/type_lattice/README.md) would admit them without
+  breaking a program the nominal cut admits.
 - **Binding a knot's members walks the knot per member.**
   [`Callable::of`](../../src/function/birth.rs) resolves member `index` through
   `knot.members().nth(index)`, O(n) per call, so binding a component's k
