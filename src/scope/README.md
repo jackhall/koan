@@ -14,20 +14,40 @@ A scope is built in three tiers, each at the moment its contents become known.
 
 - **The shape** — one per body, built once in program storage and shared by
   every scope instance of that body. It records the value names and type names
-  the body declares, each with the lexical position its binder writes at, and
-  it resolves every name the body reads.
-- **Closure bindings** — one run per closure, built when the closure is born.
-  Each name the body reads from an enclosing scope is copied in shallowly: the
-  binding's value word, not a deep copy of what it points at. A closure's
-  birth waits on any captured name whose binding is still a placeholder, so a
-  placeholder is never copied.
+  the body declares, each with the lexical position its binder writes at, the
+  class of every mention and the components its bindings form, and it
+  resolves every name the body reads.
+- **Closure bindings** — one run per callable, held in the callable value and
+  built when the callable is born. Each name the body reads from an enclosing
+  scope is copied in shallowly: the binding's value word, not a deep copy of
+  what it points at. A name that is a member of the callable's own
+  [component](#visibility) is held as an edge into the knot the component is
+  born in, never as a copied value. A callable's birth waits on any captured
+  slot that is still pending, so a closure binding is never a placeholder.
 - **Per-call bindings** — one activation per call, laid down in the call's
-  frame region: the closure bindings copied verbatim, followed by one
-  placeholder slot for each parameter and each local the shape declares.
+  frame region: a pointer to the callable's closure bindings, and one slot for
+  each parameter and each local the shape declares. Nothing is copied out of
+  the closure bindings; a read of a capture goes through the pointer, one load
+  more than a read of a local. Copying the captures in would cost a word per
+  capture per call, multiplied by recursion depth, and a copied knot edge would
+  need its knot carried beside it, where an edge left in its node resolves
+  against the knot it already lives in.
 
 Values are immutable, so a shallow copy of a binding means the same thing as a
 reference to it: every copy names the same value, and what the copy retains is
 the region that value lives in.
+
+**Four kinds of shape.** The program's top level is one shape with no
+captures. A function body (`FN`, `EXPR`, `OP`) is a *callable* shape: it
+captures, and it is a deferring boundary (below). A `MODULE` body is a
+*module* shape: it captures, since its activation outlives the frame that
+births it, but it is not a deferring boundary, because its statements run when
+the `MODULE` statement runs. A `MATCH` or `TRY` arm is a *block* shape: `it`
+is its one parameter, its statements count from `1`, its activation is laid
+down in the same frame as the enclosing one, and instead of captures it holds
+a pointer to the enclosing activation. A name declared in the block shadows
+the enclosing one from the next statement on and is gone once the block ends,
+because the block's activation is not the enclosing one.
 
 ## Resolution
 
@@ -35,38 +55,99 @@ Every name a body reads resolves when its shape is built, to one of three
 coordinates:
 
 - a slot of the body's own per-call bindings,
-- a slot of its closure bindings, or
-- an index into the builtin table.
+- a slot of its closure bindings, read through the activation's pointer, or
+- an index into the builtin table,
 
-Reading a name is then one indexed load. No runtime walk visits enclosing
-scopes, and no binding holds a reference into another scope: a coordinate is
-computed from the name at the reading site, and what a slot holds is a value.
+each prefixed by how many enclosing block activations to step through first:
+none for a callable's own body, one per block the reader sits inside. Reading a
+name is then one indexed load, two for a capture, plus one per enclosing
+block. No runtime walk visits an enclosing *scope* by name, and no binding
+holds a reference into another scope: a coordinate is computed from the name
+at the reading site, and what a slot holds is a value or an edge into the
+holder's own knot.
+
+A search by symbol happens only where the shape is built and inside `EVAL`.
+How the shape's runs are searched — linear below some length, binary above —
+is an implementation detail measured, not a commitment of the design.
 
 ## Visibility
 
 A binding is visible to a reader when its declared position is strictly less
 than the reader's, compared within the scope that declares it. A parameter
-writes at position `0` and a body's statement `i` at `i + 1`, so a body sees
-its parameters and its earlier statements, and a binder never sees its own
-right-hand side.
+writes at position `0` and a body's statement `i` at `i + 1`. Where a reader
+reads depends on what it does with the name.
 
-For a name declared in an enclosing scope, the reader's position is the
-position of the definition that encloses it — fixed where the body is written,
-not where it is called. A body therefore never sees a later sibling of its own
-definition, and the capture set a shape computes is exactly the set of
-bindings visible at the definition site. This rule is provisional: mutual
-recursion between functions needs a definition window, and the rule is held
-open until functions exercise it (see [Open work](#open-work)).
+**Eager and deferred mentions.** Every mention of a name in a binding's
+right-hand side is classified by its path from the right-hand side's root. A
+mention is **deferred** when that path is non-empty and every context on it,
+down to the outermost callable-body boundary it crosses, is a constructor slot
+(a list element, a dict value, a record field) or that boundary itself: the
+value is only stored in a container or captured by a callable, never
+inspected. A callable body is opaque — nothing inside it changes the class,
+since none of it runs until the callable is called. Any other mention is
+**eager**: the value is needed at the point it is read. A call, a keyword
+form's slot, an operator's operand, a type expression, a `MODULE` body and a
+`MATCH` or `TRY` arm are all eager contexts. So in
 
-Types declared together in one module body share one position, so a group of
-mutually recursive types is visible to each of its members in any source
-order.
+```
+LET f = FN <reads g>
+LET x = [f, compute(5)]
+LET y = g([f])
+LET z = (FN <reads f>)()
+LET a = b
+```
+
+`f`'s mention of `g` is deferred, however `g` is used inside the body, as is
+`x`'s mention of `f`; `x`'s mention of `compute` is eager. `y`'s mention of
+`f` is eager, because the list sits under a call. `z`'s mention of `f` is
+eager although it sits in a body, because that body is called. `a`'s mention
+of `b` is eager: the root itself is the mention.
+
+An eager mention reads at its statement's position, so it sees every binding
+declared before the statement and never a later one, and a binder never sees
+its own right-hand side. A deferred mention reads at the body's end, so it
+sees every binding the body declares, in any source order. Both positions are
+fixed where the statement is written, not where a callable it births is
+called. A function body therefore sees its own name, every sibling declared
+after it, and everything declared before it; a forward *use* of a name is an
+unbound-name error.
+
+**Components.** With every mention resolved, the shape's bindings form a
+reference graph, and the shape computes its strongly connected components, as
+the [type lattice](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)
+does for a group of recursive types. A component whose internal mentions are
+all deferred is a group of values that only store and capture one another. Its
+members can be born together as one [knot](../memory/README.md#the-knot) once
+each member's eager mentions, which all leave the component, have evaluated:
+a member's reference to a sibling or to itself is an edge, never a wait on a
+pending slot. Two mutually recursive functions form such a component, and so
+do a ring of containers and a container holding a callable that captures it.
+A lone self-recursive function is a one-member component.
+
+A component containing an eager mention of a fellow member has no solution:
+the mentioning binding cannot finish until the member's value exists, and the
+member's value cannot exist until the component is tied, which waits on the
+mentioning binding. The shape rejects such a program where it is built, never
+a hang. `LET a = b; LET b = a` is the smallest case, an eager mention at each
+root; `LET f = FN <reads x>; LET x = f()` is the same error through a call,
+and so is a function outside a module that is mutually recursive with one
+inside it, since a module body is an eager context — the two belong in one
+module.
+
+Which components are tied as knots, and how a deferred mention below a nested
+constructor is written into one, belong to the callable layer
+([Open work](#open-work)); the shape hands it each body's components and the
+class of every mention.
 
 ## Two channels
 
 A value name and a type name are different key types, so the value channel and
 the type channel cannot collide by construction. A name whose text classifies
 as neither is rejected where the text is classified, before any scope sees it.
+The partition lives in the shape: each channel is its own run of declared
+names. An activation holds one run of slots over `Value`, since a type is a
+`Value` arm, and the shape's key types keep the two channels' indices apart.
+Keyword buckets are dispatch's to resolve.
 
 **Builtins are immutable and unshadowable.** A user binding whose name collides
 with a builtin's, in either channel, is a rebind error at any depth, never a
@@ -79,20 +160,40 @@ no part of the builtin table.
 
 A slot is written once. Its binder replaces the placeholder in place, and
 nothing rewrites it after that, so a binding is as immutable as the value it
-holds. A read of a visible slot that is still a placeholder does not fail: the
-reader waits for the binder to commit. What the waiting reader is parked on is
-the scheduler's concern; the scope reports the slot as pending.
+holds.
+
+A pending slot names its binder: the
+[`CellHandle`](../../cellgraph/src/handle.rs) of the cell that will bind it. A
+read of a visible slot returns the bound value, or the pending handle; the
+embedder turns the handle into a dependency edge from the reading cell to the
+binder, and the scope parks nothing itself. The waiter chain is the
+scheduler's dependency graph, not the slot's.
+
+A slot visible to a running reader is never unwritten. The scheduler submits a
+body's statements in position order and claims a binder's slot when it
+submits the binder, so a binder declared before a reader has its cell before
+the reader runs. Empty is a state a slot has only before its binder is
+submitted.
+
+A function activation and a module activation are one shape. A module body's
+binders are its exports in flight, and a `USING` over a binder that is still
+pending is the same pending read.
 
 ## Names that arrive at run time
 
 Two forms introduce names no shape can see.
 
-- **`EVAL`** resolves the names of the code it evaluates against the scope it
-  appears in, by name: a search of each shape's declared names, from the
-  innermost scope outward, with the same visibility rule. A by-name resolution
-  picks the same binding the shape's coordinate would. Resolving outward needs
-  the enclosing scopes to still exist, so the closure of a body containing
-  `EVAL` retains its defining scope.
+- **`EVAL`** builds a block shape for the code it evaluates when it runs,
+  over the activation it appears in: every free name resolves by name, a
+  search of each enclosing shape's declared names from the innermost outward
+  with the same visibility rule, and every mention is eager, reading at
+  `EVAL`'s own position. A by-name resolution picks the same binding the
+  shape's coordinate would. A binder in the evaluated code binds in that block
+  shape and is gone when it ends; nothing an `EVAL` runs declares into the
+  scope around it. Resolving outward needs the enclosing scopes to still
+  exist, so a shape containing `EVAL`, and every shape lexically enclosing
+  it, retains its defining scope. Every other shape resolves through
+  coordinates alone and keeps no link to its parent.
 - **`USING … SCOPE`** takes the names it surfaces from the module's signature,
   so a shape resolves them like any other name. The module's signature must be
   known statically where `USING` appears; a module whose signature is not
@@ -101,22 +202,25 @@ Two forms introduce names no shape can see.
 ## Memory
 
 An activation is bump-backed in its frame's region and `Drop`-free, so a
-frame's death releases it with the region. It holds no pointer into itself —
+frame's death releases it with the region. It holds no pointer into itself:
 its shape lives in program storage, its builtin table outlives every frame,
-and its slots hold values — and the closure bindings it copies hold no
-placeholder, so an activation is copied by copying its bytes.
+its closure bindings live in the callable value, which the caller keeps alive
+across the call, and its slots hold values. An activation is therefore copied
+by copying its bytes.
 
 ## The import rule
 
-`scopes` names `crate::values`, `crate::type_lattice`, `crate::memory` and
-`crate::parse`, and no scheduler type. The scheduler reaches scopes through
-its embedder; scopes never reach the scheduler.
+`scope` names `crate::values`, `crate::type_lattice`, `crate::memory`,
+`crate::parse` and `cellgraph`'s cell handle, and no scheduler type. The cell
+handle is the substrate's name for a unit of work, which `memory` already
+rests on; the scheduler reaches scopes through its embedder, and scopes never
+reach the scheduler.
 
 ## Open work
 
 - [Scope on values and types](../../roadmap/rewrite/scope-on-values-and-types.md)
   — the module this document describes.
 - [Callable values](../../roadmap/rewrite/callable-values.md) — closure
-  bindings born from a function value, and the definition windows that settle
-  the provisional visibility rule.
+  bindings born from a function value, and tying a component as a knot,
+  including a deferred mention below a nested constructor.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.

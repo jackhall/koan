@@ -47,7 +47,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use crate::memory::{BumpAllocator, BumpVec, ScopeId};
+use crate::memory::{BumpAllocator, BumpVec, ScopeId, strongly_connected_components};
 use crate::parse::{Symbol, TypeSymbol};
 
 use super::digest::{ComponentMember, TypeDigest, component_digest, member_ref_digest};
@@ -552,7 +552,7 @@ pub(super) fn seal_group<'w>(
         BumpVec::with_capacity_in(count, scratch);
     placement.resize(count, None);
 
-    for mut order in tarjan_components(scratch, &edges) {
+    for mut order in strongly_connected_components(scratch, &edges) {
         // Canonical presentation order is the numeric order of the members' name symbols, with the
         // owning binder as tiebreak so two same-tag variants of different binders take stable
         // distinct positions. It is the order the digest feed folds in, so index and feed agree.
@@ -635,90 +635,4 @@ pub(super) fn seal_group<'w>(
         members: host.alloc_slice_copy(&sealed),
         binder_types: host.alloc_slice_copy(&binder_types),
     }
-}
-
-/// Tarjan's strongly-connected components over `edges` (`edges[i]` = the members `i` references).
-///
-/// Components come back in the algorithm's natural emission order, which is a reverse topological
-/// order of the condensation: a component is emitted only after every component it references. The
-/// seal depends on exactly that — a cross-component reference must already have a finished handle
-/// when the referring component is digested.
-fn tarjan_components<'s>(
-    scratch: BumpAllocator<'s>,
-    edges: &[&[usize]],
-) -> BumpVec<'s, BumpVec<'s, usize>> {
-    struct State<'e, 's> {
-        scratch: BumpAllocator<'s>,
-        edges: &'e [&'e [usize]],
-        index: usize,
-        indices: BumpVec<'s, Option<usize>>,
-        lowlink: BumpVec<'s, usize>,
-        on_stack: BumpVec<'s, bool>,
-        stack: BumpVec<'s, usize>,
-        components: BumpVec<'s, BumpVec<'s, usize>>,
-    }
-
-    fn strong_connect(state: &mut State<'_, '_>, v: usize) {
-        state.indices[v] = Some(state.index);
-        state.lowlink[v] = state.index;
-        state.index += 1;
-        state.stack.push(v);
-        state.on_stack[v] = true;
-        for edge in 0..state.edges[v].len() {
-            let w = state.edges[v][edge];
-            match state.indices[w] {
-                None => {
-                    strong_connect(state, w);
-                    state.lowlink[v] = state.lowlink[v].min(state.lowlink[w]);
-                }
-                Some(w_index) if state.on_stack[w] => {
-                    state.lowlink[v] = state.lowlink[v].min(w_index);
-                }
-                Some(_) => {}
-            }
-        }
-        if state.lowlink[v] == state.indices[v].expect("v was just indexed") {
-            let mut component = BumpVec::new_in(state.scratch);
-            loop {
-                let w = state.stack.pop().expect("the stack holds v");
-                state.on_stack[w] = false;
-                component.push(w);
-                if w == v {
-                    break;
-                }
-            }
-            state.components.push(component);
-        }
-    }
-
-    let count = edges.len();
-    let filled = |value| {
-        let mut cells = BumpVec::with_capacity_in(count, scratch);
-        cells.resize(count, value);
-        cells
-    };
-    let mut state = State {
-        scratch,
-        edges,
-        index: 0,
-        indices: {
-            let mut cells = BumpVec::with_capacity_in(count, scratch);
-            cells.resize(count, None);
-            cells
-        },
-        lowlink: filled(0),
-        on_stack: {
-            let mut cells = BumpVec::with_capacity_in(count, scratch);
-            cells.resize(count, false);
-            cells
-        },
-        stack: BumpVec::with_capacity_in(count, scratch),
-        components: BumpVec::with_capacity_in(count, scratch),
-    };
-    for v in 0..count {
-        if state.indices[v].is_none() {
-            strong_connect(&mut state, v);
-        }
-    }
-    state.components
 }
