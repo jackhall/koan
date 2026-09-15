@@ -310,16 +310,27 @@ impl<'graph> Shape<'graph> {
 
     /// `name` by name within this shape alone: a local visible at `at`, else a capture.
     pub(crate) fn resolve_here(&self, name: BinderSymbol, at: Position) -> Option<Target> {
-        if let Some((slot, declared)) = self.slot(name)
-            && at.sees(declared)
-        {
-            return Some(Target::Local(slot));
-        }
-        self.captures
-            .iter()
-            .position(|capture| capture.name == name)
-            .map(|index| Target::Capture(CaptureSlot(index as u32)))
+        resolve_here(self.names, self.captures, name, at)
     }
+}
+
+/// `name` read at `at` over one body's declared names and captures: a local visible at `at`, else a
+/// capture of that name.
+fn resolve_here(
+    names: Channels<'_, Position>,
+    captures: &[CaptureSpec],
+    name: BinderSymbol,
+    at: Position,
+) -> Option<Target> {
+    if let Some(index) = names.find(name)
+        && at.sees(names.get(index))
+    {
+        return Some(Target::Local(Slot(index as u32)));
+    }
+    captures
+        .iter()
+        .position(|capture| capture.name == name)
+        .map(|index| Target::Capture(CaptureSlot(index as u32)))
 }
 
 /// Why a shape could not be built.

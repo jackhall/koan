@@ -28,6 +28,7 @@ use super::super::signature::{
 use super::{
     BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate,
     Mention, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
+    resolve_here,
 };
 
 /// The names a body declares without a binder statement.
@@ -74,7 +75,7 @@ pub(super) fn eval<'graph>(
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph Shape<'graph>, ShapeError> {
     let lookup = |name| site.builtins().lookup(name);
-    let outer = |name, position| site.coordinate_of(name, position);
+    let outer = |name, position| site.through_chain(name, position);
     let mut builder = Builder::new(brand, scratch, &lookup, Some((&outer, at)));
     let draft = builder.draft(ShapeKind::Block, at, &[], body.body_statements())?;
     Ok(builder.seal(draft))
@@ -170,6 +171,11 @@ struct Builder<'graph, 'x, 'e> {
     /// For an `EVAL` body: the by-name resolver over the site's chain, and `EVAL`'s position.
     outer: Option<(Outer<'e>, Position)>,
     chain: BumpVec<'x, Draft<'x>>,
+    /// Type parameters of the forms enclosing the current walk path: never mentions.
+    skip: BumpVec<'x, TypeSymbol>,
+    /// Where the current draft's own entries in `skip` start; a nested body declares its enclosing
+    /// form's type parameters as parameters and reads them as mentions.
+    skip_floor: usize,
 }
 
 impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
@@ -185,6 +191,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             builtins,
             outer,
             chain: BumpVec::new_in(scratch),
+            skip: BumpVec::new_in(scratch),
+            skip_floor: 0,
         }
     }
 
@@ -211,7 +219,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         self.chain.push(draft);
         let level = self.chain.len() - 1;
         for (statement, node) in nodes.iter().enumerate() {
-            if let Err(error) = self.walk_node(level, statement as u32, node, State::Root, &[]) {
+            if let Err(error) = self.walk_node(level, statement as u32, node, State::Root) {
                 self.chain.pop();
                 return Err(error);
             }
@@ -295,14 +303,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         statement: u32,
         node: &KExpression<'graph>,
         state: State,
-        skip: &[TypeSymbol],
     ) -> Result<(), ShapeError> {
         let Some(form) = node.cache().form() else {
             if let [only] = node.parts {
-                return self.walk_part(level, statement, &only.value, state, skip);
+                return self.walk_part(level, statement, &only.value, state);
             }
             for part in node.parts {
-                self.walk_part(level, statement, &part.value, State::Eager, skip)?;
+                self.walk_part(level, statement, &part.value, State::Eager)?;
             }
             return Ok(());
         };
@@ -326,34 +333,55 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
         // A callable's parameters are declared before any part is read, so a type parameter a
         // signature names is never taken for a mention of the enclosing shape.
+        let declares = roles
+            .iter()
+            .any(|role| matches!(role, Role::Signature | Role::Quantifiers));
         let mut parameters = BumpVec::new_in(self.scratch);
-        for (role, part) in roles.iter().zip(node.parts) {
-            match role {
-                Role::Signature => declare_parameters(&part.value, &mut parameters),
-                Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
-                _ => {}
+        if declares {
+            for (role, part) in roles.iter().zip(node.parts) {
+                match role {
+                    Role::Signature => declare_parameters(&part.value, &mut parameters),
+                    Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
+                    _ => {}
+                }
             }
         }
-        let mut own_skip = BumpVec::with_capacity_in(skip.len(), self.scratch);
-        own_skip.extend_from_slice(skip);
-        own_skip.extend(parameters.iter().filter_map(|name| match name {
-            BinderSymbol::Type(name) => Some(*name),
-            BinderSymbol::Value(_) => None,
-        }));
+        let mark = self.skip.len();
+        self.skip
+            .extend(parameters.iter().filter_map(|name| match name {
+                BinderSymbol::Type(name) => Some(*name),
+                BinderSymbol::Value(_) => None,
+            }));
+        let walked = self.walk_parts(level, statement, node, form.id, roles, &parameters, state);
+        self.skip.truncate(mark);
+        walked
+    }
 
+    /// Walk each of a form's parts by its role, with the form's type parameters on the skip stack.
+    #[allow(clippy::too_many_arguments)]
+    fn walk_parts(
+        &mut self,
+        level: usize,
+        statement: u32,
+        node: &KExpression<'graph>,
+        form: FormId,
+        roles: &[Role],
+        parameters: &[BinderSymbol],
+        state: State,
+    ) -> Result<(), ShapeError> {
         for (role, part) in roles.iter().zip(node.parts) {
             let part = &part.value;
             match *role {
                 Role::Keyword | Role::Name | Role::Data | Role::Label | Role::Quantifiers => {}
-                Role::Rhs => self.walk_part(level, statement, part, state, &own_skip)?,
+                Role::Rhs => self.walk_part(level, statement, part, state)?,
                 Role::Argument | Role::TypeExpression => {
-                    self.walk_part(level, statement, part, State::Eager, &own_skip)?
+                    self.walk_part(level, statement, part, State::Eager)?
                 }
-                Role::Signature => self.walk_signature(level, statement, part, &own_skip)?,
+                Role::Signature => self.walk_signature(level, statement, part)?,
                 Role::Body(kind) => {
-                    self.enter_body(level, statement, form.id, part, kind, &parameters, state)?
+                    self.enter_body(level, statement, form, part, kind, parameters, state)?
                 }
-                Role::Branches(heads) => self.enter_arms(level, statement, form.id, part, heads)?,
+                Role::Branches(heads) => self.enter_arms(level, statement, form, part, heads)?,
                 Role::Schema(kind) => {
                     self.walk_schema(level, statement, part, kind, state.constructor())?
                 }
@@ -369,40 +397,39 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         statement: u32,
         part: &ExpressionPart<'graph>,
         state: State,
-        skip: &[TypeSymbol],
     ) -> Result<(), ShapeError> {
         match part {
             ExpressionPart::Identifier(name) => {
                 self.mention(level, statement, part, BinderSymbol::Value(*name), state)
             }
-            ExpressionPart::Type(name) if !skip.contains(name) => {
+            ExpressionPart::Type(name) if !self.skips(name) => {
                 self.mention(level, statement, part, BinderSymbol::Type(*name), state)
             }
             ExpressionPart::Expression(node) => {
-                self.walk_node(level, statement, node.reference(), state, skip)
+                self.walk_node(level, statement, node.reference(), state)
             }
             ExpressionPart::SigiledTypeExpr(node) => {
-                self.walk_node(level, statement, node.reference(), State::Eager, skip)
+                self.walk_node(level, statement, node.reference(), State::Eager)
             }
             ExpressionPart::RecordType(node) => {
-                self.walk_fields(level, statement, node.reference(), State::Eager, skip)
+                self.walk_fields(level, statement, node.reference(), State::Eager)
             }
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
-                    self.walk_part(level, statement, item, state.constructor(), skip)?;
+                    self.walk_part(level, statement, item, state.constructor())?;
                 }
                 Ok(())
             }
             ExpressionPart::DictLiteral(pairs) => {
                 for (key, value) in pairs.iter() {
-                    self.walk_part(level, statement, key, State::Eager, skip)?;
-                    self.walk_part(level, statement, value, state.constructor(), skip)?;
+                    self.walk_part(level, statement, key, State::Eager)?;
+                    self.walk_part(level, statement, value, state.constructor())?;
                 }
                 Ok(())
             }
             ExpressionPart::RecordLiteral(pairs) => {
                 for (_, value) in pairs.iter() {
-                    self.walk_part(level, statement, value, state.constructor(), skip)?;
+                    self.walk_part(level, statement, value, state.constructor())?;
                 }
                 Ok(())
             }
@@ -421,15 +448,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         statement: u32,
         run: &KExpression<'graph>,
         state: State,
-        skip: &[TypeSymbol],
     ) -> Result<(), ShapeError> {
         let mut index = 0;
         while index < run.parts.len() {
             if pair_name(run, index).is_some() {
-                self.walk_part(level, statement, &run.parts[index + 1].value, state, skip)?;
+                self.walk_part(level, statement, &run.parts[index + 1].value, state)?;
                 index += 2;
             } else {
-                self.walk_part(level, statement, &run.parts[index].value, state, skip)?;
+                self.walk_part(level, statement, &run.parts[index].value, state)?;
                 index += 1;
             }
         }
@@ -441,11 +467,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         level: usize,
         statement: u32,
         part: &ExpressionPart<'graph>,
-        skip: &[TypeSymbol],
     ) -> Result<(), ShapeError> {
         match signature_run(part) {
-            Some(run) => self.walk_fields(level, statement, run, State::Eager, skip),
-            None => self.walk_part(level, statement, part, State::Eager, skip),
+            Some(run) => self.walk_fields(level, statement, run, State::Eager),
+            None => self.walk_part(level, statement, part, State::Eager),
         }
     }
 
@@ -472,7 +497,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     })
             }));
         }
-        self.walk_schema_part(level, statement, part, kind, state, &own)
+        let mark = self.skip.len();
+        self.skip.extend_from_slice(&own);
+        let walked = self.walk_schema_part(level, statement, part, kind, state);
+        self.skip.truncate(mark);
+        walked
     }
 
     fn walk_schema_part(
@@ -482,10 +511,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         part: &ExpressionPart<'graph>,
         kind: SchemaKind,
         state: State,
-        own: &[TypeSymbol],
     ) -> Result<(), ShapeError> {
         let run = match part {
-            ExpressionPart::Type(name) if !own.contains(name) => {
+            ExpressionPart::Type(name) if !self.skips(name) => {
                 return self.mention(level, statement, part, BinderSymbol::Type(*name), state);
             }
             ExpressionPart::Expression(run)
@@ -494,7 +522,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => {
-                return self.walk_part(level, statement, part, state, own);
+                return self.walk_part(level, statement, part, state);
             }
             ExpressionPart::Type(_)
             | ExpressionPart::Identifier(_)
@@ -507,14 +535,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             if tag && matches!(inner.value, ExpressionPart::Type(_)) {
                 continue;
             }
-            self.walk_schema_part(
-                level,
-                statement,
-                &inner.value,
-                SchemaKind::Plain,
-                state,
-                own,
-            )?;
+            self.walk_schema_part(level, statement, &inner.value, SchemaKind::Plain, state)?;
         }
         Ok(())
     }
@@ -537,13 +558,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             });
         };
         let (shape_kind, class) = match kind {
-            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => (
-                ShapeKind::Callable,
-                match state {
-                    State::Eager => MentionClass::Eager,
-                    State::Root | State::Deferred => MentionClass::Deferred,
-                },
-            ),
+            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => {
+                (ShapeKind::Callable, state.constructor().class())
+            }
             BodyKind::Module => (ShapeKind::Module, MentionClass::Eager),
         };
         let operator = [
@@ -557,12 +574,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             BodyKind::UnaryOperator => &unary,
             BodyKind::Module => &[],
         };
-        let parent = &mut self.chain[level];
-        parent.current = (statement, class);
-        let entered_at = parent.boundary();
-        let child = self.draft(shape_kind, entered_at, parameters, body.body_statements())?;
-        self.chain[level].children.push((Site::of(part), child));
-        Ok(())
+        self.enter_child(
+            level,
+            statement,
+            class,
+            Site::of(part),
+            shape_kind,
+            parameters,
+            body.body_statements(),
+        )
     }
 
     fn enter_arms(
@@ -595,18 +615,51 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 return Err(malformed);
             }
             if heads == Heads::Types {
-                self.walk_part(level, statement, head, State::Eager, &[])?;
+                self.walk_part(level, statement, head, State::Eager)?;
             }
-            let parent = &mut self.chain[level];
-            parent.current = (statement, MentionClass::Eager);
-            let entered_at = parent.boundary();
             let it = [BinderSymbol::Value(IMPLICIT.it.symbol())];
-            let child = self.draft(ShapeKind::Block, entered_at, &it, body.body_statements())?;
-            self.chain[level]
-                .children
-                .push((Site::of(body_part), child));
+            self.enter_child(
+                level,
+                statement,
+                MentionClass::Eager,
+                Site::of(body_part),
+                ShapeKind::Block,
+                &it,
+                body.body_statements(),
+            )?;
         }
         Ok(())
+    }
+
+    /// Build a nested draft under the statement being walked at `level`, entered with `class`, and
+    /// hold it under `site` until this draft's components settle its captures.
+    #[allow(clippy::too_many_arguments)]
+    fn enter_child<'n>(
+        &mut self,
+        level: usize,
+        statement: u32,
+        class: MentionClass,
+        site: Site,
+        kind: ShapeKind,
+        parameters: &[BinderSymbol],
+        statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
+    ) -> Result<(), ShapeError>
+    where
+        'graph: 'n,
+    {
+        let parent = &mut self.chain[level];
+        parent.current = (statement, class);
+        let entered_at = parent.boundary();
+        let floor = std::mem::replace(&mut self.skip_floor, self.skip.len());
+        let child = self.draft(kind, entered_at, parameters, statements);
+        self.skip_floor = floor;
+        self.chain[level].children.push((site, child?));
+        Ok(())
+    }
+
+    /// Whether `name` is a type parameter of a form enclosing the walk within the current draft.
+    fn skips(&self, name: &TypeSymbol) -> bool {
+        self.skip[self.skip_floor..].contains(name)
     }
 
     /// Resolve and record the mention of `name` at `part`.
@@ -660,18 +713,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Option<Coordinate> {
         let draft = &self.chain[level];
         let kind = draft.kind;
-        let names = draft.channels();
-        let visible = names
-            .find(name)
-            .filter(|index| at.sees(names.get(*index)))
-            .map(|index| Slot(index as u32));
-        let captured = draft.captures.iter().position(|spec| spec.name == name);
-        if let Some(slot) = visible {
-            self.edge(level, slot, reader);
-            return Some(Coordinate::Activation {
-                hops: 0,
-                target: Target::Local(slot),
-            });
+        if let Some(target) = resolve_here(draft.channels(), &draft.captures, name, at) {
+            if let Target::Local(slot) = target {
+                self.edge(level, slot, reader);
+            }
+            return Some(Coordinate::Activation { hops: 0, target });
         }
         let outer = |builder: &mut Self| match level.checked_sub(1) {
             Some(parent) => {
@@ -685,12 +731,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         match kind {
             ShapeKind::Program => None,
             ShapeKind::Callable | ShapeKind::Module => {
-                if let Some(index) = captured {
-                    return Some(Coordinate::Activation {
-                        hops: 0,
-                        target: Target::Capture(CaptureSlot(index as u32)),
-                    });
-                }
                 let source = outer(self)?;
                 let captures = &mut self.chain[level].captures;
                 captures.push(CaptureSpec {

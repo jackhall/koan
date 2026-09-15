@@ -161,12 +161,17 @@ impl<'graph, 'cell> Activation<'graph, 'cell> {
         if let Some(index) = self.builtins.lookup(name) {
             return Some(Coordinate::Builtin(index));
         }
+        self.through_chain(name, at)
+    }
+
+    /// [`coordinate_of`](Self::coordinate_of) for a name already known not to be a builtin.
+    pub(super) fn through_chain(&self, name: BinderSymbol, at: Position) -> Option<Coordinate> {
         if let Some(target) = self.shape.resolve_here(name, at) {
             return Some(Coordinate::Activation { hops: 0, target });
         }
         let outer = self
             .enclosing?
-            .coordinate_of(name, self.shape.entered_at())?;
+            .through_chain(name, self.shape.entered_at())?;
         Some(outer.through_block())
     }
 }

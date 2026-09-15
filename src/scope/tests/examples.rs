@@ -369,3 +369,25 @@ fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
         },
     );
 }
+
+#[test]
+fn a_quantifier_read_in_its_body_is_a_mention_of_the_body_parameter() {
+    shaped(
+        "EXPR FOR ALL (Elt) (HEAD xs :(LIST OF Elt)) -> Elt = (Elt)",
+        |fixture, lines, shape| {
+            let shape = shape.expect("the body reads its own type parameter");
+            let body = shape
+                .nested(crate::scope::Site::of(&lines[0].parts[8].value))
+                .expect("the body has a shape");
+            let elt = BinderSymbol::Type(type_name("Elt", fixture.labels));
+            let (slot, _) = body.slot(elt).expect("the quantifier is a body parameter");
+            assert_eq!(
+                mention_of(body, elt).coordinate,
+                Coordinate::Activation {
+                    hops: 0,
+                    target: Target::Local(slot),
+                }
+            );
+        },
+    );
+}
