@@ -31,9 +31,10 @@ description: a value built in a step is a plain reference whose reach is the
 executing cell, and a value crossing a step rides the substrate's carrier,
 [`ValueCarrier`](../values.rs), `memory`'s `Ready` bound to
 [`ValueFamily`](../values.rs). Every resident struct is `Copy`, so it is
-`Drop`-free by construction and a region releases it whole. Three helpers spell
-the shapes `Writer` lays down: `resident` (one value, `fill` at length one),
-`collect` (an exact-size run, `fill` with no growth path) and `text`.
+`Drop`-free by construction and a region releases it whole. Every door lays its
+struct down through `memory`'s `resident` and its runs through `collect`, the
+two shapes derived from `Writer::fill`; `text` is the one helper here, a string
+value over `Writer::text`.
 
 A tagged value is the one nominal wrap — a newtype construction, a union
 variant, a lowered error — and its identity *is* its type, so no tag symbol
@@ -115,7 +116,8 @@ its weight, and both build the same way: a **pinned** operand arrives at the
 destination's brand and embeds as it is, and a **copied** one is rebuilt through
 `copy_into` — region parts written again through the destination's writer,
 program nodes embedded verbatim, memoized types and weights carried over
-unchanged.
+unchanged. `copy_into` is private to the crossing: the two doors are the only
+way to a deep copy, so every copy is one the graph priced.
 
 The graph consults an embedder closure for each operand's verdict, and this
 module owns it: [`verdict`](crossing.rs) copies when the copy costs less than a

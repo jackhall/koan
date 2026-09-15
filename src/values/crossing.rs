@@ -7,10 +7,10 @@
 
 use crate::memory::{
     Active, CellHandle, CrossedOperand, Operand, Prices, Reattachable, Stale, StepContext, Verdict,
-    Writer,
+    Writer, collect,
 };
 
-use super::{Dict, List, Record, Tagged, Value, ValueCarrier, ValueFamily, collect, text};
+use super::{Dict, List, Record, Tagged, Value, ValueCarrier, ValueFamily, text};
 
 /// How many copy bytes one pin byte is worth: an operand copies while its copy costs less than a
 /// `COPY_RATIO`th of what pinning it would newly retain.
@@ -69,8 +69,9 @@ pub fn cross_here<'graph, 'step, 'here, C: Reattachable<'graph>>(
 }
 
 /// The deep copy: every region part of `value` rebuilt through `writer`, every program node
-/// embedded as the same node, every memoized type and weight carried over. Total.
-pub(crate) fn copy_into<'graph, 'cell>(
+/// embedded as the same node, every memoized type and weight carried over. Total. Reached only
+/// through the two doors above, so every copy is one the graph priced.
+fn copy_into<'graph, 'cell>(
     writer: Writer<'cell>,
     value: &Value<'graph, '_>,
 ) -> Value<'graph, 'cell>

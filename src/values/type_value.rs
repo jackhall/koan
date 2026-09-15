@@ -1,9 +1,7 @@
 //! A first-class type as a value: the handle it names and the `OfKind` type it has.
 
-use crate::memory::Writer;
+use crate::memory::{Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry};
-
-use super::resident;
 
 /// A type in value position. Its own type is the kind of the type it names, memoized at
 /// construction, so a kind slot checks it with one lattice relation.

@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use crate::memory::{BumpAllocator, Writer};
+use crate::memory::{BumpAllocator, Writer, collect};
 use crate::parse::ast::RunIter;
 use crate::parse::{
     BinderSymbol, DispatchShape, ExpressionPart, KExpression, KeyElement, KeywordSymbol,
@@ -18,7 +18,7 @@ use crate::parse::{
 use crate::source::{FileId, SourceRef, Span, Spanned};
 use crate::type_lattice::{TypeRegistry, display_name};
 
-use super::{Value, collect, part_ktype};
+use super::{Value, part_ktype};
 
 /// One slot of a working expression.
 #[derive(Clone, Copy, Debug)]

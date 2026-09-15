@@ -4,10 +4,10 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::memory::{BumpAllocator, BumpVec, Writer};
+use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry, join};
 
-use super::{Value, Weight, resident};
+use super::{Value, Weight};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
 /// normalises — NaN is refused and `-0` folds to `0` — so the order and equality below agree with

@@ -5,9 +5,9 @@
 //! in when what it captures is a fellow member of its own component. Birth reads every source first
 //! and refuses while one is still pending, so a closure binding is never a placeholder.
 
-use crate::memory::{CellHandle, Edge, Writer};
+use crate::memory::{CellHandle, Edge, Writer, collect, resident};
 use crate::parse::BinderSymbol;
-use crate::values::{Value, collect, resident};
+use crate::values::Value;
 
 use super::activation::{Activation, Binding};
 use super::shape::{CaptureSlot, CaptureSource, ComponentIndex, Shape};

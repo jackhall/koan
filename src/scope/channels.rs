@@ -2,9 +2,8 @@
 //! the type channel each sorted by symbol, sharing one index space with values first and types
 //! after.
 
-use crate::memory::{BumpAllocator, BumpVec, Writer};
+use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
 use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
-use crate::values::collect;
 
 /// Two sorted runs sharing one index space: value entries first, type entries after.
 #[derive(Clone, Copy)]

@@ -1,11 +1,11 @@
 //! A record: field names and cells as two aligned runs in the region, sorted by symbol so a field
 //! read is a binary search.
 
-use crate::memory::{BumpAllocator, BumpVec, Writer};
+use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::parse::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::{Value, Weight, resident};
+use super::{Value, Weight};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
 /// nominal identity, only its fields; equality over two is blind to the order they were written in.

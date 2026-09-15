@@ -1,10 +1,10 @@
 //! The one nominal wrap: a payload tagged with a type identity — a newtype construction, a union
 //! variant, an abstract-type re-tag, a lowered error.
 
-use crate::memory::Writer;
+use crate::memory::{Writer, resident};
 use crate::type_lattice::KType;
 
-use super::{Value, Weight, resident};
+use super::{Value, Weight};
 
 /// A tagged value. The identity is its type, so no tag symbol rides beside the payload.
 #[derive(Clone, Copy, Debug)]

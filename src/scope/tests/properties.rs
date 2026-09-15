@@ -6,14 +6,14 @@ use std::collections::BTreeSet;
 
 use proptest::prelude::*;
 
-use crate::memory::{CellHandle, KnotPlan, Writer};
+use crate::memory::{CellHandle, KnotPlan, Writer, resident};
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
 use crate::scope::{
     Activation, Binding, Builtins, Capture, CaptureSource, ClosureBindings, ClosureRefused,
     Coordinate, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
 };
 use crate::type_lattice::KType;
-use crate::values::{Value, resident};
+use crate::values::Value;
 
 use super::plan::{self, Class, Generator, Kind, Lands, Refusal, Rendering, Token};
 use super::{builtins, with_fixture};

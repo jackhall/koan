@@ -5,9 +5,9 @@
 //! it into a [`BuiltinIndex`] where it is built. Values come first and types after, so one index
 //! space serves both channels.
 
-use crate::memory::{BumpAllocator, Writer};
+use crate::memory::{BumpAllocator, Writer, resident};
 use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
-use crate::values::{Value, resident};
+use crate::values::Value;
 
 use super::channels::Channels;
 use super::shape::BuiltinIndex;

@@ -86,7 +86,12 @@ its cells needs no second structure keyed on the same name. The transitions
 live on the cell itself, so a *keyed* table over the same cell type rules on a
 write exactly as the array does.
 
-**A value at rest in the region.** `fill` hands back a shared `&'cell` borrow,
+**A value at rest in the region.** `Writer` has two write verbs, `fill` and
+`text`, and every simpler shape is derived here: `resident` lays one `Copy`
+value down (`fill` at length one) and `collect` an exact-size run (`fill`
+driven by the iterator, with no growth path). Both live beside the re-export in
+[substrate.rs](substrate.rs) and are how `values` and `scope` lay down their
+region-resident structs. `fill` hands back a shared `&'cell` borrow,
 never `&mut`, and a continuation captures `'here` borrows, so every write after
 construction goes through interior mutability. Each slot is a `Cell` — no
 borrow flag — and a `Cell` never lends a `&T`, so reads copy: both parameters

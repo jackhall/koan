@@ -116,7 +116,7 @@ fn admission_reads_each_part_kind() {
             };
             assert!(admits(KType::STR, &spliced, types, scratch));
             assert!(!admits(KType::IDENTIFIER, &spliced, types, scratch));
-            let nested = WorkingPart::Expression(crate::values::resident(writer, working));
+            let nested = WorkingPart::Expression(crate::memory::resident(writer, working));
             for unfilled in [WorkingPart::StagedSlot, nested] {
                 assert!(admits(KType::ANY, &unfilled, types, scratch));
                 assert!(!admits(KType::KEXPRESSION, &unfilled, types, scratch));

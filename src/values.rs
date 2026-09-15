@@ -8,7 +8,8 @@
 //!
 //! A value borrows at two lifetimes. What it holds of program storage — a quoted expression's
 //! node — sits at `'graph`, which the cell graph never retypes; what a writer laid down sits at
-//! `'cell`. [`cross`] moves a value between regions over the substrate's placement doors, rebuilding
+//! `'cell`, through `memory`'s [`resident`](crate::memory::resident) and
+//! [`collect`](crate::memory::collect) shapes. [`cross`] moves a value between regions over the substrate's placement doors, rebuilding
 //! only the `'cell` parts under a copy, and [`verdict`] is the copy-or-pin policy a graph is built
 //! with. [`working`] is the scheduler's per-dispatch expression form, built in the executing cell's
 //! region.
@@ -209,24 +210,6 @@ impl<'graph, 'cell> Value<'graph, 'cell> {
             (other, _) => other,
         }
     }
-}
-
-/// Store one value in the region and hand back its resident borrow — `fill` at length one.
-pub fn resident<'cell, T: Copy>(writer: Writer<'cell>, value: T) -> &'cell T {
-    &writer.fill(1, |_| value)[0]
-}
-
-/// Copy an exact-length run into the region — `fill` driven by the iterator, with no growth path.
-pub fn collect<'cell, T>(
-    writer: Writer<'cell>,
-    items: impl ExactSizeIterator<Item = T>,
-) -> &'cell [T] {
-    let mut items = items;
-    writer.fill(items.len(), |_| {
-        items
-            .next()
-            .expect("an exact-size iterator yields its reported length")
-    })
 }
 
 /// A string value whose bytes are written into the region.

@@ -27,3 +27,23 @@ pub type CellGraph<'graph, C> = cellgraph::CellGraph<'graph, C, WIDTH>;
 /// What a step running in a cell holds: the cell's brand, its writer and the step's doors.
 pub type StepContext<'graph, 'step, 'here, C> =
     cellgraph::StepContext<'graph, 'step, 'here, C, WIDTH>;
+
+/// Store one value in the region and hand back its resident borrow — [`Writer::fill`] at length
+/// one.
+pub fn resident<'cell, T: Copy>(writer: Writer<'cell>, value: T) -> &'cell T {
+    &writer.fill(1, |_| value)[0]
+}
+
+/// Copy an exact-length run into the region — [`Writer::fill`] driven by the iterator, with no
+/// growth path.
+pub fn collect<'cell, T>(
+    writer: Writer<'cell>,
+    items: impl ExactSizeIterator<Item = T>,
+) -> &'cell [T] {
+    let mut items = items;
+    writer.fill(items.len(), |_| {
+        items
+            .next()
+            .expect("an exact-size iterator yields its reported length")
+    })
+}

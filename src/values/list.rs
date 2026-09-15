@@ -1,9 +1,9 @@
 //! A list: one run of cells in the region, typed by the join of its elements.
 
-use crate::memory::{BumpAllocator, Writer};
+use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry, join};
 
-use super::{Value, Weight, resident};
+use super::{Value, Weight};
 
 /// A list value, resident in the region its cells live in.
 #[derive(Clone, Copy, Debug)]
