@@ -19,6 +19,10 @@ use super::closure::{Capture, ClosureBindings};
 use super::shape::{Coordinate, Position, Shape, ShapeKind, Slot, Target};
 
 /// One body's bindings for one call or one block entry.
+///
+/// Each kind has its own constructor: a program has neither closure bindings nor an enclosing
+/// activation, a callable or module has closure bindings, and a block has an enclosing activation
+/// whose builtin table it shares.
 #[derive(Clone, Copy)]
 pub struct Activation<'graph, 'cell> {
     shape: &'graph Shape<'graph>,
@@ -42,22 +46,34 @@ pub enum Binding<'graph, 'cell> {
 }
 
 impl<'graph, 'cell> Activation<'graph, 'cell> {
-    /// A fresh activation of `shape`, every slot `Empty`.
-    ///
-    /// A block is activated beside its enclosing activation and captures nothing; every other kind
-    /// has no enclosing activation, and only a callable or module has closure bindings.
-    pub fn new(
+    /// A fresh activation of the program shape `shape`, every slot `Empty`.
+    pub fn of_program(
+        writer: Writer<'cell>,
+        shape: &'graph Shape<'graph>,
+        builtins: &'cell Builtins<'graph, 'cell>,
+    ) -> Self {
+        debug_assert_eq!(shape.kind(), ShapeKind::Program);
+        Activation {
+            shape,
+            closure: ClosureBindings::EMPTY,
+            builtins,
+            enclosing: None,
+            slots: SlotArray::new(writer, shape.slots()),
+        }
+    }
+
+    /// A fresh activation of the callable or module shape `shape` over its closure bindings, every
+    /// slot `Empty`.
+    pub fn of_callable(
         writer: Writer<'cell>,
         shape: &'graph Shape<'graph>,
         closure: &'cell ClosureBindings<'graph, 'cell>,
         builtins: &'cell Builtins<'graph, 'cell>,
-        enclosing: Option<&'cell Activation<'graph, 'cell>>,
     ) -> Self {
-        debug_assert_eq!(
-            enclosing.is_some(),
-            shape.kind() == ShapeKind::Block,
-            "a block, and only a block, is activated beside an enclosing activation",
-        );
+        debug_assert!(matches!(
+            shape.kind(),
+            ShapeKind::Callable | ShapeKind::Module
+        ));
         debug_assert_eq!(
             closure.len(),
             shape.captures().len(),
@@ -67,7 +83,23 @@ impl<'graph, 'cell> Activation<'graph, 'cell> {
             shape,
             closure,
             builtins,
-            enclosing,
+            enclosing: None,
+            slots: SlotArray::new(writer, shape.slots()),
+        }
+    }
+
+    /// A fresh activation of the block shape `shape` beside `enclosing`, every slot `Empty`.
+    pub fn of_block(
+        writer: Writer<'cell>,
+        shape: &'graph Shape<'graph>,
+        enclosing: &'cell Activation<'graph, 'cell>,
+    ) -> Self {
+        debug_assert_eq!(shape.kind(), ShapeKind::Block);
+        Activation {
+            shape,
+            closure: ClosureBindings::EMPTY,
+            builtins: enclosing.builtins,
+            enclosing: Some(enclosing),
             slots: SlotArray::new(writer, shape.slots()),
         }
     }
@@ -94,15 +126,20 @@ impl<'graph, 'cell> Activation<'graph, 'cell> {
         self.slots.bind(slot.index(), value)
     }
 
-    /// The read every resolved name makes: `hops` enclosing loads, then one slot, capture or builtin.
+    /// The read every resolved name makes: a builtin through the header, or `hops` enclosing loads
+    /// then one slot or capture.
     pub fn read(&self, at: Coordinate) -> Binding<'graph, 'cell> {
+        let (hops, target) = match at {
+            Coordinate::Builtin(index) => return Binding::Bound(self.builtins.get(index)),
+            Coordinate::Activation { hops, target } => (hops, target),
+        };
         let mut activation = self;
-        for _ in 0..at.hops {
+        for _ in 0..hops {
             activation = activation
                 .enclosing
                 .expect("a coordinate steps out only through enclosing block activations");
         }
-        match at.target {
+        match target {
             Target::Local(slot) => match activation.slots.get(slot.index()) {
                 SlotState::Bound(value) => Binding::Bound(value),
                 SlotState::Claimed(binder) => Binding::Pending(binder),
@@ -115,7 +152,6 @@ impl<'graph, 'cell> Activation<'graph, 'cell> {
                 Capture::Value(value) => Binding::Bound(value),
                 Capture::Edge(edge) => Binding::Edge(edge),
             },
-            Target::Builtin(index) => Binding::Bound(activation.builtins.get(index)),
         }
     }
 
@@ -123,20 +159,14 @@ impl<'graph, 'cell> Activation<'graph, 'cell> {
     /// then each enclosing block activation at the position its block was entered at.
     pub fn coordinate_of(&self, name: BinderSymbol, at: Position) -> Option<Coordinate> {
         if let Some(index) = self.builtins.lookup(name) {
-            return Some(Coordinate {
-                hops: 0,
-                target: Target::Builtin(index),
-            });
+            return Some(Coordinate::Builtin(index));
         }
         if let Some(target) = self.shape.resolve_here(name, at) {
-            return Some(Coordinate { hops: 0, target });
+            return Some(Coordinate::Activation { hops: 0, target });
         }
         let outer = self
             .enclosing?
             .coordinate_of(name, self.shape.entered_at())?;
-        Some(Coordinate {
-            hops: outer.hops + 1,
-            ..outer
-        })
+        Some(outer.through_block())
     }
 }

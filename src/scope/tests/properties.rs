@@ -150,8 +150,12 @@ enum Found {
 
 /// Follow `coordinate`, read at `level`, back through the chain's block steps and captures.
 fn follow(chain: &[&Shape<'_>], level: usize, coordinate: Coordinate) -> Found {
+    let (hops, target) = match coordinate {
+        Coordinate::Builtin(_) => return Found::Builtin,
+        Coordinate::Activation { hops, target } => (hops, target),
+    };
     let mut at = level;
-    for _ in 0..coordinate.hops {
+    for _ in 0..hops {
         assert_eq!(
             chain[at].kind(),
             ShapeKind::Block,
@@ -160,14 +164,7 @@ fn follow(chain: &[&Shape<'_>], level: usize, coordinate: Coordinate) -> Found {
         at -= 1;
     }
     let shape = chain[at];
-    match coordinate.target {
-        Target::Builtin(_) => {
-            assert_eq!(
-                coordinate.hops, 0,
-                "a builtin reads through the reader's own header"
-            );
-            Found::Builtin
-        }
+    match target {
         Target::Local(slot) => Found::Binder {
             level: at,
             name: shape.slot_name(slot),
@@ -182,7 +179,7 @@ fn follow(chain: &[&Shape<'_>], level: usize, coordinate: Coordinate) -> Found {
                 CaptureSource::Read(source) => follow(chain, at - 1, source),
                 CaptureSource::Member { component, index } => {
                     let enclosing = chain[at - 1];
-                    let member = enclosing.components()[component as usize].members[index as usize];
+                    let member = enclosing.components()[component.index()].members[index as usize];
                     Found::Binder {
                         level: at - 1,
                         name: enclosing.slot_name(member),
@@ -278,8 +275,12 @@ fn check(
                 .find(|mention| mention.site == located.sites[read])
                 .expect("a mention at the planned read's site");
             assert_eq!(mention.name, placed.read.name.symbol(labels), "`{source}`");
-            assert_eq!(mention.statement, placed.statement, "`{source}`");
             assert_eq!(mention.class, class(placed.read.class), "`{source}`");
+            let reads_at = match mention.class {
+                MentionClass::Eager => Position::statement(placed.statement as usize),
+                MentionClass::Deferred => shape.end(),
+            };
+            assert_eq!(mention.at, reads_at, "`{source}`");
             let expected = match placed.read.lands {
                 Lands::Builtin => Found::Builtin,
                 Lands::Binder { up } => Found::Binder {
@@ -318,7 +319,7 @@ fn check(
                     CaptureSource::Member { .. } => {
                         assert!(fellows.contains(&capture.name), "`{source}`")
                     }
-                    CaptureSource::Read(Coordinate {
+                    CaptureSource::Read(Coordinate::Activation {
                         hops: 0,
                         target: Target::Local(_),
                     }) => assert!(!fellows.contains(&capture.name), "`{source}`"),
@@ -401,16 +402,12 @@ fn followed(index: u32) -> Value<'static, 'static> {
 fn activate<'g, 'c>(
     writer: Writer<'c>,
     table: &'c Builtins<'g, 'c>,
-    shape: &'g Shape<'g>,
-    closure: &'c ClosureBindings<'g, 'c>,
-    enclosing: Option<&'c Activation<'g, 'c>>,
+    activation: Activation<'g, 'c>,
     next: &mut f64,
 ) {
     let plan = KnotPlan::new(64);
-    let activation = resident(
-        writer,
-        Activation::new(writer, shape, closure, table, enclosing),
-    );
+    let activation = resident(writer, activation);
+    let shape = activation.shape();
     for slot in 0..shape.slots() {
         activation
             .bind(Slot(slot as u32), Value::Number(*next))
@@ -420,10 +417,15 @@ fn activate<'g, 'c>(
 
     // By name at the read's own position lands where the coordinate does.
     for mention in shape.mentions() {
-        let at = match mention.class {
-            MentionClass::Eager => Position::statement(mention.statement as usize),
-            MentionClass::Deferred => shape.end(),
-        };
+        let at = mention.at;
+        if mention.class == MentionClass::Deferred {
+            assert_eq!(at, shape.end(), "a deferred mention reads at the end");
+        } else {
+            assert!(
+                Position::PARAMETER < at && at < shape.end(),
+                "an eager mention reads at its statement"
+            );
+        }
         assert_eq!(
             activation.coordinate_of(mention.name, at),
             Some(mention.coordinate)
@@ -441,7 +443,7 @@ fn activate<'g, 'c>(
         let (_, declared) = shape.slot(shape.slot_name(slot)).unwrap();
         for position in 0..=shape.end().0 {
             let at = Position(position);
-            let local = Coordinate {
+            let local = Coordinate::Activation {
                 hops: 0,
                 target: Target::Local(slot),
             };
@@ -457,9 +459,7 @@ fn activate<'g, 'c>(
             ShapeKind::Block => activate(
                 writer,
                 table,
-                nested,
-                ClosureBindings::EMPTY,
-                Some(activation),
+                Activation::of_block(writer, nested, activation),
                 next,
             ),
             ShapeKind::Callable => {
@@ -491,7 +491,12 @@ fn activate<'g, 'c>(
                         (source, _) => panic!("the binding does not follow its source {source:?}"),
                     }
                 }
-                activate(writer, table, nested, bindings, None, next);
+                activate(
+                    writer,
+                    table,
+                    Activation::of_callable(writer, nested, bindings, table),
+                    next,
+                );
             }
             ShapeKind::Program | ShapeKind::Module => panic!("a plan nests no such shape"),
         }
@@ -548,7 +553,7 @@ proptest! {
                         ShapeError::Unbound {
                             name: name.symbol(labels),
                             site: located.sites[read],
-                            statement: rendering.reads[read].statement,
+                            at: Position::statement(rendering.reads[read].statement as usize),
                         }
                     }
                     Refusal::EagerCycle(members) => {
@@ -583,7 +588,8 @@ proptest! {
     fn activations_read_what_their_coordinates_name(choices in plan::choices()) {
         let program = Generator::new(&choices).program();
         shaped_plan(&program, |shaped| {
-            activate(shaped.writer, shaped.table, shaped.shape, ClosureBindings::EMPTY, None, &mut 1.0);
+            let activation = Activation::of_program(shaped.writer, shaped.shape, shaped.table);
+            activate(shaped.writer, shaped.table, activation, &mut 1.0);
         });
     }
 
@@ -597,7 +603,7 @@ proptest! {
         let program = Generator::new(&choices).program();
         shaped_plan(&program, |shaped| {
             let ShapedPlan { writer, table, shape, handles, rendering, .. } = shaped;
-            let activation = Activation::new(writer, shape, ClosureBindings::EMPTY, table, None);
+            let activation = Activation::of_program(writer, shape, table);
             let is_bound = |slot: Slot| bound[slot.index() % bound.len()];
             for slot in 0..shape.slots() {
                 let slot = Slot(slot as u32);
@@ -607,7 +613,9 @@ proptest! {
                 }
             }
             for mention in shape.mentions() {
-                let Target::Local(slot) = mention.coordinate.target else { continue };
+                let Coordinate::Activation { target: Target::Local(slot), .. } = mention.coordinate else {
+                    continue;
+                };
                 let expected = if is_bound(slot) {
                     Observed::Number((slot.index() as f64).to_bits())
                 } else {
@@ -621,7 +629,7 @@ proptest! {
                     continue;
                 }
                 let first_pending = nested.captures().iter().find_map(|capture| match capture.source {
-                    CaptureSource::Read(Coordinate { target: Target::Local(slot), .. })
+                    CaptureSource::Read(Coordinate::Activation { target: Target::Local(slot), .. })
                         if !is_bound(slot) =>
                     {
                         Some(ClosureRefused { name: capture.name, pending: handles[slot.index()] })
@@ -716,7 +724,10 @@ proptest! {
                     let shape = located.shapes[*scope].expect("every planned scope has a shape");
                     let activation = resident(
                         writer,
-                        Activation::new(writer, shape, ClosureBindings::EMPTY, table, site),
+                        match site {
+                            None => Activation::of_program(writer, shape, table),
+                            Some(site) => Activation::of_block(writer, shape, site),
+                        },
                     );
                     for slot in 0..shape.slots() {
                         activation.bind(Slot(slot as u32), Value::Number(next)).unwrap();
@@ -737,9 +748,9 @@ proptest! {
                 let located = locate(&quoted, Some(shape), &[quote]);
                 check(fixture.labels, &quoted, &located, &shapes);
 
-                let evaluated = Activation::new(writer, shape, ClosureBindings::EMPTY, table, Some(site));
+                let evaluated = Activation::of_block(writer, shape, site);
                 for mention in shape.mentions() {
-                    if matches!(mention.coordinate, Coordinate { hops: 0, target: Target::Local(_) | Target::Capture(_) }) {
+                    if matches!(mention.coordinate, Coordinate::Activation { hops: 0, .. }) {
                         continue;
                     }
                     let by_name = site

@@ -67,11 +67,12 @@ coordinates:
 
 - a slot of the body's own per-call bindings,
 - a slot of its closure bindings, read through the activation's pointer, or
-- an index into the builtin table,
+- an index into the builtin table, read through the reader's own header.
 
-each prefixed by how many enclosing block activations to step through first:
-none for a callable's own body, one per block the reader sits inside. A builtin
-reads through the reader's own header, so it steps through none. Reading a
+A slot and a closure binding are prefixed by how many enclosing block
+activations to step through first: none for a callable's own body, one per
+block the reader sits inside. A builtin carries no such count, so a builtin
+coordinate that steps out is not expressible. Reading a
 name is then one indexed load, two for a capture, plus one per enclosing
 block. No runtime walk visits an enclosing *scope* by name, and no binding
 holds a reference into another scope: a coordinate is computed from the name
@@ -256,7 +257,10 @@ pointer into itself: its shape lives in program storage, its builtin table
 outlives every frame, its closure bindings live in the callable value, which
 the caller keeps alive across the call, an enclosing activation lives in the
 same frame, and its slots hold values. An activation is therefore copied by
-copying its bytes.
+copying its bytes. Each kind of body has its own constructor — a program's
+with neither closure bindings nor an enclosing activation, a callable's or
+module's with closure bindings, a block's beside an enclosing activation whose
+builtin table it shares — so no other combination can be built.
 
 A shape and everything it holds — declared-name runs, mentions, captures,
 components, nested shapes — rest in program storage and are `Copy`. An

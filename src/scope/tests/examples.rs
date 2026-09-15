@@ -68,30 +68,32 @@ LET y = (compute [f])
 LET g = 1";
     shaped(source, |fixture, lines, shape| {
         let shape = shape.expect("the program shapes");
-        let (x_f, x_compute) = {
-            let mut reads = shape
+        let reads_of = |name| {
+            let mut reads: Vec<_> = shape
                 .mentions()
                 .iter()
-                .filter(|mention| mention.statement == 2);
-            (reads.next().unwrap(), reads.next().unwrap())
+                .filter(|mention| mention.name == name)
+                .map(|mention| (mention.at, mention.class))
+                .collect();
+            reads.sort_by_key(|(at, _)| *at);
+            reads
         };
         let (f, compute) = (value(fixture, "f"), value(fixture, "compute"));
-        let [x_f, x_compute] = if x_f.name == f {
-            [x_f, x_compute]
-        } else {
-            [x_compute, x_f]
-        };
-        assert_eq!((x_f.name, x_f.class), (f, MentionClass::Deferred));
+        // `x` holds `f` in a list and reads it at the end; `y` passes it to a call at its statement.
         assert_eq!(
-            (x_compute.name, x_compute.class),
-            (compute, MentionClass::Eager)
+            reads_of(f),
+            [
+                (Position::statement(3), MentionClass::Eager),
+                (shape.end(), MentionClass::Deferred),
+            ]
         );
-        let y_f = shape
-            .mentions()
-            .iter()
-            .find(|mention| mention.statement == 3 && mention.name == f)
-            .unwrap();
-        assert_eq!(y_f.class, MentionClass::Eager);
+        assert_eq!(
+            reads_of(compute),
+            [
+                (Position::statement(2), MentionClass::Eager),
+                (Position::statement(3), MentionClass::Eager),
+            ]
+        );
 
         // `f`'s body reads `g` at its own statement, but reaches it through a capture read at the
         // program's end, so the program-level edge is deferred and the component is `g` alone.
@@ -101,7 +103,7 @@ LET g = 1";
         let (g_slot, _) = shape.slot(g).unwrap();
         assert_eq!(
             body.captures()[0].source,
-            CaptureSource::Read(Coordinate {
+            CaptureSource::Read(Coordinate::Activation {
                 hops: 0,
                 target: Target::Local(g_slot),
             })
@@ -115,7 +117,8 @@ fn a_root_mention_is_eager_and_a_forward_one_is_unbound() {
     shaped("LET a = b\nLET b = 1", |fixture, _, shape| {
         assert!(matches!(
             shape,
-            Err(ShapeError::Unbound { name, statement: 0, .. }) if name == value(fixture, "b")
+            Err(ShapeError::Unbound { name, at, .. })
+                if name == value(fixture, "b") && at == Position::statement(0)
         ));
     });
 }
@@ -210,14 +213,17 @@ fn an_arm_binds_it_and_its_names_are_gone_after_it() {
             let (it, _) = arm.slot(value(fixture, "it")).unwrap();
             let (w, _) = arm.slot(value(fixture, "w")).unwrap();
             assert_eq!(
-                mention_of(arm, value(fixture, "it")).coordinate.target,
-                Target::Local(it)
+                mention_of(arm, value(fixture, "it")).coordinate,
+                Coordinate::Activation {
+                    hops: 0,
+                    target: Target::Local(it),
+                }
             );
             assert_ne!(it, w);
             let (q, _) = shape.slot(value(fixture, "q")).unwrap();
             assert_eq!(
                 mention_of(arm, value(fixture, "q")).coordinate,
-                Coordinate {
+                Coordinate::Activation {
                     hops: 1,
                     target: Target::Local(q),
                 }
@@ -229,7 +235,8 @@ fn an_arm_binds_it_and_its_names_are_gone_after_it() {
         |fixture, _, shape| {
             assert!(matches!(
                 shape,
-                Err(ShapeError::Unbound { name, statement: 1, .. }) if name == value(fixture, "w")
+                Err(ShapeError::Unbound { name, at, .. })
+                    if name == value(fixture, "w") && at == Position::statement(1)
             ));
         },
     );
@@ -310,7 +317,7 @@ fn every_capture_limiting_or_module_importing_form_is_unsupported() {
                 shape.err(),
                 Some(ShapeError::Unsupported {
                     form: *form,
-                    statement: 0,
+                    at: Position::statement(0),
                 })
             );
         });
@@ -341,8 +348,8 @@ fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
         |fixture, _, shape| {
             assert!(matches!(
                 shape,
-                Err(ShapeError::Unbound { name: BinderSymbol::Type(name), statement: 0, .. })
-                    if name == type_name("Nat", fixture.labels)
+                Err(ShapeError::Unbound { name: BinderSymbol::Type(name), at, .. })
+                    if name == type_name("Nat", fixture.labels) && at == Position::statement(0)
             ));
         },
     );

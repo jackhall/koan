@@ -39,6 +39,10 @@ pub struct CaptureSlot(pub(crate) u32);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct BuiltinIndex(pub(crate) u32);
 
+/// An index into a shape's components.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ComponentIndex(pub(crate) u32);
+
 impl Slot {
     pub fn index(self) -> usize {
         self.0 as usize
@@ -52,6 +56,12 @@ impl CaptureSlot {
 }
 
 impl BuiltinIndex {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl ComponentIndex {
     pub fn index(self) -> usize {
         self.0 as usize
     }
@@ -77,21 +87,33 @@ impl Position {
     }
 }
 
-/// Where a resolved read lands once the enclosing block activations are stepped through.
+/// Where a resolved read lands in the activation its hops reach.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Target {
     Local(Slot),
     Capture(CaptureSlot),
-    Builtin(BuiltinIndex),
 }
 
-/// A resolved read: `hops` enclosing block activations to step through (`0` for the reader's own),
-/// then `target` in the activation reached. A builtin reads through any activation's header, so its
-/// `hops` is `0`.
+/// A resolved read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Coordinate {
-    pub hops: u32,
-    pub target: Target,
+pub enum Coordinate {
+    /// Through any activation's header: no hops.
+    Builtin(BuiltinIndex),
+    /// `hops` enclosing block activations out (`0` for the reader's own), then `target` there.
+    Activation { hops: u32, target: Target },
+}
+
+impl Coordinate {
+    /// This coordinate read from a block nested one activation further in.
+    pub(crate) fn through_block(self) -> Coordinate {
+        match self {
+            Coordinate::Builtin(index) => Coordinate::Builtin(index),
+            Coordinate::Activation { hops, target } => Coordinate::Activation {
+                hops: hops + 1,
+                target,
+            },
+        }
+    }
 }
 
 /// Whether a mention needs its value where it is read, or only stores or captures it.
@@ -117,8 +139,9 @@ impl Site {
 pub struct Mention {
     pub site: Site,
     pub name: BinderSymbol,
-    /// The statement of this shape the mention sits in.
-    pub statement: u32,
+    /// The position the mention reads at: its statement's when eager, the shape's end when
+    /// deferred.
+    pub at: Position,
     pub class: MentionClass,
     pub coordinate: Coordinate,
 }
@@ -151,7 +174,10 @@ pub enum CaptureSource {
     Read(Coordinate),
     /// Member `index` of `component` of the enclosing shape — the component the callable itself
     /// belongs to — held as an edge into the knot that component is born in.
-    Member { component: u32, index: u32 },
+    Member {
+        component: ComponentIndex,
+        index: u32,
+    },
 }
 
 /// A strongly connected component of a shape's bindings.
@@ -173,7 +199,7 @@ pub struct Shape<'graph> {
     /// The position in the enclosing shape this one is entered at: the statement's for an eager
     /// boundary, the enclosing body's end for a deferred one, and `EVAL`'s own for an `EVAL` body.
     entered_at: Position,
-    component_of: &'graph [u32],
+    component_of: &'graph [ComponentIndex],
     components: &'graph [Component<'graph>],
     mentions: &'graph [Mention],
     captures: &'graph [CaptureSpec],
@@ -254,12 +280,12 @@ impl<'graph> Shape<'graph> {
     }
 
     /// The component `slot` belongs to, by index into [`components`](Self::components).
-    pub fn component_index(&self, slot: Slot) -> u32 {
+    pub fn component_index(&self, slot: Slot) -> ComponentIndex {
         self.component_of[slot.index()]
     }
 
     pub fn component_of(&self, slot: Slot) -> &'graph Component<'graph> {
-        &self.components[self.component_index(slot) as usize]
+        &self.components[self.component_index(slot).index()]
     }
 
     /// The shape of the body or arm whose part sits at `site`.
@@ -311,14 +337,14 @@ pub enum ShapeError {
     Unbound {
         name: BinderSymbol,
         site: Site,
-        statement: u32,
+        at: Position,
     },
     /// A component containing an eager mention of one of its own members.
     EagerCycle { members: Vec<BinderSymbol> },
     /// A form the shape builder does not resolve.
-    Unsupported { form: FormId, statement: u32 },
+    Unsupported { form: FormId, at: Position },
     /// A form whose body or branches are not the shape it declares.
-    Malformed { form: FormId, statement: u32 },
+    Malformed { form: FormId, at: Position },
 }
 
 impl ShapeError {
@@ -355,16 +381,9 @@ impl fmt::Display for ShapeErrorDisplay<'_> {
                 "`{}` at {at} names a builtin, which cannot be rebound",
                 name(bound)
             ),
-            ShapeError::Unbound {
-                name: read,
-                statement,
-                ..
-            } => write!(
-                f,
-                "`{}` in {} names no binding visible there",
-                name(read),
-                Position::statement(*statement as usize)
-            ),
+            ShapeError::Unbound { name: read, at, .. } => {
+                write!(f, "`{}` in {at} names no binding visible there", name(read))
+            }
             ShapeError::EagerCycle { members } => {
                 f.write_str("these bindings need each other's values before any of them exists:")?;
                 for member in members {
@@ -372,16 +391,12 @@ impl fmt::Display for ShapeErrorDisplay<'_> {
                 }
                 Ok(())
             }
-            ShapeError::Unsupported { form, statement } => write!(
-                f,
-                "`{form:?}` in {} is not supported here yet",
-                Position::statement(*statement as usize)
-            ),
-            ShapeError::Malformed { form, statement } => write!(
-                f,
-                "`{form:?}` in {} is not the shape it declares",
-                Position::statement(*statement as usize)
-            ),
+            ShapeError::Unsupported { form, at } => {
+                write!(f, "`{form:?}` in {at} is not supported here yet")
+            }
+            ShapeError::Malformed { form, at } => {
+                write!(f, "`{form:?}` in {at} is not the shape it declares")
+            }
         }
     }
 }

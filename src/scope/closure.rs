@@ -10,7 +10,7 @@ use crate::parse::BinderSymbol;
 use crate::values::{Value, collect, resident};
 
 use super::activation::{Activation, Binding};
-use super::shape::{CaptureSlot, CaptureSource, Shape};
+use super::shape::{CaptureSlot, CaptureSource, ComponentIndex, Shape};
 
 /// One closure binding.
 #[derive(Clone, Copy, Debug)]
@@ -41,12 +41,13 @@ impl<'graph, 'cell> ClosureBindings<'graph, 'cell> {
     /// A `Read` source is read from `enclosing`; one still pending refuses the birth with its
     /// binder's handle, and one that is itself an edge — a capture of the enclosing callable's own
     /// knot — is resolved to a value by `follow`. A `Member` source takes `edge(component, index)`,
-    /// the edge the caller minted for that member of the knot the callable is born in.
+    /// the edge the caller minted for member `index` of the enclosing shape's component `component`
+    /// — the knot the callable is born in.
     pub fn born(
         writer: Writer<'cell>,
         shape: &Shape<'_>,
         enclosing: &Activation<'graph, 'cell>,
-        mut edge: impl FnMut(u32, u32) -> Edge,
+        mut edge: impl FnMut(ComponentIndex, u32) -> Edge,
         mut follow: impl FnMut(Edge) -> Value<'graph, 'cell>,
     ) -> Result<&'cell ClosureBindings<'graph, 'cell>, ClosureRefused> {
         let captures = shape.captures();

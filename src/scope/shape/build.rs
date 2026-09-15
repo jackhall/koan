@@ -26,8 +26,8 @@ use super::super::signature::{
     body_of, declare_parameters, declare_quantifiers, pair_name, signature_run,
 };
 use super::{
-    BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, Coordinate, Mention,
-    MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
+    BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate,
+    Mention, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
 };
 
 /// The names a body declares without a binder statement.
@@ -136,7 +136,7 @@ struct Draft<'x> {
     edges: BumpVec<'x, (Slot, Slot, MentionClass)>,
     /// Finished nested drafts, waiting on this draft's components to settle their captures.
     children: BumpVec<'x, (Site, Draft<'x>)>,
-    component_of: BumpVec<'x, u32>,
+    component_of: BumpVec<'x, ComponentIndex>,
     components: BumpVec<'x, (BumpVec<'x, Slot>, bool)>,
     keeps_defining_scope: bool,
     /// The statement being walked when a nested draft was entered, and the class that path takes
@@ -310,7 +310,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         if roles == [Role::Unsupported] {
             return Err(ShapeError::Unsupported {
                 form: form.id,
-                statement,
+                at: Position::statement(statement as usize),
             });
         }
         debug_assert_eq!(
@@ -531,7 +531,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         state: State,
     ) -> Result<(), ShapeError> {
         let Some(body) = body_of(part) else {
-            return Err(ShapeError::Malformed { form, statement });
+            return Err(ShapeError::Malformed {
+                form,
+                at: Position::statement(statement as usize),
+            });
         };
         let (shape_kind, class) = match kind {
             BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => (
@@ -570,7 +573,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         part: &ExpressionPart<'graph>,
         heads: Heads,
     ) -> Result<(), ShapeError> {
-        let malformed = ShapeError::Malformed { form, statement };
+        let malformed = ShapeError::Malformed {
+            form,
+            at: Position::statement(statement as usize),
+        };
         let Some(branches) = body_of(part) else {
             return Err(malformed);
         };
@@ -624,22 +630,19 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         };
         let site = Site::of(part);
         let coordinate = match (self.builtins)(name) {
-            Some(index) => Coordinate {
-                hops: 0,
-                target: Target::Builtin(index),
-            },
+            Some(index) => Coordinate::Builtin(index),
             None => self
                 .resolve(level, name, at, reader)
                 .ok_or(ShapeError::Unbound {
                     name,
                     site,
-                    statement,
+                    at: Position::statement(statement as usize),
                 })?,
         };
         self.chain[level].mentions.push(Mention {
             site,
             name,
-            statement,
+            at,
             class,
             coordinate,
         });
@@ -665,7 +668,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let captured = draft.captures.iter().position(|spec| spec.name == name);
         if let Some(slot) = visible {
             self.edge(level, slot, reader);
-            return Some(Coordinate {
+            return Some(Coordinate::Activation {
                 hops: 0,
                 target: Target::Local(slot),
             });
@@ -683,7 +686,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ShapeKind::Program => None,
             ShapeKind::Callable | ShapeKind::Module => {
                 if let Some(index) = captured {
-                    return Some(Coordinate {
+                    return Some(Coordinate::Activation {
                         hops: 0,
                         target: Target::Capture(CaptureSlot(index as u32)),
                     });
@@ -694,21 +697,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     name,
                     source: CaptureSource::Read(source),
                 });
-                Some(Coordinate {
+                Some(Coordinate::Activation {
                     hops: 0,
                     target: Target::Capture(CaptureSlot(captures.len() as u32 - 1)),
                 })
             }
-            ShapeKind::Block => {
-                let found = outer(self)?;
-                Some(match found.target {
-                    Target::Builtin(_) => found,
-                    Target::Local(_) | Target::Capture(_) => Coordinate {
-                        hops: found.hops + 1,
-                        ..found
-                    },
-                })
-            }
+            ShapeKind::Block => Some(outer(self)?.through_block()),
         }
     }
 
@@ -740,13 +734,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         borrowed.extend(adjacency.iter().map(|edges| edges.as_slice()));
         let condensed = strongly_connected_components(scratch, &borrowed);
 
-        draft.component_of.resize(count, 0);
+        draft.component_of.resize(count, ComponentIndex(0));
         for (index, members) in condensed.iter().enumerate() {
             let mut slots = BumpVec::with_capacity_in(members.len(), scratch);
             slots.extend(members.iter().map(|member| Slot(*member as u32)));
             slots.sort_unstable();
             for slot in slots.iter() {
-                draft.component_of[slot.index()] = index as u32;
+                draft.component_of[slot.index()] = ComponentIndex(index as u32);
             }
             draft.components.push((slots, true));
         }
@@ -757,10 +751,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             if component != draft.component_of[bound.index()] {
                 continue;
             }
-            cyclic[component as usize] |=
-                binder == bound || draft.components[component as usize].0.len() > 1;
+            cyclic[component.index()] |=
+                binder == bound || draft.components[component.index()].0.len() > 1;
             if *class == MentionClass::Eager {
-                draft.components[component as usize].1 = false;
+                draft.components[component.index()].1 = false;
             }
         }
         let refused = draft
@@ -787,7 +781,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         for (_, child) in draft.children.iter_mut() {
             let binder = draft.statement_binder[child.parent_statement as usize];
             for capture in child.captures.iter_mut() {
-                let CaptureSource::Read(Coordinate {
+                let CaptureSource::Read(Coordinate::Activation {
                     hops: 0,
                     target: Target::Local(bound),
                 }) = capture.source
@@ -796,7 +790,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 };
                 let component = draft.component_of[bound.index()];
                 if binder.is_some_and(|binder| draft.component_of[binder.index()] == component) {
-                    let members = &draft.components[component as usize].0;
+                    let members = &draft.components[component.index()].0;
                     let index = members
                         .binary_search(&bound)
                         .expect("a slot sits in its own component");

@@ -2,7 +2,7 @@
 
 use crate::memory::SlotConflict;
 use crate::parse::BinderSymbol;
-use crate::scope::{Activation, Binding, Builtins, ClosureBindings, Shape};
+use crate::scope::{Activation, Binding, Builtins, Shape};
 use crate::values::Value;
 
 use super::{BUILTIN_TYPES, BUILTIN_VALUES, builtins, type_name, value_name, with_fixture};
@@ -19,7 +19,7 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
             let table = builtins(fixture, writer);
             let shape = Shape::of_program(fixture.program, &lines, table, fixture.scratch()).unwrap();
             let activation =
-                Activation::new(writer, shape, ClosureBindings::EMPTY, table, None);
+                Activation::of_program(writer, shape, table);
             let b_reads_a = shape.mentions()[0];
             let (a, _) = shape.slot(BinderSymbol::Value(value_name("a", fixture.labels))).unwrap();
             activation.claim(a, handles[0]).unwrap();
@@ -41,8 +41,7 @@ fn reading_an_unclaimed_slot_breaks_the_scheduler_invariant() {
             let shape =
                 Shape::of_program(fixture.program, &lines, Builtins::EMPTY, fixture.scratch())
                     .unwrap();
-            let activation =
-                Activation::new(writer, shape, ClosureBindings::EMPTY, Builtins::EMPTY, None);
+            let activation = Activation::of_program(writer, shape, Builtins::EMPTY);
             activation.read(shape.mentions()[0].coordinate);
         });
     });
