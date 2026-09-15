@@ -4,7 +4,7 @@
 mod activation;
 mod boundary;
 mod examples;
-mod plan;
+pub(crate) mod plan;
 mod properties;
 
 use std::fmt;

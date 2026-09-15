@@ -31,7 +31,7 @@ mod shape;
 mod signature;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use roles::{BodyKind, Role, roles};
 pub(crate) use signature::pair_name;
