@@ -220,9 +220,7 @@ pair with are `cellgraph`'s own slate.
 ## Open work
 
 - [Callable values](../../roadmap/rewrite/callable-values.md) — function and
-  module arms, once a scope exists for them to capture.
+  module arms, capturing a [scope](../scope/README.md).
 - [Scheduler on cellgraph](../../roadmap/rewrite/scheduler-on-cellgraph.md) —
   the scheduler that builds its graph with `verdict` and delivers values
   between cells.
-- [Scope on values and types](../../roadmap/rewrite/scope-on-values-and-types.md)
-  — the binding tables that hold values and their types.

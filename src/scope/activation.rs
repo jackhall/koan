@@ -6,9 +6,9 @@
 //! drop glue, and it is `Copy`: a copy is its bytes.
 //!
 //! A slot is `Empty` until its binder is submitted, `Claimed` by the binder's cell while it runs,
-//! and `Bound` once. The scheduler submits a body's binders in position order and claims each at
-//! submission, so a slot visible to a running reader is never `Empty`; [`Activation::read`] panics
-//! if it is.
+//! and `Bound` once. A deferred mention reads at the body's end and so sees later siblings, so the
+//! scheduler claims every binder of a body, in position order, before any of its statements runs:
+//! a slot visible to a running reader is never `Empty`, and [`Activation::read`] panics if it is.
 
 use crate::memory::{CellHandle, Edge, SlotArray, SlotConflict, SlotState, Writer};
 use crate::parse::BinderSymbol;

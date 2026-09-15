@@ -10,8 +10,8 @@ a parser part, a declaration — lives with that thing and calls in here.
 ## The boundary, and why it is a test
 
 The lattice imports exactly two things from the rest of koan: the classified
-label and symbol types from [`parse`](../parse/README.md), and `ScopeId` plus
-the bump-allocation seam from [`memory`](../memory/README.md). No value, cell,
+label and symbol types from [`parse`](../parse/README.md), and `ScopeId`, the
+bump-allocation seam and the component walk from [`memory`](../memory/README.md). No value, cell,
 AST, scope, working part or execute-side type reaches it.
 
 The compiler cannot enforce that — a public module may name anything in its own
@@ -235,7 +235,8 @@ window that minted it.
 At the last fill the window seals, and **identity is not the declared group**: it
 is each member's strongly-connected component under the sibling-reference
 relation, presented canonically in name-symbol order. `seal_group` extracts the
-reference edges, runs Tarjan, and digests the condensation in topological order —
+reference edges, runs `memory`'s
+[Tarjan walk](../memory/README.md#strongly-connected-components), and digests the condensation in topological order —
 every component after the components it references, so a cross-component
 reference folds the referent's already-finished handle as ordinary external
 content while an intra-component one stays relative.

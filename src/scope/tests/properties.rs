@@ -394,7 +394,7 @@ fn followed(index: u32) -> Value<'static, 'static> {
     Value::Number(-1.0 - f64::from(index))
 }
 
-/// Activate `shape` with every slot bound to a fresh number, check laws 4 and 6 over it, and
+/// Activate `shape` with every slot bound to a fresh number, check its by-name and capture laws, and
 /// activate every shape nested in it the way a call or an arm would.
 fn activate<'g, 'c>(
     writer: Writer<'c>,
@@ -416,7 +416,7 @@ fn activate<'g, 'c>(
         *next += 1.0;
     }
 
-    // Law 4: by name at the read's own position lands where the coordinate does.
+    // By name at the read's own position lands where the coordinate does.
     for mention in shape.mentions() {
         let at = match mention.class {
             MentionClass::Eager => Position::statement(mention.statement as usize),
@@ -467,7 +467,7 @@ fn activate<'g, 'c>(
                     |edge| followed(edge.index()),
                 )
                 .expect("every enclosing slot is bound");
-                // Law 6: a captured value is the enclosing binding's word; a fellow is an edge.
+                // A captured value is the enclosing binding's word; a fellow is an edge.
                 for (index, capture) in nested.captures().iter().enumerate() {
                     let held = bindings.get(crate::scope::CaptureSlot(index as u32));
                     match (capture.source, held) {
@@ -497,7 +497,7 @@ fn activate<'g, 'c>(
 proptest! {
     #![proptest_config(ProptestConfig { cases: crate::tests::case_share(1, 1), ..ProptestConfig::default() })]
 
-    /// Laws 1–3: a planned program shapes back into its plan — every scope's kind, layout,
+    /// A planned program shapes back into its plan — every scope's kind, layout,
     /// components and nested scopes, and every mention's site, class, statement and landing.
     #[test]
     fn a_planned_program_shapes_back_into_its_plan(choices in plan::choices()) {
@@ -570,7 +570,7 @@ proptest! {
         shaped_plan(&program, |shaped| check(shaped.labels, shaped.rendering, &shaped.located, &[]));
     }
 
-    /// Laws 4 and 6: over every activation of a planned program, by-name resolution agrees with the
+    /// Over every activation of a planned program, by-name resolution agrees with the
     /// coordinates, a local is visible exactly where its position is seen, and closure bindings
     /// copy the enclosing words.
     #[test]
@@ -581,7 +581,7 @@ proptest! {
         });
     }
 
-    /// Law 5: a claimed slot reads as its binder until bound, and a callable is born only once
+    /// A claimed slot reads as its binder until bound, and a callable is born only once
     /// every slot it reads is bound.
     #[test]
     fn a_pending_slot_names_its_binder_and_refuses_a_birth(
@@ -634,7 +634,7 @@ proptest! {
         });
     }
 
-    /// Law 7: an `EVAL` body planned over the names a statement of the program or of an arm inside
+    /// An `EVAL` body planned over the names a statement of the program or of an arm inside
     /// it sees shapes back into its plan over that scope's chain, and each of its enclosing reads is
     /// the site's own by-name read.
     #[test]

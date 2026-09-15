@@ -12,8 +12,8 @@
 //! A read through a coordinate searches nothing by name; [`Activation::resolve_by_name`] is the
 //! walk `EVAL` runs, and it lands where the coordinate would.
 //!
-//! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
-//! `crate::parse`, `crate::type_lattice` and `crate::values`, and no scheduler type;
+//! **Imports.** This module may name `crate::memory`, `crate::parse`, `crate::type_lattice` and
+//! `crate::values`, and no scheduler type; outside `#[cfg(test)]` it names no `type_lattice` item.
 //! `tests::boundary` reads the source to hold it there.
 //!
 //! See [scope/README.md](scope/README.md).

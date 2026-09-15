@@ -99,11 +99,14 @@ The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/READ
 
 ## Source layout
 
-The crate splits into six top-level modules: [memory/](src/memory) (where a
+The crate splits into seven top-level modules: [memory/](src/memory) (where a
 value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus the
 symbol, AST and form-table vocabulary that output is written in),
 [values/](src/values.rs) (the data values and the per-dispatch expression form,
 laid down in a cell's region — see [src/values/README.md](src/values/README.md)),
+[scope/](src/scope.rs) (lexical environments: the shape a body resolves its names
+through, closure bindings and activations — see
+[src/scope/README.md](src/scope/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
 type nodes — see [src/type_lattice/README.md](src/type_lattice/README.md)),
@@ -175,6 +178,7 @@ src/
 │   ├── substrate.rs        the crate's only import of cellgraph — a re-export block binding the liveness width once (WIDTH), with the width-bound Ready / Operand / CellGraph / StepContext aliases
 │   ├── bump.rs             the bump tier — Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap and bump_table; the crate's only import of bumpalo / hashbrown / allocator_api2
 │   ├── slots.rs            SlotState / SlotArray — a fixed run of Empty | Claimed(P) | Bound(V) Cell slots laid down by Writer::fill in a cell's region, a Copy array beside the in-region live-claim counter that makes "nothing in flight" an O(1) read
+│   ├── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and a scope's bindings both condense by
 │   ├── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
 │   └── program.rs          ProgramStorage / ProgramBrand — the bump program text and its parsed AST live in, outside the graph
 ├── parse.rs             pub mod parse — the parser and what it produces: the label vocabulary, the syntax AST, and the form table
@@ -250,6 +254,15 @@ src/
 │   ├── sig_relations.rs  sig_subtype and its failure record, keyworded selection, meet_schemas, and shape_specificity
 │   ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
 │   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the label interner
+├── scope.rs          pub mod scope — koan's lexical environments over values and types, in three tiers: the shape, closure bindings and the activation
+├── scope/
+│   ├── shape.rs          Shape — one body's declared-name runs, classified mentions with their coordinates, capture layout, components and nested shapes, in program storage; Position / Coordinate / Site and ShapeError
+│   ├── shape/build.rs    the one shape builder: the binders pass, the mention walk with its eager/deferred state, nested bodies and arms, and the components pass
+│   ├── roles.rs          the exhaustive FormId → part-role table name resolution walks a form by
+│   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
+│   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types
+│   ├── closure.rs        ClosureBindings — a callable's captures, born from the enclosing activation: a value word or a knot edge each
+│   └── activation.rs     Activation — one call's or block's Copy, Drop-free header and slot array: claim, bind, read by coordinate, and EVAL's by-name walk
 ├── values.rs         pub mod values — Value, the 24-byte Copy sum over scalars, a region string, a quoted program node and a borrow of each per-kind resident struct; ValueFamily / ValueCarrier; the resident / collect / text helpers and the ascription retype
 ├── values/
 │   ├── weight.rs         Weight — the saturating bytes a total rebuild writes, memoized on every composite
@@ -358,6 +371,10 @@ from that module's top-of-file comment. The kept modules carry theirs:
   resident structs born through a `Writer`, the two lifetimes a quote crosses
   every verdict on, the type memo `satisfies` reads, weight and the crossing
   verb, dict key order, and working expressions.
+- [src/scope/README.md](src/scope/README.md) — lexical environments: the three
+  tiers, eager and deferred mentions and the visibility rule over them, the
+  components a knot can tie, the two channels and unshadowable builtins, and
+  pending slots.
 - [src/type_lattice/README.md](src/type_lattice/README.md) — the closed algebra:
   digest identity, the node vocabulary, the interning registry, the one order
   and the lattice operations over it, and the unifier that solves a quantified

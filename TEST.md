@@ -42,7 +42,7 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 ## The pending rewrite
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
-`memory`, `parse`, `source`, `type_lattice`, `values` and the embedded crates
+`memory`, `parse`, `scope`, `source`, `type_lattice`, `values` and the embedded crates
 `cellgraph` and `sexlex` — are what a default koan build compiles and a default `cargo test`
 runs. `workgraph` is no longer a koan dependency; it still builds and tests as a
 workspace member. Everything above the kept modules — `machine`, `builtins`, the
@@ -125,6 +125,30 @@ beside its sibling unit tests. Seven files hold the thirty properties:
   laws: symbol order, the lexical position beside each entry, parameter merge.
 - [`src/machine/model/close_inference/tests.rs`](src/machine/model/close_inference/tests.rs)
   — the capture-inference laws, per close rule.
+
+### Scope property laws
+
+The [scope](src/scope/README.md) laws are round trips at the tier's full depth, with nothing
+filtered. [`src/scope/tests/plan.rs`](src/scope/tests/plan.rs) generates a *shape plan* from a
+stream of choices. A plan says what each scope should come out as: its binders in the value and
+type channels, how they partition into components, each read's class, and the binder each read
+lands on. The plan is rendered to koan source, which is parsed and built. Every plan is valid by
+construction and names are unique across the program, so the expected shape is the plan itself
+and nothing is re-derived from the source. `MODULE` and operator bodies are not generated.
+[`src/scope/tests/examples.rs`](src/scope/tests/examples.rs) covers `MODULE` by example.
+[`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds six laws:
+
+- a planned program shapes back into its plan: kinds, layouts, components, one mention per planned
+  read with its class, statement and landing, nested scopes, and which captures are knot edges;
+- a plan with exactly one refusal injected (an eager cycle, an eager read ahead, an undeclared
+  name, a rebind, a shadowed builtin) is refused with that refusal;
+- a name re-declared inside a nested scope takes the reads nearest it;
+- every activation of a planned program reads by name what its coordinates name, and closure
+  bindings copy the enclosing words or hold knot edges;
+- a claimed slot reads as pending until bound, and a callable is not created while a slot it reads
+  is pending;
+- an `EVAL` body planned over what a program or arm statement sees shapes back into its plan over
+  that chain, and its enclosing reads agree with the site's by-name reads.
 
 ## Tutorial snippets
 

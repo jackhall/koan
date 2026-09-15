@@ -39,15 +39,26 @@ the region that value lives in.
 
 **Four kinds of shape.** The program's top level is one shape with no
 captures. A function body (`FN`, `EXPR`, `OP`) is a *callable* shape: it
-captures, and it is a deferring boundary (below). A `MODULE` body is a
-*module* shape: it captures, since its activation outlives the frame that
+captures, and it is a deferring boundary (below). Its parameters are the names
+its signature declares — each `<name> :<Type>` pair, a `:{…}` schema's fields,
+every `FOR ALL` type parameter — or `left` and `right` for a binary `OP` and
+`operands` for a unary one, all at position `0`. A `MODULE` or `GROUP` body is
+a *module* shape: it captures, since its activation outlives the frame that
 births it, but it is not a deferring boundary, because its statements run when
-the `MODULE` statement runs. A `MATCH` or `TRY` arm is a *block* shape: `it`
-is its one parameter, its statements count from `1`, its activation is laid
-down in the same frame as the enclosing one, and instead of captures it holds
-a pointer to the enclosing activation. A name declared in the block shadows
-the enclosing one from the next statement on and is gone once the block ends,
-because the block's activation is not the enclosing one.
+the statement holding it runs. A `MATCH` or `TRY` arm, and the code an `EVAL`
+runs, is a *block* shape: an arm's one parameter is `it`, its statements count
+from `1`, its activation is laid down in the same frame as the enclosing one,
+and instead of captures it holds a pointer to the enclosing activation. A name
+declared in the block shadows the enclosing one from the next statement on and
+is gone once the block ends, because the block's activation is not the
+enclosing one.
+
+One builder serves all four kinds. It walks a body once, building every body
+and arm nested in it as it meets them, and lays each finished shape down in
+program storage. A nested shape is found from its enclosing one by the address
+of the part that holds it, and a mention by the address of its own part — an
+identity any holder of the part recomputes, and which program storage never
+moves.
 
 ## Resolution
 
@@ -59,12 +70,22 @@ coordinates:
 - an index into the builtin table,
 
 each prefixed by how many enclosing block activations to step through first:
-none for a callable's own body, one per block the reader sits inside. Reading a
+none for a callable's own body, one per block the reader sits inside. A builtin
+reads through the reader's own header, so it steps through none. Reading a
 name is then one indexed load, two for a capture, plus one per enclosing
 block. No runtime walk visits an enclosing *scope* by name, and no binding
 holds a reference into another scope: a coordinate is computed from the name
 at the reading site, and what a slot holds is a value or an edge into the
 holder's own knot.
+
+A name a callable body reads from outside is added to its capture layout once,
+however often the body reads it, with where the callable's birth reads it from:
+a coordinate of the enclosing activation, or — when the name is a fellow member
+of the component the callable's own binding belongs to — that member's place in
+the component, which the birth turns into a knot edge the caller mints. A
+capture read through a coordinate that is itself an enclosing callable's knot
+edge is resolved to a value at birth by the caller, since resolving an edge is
+the knot's owner's to do.
 
 A search by symbol happens only where the shape is built and inside `EVAL`.
 How the shape's runs are searched — linear below some length, binary above —
@@ -83,11 +104,16 @@ mention is **deferred** when that path is non-empty and every context on it,
 down to the outermost callable-body boundary it crosses, is a constructor slot
 (a list element, a dict value, a record field) or that boundary itself: the
 value is only stored in a container or captured by a callable, never
-inspected. A callable body is opaque — nothing inside it changes the class,
+inspected. A type declaration's schema — a `UNION`'s variants, a `SIG` or
+`NEWTYPE`'s fields — is a constructor slot too, so a type naming itself or a
+later sibling in its schema is a deferred mention. A callable body is opaque — nothing inside it changes the class,
 since none of it runs until the callable is called. Any other mention is
 **eager**: the value is needed at the point it is read. A call, a keyword
-form's slot, an operator's operand, a type expression, a `MODULE` body and a
-`MATCH` or `TRY` arm are all eager contexts. So in
+form's slot, an operator's operand, a dict key, a type expression outside a
+schema, a `MODULE` body and a `MATCH` or `TRY` arm are all eager contexts, and
+so are a callable's parameter and return types, which are mentions of the
+enclosing shape read where the callable is born. A parenthesized group of one
+part is transparent: it is the part. So in
 
 ```
 LET f = FN <reads g>
@@ -169,11 +195,12 @@ embedder turns the handle into a dependency edge from the reading cell to the
 binder, and the scope parks nothing itself. The waiter chain is the
 scheduler's dependency graph, not the slot's.
 
-A slot visible to a running reader is never unwritten. The scheduler submits a
-body's statements in position order and claims a binder's slot when it
-submits the binder, so a binder declared before a reader has its cell before
-the reader runs. Empty is a state a slot has only before its binder is
-submitted.
+A slot visible to a running reader is never unwritten. A deferred mention
+reads at the body's end and sees the siblings declared after it, so the
+scheduler submits every statement of a body, in position order and claiming
+each binder's slot as it submits it, before any of those statements runs.
+Empty is a state a slot has only before its binder is submitted, and a read
+that finds one is a scheduler bug, not a pending read.
 
 A function activation and a module activation are one shape. A module body's
 binders are its exports in flight, and a `USING` over a binder that is still
@@ -186,8 +213,8 @@ Two forms introduce names no shape can see.
 - **`EVAL`** builds a block shape for the code it evaluates when it runs,
   over the activation it appears in: every free name resolves by name, a
   search of each enclosing shape's declared names from the innermost outward
-  with the same visibility rule, and every mention is eager, reading at
-  `EVAL`'s own position. A by-name resolution picks the same binding the
+  with the same visibility rule, reading the enclosing shape at `EVAL`'s own
+  position as an eager mention there would. A by-name resolution picks the same binding the
   shape's coordinate would. A binder in the evaluated code binds in that block
   shape and is gone when it ends; nothing an `EVAL` runs declares into the
   scope around it. Resolving outward needs the enclosing scopes to still
@@ -199,28 +226,57 @@ Two forms introduce names no shape can see.
   known statically where `USING` appears; a module whose signature is not
   requires an ascription there.
 
+## Errors
+
+A shape that cannot be built is refused where it is built, with the first
+error in walk order:
+
+- a **rebind** — a name declared twice in one shape, parameters included;
+- a binding that **shadows a builtin**, in either channel;
+- an **unbound** name — no binding of it visible where the mention reads;
+- an **eager cycle** — a component with an eager mention of a fellow member;
+- an **unsupported** form — `USING … SCOPE`, `CLOSE` and `CLOSE OVER`, whose
+  resolution has no rewrite home yet, and the reserved forms that exist only
+  to diagnose a miss;
+- a **malformed** form — a body or a branch list that is not the shape its form
+  declares.
+
+Each renders with the names and positions a user needs, spelled through the
+label interner.
+
 ## Memory
 
-An activation is bump-backed in its frame's region and `Drop`-free, so a
-frame's death releases it with the region. It holds no pointer into itself:
-its shape lives in program storage, its builtin table outlives every frame,
-its closure bindings live in the callable value, which the caller keeps alive
-across the call, and its slots hold values. An activation is therefore copied
-by copying its bytes.
+An activation is `Drop`-free and laid down in its frame's region, so a frame's
+death releases it with the region. It is a header of four pointers — its shape,
+its closure bindings, the builtin table and, for a block, the enclosing
+activation — beside one slot array over the shape's slot count. It holds no
+pointer into itself: its shape lives in program storage, its builtin table
+outlives every frame, its closure bindings live in the callable value, which
+the caller keeps alive across the call, an enclosing activation lives in the
+same frame, and its slots hold values. An activation is therefore copied by
+copying its bytes.
+
+A shape and everything it holds — declared-name runs, mentions, captures,
+components, nested shapes — rest in program storage and are `Copy`. An
+`EVAL`'s block shape is built into program storage each time the `EVAL` runs.
 
 ## The import rule
 
-`scope` names `crate::values`, `crate::type_lattice`, `crate::memory`,
-`crate::parse` and `cellgraph`'s cell handle, and no scheduler type. The cell
-handle is the substrate's name for a unit of work, which `memory` already
-rests on; the scheduler reaches scopes through its embedder, and scopes never
-reach the scheduler.
+`scope` names `crate::values`, `crate::type_lattice`, `crate::memory` and
+`crate::parse`, and no scheduler type. A pending slot's cell handle is
+`cellgraph`'s name for a unit of work, spelled through `memory`'s substrate
+re-exports like every other substrate name; the scheduler reaches scopes
+through its embedder, and scopes never reach the scheduler. The compiler
+cannot hold a module to that, so [`tests::boundary`](tests/boundary.rs) reads
+the module's source and fails on any other `crate::` path, on an owning heap
+type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [Scope on values and types](../../roadmap/rewrite/scope-on-values-and-types.md)
-  — the module this document describes.
 - [Callable values](../../roadmap/rewrite/callable-values.md) — closure
   bindings born from a function value, and tying a component as a knot,
   including a deferred mention below a nested constructor.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `USING …
+  SCOPE`, `CLOSE OVER`, and an `EVAL` retaining its defining scope across
+  frames.
