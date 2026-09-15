@@ -138,14 +138,38 @@ struct Draft<'x> {
     /// Finished nested drafts, waiting on this draft's components to settle their captures.
     children: BumpVec<'x, (Site, Draft<'x>)>,
     component_of: BumpVec<'x, ComponentIndex>,
-    components: BumpVec<'x, (BumpVec<'x, Slot>, bool)>,
+    /// Every component's members, one run after another, each run sorted.
+    members: BumpVec<'x, Slot>,
+    /// Each component's run in `members`, and whether every mention between its members is
+    /// deferred.
+    components: BumpVec<'x, DraftComponent>,
     keeps_defining_scope: bool,
     /// The statement being walked when a nested draft was entered, and the class that path takes
     /// at this level.
     current: (u32, MentionClass),
 }
 
+/// A component under construction: its run in [`Draft::members`].
+#[derive(Clone, Copy)]
+struct DraftComponent {
+    start: u32,
+    len: u32,
+    deferred_only: bool,
+}
+
+impl DraftComponent {
+    /// This component's run within every component's `members`.
+    fn run(self, members: &[Slot]) -> &[Slot] {
+        let start = self.start as usize;
+        &members[start..start + self.len as usize]
+    }
+}
+
 impl Draft<'_> {
+    fn members_of(&self, component: ComponentIndex) -> &[Slot] {
+        self.components[component.index()].run(&self.members)
+    }
+
     fn end(&self) -> Position {
         Position(self.statements + 1)
     }
@@ -269,30 +293,36 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
         values.sort_unstable_by_key(|(name, _)| *name);
         types.sort_unstable_by_key(|(name, _)| *name);
-        let mut draft = Draft {
+        let mut statement_binder = BumpVec::with_capacity_in(nodes.len(), scratch);
+        statement_binder.resize(nodes.len(), None);
+        let entries = values
+            .iter()
+            .map(|(_, position)| *position)
+            .chain(types.iter().map(|(_, position)| *position));
+        for (slot, position) in entries.enumerate() {
+            // A parameter writes at `0` and binds no statement.
+            if let Some(statement) = position.0.checked_sub(1) {
+                statement_binder[statement as usize] = Some(Slot(slot as u32));
+            }
+        }
+        Ok(Draft {
             kind,
             entered_at,
             parent_statement,
             statements: nodes.len() as u32,
             values,
             types,
-            statement_binder: BumpVec::with_capacity_in(nodes.len(), scratch),
+            statement_binder,
             mentions: BumpVec::new_in(scratch),
             captures: BumpVec::new_in(scratch),
             edges: BumpVec::new_in(scratch),
             children: BumpVec::new_in(scratch),
             component_of: BumpVec::new_in(scratch),
+            members: BumpVec::new_in(scratch),
             components: BumpVec::new_in(scratch),
             keeps_defining_scope: false,
             current: (0, MentionClass::Eager),
-        };
-        for node in nodes {
-            let name = node.statement_binder_plan().and_then(|plan| plan.name);
-            let slot = name.and_then(|name| draft.channels().find(name));
-            let slot = slot.map(|index| Slot(index as u32));
-            draft.statement_binder.push(slot);
-        }
-        Ok(draft)
+        })
     }
 
     /// Walk a node's parts under `state`, by its form's roles. A formless node is a call or a
@@ -764,25 +794,41 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     fn components(&mut self, draft: &mut Draft<'x>) -> Result<(), ShapeError> {
         let scratch = self.scratch;
         let count = draft.channels().len();
-        let mut adjacency: BumpVec<'x, BumpVec<'x, usize>> =
-            BumpVec::with_capacity_in(count, scratch);
-        adjacency.resize_with(count, || BumpVec::new_in(scratch));
-        for (binder, bound, _) in draft.edges.iter() {
-            adjacency[binder.index()].push(bound.index());
+        // Compressed rows: `offsets[i]..offsets[i + 1]` of `targets` are the slots binder `i` reads.
+        let mut offsets: BumpVec<'x, usize> = BumpVec::with_capacity_in(count + 1, scratch);
+        offsets.resize(count + 1, 0);
+        for (binder, _, _) in draft.edges.iter() {
+            offsets[binder.index() + 1] += 1;
         }
-        let mut borrowed = BumpVec::with_capacity_in(count, scratch);
-        borrowed.extend(adjacency.iter().map(|edges| edges.as_slice()));
+        for index in 0..count {
+            offsets[index + 1] += offsets[index];
+        }
+        let mut fill = BumpVec::with_capacity_in(count, scratch);
+        fill.extend_from_slice(&offsets[..count]);
+        let mut targets: BumpVec<'x, usize> = BumpVec::with_capacity_in(draft.edges.len(), scratch);
+        targets.resize(draft.edges.len(), 0);
+        for (binder, bound, _) in draft.edges.iter() {
+            let at = &mut fill[binder.index()];
+            targets[*at] = bound.index();
+            *at += 1;
+        }
+        let mut borrowed: BumpVec<'x, &[usize]> = BumpVec::with_capacity_in(count, scratch);
+        borrowed.extend((0..count).map(|index| &targets[offsets[index]..offsets[index + 1]]));
         let condensed = strongly_connected_components(scratch, &borrowed);
 
         draft.component_of.resize(count, ComponentIndex(0));
-        for (index, members) in condensed.iter().enumerate() {
-            let mut slots = BumpVec::with_capacity_in(members.len(), scratch);
-            slots.extend(members.iter().map(|member| Slot(*member as u32)));
-            slots.sort_unstable();
-            for slot in slots.iter() {
-                draft.component_of[slot.index()] = ComponentIndex(index as u32);
+        for (index, mut members) in condensed.into_iter().enumerate() {
+            members.sort_unstable();
+            let start = draft.members.len() as u32;
+            for member in members.iter() {
+                draft.component_of[*member] = ComponentIndex(index as u32);
+                draft.members.push(Slot(*member as u32));
             }
-            draft.components.push((slots, true));
+            draft.components.push(DraftComponent {
+                start,
+                len: members.len() as u32,
+                deferred_only: true,
+            });
         }
         let mut cyclic = BumpVec::new_in(scratch);
         cyclic.resize(draft.components.len(), false);
@@ -792,26 +838,27 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 continue;
             }
             cyclic[component.index()] |=
-                binder == bound || draft.components[component.index()].0.len() > 1;
+                binder == bound || draft.components[component.index()].len > 1;
             if *class == MentionClass::Eager {
-                draft.components[component.index()].1 = false;
+                draft.components[component.index()].deferred_only = false;
             }
         }
-        let refused = draft
-            .components
-            .iter()
-            .zip(cyclic.iter())
-            .filter(|((_, deferred_only), cyclic)| **cyclic && !*deferred_only)
-            .map(|((members, _), _)| members)
-            .min_by_key(|members| {
-                members
+        let refused = (0..draft.components.len())
+            .map(|index| ComponentIndex(index as u32))
+            .filter(|component| {
+                cyclic[component.index()] && !draft.components[component.index()].deferred_only
+            })
+            .min_by_key(|component| {
+                draft
+                    .members_of(*component)
                     .iter()
                     .map(|slot| draft.channels().get(slot.index()))
                     .min()
             });
-        if let Some(members) = refused {
+        if let Some(component) = refused {
             return Err(ShapeError::EagerCycle {
-                members: members
+                members: draft
+                    .members_of(component)
                     .iter()
                     .map(|slot| draft.channels().name(slot.index()))
                     .collect(),
@@ -830,7 +877,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 };
                 let component = draft.component_of[bound.index()];
                 if binder.is_some_and(|binder| draft.component_of[binder.index()] == component) {
-                    let members = &draft.components[component.index()].0;
+                    let members = draft.components[component.index()].run(&draft.members);
                     let index = members
                         .binary_search(&bound)
                         .expect("a slot sits in its own component");
@@ -854,16 +901,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         nested.sort_unstable_by_key(|(site, _)| *site);
         let mut mentions = draft.mentions;
         mentions.sort_unstable_by_key(|mention| mention.site);
+        let members = storage.alloc_slice_copy(&draft.members);
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
-        components.extend(
-            draft
-                .components
-                .iter()
-                .map(|(members, deferred_only)| Component {
-                    members: storage.alloc_slice_copy(members),
-                    deferred_only: *deferred_only,
-                }),
-        );
+        components.extend(draft.components.iter().map(|component| Component {
+            members: component.run(members),
+            deferred_only: component.deferred_only,
+        }));
         storage.alloc(Shape {
             kind: draft.kind,
             names: Channels::new(
