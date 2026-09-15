@@ -11,14 +11,15 @@
 //! a slot visible to a running reader is never `Empty`, and [`Activation::read`] panics if it is.
 //!
 //! A closure binding that is an edge into the callable's own knot never reaches a reader: the read
-//! resolves it through the callable the activation runs to the sibling callable it names.
+//! resolves it through the knot member the activation runs to the sibling it names, a function or a
+//! data node.
 
 use crate::memory::{CellHandle, SlotArray, SlotConflict, SlotState, Writer};
 use crate::parse::BinderSymbol;
-use crate::values::{Knotted, Nothing, Value};
+use crate::values::{Knotted, Link, Nothing, Value};
 
 use super::builtins::Builtins;
-use super::closure::{Capture, ClosureBindings};
+use super::closure::ClosureBindings;
 use super::shape::{Coordinate, Position, Shape, ShapeKind, Slot, Target};
 
 /// One body's bindings for one call or one block entry.
@@ -32,8 +33,9 @@ pub struct Activation<'graph, 'cell, X = Nothing> {
     closure: &'cell ClosureBindings<'graph, 'cell, X>,
     builtins: &'cell Builtins<'graph, 'cell, X>,
     enclosing: Option<&'cell Activation<'graph, 'cell, X>>,
-    /// The value this activation runs: `Some` for a callable's or module's activation and every
-    /// block inside one, `None` for the program's and every block inside it.
+    /// The knot member this activation runs: `Some` for a callable's or module's activation and
+    /// every block inside one, `None` for the program's and every block inside it. An edge capture
+    /// resolves through it.
     callable: Option<X>,
     slots: SlotArray<'cell, Value<'graph, 'cell, X>, CellHandle>,
 }
@@ -140,7 +142,7 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
     }
 
     /// The read every resolved name makes: a builtin through the header, or `hops` enclosing loads
-    /// then one slot or capture. A capture that is an edge reads as the sibling callable it names.
+    /// then one slot or capture. A capture that is an edge reads as the sibling member it names.
     pub fn read(&self, at: Coordinate) -> Binding<'graph, 'cell, X> {
         let (hops, target) = match at {
             Coordinate::Builtin(index) => return Binding::Bound(self.builtins.get(index)),
@@ -162,8 +164,8 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
                 ),
             },
             Target::Capture(slot) => match activation.closure.get(slot) {
-                Capture::Value(value) => Binding::Bound(value),
-                Capture::Edge(edge) => Binding::Bound(Value::Knotted(
+                Link::Value(value) => Binding::Bound(value),
+                Link::Edge(edge) => Binding::Bound(Value::Knotted(
                     activation
                         .callable
                         .expect("an edge capture is a callable's, read in its own activation")

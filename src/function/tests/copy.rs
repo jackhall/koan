@@ -7,7 +7,8 @@
 use std::ptr;
 
 use crate::memory::{CellGraph, ReleaseAbsorption};
-use crate::scope::{Capture, CaptureSlot};
+use crate::scope::CaptureSlot;
+use crate::values::Link;
 use crate::values::{Knotted as _, Value, cross};
 
 use super::super::{KValue, KValueFamily, Knotted};
@@ -18,7 +19,7 @@ fn capture<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     callable: Knotted<'graph, 'cell>,
     name: &str,
-) -> Capture<'graph, 'cell, Knotted<'graph, 'cell>> {
+) -> Link<'graph, 'cell, Knotted<'graph, 'cell>> {
     let function = callable.function().expect("a function");
     let name = fixture.name(name);
     let index = function
@@ -36,8 +37,8 @@ fn captured_value<'graph, 'cell>(
     name: &str,
 ) -> KValue<'graph, 'cell> {
     match capture(fixture, callable, name) {
-        Capture::Value(value) => value,
-        Capture::Edge(_) => panic!("`{name}` is captured as a value"),
+        Link::Value(value) => value,
+        Link::Edge(_) => panic!("`{name}` is captured as a value"),
     }
 }
 
@@ -47,8 +48,8 @@ fn captured_sibling<'graph, 'cell>(
     name: &str,
 ) -> Knotted<'graph, 'cell> {
     match capture(fixture, callable, name) {
-        Capture::Edge(edge) => callable.sibling(edge),
-        Capture::Value(_) => panic!("`{name}` is captured as an edge"),
+        Link::Edge(edge) => callable.sibling(edge),
+        Link::Value(_) => panic!("`{name}` is captured as an edge"),
     }
 }
 

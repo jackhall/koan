@@ -10,9 +10,9 @@
 use crate::elaborate::{Elaboration, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, CellHandle, Knot, KnotPlan, Writer};
 use crate::parse::BinderSymbol;
-use crate::scope::{Capture, ClosureBindings, ClosureRefused, Component, Shape};
+use crate::scope::{ClosureBindings, ClosureRefused, Component, Shape};
 use crate::type_lattice::{KType, TypeRegistry};
-use crate::values::Weight;
+use crate::values::{Link, Weight};
 
 use super::{Function, KActivation, Knotted, Node};
 
@@ -35,7 +35,7 @@ pub enum Untieable {
 struct Staged<'graph, 'cell, 'x> {
     shape: &'graph Shape<'graph>,
     ktype: KType,
-    captures: BumpVec<'x, Capture<'graph, 'cell, Knotted<'graph, 'cell>>>,
+    captures: BumpVec<'x, Link<'graph, 'cell, Knotted<'graph, 'cell>>>,
 }
 
 /// Tie `component` of `activation`'s shape as one knot in `writer`'s region: every member born

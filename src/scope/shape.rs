@@ -6,7 +6,7 @@
 //! and coordinate,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
 //! components of the body's bindings, the shapes nested in it by site, the form node a callable's
-//! body sits in, and the callable body each binder births. [`build`] is the one builder every kind
+//! body sits in, the callable body each binder births, and each `LET` binder's right-hand side. [`build`] is the one builder every kind
 //! goes through.
 //!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
@@ -189,6 +189,12 @@ pub struct Component<'graph> {
     pub members: &'graph [Slot],
     /// Whether every mention between members is deferred — the component a knot can tie.
     pub deferred_only: bool,
+    /// Whether the component holds more than one member or a member reads itself. A caller ties a
+    /// component of value binders when it is cyclic or when every member births a callable; a
+    /// non-cyclic data binder is an ordinary value, and a component of type binders is the
+    /// elaborator's. A component never mixes the two channels: a schema names types only, so no
+    /// mention leaves a type binder for a value binder.
+    pub cyclic: bool,
 }
 
 /// One body's resolved lexical structure. See the module documentation.
@@ -210,6 +216,8 @@ pub struct Shape<'graph> {
     form: Option<&'graph KExpression<'graph>>,
     /// Each binder whose right-hand side births a callable, beside that callable's body, by slot.
     births: &'graph [(Slot, &'graph Shape<'graph>)],
+    /// Each `LET` binder beside its right-hand side part, by slot.
+    rhs: &'graph [(Slot, &'graph ExpressionPart<'graph>)],
     keeps_defining_scope: bool,
 }
 
@@ -333,6 +341,16 @@ impl<'graph> Shape<'graph> {
             .binary_search_by_key(&slot, |(binder, _)| *binder)
             .ok()?;
         Some(self.births[index].1)
+    }
+
+    /// The right-hand side part of the `LET` binder at `slot`, the part a knot's data member is built
+    /// from. `None` for a parameter, a type declaration and a module binder.
+    pub fn rhs(&self, slot: Slot) -> Option<&'graph ExpressionPart<'graph>> {
+        let index = self
+            .rhs
+            .binary_search_by_key(&slot, |(binder, _)| *binder)
+            .ok()?;
+        Some(self.rhs[index].1)
     }
 
     /// Whether this shape holds an `EVAL` or encloses a shape that does, so its activation must

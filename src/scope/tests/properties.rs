@@ -9,11 +9,11 @@ use proptest::prelude::*;
 use crate::memory::{BumpAllocator, CellHandle, KnotPlan, Writer, resident};
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
 use crate::scope::{
-    Activation, Binding, Builtins, Capture, CaptureSource, ClosureBindings, ClosureRefused,
-    Coordinate, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
+    Activation, Binding, Builtins, CaptureSource, ClosureBindings, ClosureRefused, Coordinate,
+    MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
 };
 use crate::type_lattice::KType;
-use crate::values::Value;
+use crate::values::{Link, Value};
 
 use super::plan::{self, Class, Generator, Kind, Lands, Refusal, Rendering, Token};
 use super::{Probe, builtins, with_fixture};
@@ -190,6 +190,40 @@ fn follow(chain: &[&Shape<'_>], level: usize, coordinate: Coordinate) -> Found {
     }
 }
 
+/// Every binder of scope `index` a planned read in its own statement reads — directly, or from a
+/// scope nested in that statement.
+fn self_reads(
+    labels: &LabelInterner,
+    rendering: &Rendering<'_>,
+    index: usize,
+) -> BTreeSet<BinderSymbol> {
+    let target = rendering.scopes[index].level;
+    let statements = &rendering.scopes[index].scope.statements;
+    let mut found = BTreeSet::new();
+    for placed in &rendering.reads {
+        let Lands::Binder { up } = placed.read.lands else {
+            continue;
+        };
+        let (mut scope, mut statement) = (placed.scope, placed.statement);
+        if rendering.scopes[scope].level < target + up
+            || rendering.scopes[scope].level - up != target
+        {
+            continue;
+        }
+        while rendering.scopes[scope].level > target {
+            statement = rendering.scopes[scope].statement;
+            let Some(parent) = rendering.scopes[scope].parent else {
+                break;
+            };
+            scope = parent;
+        }
+        if scope == index && statements[statement as usize].binder == Some(placed.read.name) {
+            found.insert(placed.read.name.symbol(labels));
+        }
+    }
+    found
+}
+
 /// Check every planned scope's shape against its plan; `prefix` is the chain of shapes the root
 /// scope reads through.
 fn check(
@@ -236,7 +270,9 @@ fn check(
             );
         }
 
-        // The components are the planned partition, each holding only deferred reads.
+        // The components are the planned partition, each holding only deferred reads, and cyclic
+        // exactly when it holds more than one member or a member reads itself.
+        let self_reads = self_reads(labels, rendering, index);
         let components =
             |sets: Vec<BTreeSet<BinderSymbol>>| sets.into_iter().collect::<BTreeSet<_>>();
         let built: Vec<BTreeSet<BinderSymbol>> = shape
@@ -244,11 +280,15 @@ fn check(
             .iter()
             .map(|component| {
                 assert!(component.deferred_only, "`{source}`");
-                component
+                let members: BTreeSet<BinderSymbol> = component
                     .members
                     .iter()
                     .map(|slot| shape.slot_name(*slot))
-                    .collect()
+                    .collect();
+                let cyclic =
+                    members.len() > 1 || members.iter().any(|name| self_reads.contains(name));
+                assert_eq!(component.cyclic, cyclic, "`{source}`");
+                members
             })
             .collect();
         let expected: Vec<BTreeSet<BinderSymbol>> = planned
@@ -475,11 +515,11 @@ fn activate<'g, 'c>(
                 for (index, capture) in nested.captures().iter().enumerate() {
                     let held = bindings.get(crate::scope::CaptureSlot(index as u32));
                     match (capture.source, held) {
-                        (CaptureSource::Read(source), Capture::Value(value)) => {
+                        (CaptureSource::Read(source), Link::Value(value)) => {
                             let expected = observe(activation.read(source));
                             assert_eq!(observe(Binding::Bound(value)), expected);
                         }
-                        (CaptureSource::Member { index, .. }, Capture::Edge(edge)) => {
+                        (CaptureSource::Member { index, .. }, Link::Edge(edge)) => {
                             assert_eq!(edge.index(), index)
                         }
                         (source, _) => panic!("the binding does not follow its source {source:?}"),

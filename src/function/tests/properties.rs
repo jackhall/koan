@@ -9,8 +9,9 @@ use proptest::prelude::*;
 
 use crate::memory::{CellGraph, Edge, ReleaseAbsorption, Writer, resident};
 use crate::parse::BinderSymbol;
-use crate::scope::{Binding, Capture, CaptureSlot, CaptureSource, ShapeKind, Slot};
+use crate::scope::{Binding, CaptureSlot, CaptureSource, ShapeKind, Slot};
 use crate::type_lattice::KType;
+use crate::values::Link;
 use crate::values::{Knotted as _, TypeValue, Value, cross};
 
 use super::super::{KActivation, KValue, KValueFamily, Knotted, Untieable, tie};
@@ -107,10 +108,10 @@ fn run<'graph, 'cell>(
             assert_eq!(function.closure().len(), body.captures().len());
             for (at, spec) in body.captures().iter().enumerate() {
                 match (spec.source, function.closure().get(CaptureSlot(at as u32))) {
-                    (CaptureSource::Member { index, .. }, Capture::Edge(edge)) => {
+                    (CaptureSource::Member { index, .. }, Link::Edge(edge)) => {
                         assert_eq!(edge.index(), index)
                     }
-                    (CaptureSource::Read(coordinate), Capture::Value(value)) => {
+                    (CaptureSource::Read(coordinate), Link::Value(value)) => {
                         let Binding::Bound(enclosing) = activation.read(coordinate) else {
                             panic!("every enclosing binding is bound before the tie");
                         };
@@ -207,8 +208,8 @@ proptest! {
                             assert_eq!(before.len(), after.len());
                             for at in 0..before.len() {
                                 match (before.get(CaptureSlot(at as u32)), after.get(CaptureSlot(at as u32))) {
-                                    (Capture::Edge(before), Capture::Edge(after)) => assert_eq!(before, after),
-                                    (Capture::Value(before), Capture::Value(after)) => {
+                                    (Link::Edge(before), Link::Edge(after)) => assert_eq!(before, after),
+                                    (Link::Value(before), Link::Value(after)) => {
                                         assert!(rebuilt(before, after), "`{source}`")
                                     }
                                     _ => panic!("a copy keeps each binding's kind"),

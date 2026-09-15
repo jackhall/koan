@@ -104,7 +104,7 @@ pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
 pub(super) const BUILTIN_VALUES: &[&str] = &["origin"];
 
 /// The type builtins every suite's table holds.
-pub(super) const BUILTIN_TYPES: &[&str] = &["Number", "Str", "Bool", "Null", "Any"];
+pub(super) const BUILTIN_TYPES: &[&str] = &["Number", "Str", "Bool", "Null", "Any", "Ring"];
 
 pub(super) fn value_name(text: &str, labels: &LabelInterner) -> ValueSymbol {
     ValueSymbol::declared(text, labels).expect("a value token")
@@ -129,6 +129,7 @@ pub(super) fn builtins<'graph, 'cell, X: Knotted>(
         KType::STR,
         KType::BOOL,
         KType::NULL,
+        KType::ANY,
         KType::ANY,
     ];
     let types: Vec<_> = BUILTIN_TYPES

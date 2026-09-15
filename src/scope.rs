@@ -38,7 +38,7 @@ pub(crate) use signature::pair_name;
 
 pub use activation::{Activation, Binding};
 pub use builtins::Builtins;
-pub use closure::{Capture, ClosureBindings, ClosureRefused};
+pub use closure::{ClosureBindings, ClosureRefused};
 pub use shape::{
     BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate,
     Mention, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,

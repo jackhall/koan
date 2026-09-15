@@ -2,8 +2,9 @@
 //! every refusal.
 
 use crate::elaborate::Elaboration;
-use crate::scope::{Binding, Capture, CaptureSlot, Coordinate, Target};
+use crate::scope::{Binding, CaptureSlot, Coordinate, Target};
 use crate::type_lattice::KType;
+use crate::values::Link;
 use crate::values::{Knotted as _, Value, Weight};
 
 use super::super::{KActivation, Knotted, Node, Untieable, tie};
@@ -69,7 +70,7 @@ fn a_closure_captures_the_enclosing_value_word() {
         fixture.in_cell(pin, |context, binder| {
             let activation = fixture.run(context.writer(), &lines, binder, &[]);
             let f = callable(fixture, activation, "f");
-            let Capture::Value(Value::Str(captured)) = f
+            let Link::Value(Value::Str(captured)) = f
                 .function()
                 .expect("a function")
                 .closure()
@@ -141,8 +142,8 @@ fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
                 .closure()
                 .get(CaptureSlot(0))
             {
-                Capture::Edge(edge) => edge.index(),
-                Capture::Value(_) => panic!("a fellow member is captured as an edge"),
+                Link::Edge(edge) => edge.index(),
+                Link::Value(_) => panic!("a fellow member is captured as an edge"),
             };
             assert_eq!(edge(f), g.member().index().index());
             assert_eq!(edge(g), f.member().index().index());
@@ -198,7 +199,7 @@ fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
             );
             let knot = tie_of(fixture, writer, call, "h").expect("the inner function ties");
             let h = Knotted::of(knot, 0);
-            let Capture::Value(Value::Knotted(captured)) = h
+            let Link::Value(Value::Knotted(captured)) = h
                 .function()
                 .expect("a function")
                 .closure()
