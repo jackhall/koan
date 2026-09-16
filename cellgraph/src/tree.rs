@@ -48,9 +48,9 @@ pub(crate) enum Ancestor {
 /// Where a tree cell sits relative to a placement destination on the same root — the classification
 /// the ancestry rule turns on.
 ///
-/// Not one of the crate's **relations**. Those are the two square bit matrices over slab slots,
-/// birth and pin ([`Matrix`](crate::matrix::Matrix)), and no tree cell is in either. Ancestry is
-/// read off the chain links instead, at a cost of the level distance between the two cells.
+/// Not the crate's **relation**. That is the square bit matrix over slab slots, pin
+/// ([`Matrix`](crate::matrix::Matrix)), and no tree cell is in it. Ancestry is read off the chain
+/// links instead, at a cost of the level distance between the two cells.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Ancestry {
     /// The destination is the cell itself, or a tree cell under it. It dies first, so a borrow into

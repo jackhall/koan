@@ -26,8 +26,8 @@ fn a_copied_list_outlives_its_home() {
         let (types, scratch) = (fixture.types, fixture.scratch());
         let node = quote(fixture, "#(a b)");
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
-        let home = graph.create(None, None).unwrap();
-        let dest = graph.create(None, None).unwrap();
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
                 let writer = context.writer();
@@ -79,8 +79,8 @@ fn a_pinned_record_reads_after_its_home_seals() {
         let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
         let name = BinderSymbol::declared("name", labels).unwrap();
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, pin);
-        let home = graph.create(None, None).unwrap();
-        let holder = graph.create(None, None).unwrap();
+        let home = graph.create(None).unwrap();
+        let holder = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
                 let writer = context.writer();
@@ -120,7 +120,7 @@ fn a_kept_value_redeems_in_a_later_step() {
     with_fixture(|fixture| {
         let (types, scratch) = (fixture.types, fixture.scratch());
         let mut graph: CellGraph<'_, Step> = CellGraph::new(1, pin);
-        let cell = graph.create(None, None).unwrap();
+        let cell = graph.create(None).unwrap();
         let dormant = graph
             .enter(cell, |context| {
                 let writer = context.writer();
@@ -156,7 +156,7 @@ fn a_quote_crosses_a_forced_tree_copy() {
         let (types, scratch) = (fixture.types, fixture.scratch());
         let node = quote(fixture, "#(x)");
         let mut graph: CellGraph<'_, Step> = CellGraph::new(1, pin);
-        let root = graph.create(None, None).unwrap();
+        let root = graph.create(None).unwrap();
         let left = graph.create_tree(root, None).unwrap();
         let right = graph.create_tree(root, None).unwrap();
         graph
@@ -187,8 +187,8 @@ fn crossing_here_brings_a_value_back_into_the_step() {
     with_fixture(|fixture| {
         let (types, scratch) = (fixture.types, fixture.scratch());
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
-        let cell = graph.create(None, None).unwrap();
-        let other = graph.create(None, None).unwrap();
+        let cell = graph.create(None).unwrap();
+        let other = graph.create(None).unwrap();
         graph
             .enter(cell, |context| {
                 let writer = context.writer();
@@ -248,8 +248,8 @@ fn a_circular_value_copies_as_the_same_graph_and_pins_as_the_same_node() {
         let (types, scratch) = (fixture.types, fixture.scratch());
         for (verdict, copies) in [(copy as fn(Prices) -> Verdict, true), (pin, false)] {
             let mut graph: CellGraph<'_, Step> = CellGraph::new(2, verdict);
-            let home = graph.create(None, None).unwrap();
-            let dest = graph.create(None, None).unwrap();
+            let home = graph.create(None).unwrap();
+            let dest = graph.create(None).unwrap();
             graph
                 .enter(home, |context| {
                     let writer = context.writer();

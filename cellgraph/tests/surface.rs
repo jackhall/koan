@@ -192,10 +192,10 @@ fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
 fn every_public_door_answers_from_outside_the_crate() {
     let mut graph: CellGraph<'static, Work> = CellGraph::new(4, weigh);
 
-    // Creation, with and without a parent, and with or without a continuation at birth.
-    let root: SlabHandle = graph.create(None, Some(String::from("root"))).unwrap();
-    let child = graph.create(Some(root), None).unwrap();
-    let doomed = graph.create(Some(root), None).unwrap();
+    // Creation, with and without a continuation at birth.
+    let root: SlabHandle = graph.create(Some(String::from("root"))).unwrap();
+    let child = graph.create(None).unwrap();
+    let doomed = graph.create(None).unwrap();
     assert_eq!(root.slot(), 0);
     assert_eq!(child.generation(), 0);
     assert!(graph.is_live(child));
@@ -301,8 +301,8 @@ fn every_public_door_answers_from_outside_the_crate() {
         .unwrap();
     assert_eq!(carried, "done");
 
-    // The value kept in the last step redeems in this one: the child holds root, whose region the
-    // value lives in, so the door hands it back with reach derived from the reach table.
+    // The value kept in the last step redeems in this one: the child's pin row names root, whose
+    // region the value lives in, so the door hands it back with reach derived from the reach table.
     let kept = kept.unwrap();
     let redeemed = graph
         .enter(child, |context| {
@@ -319,7 +319,7 @@ fn every_public_door_answers_from_outside_the_crate() {
         refused.is_ok(),
         "the home cell redeems its own dormant carrier"
     );
-    let bystander = graph.create(None, None).unwrap();
+    let bystander = graph.create(None).unwrap();
     let error = graph
         .enter(bystander, |context| match context.redeem(kept) {
             Err(error) => error,
@@ -350,8 +350,8 @@ fn every_public_door_answers_from_outside_the_crate() {
 #[test]
 fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
     let mut graph: CellGraph<'static, Resumed> = CellGraph::new(2, weigh);
-    let cell = graph.create(None, None).unwrap();
-    let other = graph.create(None, None).unwrap();
+    let cell = graph.create(None).unwrap();
+    let other = graph.create(None).unwrap();
 
     // A capture out of the cell's own region: written through the cell's writer, stored through
     // the one successor door, and handed back at the next step's `'here`.
@@ -394,19 +394,13 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
 #[test]
 fn the_refusals_hand_back_the_handle_that_went_stale() {
     let mut full: CellGraph<'static, Work> = CellGraph::new(1, weigh);
-    let taken = full.create(None, None).unwrap();
-    assert_eq!(full.create(None, None), Err(CreateError::SlabFull));
+    let taken = full.create(None).unwrap();
+    assert_eq!(full.create(None), Err(CreateError::SlabFull));
 
     // Every door refuses a handle kept past the death the embedder declared itself, and every
     // refusal hands the handle back rather than swallowing it.
     full.release(taken, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(full.is_empty());
-
-    let Err(CreateError::StaleParent(stale)) = full.create(Some(taken), None) else {
-        panic!("a dead parent must refuse");
-    };
-    let stale: Stale<SlabHandle> = stale;
-    assert_eq!(stale.name(), taken);
 
     let Err(error) = full.enter(taken, |_| ()) else {
         panic!("a dead cell must refuse the step");
@@ -417,13 +411,18 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
         panic!("a second release names a death already declared");
     };
     assert_eq!(name_release_error(error), "stale");
+    let ReleaseError::Stale(stale) = error else {
+        panic!("a stale release names the handle it refused");
+    };
+    let stale: Stale<SlabHandle> = stale;
+    assert_eq!(stale.name(), taken);
 }
 
 #[test]
 fn the_tree_pool_answers_from_outside_the_crate() {
     let mut graph: CellGraph<'static, Work> = CellGraph::new(1, weigh);
-    let root: SlabHandle = graph.create(None, None).unwrap();
-    assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
+    let root: SlabHandle = graph.create(None).unwrap();
+    assert_eq!(graph.create(None), Err(CreateError::SlabFull));
 
     // The pool takes no cap: a chain deeper than the slab is ordinary, and none of it is a slot.
     let outer: TreeHandle = graph.create_tree(root, None).unwrap();
@@ -512,7 +511,7 @@ fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
     // Storage the embedder owns outside the graph, which the graph may borrow but not outlive.
     let program = String::from("program text");
     let mut graph: CellGraph<'_, Work> = CellGraph::new(1, weigh);
-    let root = graph.create(None, None).unwrap();
+    let root = graph.create(None).unwrap();
     let left = graph.create_tree(root, None).unwrap();
     let right = graph.create_tree(root, None).unwrap();
     graph
@@ -562,8 +561,8 @@ fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
 fn a_graph_borrow_is_captured_kept_and_redeemed_after_its_home_is_released() {
     let program = String::from("program text");
     let mut graph: CellGraph<'_, Script<'_>> = CellGraph::new(2, weigh);
-    let producer = graph.create(None, None).unwrap();
-    let consumer = graph.create(None, None).unwrap();
+    let producer = graph.create(None).unwrap();
+    let consumer = graph.create(None).unwrap();
     let dormant: Dormant<'_, Listing> = graph
         .enter(producer, |context| {
             let count = one(context.writer(), 41);

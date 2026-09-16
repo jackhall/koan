@@ -3,10 +3,9 @@
 //! / `read` / `release` can break the conditions the whole model rests on
 //! ([../README.md § Invariants](../README.md#invariants)):
 //!
-//! - a recycled slot is named by nothing — no occupant's row in either relation, and no frozen
-//!   aggregate;
-//! - a cell undisposed after its declared death is named by an occupant's birth row — the one
-//!   relation with no sealed half to convert into — or counted by an undisposed tree child;
+//! - a recycled slot is named by nothing — no occupant's pin row, and no frozen aggregate;
+//! - a cell undisposed after its declared death has an undisposed tree cell under it, which is the
+//!   one thing that can hold a slot past its death;
 //! - every sealed cell's holder count equals the number of hold sets that name it, and the reverse
 //!   naming index is exactly the transpose of the aggregates;
 //! - every bit and id of a dormant carrier's mask is covered by storage its cell is answerable
@@ -57,9 +56,7 @@ fn alternating() -> impl FnMut(Prices) -> Verdict + 'static {
 /// mis-applied.
 #[derive(Clone, Debug)]
 enum Verb {
-    Create {
-        parent: Option<usize>,
-    },
+    Create,
     CreateTree {
         parent: usize,
         under_tree: bool,
@@ -115,7 +112,7 @@ enum Verb {
 /// the corpus needed for one, and the three shapes are already rare in a random interleaving.
 fn merge_verb() -> impl Strategy<Value = Verb> {
     prop_oneof![
-        proptest::option::of(0..8usize).prop_map(|parent| Verb::Create { parent }),
+        Just(Verb::Create),
         (0..8usize, 0..8usize).prop_map(|(holder, held)| Verb::Hold { holder, held }),
         (0..8usize, 0..8usize).prop_map(|(producer, consumer)| Verb::Place { producer, consumer }),
         (0..8usize, 0..8usize).prop_map(|(cell, over)| Verb::Continue { cell, over }),
@@ -194,16 +191,12 @@ fn check_invariants(
         .collect();
 
     for slot in 0..CAP {
-        let by_birth = graph
-            .cells
-            .birth
-            .held_by_any(occupied.iter().copied(), slot);
         let by_pins = graph.cells.pins.held_by_any(occupied.iter().copied(), slot);
         let by_aggregate = !graph.cells.naming[slot as usize].is_empty();
         match graph.cells.slots[slot as usize].state {
             SlabState::Free => {
                 assert!(
-                    !by_birth && !by_pins && !by_aggregate,
+                    !by_pins && !by_aggregate,
                     "slot {slot} is free but something still names it"
                 );
                 assert!(
@@ -211,11 +204,11 @@ fn check_invariants(
                     "slot {slot} is free but kept a sealed hold"
                 );
             }
-            // Two relations keep a dead cell in place: a descendant's birth row, and an
-            // undisposed tree child, which is the same relation counted rather than rowed.
+            // One thing keeps a dead cell in place, and it is not a hold: an undisposed tree cell
+            // under it, whose own disposal still has to find its root.
             SlabState::Dead => assert!(
-                by_birth || graph.cells.tree_children_of(graph.cells.occupant(slot)) > 0,
-                "slot {slot} is undisposed but nothing names it, so it should have left the slab"
+                graph.cells.tree_children_of(graph.cells.occupant(slot)) > 0,
+                "slot {slot} is undisposed but no tree child is under it, so it should have left the slab"
             ),
             SlabState::Live => {}
         }
@@ -465,10 +458,7 @@ fn expected_redeem(
     match graph.cells.locate(slab_home) {
         None => Err(RedeemError::Gone),
         Some(SlabForward::Slab { slot, .. }) => {
-            match slot == executing
-                || graph.cells.pins.test(executing, slot)
-                || graph.cells.birth.test(executing, slot)
-            {
+            match slot == executing || graph.cells.pins.test(executing, slot) {
                 true => Ok(()),
                 false => Err(RedeemError::Unheld),
             }
@@ -568,7 +558,7 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed>) {
     }
 
     for index in occupied.iter().copied().filter(|index| alive(*index)) {
-        // The child count is the birth tally's analogue: it has to agree with a scan.
+        // The child count is a tally like the matrix's: it has to agree with a scan.
         let children = occupied
             .iter()
             .copied()
@@ -652,9 +642,8 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
 
     for step in verbs {
         match *step {
-            Verb::Create { parent } => {
-                let parent = parent.and_then(|index| minted.get(index).copied());
-                if let Ok(handle) = graph.create(parent, None) {
+            Verb::Create => {
+                if let Ok(handle) = graph.create(None) {
                     minted.push(handle);
                 }
             }
@@ -749,7 +738,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 // otherwise. A run with no slab cell yet takes one now: a tree cell is meaningless
                 // without a root, so the alternative is a verb that can never fire.
                 if minted.is_empty()
-                    && let Ok(handle) = graph.create(None, None)
+                    && let Ok(handle) = graph.create(None)
                 {
                     minted.push(handle);
                 }
@@ -963,13 +952,17 @@ proptest! {
 /// An interleaving invariant test is only worth what its runs cover: without this, a merge that
 /// never fired would look exactly like a merge that always held. Miri skips the assertion — four
 /// cases is what a slate run affords, and that is too few to reach all three shapes reliably.
+///
+/// The runs are long because the rarest shape is deep rather than wide: seal-time absorption wants
+/// a three-deep pin chain built and then wound down from the producer end inside one run, so
+/// lengthening a run reaches it far faster than drawing more short ones.
 #[test]
 fn each_merge_fires_across_generated_interleavings() {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
 
     let cases = if cfg!(miri) { 4 } else { 256 };
-    let strategy = proptest::collection::vec(merge_verb(), 1..40);
+    let strategy = proptest::collection::vec(merge_verb(), 1..100);
     let mut runner = TestRunner::deterministic();
     let mut total = Merges::default();
 

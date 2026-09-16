@@ -319,8 +319,8 @@ proptest! {
         with_fixture(|fixture| {
             let lines = fixture.parse(&source);
             let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
-            let home = graph.create(None, None).unwrap();
-            let dest = graph.create(None, None).unwrap();
+            let home = graph.create(None).unwrap();
+            let dest = graph.create(None).unwrap();
             graph
                 .enter(home, |context| {
                     let writer = context.writer();

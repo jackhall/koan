@@ -100,7 +100,7 @@ fn build_slice<'cell, 'severed>(
 /// of the next, `n` times over, with nothing else in the graph.
 fn keep_redeem(n: u32) {
     let mut graph = graph();
-    let cell = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let cell = measure(Verb::Create, || graph.create(None)).unwrap();
 
     let first = measure(Verb::Enter, || {
         graph.enter(cell, |context| {
@@ -138,12 +138,12 @@ fn keep_redeem(n: u32) {
 /// keep scans the entries before it, which is the linear term interning is priced at.
 fn keep_shapes(n: u32) {
     let mut graph = graph();
-    let dest = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let dest = measure(Verb::Create, || graph.create(None)).unwrap();
     let mut sources: Vec<SlabHandle> = Vec::with_capacity(n as usize);
     let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
-        let source = measure(Verb::Create, || graph.create(None, None)).unwrap();
+        let source = measure(Verb::Create, || graph.create(None)).unwrap();
         sources.push(source);
         let resting = measure(Verb::Enter, || {
             graph.enter(source, |context| {
@@ -188,11 +188,11 @@ fn keep_shapes(n: u32) {
 /// and then dying, so every release finds a unique holder and folds into it.
 fn push_chain(n: u32) {
     let mut graph = graph();
-    let consumer = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let consumer = measure(Verb::Create, || graph.create(None)).unwrap();
     let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
-        let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
+        let producer = measure(Verb::Create, || graph.create(None)).unwrap();
         let resting = measure(Verb::Enter, || {
             graph.enter(producer, |context| {
                 let value = measure(Verb::Alloc, || number_here(context, i));
@@ -235,11 +235,11 @@ fn push_chain(n: u32) {
 /// together.
 fn pull_chain(n: u32) {
     let mut graph = graph();
-    let consumer = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let consumer = measure(Verb::Create, || graph.create(None)).unwrap();
     let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
-        let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
+        let producer = measure(Verb::Create, || graph.create(None)).unwrap();
         let resting = measure(Verb::Enter, || {
             graph.enter(producer, |context| {
                 let value = measure(Verb::Alloc, || number_here(context, i));
@@ -279,32 +279,6 @@ fn pull_chain(n: u32) {
     assert!(graph.is_empty());
 }
 
-/// Dead ancestors waiting on a descendant: a chain of `n` cells each born under the last, released
-/// outermost-first so every one of them stays dead-but-undisposed under the leaf's birth row, and
-/// then the leaf — the single release that frees the whole chain in one walk up it.
-fn birth_chain(n: u32) {
-    let mut graph = graph();
-    let mut handles: Vec<SlabHandle> = Vec::with_capacity(n as usize);
-
-    let root = measure(Verb::Create, || graph.create(None, None)).unwrap();
-    handles.push(root);
-    for depth in 1..n {
-        let parent = handles[depth as usize - 1];
-        let child = measure(Verb::Create, || graph.create(Some(parent), None)).unwrap();
-        handles.push(child);
-    }
-
-    // Every release but the last leaves its cell dead-but-undisposed: the leaf is still live, and
-    // its birth row names the whole chain above it.
-    for handle in &handles {
-        measure(Verb::Release, || {
-            graph.release(*handle, ReleaseAbsorption::IntoHolder)
-        })
-        .unwrap();
-    }
-    assert!(graph.is_empty());
-}
-
 /// One round of the fan-out: `m` values built in `source` and placed as one slice into `dest`.
 fn fan_out_round(
     graph: &mut CellGraph<'static, Work>,
@@ -337,8 +311,8 @@ fn fan_out_round(
 /// already holds the home is, and the one an always-pin embedder pays per operand.
 fn fan_out(m: u32) {
     let mut graph = graph();
-    let source = measure(Verb::Create, || graph.create(None, None)).unwrap();
-    let dest = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let source = measure(Verb::Create, || graph.create(None)).unwrap();
+    let dest = measure(Verb::Create, || graph.create(None)).unwrap();
 
     let first = fan_out_round(&mut graph, source, dest, m);
     let second = fan_out_round(&mut graph, source, dest, m);
@@ -373,12 +347,12 @@ fn fan_out(m: u32) {
 /// cell's holder count falls to zero at once.
 fn shared_subtier(n: u32) {
     let mut graph = graph();
-    let left = measure(Verb::Create, || graph.create(None, None)).unwrap();
-    let right = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let left = measure(Verb::Create, || graph.create(None)).unwrap();
+    let right = measure(Verb::Create, || graph.create(None)).unwrap();
 
     let mut bases: Vec<SlabHandle> = Vec::with_capacity(n as usize);
     for _ in 0..n {
-        bases.push(measure(Verb::Create, || graph.create(None, None)).unwrap());
+        bases.push(measure(Verb::Create, || graph.create(None)).unwrap());
     }
 
     let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
@@ -459,7 +433,7 @@ pub struct Shape {
 /// its death is a bump splice into the ancestor it pledged.
 fn tree_chain(n: u32) {
     let mut graph = graph();
-    let root = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let root = measure(Verb::Create, || graph.create(None)).unwrap();
 
     let mut chain: Vec<TreeHandle> = Vec::with_capacity(n as usize);
     let mut parent = CellHandle::Slab(root);
@@ -526,7 +500,7 @@ fn tree_chain(n: u32) {
 
 /// Every shape. Each is swept at both its sizes, so the per-unit trend is the difference over the
 /// difference in `n` — a term needs both readings.
-pub const SHAPES: [Shape; 8] = [
+pub const SHAPES: [Shape; 7] = [
     Shape {
         name: "keep_redeem",
         run: keep_redeem,
@@ -542,12 +516,6 @@ pub const SHAPES: [Shape; 8] = [
     Shape {
         name: "pull_chain",
         run: pull_chain,
-        small: 8,
-        large: 32,
-    },
-    Shape {
-        name: "birth_chain",
-        run: birth_chain,
         small: 8,
         large: 32,
     },

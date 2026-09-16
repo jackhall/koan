@@ -56,12 +56,12 @@ fn retained(graph: &CellGraph<'static, Owned>, id: SealedId) -> usize {
 /// Every link keeps a second live holder so the seal-time merge finds no count of one, and the head
 /// refuses death-time absorption so it seals rather than folding into its keeper.
 fn sealed_chain(graph: &mut CellGraph<'static, Owned>) -> (SealedId, SealedId, SealedId) {
-    let b = graph.create(None, None).unwrap();
-    let a = graph.create(None, None).unwrap();
-    let s = graph.create(None, None).unwrap();
-    let keep_b = graph.create(None, None).unwrap();
-    let keep_a = graph.create(None, None).unwrap();
-    let keep_s = graph.create(None, None).unwrap();
+    let b = graph.create(None).unwrap();
+    let a = graph.create(None).unwrap();
+    let s = graph.create(None).unwrap();
+    let keep_b = graph.create(None).unwrap();
+    let keep_a = graph.create(None).unwrap();
+    let keep_s = graph.create(None).unwrap();
     for cell in [b, a, s] {
         allocate(graph, cell);
     }
@@ -105,13 +105,13 @@ fn a_closure_prices_everything_a_hold_on_the_sealed_cell_reaches() {
 #[test]
 fn a_shared_sub_tier_is_billed_once_within_one_closure() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
-    let c = graph.create(None, None).unwrap();
-    let a = graph.create(None, None).unwrap();
-    let b = graph.create(None, None).unwrap();
-    let s = graph.create(None, None).unwrap();
-    let keep_a = graph.create(None, None).unwrap();
-    let keep_b = graph.create(None, None).unwrap();
-    let keep_s = graph.create(None, None).unwrap();
+    let c = graph.create(None).unwrap();
+    let a = graph.create(None).unwrap();
+    let b = graph.create(None).unwrap();
+    let s = graph.create(None).unwrap();
+    let keep_a = graph.create(None).unwrap();
+    let keep_b = graph.create(None).unwrap();
+    let keep_s = graph.create(None).unwrap();
     for cell in [c, a, b, s] {
         allocate(&mut graph, cell);
     }
@@ -153,9 +153,9 @@ fn a_shared_sub_tier_is_billed_once_within_one_closure() {
 #[test]
 fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let live = graph.create(None, None).unwrap();
-    let s = graph.create(None, None).unwrap();
-    let keep_s = graph.create(None, None).unwrap();
+    let live = graph.create(None).unwrap();
+    let s = graph.create(None).unwrap();
+    let keep_s = graph.create(None).unwrap();
     allocate(&mut graph, live);
     allocate(&mut graph, s);
     hold(&mut graph, s, live);
@@ -203,9 +203,9 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
 #[test]
 fn priming_a_memo_costs_the_sealed_cell_the_bytes_it_writes() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let bare = graph.create(None, None).unwrap();
-    let keep = graph.create(None, None).unwrap();
-    let keep_too = graph.create(None, None).unwrap();
+    let bare = graph.create(None).unwrap();
+    let keep = graph.create(None).unwrap();
+    let keep_too = graph.create(None).unwrap();
     // No `allocate`: the cell writes nothing, so the sealed cell it seals into starts with no
     // chunk.
     hold(&mut graph, keep, bare);
@@ -247,12 +247,12 @@ fn priming_a_memo_costs_the_sealed_cell_the_bytes_it_writes() {
 #[test]
 fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
-    let a = graph.create(None, None).unwrap();
-    let s = graph.create(None, None).unwrap();
-    let keep_a = graph.create(None, None).unwrap();
-    let keep_a_too = graph.create(None, None).unwrap();
-    let keep_s = graph.create(None, None).unwrap();
-    let keep_s_too = graph.create(None, None).unwrap();
+    let a = graph.create(None).unwrap();
+    let s = graph.create(None).unwrap();
+    let keep_a = graph.create(None).unwrap();
+    let keep_a_too = graph.create(None).unwrap();
+    let keep_s = graph.create(None).unwrap();
+    let keep_s_too = graph.create(None).unwrap();
     allocate(&mut graph, a);
     allocate(&mut graph, s);
     hold(&mut graph, s, a);
@@ -293,13 +293,13 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
 #[test]
 fn a_walk_that_reaches_a_memoized_sealed_cell_merges_its_set() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
-    let b = graph.create(None, None).unwrap();
-    let a = graph.create(None, None).unwrap();
-    let s = graph.create(None, None).unwrap();
-    let live = graph.create(None, None).unwrap();
-    let keep_b = graph.create(None, None).unwrap();
-    let keep_a = graph.create(None, None).unwrap();
-    let keep_s = graph.create(None, None).unwrap();
+    let b = graph.create(None).unwrap();
+    let a = graph.create(None).unwrap();
+    let s = graph.create(None).unwrap();
+    let live = graph.create(None).unwrap();
+    let keep_b = graph.create(None).unwrap();
+    let keep_a = graph.create(None).unwrap();
+    let keep_s = graph.create(None).unwrap();
     for cell in [b, a, s, live] {
         allocate(&mut graph, cell);
     }
@@ -342,15 +342,15 @@ fn a_walk_that_reaches_a_memoized_sealed_cell_merges_its_set() {
 #[test]
 fn unique_slices_do_not_double_bill_a_shared_sub_tier() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(10, pin);
-    let c = graph.create(None, None).unwrap();
-    let a = graph.create(None, None).unwrap();
-    let b = graph.create(None, None).unwrap();
-    let first = graph.create(None, None).unwrap();
-    let second = graph.create(None, None).unwrap();
-    let keep_a = graph.create(None, None).unwrap();
-    let keep_b = graph.create(None, None).unwrap();
-    let keep_first = graph.create(None, None).unwrap();
-    let keep_second = graph.create(None, None).unwrap();
+    let c = graph.create(None).unwrap();
+    let a = graph.create(None).unwrap();
+    let b = graph.create(None).unwrap();
+    let first = graph.create(None).unwrap();
+    let second = graph.create(None).unwrap();
+    let keep_a = graph.create(None).unwrap();
+    let keep_b = graph.create(None).unwrap();
+    let keep_first = graph.create(None).unwrap();
+    let keep_second = graph.create(None).unwrap();
     for cell in [c, a, b, first, second] {
         allocate(&mut graph, cell);
     }
@@ -428,8 +428,8 @@ fn a_candidate_inside_another_candidates_closure_is_shared_throughout() {
 fn an_absent_id_prices_as_none() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
     let (s_id, ..) = sealed_chain(&mut graph);
-    let gone = graph.create(None, None).unwrap();
-    let keeper = graph.create(None, None).unwrap();
+    let gone = graph.create(None).unwrap();
+    let keeper = graph.create(None).unwrap();
     allocate(&mut graph, gone);
     hold(&mut graph, keeper, gone);
 
@@ -452,9 +452,9 @@ fn an_absent_id_prices_as_none() {
 #[test]
 fn occupancy_tracks_both_tiers() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let first = graph.create(None, None).unwrap();
-    let second = graph.create(None, None).unwrap();
-    let third = graph.create(None, None).unwrap();
+    let first = graph.create(None).unwrap();
+    let second = graph.create(None).unwrap();
+    let third = graph.create(None).unwrap();
     for cell in [first, second, third] {
         allocate(&mut graph, cell);
     }
@@ -518,9 +518,9 @@ fn pricing_mutates_no_hold() {
     let (s_id, ..) = sealed_chain(&mut graph);
     // A sealed cell naming a live cell, so the sweep meets an unfrozen closure as well as a frozen
     // one.
-    let live = graph.create(None, None).unwrap();
-    let open = graph.create(None, None).unwrap();
-    let keep_open = graph.create(None, None).unwrap();
+    let live = graph.create(None).unwrap();
+    let open = graph.create(None).unwrap();
+    let keep_open = graph.create(None).unwrap();
     allocate(&mut graph, live);
     allocate(&mut graph, open);
     hold(&mut graph, open, live);
@@ -534,7 +534,6 @@ fn pricing_mutates_no_hold() {
     let ids: Vec<SealedId> = graph.cells.sealed.ids().collect();
 
     let pins: Vec<Bits<1>> = (0..10).map(|slot| *graph.cells.pins.row(slot)).collect();
-    let births: Vec<Bits<1>> = (0..10).map(|slot| *graph.cells.birth.row(slot)).collect();
     let sealed_holds: Vec<SealedSet> = graph.cells.sealed_holds.to_vec();
     let naming: Vec<SealedSet> = graph.cells.naming.to_vec();
     let sealed_cells: Vec<(u32, GraphReach<1>)> = ids
@@ -575,10 +574,6 @@ fn pricing_mutates_no_hold() {
     // The memo is the only mark a price query leaves, and a memo is not a hold.
     for slot in 0..10 {
         assert_eq!(graph.cells.pins.row(slot).to_owned(), pins[slot as usize]);
-        assert_eq!(
-            graph.cells.birth.row(slot).to_owned(),
-            births[slot as usize]
-        );
     }
     assert_eq!(graph.cells.sealed_holds.to_vec(), sealed_holds);
     assert_eq!(graph.cells.naming.to_vec(), naming);

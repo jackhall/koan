@@ -41,8 +41,8 @@ fn place_over(
 /// in the region's own occupancy after the step returns.
 fn dirtied() -> (CellGraph<'static, Owned>, SlabHandle, SlabHandle) {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let producer = graph.create(None, None).unwrap();
-    let consumer = graph.create(None, None).unwrap();
+    let producer = graph.create(None).unwrap();
+    let consumer = graph.create(None).unwrap();
     place_over(&mut graph, producer, consumer, WIDE);
     assert!(
         graph.cells.scratch_at_rest().in_use() > 0,
@@ -76,7 +76,7 @@ fn resets_at_its_entry(
 fn a_create_clears_the_region_at_its_entry() {
     let (mut graph, _, _) = dirtied();
     resets_at_its_entry(&mut graph, |graph| {
-        graph.create(None, None).unwrap();
+        graph.create(None).unwrap();
     });
 }
 
@@ -115,10 +115,10 @@ fn a_release_clears_the_region_at_its_entry() {
 #[test]
 fn a_warm_scratch_grows_no_chunk_across_repeated_verbs() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(8, pin);
-    let consumer = graph.create(None, None).unwrap();
+    let consumer = graph.create(None).unwrap();
 
     let round = |graph: &mut CellGraph<'static, Owned>| {
-        let producer = graph.create(None, None).unwrap();
+        let producer = graph.create(None).unwrap();
         place_over(graph, producer, consumer, 8);
         graph
             .enter(consumer, |context| context.hold(producer).unwrap())
@@ -159,5 +159,5 @@ fn a_panicking_step_hands_the_region_back() {
     );
     // Back on the graph, and cleared by the entry of the step that then failed.
     assert_eq!(graph.cells.scratch_at_rest().in_use(), 0);
-    graph.create(None, None).unwrap();
+    graph.create(None).unwrap();
 }

@@ -4,7 +4,7 @@
 //! family enters as a type parameter and is stored erased.
 //!
 //! The cell model — the slot-plus-generation handle, the `create` / `enter` / `release` verbs,
-//! the parent birth relation — is [../README.md](../README.md). The matrix that
+//! the three region habitats — is [../README.md](../README.md). The matrix that
 //! decides when a cell may be reclaimed, the mint OR that is the only write into it, and the
 //! sealed tier a still-held cell falls into on release, are
 //! [graph/README.md](graph/README.md).

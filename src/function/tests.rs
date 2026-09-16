@@ -70,8 +70,8 @@ impl<'graph> Fixture<'_, 'graph> {
         ) -> R,
     ) -> R {
         let mut graph: CellGraph<'graph, Step> = CellGraph::new(2, verdict);
-        let cell = graph.create(None, None).expect("the graph has a free slot");
-        let other = graph.create(None, None).expect("the graph has a free slot");
+        let cell = graph.create(None).expect("the graph has a free slot");
+        let other = graph.create(None).expect("the graph has a free slot");
         let out = graph
             .enter(cell, |context| step(context, other.into()))
             .expect("a fresh cell is enterable");

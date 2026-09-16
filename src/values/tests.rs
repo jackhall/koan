@@ -79,7 +79,7 @@ impl<'graph> Fixture<'_, 'graph> {
     ) -> R {
         let mut graph: CellGraph<'graph, Step> = CellGraph::new(1, verdict);
         let cell = graph
-            .create(None, None)
+            .create(None)
             .expect("a one-slot graph has a free slot");
         let out = graph.enter(cell, step).expect("a fresh cell is enterable");
         graph

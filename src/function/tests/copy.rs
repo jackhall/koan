@@ -67,8 +67,8 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
         let lines = fixture.parse(KNOT);
         let (types, scratch) = (fixture.types, fixture.scratch());
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
-        let home = graph.create(None, None).unwrap();
-        let dest = graph.create(None, None).unwrap();
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
                 let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
@@ -133,8 +133,8 @@ fn a_copied_knot_outlives_its_home() {
     with_fixture(|fixture| {
         let lines = fixture.parse(KNOT);
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
-        let home = graph.create(None, None).unwrap();
-        let dest = graph.create(None, None).unwrap();
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
                 let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
@@ -197,8 +197,8 @@ fn a_copied_ring_is_the_same_graph_rebuilt() {
         let lines = fixture.parse(RING);
         let (types, scratch) = (fixture.types, fixture.scratch());
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
-        let home = graph.create(None, None).unwrap();
-        let dest = graph.create(None, None).unwrap();
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
                 let activation = fixture.run_with(
@@ -272,8 +272,8 @@ fn a_copied_ring_outlives_its_home() {
         );
         let lines = fixture.parse("LET a = (Tag {next = a name = \"ring\" items = [a]})");
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
-        let home = graph.create(None, None).unwrap();
-        let dest = graph.create(None, None).unwrap();
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
                 let activation =

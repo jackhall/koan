@@ -1,4 +1,4 @@
-//! The cell graph: a slab capped at construction, the two hold relations over its slots, the
+//! The cell graph: a slab capped at construction, the pin relation over its slots, the
 //! executing flag, the per-cell regions and reach tables, the sealed tier a still-reached cell
 //! falls into, the relocation map that forwards a dormant carrier through a merge, and the
 //! `create` / `enter` / `release` verbs. The embedder's crossing verdict is taken here too, at
@@ -29,8 +29,6 @@ use crate::tree::{Ancestor, Ancestry, TreeForward, TreePool, TreeState};
 pub enum CreateError {
     /// The slab is at its cap. What to do next is admission policy, and the embedder's.
     SlabFull,
-    /// The named parent is not a live cell.
-    StaleParent(Stale<SlabHandle>),
 }
 
 /// Refusals from [`CellGraph::enter`].
@@ -67,10 +65,10 @@ pub enum RedeemError {
     /// The storage the value names is gone — its home cell reclaimed, or the sealed cell it sealed
     /// into retired. Nothing could have read it, so nothing was lost by refusing.
     Gone,
-    /// The storage is alive, but this cell has no claim on it: it is not the home, its pin row and
-    /// birth row do not name the home, and it does not hold the sealed cell the home sealed into. A
-    /// hold reached only transitively does not entitle — the entitling relations are the two that
-    /// keep the home in the slab with its storage intact.
+    /// The storage is alive, but this cell has no claim on it: it is not the home, its pin row does
+    /// not name the home, and it does not hold the sealed cell the home sealed into. A hold reached
+    /// only transitively does not entitle — the entitling relation is the one that keeps the home
+    /// in the slab with its storage intact.
     Unheld,
 }
 
@@ -79,7 +77,7 @@ pub enum RedeemError {
 /// Locality tactics](graph/README.md#locality-tactics)).
 ///
 /// The choice is recorded on the slot at the release and consulted when the slot *disposes*, which
-/// may be later: a dead cell a descendant's birth row still names waits in the slab first.
+/// may be later: a released root with an undisposed tree child under it waits in the slab first.
 ///
 /// **`Release` is in the name because three other things go by the word**, and none of them is
 /// this one — none is refusable, and none is the embedder's to weigh:
@@ -174,8 +172,8 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 /// impl DropFree for Number {}
 ///
 /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
-/// let cell = graph.create(None, None).unwrap();
-/// let other = graph.create(None, None).unwrap();
+/// let cell = graph.create(None).unwrap();
+/// let other = graph.create(None).unwrap();
 /// let read = graph
 ///     .enter(cell, |context| {
 ///         let value = context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0]);
@@ -210,8 +208,8 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 /// impl DropFree for Number {}
 ///
 /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Copy);
-/// let cell = graph.create(None, None).unwrap();
-/// let other = graph.create(None, None).unwrap();
+/// let cell = graph.create(None).unwrap();
+/// let other = graph.create(None).unwrap();
 /// graph
 ///     .enter(cell, |context| {
 ///         let value = context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0]);
@@ -245,8 +243,8 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 /// impl DropFree for Number {}
 ///
 /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
-/// let cell = graph.create(None, None).unwrap();
-/// let other = graph.create(None, None).unwrap();
+/// let cell = graph.create(None).unwrap();
+/// let other = graph.create(None).unwrap();
 /// let mut escaped: Option<&[CrossedOperand<'static, '_, '_, Number>]> = None;
 /// graph
 ///     .enter(cell, |context| {
@@ -287,8 +285,8 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 ///
 /// let program = String::from("program text");
 /// let mut graph: CellGraph<'_, Work> = CellGraph::new(2, |_| Verdict::Copy);
-/// let cell = graph.create(None, None).unwrap();
-/// let other = graph.create(None, None).unwrap();
+/// let cell = graph.create(None).unwrap();
+/// let other = graph.create(None).unwrap();
 /// graph
 ///     .enter(cell, |context| {
 ///         let count = one(context.writer(), 41);
@@ -333,8 +331,8 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 ///
 /// let program = String::from("program text");
 /// let mut graph: CellGraph<'_, Work> = CellGraph::new(2, |_| Verdict::Copy);
-/// let cell = graph.create(None, None).unwrap();
-/// let other = graph.create(None, None).unwrap();
+/// let cell = graph.create(None).unwrap();
+/// let other = graph.create(None).unwrap();
 /// graph
 ///     .enter(cell, |context| {
 ///         let count = one(context.writer(), 41);
@@ -420,8 +418,7 @@ enum GraphNode {
 /// again — and [`RetentionPrice`] is this same set weighed in bytes.
 ///
 /// Pins and nothing else. The walk steps along `pins` rows and `sealed_holds`, and through a sealed
-/// cell's aggregate; the birth relation is never traversed, so a cell a parent's row names but
-/// nothing pins is not here.
+/// cell's aggregate.
 ///
 /// Test-only: a walk reports each node as it visits it, and the two readings the crate takes —
 /// a price and a memo — fold that stream rather than materialising it. The tests that check the
@@ -433,7 +430,8 @@ struct TransitivePins {
 }
 
 /// What a slab slot currently holds. `Dead` is the undisposed state: the embedder declared the
-/// cell's death, but a descendant's birth row still names it, so the slot is not yet disposable.
+/// cell's death, but a tree cell under it has not disposed, so the slot is not yet disposable. It
+/// is the only reason a death outlives its own `release`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SlabState {
     Free,
@@ -470,11 +468,6 @@ struct Relocation {
 struct SlabCell<'graph, C: Reattachable<'graph>, const W: usize> {
     generation: u32,
     state: SlabState,
-    /// The slot this cell was created under, and `None` for a root. The birth matrix answers
-    /// "is this cell an ancestor" in O(1) and the parent link answers "which cell is next up",
-    /// which is the axis a disposal cascade walks: the slots one release can free are a prefix of
-    /// this chain upward from the released cell.
-    parent: Option<u32>,
     /// What the release of this cell said about death-time absorption. Read at the slot's
     /// disposal, which is why it rests here rather than travelling with the call.
     absorption: ReleaseAbsorption,
@@ -490,9 +483,9 @@ struct SlabCell<'graph, C: Reattachable<'graph>, const W: usize> {
     /// through the relocation entries themselves. Bounded by merges, never by values, and one
     /// word rather than a vector: the links live where the entries already are.
     lineage: Option<SlabHandle>,
-    /// Tree children whose chain tops out at this cell and that have not disposed — the birth
-    /// tally's analogue for the pool. A released root waits dead-but-undisposed while any of them
-    /// is still there, and the last one's disposal is what sets its own cascade off.
+    /// Tree children whose chain tops out at this cell and that have not disposed — the one count
+    /// that can keep a slot in the slab past its death. A released root waits dead-but-undisposed
+    /// while any of them is still there, and the last one's disposal is what disposes of it.
     tree_children: u32,
     /// The head of the list of tree tombstones whose bytes spliced into this cell's bundle. Travels
     /// onto the relocation entry when the cell leaves the slab, so a dormant carrier still keyed to
@@ -506,7 +499,6 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> SlabCell<'graph, C, W> {
         SlabCell {
             generation,
             state: SlabState::Free,
-            parent: None,
             absorption: ReleaseAbsorption::IntoHolder,
             continuation: None,
             reaches: ReachTable::default(),
@@ -572,7 +564,7 @@ enum Crossing {
 ///
 /// let program = String::from("program text");
 /// let mut graph: CellGraph<'_, Script> = CellGraph::new(1, |_| Verdict::Pin);
-/// let cell = graph.create(None, Some(program.as_str())).unwrap();
+/// let cell = graph.create(Some(program.as_str())).unwrap();
 /// let read = graph
 ///     .enter(cell, |context| context.continuation().map(str::len))
 ///     .unwrap();
@@ -588,7 +580,7 @@ enum Crossing {
 ///
 /// let program = String::from("program text");
 /// let mut graph: CellGraph<'_, Script> = CellGraph::new(1, |_| Verdict::Pin);
-/// let cell = graph.create(None, Some(program.as_str())).unwrap();
+/// let cell = graph.create(Some(program.as_str())).unwrap();
 /// drop(program);
 /// let read = graph
 ///     .enter(cell, |context| context.continuation().map(str::len))
@@ -624,7 +616,6 @@ pub struct CellGraph<'graph, C: Reattachable<'graph>, const W: usize = 1> {
 struct Cells<'graph, C: Reattachable<'graph>, const W: usize> {
     slots: Box<[SlabCell<'graph, C, W>]>,
     free: Vec<u32>,
-    birth: Matrix<W>,
     /// The pin relation's slab half: row M is the set of live cells whose region storage M's own
     /// dormant values read. Written only by [`CellGraph::mint`], which is the mint OR of
     /// [graph/README.md § Reach as a hybrid
@@ -720,17 +711,16 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
         }
     }
 
-    /// Take a free slot for a new cell, optionally under a parent and with a continuation.
+    /// Take a free slot for a new cell, with a continuation or without one.
     ///
-    /// The new cell's birth row is the parent's row plus the parent's bit, so the row is the
-    /// parent chain's transitive closure by construction. A cell created without a continuation is
-    /// storage-only: it is enterable, but a step finds nothing to run.
+    /// A slab cell stands on its own: it is under nothing, and the only relation it enters is the
+    /// pin relation, as values are minted into it. A cell created without a continuation is
+    /// storage-only — it is enterable, but a step finds nothing to run.
     pub fn create(
         &mut self,
-        parent: Option<SlabHandle>,
         continuation: Option<C::At<'graph>>,
     ) -> Result<SlabHandle, CreateError> {
-        self.cells.create(parent, continuation)
+        self.cells.create(continuation)
     }
 
     /// Run `step` against the cell, with its executing flag set for the scope.
@@ -759,7 +749,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
     /// reattachable!(Owned => String);
     ///
     /// let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, |_| Verdict::Pin);
-    /// let cell = graph.create(None, None).unwrap();
+    /// let cell = graph.create(None).unwrap();
     /// graph
     ///     .enter(cell, |_context| {
     ///         // `graph` is already exclusively borrowed by the `enter` this closure runs under.
@@ -802,11 +792,9 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
 
     /// Declare the cell's death: the embedder promises never to enter it again.
     ///
-    /// The cell's own birth row releases wholesale — birth holds exist for execution, and the cell
-    /// will not execute again. What happens to the slot then is the disposal's call: reclaimed if
-    /// nothing reaches it, absorbed into a unique holder if `absorption` allows and one is there,
-    /// sealed if something else reaches it, and left undisposed only while a descendant's birth row
-    /// still names it.
+    /// The slot disposes within this call unless a tree cell under it is still undisposed. What
+    /// happens to it then is the disposal's call: reclaimed if nothing reaches it, absorbed into a
+    /// unique holder if `absorption` allows and one is there, sealed if something else reaches it.
     ///
     /// `absorption` is the embedder's say over that merge, recorded on the slot and applied
     /// whenever the slot actually disposes.
@@ -819,15 +807,17 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
         if self.cells.executing.test(slot) {
             return Err(ReleaseError::Executing);
         }
-        self.cells.birth.clear_row(slot);
         let cell = &mut self.cells.slots[slot as usize];
         cell.state = SlabState::Dead;
         cell.absorption = absorption;
-        // A release runs its cascade outside any step, so the scratch region is taken and reset
+        // A release runs its disposal outside any step, so the scratch region is taken and reset
         // here for the same reason `enter` takes and resets it: a verb's transients start on empty
         // ground.
-        self.park()
-            .run(|cells, regions, scratch| cells.dispose_chain(slot, regions, scratch));
+        self.park().run(|cells, regions, scratch| {
+            if cells.disposable(slot) {
+                cells.dispose(slot, regions, scratch);
+            }
+        });
         Ok(())
     }
 
@@ -965,7 +955,6 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
         Cells {
             slots,
             free: (0..cap).rev().collect(),
-            birth: Matrix::new(),
             pins: Matrix::new(),
             sealed_holds: (0..cap).map(|_| SealedSet::new()).collect(),
             naming: (0..cap).map(|_| SealedSet::new()).collect(),
@@ -984,38 +973,25 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
         }
     }
 
-    fn create(
-        &mut self,
-        parent: Option<SlabHandle>,
-        continuation: Option<C::At<'graph>>,
-    ) -> Result<SlabHandle, CreateError> {
-        let parent_slot = match parent {
-            Some(parent) => Some(self.live_slot(parent).map_err(CreateError::StaleParent)?),
-            None => None,
-        };
+    fn create(&mut self, continuation: Option<C::At<'graph>>) -> Result<SlabHandle, CreateError> {
         self.take_scratch().reset();
         let slot = self.free.pop().ok_or(CreateError::SlabFull)?;
         let cell = &mut self.slots[slot as usize];
         cell.state = SlabState::Live;
-        cell.parent = parent_slot;
         // A continuation handed in from outside is at `'graph`: it borrows no region, only storage
         // that outlives the graph, so it reaches nothing and takes no reach-table entry.
         cell.continuation = continuation.map(Erased::store);
-        let generation = cell.generation;
-        if let Some(parent_slot) = parent_slot {
-            self.birth.inherit_row(slot, parent_slot);
-            self.birth.set(slot, parent_slot);
-        }
-        Ok(SlabHandle::new(slot, generation))
+        Ok(SlabHandle::new(slot, cell.generation))
     }
 
     /// Dispose of the just-released tree cell and then of every dead-but-undisposed ancestor its
-    /// disposal leaves with no undisposed child, innermost first — and, at the top, of the root
-    /// through the slab's own cascade.
+    /// disposal leaves with no undisposed child, innermost first — and, at the top, of the root if
+    /// this was the last tree child a declared death was waiting on. It is the crate's one walk.
     ///
-    /// The walk is complete for the same reason the slab's is: only creation and disposal move a
-    /// child count, so the only cells this release can bring to zero are the ones on its own chain
-    /// upward, and the first ancestor that is still live or still has another child stops it.
+    /// The walk is complete because only creation and disposal move a child count, so the only
+    /// cells this release can bring to zero are the ones on its own chain upward, and the first
+    /// ancestor that is still live or still has another child stops it. It ends at the root, which
+    /// is under nothing.
     fn dispose_tree_chain(&mut self, released: u32, regions: &mut Regions, scratch: &Scratch) {
         let mut next = Some(released);
         while let Some(index) = next {
@@ -1038,8 +1014,8 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
                         "a tree cell disposed under a root that counted none"
                     );
                     self.slots[root as usize].tree_children -= 1;
-                    if self.slots[root as usize].state == SlabState::Dead {
-                        self.dispose_chain(root, regions, scratch);
+                    if self.slots[root as usize].state == SlabState::Dead && self.disposable(root) {
+                        self.dispose(root, regions, scratch);
                     }
                     return;
                 }
@@ -1153,29 +1129,17 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
         (0..self.cap).filter(|slot| self.slots[*slot as usize].state != SlabState::Free)
     }
 
-    /// Whether a dead cell's slot may leave the slab now: no occupant's birth row still names it,
-    /// and no tree cell under it is undisposed. Birth holds are the one relation that keeps a dead
-    /// cell in place — a descendant that can still walk to it has not finished with it, and the
-    /// relation has no sealed half for the walk to follow — and a tree child is the same relation
-    /// counted rather than rowed, since no matrix names a tree cell.
+    /// Whether a dead cell's slot may leave the slab now: no tree cell under it is undisposed.
+    ///
+    /// That count is the only thing that can hold a slot past its death. A pin keeps the cell's
+    /// *storage*, which seals or folds and lets the slot go; a tree child keeps the slot itself,
+    /// because the child's own disposal still has to find its root.
     ///
     /// Execution does not enter the question: `release` refuses an executing cell and `begin`
     /// refuses a dead one, so a dead cell is never executing.
     fn disposable(&self, slot: u32) -> bool {
-        // A free slot's birth row is cleared before the slot is recycled, so no free row names
-        // anything and the count across every row is the count across the occupied ones.
-        if self.slots[slot as usize].tree_children > 0 {
-            return false;
-        }
-        let held = self.birth.holders(slot);
-        #[cfg(test)]
-        debug_assert_eq!(
-            held > 0,
-            self.birth.held_by_any(self.occupied(), slot),
-            "the birth tally disagrees with a scan across the occupied rows"
-        );
         debug_assert!(!self.executing.test(slot), "a dead cell is executing");
-        held == 0
+        self.slots[slot as usize].tree_children == 0
     }
 
     /// The handle of whatever occupies `slot` right now, at its current generation.
@@ -1699,29 +1663,6 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
             }
             pending.extend(transferred.iter().copied());
             pending.extend(duplicated.iter().copied());
-        }
-    }
-
-    /// Dispose of the just-released cell and then of every dead ancestor the release left with no
-    /// birth holder, innermost first — the whole cascade one death can set off, walked rather than
-    /// scanned for.
-    ///
-    /// The walk is complete because only `create` and `release` write the birth relation: no
-    /// disposal changes any slot's birth-holder count, so the only slots this release can bring to
-    /// zero are the ones its own row named, its ancestors. Each ancestor's row names everything
-    /// the row below it names ([graph/README.md § Two relations](graph/README.md#two-relations-two-structures)),
-    /// so the dead ancestors this release zeroes are a prefix of the chain upward: a live
-    /// ancestor, or one another branch's row still names, stops the walk, and everything above it
-    /// is still held.
-    fn dispose_chain(&mut self, released: u32, regions: &mut Regions, scratch: &Scratch) {
-        let mut next = Some(released);
-        while let Some(slot) = next {
-            if self.slots[slot as usize].state != SlabState::Dead || !self.disposable(slot) {
-                return;
-            }
-            // Read the link first: disposal recycles the slot, which clears it.
-            next = self.slots[slot as usize].parent;
-            self.dispose(slot, regions, scratch);
         }
     }
 
@@ -2739,7 +2680,7 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// reattachable!(Work => String);
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
-    /// let cell = graph.create(None, None).unwrap();
+    /// let cell = graph.create(None).unwrap();
     /// let read = graph
     ///     .enter(cell, |context| {
     ///         let counters = context.writer().fill(3, |index| index as u32);
@@ -2771,8 +2712,8 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// impl DropFree for Spine {}
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
-    /// let cell = graph.create(None, None).unwrap();
-    /// let other = graph.create(None, None).unwrap();
+    /// let cell = graph.create(None).unwrap();
+    /// let other = graph.create(None).unwrap();
     /// graph
     ///     .enter(cell, |context| {
     ///         let foreign = context
@@ -2797,7 +2738,7 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// reattachable!(Work => String);
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
-    /// let cell = graph.create(None, None).unwrap();
+    /// let cell = graph.create(None).unwrap();
     /// let escaped: Option<&u32> = graph
     ///     .enter(cell, |context| Some(&context.writer().fill(1, |_| 41u32)[0]))
     ///     .unwrap();
@@ -2826,7 +2767,7 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// reattachable!(Work => String);
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
-    /// let cell = graph.create(None, None).unwrap();
+    /// let cell = graph.create(None).unwrap();
     /// let _ = graph.continuation(cell);
     /// ```
     pub fn continuation(&mut self) -> Option<C::At<'here>> {
@@ -2907,8 +2848,8 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// impl DropFree for Number {}
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
-    /// let cell = graph.create(None, None).unwrap();
-    /// let other = graph.create(None, None).unwrap();
+    /// let cell = graph.create(None).unwrap();
+    /// let other = graph.create(None).unwrap();
     /// let read = graph
     ///     .enter(cell, |context| {
     ///         let foreign = context
@@ -3056,7 +2997,7 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// impl DropFree for Number {}
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
-    /// let cell = graph.create(None, None).unwrap();
+    /// let cell = graph.create(None).unwrap();
     /// let read = graph
     ///     .enter(cell, |context| {
     ///         let value = context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0]);
@@ -3078,7 +3019,7 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// impl DropFree for Number {}
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
-    /// let cell = graph.create(None, None).unwrap();
+    /// let cell = graph.create(None).unwrap();
     /// let escaped: Ready<'static, '_, Number> = graph
     ///     .enter(cell, |context| {
     ///         context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0])
@@ -3158,8 +3099,8 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// producer built into the consumer comes back in the consumer's own later step, and a value
     /// the consumer held its producer for comes back after the producer sealed.
     ///
-    /// The executing cell must be entitled: it is the home, or its pin row or birth row names the
-    /// home — both keep the home in the slab with its storage intact — or the home sealed into a
+    /// The executing cell must be entitled: it is the home, or its pin row names the home — which
+    /// keeps the home's storage intact wherever the slot went — or the home sealed into a
     /// sealed cell this cell holds. A value redeemed out of a sealed cell comes back reaching that
     /// sealed cell's id alone, which covers: a hold on a sealed cell keeps its whole aggregate
     /// alive transitively.
@@ -3200,9 +3141,7 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
         let (reach, home) = match cells.locate(slab_home) {
             None => return Err(RedeemError::Gone),
             Some(SlabForward::Slab { slot, first_index }) => {
-                let entitled = slot == executing
-                    || cells.pins.test(executing, slot)
-                    || cells.birth.test(executing, slot);
+                let entitled = slot == executing || cells.pins.test(executing, slot);
                 if !entitled {
                     return Err(RedeemError::Unheld);
                 }

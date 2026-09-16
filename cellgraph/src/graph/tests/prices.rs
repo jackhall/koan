@@ -48,8 +48,8 @@ fn cheaper(prices: Prices) -> Verdict {
 fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, verdict);
-    let destination = graph.create(None, None).unwrap();
-    let producer = graph.create(None, None).unwrap();
+    let destination = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
 
     graph
         .enter(producer, |context| {
@@ -99,8 +99,8 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
 fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
     for verdict in [Verdict::Pin, Verdict::Copy] {
         let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, move |_| verdict);
-        let destination = graph.create(None, None).unwrap();
-        let producer = graph.create(None, None).unwrap();
+        let destination = graph.create(None).unwrap();
+        let producer = graph.create(None).unwrap();
 
         let names_producer = graph
             .enter(producer, |context| {
@@ -139,8 +139,8 @@ fn a_pin_mints_the_operands_reach_and_a_copy_does_not() {
 fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
     let (verdict, seen) = recording(cheaper);
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, verdict);
-    let destination = graph.create(None, None).unwrap();
-    let producer = graph.create(None, None).unwrap();
+    let destination = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
 
     let read = graph
         .enter(producer, |context| {
@@ -191,12 +191,12 @@ fn a_copied_view_is_readable_and_a_pinned_one_embeddable() {
 fn pin_price_is_marginal_against_what_the_destination_already_holds() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(6, verdict);
-    let destination = graph.create(None, None).unwrap();
-    let held = graph.create(None, None).unwrap();
-    let head = graph.create(None, None).unwrap();
-    let tail = graph.create(None, None).unwrap();
-    let doomed = graph.create(None, None).unwrap();
-    let driver = graph.create(None, None).unwrap();
+    let destination = graph.create(None).unwrap();
+    let held = graph.create(None).unwrap();
+    let head = graph.create(None).unwrap();
+    let tail = graph.create(None).unwrap();
+    let doomed = graph.create(None).unwrap();
+    let driver = graph.create(None).unwrap();
 
     // The destination already answers for `held`, so a pin over it retains nothing new.
     graph
@@ -261,9 +261,9 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
 fn operands_from_one_source_are_priced_against_what_the_placement_has_already_pinned() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, verdict);
-    let destination = graph.create(None, None).unwrap();
-    let source = graph.create(None, None).unwrap();
-    let driver = graph.create(None, None).unwrap();
+    let destination = graph.create(None).unwrap();
+    let source = graph.create(None).unwrap();
+    let driver = graph.create(None).unwrap();
 
     graph
         .enter(driver, |context| {
@@ -306,9 +306,9 @@ fn a_copied_operand_leaves_the_next_one_the_whole_price() {
     // is copied, the second at `usize::MAX` and is pinned.
     let (verdict, seen) = recording(cheaper);
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, verdict);
-    let destination = graph.create(None, None).unwrap();
-    let source = graph.create(None, None).unwrap();
-    let driver = graph.create(None, None).unwrap();
+    let destination = graph.create(None).unwrap();
+    let source = graph.create(None).unwrap();
+    let driver = graph.create(None).unwrap();
 
     graph
         .enter(driver, |context| {
@@ -343,9 +343,9 @@ fn a_copied_operand_leaves_the_next_one_the_whole_price() {
 fn a_frozen_closure_prices_through_its_memo() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, verdict);
-    let destination = graph.create(None, None).unwrap();
-    let consumer = graph.create(None, None).unwrap();
-    let producer = graph.create(None, None).unwrap();
+    let destination = graph.create(None).unwrap();
+    let consumer = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
 
     graph
         .enter(consumer, |context| context.hold(producer))
@@ -405,9 +405,9 @@ const HOPS: usize = if cfg!(miri) { 4 } else { 16 };
 fn a_loop_is_two_hop_cells_and_a_cart() {
     let (verdict, seen) = recording(cheaper);
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, verdict);
-    let cart = graph.create(None, None).unwrap();
-    let mut running = graph.create(None, None).unwrap();
-    let mut waiting = graph.create(None, None).unwrap();
+    let cart = graph.create(None).unwrap();
+    let mut running = graph.create(None).unwrap();
+    let mut waiting = graph.create(None).unwrap();
 
     // The cart seeds both dormant carriers: the first hop's argument, built into the hop's own
     // region, and the accumulator, which lives in the cart from here on.
@@ -476,7 +476,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
         );
         assert!(!graph.cells.holds(cart, waiting));
 
-        let fresh = graph.create(None, None).unwrap();
+        let fresh = graph.create(None).unwrap();
         assert!(
             graph.cells.occupancy().occupied <= 3,
             "hop {hop} grew the slab"
@@ -528,8 +528,8 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
 fn captures_cross_through_the_same_verdict() {
     for verdict in [Verdict::Pin, Verdict::Copy] {
         let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, move |_| verdict);
-        let keeper = graph.create(None, None).unwrap();
-        let host = graph.create(None, None).unwrap();
+        let keeper = graph.create(None).unwrap();
+        let host = graph.create(None).unwrap();
 
         graph
             .enter(keeper, |context| {
@@ -561,8 +561,8 @@ fn captures_cross_through_the_same_verdict() {
 fn a_placement_over_no_operands_consults_nothing() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, verdict);
-    let cell = graph.create(None, None).unwrap();
-    let other = graph.create(None, None).unwrap();
+    let cell = graph.create(None).unwrap();
+    let other = graph.create(None).unwrap();
 
     graph
         .enter(cell, |context| {

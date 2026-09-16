@@ -70,7 +70,7 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn in_cell<R>(&self, step: impl for<'cell> FnOnce(Writer<'cell>, &[CellHandle]) -> R) -> R {
         let mut graph: CellGraph<'graph, Step> = CellGraph::new(CELLS, |_| Verdict::Pin);
         let cells: Vec<SlabHandle> = (0..CELLS)
-            .map(|_| graph.create(None, None).expect("the graph has a free slot"))
+            .map(|_| graph.create(None).expect("the graph has a free slot"))
             .collect();
         let handles: Vec<CellHandle> = cells[1..].iter().map(|cell| (*cell).into()).collect();
         let out = graph

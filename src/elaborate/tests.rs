@@ -77,7 +77,7 @@ pub(super) fn with_program<R>(
     let extra = extra(&types, &scratch, &labels);
     let mut graph: CellGraph<'_, Step> = CellGraph::new(2, |_| Verdict::Pin);
     let cells: Vec<SlabHandle> = (0..2)
-        .map(|_| graph.create(None, None).expect("the graph has a free slot"))
+        .map(|_| graph.create(None).expect("the graph has a free slot"))
         .collect();
     let binder: CellHandle = cells[1].into();
     let out = graph
