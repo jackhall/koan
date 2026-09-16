@@ -29,50 +29,44 @@ structural self-holds (a cell's references into its own storage have no bits),
 no drop-ordering discipline in the embedder's loop.
 
 A cell that dies with a *nonzero* pin column does not linger: it **seals** into
-the second tier and its slot recycles. The one hold that keeps a dead cell in
-place is a birth hold — the relation with no sealed form to convert into — and
-it keeps it only until the last descendant naming it dies in turn. So the slab
-holds live cells and the dead ones a descendant's birth row still names;
-admission control bounds that population, and the matrix is square at the cap.
+the second tier and its slot recycles. A pin keeps the cell's *storage*, and
+storage always has somewhere to go — a seal or a fold — so a pin never keeps the
+slot itself. The one thing that does is an undisposed **tree cell** under the
+slot ([../tree/README.md](../tree/README.md)), because that child's own disposal
+still has to find its root. So the slab holds live cells and the dead ones a
+tree child is still counted under; admission control bounds that population, and
+the matrix is square at the cap.
 
-## Two relations, two structures
+## The pin relation
 
-Holds arise from two sources with different disciplines, and each gets its own
-structure rather than sharing one matrix ([../matrix.rs](../matrix.rs)):
+There is exactly one relation over slab slots, and it is pin holds — value reach
+([../matrix.rs](../matrix.rs)). Cell M's region stores values whose borrows read
+other regions' storage; each such region gets an entry in M's hold set, and
+those entries accumulate throughout M's life. Pin bits are monotone-growing,
+written only by the mint OR ([§ Reach as a hybrid
+mask](#reach-as-a-hybrid-mask)) and released whole at the cell's death, and the
+row is what freezes into a seal.
 
-- **Pin holds** — value reach. Cell M's region stores values whose borrows read
-  other regions' storage; each such region gets an entry in M's hold set. These
-  accumulate throughout M's life.
-- **Birth holds** — the parent chain. A cell names at most one **parent** at
-  creation, and its birth row is *derived* by the substrate as the parent's row
-  plus the parent's own bit — the cactus chain as masks, with transitive closure
-  by construction rather than by embedder discipline. Written once, never
-  changed. The substrate knows only parents; what an embedder uses the relation
-  for (koan: the lexical outer chain a frame walks) is its own business.
+A slab cell is under nothing: it names no parent, and no matrix records one. The
+parent chain a call subtree has lives in the tree pool, where it is chain links
+and a per-cell count of undisposed children rather than bits — no tree cell is in
+the matrix at all ([../tree/README.md](../tree/README.md)), and `Ancestry` is
+read off the links, not off a row.
 
-Keeping them separate lets each assert its own discipline: birth bits are
-write-once and immutable, pin bits are monotone-growing. The birth side is a
-matrix and the sparser shape at once — the row answers "is this cell an
-ancestor" in O(1), which is what `redeem` asks, and each slot *additionally*
-records its parent slot, which is the axis a disposal walks. The invariant that
-a birth row contains its parent's row ties the two together.
+## Disposal, and the one walk left
 
-Only the pin row freezes into a seal. Birth holds exist for execution, so a
-cell's birth row releases at its death unconditionally, and a dead cell no
-descendant names has no birth presence left to convert.
+A slab `release` disposes the slot inside its own call, unless a tree cell under
+it is still undisposed. Nothing cascades along the slab, because no slab cell
+stands above another: the released cell is the only slot its own death can free.
 
-### Why the disposal cascade is a walk, not a scan
-
-A release clears the dying cell's own birth row, and that is the *only* write
-that can bring another slot's birth-holder count to zero — birth bits are
-written at creation and released wholesale at death, and no disposal touches
-them. So the slots one release can free are exactly the released cell and the
-dead ancestors above it, and by row containment they are a **prefix of the
-parent chain**: a live ancestor, or one another branch still names, stops the
-walk and everything above it is still held.
-
-The cascade is therefore a walk up the parent links, innermost first, with
-nothing scanning the slab and no list of dead slots kept anywhere. Order does
+The one walk is the pool's. A tree cell's disposal steps up its chain, dropping
+each parent's child count and disposing every parent the drop leaves dead and
+childless, innermost first, and it ends at the root — which is under nothing, and
+which disposes there if this was the last child a declared death was waiting on.
+The walk is complete because only creation and disposal move a child count, so
+the cells one release can bring to zero are exactly the ones on its own chain
+upward, and the first ancestor still live or still holding another child stops
+it. Nothing scans the pool and no list of dead cells is kept anywhere. Order does
 change retention — a dead child pinning a dead parent that a live cell also pins
 reclaims first and lets the parent absorb into the live cell — but the mirror
 image favours the other order, so no fixed order dominates and the walk's own is
@@ -314,8 +308,8 @@ The slab width is a constant of the graph's *type*: a row is `W` words held
 inline and names `64 · W` slots, one word — 64 cells — by default, and an
 embedder wanting a deeper slab instantiates a wider graph. So every slab mask in
 a graph is that one width and the width question disappears; a row is `Copy`,
-and building, copying or comparing one touches no allocator. Both relations are
-inline arrays of those rows, quadratic in the width by construction, held in the
+and building, copying or comparing one touches no allocator. The relation is an
+inline array of those rows, quadratic in the width by construction, held in the
 graph's own bytes — so a graph wide enough for that to matter is one the embedder
 boxes.
 
@@ -330,15 +324,14 @@ needs no geometry, since sealed sets are sparse.
 ## Layout, and why row-major
 
 Row-major by holder: one contiguous run of words per slot, naming the set that
-slot keeps alive. That is the axis each relation's *write* wants, which is what
-decides the orientation. Both compound writes are whole-row ORs — the birth
-derivation ORs a parent's row into its child's, the pin mint ORs a reach mask
-into a destination's — the row clear at reclamation zeroes a run, and the freeze
-at seal copies one out. Every one is a word-wise pass over contiguous memory
-that reads no value.
+slot keeps alive. That is the axis the relation's *write* wants, which is what
+decides the orientation. The compound write is a whole-row OR — the pin mint ORs
+a reach mask into a destination's row — the row clear at reclamation zeroes a
+run, and the freeze at seal copies one out. Every one is a word-wise pass over
+contiguous memory that reads no value.
 
 The reclaim query asks the other axis: "does anything still hold this cell" is a
-column, and a column has no run of its own. So each matrix carries a **holder
+column, and a column has no run of its own. So the matrix carries a **holder
 tally**, one count per column, bumped by every write that can set or clear a bit.
 The query is then one read, and a write pays only for the bits it *newly* sets.
 The tallies are derived data — derived *from* attributed transitions, never a
@@ -505,9 +498,9 @@ dormant carrier therefore survives any number of merges, and the forwarding cost
 one entry per departed cell however many values it kept.
 
 M is any *slab occupant*, live or dead-but-undisposed — "live holder" names the
-slab tier as opposed to the sealed one, and a dead cell a descendant's birth row
-still names keeps a maintained row, so absorbing into it only brings forward the
-fold its own disposal would perform. No sealed id, no index entry, no accessor
+slab tier as opposed to the sealed one, and a dead cell an undisposed tree child
+still keeps in the slab keeps a maintained row, so absorbing into it only brings
+forward the fold its own disposal would perform. No sealed id, no index entry, no accessor
 indirection: reads stay on the precise per-value-mask path, and future seal
 transitions maintain the absorbed masks automatically because the chunks are M's
 storage now. Retention is identical to sealing — a count-1 sealed region lives
@@ -525,8 +518,9 @@ dead locals ride along, permanently indistinguishable inside M — so a cell tha
 stored much and delivers little should copy instead. Region size is known, result
 size is not: a priced choice, and the reason this merge alone of the three is
 **refusable**. `release` carries the embedder's answer, recorded on the slot and
-read when the slot actually disposes, which for a cell a descendant's birth row
-still names is later than the release. A refusal falls through to a plain seal.
+read when the slot actually disposes, which for a cell an undisposed tree child
+is still under is later than the release. A refusal falls through to a plain
+seal.
 The two sealed-tier merges retain exactly what a plain seal retains, so there is
 nothing there to price and no refusal to offer.
 

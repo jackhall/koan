@@ -3167,7 +3167,7 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
             }
         };
         // SAFETY: the match above resolved the key's home to storage that is still there — a live
-        // slab slot this cell is the home of, holds, or descends from, or a sealed cell it holds —
+        // slab slot this cell is the home of, holds, or has as its root, or a sealed cell it holds —
         // so the referents parked in those bytes are live for the whole step, which is the contract
         // `take` asks for.
         let value = unsafe { dormant.take() };

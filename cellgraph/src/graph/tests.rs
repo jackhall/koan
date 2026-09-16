@@ -211,16 +211,30 @@ fn a_two_word_graph_names_slots_across_the_chunk_boundary() {
     let high = cells[100];
     assert_eq!(high.slot(), 100);
     let low = cells[2];
+    let other = cells[3];
     graph
         .enter(low, |context| context.hold(high).unwrap())
         .unwrap();
     assert!(graph.cells.holds(low, high));
+
+    // And a hold written *from* the high chunk, so a row index past the boundary is exercised on
+    // the write and not only on the tally: a row that always stayed empty would let an aliasing
+    // `Matrix::at` through.
+    graph
+        .enter(high, |context| context.hold(other).unwrap())
+        .unwrap();
+    assert!(graph.cells.holds(high, other));
 
     // Releasing the holder drops the whole row, both chunks of it, so the held cell reclaims.
     graph.release(low, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!graph.cells.holds(low, high));
     graph.release(high, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(!graph.is_live(high));
+
+    // The high-chunk row released whole in turn, so what it named is reachable from nothing.
+    assert!(!graph.cells.holds(high, other));
+    graph.release(other, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(!graph.is_live(other));
     assert_eq!(graph.cells.occupancy().sealed_cells, 0);
 }
 

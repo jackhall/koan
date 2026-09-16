@@ -15,7 +15,7 @@ first embedder and [koan](../README.md) sits above that.
 This README is the substrate's design. Two parts of it are large enough to
 carry their own:
 
-- **[src/graph/README.md](src/graph/README.md)** — liveness. The bit matrices,
+- **[src/graph/README.md](src/graph/README.md)** — liveness. The bit matrix,
   the sealed tier, reach, the seal transition, the invariants and the staleness
   argument, the merges, and what retention costs.
 - **[src/tree/README.md](src/tree/README.md)** — the tree pool: the third
@@ -63,7 +63,7 @@ Four absences are design statements rather than gaps:
   `CellHandle` is the two under one name, which is what a door taking a
   destination or a parent asks for.
 - **Habitat**, one of two live kinds. A cell either takes a slab slot, where the
-  liveness matrices decide its death, or it is a
+  pin matrix decides its death, or it is a
   [tree cell](src/tree/README.md), living under a slab **root** through a chain
   of tree parents, in an uncapped pool that no mask and no relation ever names.
   Which kind a creation takes is an admission decision, and the embedder's: the
@@ -86,10 +86,11 @@ Four absences are design statements rather than gaps:
   **storage-only**: the answer to "a
   region that outlives its step but is never executed in" — a cart a loop
   accumulates into, a mailbox a scheduler parks values in.
-- **Holds**, in two relations — *birth* (the parent chain, derived at creation)
-  and *pin* (value reach, accruing as values are minted in). Both are monotone
-  for the cell's life and both release wholesale rather than per reason. The
-  structures and the discipline are [src/graph/README.md](src/graph/README.md).
+- **Holds**, in one relation — *pin*: value reach, accruing as values are minted
+  in. It is monotone for the cell's life and releases wholesale rather than per
+  reason. A slab cell stands under nothing; the parent chain is the tree pool's,
+  and it is no relation at all. The structure and the discipline are
+  [src/graph/README.md](src/graph/README.md).
 
 ## The contract: two embedder types
 
@@ -139,7 +140,7 @@ the shared borrow of the graph's region table that `enter` holds for the whole
 step beside its exclusive borrow of everything else, so the step's own writer is
 a plain `&'here` and the verbs that move or drop a region cannot run under it. A
 value built there is held as a plain `&'here` reference and needs no carrier,
-because its reach is the cell itself and the cell's birth row already keeps it;
+because its reach is the cell itself, which is alive for as long as the borrow;
 the three carrier states are for a value homed in another cell or crossing a
 step. The continuation's captures are `'here` references, re-anchored at each
 step's brand, which is how per-cell embedder structure rides the cell without a
@@ -176,9 +177,10 @@ on the read out, which re-anchors at the same `'cell`.
 
 ## Verbs
 
-- **`create(parent?, continuation?)`** hands back a handle, or refuses when the
-  slab is at its cap. A continuation handed in at birth is at `'graph`: it
-  borrows no region, so it reaches nothing.
+- **`create(continuation?)`** hands back a handle, or refuses when the slab is
+  at its cap. The new cell stands on its own — a slab cell is under nothing. A
+  continuation handed in at birth is at `'graph`: it borrows no region, so it
+  reaches nothing.
 - **`enter(handle, step)`** sets the cell's executing bit for the scope of
   `step` and supplies a step context. A cell cannot be entered while it is
   already executing. Within the scope a step can take the cell's continuation
@@ -196,8 +198,8 @@ on the read out, which re-anchors at the same `'cell`.
 
 - **`redeem`** is the one door out of the at-rest state, and it **refuses rather
   than panics**. The executing cell must be entitled to the storage the value
-  names: it is the home itself, its pin row or its birth row names the home, or
-  the home has sealed into a sealed cell this cell holds. For a value homed in a
+  names: it is the home itself, its pin row names the home, or the home has
+  sealed into a sealed cell this cell holds. For a value homed in a
   tree cell the test is root identity. Anything else is `Unheld`; a home whose
   storage is gone entirely is `Gone`. Nothing could have read such a value, so
   nothing is lost by refusing it.
@@ -205,11 +207,12 @@ on the read out, which re-anchors at the same `'cell`.
   `enter` is one door over both kinds. See
   [src/tree/README.md](src/tree/README.md).
 - **`release(handle, absorption)`** declares death: the embedder promises never
-  to enter the cell again. The slot leaves the slab once no descendant's birth
-  row names it — reclaimed if nothing reaches its storage, folded into the one
-  thing that reaches it if there is exactly one, sealed otherwise. `absorption`
-  is the embedder's say over that fold, recorded on the slot and read when the
-  slot actually leaves.
+  to enter the cell again. The slot leaves the slab within that same call —
+  reclaimed if nothing reaches its storage, folded into the one thing that
+  reaches it if there is exactly one, sealed otherwise — unless a tree cell
+  under it has not disposed, which is the one thing that makes a death outlive
+  its own `release`. `absorption` is the embedder's say over that fold, recorded
+  on the slot and read when the slot actually leaves.
 - **`is_empty()`** asks whether the graph holds nothing at all — every slot
   free, no sealed cell left, no tree cell or tombstone left in the pool. After a
   program's last release it is the end-of-program alarm, and the only one the
@@ -322,7 +325,7 @@ exactly one decision.
 - [src/tree.rs](src/tree.rs) — the tree pool: chain links and depth, the
   undisposed-child count, the pledge, and the tombstone chain.
 - [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits, and the
-  two relations as inline arrays of those rows.
+  pin relation as an inline array of those rows.
 - [src/reach.rs](src/reach.rs) — reach as a hybrid mask: an inline `Bits` row
   over slab slots plus a sparse sealed-id set, itself inline up to two ids.
 - [src/sealed.rs](src/sealed.rs) — the sealed tier: ids as a serial beside a
@@ -357,7 +360,7 @@ exactly one decision.
 
 A reference count fails safe: a forgotten release leaks. This model fails
 dangerous: a forgotten bit reclaims a live cell. That trade is accepted
-deliberately, and it dictates the engineering posture. The matrices, the sealed
+deliberately, and it dictates the engineering posture. The matrix, the sealed
 tier and every hold transition are encapsulated behind an interface designed so
 that safe usage *cannot skip a declaration* — a value cannot be stored without
 its mask passing through the mint OR, and sealed contents cannot be read except
@@ -380,7 +383,7 @@ machinery and not the `alloc_into` within it.
 - [perf/](perf/) — the harness, a `[[bin]]` behind the `perf` cargo feature so
   the library build, its tests, and the Miri slate never compile it.
   [perf/shapes.rs](perf/shapes.rs) holds the shapes — a keep-and-redeem loop, a
-  push chain, a pull chain, a birth chain, a fan-out placement, a shared
+  push chain, a pull chain, a fan-out placement, a shared
   sub-tier wound down, a cell kept into at many distinct reaches, and a chain of
   tree cells each pinning its result into its parent — and
   [perf/meter.rs](perf/meter.rs) the meter, which subtracts a nested door's spend

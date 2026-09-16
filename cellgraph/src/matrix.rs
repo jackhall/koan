@@ -1,7 +1,7 @@
 //! Bit storage for the cell relation, and the single row the executing flag occupies. **The
 //! relation is exactly one** — pin, over slab slots. A tree cell is not in it, and where one sits
 //! on its chain is [`Ancestry`](crate::tree::Ancestry), which is not a relation and reads no bits.
-//! See [graph/README.md](graph/README.md).
+//! See [graph/README.md § The pin relation](graph/README.md#the-pin-relation).
 //!
 //! The matrix is square, indexed row `holder`, bit `held`, so a cell's whole hold set is one
 //! contiguous row. That is the axis the *write* wants — the mint ORs a reach mask into a
