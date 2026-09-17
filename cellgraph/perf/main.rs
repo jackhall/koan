@@ -73,12 +73,14 @@ fn block(shape: &shapes::Shape, n: u32, runs: usize) -> Tallies {
     total.expect("a block is at least one run")
 }
 
-/// The block total of the smallest row the shape has, which is the row the floor is about.
+/// The block total of the smallest timed row the shape has, which is the row the floor is about.
+/// The resident row is a level and has no time to clear a floor with.
 fn smallest_row(tallies: &Tallies) -> u64 {
-    tallies
+    meter::Verb::ALL
         .iter()
-        .filter(|tally| tally.calls > 0)
-        .map(|tally| tally.nanos)
+        .zip(tallies)
+        .filter(|(verb, tally)| tally.calls > 0 && !matches!(verb, meter::Verb::Resident))
+        .map(|(_, tally)| tally.nanos)
         .min()
         .unwrap_or(u64::MAX)
 }

@@ -16,7 +16,8 @@ use cellgraph::{
     reattachable,
 };
 
-use crate::meter::{Verb, measure};
+use crate::counting_alloc::thread_live_bytes;
+use crate::meter::{Verb, measure, record};
 
 /// The cap every shape builds at: the full width of a one-word graph, which is the width the crate
 /// ships at. One cap for the whole set, so a row's `cap` column is a constant across the record.
@@ -498,9 +499,47 @@ fn tree_chain(n: u32) {
     assert!(graph.is_empty());
 }
 
+/// The tail loop: `n` hops, each writing into a fresh cell, creating its successor, and dying.
+///
+/// The trend this reads is recycling's. A released cell's chunk waits on the spare list and the
+/// next birth draws it, so past the first hop no verb reaches the allocator and the rows are equal
+/// at both sizes; and the `resident` row, read before the last cell is torn down, is equal at both
+/// too — a loop holds what one hop holds, however long it runs.
+fn tail_hop(n: u32) {
+    let live_at_start = thread_live_bytes();
+    let mut graph = graph();
+    let mut current = measure(Verb::Create, || graph.create(None)).unwrap();
+    for _ in 0..n {
+        measure(Verb::Enter, || {
+            graph.enter(current, |context| {
+                measure(Verb::Alloc, || {
+                    context.writer().fill(64, |index| index as u32);
+                })
+            })
+        })
+        .unwrap();
+        // The successor first, then the predecessor's death: the order a tail call runs in.
+        let next = measure(Verb::Create, || graph.create(None)).unwrap();
+        measure(Verb::Release, || {
+            graph.release(current, ReleaseAbsorption::IntoHolder)
+        })
+        .unwrap();
+        current = next;
+    }
+    record(
+        Verb::Resident,
+        (thread_live_bytes() - live_at_start).max(0) as u64,
+    );
+    measure(Verb::Release, || {
+        graph.release(current, ReleaseAbsorption::IntoHolder)
+    })
+    .unwrap();
+    assert!(graph.is_empty());
+}
+
 /// Every shape. Each is swept at both its sizes, so the per-unit trend is the difference over the
 /// difference in `n` — a term needs both readings.
-pub const SHAPES: [Shape; 7] = [
+pub const SHAPES: [Shape; 8] = [
     Shape {
         name: "keep_redeem",
         run: keep_redeem,
@@ -542,5 +581,11 @@ pub const SHAPES: [Shape; 7] = [
         run: tree_chain,
         small: 64,
         large: 256,
+    },
+    Shape {
+        name: "tail_hop",
+        run: tail_hop,
+        small: 16,
+        large: 64,
     },
 ];

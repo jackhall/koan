@@ -17,6 +17,9 @@ use crate::counting_alloc;
 /// The public doors a row can be about, plus [`Verb::Harness`] for the benchmark's own bookkeeping
 /// that has to happen inside a step — building an operand list. That work is reported as its own
 /// row rather than folded into a door's, so nothing is hidden and nothing inflates a real verb.
+///
+/// [`Verb::Resident`] is no door either: it is the row a shape [`record`]s the bytes it still
+/// holds under, read off the allocator's live balance before the shape tears down.
 #[derive(Clone, Copy)]
 pub enum Verb {
     Create,
@@ -33,11 +36,12 @@ pub enum Verb {
     Redeem,
     Read,
     Harness,
+    Resident,
 }
 
 impl Verb {
     /// Every verb, in the order rows are printed.
-    pub const ALL: [Verb; 13] = [
+    pub const ALL: [Verb; 14] = [
         Verb::Create,
         Verb::Enter,
         Verb::Release,
@@ -51,6 +55,7 @@ impl Verb {
         Verb::Redeem,
         Verb::Read,
         Verb::Harness,
+        Verb::Resident,
     ];
 
     /// The name the row carries. Lower-case and stable: the recorded dataframe keys on it.
@@ -69,6 +74,7 @@ impl Verb {
             Verb::Redeem => "redeem",
             Verb::Read => "read",
             Verb::Harness => "harness",
+            Verb::Resident => "resident",
         }
     }
 }
@@ -120,6 +126,24 @@ pub fn reset() {
 /// The totals since the last [`reset`], indexed by [`Verb::ALL`].
 pub fn take() -> [Tally; Verb::ALL.len()] {
     METER.with_borrow(|meter| meter.totals)
+}
+
+/// Set `verb`'s row to one reading of `bytes`, outside every frame — how a shape reports a figure
+/// that is a level rather than a cost. The row's time is a constant `1`: there is nothing timed
+/// behind it, and the record's readers divide by a row's time.
+pub fn record(verb: Verb, bytes: u64) {
+    METER.with_borrow_mut(|meter| {
+        debug_assert!(
+            meter.stack.is_empty(),
+            "a level is recorded outside every frame"
+        );
+        meter.totals[verb as usize] = Tally {
+            calls: 1,
+            allocations: 0,
+            bytes,
+            nanos: 1,
+        };
+    });
 }
 
 /// Run `body` as one call to `verb`, charging it what it spent minus what the verbs inside it did.

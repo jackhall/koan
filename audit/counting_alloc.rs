@@ -8,7 +8,7 @@
 //! (`tests/allocation_baseline.rs`), and the cellgraph measurement harness
 //! (`cellgraph/perf/main.rs`) — so there is one wrapper, not one per target.
 //!
-//! Four tallies, all bumped on the way through, in two pairs:
+//! Five tallies, all moved on the way through — two pairs and a balance:
 //!
 //! - [`allocations`] and [`bytes`] read process-wide atomics. These are the
 //!   whole-program numbers: a binary's `main` cannot read another thread's
@@ -16,6 +16,9 @@
 //! - [`thread_allocations`] and [`thread_bytes`] read thread-locals. These are the
 //!   bracketing numbers: the test harness runs tests concurrently, so a bracket around
 //!   one call has to be insulated from every other test's traffic.
+//! - [`thread_live_bytes`] reads a thread-local balance: what the calling thread has
+//!   asked for less what it has given back. The resident figure, which a count of
+//!   requests cannot give — a bracket around a loop reads what the loop still holds.
 //!
 //! A count says how many times the program asked; the paired byte figure says how much
 //! it asked for, which is what separates a growing buffer from a new one.
@@ -35,6 +38,7 @@ static PROCESS_BYTES: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     static THREAD_ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
     static THREAD_BYTES: Cell<u64> = const { Cell::new(0) };
+    static THREAD_LIVE_BYTES: Cell<i64> = const { Cell::new(0) };
 }
 
 /// The number of heap allocations this process has made since it started.
@@ -57,13 +61,25 @@ pub fn thread_bytes() -> u64 {
     THREAD_BYTES.with(Cell::get)
 }
 
+/// The bytes the calling thread has asked the heap for and not yet given back. Signed: a
+/// thread that frees what another allocated reads below zero, and a bracket's difference is
+/// right either way.
+pub fn thread_live_bytes() -> i64 {
+    THREAD_LIVE_BYTES.with(Cell::get)
+}
+
 /// Delegating counter: forwards every request to `A`, tallying the ones that hand back
 /// fresh capacity. Wrapping rather than replacing is what keeps a counted build and a
 /// shipped build on the same allocator, so a wall-clock reading off the counted one is
 /// still comparable.
 pub struct Counting<A>(pub A);
 
-/// Bump all four tallies by one request of `bytes` bytes. Allocates nothing itself — a
+/// Move the live balance by `bytes`, either way. Allocates nothing, like [`tally`].
+fn balance(bytes: i64) {
+    THREAD_LIVE_BYTES.with(|live| live.set(live.get() + bytes));
+}
+
+/// Bump the four request tallies by one request of `bytes` bytes. Allocates nothing itself — a
 /// `thread_local!` over a `Cell<u64>` needs no lazy heap init — so it cannot re-enter the
 /// allocator.
 fn tally(bytes: usize) {
@@ -79,15 +95,18 @@ fn tally(bytes: usize) {
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         tally(layout.size());
+        balance(layout.size() as i64);
         unsafe { self.0.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        balance(-(layout.size() as i64));
         unsafe { self.0.dealloc(pointer, layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         tally(layout.size());
+        balance(layout.size() as i64);
         unsafe { self.0.alloc_zeroed(layout) }
     }
 
@@ -95,6 +114,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     // count already measures: a request that yields fresh capacity.
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         tally(new_size);
+        balance(new_size as i64 - layout.size() as i64);
         unsafe { self.0.realloc(pointer, layout, new_size) }
     }
 }

@@ -101,6 +101,38 @@ pub enum ReleaseAbsorption {
     Refused,
 }
 
+/// What a graph is built with beyond its type: the slab's cap, and the two constants that bound the
+/// spare list a reclaimed region's chunks wait on for the next birth.
+///
+/// The list never holds more bumps than `spare_proportion` times a moving average of the live
+/// region-owning cell count, rounded up, and a bump retired past that goes back to the allocator —
+/// so a program's peak does not stay resident for the rest of its run. The average closes
+/// `1 / 2^spare_window_shift` of its gap to the live count at every birth and every disposal, so
+/// the shift is its memory in events rather than in time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Config {
+    /// The slab's fixed cap, as [`CellGraph::new`] takes it.
+    pub cap: u32,
+    /// Spare bumps kept per averaged live cell. `0` recycles nothing. A sawtooth between no cells
+    /// and a peak averages half the peak and wants the whole peak spare at its trough, which is
+    /// the default's `2`.
+    pub spare_proportion: u32,
+    /// The moving average's window, as a shift. The default's `6` is about 64 births and deaths
+    /// of memory.
+    pub spare_window_shift: u32,
+}
+
+impl Config {
+    /// A slab of `cap` cells under the default spare-list bound.
+    pub const fn new(cap: u32) -> Self {
+        Config {
+            cap,
+            spare_proportion: 2,
+            spare_window_shift: 6,
+        }
+    }
+}
+
 /// What the embedder decides about one operand of a placement: pin the storage it reaches into the
 /// destination, or copy it in.
 ///
@@ -704,9 +736,29 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
     ///
     /// If `cap` exceeds the width. A slot the relations cannot name is not a slot.
     pub fn new(cap: u32, verdict: impl FnMut(Prices) -> Verdict + 'static) -> Self {
+        Self::with_config(Config::new(cap), verdict)
+    }
+
+    /// [`new`](Self::new), with the spare list's bound chosen rather than defaulted.
+    ///
+    /// # Panics
+    ///
+    /// If `config.cap` exceeds the width, as in [`new`](Self::new), or if
+    /// `config.spare_window_shift` is 24 or more: the average is 24.8 fixed point, and a window
+    /// that wide never moves it.
+    pub fn with_config(config: Config, verdict: impl FnMut(Prices) -> Verdict + 'static) -> Self {
+        assert!(
+            config.spare_window_shift < 24,
+            "a spare window shift of {} leaves the moving average nothing to move by",
+            config.spare_window_shift
+        );
         CellGraph {
-            cells: Cells::new(cap, verdict),
-            regions: Regions::new(cap),
+            cells: Cells::new(config.cap, verdict),
+            regions: Regions::new(
+                config.cap,
+                config.spare_proportion,
+                config.spare_window_shift,
+            ),
             _graph: PhantomData,
         }
     }
@@ -720,7 +772,11 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
         &mut self,
         continuation: Option<C::At<'graph>>,
     ) -> Result<SlabHandle, CreateError> {
-        self.cells.create(continuation)
+        let handle = self.cells.create(continuation)?;
+        // The region a reclaim most recently gave up, if one is spare: a birth right after a death
+        // writes into the chunk that death freed, and never reaches the allocator for it.
+        self.regions.warm_slab(handle.slot());
+        Ok(handle)
     }
 
     /// Run `step` against the cell, with its executing flag set for the scope.
@@ -854,6 +910,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
             .trees
             .create(root, tree_parent, depth, continuation);
         self.regions.reach_tree(handle.index());
+        self.regions.warm_tree(handle.index());
         match tree_parent {
             Ancestor::Tree(index) => self.cells.trees.add_child(index),
             Ancestor::Root => self.cells.slots[root as usize].tree_children += 1,
@@ -1023,7 +1080,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
         }
     }
 
-    /// Take one tree cell out: its bump splices into the ancestor it pledged, or is dropped where
+    /// Take one tree cell out: its bump splices into the ancestor it pledged, or is retired where
     /// it pledged none, and its identity either recycles or stays behind as a tombstone.
     ///
     /// O(1). No hold arithmetic and no seal transition runs — a tree cell holds nothing of its own
@@ -1031,7 +1088,10 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
     fn dispose_tree(&mut self, index: u32, regions: &mut Regions, scratch: &Scratch) {
         let region = regions.take_tree(index);
         let into = match self.trees.pledge(index) {
-            None => None,
+            None => {
+                regions.retire(region);
+                None
+            }
             Some(Ancestor::Root) => {
                 let root = self.trees.root(index);
                 regions.splice_into_slab(root, region);
@@ -1042,6 +1102,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
                 Some(CellHandle::Tree(self.trees.occupant(dest)))
             }
         };
+        regions.departed();
         match into {
             // The bytes moved and something may still name this cell: it stays as a tombstone
             // pointing at where they went, and the tombstones already hanging off it stay hanging
@@ -1503,7 +1564,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
             .expect("the namer came out of the reverse index")
             .aggregate
             .remove_slot(dead);
-        let (_, dups) = self.fold_into_sealed(namer, holds, storage, scratch);
+        let (_, dups) = self.fold_into_sealed(namer, holds, storage, regions, scratch);
         let (lineage, has_occupant) = self.take_lineage(dead, scratch);
         self.relocate_to_sealed(lineage, namer);
         if has_occupant {
@@ -1518,10 +1579,10 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
             self.merges.into_namer += 1;
         }
         // The dead cell may have been the namer's last holder — a ring whose final cell just died.
-        if self.reclaim_if_unheld(namer, scratch) {
+        if self.reclaim_if_unheld(namer, regions, scratch) {
             return;
         }
-        self.absorb_singletons(namer, scratch);
+        self.absorb_singletons(namer, regions, scratch);
     }
 
     /// Fold a hold set and a region into an existing sealed cell: the shared body of merges 2 and
@@ -1538,6 +1599,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
         target: SealedId,
         holds: GraphReach<W>,
         storage: Region,
+        regions: &mut Regions,
         scratch: &'scratch Scratch,
     ) -> (
         ScratchVec<'scratch, SealedId>,
@@ -1584,7 +1646,9 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
             !sealed_cell.aggregate.names_sealed(target),
             "a sealed cell's aggregate names itself"
         );
-        self.sealed.splice_storage(target, storage);
+        if let Some(bump) = self.sealed.splice_storage(target, storage) {
+            regions.retire_bump(bump);
+        }
         (transferred, duplicated)
     }
 
@@ -1595,7 +1659,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
     /// single-consumer producers the tier would otherwise keep as a chain of sealed cells. The
     /// candidate set is a worklist rather than one pass: a fold transfers ids the target did not
     /// hold before, and drops a duplicate's count, either of which can newly qualify.
-    fn absorb_singletons(&mut self, target: SealedId, scratch: &Scratch) {
+    fn absorb_singletons(&mut self, target: SealedId, regions: &mut Regions, scratch: &Scratch) {
         let mut pending = scratch.vec();
         {
             let Some(sealed_cell) = self.sealed.get(target) else {
@@ -1646,11 +1710,16 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
                 .remove_sealed(source);
             #[cfg(test)]
             let sealed_width = absorbed.aggregate.sealed().len() as u64;
-            let (transferred, duplicated) =
-                self.fold_into_sealed(target, absorbed.aggregate, absorbed.storage, scratch);
+            let (transferred, duplicated) = self.fold_into_sealed(
+                target,
+                absorbed.aggregate,
+                absorbed.storage,
+                regions,
+                scratch,
+            );
             // Each duplicate had at least two holders — the target and the absorbed sealed cell —
             // so none of these counts reaches zero, and the target survives the call.
-            self.release_sealed_holds(&duplicated, scratch);
+            self.release_sealed_holds(&duplicated, regions, scratch);
             #[cfg(test)]
             {
                 self.seal_work += 1 + named + sealed_width;
@@ -1658,7 +1727,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
             }
 
             // The absorbed sealed cell held its own holder, and was its last: the ring dissolves.
-            if self.reclaim_if_unheld(target, scratch) {
+            if self.reclaim_if_unheld(target, regions, scratch) {
                 return;
             }
             pending.extend(transferred.iter().copied());
@@ -1668,9 +1737,10 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
 
     /// Return a slot to the free list under a fresh generation, so every handle minted for the
     /// departing occupant is stale from here on. Whatever storage the exit left in the slot goes
-    /// with it — a seal or a merge has already taken it, and a reclaim drops it here.
+    /// with it — a seal or a merge has already taken it, and a reclaim retires it here.
     fn recycle(&mut self, slot: u32, regions: &mut Regions) {
         regions.clear_slab(slot);
+        regions.departed();
         let cell = &mut self.slots[slot as usize];
         *cell = SlabCell::free(cell.generation.wrapping_add(1));
         self.free.push(slot);
@@ -1713,7 +1783,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
     ) {
         self.pins.clear_row(slot);
         self.recycle(slot, regions);
-        self.release_sealed_holds(released, scratch);
+        self.release_sealed_holds(released, regions, scratch);
     }
 
     /// The seal transition: convert every representation of the dying cell from slab bit to sealed
@@ -1797,12 +1867,17 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
         // 4. Every count-1 region the new sealed cell holds folds into it: a chain of
         //    single-consumer producers collapses to the one sealed cell at its head rather than one
         //    sealed cell per link.
-        self.absorb_singletons(id, scratch);
+        self.absorb_singletons(id, regions, scratch);
     }
 
     /// Drop one hold on each of `released`, reclaiming every sealed cell whose count reaches zero
     /// and cascading through the holds that sealed cell's own aggregate named.
-    fn release_sealed_holds(&mut self, released: &[SealedId], scratch: &Scratch) {
+    fn release_sealed_holds(
+        &mut self,
+        released: &[SealedId],
+        regions: &mut Regions,
+        scratch: &Scratch,
+    ) {
         let mut pending = scratch.vec_with_capacity(released.len());
         pending.extend_from_slice(released);
         while let Some(id) = pending.pop() {
@@ -1817,14 +1892,19 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
             if sealed_cell.holders > 0 {
                 continue;
             }
-            pending.extend(self.retire_sealed(id, scratch).iter());
+            pending.extend(self.retire_sealed(id, regions, scratch).iter());
         }
     }
 
     /// Retire a sealed cell whose count has reached zero: out of the tier, out of the reverse
     /// naming index, and its storage dropped. Hands back the holds its aggregate named, which the
     /// caller releases in turn.
-    fn retire_sealed(&mut self, id: SealedId, scratch: &Scratch) -> SealedSet {
+    fn retire_sealed(
+        &mut self,
+        id: SealedId,
+        regions: &mut Regions,
+        scratch: &Scratch,
+    ) -> SealedSet {
         let Some(sealed_cell) = self.sealed.remove(id) else {
             return SealedSet::new();
         };
@@ -1832,26 +1912,32 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
             self.naming[slot as usize].remove(id);
         }
         self.forget_chain(sealed_cell.lineage, scratch);
-        // The sealed cell's storage drops here: nothing reaches these chunks any more.
+        // Nothing reaches these chunks any more, so they go to the next birth.
+        regions.retire(sealed_cell.storage);
         sealed_cell.aggregate.into_sealed()
     }
 
     /// Reclaim a sealed cell nothing holds any more — the zero-count exit, reached directly when a
     /// merge dissolves the last hold on its own target rather than through a holder's release.
-    fn reclaim_sealed(&mut self, id: SealedId, scratch: &Scratch) {
-        let released = self.retire_sealed(id, scratch);
-        self.release_sealed_holds(released.as_slice(), scratch);
+    fn reclaim_sealed(&mut self, id: SealedId, regions: &mut Regions, scratch: &Scratch) {
+        let released = self.retire_sealed(id, regions, scratch);
+        self.release_sealed_holds(released.as_slice(), regions, scratch);
     }
 
     /// Reclaim `id` if a fold has just taken its last holder. `true` when it did, so the caller
     /// stops working on a sealed cell that is no longer in the tier.
-    fn reclaim_if_unheld(&mut self, id: SealedId, scratch: &Scratch) -> bool {
+    fn reclaim_if_unheld(
+        &mut self,
+        id: SealedId,
+        regions: &mut Regions,
+        scratch: &Scratch,
+    ) -> bool {
         let unheld = self
             .sealed
             .get(id)
             .is_some_and(|sealed_cell| sealed_cell.holders == 0);
         if unheld {
-            self.reclaim_sealed(id, scratch);
+            self.reclaim_sealed(id, regions, scratch);
         }
         unheld
     }

@@ -28,7 +28,7 @@ mod tree;
 pub use carrier::{Active, Ready};
 pub use dormant::Dormant;
 pub use graph::{
-    CellGraph, CreateError, CrossedOperand, EnterError, Operand, Prices, RedeemError,
+    CellGraph, Config, CreateError, CrossedOperand, EnterError, Operand, Prices, RedeemError,
     ReleaseAbsorption, ReleaseError, ReleaseTreeError, StepContext, Verdict,
 };
 pub use handle::{CellHandle, SlabHandle, Stale, TreeHandle};

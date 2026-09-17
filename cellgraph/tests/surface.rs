@@ -11,10 +11,10 @@
 use std::marker::PhantomData;
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
-    Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError, ReleaseAbsorption,
-    ReleaseError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext, ThinRun, TreeHandle,
-    Verdict, Writer, reattachable,
+    Active, CellGraph, CellHandle, Config, CreateError, CrossedOperand, Dormant, DropFree,
+    EnterError, Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError,
+    ReleaseAbsorption, ReleaseError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext,
+    ThinRun, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -389,6 +389,22 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
         .enter(cell, |context| *context.continuation().unwrap())
         .unwrap();
     assert_eq!(across, 23);
+}
+
+#[test]
+fn a_graph_is_built_with_the_spare_lists_bound_chosen() {
+    // The default is what `new` builds with, and every field is the embedder's to set.
+    let defaults = Config::new(2);
+    assert_eq!((defaults.cap, defaults.spare_proportion), (2, 2));
+    let config = Config {
+        spare_proportion: 0,
+        spare_window_shift: 3,
+        ..defaults
+    };
+    let mut graph: CellGraph<'static, Work> = CellGraph::with_config(config, weigh);
+    let cell = graph.create(None).unwrap();
+    graph.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]

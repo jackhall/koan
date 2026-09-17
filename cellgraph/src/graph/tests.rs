@@ -2,6 +2,9 @@ mod absorption;
 mod prices;
 mod pricing;
 mod properties;
+// Off under Miri with the recycling it pins.
+#[cfg(not(miri))]
+mod recycling;
 mod scratch;
 mod sealing;
 mod tree;
