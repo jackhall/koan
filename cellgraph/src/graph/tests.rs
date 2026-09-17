@@ -8,6 +8,7 @@ mod properties;
 mod recycling;
 mod scratch;
 mod sealing;
+mod tenancy;
 mod tree;
 mod values;
 
@@ -151,7 +152,7 @@ fn kept_reach<'a, C: Reattachable<'static>, T: Reattachable<'static> + DropFree>
     dormant: &Dormant<'static, T>,
 ) -> &'a GraphReach<1> {
     let key = dormant.key();
-    let CellHandle::Slab(home) = key.home else {
+    let HomeHandle::Slab(home) = key.home else {
         panic!("a value homed in a tree cell interns no reach")
     };
     let Some(SlabForward::Slab { slot, first_index }) = graph.cells.locate(home) else {

@@ -1,7 +1,7 @@
 //! The cell graph: a slab capped at construction, the pin relation over its slots, the
 //! executing flag, the per-cell regions and reach tables, the sealed tier a still-reached cell
-//! falls into, the relocation map that forwards a dormant carrier through a merge, and the
-//! `create` / `enter` / `release` verbs. The embedder's crossing verdict is taken here too, at
+//! falls into, the relocation map that forwards a dormant carrier through a merge, the tree and
+//! tenant pools beside the slab, and the birth, `enter` and death verbs over all three kinds. The embedder's crossing verdict is taken here too, at
 //! construction, and consulted once per operand of every placement. See
 //! [../README.md](../README.md) § Verbs and § The crossing verdict, and
 //! [graph/README.md](graph/README.md) § The model.
@@ -15,13 +15,14 @@ use smallvec::SmallVec;
 
 use crate::carrier::{Active, CellHome, Ready};
 use crate::dormant::{Dormant, DormantKey, ReachTable};
-use crate::handle::{CellHandle, SlabHandle, Stale, TreeHandle};
+use crate::handle::{CellHandle, HomeHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
 use crate::matrix::{Bits, Matrix};
 use crate::reach::GraphReach;
 use crate::reattach::{DropFree, Erased, Halves, Reattachable};
 use crate::region::{Region, Regions, Writer};
 use crate::scratch::{Scratch, ScratchVec};
 use crate::sealed::{ScratchSet, SealedCell, SealedId, SealedSet, SealedTier};
+use crate::tenant::{Departed, Tenancy, TenantPool};
 use crate::tree::{Ancestor, Ancestry, TreeForward, TreePool, TreeState};
 
 /// Refusals from [`CellGraph::create`].
@@ -55,6 +56,15 @@ pub enum ReleaseTreeError {
     /// The named cell is not a live tree cell — a second release names a death already declared.
     Stale(Stale<TreeHandle>),
     /// The cell is executing. Death is declared from outside a step, never from within one.
+    Executing,
+}
+
+/// Refusals from [`CellGraph::release_tenant`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReleaseTenantError {
+    /// The named tenant is not live — a second release names a death already declared.
+    Stale(Stale<TenantHandle>),
+    /// The tenant is executing. Death is declared from outside a step, never from within one.
     Executing,
 }
 
@@ -462,8 +472,9 @@ struct TransitivePins {
 }
 
 /// What a slab slot currently holds. `Dead` is the undisposed state: the embedder declared the
-/// cell's death, but a tree cell under it has not disposed, so the slot is not yet disposable. It
-/// is the only reason a death outlives its own `release`.
+/// cell's death, but a tree cell under it has not disposed or a tenant is still writing its
+/// region, so the slot is not yet disposable. Those are the two reasons a death outlives its own
+/// `release`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SlabState {
     Free,
@@ -523,6 +534,9 @@ struct SlabCell<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const 
     /// that can keep a slot in the slab past its death. A released root waits dead-but-undisposed
     /// while any of them is still there, and the last one's disposal is what disposes of it.
     tree_children: u32,
+    /// The tenants writing this cell's region — the other count that keeps a slot in the slab past
+    /// its death, region in place, until the last of them leaves.
+    tenancy: Tenancy,
     /// The head of the list of tree tombstones whose bytes spliced into this cell's bundle. Travels
     /// onto the relocation entry when the cell leaves the slab, so a dormant carrier still keyed to
     /// one of them keeps resolving.
@@ -543,6 +557,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
             reaches: ReachTable::default(),
             lineage: None,
             tree_children: 0,
+            tenancy: Tenancy::default(),
             tree_tombstones: None,
         }
     }
@@ -677,6 +692,9 @@ struct Cells<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: 
     /// The tree pool: the third region habitat, uncapped and outside every relation. See
     /// [tree](crate::tree).
     trees: TreePool<'graph, C, S>,
+    /// The tenant pool: cells with no region of their own, each writing its host's. See
+    /// [tenant](crate::tenant).
+    tenants: TenantPool<'graph, C, S>,
     /// Where the dormant carriers of a cell that has left the slab went, one list per slab slot. A
     /// departed handle maps to the live cell whose reach table absorbed its masks, or to the sealed
     /// cell its storage sealed into; a cell with an empty reach table leaves no entry. Rewritten at
@@ -841,7 +859,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
         // a byte of the bump. Read before the halves come off the cell, and done before the table
         // is borrowed shared — a reset needs it exclusively. No failable check: the slot's
         // emptiness is the whole condition.
-        if !self.cells.scratch_named(cell) {
+        if !self.cells.scratch_named(home) {
             self.regions.reset_scratch(home);
         }
         let (stored, stored_scratch) = self.cells.take_halves(cell);
@@ -866,17 +884,25 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
         // all of this step (it is the one executing) and its holds are monotone for its life, so
         // every one of them is still there. For a tree step the hold set is the root's, and a
         // capture's own storage is the root's, one of the cells it holds, or a tree cell on this
-        // one's chain — an ancestor, which outlives it, or the executing cell itself. `'here` is
-        // quantified by this call's `step` and nameable nowhere outside it, which discharges
-        // the invariant-family condition: nothing anchored at it escapes the step.
+        // one's chain — an ancestor, which outlives it, or the executing cell itself. For a tenant
+        // step `'here` is the host's, and every clause above holds with the host for the cell: the
+        // host's region cannot move or drop while this tenant is counted on it, since both
+        // disposal gates wait on that count, and its chunks stay put under every append the host
+        // or another tenant makes — growth claims a new chunk and moves none; the host's hold set
+        // (its row, or its root's) is monotone until the host disposes, which is after this
+        // tenant; and for a tree host the chain is the host's. `'here` is quantified by this
+        // call's `step` and nameable nowhere outside it, which discharges the invariant-family
+        // condition: nothing anchored at it escapes the step.
         let continuation = stored.map(|half| unsafe { half.reattach() });
         // SAFETY: the value came in through `store_scratch_successor` at some earlier step's
         // `'scratch`, and its referents are of two kinds. The ones at that step's `'here`,
         // shortened on the way in, are covered by the argument above. The ones at `'scratch` are
-        // chunks of this cell's scratch bump, which is pinned to its table index, pointer-stable,
-        // and reset only by an `enter` that found this slot empty or by the cell's disposal — and
-        // the slot has been full since the store, the cell live. `'scratch` is quantified by
-        // this call's `step` like `'here`, which discharges the invariant-family condition.
+        // chunks of the write home's scratch bump, which is pinned to its table index,
+        // pointer-stable, and reset only by an `enter` that found no scratch half at rest over it
+        // — the home's own or any tenant's, this slot among them — or by the home's disposal,
+        // which waits on every tenant. The slot has been full since the store and the cell live.
+        // `'scratch` is quantified by this call's `step` like `'here`, which discharges the
+        // invariant-family condition.
         let scratch_continuation = stored_scratch.map(|half| unsafe { half.reattach() });
         // The scratch comes off the graph for the whole step: the doors take `&mut self`, so a
         // transient borrowing the field could not coexist with them. The context's `Drop` hands it
@@ -889,6 +915,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
             cell,
             home,
             continuation,
+            scratch_was_named: scratch_continuation.is_some(),
             scratch_continuation,
             writer,
             scratch_writer,
@@ -933,7 +960,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
     }
 
     /// Create a tree cell under `parent` — a slab cell, which becomes its **root**, or another
-    /// tree cell, whose root it inherits.
+    /// tree cell, whose root it inherits. A live tenant named here means its host.
     ///
     /// The cell owns its region outright and takes no slab slot, so this door has no full refusal:
     /// what bounds the pool is the depth of the call tree, not the slab's cap. It takes no row and
@@ -944,16 +971,14 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
         parent: impl Into<CellHandle>,
         continuation: Option<C::At<'graph>>,
     ) -> Result<TreeHandle, Stale<CellHandle>> {
-        let (root, tree_parent, depth) = match parent.into() {
-            CellHandle::Slab(handle) => (self.cells.live_slot(handle)?, Ancestor::Root, 1),
-            CellHandle::Tree(handle) => {
-                let index = self.cells.trees.live_index(handle)?;
-                (
-                    self.cells.trees.root(index),
-                    Ancestor::Tree(index),
-                    self.cells.trees.depth(index) + 1,
-                )
-            }
+        // A tenant named as a parent means its host: the child is the host's child.
+        let (root, tree_parent, depth) = match self.cells.write_home(parent.into())? {
+            CellHome::Slab(slot) => (slot, Ancestor::Root, 1),
+            CellHome::Tree(index) => (
+                self.cells.trees.root(index),
+                Ancestor::Tree(index),
+                self.cells.trees.depth(index) + 1,
+            ),
         };
         self.cells.take_scratch().reset();
         // A continuation handed in from outside is at `'graph`: it borrows no region, only storage
@@ -997,8 +1022,60 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
         Ok(())
     }
 
-    /// Whether the graph holds nothing at all: every slab slot free, no sealed region left, and no
-    /// tree cell or tombstone in the pool.
+    /// Create a **tenant** of `host`: a cell with no region of its own, whose every step writes the
+    /// host's. It draws no bump and takes no slab slot, so like `create_tree` it has no full
+    /// refusal.
+    ///
+    /// A step in a tenant is handed the host's writer and the host's scratch writer, so a value it
+    /// writes embeds a host-homed `'here` borrow with no operand, no pin and no price — it is an
+    /// own-region write. It places, mints and lifts as the host, its carriers carry the host's
+    /// reach, and it redeems exactly what the host may.
+    ///
+    /// `host` is any live cell. A live tenant named here means *its* host, whether or not that
+    /// host's own death has been declared: a host cannot dispose while a tenant is counted on it,
+    /// so a chain of tenants each created by naming the one before shares the first host's region
+    /// for as long as any of them lives.
+    ///
+    /// When to make a cell a tenant rather than give it a region is the embedder's election; the
+    /// substrate ships the kind and no rule.
+    pub fn create_tenant(
+        &mut self,
+        host: impl Into<CellHandle>,
+        continuation: Option<C::At<'graph>>,
+    ) -> Result<TenantHandle, Stale<CellHandle>> {
+        let host = self.cells.write_home(host.into())?;
+        self.cells.take_scratch().reset();
+        self.cells.tenancy_mut(host).tenants += 1;
+        // At `'graph`, like every continuation handed in from outside: it borrows no region.
+        Ok(self
+            .cells
+            .tenants
+            .create(host, continuation.map(Erased::store)))
+    }
+
+    /// Declare a tenant's death. **A count decrement on its host** — no reclaim, no splice, no
+    /// pledge and no tombstone, because a tenant owns nothing to settle: what it wrote is the
+    /// host's, and stays the host's.
+    ///
+    /// If the host's own death was already declared and this was the last thing it waited on, the
+    /// host disposes within this call.
+    pub fn release_tenant(&mut self, handle: TenantHandle) -> Result<(), ReleaseTenantError> {
+        let index = self
+            .cells
+            .tenants
+            .live_index(handle)
+            .map_err(ReleaseTenantError::Stale)?;
+        if self.cells.tenants.is_executing(index) {
+            return Err(ReleaseTenantError::Executing);
+        }
+        let departed = self.cells.tenants.remove(index);
+        self.park()
+            .run(|cells, regions, scratch| cells.tenant_left(departed, regions, scratch));
+        Ok(())
+    }
+
+    /// Whether the graph holds nothing at all: every slab slot free, no sealed region left, no
+    /// tree cell or tombstone in the pool, and no tenant.
     ///
     /// The embedder's end-of-program alarm, and the only one the substrate ships. After the last
     /// release, a non-empty graph means either a release was forgotten — a slot is still occupied
@@ -1013,16 +1090,21 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
             self.cells.occupied().next().is_none(),
             "the free list disagrees with a scan across the slab"
         );
-        vacant && self.cells.sealed.is_empty() && self.cells.trees.is_empty()
+        vacant
+            && self.cells.sealed.is_empty()
+            && self.cells.trees.is_empty()
+            && self.cells.tenants.is_empty()
     }
 
-    /// Whether the name is a cell of either kind that is still live — false for a slot or pool
+    /// Whether the name is a cell of any kind that is still live — false for a slot or pool
     /// index that is free, holds a later generation, or holds a cell whose death was already
-    /// declared, and false for a tree tombstone.
+    /// declared, and false for a tree tombstone. The liveness is the named cell's own: a live
+    /// tenant is live whatever has been declared about its host.
     pub fn is_live(&self, cell: impl Into<CellHandle>) -> bool {
         match cell.into() {
             CellHandle::Slab(handle) => self.cells.live_slot(handle).is_ok(),
             CellHandle::Tree(handle) => self.cells.trees.live_index(handle).is_ok(),
+            CellHandle::Tenant(handle) => self.cells.tenants.live_index(handle).is_ok(),
         }
     }
 
@@ -1074,6 +1156,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
             naming: (0..cap).map(|_| SealedSet::new()).collect(),
             sealed: SealedTier::new(cap),
             trees: TreePool::new(cap),
+            tenants: TenantPool::new(cap),
             relocated: (0..cap).map(|_| SmallVec::new()).collect(),
             departed_tombstones: Vec::new(),
             verdict: Box::new(verdict),
@@ -1104,12 +1187,19 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
     ///
     /// The walk is complete because only creation and disposal move a child count, so the only
     /// cells this release can bring to zero are the ones on its own chain upward, and the first
-    /// ancestor that is still live or still has another child stops it. It ends at the root, which
+    /// ancestor that is still live, still has another child, or still has a tenant stops it. A
+    /// tenant's departure starts the same walk at its host, which returns at once for a host that
+    /// is live. It ends at the root, which
     /// is under nothing.
     fn dispose_tree_chain(&mut self, released: u32, regions: &mut Regions, scratch: &Scratch) {
         let mut next = Some(released);
         while let Some(index) = next {
-            if self.trees.state(index) != TreeState::Dead || self.trees.children(index) > 0 {
+            // Two things hold a tree cell past its death: an undisposed child, and a tenant still
+            // writing its region. Either one, or a cell still live, stops the walk here.
+            if self.trees.state(index) != TreeState::Dead
+                || self.trees.children(index) > 0
+                || self.trees.tenancy(index).tenants > 0
+            {
                 return;
             }
             // Read the links first: disposal recycles the slot or turns it into a tombstone, and
@@ -1152,11 +1242,11 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
             Some(Ancestor::Root) => {
                 let root = self.trees.root(index);
                 regions.splice_into_slab(root, region);
-                Some(CellHandle::Slab(self.occupant(root)))
+                Some(HomeHandle::Slab(self.occupant(root)))
             }
             Some(Ancestor::Tree(dest)) => {
                 regions.splice_into_tree(dest, region);
-                Some(CellHandle::Tree(self.trees.occupant(dest)))
+                Some(HomeHandle::Tree(self.trees.occupant(dest)))
             }
         };
         // The departing cell's scratch goes with it: the splice above moved its region alone.
@@ -1167,13 +1257,13 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
             // pointing at where they went, and the tombstones already hanging off it stay hanging
             // off it, so the chain lengthens rather than being repointed.
             Some(into) if self.trees.leaves_tombstone(index) => match into {
-                CellHandle::Tree(dest) => {
-                    self.trees.entomb(index, CellHandle::Tree(dest), None);
+                HomeHandle::Tree(dest) => {
+                    self.trees.entomb(index, HomeHandle::Tree(dest), None);
                     self.trees.adopt_tombstone(dest.index(), index);
                 }
-                CellHandle::Slab(root) => {
+                HomeHandle::Slab(root) => {
                     let head = self.slots[root.slot() as usize].tree_tombstones;
-                    self.trees.entomb(index, CellHandle::Slab(root), head);
+                    self.trees.entomb(index, HomeHandle::Slab(root), head);
                     self.slots[root.slot() as usize].tree_tombstones = Some(index);
                 }
             },
@@ -1242,18 +1332,88 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
                 self.trees.set_executing(index, true);
                 CellHome::Tree(index)
             }
+            CellHandle::Tenant(handle) => {
+                let index = self
+                    .tenants
+                    .live_index(handle)
+                    .map_err(|stale| EnterError::Stale(stale.into()))?;
+                if self.tenants.is_executing(index) {
+                    return Err(EnterError::AlreadyExecuting);
+                }
+                self.tenants.set_executing(index, true);
+                self.tenants.host(index)
+            }
         })
     }
 
-    /// Whether a scratch half is at rest over the scratch bump a step in `cell` writes — what holds
-    /// off that bump's reset.
-    fn scratch_named(&self, cell: CellHandle) -> bool {
-        match cell {
-            CellHandle::Slab(handle) => self.slots[handle.slot() as usize]
-                .scratch_continuation
-                .is_some(),
-            CellHandle::Tree(handle) => self.trees.scratch_named(handle.index()),
+    /// The **write home** of a named cell: the cell whose region a step in it writes, and a
+    /// placement into it lands in — the cell itself, or a tenant's host.
+    ///
+    /// The one resolution every door that asks for a place with storage goes through: a host, a
+    /// tree parent, a placement destination. The liveness check is on the cell *named*. A tenant's
+    /// host is not asked whether it is live: it may be dead, and it is undisposed — its disposal
+    /// waits on this tenant — so its region is in place either way.
+    fn write_home(&self, cell: CellHandle) -> Result<CellHome, Stale<CellHandle>> {
+        Ok(match cell {
+            CellHandle::Slab(handle) => CellHome::Slab(self.live_slot(handle)?),
+            CellHandle::Tree(handle) => CellHome::Tree(self.trees.live_index(handle)?),
+            CellHandle::Tenant(handle) => self.tenants.host(self.tenants.live_index(handle)?),
+        })
+    }
+
+    /// The tenant counts of a region-owning cell.
+    fn tenancy(&self, home: CellHome) -> Tenancy {
+        match home {
+            CellHome::Slab(slot) => self.slots[slot as usize].tenancy,
+            CellHome::Tree(index) => self.trees.tenancy(index),
         }
+    }
+
+    fn tenancy_mut(&mut self, home: CellHome) -> &mut Tenancy {
+        match home {
+            CellHome::Slab(slot) => &mut self.slots[slot as usize].tenancy,
+            CellHome::Tree(index) => self.trees.tenancy_mut(index),
+        }
+    }
+
+    /// Settle a released tenant with its host: the counts fall, and a host that was only waiting
+    /// on this tenant disposes. Nothing of the tenant's own is left to settle.
+    fn tenant_left(&mut self, departed: Departed, regions: &mut Regions, scratch: &Scratch) {
+        let tenancy = self.tenancy_mut(departed.host);
+        debug_assert!(
+            tenancy.tenants > 0,
+            "a tenant left a host that counted none"
+        );
+        tenancy.tenants -= 1;
+        if departed.scratch_named {
+            debug_assert!(
+                tenancy.scratch_tenants > 0,
+                "a scratch half was at rest that the host did not count"
+            );
+            tenancy.scratch_tenants -= 1;
+        }
+        match departed.host {
+            CellHome::Slab(slot) => {
+                if self.slots[slot as usize].state == SlabState::Dead && self.disposable(slot) {
+                    self.dispose(slot, regions, scratch);
+                }
+            }
+            // The chain walk returns at once unless the host is dead with nothing else under it.
+            CellHome::Tree(index) => self.dispose_tree_chain(index, regions, scratch),
+        }
+    }
+
+    /// Whether a scratch half is at rest over the scratch bump `home` owns — what holds off that
+    /// bump's reset. The bump is shared by the cell and every tenant of it, so the answer is the
+    /// cell's own slot or any tenant's: the count is the whole rule, and no `enter` walks the
+    /// tenants. A host whose death was declared had its own slot cleared then, so it stops holding
+    /// the reset off while its tenants run on.
+    fn scratch_named(&self, home: CellHome) -> bool {
+        let own = match home {
+            CellHome::Slab(slot) => self.slots[slot as usize].scratch_continuation.is_some(),
+            CellHome::Tree(index) => self.trees.scratch_named(index),
+        };
+        own || self.tenancy(home).scratch_tenants > 0
     }
 
     /// Both halves of a live cell's continuation, off the cell for the length of its step.
@@ -1264,6 +1424,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
                 (cell.continuation.take(), cell.scratch_continuation.take())
             }
             CellHandle::Tree(handle) => self.trees.take_halves(handle.index()),
+            CellHandle::Tenant(handle) => self.tenants.take_halves(handle.index()),
         }
     }
 
@@ -1275,6 +1436,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
                 (cell.continuation, cell.scratch_continuation) = halves;
             }
             CellHandle::Tree(handle) => self.trees.put_halves(handle.index(), halves),
+            CellHandle::Tenant(handle) => self.tenants.put_halves(handle.index(), halves),
         }
     }
 
@@ -1298,17 +1460,20 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
         (0..self.cap).filter(|slot| self.slots[*slot as usize].state != SlabState::Free)
     }
 
-    /// Whether a dead cell's slot may leave the slab now: no tree cell under it is undisposed.
+    /// Whether a dead cell's slot may leave the slab now: no tree cell under it is undisposed, and
+    /// no tenant is still writing its region.
     ///
-    /// That count is the only thing that can hold a slot past its death. A pin keeps the cell's
-    /// *storage*, which seals or folds and lets the slot go; a tree child keeps the slot itself,
-    /// because the child's own disposal still has to find its root.
+    /// Those two counts are the only things that can hold a slot past its death. A pin keeps the
+    /// cell's *storage*, which seals or folds and lets the slot go; a tree child keeps the slot
+    /// itself, because the child's own disposal still has to find its root; and a tenant keeps the
+    /// region *in the slot*, because its writer is minted from the region table at that index.
     ///
     /// Execution does not enter the question: `release` refuses an executing cell and `begin`
     /// refuses a dead one, so a dead cell is never executing.
     fn disposable(&self, slot: u32) -> bool {
         debug_assert!(!self.executing.test(slot), "a dead cell is executing");
-        self.slots[slot as usize].tree_children == 0
+        let cell = &self.slots[slot as usize];
+        cell.tree_children == 0 && cell.tenancy.tenants == 0
     }
 
     /// The handle of whatever occupies `slot` right now, at its current generation.
@@ -2847,6 +3012,9 @@ pub struct StepContext<
     continuation: Option<C::At<'here>>,
     /// The scratch half, the same way at `'scratch`.
     scratch_continuation: Option<S::At<'scratch>>,
+    /// Whether the scratch half was at rest when the step began — what a tenant step's end compares
+    /// against to move its host's count.
+    scratch_was_named: bool,
     /// The executing cell's write surface, minted once at `enter`. A `Copy` field, so
     /// [`writer`](Self::writer) is a read rather than a door onto the region.
     writer: Writer<'here>,
@@ -3459,25 +3627,8 @@ where
         let scratch = scratch
             .as_ref()
             .expect("a step holds the scratch region for its whole length");
-        let dest = match dest.into() {
-            CellHandle::Slab(handle) => {
-                let slot = cells.live_slot(handle).map_err(Stale::<CellHandle>::from)?;
-                Destination {
-                    mint_slot: slot,
-                    home: CellHome::Slab(slot),
-                }
-            }
-            CellHandle::Tree(handle) => {
-                let index = cells
-                    .trees
-                    .live_index(handle)
-                    .map_err(Stale::<CellHandle>::from)?;
-                Destination {
-                    mint_slot: cells.trees.root(index),
-                    home: CellHome::Tree(index),
-                }
-            }
-        };
+        // A tenant named as a destination means its host: the bytes land in the host's region.
+        let dest = cells.destination(cells.write_home(dest.into())?);
         let (reach, verdicts) = cells.appraise_and_pledge(dest, operands, regions, scratch);
         Ok(
             cells.mint_and_build(dest, reach, regions, move |writer, _| {
@@ -3588,7 +3739,7 @@ where
                 let cell = &mut self.cells.slots[slot as usize];
                 let index = cell.reaches.intern(reach);
                 DormantKey {
-                    home: CellHandle::Slab(SlabHandle::new(slot, cell.generation)),
+                    home: HomeHandle::Slab(SlabHandle::new(slot, cell.generation)),
                     index,
                 }
             }
@@ -3599,7 +3750,7 @@ where
             CellHome::Tree(index) => {
                 self.cells.trees.mark_kept(index);
                 DormantKey {
-                    home: CellHandle::Tree(self.cells.trees.occupant(index)),
+                    home: HomeHandle::Tree(self.cells.trees.occupant(index)),
                     index: 0,
                 }
             }
@@ -3635,8 +3786,8 @@ where
         // been through since the keep, ending at a tree cell that still holds them or at the slab
         // handle the relocation map answers for from there.
         let slab_home = match key.home {
-            CellHandle::Slab(handle) => handle,
-            CellHandle::Tree(handle) => match cells.trees.resolve(handle) {
+            HomeHandle::Slab(handle) => handle,
+            HomeHandle::Tree(handle) => match cells.trees.resolve(handle) {
                 None => return Err(RedeemError::Gone),
                 Some(TreeForward::Tree(index)) => {
                     // Entitled by root identity, which is O(1): a slab cell is its own root, and
@@ -3663,8 +3814,8 @@ where
                 // A key that started in a tree cell indexes no reach table: its value reached the
                 // root alone, and the slot the chain ends at is where those bytes are now.
                 let reach = match key.home {
-                    CellHandle::Tree(_) => GraphReach::single(slot),
-                    CellHandle::Slab(_) => cells.slots[slot as usize]
+                    HomeHandle::Tree(_) => GraphReach::single(slot),
+                    HomeHandle::Slab(_) => cells.slots[slot as usize]
                         .reaches
                         .get(first_index + key.index)
                         .expect("a relocated key names an entry of the reach table it landed in")
@@ -3795,12 +3946,25 @@ where
             self.continuation.take().map(Erased::<C>::erase),
             self.scratch_continuation.take().map(Erased::<S>::erase),
         );
+        let scratch_named = halves.1.is_some();
         self.cells.put_halves(self.cell, halves);
         match self.cell {
             CellHandle::Slab(handle) => {
                 self.cells.executing.clear(handle.slot());
             }
             CellHandle::Tree(handle) => self.cells.trees.set_executing(handle.index(), false),
+            CellHandle::Tenant(handle) => {
+                self.cells.tenants.set_executing(handle.index(), false);
+                // The host counts the tenants whose scratch half is at rest, and this is one of
+                // the two places that count moves: by what this step did to the slot, read once
+                // here rather than at each door.
+                let tenancy = self.cells.tenancy_mut(self.home);
+                match (self.scratch_was_named, scratch_named) {
+                    (false, true) => tenancy.scratch_tenants += 1,
+                    (true, false) => tenancy.scratch_tenants -= 1,
+                    _ => {}
+                }
+            }
         }
         // Back on the graph, chunk and all, so the next verb starts warm — and so a panicking step
         // hands it back exactly as an ordinary one does.

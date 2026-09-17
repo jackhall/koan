@@ -9,8 +9,9 @@ pub const WIDTH: usize = 2;
 
 pub use cellgraph::{
     Active, CellHandle, Config, CreateError, CrossedOperand, Dormant, DropFree, EnterError, Erased,
-    Prices, Prose, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError, ReleaseTreeError,
-    Run, SlabHandle, Stale, ThinRun, TreeHandle, Verdict, Writer, reattachable,
+    Prices, Prose, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
+    ReleaseTreeError, Run, SlabHandle, Stale, TenantHandle, ThinRun, TreeHandle, Verdict, Writer,
+    reattachable,
 };
 
 /// A carrier at rest in the region hosting it, branded by that region's `'home`; `'graph` is the

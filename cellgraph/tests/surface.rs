@@ -13,8 +13,8 @@ use std::marker::PhantomData;
 use cellgraph::{
     Active, CellGraph, CellHandle, Config, CreateError, CrossedOperand, Dormant, DropFree,
     EnterError, Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError,
-    ReleaseAbsorption, ReleaseError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext,
-    ThinRun, TreeHandle, Verdict, Writer, reattachable,
+    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale,
+    StepContext, TenantHandle, ThinRun, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -186,6 +186,73 @@ fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
         ReleaseTreeError::Stale(_) => "stale",
         ReleaseTreeError::Executing => "executing",
     }
+}
+
+/// Every refusal `release_tenant` can give, matched by name for the same reason.
+fn name_release_tenant_error(error: ReleaseTenantError) -> &'static str {
+    match error {
+        ReleaseTenantError::Stale(_) => "stale",
+        ReleaseTenantError::Executing => "executing",
+    }
+}
+
+/// The scratch half's family, named apart from the continuation's so the second parameter of the
+/// graph's type is spelled from outside the crate.
+struct Worklist;
+reattachable!(Worklist => &'cell [&'cell u32]);
+
+#[test]
+fn a_tenant_and_the_scratch_habitat_answer_from_outside_the_crate() {
+    let mut graph: CellGraph<'static, Resumed, Worklist> = CellGraph::new(1, weigh);
+    let host: SlabHandle = graph.create(None).unwrap();
+    let tenant: TenantHandle = graph.create_tenant(host, None).unwrap();
+    assert_eq!((tenant.index(), tenant.generation()), (0, 0));
+    assert!(graph.is_live(tenant));
+
+    // A tenant step writes its host's region at `'here` and its host's scratch at `'scratch`,
+    // and parks a half in each slot.
+    let ran_in = graph
+        .enter(tenant, |context| {
+            let kept = one(context.writer(), 41u32);
+            let worklist: &[&u32] = context.scratch_writer().fill(2, |_| kept);
+            context.store_successor(kept);
+            context.store_scratch_successor(worklist);
+            context.cell()
+        })
+        .unwrap();
+    assert_eq!(ran_in, CellHandle::Tenant(tenant));
+    assert_eq!(CellHandle::from(tenant), ran_in);
+
+    let read = graph
+        .enter(tenant, |context| {
+            let kept = context.continuation().expect("the storage half was stored");
+            let worklist = context
+                .scratch_continuation()
+                .expect("the scratch half was stored");
+            *kept + *worklist[1]
+        })
+        .unwrap();
+    assert_eq!(read, 82);
+
+    // A tenant named as a host means its host, and a released host waits on its tenants.
+    let second = graph.create_tenant(tenant, None).unwrap();
+    graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(!graph.is_empty());
+    graph.release_tenant(tenant).unwrap();
+    let Err(error) = graph.release_tenant(tenant) else {
+        panic!("a second release names a death already declared");
+    };
+    assert_eq!(name_release_tenant_error(error), "stale");
+    let ReleaseTenantError::Stale(stale) = error else {
+        panic!("a stale release names the handle it refused");
+    };
+    let stale: Stale<TenantHandle> = stale;
+    assert_eq!(stale.name(), tenant);
+    let widened: Stale<CellHandle> = stale.into();
+    assert_eq!(widened.name(), CellHandle::Tenant(tenant));
+
+    graph.release_tenant(second).unwrap();
+    assert!(graph.is_empty());
 }
 
 #[test]

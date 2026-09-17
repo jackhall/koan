@@ -13,9 +13,10 @@
 //! itself, the **pledge** naming the ancestor its bump will splice into, and the tombstone links
 //! that say where its bytes went once it did.
 
-use crate::handle::{CellHandle, SlabHandle, Stale, TreeHandle};
+use crate::handle::{HomeHandle, SlabHandle, Stale, TreeHandle};
 use crate::reattach::{Erased, Halves, Reattachable};
 use crate::scratch::Scratch;
+use crate::tenant::Tenancy;
 
 /// What one pool index currently holds.
 ///
@@ -105,6 +106,9 @@ struct Branch<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> {
     /// only once this reaches zero, which is what lets an embedder tear a subtree down in any
     /// order.
     children: u32,
+    /// The tenants writing this cell's region. Like an undisposed child, a tenant keeps a released
+    /// cell undisposed: its region stays put until the last one leaves.
+    tenancy: Tenancy,
     executing: bool,
     /// The shallowest ancestor a value homed here has been pinned into, and so the destination this
     /// cell's whole bump splices into at death.
@@ -123,7 +127,7 @@ struct Tombstone {
     /// Where this cell's bytes went. Never repointed when *that* cell's bytes move on in turn — the
     /// chain lengthens instead — which is what keeps a splice O(1) list work however many
     /// tombstones hang off the dying cell.
-    into: CellHandle,
+    into: HomeHandle,
     /// The next tombstone on the tombstone list this one sits in.
     next: Option<u32>,
 }
@@ -209,6 +213,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TreePool<'graph, 
             parent,
             depth,
             children: 0,
+            tenancy: Tenancy::default(),
             executing: false,
             pledge: None,
             kept: false,
@@ -285,6 +290,15 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TreePool<'graph, 
         self.branch(index).children
     }
 
+    /// The cell's tenant counts, live or dead-but-undisposed.
+    pub(crate) fn tenancy(&self, index: u32) -> Tenancy {
+        self.branch(index).tenancy
+    }
+
+    pub(crate) fn tenancy_mut(&mut self, index: u32) -> &mut Tenancy {
+        &mut self.branch_mut(index).tenancy
+    }
+
     pub(crate) fn pledge(&self, index: u32) -> Option<Ancestor> {
         self.branch(index).pledge
     }
@@ -295,7 +309,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TreePool<'graph, 
     }
 
     #[cfg(test)]
-    pub(crate) fn tombstone_target(&self, index: u32) -> Option<CellHandle> {
+    pub(crate) fn tombstone_target(&self, index: u32) -> Option<HomeHandle> {
         match &self.slots[index as usize].slot {
             TreeSlot::Tombstone(tombstone) => Some(tombstone.into),
             _ => None,
@@ -455,7 +469,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TreePool<'graph, 
     /// parents nothing, is nobody's child and pledges nothing, and all it answers is where its
     /// bytes went. The tombstones already hanging off the slot stay there — they spliced into these
     /// bytes and travel with them.
-    pub(crate) fn entomb(&mut self, index: u32, into: CellHandle, head: Option<u32>) {
+    pub(crate) fn entomb(&mut self, index: u32, into: HomeHandle, head: Option<u32>) {
         self.slots[index as usize].slot = TreeSlot::Tombstone(Tombstone { into, next: head });
     }
 
@@ -525,8 +539,8 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TreePool<'graph, 
             match &cell.slot {
                 TreeSlot::InTree(_) => return Some(TreeForward::Tree(index)),
                 TreeSlot::Tombstone(entry) => match entry.into {
-                    CellHandle::Slab(handle) => return Some(TreeForward::Slab(handle)),
-                    CellHandle::Tree(next) => {
+                    HomeHandle::Slab(handle) => return Some(TreeForward::Slab(handle)),
+                    HomeHandle::Tree(next) => {
                         index = next.index();
                         generation = next.generation();
                     }

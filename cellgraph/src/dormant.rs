@@ -20,7 +20,7 @@
 
 use std::mem::MaybeUninit;
 
-use crate::handle::CellHandle;
+use crate::handle::HomeHandle;
 use crate::reach::GraphReach;
 use crate::reattach::{DropFree, Erased, Reattachable};
 
@@ -108,7 +108,7 @@ impl<'graph, T: Reattachable<'graph> + DropFree> Copy for Dormant<'graph, T> whe
 /// reading it back.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct DormantKey {
-    pub(crate) home: CellHandle,
+    pub(crate) home: HomeHandle,
     pub(crate) index: u32,
 }
 

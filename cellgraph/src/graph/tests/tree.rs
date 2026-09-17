@@ -475,7 +475,7 @@ fn a_dormant_carrier_whose_home_was_absorbed_redeems_from_the_destination() {
     assert_eq!(graph.cells.trees().state(home.index()), TreeState::Absorbed);
     assert_eq!(
         graph.cells.trees().tombstone_target(home.index()),
-        Some(CellHandle::Slab(root))
+        Some(HomeHandle::Slab(root))
     );
     assert_eq!(graph.cells.tree_tombstones_of(root), Some(home.index()));
 

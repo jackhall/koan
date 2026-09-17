@@ -8,6 +8,9 @@
 //! leaves the absorber's scratch where it is; a departing cell's scratch goes at its disposal and
 //! into no seal; scratch bytes are in no price; and the two doors are plain moves of the slot,
 //! including under a panic.
+//!
+//! And for a shared region: a tenant's scratch is its host's bump, whose reset waits on every
+//! tenant's scratch slot as well as the host's own — until a tenant dies, or the host does.
 
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -31,15 +34,16 @@ crate::reattachable!(Spine => Parked<'cell>);
 
 type Graph = CellGraph<'static, Storage, Spine>;
 
-fn home_of(cell: CellHandle) -> CellHome {
-    match cell {
-        CellHandle::Slab(handle) => CellHome::Slab(handle.slot()),
-        CellHandle::Tree(handle) => CellHome::Tree(handle.index()),
-    }
-}
-
-fn scratch_in_use(graph: &Graph, cell: impl Into<CellHandle>) -> usize {
-    graph.regions.scratch_in_use(home_of(cell.into()))
+/// Scratch bytes in use in the bump a step in `cell` writes: its own, or its host's.
+fn scratch_in_use<S: Reattachable<'static>>(
+    graph: &CellGraph<'static, Storage, S>,
+    cell: impl Into<CellHandle>,
+) -> usize {
+    let home = graph
+        .cells
+        .write_home(cell.into())
+        .expect("the cell is live");
+    graph.regions.scratch_in_use(home)
 }
 
 fn round_trip(graph: &mut Graph, cell: CellHandle) {
@@ -206,7 +210,12 @@ fn a_departing_cells_scratch_is_dropped_at_disposal() {
     // Held and refused, so the producer seals: its region goes into the tier, and its scratch
     // goes nowhere.
     graph.release(producer, ReleaseAbsorption::Refused).unwrap();
-    assert_eq!(scratch_in_use(&graph, producer), 0);
+    assert_eq!(
+        graph
+            .regions
+            .scratch_in_use(CellHome::Slab(producer.slot())),
+        0
+    );
     let sealed = graph
         .cells
         .sealed
@@ -316,4 +325,106 @@ fn a_panicking_step_leaves_both_halves_as_it_held_them() {
             assert_eq!((*parked.spine[0], *parked.slot.get()), (1, 0));
         })
         .unwrap();
+}
+
+/// A scratch half over one scratch value, for the shared-region tests: what it names is a byte of
+/// the *host's* scratch bump, whichever cell stored it.
+fn park_one<'step>(context: &mut StepContext<'static, 'step, '_, '_, Storage, Spine>, value: u32) {
+    let numbers = context.scratch_writer().fill(1, |_| value);
+    let spine = context.scratch_writer().fill(1, |_| &numbers[0]);
+    let slot = &context.scratch_writer().fill(1, |_| Cell::new(&numbers[0]))[0];
+    context.store_scratch_successor(Parked { spine, slot });
+}
+
+#[test]
+fn a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant() {
+    let mut graph: Graph = CellGraph::new(1, pin);
+    let host = graph.create(None).unwrap();
+    let first = graph.create_tenant(host, None).unwrap();
+    let second = graph.create_tenant(host, None).unwrap();
+    let home = CellHome::Slab(host.slot());
+
+    graph.enter(first, |context| park_one(context, 41)).unwrap();
+    let parked = scratch_in_use(&graph, host);
+    assert!(parked > 0, "a tenant's scratch is its host's bump");
+    assert_eq!(scratch_in_use(&graph, first), parked);
+    assert_eq!(graph.cells.tenancy(home).scratch_tenants, 1);
+
+    // The other tenant enters with its own slot empty, and the bump is not handed back: the
+    // first tenant's half is at rest over it. It writes beside that half and stores nothing.
+    graph
+        .enter(second, |context| {
+            context.scratch_writer().fill(8, |index| index as u64);
+        })
+        .unwrap();
+    assert!(scratch_in_use(&graph, host) > parked);
+    // The host's own step holds the reset off for the same reason.
+    graph.enter(host, |_| ()).unwrap();
+    assert!(scratch_in_use(&graph, host) > parked);
+
+    // The first tenant's half comes back intact, and it stores nothing this time.
+    graph
+        .enter(first, |context| {
+            let Parked { spine, slot } = context
+                .scratch_continuation()
+                .expect("the scratch half was stored");
+            assert_eq!((*spine[0], *slot.get()), (41, 41));
+        })
+        .unwrap();
+    assert_eq!(graph.cells.tenancy(home).scratch_tenants, 0);
+    assert!(
+        scratch_in_use(&graph, host) > 0,
+        "nothing resets at a step's exit"
+    );
+
+    // Nothing names the bump now, so the next `enter` of any of the three hands it back.
+    graph.enter(second, |_| ()).unwrap();
+    assert_eq!(scratch_in_use(&graph, host), 0);
+
+    graph.release_tenant(first).unwrap();
+    graph.release_tenant(second).unwrap();
+    graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn a_tenant_dying_with_named_scratch_unblocks_the_reset() {
+    let mut graph: Graph = CellGraph::new(1, pin);
+    let host = graph.create(None).unwrap();
+    let tenant = graph.create_tenant(host, None).unwrap();
+    let home = CellHome::Slab(host.slot());
+    graph
+        .enter(tenant, |context| park_one(context, 41))
+        .unwrap();
+    assert_eq!(graph.cells.tenancy(home).scratch_tenants, 1);
+
+    graph.enter(host, |_| ()).unwrap();
+    assert!(scratch_in_use(&graph, host) > 0);
+
+    graph.release_tenant(tenant).unwrap();
+    assert_eq!(graph.cells.tenancy(home), crate::tenant::Tenancy::default());
+    graph.enter(host, |_| ()).unwrap();
+    assert_eq!(scratch_in_use(&graph, host), 0);
+}
+
+#[test]
+fn a_released_hosts_scratch_slot_no_longer_blocks_its_tenants() {
+    let mut graph: Graph = CellGraph::new(1, pin);
+    let host = graph.create(None).unwrap();
+    let tenant = graph.create_tenant(host, None).unwrap();
+    graph.enter(host, |context| park_one(context, 41)).unwrap();
+
+    // While the host lives, its half holds the reset off for its tenant too.
+    graph.enter(tenant, |_| ()).unwrap();
+    assert!(scratch_in_use(&graph, tenant) > 0);
+
+    // Its death clears the half — a dead cell is never entered — and the bump stays, for the
+    // tenant to have whole at its next step.
+    graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(scratch_in_use(&graph, tenant) > 0);
+    graph.enter(tenant, |_| ()).unwrap();
+    assert_eq!(scratch_in_use(&graph, tenant), 0);
+
+    graph.release_tenant(tenant).unwrap();
+    assert!(graph.is_empty());
 }

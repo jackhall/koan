@@ -21,6 +21,12 @@
 //! takes the table exclusively, which no step can do, so no `&mut` over a live region's bytes can
 //! exist under a writer into it: the borrow checker holds that line.
 //!
+//! Beside each region the table keeps the cell's **scratch bump** — the habitat a step writes at
+//! its `'scratch` brand and the table hands back whole once nothing names it — and, for the whole
+//! graph, a bounded **spare list** of reset bumps: a reclaimed region's chunks wait there for the
+//! next birth, so a release-then-create loop stays off the allocator. Both are reset only through
+//! the table's `&mut` doors, outside any step.
+//!
 //! A region is a **bundle** of bumps: the one it writes into, plus the bumps of every region
 //! absorbed into it. Absorption is how a merge splices storage
 //! ([graph/README.md § Locality tactics](graph/README.md#locality-tactics)) —
