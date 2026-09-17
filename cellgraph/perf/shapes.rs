@@ -71,7 +71,7 @@ fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 /// A value homed in the executing cell: the own-region write, then the bridge that makes it a
 /// carrier. What every shape's `Verb::Alloc` row measures.
 fn number_here<'step>(
-    context: &StepContext<'static, 'step, '_, Work>,
+    context: &StepContext<'static, 'step, '_, '_, Work>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))

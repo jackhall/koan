@@ -64,8 +64,8 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn in_cell<R>(
         &self,
         verdict: fn(Prices) -> Verdict,
-        step: impl for<'step, 'here> FnOnce(
-            &mut StepContext<'graph, 'step, 'here, Step>,
+        step: impl for<'step, 'here, 'scratch> FnOnce(
+            &mut StepContext<'graph, 'step, 'here, 'scratch, Step>,
             CellHandle,
         ) -> R,
     ) -> R {

@@ -476,7 +476,7 @@ fn expected_redeem(
 /// was kept as, which is what says a mask forwarded through a merge — or a tombstone chain — still
 /// names the right storage.
 fn check_redeem(
-    context: &StepContext<'static, '_, '_, Borrowed>,
+    context: &StepContext<'static, '_, '_, '_, Borrowed>,
     dormant: Dormant<'static, Number>,
     carried: u32,
 ) -> Result<(), RedeemError> {

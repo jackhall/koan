@@ -30,8 +30,14 @@ pub fn verdict(prices: Prices) -> Verdict {
 
 /// Build `carrier`'s value into `dest`'s region and hand back the carrier resting there: the value
 /// as it is under a pin, rebuilt deep under a copy.
-pub fn cross<'graph, 'step, 'here, C: Reattachable<'graph>, XF: KnottedFamily<'graph>>(
-    context: &mut StepContext<'graph, 'step, 'here, C>,
+pub fn cross<
+    'graph,
+    'step,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph>,
+    XF: KnottedFamily<'graph>,
+>(
+    context: &mut StepContext<'graph, 'step, '_, '_, C, S>,
     dest: impl Into<CellHandle>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
 ) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>> {
@@ -53,8 +59,15 @@ pub fn cross<'graph, 'step, 'here, C: Reattachable<'graph>, XF: KnottedFamily<'g
 
 /// The own-cell crossing: `carrier`'s value made reachable at the executing cell's `'here`, where it
 /// may be embedded in what the step builds or captured by its continuation.
-pub fn cross_here<'graph, 'step, 'here, C: Reattachable<'graph>, XF: KnottedFamily<'graph>>(
-    context: &mut StepContext<'graph, 'step, 'here, C>,
+pub fn cross_here<
+    'graph,
+    'step,
+    'here,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph>,
+    XF: KnottedFamily<'graph>,
+>(
+    context: &mut StepContext<'graph, 'step, 'here, '_, C, S>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
 ) -> Value<'graph, 'here, XF::Closed<'here>> {
     let weight = context.read(carrier).value().weight();

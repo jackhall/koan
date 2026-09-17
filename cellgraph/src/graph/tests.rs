@@ -1,4 +1,5 @@
 mod absorption;
+mod habitat;
 mod prices;
 mod pricing;
 mod properties;
@@ -113,8 +114,8 @@ fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 
 /// A `Number` carrier homed in the executing cell: the own-region write, then the bridge to a
 /// carrier. What a test that wants a value living where the step runs does.
-fn number_here<'step, C: Reattachable<'static>>(
-    context: &StepContext<'static, 'step, '_, C>,
+fn number_here<'step, C: Reattachable<'static>, S: Reattachable<'static>>(
+    context: &StepContext<'static, 'step, '_, '_, C, S>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))
@@ -207,7 +208,7 @@ fn a_cap_above_the_width_is_refused_at_construction() {
 fn a_two_word_graph_names_slots_across_the_chunk_boundary() {
     // The shape that exercises the matrix's chunk arithmetic: a pin whose ends sit in different
     // chunks of the same row.
-    let mut graph: CellGraph<'static, Owned, 2> = CellGraph::new(128, pin);
+    let mut graph: CellGraph<'static, Owned, Owned, 2> = CellGraph::new(128, pin);
     let cells: Vec<SlabHandle> = (0..128).map(|_| graph.create(None).unwrap()).collect();
     assert_eq!(graph.create(None), Err(CreateError::SlabFull));
 

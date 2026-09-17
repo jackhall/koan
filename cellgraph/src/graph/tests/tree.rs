@@ -42,7 +42,7 @@ fn recording(
 
 /// Build a number in the cell the step is running in.
 fn number_in<'step, C: Reattachable<'static>>(
-    context: &mut StepContext<'static, 'step, '_, C>,
+    context: &mut StepContext<'static, 'step, '_, '_, C>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     number_here(context, value)

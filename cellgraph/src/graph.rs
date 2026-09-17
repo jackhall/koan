@@ -18,7 +18,7 @@ use crate::dormant::{Dormant, DormantKey, ReachTable};
 use crate::handle::{CellHandle, SlabHandle, Stale, TreeHandle};
 use crate::matrix::{Bits, Matrix};
 use crate::reach::GraphReach;
-use crate::reattach::{DropFree, Erased, Reattachable};
+use crate::reattach::{DropFree, Erased, Halves, Reattachable};
 use crate::region::{Region, Regions, Writer};
 use crate::scratch::{Scratch, ScratchVec};
 use crate::sealed::{ScratchSet, SealedCell, SealedId, SealedSet, SealedTier};
@@ -497,7 +497,7 @@ struct Relocation {
     next: Option<SlabHandle>,
 }
 
-struct SlabCell<'graph, C: Reattachable<'graph>, const W: usize> {
+struct SlabCell<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize> {
     generation: u32,
     state: SlabState,
     /// What the release of this cell said about death-time absorption. Read at the slot's
@@ -507,6 +507,10 @@ struct SlabCell<'graph, C: Reattachable<'graph>, const W: usize> {
     /// capture is at the executing cell's brand, `'here`, which names storage the cell's hold set already
     /// covers — its own region, or a region a pinned crossing minted in.
     continuation: Option<Erased<'graph, C>>,
+    /// The scratch half of the continuation, at rest: what names this cell's scratch bump across a
+    /// park, and so what holds off the bump's reset at the next `enter`. Empty at birth, and
+    /// cleared when the cell's death is declared — a dead cell is never entered.
+    scratch_continuation: Option<Erased<'graph, S>>,
     /// The reach of every value kept in this cell's region, interned on content — the one durable
     /// habitat of a mask on the slab side, and what the seal transition's step 1 rewrites. One
     /// entry per distinct reach is what bounds that rewrite.
@@ -525,7 +529,9 @@ struct SlabCell<'graph, C: Reattachable<'graph>, const W: usize> {
     tree_tombstones: Option<u32>,
 }
 
-impl<'graph, C: Reattachable<'graph>, const W: usize> SlabCell<'graph, C, W> {
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
+    SlabCell<'graph, C, S, W>
+{
     /// A slot with no occupant, under the given generation.
     fn free(generation: u32) -> Self {
         SlabCell {
@@ -533,6 +539,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> SlabCell<'graph, C, W> {
             state: SlabState::Free,
             absorption: ReleaseAbsorption::IntoHolder,
             continuation: None,
+            scratch_continuation: None,
             reaches: ReachTable::default(),
             lineage: None,
             tree_children: 0,
@@ -579,7 +586,9 @@ enum Crossing {
 /// sealed tier that holds the regions whose slot came back while something still reached them.
 ///
 /// `C` is the embedder's continuation family: a family the graph stores erased at `'graph`, hands
-/// back re-anchored under [`enter`](CellGraph::enter), and never calls.
+/// back re-anchored under [`enter`](CellGraph::enter), and never calls. `S` is the family of the
+/// continuation's **scratch half**, which re-anchors at the step's `'scratch` brand rather than at
+/// `'here`; it defaults to `C`, and an embedder that parks nothing in scratch never names it.
 ///
 /// `'graph` is storage the embedder owns outside the graph — program text, say — which every cell
 /// may borrow through without the substrate pricing, reaching, or retyping it. The borrow checker
@@ -635,8 +644,13 @@ enum Crossing {
 /// tier — which a step holds exclusively, and the [`Regions`] every live cell writes into, which
 /// it holds shared for its whole length. The verbs that dispose of a cell take both exclusively,
 /// so no region can move or drop under a step's writer into it.
-pub struct CellGraph<'graph, C: Reattachable<'graph>, const W: usize = 1> {
-    cells: Cells<'graph, C, W>,
+pub struct CellGraph<
+    'graph,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph> = C,
+    const W: usize = 1,
+> {
+    cells: Cells<'graph, C, S, W>,
     regions: Regions,
     /// Invariant in `'graph`: a covariant graph lifetime could shorten to a step brand, and a
     /// borrow at it would stop meaning storage that outlives the graph.
@@ -645,8 +659,8 @@ pub struct CellGraph<'graph, C: Reattachable<'graph>, const W: usize = 1> {
 
 /// Everything about the cells but their bytes: the slab and its relations, the tree pool, the
 /// sealed tier, and the scratch. A step mutates this half; the region table it reads beside it.
-struct Cells<'graph, C: Reattachable<'graph>, const W: usize> {
-    slots: Box<[SlabCell<'graph, C, W>]>,
+struct Cells<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize> {
+    slots: Box<[SlabCell<'graph, C, S, W>]>,
     free: Vec<u32>,
     /// The pin relation's slab half: row M is the set of live cells whose region storage M's own
     /// dormant values read. Written only by [`CellGraph::mint`], which is the mint OR of
@@ -662,7 +676,7 @@ struct Cells<'graph, C: Reattachable<'graph>, const W: usize> {
     sealed: SealedTier<W>,
     /// The tree pool: the third region habitat, uncapped and outside every relation. See
     /// [tree](crate::tree).
-    trees: TreePool<'graph, C>,
+    trees: TreePool<'graph, C, S>,
     /// Where the dormant carriers of a cell that has left the slab went, one list per slab slot. A
     /// departed handle maps to the live cell whose reach table absorbed its masks, or to the sealed
     /// cell its storage sealed into; a cell with an empty reach table leaves no entry. Rewritten at
@@ -717,7 +731,9 @@ pub(crate) struct Merges {
     pub(crate) into_namer: u64,
 }
 
-impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
+    CellGraph<'graph, C, S, W>
+{
     /// A slab of `cap` cells. The cap is fixed here and the graph never grows past it, and it is at
     /// or below `64 · W`, the slab width the graph's *type* fixes: every slab relation is a row of
     /// `W` words held inline, so a relation costs `64 · W × W` words of the graph's own bytes — a
@@ -816,20 +832,52 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
     pub fn enter<R>(
         &mut self,
         cell: impl Into<CellHandle>,
-        step: impl FnOnce(&mut StepContext<'graph, '_, '_, C, W>) -> R,
+        step: impl FnOnce(&mut StepContext<'graph, '_, '_, '_, C, S, W>) -> R,
     ) -> Result<R, EnterError> {
         let cell = cell.into();
-        self.cells.begin(cell)?;
-        // The two halves borrowed apart for the whole step: the region table shared, which is the
-        // `'here` brand, and the cells exclusively. The step's own writer is taken here, once, so
-        // `writer` is a field copy; every slot carries a region, and an empty bump claims no
-        // chunk, so a step that never writes costs none.
-        let regions = &self.regions;
-        let writer = match cell {
-            CellHandle::Slab(handle) => regions.slab(handle.slot()),
-            CellHandle::Tree(handle) => regions.tree(handle.index()),
+        let home = self.cells.begin(cell)?;
+        // The scratch bump goes back whole when no scratch half is at rest over it: a `'scratch`
+        // reference outlives its step only through that slot, so an empty slot means nothing names
+        // a byte of the bump. Read before the halves come off the cell, and done before the table
+        // is borrowed shared — a reset needs it exclusively. No failable check: the slot's
+        // emptiness is the whole condition.
+        if !self.cells.scratch_named(cell) {
+            self.regions.reset_scratch(home);
         }
-        .writer();
+        let (stored, stored_scratch) = self.cells.take_halves(cell);
+        // The two halves borrowed apart for the whole step: the region table shared, which is the
+        // `'here` brand, and the cells exclusively. Both writers are taken here, once, so the
+        // doors that hand them out are field copies; every slot carries both bumps, and an empty
+        // bump claims no chunk, so a step that never writes costs none.
+        let regions = &self.regions;
+        let writer = regions.region(home).writer();
+        let scratch_writer = regions.scratch_writer(home);
+        // Both halves of the continuation are re-anchored here, beside the two writers whose
+        // brands they come back at, so the pairing of slot with brand is made in this one place.
+        // The brands themselves are fixed by the fields the values land in.
+        //
+        // SAFETY: a value handed in at `create` or `create_tree` is at `'graph` and names no
+        // region, and a `'graph` borrow in any value outlives the graph and so this step. Otherwise
+        // the value came in through `store_successor` at some earlier step's `'here`, so its region
+        // referents are storage that brand covers: this cell's own region, whose chunks are
+        // pointer-stable and which a seal detaches and a merge absorbs unmoved, or a region a
+        // pinned crossing minted into this cell's hold set — a live cell, or a sealed cell the
+        // hold has followed into the tier, both of which keep their chunks. The cell is live for
+        // all of this step (it is the one executing) and its holds are monotone for its life, so
+        // every one of them is still there. For a tree step the hold set is the root's, and a
+        // capture's own storage is the root's, one of the cells it holds, or a tree cell on this
+        // one's chain — an ancestor, which outlives it, or the executing cell itself. `'here` is
+        // quantified by this call's `step` and nameable nowhere outside it, which discharges
+        // the invariant-family condition: nothing anchored at it escapes the step.
+        let continuation = stored.map(|half| unsafe { half.reattach() });
+        // SAFETY: the value came in through `store_scratch_successor` at some earlier step's
+        // `'scratch`, and its referents are of two kinds. The ones at that step's `'here`,
+        // shortened on the way in, are covered by the argument above. The ones at `'scratch` are
+        // chunks of this cell's scratch bump, which is pinned to its table index, pointer-stable,
+        // and reset only by an `enter` that found this slot empty or by the cell's disposal — and
+        // the slot has been full since the store, the cell live. `'scratch` is quantified by
+        // this call's `step` like `'here`, which discharges the invariant-family condition.
+        let scratch_continuation = stored_scratch.map(|half| unsafe { half.reattach() });
         // The scratch comes off the graph for the whole step: the doors take `&mut self`, so a
         // transient borrowing the field could not coexist with them. The context's `Drop` hands it
         // back, so a panicking step loses no chunk.
@@ -839,9 +887,14 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
             cells: &mut self.cells,
             regions,
             cell,
+            home,
+            continuation,
+            scratch_continuation,
             writer,
+            scratch_writer,
             scratch: Some(scratch),
             _here: PhantomData,
+            _scratch: PhantomData,
         };
         Ok(step(&mut context))
     }
@@ -866,6 +919,8 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
         let cell = &mut self.cells.slots[slot as usize];
         cell.state = SlabState::Dead;
         cell.absorption = absorption;
+        // A dead cell is never entered, so nothing will read its scratch half again.
+        cell.scratch_continuation = None;
         // A release runs its disposal outside any step, so the scratch region is taken and reset
         // here for the same reason `enter` takes and resets it: a verb's transients start on empty
         // ground.
@@ -987,7 +1042,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
 
     /// The scratch region off the graph and reset, under a guard that hands it back however the
     /// verb ends.
-    fn park(&mut self) -> Parked<'_, 'graph, C, W> {
+    fn park(&mut self) -> Parked<'_, 'graph, C, S, W> {
         let mut scratch = self.cells.take_scratch_owned();
         scratch.reset();
         Parked {
@@ -998,7 +1053,9 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> CellGraph<'graph, C, W> {
     }
 }
 
-impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
+    Cells<'graph, C, S, W>
+{
     fn new(cap: u32, verdict: impl FnMut(Prices) -> Verdict + 'static) -> Self {
         assert!(
             cap <= Bits::<W>::CELLS,
@@ -1102,6 +1159,8 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
                 Some(CellHandle::Tree(self.trees.occupant(dest)))
             }
         };
+        // The departing cell's scratch goes with it: the splice above moved its region alone.
+        regions.reset_scratch(CellHome::Tree(index));
         regions.departed();
         match into {
             // The bytes moved and something may still name this cell: it stays as a tombstone
@@ -1157,8 +1216,11 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
 
     /// Set the executing flag, or refuse. Paired with the clear in [`StepContext`]'s `Drop`, so
     /// the flag falls even if the step panics.
-    fn begin(&mut self, cell: CellHandle) -> Result<(), EnterError> {
-        match cell {
+    ///
+    /// Hands back the step's **write home**: the cell whose region, and whose scratch bump, the
+    /// step writes.
+    fn begin(&mut self, cell: CellHandle) -> Result<CellHome, EnterError> {
+        Ok(match cell {
             CellHandle::Slab(handle) => {
                 let slot = self
                     .live_slot(handle)
@@ -1167,6 +1229,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
                     return Err(EnterError::AlreadyExecuting);
                 }
                 self.executing.set(slot);
+                CellHome::Slab(slot)
             }
             CellHandle::Tree(handle) => {
                 let index = self
@@ -1177,9 +1240,54 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
                     return Err(EnterError::AlreadyExecuting);
                 }
                 self.trees.set_executing(index, true);
+                CellHome::Tree(index)
             }
+        })
+    }
+
+    /// Whether a scratch half is at rest over the scratch bump a step in `cell` writes — what holds
+    /// off that bump's reset.
+    fn scratch_named(&self, cell: CellHandle) -> bool {
+        match cell {
+            CellHandle::Slab(handle) => self.slots[handle.slot() as usize]
+                .scratch_continuation
+                .is_some(),
+            CellHandle::Tree(handle) => self.trees.scratch_named(handle.index()),
         }
-        Ok(())
+    }
+
+    /// Both halves of a live cell's continuation, off the cell for the length of its step.
+    fn take_halves(&mut self, cell: CellHandle) -> Halves<'graph, C, S> {
+        match cell {
+            CellHandle::Slab(handle) => {
+                let cell = &mut self.slots[handle.slot() as usize];
+                (cell.continuation.take(), cell.scratch_continuation.take())
+            }
+            CellHandle::Tree(handle) => self.trees.take_halves(handle.index()),
+        }
+    }
+
+    /// Both halves back at rest, as the step left them.
+    fn put_halves(&mut self, cell: CellHandle, halves: Halves<'graph, C, S>) {
+        match cell {
+            CellHandle::Slab(handle) => {
+                let cell = &mut self.slots[handle.slot() as usize];
+                (cell.continuation, cell.scratch_continuation) = halves;
+            }
+            CellHandle::Tree(handle) => self.trees.put_halves(handle.index(), halves),
+        }
+    }
+
+    /// A write home as a placement destination: the cell whose region takes the bytes, and the
+    /// slab slot whose relations the placement writes — the home itself, or a tree home's root.
+    fn destination(&self, home: CellHome) -> Destination {
+        Destination {
+            mint_slot: match home {
+                CellHome::Slab(slot) => slot,
+                CellHome::Tree(index) => self.trees.root(index),
+            },
+            home,
+        }
     }
 
     /// The slots currently occupied — live cells and dead-but-undisposed ones alike.
@@ -1740,6 +1848,8 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
     /// with it — a seal or a merge has already taken it, and a reclaim retires it here.
     fn recycle(&mut self, slot: u32, regions: &mut Regions) {
         regions.clear_slab(slot);
+        // The departing cell's scratch goes with it: no seal, merge or absorb ever took it.
+        regions.reset_scratch(CellHome::Slab(slot));
         regions.departed();
         let cell = &mut self.slots[slot as usize];
         *cell = SlabCell::free(cell.generation.wrapping_add(1));
@@ -2071,7 +2181,7 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
     /// The tree pool, for the assertions that read a cell's chain links, its pledge and the
     /// tombstones hanging off it — none of which is observable through a public verb.
     #[cfg(test)]
-    pub(crate) fn trees(&self) -> &TreePool<'graph, C> {
+    pub(crate) fn trees(&self) -> &TreePool<'graph, C, S> {
         &self.trees
     }
 
@@ -2679,7 +2789,8 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
 /// The view of the graph a step gets: its own cell's continuation slot, the cell-region doors, and
 /// its own identity.
 ///
-/// **Two brands, and no outlives relation between them.**
+/// **Three brands.** `'step` stands apart from the other two, with no outlives relation to either;
+/// `'here` outlives `'scratch`.
 ///
 /// `'step` is the step's: the lifetime of the graph borrow the enclosing
 /// [`enter`](CellGraph::enter) holds, and what every carrier this step's doors hand back is
@@ -2693,24 +2804,54 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Cells<'graph, C, W> {
 /// one door from a `'here` reference into anything that outlives the step is
 /// [`lift`](Self::lift).
 ///
+/// `'scratch` is the executing cell's **scratch habitat**: a second bump beside its region, written
+/// through [`scratch_writer`](Self::scratch_writer), for the multi-step transients a long-lived
+/// cell would otherwise strand in the region it keeps. Invariant and quantified per `enter` like
+/// `'here`, and `'here: 'scratch` is the whole of its relation to it — so a scratch value may
+/// reference `'here` storage, and a scratch borrow cannot be embedded anywhere that asks for
+/// `'here`. Every door into storage does: the successor store, [`lift`](Self::lift), both
+/// placement doors, and a write through a `'here`-homed slot. A scratch structure crosses a park
+/// only through [`store_scratch_successor`](Self::store_scratch_successor), and the bump is
+/// handed back whole at the first `enter` that finds that slot empty.
+///
 /// `'graph` outlives both. It is the graph's lifetime — storage the embedder owns outside the graph,
 /// which the graph cannot outlive — and the where-clause is what lets a step capture a `&'graph`
 /// borrow in its successor, lift it into a carrier, or embed it in a value it builds anywhere. It is
 /// not a brand: nothing is confined to it and no door retypes it.
-pub struct StepContext<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize = 1>
-where
+pub struct StepContext<
+    'graph,
+    'step,
+    'here,
+    'scratch,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph> = C,
+    const W: usize = 1,
+> where
     'graph: 'step + 'here,
+    'here: 'scratch,
 {
-    cells: &'step mut Cells<'graph, C, W>,
+    cells: &'step mut Cells<'graph, C, S, W>,
     /// Every live cell's region, borrowed shared for the whole step — the borrow `'here` names.
     /// A placement's destination is minted and written through it, and nothing a step can reach
     /// takes it exclusively, which is what keeps every writer into it live to the step's end.
     regions: &'here Regions,
     /// The cell this step is running in, of either kind.
     cell: CellHandle,
+    /// The step's write home: the cell whose region and scratch bump it writes, resolved once at
+    /// `enter`. What every door that places into, mints for, or redeems as the executing cell
+    /// reads, so none of them matches on the cell's kind.
+    home: CellHome,
+    /// The storage half of the cell's continuation, off its slot and live at `'here` for the
+    /// length of the step. The field *is* the slot for that long: the doors move it in and out,
+    /// and `Drop` erases whatever it holds back onto the cell.
+    continuation: Option<C::At<'here>>,
+    /// The scratch half, the same way at `'scratch`.
+    scratch_continuation: Option<S::At<'scratch>>,
     /// The executing cell's write surface, minted once at `enter`. A `Copy` field, so
     /// [`writer`](Self::writer) is a read rather than a door onto the region.
     writer: Writer<'here>,
+    /// The scratch bump's write surface, minted beside it.
+    scratch_writer: Writer<'scratch>,
     /// The graph's scratch region, held here for the length of the step and handed back by `Drop`.
     /// A door splits this off the cells borrow so a transient and a `&mut Cells` coexist.
     ///
@@ -2718,10 +2859,16 @@ where
     /// one to leave behind would be the one allocation the step machinery does not need.
     scratch: Option<Scratch>,
     _here: PhantomData<fn(&'here ()) -> &'here ()>,
+    _scratch: PhantomData<fn(&'scratch ()) -> &'scratch ()>,
 }
 
-impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
-    StepContext<'graph, 'step, 'here, C, W>
+impl<'graph, 'step, 'here, 'scratch, C, S, const W: usize>
+    StepContext<'graph, 'step, 'here, 'scratch, C, S, W>
+where
+    'graph: 'step + 'here,
+    'here: 'scratch,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph>,
 {
     /// The cell this step is running in, of either kind.
     pub fn cell(&self) -> CellHandle {
@@ -2731,25 +2878,13 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// The slab slot whose relations this step's placements write: the executing cell itself when
     /// it is a slab cell, and its root when it is a tree cell.
     fn executing_slot(&self) -> u32 {
-        match self.cell {
-            CellHandle::Slab(handle) => handle.slot(),
-            CellHandle::Tree(handle) => self.cells.trees.root(handle.index()),
-        }
+        self.executing_dest().mint_slot
     }
 
     /// The executing cell as a placement destination — where [`alloc`](Self::alloc) builds and what
     /// a successor store writes into.
     fn executing_dest(&self) -> Destination {
-        match self.cell {
-            CellHandle::Slab(handle) => Destination {
-                mint_slot: handle.slot(),
-                home: CellHome::Slab(handle.slot()),
-            },
-            CellHandle::Tree(handle) => Destination {
-                mint_slot: self.cells.trees.root(handle.index()),
-                home: CellHome::Tree(handle.index()),
-            },
-        }
+        self.cells.destination(self.home)
     }
 
     /// The executing cell's own write surface, at its brand `'here`.
@@ -2857,26 +2992,7 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// let _ = graph.continuation(cell);
     /// ```
     pub fn continuation(&mut self) -> Option<C::At<'here>> {
-        let stored = match self.cell {
-            CellHandle::Slab(handle) => {
-                self.cells.slots[handle.slot() as usize].continuation.take()
-            }
-            CellHandle::Tree(handle) => self.cells.trees.take_continuation(handle.index()),
-        }?;
-        // SAFETY: a value handed in at `create` or `create_tree` is at `'graph` and names no
-        // region, and a `'graph` borrow in any value outlives the graph and so this step. Otherwise
-        // the value came in through `store_successor` at some earlier step's `'here`, so its region
-        // referents are storage that brand covers: this cell's own region, whose chunks are
-        // pointer-stable and which a seal detaches and a merge absorbs unmoved, or a region a
-        // pinned crossing minted into this cell's hold set — a live cell, or a sealed cell the
-        // hold has followed into the tier, both of which keep their chunks. The cell is live for
-        // all of this step (it is the one executing) and its holds are monotone for its life, so
-        // every one of them is still there. For a tree step the hold set is the root's, and a
-        // capture's own storage is the root's, one of the cells it holds, or a tree cell on this
-        // one's chain — an ancestor, which outlives it, or the executing cell itself. `'here` is
-        // quantified by the enclosing `enter` and nameable nowhere outside it, which discharges
-        // the invariant-family condition: nothing anchored at it escapes the step.
-        Some(unsafe { stored.reattach::<'here>() })
+        self.continuation.take()
     }
 
     /// Store the continuation the next step of this cell receives.
@@ -2892,16 +3008,329 @@ impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize>
     /// `'graph` borrow: `'here` is satisfied by an owned value or a borrow of storage outliving the
     /// graph just as it is by a region reference. Neither is a reach, so neither is priced.
     pub fn store_successor(&mut self, continuation: C::At<'here>) {
-        let stored = Erased::<C>::erase(continuation);
-        match self.cell {
-            CellHandle::Slab(handle) => {
-                self.cells.slots[handle.slot() as usize].continuation = Some(stored)
-            }
-            CellHandle::Tree(handle) => self
-                .cells
-                .trees
-                .set_continuation(handle.index(), Some(stored)),
-        }
+        self.continuation = Some(continuation);
+    }
+
+    /// The executing cell's **scratch habitat**: a second bump beside its region, at the brand
+    /// `'scratch`.
+    ///
+    /// What a step writes here it can prove it throws away. Nothing at `'scratch` can be embedded in
+    /// storage, so the bump is handed back whole at the first `enter` that finds no scratch half at
+    /// rest — a long-lived cell's multi-step transients go here rather than accreting in the region
+    /// it keeps until it dies. A parked cell keeps its scratch bytes until its next `enter` or its
+    /// death: the hand-back is at entry, never at exit.
+    ///
+    /// `'here: 'scratch`, so a scratch value may reference the cell's storage:
+    ///
+    /// ```
+    /// use cellgraph::{CellGraph, Verdict, reattachable};
+    /// struct Work;
+    /// reattachable!(Work => String);
+    ///
+    /// let mut graph: CellGraph<'static, Work> = CellGraph::new(1, |_| Verdict::Pin);
+    /// let cell = graph.create(None).unwrap();
+    /// let read = graph
+    ///     .enter(cell, |context| {
+    ///         let kept: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+    ///         let worklist: &[&u32] = context.scratch_writer().fill(3, |_| kept);
+    ///         *worklist[2]
+    ///     })
+    ///     .unwrap();
+    /// assert_eq!(read, 41);
+    /// ```
+    ///
+    /// The reverse is a compile error **by every route into storage**. This compiles — each door
+    /// given a `'here` value, and the scratch value only read:
+    ///
+    /// ```
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # struct Storage;
+    /// # struct Parked;
+    /// # struct Number;
+    /// # struct Spine;
+    /// # reattachable!(
+    /// #     Storage => (&'cell u32, &'cell Cell<&'cell u32>),
+    /// #     Parked => &'cell u32,
+    /// #     Number => &'cell u32,
+    /// #     Spine => &'cell [&'cell u32],
+    /// # );
+    /// # impl DropFree for Number {}
+    /// # impl DropFree for Spine {}
+    /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// # let other = graph.create(None).unwrap();
+    /// let _: u32 = graph
+    ///     .enter(cell, |context| {
+    ///         let kept: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+    ///         let scratch: &u32 = &context.scratch_writer().fill(1, |_| 1u32)[0];
+    ///         let slot = &context.writer().fill(1, |_| Cell::new(kept))[0];
+    ///         context.store_successor((kept, slot));
+    ///         let spine = context.writer().fill(1, |_| kept);
+    ///         context.lift::<Spine>(spine);
+    ///         context.lift::<Number>(kept);
+    ///         for dest in [other.into(), context.cell()] {
+    ///             context
+    ///                 .alloc_into::<Number, Number>(dest, &[], |writer, _| {
+    ///                     // Read inside the build, and written again: the one thing a scratch value may do there.
+    ///                     Active::new(&writer.fill(1, |_| *scratch)[0])
+    ///                 })
+    ///                 .unwrap();
+    ///         }
+    ///         slot.set(kept);
+    ///         *scratch
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// and each of these is that program with one `'here` value swapped for the scratch one.
+    ///
+    /// The successor store:
+    ///
+    /// ```compile_fail
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # struct Storage;
+    /// # struct Parked;
+    /// # struct Number;
+    /// # struct Spine;
+    /// # reattachable!(
+    /// #     Storage => (&'cell u32, &'cell Cell<&'cell u32>),
+    /// #     Parked => &'cell u32,
+    /// #     Number => &'cell u32,
+    /// #     Spine => &'cell [&'cell u32],
+    /// # );
+    /// # impl DropFree for Number {}
+    /// # impl DropFree for Spine {}
+    /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// # let other = graph.create(None).unwrap();
+    /// let _: u32 = graph
+    ///     .enter(cell, |context| {
+    ///         let kept: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+    ///         let scratch: &u32 = &context.scratch_writer().fill(1, |_| 1u32)[0];
+    ///         let slot = &context.writer().fill(1, |_| Cell::new(kept))[0];
+    ///         context.store_successor((scratch, slot));
+    ///         *scratch
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// The region's own writer, whose output is only as long-lived as what it was given:
+    ///
+    /// ```compile_fail
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # struct Storage;
+    /// # struct Parked;
+    /// # struct Number;
+    /// # struct Spine;
+    /// # reattachable!(
+    /// #     Storage => (&'cell u32, &'cell Cell<&'cell u32>),
+    /// #     Parked => &'cell u32,
+    /// #     Number => &'cell u32,
+    /// #     Spine => &'cell [&'cell u32],
+    /// # );
+    /// # impl DropFree for Number {}
+    /// # impl DropFree for Spine {}
+    /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// # let other = graph.create(None).unwrap();
+    /// let _: u32 = graph
+    ///     .enter(cell, |context| {
+    ///         let kept: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+    ///         let scratch: &u32 = &context.scratch_writer().fill(1, |_| 1u32)[0];
+    ///         let spine = context.writer().fill(1, |_| scratch);
+    ///         context.lift::<Spine>(spine);
+    ///         *scratch
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// [`lift`](Self::lift):
+    ///
+    /// ```compile_fail
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # struct Storage;
+    /// # struct Parked;
+    /// # struct Number;
+    /// # struct Spine;
+    /// # reattachable!(
+    /// #     Storage => (&'cell u32, &'cell Cell<&'cell u32>),
+    /// #     Parked => &'cell u32,
+    /// #     Number => &'cell u32,
+    /// #     Spine => &'cell [&'cell u32],
+    /// # );
+    /// # impl DropFree for Number {}
+    /// # impl DropFree for Spine {}
+    /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// # let other = graph.create(None).unwrap();
+    /// let _: u32 = graph
+    ///     .enter(cell, |context| {
+    ///         let kept: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+    ///         let scratch: &u32 = &context.scratch_writer().fill(1, |_| 1u32)[0];
+    ///         context.lift::<Number>(scratch);
+    ///         *scratch
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// A placement into another cell:
+    ///
+    /// ```compile_fail
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # struct Storage;
+    /// # struct Parked;
+    /// # struct Number;
+    /// # struct Spine;
+    /// # reattachable!(
+    /// #     Storage => (&'cell u32, &'cell Cell<&'cell u32>),
+    /// #     Parked => &'cell u32,
+    /// #     Number => &'cell u32,
+    /// #     Spine => &'cell [&'cell u32],
+    /// # );
+    /// # impl DropFree for Number {}
+    /// # impl DropFree for Spine {}
+    /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// # let other = graph.create(None).unwrap();
+    /// let _: u32 = graph
+    ///     .enter(cell, |context| {
+    ///         let kept: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+    ///         let scratch: &u32 = &context.scratch_writer().fill(1, |_| 1u32)[0];
+    ///         context
+    ///             .alloc_into::<Number, Number>(other, &[], |_, _| Active::new(scratch))
+    ///             .unwrap();
+    ///         *scratch
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// A placement into the executing cell itself:
+    ///
+    /// ```compile_fail
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # struct Storage;
+    /// # struct Parked;
+    /// # struct Number;
+    /// # struct Spine;
+    /// # reattachable!(
+    /// #     Storage => (&'cell u32, &'cell Cell<&'cell u32>),
+    /// #     Parked => &'cell u32,
+    /// #     Number => &'cell u32,
+    /// #     Spine => &'cell [&'cell u32],
+    /// # );
+    /// # impl DropFree for Number {}
+    /// # impl DropFree for Spine {}
+    /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// # let other = graph.create(None).unwrap();
+    /// let _: u32 = graph
+    ///     .enter(cell, |context| {
+    ///         let kept: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+    ///         let scratch: &u32 = &context.scratch_writer().fill(1, |_| 1u32)[0];
+    ///         let here = context.cell();
+    ///         context
+    ///             .alloc_into::<Number, Number>(here, &[], |_, _| Active::new(scratch))
+    ///             .unwrap();
+    ///         *scratch
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// The return of `enter`:
+    ///
+    /// ```compile_fail
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # struct Storage;
+    /// # struct Parked;
+    /// # struct Number;
+    /// # struct Spine;
+    /// # reattachable!(
+    /// #     Storage => (&'cell u32, &'cell Cell<&'cell u32>),
+    /// #     Parked => &'cell u32,
+    /// #     Number => &'cell u32,
+    /// #     Spine => &'cell [&'cell u32],
+    /// # );
+    /// # impl DropFree for Number {}
+    /// # impl DropFree for Spine {}
+    /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// # let other = graph.create(None).unwrap();
+    /// let _: &u32 = graph
+    ///     .enter(cell, |context| {
+    ///         let kept: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+    ///         let scratch: &u32 = &context.scratch_writer().fill(1, |_| 1u32)[0];
+    ///         scratch
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// A write through a slot homed at `'here` — one the successor keeps, which is what holds its
+    /// brand at `'here` rather than letting it shorten:
+    ///
+    /// ```compile_fail
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # struct Storage;
+    /// # struct Parked;
+    /// # struct Number;
+    /// # struct Spine;
+    /// # reattachable!(
+    /// #     Storage => (&'cell u32, &'cell Cell<&'cell u32>),
+    /// #     Parked => &'cell u32,
+    /// #     Number => &'cell u32,
+    /// #     Spine => &'cell [&'cell u32],
+    /// # );
+    /// # impl DropFree for Number {}
+    /// # impl DropFree for Spine {}
+    /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let cell = graph.create(None).unwrap();
+    /// # let other = graph.create(None).unwrap();
+    /// let _: u32 = graph
+    ///     .enter(cell, |context| {
+    ///         let kept: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+    ///         let scratch: &u32 = &context.scratch_writer().fill(1, |_| 1u32)[0];
+    ///         let slot = &context.writer().fill(1, |_| Cell::new(kept))[0];
+    ///         context.store_successor((kept, slot));
+    ///         slot.set(scratch);
+    ///         *scratch
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// [`writer`](Self::writer)'s output *used at* `'scratch` is sound and useless: `Writer` is
+    /// covariant, so the write lands in storage at the shorter brand, and the bytes are stranded
+    /// there until the cell dies with nothing able to name them past the scratch half.
+    pub fn scratch_writer(&self) -> Writer<'scratch> {
+        self.scratch_writer
+    }
+
+    /// Take the scratch half of the cell's continuation, re-anchored at `'scratch`.
+    ///
+    /// The second continuation slot: what carries a scratch structure across a park. It has its
+    /// own family, `S`, so neither slot can hold the other's form, and it is one-shot like
+    /// [`continuation`](Self::continuation) — a step that leaves it empty is what lets the next
+    /// `enter` hand the scratch bump back.
+    ///
+    /// One lifetime per family: an invariant `'here` structure (`&'here Table<'here>`) cannot ride
+    /// this half, since it would have to shorten to `'scratch`. It stays in the storage half, and
+    /// the step rejoins the two each wake.
+    pub fn scratch_continuation(&mut self) -> Option<S::At<'scratch>> {
+        self.scratch_continuation.take()
+    }
+
+    /// Store the scratch half the next step of this cell receives, and with it keep the scratch
+    /// bump as it is until then. Prices nothing and records no reach, for
+    /// [`store_successor`](Self::store_successor)'s reasons: its referents are scratch bytes, or
+    /// `'here` storage the cell's hold set already covers.
+    pub fn store_scratch_successor(&mut self, continuation: S::At<'scratch>) {
+        self.scratch_continuation = Some(continuation);
     }
 
     /// The own-cell crossing: price `operands` into the executing cell, mint what pins into its
@@ -3319,15 +3748,17 @@ where
 /// behind, so a hand-back written after the cascade would be the one thing a panic in it skips,
 /// and every later verb would then fail on the missing scratch region rather than on the original
 /// fault.
-struct Parked<'dispose, 'graph, C: Reattachable<'graph>, const W: usize> {
-    cells: &'dispose mut Cells<'graph, C, W>,
+struct Parked<'dispose, 'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize> {
+    cells: &'dispose mut Cells<'graph, C, S, W>,
     regions: &'dispose mut Regions,
     scratch: Option<Scratch>,
 }
 
-impl<'graph, C: Reattachable<'graph>, const W: usize> Parked<'_, 'graph, C, W> {
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
+    Parked<'_, 'graph, C, S, W>
+{
     /// Run one verb's body against the graph and the scratch region parked off it.
-    fn run(&mut self, body: impl FnOnce(&mut Cells<'graph, C, W>, &mut Regions, &Scratch)) {
+    fn run(&mut self, body: impl FnOnce(&mut Cells<'graph, C, S, W>, &mut Regions, &Scratch)) {
         let Parked {
             cells,
             regions,
@@ -3340,18 +3771,31 @@ impl<'graph, C: Reattachable<'graph>, const W: usize> Parked<'_, 'graph, C, W> {
     }
 }
 
-impl<'graph, C: Reattachable<'graph>, const W: usize> Drop for Parked<'_, 'graph, C, W> {
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize> Drop
+    for Parked<'_, 'graph, C, S, W>
+{
     fn drop(&mut self) {
         self.cells.scratch = self.scratch.take();
     }
 }
 
-impl<'graph, 'step, 'here, C: Reattachable<'graph>, const W: usize> Drop
-    for StepContext<'graph, 'step, 'here, C, W>
+impl<'graph, 'step, 'here, 'scratch, C, S, const W: usize> Drop
+    for StepContext<'graph, 'step, 'here, 'scratch, C, S, W>
 where
     'graph: 'step + 'here,
+    'here: 'scratch,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph>,
 {
     fn drop(&mut self) {
+        // Both halves go back to rest as the step left them, erased — and before the executing
+        // flag falls, so the cell is never enterable with its halves still off it. A panicking
+        // step passes through here too, and leaves exactly what it held.
+        let halves = (
+            self.continuation.take().map(Erased::<C>::erase),
+            self.scratch_continuation.take().map(Erased::<S>::erase),
+        );
+        self.cells.put_halves(self.cell, halves);
         match self.cell {
             CellHandle::Slab(handle) => {
                 self.cells.executing.clear(handle.slot());

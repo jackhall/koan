@@ -34,6 +34,7 @@ use std::ptr::NonNull;
 
 use bumpalo::Bump;
 
+use crate::carrier::CellHome;
 use crate::sealed::SealedId;
 
 #[cfg(test)]
@@ -198,6 +199,14 @@ pub(crate) struct Regions {
     /// starts a slab's width long, like the pool itself, and doubles from there in step with it;
     /// a cell's creation finds its region already waiting, and pays a length check for it.
     tree: Vec<Region>,
+    /// One **scratch bump** per slab slot and per tree-pool index, beside the regions rather than
+    /// inside them: the second bump a step writes at its `'scratch` brand, reset at the cell's
+    /// `enter` once nothing names it. A `Region` is what seals, splices and absorbs, and a scratch
+    /// bump is none of that — it is pinned to its table index and never travels, so an absorb
+    /// leaves the absorber's scratch alone and a seal retains no scratch, by construction. Its
+    /// bytes are in no price either: a hold never extends a scratch byte's life.
+    slab_scratch: Box<[Bump]>,
+    tree_scratch: Vec<Bump>,
     /// Reset bumps a reclaim gave up, each still owning its chunk, for the next birth to draw:
     /// last in, first out, so a cell born right after a death writes into the chunk that death
     /// freed. Never longer than [`bound`](Self::bound). Always empty under Miri, where a reclaimed
@@ -220,6 +229,8 @@ impl Regions {
         Regions {
             slab: (0..cap).map(|_| Region::new()).collect(),
             tree: (0..cap).map(|_| Region::new()).collect(),
+            slab_scratch: (0..cap).map(|_| Bump::new()).collect(),
+            tree_scratch: (0..cap).map(|_| Bump::new()).collect(),
             spare: Vec::with_capacity(cap as usize),
             live: 0,
             average: 0,
@@ -322,6 +333,52 @@ impl Regions {
         &self.tree[index as usize]
     }
 
+    /// The region a step homed in `home` writes.
+    pub(crate) fn region(&self, home: CellHome) -> &Region {
+        match home {
+            CellHome::Slab(slot) => self.slab(slot),
+            CellHome::Tree(index) => self.tree(index),
+        }
+    }
+
+    fn scratch_bump(&self, home: CellHome) -> &Bump {
+        match home {
+            CellHome::Slab(slot) => &self.slab_scratch[slot as usize],
+            CellHome::Tree(index) => &self.tree_scratch[index as usize],
+        }
+    }
+
+    /// The write surface of `home`'s scratch bump, which a step takes at its `'scratch` brand.
+    pub(crate) fn scratch_writer(&self, home: CellHome) -> Writer<'_> {
+        Writer(self.scratch_bump(home))
+    }
+
+    /// Hand `home`'s scratch bump back whole. The caller has established that nothing names a
+    /// byte of it: no scratch half is at rest over it, and no step is running.
+    ///
+    /// Under Miri the bump is rebuilt rather than reset, so its chunk goes back to the allocator
+    /// and a stale `'scratch` reference is an error Miri can see.
+    pub(crate) fn reset_scratch(&mut self, home: CellHome) {
+        let bump = match home {
+            CellHome::Slab(slot) => &mut self.slab_scratch[slot as usize],
+            CellHome::Tree(index) => &mut self.tree_scratch[index as usize],
+        };
+        if bump.allocated_bytes() > 0 {
+            if cfg!(miri) {
+                *bump = Bump::new();
+            } else {
+                bump.reset();
+            }
+        }
+    }
+
+    /// Bytes `home`'s scratch bump has handed out since its last reset.
+    #[cfg(test)]
+    pub(crate) fn scratch_in_use(&self, home: CellHome) -> usize {
+        let bump = self.scratch_bump(home);
+        bump.allocated_bytes() - bump.chunk_capacity()
+    }
+
     /// Chunk bytes a slab cell's region bundle occupies, `0` where it never allocated.
     pub(crate) fn slab_bytes(&self, slot: u32) -> usize {
         self.slab[slot as usize].allocated_bytes()
@@ -341,6 +398,7 @@ impl Regions {
             self.tree.reserve(needed.max(self.tree.len()));
             let room = self.tree.capacity();
             self.tree.resize_with(room, Region::new);
+            self.tree_scratch.resize_with(room, Bump::new);
         }
     }
 

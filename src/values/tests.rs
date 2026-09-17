@@ -75,7 +75,9 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn in_cell<R>(
         &self,
         verdict: fn(Prices) -> Verdict,
-        step: impl for<'step, 'here> FnOnce(&mut StepContext<'graph, 'step, 'here, Step>) -> R,
+        step: impl for<'step, 'here, 'scratch> FnOnce(
+            &mut StepContext<'graph, 'step, 'here, 'scratch, Step>,
+        ) -> R,
     ) -> R {
         let mut graph: CellGraph<'graph, Step> = CellGraph::new(1, verdict);
         let cell = graph

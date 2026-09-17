@@ -22,11 +22,14 @@ pub type Operand<'graph, 'a, 'step, V> = cellgraph::Operand<'graph, 'a, 'step, V
 
 /// The graph of cells, their regions and the liveness matrix over them, over storage `'graph` that
 /// outlives it.
-pub type CellGraph<'graph, C> = cellgraph::CellGraph<'graph, C, WIDTH>;
+///
+/// `S` is the family of a continuation's scratch half, and the continuation family unless named.
+pub type CellGraph<'graph, C, S = C> = cellgraph::CellGraph<'graph, C, S, WIDTH>;
 
-/// What a step running in a cell holds: the cell's brand, its writer and the step's doors.
-pub type StepContext<'graph, 'step, 'here, C> =
-    cellgraph::StepContext<'graph, 'step, 'here, C, WIDTH>;
+/// What a step running in a cell holds: the cell's brand `'here`, its scratch habitat's brand
+/// `'scratch`, a writer at each, and the step's doors.
+pub type StepContext<'graph, 'step, 'here, 'scratch, C, S = C> =
+    cellgraph::StepContext<'graph, 'step, 'here, 'scratch, C, S, WIDTH>;
 
 /// Store one value in the region and hand back its resident borrow — [`Writer::fill`] at length
 /// one.

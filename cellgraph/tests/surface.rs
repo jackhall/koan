@@ -114,7 +114,7 @@ fn build_prose<'cell>(writer: Writer<'cell>) -> &'cell str {
 /// outside: the read door's `Copy` bound is on the erased form, so a caller that wants to be
 /// generic over the value family has to write that bound too.
 fn read_first<'graph, 'cell, 'step, V>(
-    context: &'cell StepContext<'graph, 'step, '_, Work>,
+    context: &'cell StepContext<'graph, 'step, '_, '_, Work>,
     carrier: &'cell Ready<'graph, 'step, V>,
 ) -> V::At<'cell>
 where
