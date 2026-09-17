@@ -24,7 +24,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-29 tests, grouped by the unsafe site each pins down. Names below are the exact
+36 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -36,8 +36,10 @@ MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p cellgraph --lib
 lifetime-retype, a `transmute_copy` behind a `ManuallyDrop` (the one site `transmute`'s
 associated-type size proof can't cover). It is reached through the two doors on `Erased`, and every
 call site shortens a stored form to a lifetime the referents outlive. The tests store a family value
-in a cell's continuation slot, take it back out inside `enter`, and read through it; the borrowing
-family is the load-bearing one, since its erased form holds a real reference across the store.
+in a cell's continuation slot and read through it a step later: `enter` re-anchors the slot's value
+at the step's `'here` as it builds the context, and the continuation door hands that value over.
+The borrowing family is the load-bearing one, since its erased form holds a real reference across
+the store.
 
 - `graph::tests::the_continuation_comes_back_re_anchored_at_the_step_brand`
 - `graph::tests::a_step_stores_the_successor_the_next_step_receives`
@@ -83,7 +85,8 @@ live continuation already borrows into.
 **Region bookkeeping — `Kept`** ([src/region.rs](../src/region.rs)) — a sealed cell's frozen-closure
 memo is a run of ids written into the sealed cell's own bump and held as a raw pointer, read back
 only through the `&self` door on the region that wrote it. It stands on the same argument the seal
-transition does — a `Bump` moves without moving a chunk byte, and a region never resets — but in a
+transition does — a `Bump` moves without moving a chunk byte, and a region's bump is reset only
+once the region has been taken apart — but in a
 shape nothing else covers: the pointer is stored *inside* the same struct as the bump it names, so
 what Miri checks is that moving the region and absorbing another one into it leave the run readable,
 and that the chunk carrying it goes at the region's drop rather than outliving it.
@@ -130,8 +133,9 @@ is that the retype moves the region borrow and leaves the `'graph` one naming th
 - `graph::tests::values::a_graph_borrow_in_a_kept_value_redeems_after_its_home_seals`
 
 **The own-region brand** ([src/region.rs](../src/region.rs), [src/graph.rs](../src/graph.rs)) —
-the same `retype` primitive at the two doors that re-anchor at `'here`, the shared borrow of the
-region table a step holds for its whole length. A capture at `'here` is read back a step later,
+the same `retype` primitive at the two places that re-anchor at `'here`, the shared borrow of the
+region table a step holds for its whole length: `enter`, for the continuation, and the own-cell
+crossing, for a pinned view. A capture at `'here` is read back a step later,
 once with the cell's own bundle grown by an absorption under it, and once with the pinned home
 sealed out of the slab entirely: what Miri checks is that the storage a `'here` reference names
 stays where it was across the moves a region makes between two of the cell's steps.
@@ -181,3 +185,33 @@ entry as the baseline expectation when scheduling a run.
 - 2026-09-12: 237.58s — 109 tests, 0 leaks, 0 UB
 - 2026-09-12: 132.37s — 109 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
+
+**The scratch habitat's re-anchor** ([src/graph.rs](../src/graph.rs),
+[src/region.rs](../src/region.rs)) — the same `retype` primitive at the second re-anchor `enter`
+makes: the scratch half of a continuation, handed back at a fresh `'scratch` each step over a
+second bump that is reset whenever no scratch half is at rest. The family is invariant — a
+`Cell<&'cell u32>` beside a spine of borrows — and the test writes through the re-anchored `Cell`
+and reads the write back a step later, so what Miri checks is an interior write through a value
+retyped at a new brand each wake, scratch bytes that embed borrows of the cell's own region, and —
+because a reset rebuilds the bump under Miri — that nothing reads a scratch byte after the `enter`
+that handed the bump back. The third holds a parent's scratch across a child's bump splicing into
+the parent's region; the fourth shares one scratch bump between a host and two tenants, whose reset
+waits on all of them.
+
+- `graph::tests::habitat::a_slab_cells_scratch_survives_parks_and_resets_once_unnamed`
+- `graph::tests::habitat::a_tree_cells_scratch_survives_parks_and_resets_once_unnamed`
+- `graph::tests::habitat::an_absorb_leaves_the_absorbers_named_scratch_alone`
+- `graph::tests::habitat::a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant`
+
+**Tenancy — a second writer under a parked borrow** ([src/tenant.rs](../src/tenant.rs),
+[src/graph.rs](../src/graph.rs)) — no unsafe site of its own, and a new reading of one that exists:
+for a tenant step the `'here` a continuation is re-anchored at is its *host's*, so two cells park
+borrows into one bump and each appends under the other's. The first test embeds a host-homed borrow
+through the tenant's own writer and reads through it a step later. The other two park the host over
+a run while a tenant appends enough to claim a new chunk, for a slab host and a tree host: what Miri
+checks is that another writer's append is growth and not movement — the retag a bump takes at every
+allocation leaves a chunk borrow issued to a different cell alone.
+
+- `graph::tests::tenancy::a_tenant_embeds_a_host_homed_borrow_through_its_own_writer`
+- `graph::tests::tenancy::a_slab_hosts_borrow_survives_a_tenant_appending_under_it`
+- `graph::tests::tenancy::a_tree_hosts_borrow_survives_a_tenant_appending_under_it`
