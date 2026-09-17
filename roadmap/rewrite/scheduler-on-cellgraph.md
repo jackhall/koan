@@ -92,11 +92,7 @@ This item subsumes `workgraph`'s own
 [adopt-cellgraph.md](../../workgraph/old_roadmap/adopt-cellgraph.md), which stays
 as a requirements record for the fresh crate.
 
-[values](../../src/values/README.md), what a cell delivers, ships.
-
-**Requires:**
-
-- [Shared regions, a scratch habitat and region recycling](../../cellgraph/roadmap/shared-regions.md) — tenant cells, per-region scratch and the recycled tail hop.
+**Requires:** none — [values](../../src/values/README.md), what a cell delivers, and cellgraph's [tenant cells, scratch habitat and recycled regions](../../cellgraph/README.md#the-cell) ship.
 
 **Unblocks:**
 
