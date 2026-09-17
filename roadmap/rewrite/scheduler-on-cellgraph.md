@@ -65,13 +65,38 @@ rewrite can restate; it is a record of what the old substrate required.
   stack discipline and takes tree cells; slab cells are for work whose
   liveness is not nested.
 
+- *Own region versus the caller's region for a sub-dispatch — decided.*
+  `cellgraph` ships a tenant cell — one with no region of its own, whose writer
+  is its host's — and the scheduler elects it per spawned cell from a one-bit,
+  per-function hint: whether the function's result shares structure with its
+  arguments. A fresh result is built in a tree child with its own region and
+  placed operand-free into its destination, so the child reclaims whole at
+  death; a sharing result is built by a tenant of the caller's frame, which
+  embeds its arguments at no price. The same bit decides a tail hop: a fresh
+  hop draws a recycled region and the loop runs in bounded memory, a sharing
+  hop joins its predecessor's region, whose growth the result retains anyway.
+  The hint is never a contract — a wrong *fresh* costs a priced copy, a wrong
+  *shares* costs delayed reclaim, and soundness rests on the substrate's brands
+  either way. First cut: builtins declare the bit and a user function derives
+  it from its return type (a flat return cannot share). Open beyond the first
+  cut, in precedence order over the derived bit: a programmer annotation with
+  no semantic effect, since the cost of a wrong guess scales with data size
+  only a programmer can predict; and a runtime measurement of copied and
+  retained bytes per function. A sharing tail loop accumulates per-hop garbage
+  in its region, so a scratch habitat scoped to the shared region comes with
+  tenancy.
+
 ## Dependencies
 
 This item subsumes `workgraph`'s own
 [adopt-cellgraph.md](../../workgraph/old_roadmap/adopt-cellgraph.md), which stays
 as a requirements record for the fresh crate.
 
-**Requires:** none — [values](../../src/values/README.md), what a cell delivers, ships.
+[values](../../src/values/README.md), what a cell delivers, ships.
+
+**Requires:**
+
+- [Shared regions, a scratch habitat and region recycling](../../cellgraph/roadmap/shared-regions.md) — tenant cells, per-region scratch and the recycled tail hop.
 
 **Unblocks:**
 

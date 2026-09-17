@@ -160,6 +160,36 @@ the slab entirely — the root seals, and a holder reads a tree-homed value out 
 - `graph::tests::tree::a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one`
 - `graph::tests::tree::a_tree_root_that_seals_carries_its_spliced_bumps`
 
+**The scratch habitat's re-anchor** ([src/graph.rs](../src/graph.rs),
+[src/region.rs](../src/region.rs)) — the same `retype` primitive at the second re-anchor `enter`
+makes: the scratch half of a continuation, handed back at a fresh `'scratch` each step over a
+second bump that is reset whenever no scratch half is at rest. The family is invariant — a
+`Cell<&'cell u32>` beside a spine of borrows — and the test writes through the re-anchored `Cell`
+and reads the write back a step later, so what Miri checks is an interior write through a value
+retyped at a new brand each wake, scratch bytes that embed borrows of the cell's own region, and —
+because a reset rebuilds the bump under Miri — that nothing reads a scratch byte after the `enter`
+that handed the bump back. The third holds a parent's scratch across a child's bump splicing into
+the parent's region; the fourth shares one scratch bump between a host and two tenants, whose reset
+waits on all of them.
+
+- `graph::tests::habitat::a_slab_cells_scratch_survives_parks_and_resets_once_unnamed`
+- `graph::tests::habitat::a_tree_cells_scratch_survives_parks_and_resets_once_unnamed`
+- `graph::tests::habitat::an_absorb_leaves_the_absorbers_named_scratch_alone`
+- `graph::tests::habitat::a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant`
+
+**Tenancy — a second writer under a parked borrow** ([src/tenant.rs](../src/tenant.rs),
+[src/graph.rs](../src/graph.rs)) — no unsafe site of its own, and a second reading of the re-anchor in `enter`:
+for a tenant step the `'here` a continuation is re-anchored at is its *host's*, so two cells park
+borrows into one bump and each appends under the other's. The first test embeds a host-homed borrow
+through the tenant's own writer and reads through it a step later. The other two park the host over
+a run while a tenant appends enough to claim a new chunk, for a slab host and a tree host: what Miri
+checks is that another writer's append is growth and not movement — the retag a bump takes at every
+allocation leaves a chunk borrow issued to a different cell alone.
+
+- `graph::tests::tenancy::a_tenant_embeds_a_host_homed_borrow_through_its_own_writer`
+- `graph::tests::tenancy::a_slab_hosts_borrow_survives_a_tenant_appending_under_it`
+- `graph::tests::tenancy::a_tree_hosts_borrow_survives_a_tenant_appending_under_it`
+
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute,
@@ -179,39 +209,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-17: 284.76s — 149 tests, 0 leaks, 0 UB
 - 2026-09-14: 222.81s — 123 tests, 0 leaks, 0 UB
 - 2026-09-13: 215.91s — 115 tests, 0 leaks, 0 UB
 - 2026-09-12: 172.91s — 115 tests, 0 leaks, 0 UB
 - 2026-09-12: 237.58s — 109 tests, 0 leaks, 0 UB
-- 2026-09-12: 132.37s — 109 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
-
-**The scratch habitat's re-anchor** ([src/graph.rs](../src/graph.rs),
-[src/region.rs](../src/region.rs)) — the same `retype` primitive at the second re-anchor `enter`
-makes: the scratch half of a continuation, handed back at a fresh `'scratch` each step over a
-second bump that is reset whenever no scratch half is at rest. The family is invariant — a
-`Cell<&'cell u32>` beside a spine of borrows — and the test writes through the re-anchored `Cell`
-and reads the write back a step later, so what Miri checks is an interior write through a value
-retyped at a new brand each wake, scratch bytes that embed borrows of the cell's own region, and —
-because a reset rebuilds the bump under Miri — that nothing reads a scratch byte after the `enter`
-that handed the bump back. The third holds a parent's scratch across a child's bump splicing into
-the parent's region; the fourth shares one scratch bump between a host and two tenants, whose reset
-waits on all of them.
-
-- `graph::tests::habitat::a_slab_cells_scratch_survives_parks_and_resets_once_unnamed`
-- `graph::tests::habitat::a_tree_cells_scratch_survives_parks_and_resets_once_unnamed`
-- `graph::tests::habitat::an_absorb_leaves_the_absorbers_named_scratch_alone`
-- `graph::tests::habitat::a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant`
-
-**Tenancy — a second writer under a parked borrow** ([src/tenant.rs](../src/tenant.rs),
-[src/graph.rs](../src/graph.rs)) — no unsafe site of its own, and a new reading of one that exists:
-for a tenant step the `'here` a continuation is re-anchored at is its *host's*, so two cells park
-borrows into one bump and each appends under the other's. The first test embeds a host-homed borrow
-through the tenant's own writer and reads through it a step later. The other two park the host over
-a run while a tenant appends enough to claim a new chunk, for a slab host and a tree host: what Miri
-checks is that another writer's append is growth and not movement — the retag a bump takes at every
-allocation leaves a chunk borrow issued to a different cell alone.
-
-- `graph::tests::tenancy::a_tenant_embeds_a_host_homed_borrow_through_its_own_writer`
-- `graph::tests::tenancy::a_slab_hosts_borrow_survives_a_tenant_appending_under_it`
-- `graph::tests::tenancy::a_tree_hosts_borrow_survives_a_tenant_appending_under_it`

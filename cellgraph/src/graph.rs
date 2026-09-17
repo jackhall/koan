@@ -35,7 +35,7 @@ pub enum CreateError {
 /// Refusals from [`CellGraph::enter`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EnterError {
-    /// The named cell is not a live cell of either kind.
+    /// The named cell is not a live cell of any kind.
     Stale(Stale<CellHandle>),
     /// The cell is already executing; a cell is entered by one step at a time.
     AlreadyExecuting,
@@ -3000,7 +3000,7 @@ pub struct StepContext<
     /// A placement's destination is minted and written through it, and nothing a step can reach
     /// takes it exclusively, which is what keeps every writer into it live to the step's end.
     regions: &'here Regions,
-    /// The cell this step is running in, of either kind.
+    /// The cell this step is running in, of any kind.
     cell: CellHandle,
     /// The step's write home: the cell whose region and scratch bump it writes, resolved once at
     /// `enter`. What every door that places into, mints for, or redeems as the executing cell
@@ -3038,13 +3038,13 @@ where
     C: Reattachable<'graph>,
     S: Reattachable<'graph>,
 {
-    /// The cell this step is running in, of either kind.
+    /// The cell this step is running in, of any kind.
     pub fn cell(&self) -> CellHandle {
         self.cell
     }
 
-    /// The slab slot whose relations this step's placements write: the executing cell itself when
-    /// it is a slab cell, and its root when it is a tree cell.
+    /// The slab slot whose relations this step's placements write: the write home itself when it
+    /// is a slab cell, and its root when it is a tree cell.
     fn executing_slot(&self) -> u32 {
         self.executing_dest().mint_slot
     }

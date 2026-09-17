@@ -31,11 +31,26 @@ no drop-ordering discipline in the embedder's loop.
 A cell that dies with a *nonzero* pin column does not linger: it **seals** into
 the second tier and its slot recycles. A pin keeps the cell's *storage*, and
 storage always has somewhere to go — a seal or a fold — so a pin never keeps the
-slot itself. The one thing that does is an undisposed **tree cell** under the
+slot itself. Two things do. One is an undisposed **tree cell** under the
 slot ([../tree/README.md](../tree/README.md)), because that child's own disposal
-still has to find its root. So the slab holds live cells and the dead ones a
-tree child is still counted under; admission control bounds that population, and
-the matrix is square at the cap.
+still has to find its root. The other is a **tenant** — a cell with no region of
+its own, which writes this one's
+([../../README.md § The cell](../../README.md#the-cell)) — because a tenant's
+writer is minted from the region table at this slot, so the region stays *in
+the slot* until the last tenant leaves. Each is a count on the slot. So the
+slab holds live cells and the dead ones a tree child or a tenant is still
+counted on; admission control bounds that population, and the matrix is square
+at the cap.
+
+A tenant is in no relation and has no liveness of its own to decide. A step in
+it runs at its host's **write home**: it mints into the host's row (or the
+host's root's), its carriers are homed in the host and carry the host's reach,
+and redeem entitlement is the host's. One resolution turns a named cell into
+its write home — the cell itself, or a tenant's host — and every door that asks
+for a place with storage goes through it, so no door has a tenant case. The
+resolution checks the liveness of the cell *named*; a tenant's host is not
+asked whether it is live, because it cannot have disposed while the tenant is
+counted on it.
 
 ## The pin relation
 
@@ -56,7 +71,7 @@ read off the links, not off a row.
 ## Disposal, and the one walk left
 
 A slab `release` disposes the slot inside its own call, unless a tree cell under
-it is still undisposed. Nothing cascades along the slab, because no slab cell
+it is still undisposed or a tenant still writes its region. Nothing cascades along the slab, because no slab cell
 stands above another: the released cell is the only slot its own death can free.
 
 The one walk is the pool's. A tree cell's disposal steps up its chain, dropping
@@ -65,12 +80,20 @@ childless, innermost first, and it ends at the root — which is under nothing, 
 which disposes there if this was the last child a declared death was waiting on.
 The walk is complete because only creation and disposal move a child count, so
 the cells one release can bring to zero are exactly the ones on its own chain
-upward, and the first ancestor still live or still holding another child stops
-it. Nothing scans the pool and no list of dead cells is kept anywhere. Order does
+upward, and the first ancestor still live, still holding another child or
+still hosting a tenant stops it. Nothing scans the pool and no list of dead cells is kept anywhere. Order does
 change retention — a dead child pinning a dead parent that a live cell also pins
 reclaims first and lets the parent absorb into the live cell — but the mirror
 image favours the other order, so no fixed order dominates and the walk's own is
 taken.
+
+A tenant's death is a count decrement on its host and nothing else: no reclaim,
+no splice, no pledge, no tombstone, since what it wrote is the host's. If the
+host is dead and that was the last count it waited on, the host disposes there
+— a slab host directly, a tree host by starting the same upward walk at itself,
+which returns at once for a host still live. Every disposal, by whichever exit,
+also hands the departing cell's scratch bump back: the scratch habitat is
+beside the region and not in it, so no seal, fold or splice ever carries it.
 
 ## The sealed tier
 
@@ -257,7 +280,8 @@ express.
 ### References at `'here`
 
 A reference at `'here` — the executing cell's brand, which a step's own writer,
-its own-cell crossing and its continuation all speak — carries no mask, so the
+its own-cell crossing and the storage half of its continuation all speak —
+carries no mask, so the
 argument above has nothing to rewrite for it. What stands in for a mask is an
 address that does not move and a hold that keeps the storage. Two kinds of
 storage reach the brand, and each has one of those two for the executing cell's
@@ -278,7 +302,8 @@ whole life:
 Growth is not a movement: a bump claims a new chunk and never reallocates one
 it has handed out, so a run written earlier in the step stays where it was —
 including when a second writer is laying down runs into the same bump, which is
-what a placement whose destination is the executing cell is. And every movement
+what a placement whose destination is the executing cell is, and what a tenant
+appending to its host's bump under the parked host's borrow is. And every movement
 storage does make under such a reference moves a `Bump` and not a chunk byte, so
 the addresses stand:
 
@@ -301,6 +326,38 @@ the cell is live, its holds are monotone, and every chunk those holds cover is
 where it was written. A borrow through `'graph` needs neither an address the
 substrate keeps nor a hold: it names storage the embedder owns outside the
 graph, which the graph cannot outlive.
+
+**Both halves re-anchor in `enter`.** The storage half comes back at `'here`
+and the scratch half at `'scratch`, in the one function that mints both brands
+and both writers, so the pairing of slot with brand is audited where it is made
+and the continuation doors contain no `unsafe`. The scratch half's `'here`
+referents, shortened on the way in, stand on the argument above. Its scratch
+referents are chunks of the write home's scratch bump, which is pinned to its
+table index and handed back only by an `enter` that found no scratch half at
+rest over it, or by the home's disposal. There is no failable check: an empty
+slot is the whole condition, because a `'scratch` reference outlives its step
+through that slot and no other way. For a shared region the bump is the host's
+and the condition is the host's own slot and a count of the tenants whose
+scratch half is at rest — moved at a tenant step's end and at a tenant's death,
+read at `enter`, and never walked. A host whose death is declared has its own
+slot cleared then, so it stops holding the reset off while its tenants run on.
+
+**A tenant's `'here` is its host's**, and every clause above holds with the host
+for the cell. The host's region cannot move or drop while the tenant is counted
+on it, since both disposal gates wait on that count; the host's hold set — its
+row, or its root's — is monotone until the host disposes, which is after the
+tenant; and for a tree host the chain is the host's.
+
+**Recycling rests on `release`'s own argument.** A bump reaches the spare list
+only from a reclaim that owns it outright — nothing holds the region, so nothing
+borrows its bytes — and a reset is that reclaim's drop with the largest chunk
+kept. Recycling a *dead* cell's chunks is therefore as safe as freeing them.
+Resetting a *live* cell's region in place is not the same thing and is not done:
+it keeps the generation, so a stale dormant keyed to a tree cell, which interns
+no reach entry, would redeem into recycled bytes. Under `cfg(miri)` nothing is
+recycled — a retired bump goes back to the allocator and a scratch reset
+rebuilds its bump — so a use after a reclaim stays an allocator-visible error
+across the [Miri slate](../../observe/miri_slate.md).
 
 ## Pool geometry
 
@@ -378,6 +435,15 @@ Retention does not occupy slab slots, so admission alone genuinely bounds this
 tier. A call subtree does not occupy them either: its cells live in the uncapped
 [tree pool](../tree/README.md), so a non-tail recursion holds one cell per level
 without ever consulting the cap.
+
+Beside the two tiers sits what neither reaches: the **spare list** of reset
+bumps a reclaim gave up, waiting for the next birth
+([../../README.md § Recycled regions](../../README.md#recycled-regions)). It is
+bounded against recent demand rather than against a cap — at most a proportion
+of a moving average of the live region-owning cell count, enforced where a bump
+is pushed — so a program's peak does not stay resident for the rest of its run.
+The measure is cells and not bumps: spares serve births, and sealed or absorbed
+storage is retention, which the list neither counts nor serves.
 
 The sealed tier is program-dependent — a program building a deep cactus of
 closures retains regions no matter how slowly cells are admitted — and it is the

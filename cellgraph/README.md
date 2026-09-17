@@ -22,6 +22,10 @@ carry their own:
   region habitat, for a call subtree whose liveness is a stack discipline
   rather than a matrix reading.
 
+The third kind of cell, the **tenant**, owns no region and so has no design doc
+of its own: it is stated here, under [The cell](#the-cell), and its effect on
+disposal in [src/graph/README.md](src/graph/README.md).
+
 ## What the substrate is, and what it refuses to be
 
 The substrate does three things: it owns regions, it records which region's
@@ -49,9 +53,12 @@ Four absences are design statements rather than gaps:
 - **No admission policy.** `create` refuses at the cap; what to do then — admit
   lazily, drain first, fail the program — is the layer above's.
 - **No frame payload.** There is no frame type. Per-cell embedder structure is
-  composed *from* cells: a body cell and a storage-only cart cell, held together
-  by ordinary holds, is how an embedder gives one unit of work two regions with
-  different lifetimes.
+  composed *from* cells, in both directions. One unit of work, two regions: a
+  body cell and a storage-only cart cell, held together by ordinary holds, give
+  one unit of work two regions with different lifetimes. Many units of work,
+  one region, at the embedder's election: a **tenant** cell owns no region and
+  writes its host's, so work whose results share structure runs in one region
+  and embeds across it at no price.
 
 ## The cell
 
@@ -59,16 +66,30 @@ Four absences are design statements rather than gaps:
   the handle was minted ([src/handle.rs](src/handle.rs)). `Copy`, never an
   owning pointer. An operation on a handle whose occupant has died is an error,
   never a silent no-op — a stale handle means a caller kept a name past a death
-  it declared. `SlabHandle` and `TreeHandle` name the two habitats and
-  `CellHandle` is the two under one name, which is what a door taking a
-  destination or a parent asks for.
-- **Habitat**, one of two live kinds. A cell either takes a slab slot, where the
-  pin matrix decides its death, or it is a
+  it declared. `SlabHandle`, `TreeHandle` and `TenantHandle` name the three
+  kinds of cell and `CellHandle` is the three under one name, which is what a
+  door taking a destination, a parent or a host asks for.
+- **Habitat**, one of two live kinds. A cell that owns a region either takes a
+  slab slot, where the pin matrix decides its death, or it is a
   [tree cell](src/tree/README.md), living under a slab **root** through a chain
   of tree parents, in an uncapped pool that no mask and no relation ever names.
   Which kind a creation takes is an admission decision, and the embedder's: the
   substrate ships both and no rule.
-- **Region** — one bump per cell ([src/region.rs](src/region.rs)), in
+- **Tenant**, the kind with no habitat ([src/tenant.rs](src/tenant.rs)). A
+  tenant has what a step needs — a continuation, an executing flag, a
+  generation — and no region: it names a **host**, a slab or tree cell, and a
+  step in it is handed the host's writer. It places, mints and lifts as the
+  host, its carriers carry the host's reach, and it redeems exactly what the
+  host may, so a value it writes embeds a host-homed `'here` borrow with no
+  operand, no pin and no price. No value is ever homed in a tenant. A live
+  tenant named where a place with storage is asked for — a host, a tree parent,
+  a placement destination — means its host, whether or not the host's own death
+  has been declared, so a chain of tenants each created by naming the one
+  before it shares the first host's region for as long as any of them lives.
+  Tenants sit in an uncapped pool of their own, in no relation. When to make a
+  cell a tenant is the embedder's election: the substrate ships the kind and no
+  rule.
+- **Region** — one bump per region-owning cell ([src/region.rs](src/region.rs)), in
   pointer-stable chunks, and the only place a value with reach may rest.
   Storage can leave its slot without a byte moving, which is what sealing and
   every merge rely on. Nothing in a region is ever dropped, because a bump
@@ -76,9 +97,20 @@ Four absences are design statements rather than gaps:
   region is a *bundle* — the bump it writes into, plus the bumps of everything
   absorbed into it. Inside a step the executing cell's own region is reachable
   at its own brand, `'here`, distinct from the step's.
+- **Scratch habitat** — a second bump beside each region, written at a brand of
+  its own, `'scratch`, for what a step can prove it throws away: the multi-step
+  transients a long-lived cell would otherwise strand in the region it keeps
+  until it dies. It is no part of the region — it never seals, splices or
+  absorbs, no price counts its bytes, and it stays at its table index when the
+  region leaves — and it is handed back whole at the first `enter` that finds
+  nothing naming it. A departing cell's scratch is dropped at its disposal. A
+  tenant's scratch is its host's.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and
-  **never calls**. It is captured at `'here` and records no reach of its own: a
+  **never calls**. It rests in two halves, each in its own slot: the **storage
+  half**, captured at `'here`, and the **scratch half**, captured at `'scratch`,
+  which is what carries a scratch structure across a park and is empty at
+  birth. The storage half is captured at `'here` and records no reach of its own: a
   cell holds what its continuation reads, and every reference the
   continuation can capture is one the cell's holds already cover — its own
   region, or storage a pinned crossing minted in when it arrived — so the
@@ -102,7 +134,12 @@ type parameters.
 the graph lifetime `'graph`: an erased storage form at `'graph` and a single
 lifetime-retype that moves `'cell` alone. A cell's name-resolution state, its
 semantic frame, any output obligation — all of it rides inside the
-continuation's captures, or as a value at rest in the cell's region.
+continuation's captures, or as a value at rest in the cell's region. The
+continuation's scratch half is a family of its own, `S`, which defaults to the
+continuation family: a separate family keeps the wrong half unrepresentable in
+each slot and sizes each slot to its own half, and an embedder that parks
+nothing in scratch never names it. The reattachable contract is the same for
+both — one lifetime per family.
 
 **Value** — what passes between cells. Also a reattachable family,
 carried witnessed: born in a region, duplicated per reader, read only under a
@@ -130,7 +167,7 @@ liveness, and the brand a step's doors hand out is the step's own — so "a
 carrier is reachable only inside an `enter` scope" is a lifetime rather than a
 rule.
 
-**Two brands per step, under the graph's lifetime.** `'step` is the step: a
+**Three brands per step, under the graph's lifetime.** `'step` is the step: a
 carrier branded to it was built or redeemed by this step's doors and dies with
 the step. `'here` is the executing cell's: invariant, quantified per `enter`,
 with no outlives relation to `'step`, and naming storage the cell's hold set
@@ -144,7 +181,29 @@ because its reach is the cell itself, which is alive for as long as the borrow;
 the three carrier states are for a value homed in another cell or crossing a
 step. The continuation's captures are `'here` references, re-anchored at each
 step's brand, which is how per-cell embedder structure rides the cell without a
-frame type.
+frame type. For a step in a tenant `'here` is the host's: the host's region and
+the host's hold set, which the host keeps until its last tenant has left.
+
+`'scratch` is the scratch habitat's: invariant and quantified per `enter` like
+`'here`, with `'here: 'scratch` the whole of its relation to it. So a scratch
+value may reference `'here` storage, and a scratch borrow cannot go anywhere
+that asks for `'here` — which every door into storage does. Embedding one is a
+compile error by every route: the successor store, the region writer's output
+used at `'here`, `lift`, a placement's build into another cell or into the
+executing cell itself, the return of `enter`, and a write through a
+`'here`-homed slot. Each is pinned by a `compile_fail` doctest on
+`scratch_writer` against one compiling control. The trip is one way and the
+habitat's only door across a park is the scratch half of the continuation. Two
+limits follow from one lifetime per family. An invariant `'here` structure
+(`&'here Table<'here>`) cannot ride the scratch half, since it would have to
+shorten to `'scratch`; it stays in the storage half and the step rejoins the
+two each wake. And the region's own writer is covariant, so its output used at
+`'scratch` is sound and useless: the bytes land in storage, stranded until the
+cell dies.
+
+Both halves are re-anchored in `enter`, the one function that mints both brands
+and both writers, so the pairing of slot with brand is made and audited in one
+place and the continuation doors are field moves.
 
 `'graph` outlives both. It is the lifetime of storage the embedder owns outside
 the graph — program text, say — which the borrow checker keeps alive for as
@@ -177,6 +236,10 @@ on the read out, which re-anchors at the same `'cell`.
 
 ## Verbs
 
+- **`new(cap, verdict)` / `with_config(config, verdict)`** build the graph.
+  `Config` carries the slab's cap and the two constants of the spare list's
+  bound — a proportion and the window of a moving average, below — which are
+  runtime values beside the type-level width `W`.
 - **`create(continuation?)`** hands back a handle, or refuses when the slab is
   at its cap. The new cell stands on its own — a slab cell is under nothing. A
   continuation handed in at birth is at `'graph`: it borrows no region, so it
@@ -184,11 +247,15 @@ on the read out, which re-anchors at the same `'cell`.
 - **`enter(handle, step)`** sets the cell's executing bit for the scope of
   `step` and supplies a step context. A cell cannot be entered while it is
   already executing. Within the scope a step can take the cell's continuation
-  re-anchored at `'here`; take a `Copy` writer onto its own region at `'here`;
+  re-anchored at `'here` (`continuation`), and its scratch half re-anchored at
+  `'scratch` (`scratch_continuation`); take a `Copy` writer onto its own region
+  at `'here`, and one onto its scratch habitat at `'scratch`
+  (`scratch_writer`);
   allocate into any other live cell by handle (destination-homed placement),
   or into itself at `'here`; lift an own-region value to a carrier whose reach
   is the cell itself; mint a bare hold on another cell; read a carrier it
-  built; store a successor continuation, over captures or over nothing; `keep`
+  built; store a successor continuation, over captures or over nothing, and a
+  scratch successor beside it (`store_scratch_successor`); `keep`
   a carrier it holds, which hands back the at-rest form; and `redeem` one a
   previous step put to rest.
 
@@ -204,27 +271,67 @@ on the read out, which re-anchors at the same `'cell`.
   storage is gone entirely is `Gone`. Nothing could have read such a value, so
   nothing is lost by refusing it.
 - **`create_tree` / `release_tree`** are birth and death over the tree pool;
-  `enter` is one door over both kinds. See
+  `enter` is one door over all three kinds. See
   [src/tree/README.md](src/tree/README.md).
+- **`create_tenant(host, continuation?)` / `release_tenant`** are birth and
+  death over the tenant pool. Birth draws no bump and takes no slab slot, so it
+  has no full refusal; it refuses only a stale name. Death is **a count
+  decrement on the host** — no reclaim, no splice, no pledge, no tombstone —
+  because a tenant owns nothing to settle: what it wrote is the host's and
+  stays the host's. A tenant has no dead-but-undisposed state, since nothing
+  can be under one. If the host's own death was already declared and this
+  tenant was the last thing it waited on, the host disposes within the call.
 - **`release(handle, absorption)`** declares death: the embedder promises never
   to enter the cell again. The slot leaves the slab within that same call —
   reclaimed if nothing reaches its storage, folded into the one thing that
   reaches it if there is exactly one, sealed otherwise — unless a tree cell
-  under it has not disposed, which is the one thing that makes a death outlive
-  its own `release`. `absorption` is the embedder's say over that fold, recorded
+  under it has not disposed or a tenant is still writing its region, the two
+  things that make a death outlive its own `release`. `absorption` is the embedder's say over that fold, recorded
   on the slot and read when the slot actually leaves.
 - **`is_empty()`** asks whether the graph holds nothing at all — every slot
-  free, no sealed cell left, no tree cell or tombstone left in the pool. After a
+  free, no sealed cell left, no tree cell or tombstone left in the pool, and no
+  tenant. After a
   program's last release it is the end-of-program alarm, and the only one the
   substrate ships: a non-empty graph means a release was forgotten or a ring no
   merge dissolved survives. Naming the nodes on such a ring is a walk of the
   hold graph the crate's own tests carry, not a door.
 
+### Recycled regions
+
+A reclaimed region's chunks do not go back to the allocator: each bump of the
+bundle is reset onto a graph-level **spare list**, and `create` and
+`create_tree` draw from it, so a release-then-create loop settles at zero
+allocator calls per hop. The list is last in, first out, which is what makes a
+tail hop write into the chunk its predecessor just gave up. Every reclaim path
+retires through it — a slab reclaim, an unpledged tree disposal, a sealed
+cell's retirement, and the bump a splice leaves out of a bundle. Recycling is
+allocator-private: no verb names it and none of the birth and death verbs
+carries it in its signature.
+
+The list is bounded against recent demand, so a program's peak does not stay
+resident for the rest of its run. It holds at most `spare_proportion` times a
+moving average of the live region-owning cell count, rounded up, and a bump
+retired past that goes back to the allocator. The average is fixed point,
+sampled at every birth and every disposal of a region-owning cell and nowhere
+else — no clock and no float — and closes `1 / 2^spare_window_shift` of its gap
+to the live count per sample. Tenants, sealed storage and absorbed bumps are
+not counted: spares serve births, and those are retention rather than demand.
+The bound is enforced where a bump is pushed, so a list an earlier peak left
+long drains a bump per birth rather than in a trim pass. The defaults are a
+proportion of 2 — a sawtooth between nothing and a peak averages half the peak
+and wants the whole peak spare at its trough — and a shift of 6; a proportion
+of 0 recycles nothing. The safety argument and the `cfg(miri)` switch are
+[src/graph/README.md § References at `'here`](src/graph/README.md#references-at-here).
+
 ### One scratch region, reset at entry
+
+The scratch region is the *graph's* and strictly inside a verb; it is not the
+per-cell [scratch habitat](#the-cell), which is the embedder's to write and
+lives across steps.
 
 Every verb runs over the graph's **scratch region**
 ([src/scratch.rs](src/scratch.rs)): one bump per graph, reset at the entry of
-`create`, `enter` and `release` and never inside one. Every transient a verb
+every birth verb, `enter` and every death verb, and never inside one. Every transient a verb
 builds lives there — the worklists a disposal cascade nests, the runs a
 placement builds per operand, the views a build closure receives — so a
 transient lives exactly as long as the verb that built it, and a verb on a graph
@@ -314,9 +421,12 @@ exactly one decision.
 ## Source layout
 
 - [src/lib.rs](src/lib.rs) — the module wiring and the public surface.
-- [src/handle.rs](src/handle.rs) — cell identity over both habitats, and the
-  stale refusals.
-- [src/graph.rs](src/graph.rs) — the slab, the verbs, the step context's doors,
+- [src/handle.rs](src/handle.rs) — cell identity over all three kinds, the
+  crate-private name for the two kinds a value can be homed in, and the stale
+  refusals.
+- [src/graph.rs](src/graph.rs) — the slab, the graph's `Config`, the verbs over
+  all three kinds, the write-home resolution every door naming a place with
+  storage goes through, the step context's doors,
   the seal transition, the three locality merges, the disposal cascade, and the
   relocation map that forwards a dormant carrier through a merge. The embedder's
   crossing verdict is taken here at construction. The graph is two halves a
@@ -324,6 +434,8 @@ exactly one decision.
   exclusively, and the region table shared.
 - [src/tree.rs](src/tree.rs) — the tree pool: chain links and depth, the
   undisposed-child count, the pledge, and the tombstone chain.
+- [src/tenant.rs](src/tenant.rs) — the tenant pool, and the two counts a host
+  carries for its tenants.
 - [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits, and the
   pin relation as an inline array of those rows.
 - [src/reach.rs](src/reach.rs) — reach as a hybrid mask: an inline `Bits` row
@@ -334,7 +446,8 @@ exactly one decision.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
   merge performs, `Regions` — the table of every live cell's region, which a
   step holds shared for its whole length so that nothing can move or drop a bump
-  under a writer into it — `Writer` — the crate's one write surface, a verb per
+  under a writer into it, with the scratch bumps beside the regions and the
+  bounded spare list — `Writer` — the crate's one write surface, a verb per
   shape a region cannot be given: `fill`, `thin_run` and `text` where the width
   is settled before the first element — `thin_run` laying its run behind a
   length header so its `ThinRun` handle is one pointer wide — `run` and `prose` where only the producer settles it,
@@ -385,7 +498,9 @@ machinery and not the `alloc_into` within it.
   [perf/shapes.rs](perf/shapes.rs) holds the shapes — a keep-and-redeem loop, a
   push chain, a pull chain, a fan-out placement, a shared
   sub-tier wound down, a cell kept into at many distinct reaches, and a chain of
-  tree cells each pinning its result into its parent — and
+  tree cells each pinning its result into its parent, and `tail_hop`, a
+  create-then-release loop whose allocations and resident bytes are the same at
+  every length — and
   [perf/meter.rs](perf/meter.rs) the meter, which subtracts a nested door's spend
   from its parent's frame. It counts through
   [audit/counting_alloc.rs](../audit/counting_alloc.rs), the same delegating
@@ -406,7 +521,9 @@ machinery and not the `alloc_into` within it.
 - [observe/perf.csv](observe/perf.csv) — the record: a tidy dataframe, one row
   per `(date, sha, dirty, benchmark, n, cap, verb)` carrying `calls`,
   `allocations`, `bytes` and `nanos`, capped to the three most recently recorded
-  commits. Allocations and bytes are deterministic and gate a change on their
+  commits. A shape that reports what it leaves resident does so as a row under
+  the pseudo-verb `resident`, whose `bytes` is the thread's live bytes at the
+  end of the workload over its start. Allocations and bytes are deterministic and gate a change on their
   own; a recorded `nanos` is there for the trend and is never asserted, since it
   was read in another session on a machine doing other things.
 
