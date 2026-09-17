@@ -1,5 +1,5 @@
 //! Region recycling: a reclaimed region's chunks wait on a bounded last-in-first-out spare list
-//! and the next birth draws them, so a release-then-create loop stays off the allocator.
+//! that evicts its oldest when full, and the next birth draws them, so a release-then-create loop stays off the allocator.
 //!
 //! What these pin: every reclaim path feeds the list — a slab reclaim, an unpledged tree disposal,
 //! a sealed cell's retirement, and every bump of an absorber's bundle; a birth draws the newest
@@ -66,6 +66,45 @@ fn the_spare_list_is_last_in_first_out() {
     let second_born = graph.create(None).unwrap();
     assert_eq!(write_in(&mut graph, first_born), newer_written);
     assert_eq!(write_in(&mut graph, second_born), older_written);
+}
+
+#[test]
+fn a_full_spare_list_evicts_its_oldest() {
+    // One spare per live cell, averaged over no window, so the bound is the live count exactly.
+    let mut graph: CellGraph<'static, Owned> = CellGraph::with_config(
+        Config {
+            cap: 4,
+            spare_proportion: 1,
+            spare_window_shift: 0,
+        },
+        pin,
+    );
+    let _keeper = graph.create(None).unwrap();
+    let oldest = graph.create(None).unwrap();
+    let middle = graph.create(None).unwrap();
+    let newest = graph.create(None).unwrap();
+    write_in(&mut graph, oldest);
+    let middle_written = write_in(&mut graph, middle);
+    let newest_written = write_in(&mut graph, newest);
+    graph
+        .release(oldest, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    graph
+        .release(middle, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    assert_eq!(graph.regions.spare_len(), 2);
+    // Retired while two cells are live, the keeper and itself, onto a list already two long: the
+    // oldest spare goes.
+    graph
+        .release(newest, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    assert_eq!(graph.regions.spare_len(), 2);
+
+    let first_born = graph.create(None).unwrap();
+    let second_born = graph.create(None).unwrap();
+    assert_eq!(graph.regions.spare_len(), 0);
+    assert_eq!(write_in(&mut graph, first_born), newest_written);
+    assert_eq!(write_in(&mut graph, second_born), middle_written);
 }
 
 #[test]
@@ -210,12 +249,12 @@ fn the_spare_list_is_bounded_by_recent_live_cells() {
     let after_unwind = graph.regions.spare_len();
     assert!(
         after_unwind < DEPTH,
-        "the bound fell with the live count and turned bumps away, leaving {after_unwind}"
+        "the bound fell with the live count and evicted bumps, leaving {after_unwind}"
     );
     assert!(after_unwind > 4, "a deep peak leaves a long list behind");
 
-    // A two-cell loop draws one and retires one per hop, and the retire is refused while the list
-    // is over the bound, so a list the peak left long drains a bump per hop.
+    // A two-cell loop draws one and retires one per hop, and the first retire evicts the whole
+    // excess a peak left behind.
     let mut current = root;
     for _ in 0..4 * DEPTH {
         let before = graph.regions.spare_len();

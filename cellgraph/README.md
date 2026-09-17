@@ -310,8 +310,10 @@ carries it in its signature.
 
 The list is bounded against recent demand, so a program's peak does not stay
 resident for the rest of its run. It holds at most `spare_proportion` times a
-moving average of the live region-owning cell count, rounded up, and a bump
-retired past that goes back to the allocator. The average is fixed point,
+moving average of the live region-owning cell count, rounded up. A bump
+retired onto a full list still waits: the list evicts its oldest spares back
+to the allocator to make room, so the chunks that stay resident are the ones
+most recently written. The average is fixed point,
 sampled at every birth and every disposal of a region-owning cell and nowhere
 else — no clock and no float — and closes `1 / 2^spare_window_shift` of its gap
 to the live count per sample. Tenants, sealed storage and absorbed bumps are

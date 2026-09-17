@@ -35,6 +35,7 @@
 
 use std::alloc::Layout;
 use std::cell::OnceCell;
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
@@ -215,9 +216,9 @@ pub(crate) struct Regions {
     tree_scratch: Vec<Bump>,
     /// Reset bumps a reclaim gave up, each still owning its chunk, for the next birth to draw:
     /// last in, first out, so a cell born right after a death writes into the chunk that death
-    /// freed. Never longer than [`bound`](Self::bound). Always empty under Miri, where a reclaimed
+    /// freed, and a push past [`bound`](Self::bound) evicts from the other end, the oldest first. Always empty under Miri, where a reclaimed
     /// chunk goes back to the allocator so that a use after the reclaim is an error it can see.
-    spare: Vec<Bump>,
+    spare: VecDeque<Bump>,
     /// Cells that own a region and have not disposed — what the spare list serves. Sealed storage
     /// and absorbed bumps are retention rather than demand, and are not counted.
     live: u32,
@@ -237,7 +238,7 @@ impl Regions {
             tree: (0..cap).map(|_| Region::new()).collect(),
             slab_scratch: (0..cap).map(|_| Bump::new()).collect(),
             tree_scratch: (0..cap).map(|_| Bump::new()).collect(),
-            spare: Vec::with_capacity(cap as usize),
+            spare: VecDeque::with_capacity(cap as usize),
             live: 0,
             average: 0,
             spare_proportion,
@@ -247,8 +248,8 @@ impl Regions {
 
     /// The most bumps the spare list may hold right now: the proportion of the averaged live
     /// count, rounded up — so a loop holding one live cell keeps one spare. Enforced where a bump
-    /// is pushed and nowhere else: a list an earlier peak left long drains a bump per birth, with
-    /// no trim pass.
+    /// is pushed and nowhere else: a list an earlier peak left long sheds its whole excess at the
+    /// next retire.
     fn bound(&self) -> usize {
         ((u64::from(self.spare_proportion) * u64::from(self.average) + 255) >> 8) as usize
     }
@@ -262,9 +263,9 @@ impl Regions {
     /// A region-owning cell was born: count it, and warm its bump off the spare list if one is
     /// there. A slot's region is cold at every birth — disposal left it so — which is why the draw
     /// is a plain replacement.
-    fn warm(region: &mut Region, spare: &mut Vec<Bump>) {
+    fn warm(region: &mut Region, spare: &mut VecDeque<Bump>) {
         debug_assert!(region.is_untouched(), "a cell is born into a region in use");
-        if let Some(bump) = spare.pop() {
+        if let Some(bump) = spare.pop_back() {
             region.bump = bump;
         }
     }
@@ -301,8 +302,9 @@ impl Regions {
         self.retire_bump(bump);
     }
 
-    /// Reset one bump onto the spare list, or drop it: a cold one owns no chunk to keep, and one
-    /// past the bound — or any at all under Miri — goes back to the allocator.
+    /// Reset one bump onto the spare list, or drop it: a cold one owns no chunk to keep, and under
+    /// Miri every one goes back to the allocator. A full list makes room by evicting its oldest
+    /// spares, the coldest chunks, so a bump retired now always waits unless the bound is zero.
     ///
     /// The caller owns the bump, so nothing borrows its bytes: the safety argument is the one a
     /// reclaim's drop already rests on, and a reset is that drop with the largest chunk kept.
@@ -310,11 +312,15 @@ impl Regions {
         if bump.allocated_bytes() == 0 {
             return;
         }
-        if cfg!(miri) || self.spare.len() >= self.bound() {
+        let bound = self.bound();
+        if cfg!(miri) || bound == 0 {
             return;
         }
+        while self.spare.len() >= bound {
+            self.spare.pop_front();
+        }
         bump.reset();
-        self.spare.push(bump);
+        self.spare.push_back(bump);
     }
 
     /// How many bumps the spare list holds.
