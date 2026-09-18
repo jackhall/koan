@@ -38,8 +38,13 @@ Two queues, `in_flight` strictly ahead of `fresh`: an in-progress computation
 finishes before a new unit starts, and a tail successor pushed to the front of
 `in_flight` runs before any sibling work.
 
-The queue emptying with the graph empty beside it is success. Anything else is
-`DrainStalled`, the only error the scheduler defines. A koan error is a
+Each round also launches: every submitted unit whose dependency count has
+reached zero gets its cell and joins `fresh`. A unit's count falls when a cell
+that answers for it finishes, which is why the launch is the drain's rather than
+the finishing step's.
+
+The queue emptying with the graph and the submission table empty beside it is
+success. Anything else is `DrainStalled`, the only error the scheduler defines. A koan error is a
 [tagged value](../values/README.md#what-a-value-is) and travels between cells as
 data, so no `Result` passes from one cell to another and a consumer checks the
 results it redeems.
@@ -103,6 +108,17 @@ observes a binding whose binder has not run — the discipline
 that finds an empty slot is a scheduler bug. This is why there is no wait record,
 no waiter list and no per-slot park, and why the drain holds a record per
 *unsubmitted* unit rather than per parked cell.
+
+That record is `submit.rs`'s table. A `Unit` names where its cell will be born
+and what it will run, and nothing about where its result goes: a submitted unit
+reports by finishing, not by filling a slot. `submit` takes the count, `edge`
+says which finishes answer for it, and both are wired before the run. A cell
+carries the unit it answers for in its `Provenance`, so a chain of tail hops
+settles once, at whichever successor finishes the work. Entries and edges live
+in flat arenas threaded by index, so a table of any width costs a fixed number
+of allocations rather than one per unit. Units left waiting on each other never
+reach zero and never get a cell: the queue runs dry with the graph already
+empty, which the drain reports as `DrainStalled::UnitsPending`.
 
 A **sub-dispatch** is waited on by a live, parked cell, and the count lives in
 the substrate's own receipt run. A producer's delivery door decrements it, and
@@ -209,9 +225,10 @@ Outside doc comments and `#[cfg(test)]` this module names `crate::function`,
 `crate::memory` and `crate::values`, and nothing else in the crate. It does not
 name `scope`, `parse` or `elaborate`. `cellgraph` is reached only through
 `memory`, and `cellgraph` itself depends on neither this module nor koan.
-`tests/boundary.rs` reads the source to hold the rule there; the work queue and
-the request buffer are the two owning heap types it blanks, because each is the
-scheduler's own runtime state and never a value in a region.
+`tests/boundary.rs` reads the source to hold the rule there; the work queues, the
+request buffer and the submission table's arenas are the owning heap types it
+blanks, because each is the scheduler's own runtime state and never a value in a
+region.
 
 ## Testing
 
@@ -221,7 +238,9 @@ submissions, and a consumer parked on several producers. `tests/continuation.rs`
 holds the round trip a continuation makes between `'graph` and a step's `'here`;
 `tests/drain.rs` holds the loop itself, including two schedulers running beside
 each other and sharing nothing; `tests/calls.rs` holds a call at each placement
-and `tests/delivery.rs` a consumer parked on three producers. `tests/tail.rs`
+and `tests/delivery.rs` a consumer parked on three producers.
+`tests/submissions.rs` holds a diamond of four submitted units, a pair that wait on each other, and a
+producer whose dependent waits out its whole parked subtree. `tests/tail.rs`
 runs a ten-thousand-hop loop at each placement and reads the drain's own
 high-water mark and the process allocation count back: three cells live at the
 peak, and no more heap than the same loop a hundred hops long. A native step is a

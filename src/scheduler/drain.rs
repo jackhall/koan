@@ -16,12 +16,15 @@ use crate::scheduler::continuation::{
     ScratchFamily, State,
 };
 use crate::scheduler::delivery::KDelivery;
+use crate::scheduler::submit::{Submissions, Unit, UnitId};
 
 /// The drain and the graph of cells it runs.
 pub struct Scheduler<'graph> {
     graph: CellGraph<'graph, ContinuationFamily, ScratchFamily, KDelivery>,
     queue: Queue,
     spawns: Spawns<'graph>,
+    /// Units of work with no cell yet, each waiting on a count of dependencies.
+    pending: Submissions<'graph>,
     /// A tail hop's predecessor, waiting on its successor's first step. The successor redeems out
     /// of it, so its release is the last move of the hand-off rather than part of the creation.
     deferred: Option<CellHandle>,
@@ -36,14 +39,15 @@ impl<'graph> Scheduler<'graph> {
             graph: CellGraph::new(cap, crate::values::verdict),
             queue: Queue::new(),
             spawns: Spawns::new(),
+            pending: Submissions::new(),
             deferred: None,
             live: 0,
             peak: 0,
         }
     }
 
-    /// Admit a unit of work as a slab cell and queue it. The drain's only door onto a birth that
-    /// no running step asked for: everything else a program spawns comes from a step's `Action`.
+    /// Admit a unit of work as a slab cell and queue it, with nothing waiting on it. The drain's
+    /// one door onto a birth that neither a running step nor the submission table asked for.
     pub fn admit(
         &mut self,
         step: NativeStep<'graph>,
@@ -54,33 +58,49 @@ impl<'graph> Scheduler<'graph> {
             provenance: Provenance {
                 place: CellPlace::Slab,
                 destination: None,
+                unit: None,
             },
             state,
         };
-        let handle = self
-            .graph
-            .create(Some(continuation))
-            .map_err(|_| DrainStalled::SlabFull)?;
-        self.born();
+        let handle = self.in_slab(continuation)?;
         self.queue.push_fresh(handle.into());
         Ok(handle)
     }
 
-    /// Run until the queue empties.
+    /// Register a unit that gets its cell once `dependencies` submitted units have finished.
     ///
-    /// Success is the queue empty with the graph empty beside it. Anything else is the drain's one
-    /// failure: a koan error is a tagged value and travels between cells as data, so no `Result`
-    /// passes from one cell to another and this is the only error the scheduler defines.
+    /// The count is the unit's, the edges say which finishes answer for it, and both are wired
+    /// before the run: a body's reference graph is known before it runs, which is why a reader
+    /// never observes a binding whose binder has not run.
+    pub fn submit(&mut self, unit: Unit<'graph>, dependencies: usize) -> UnitId {
+        self.pending.submit(unit, dependencies)
+    }
+
+    /// Record that finishing `producer` satisfies one of `dependent`'s dependencies.
+    pub fn edge(&mut self, producer: UnitId, dependent: UnitId) {
+        self.pending.edge(producer, dependent);
+    }
+
+    /// Run until the queue empties with nothing left to launch.
+    ///
+    /// Success is the queue empty, the graph empty, and the submission table empty beside them.
+    /// Anything else is the drain's one failure: a koan error is a tagged value and travels between
+    /// cells as data, so no `Result` passes from one cell to another and this is the only error the
+    /// scheduler defines.
     pub fn run(&mut self) -> Result<(), DrainStalled> {
-        while let Some(cell) = self.queue.pop() {
+        loop {
+            // Whatever the round before released. A unit reaching zero is a birth like any other,
+            // so it happens here rather than inside the step that satisfied the last dependency.
+            self.launch()?;
+            let Some(cell) = self.queue.pop() else { break };
             let (action, provenance) = self.step(cell)?;
             // The hop whose successor the step just was: what that successor redeemed is copied in
             // and its own hand-off is behind it, so the predecessor's region can go now.
             self.release_deferred()?;
             match action {
-                Action::Done => self.retire(cell)?,
+                Action::Done => self.finish(cell, provenance)?,
                 Action::Wakes(consumer) => {
-                    self.retire(cell)?;
+                    self.finish(cell, provenance)?;
                     self.queue.push_in_flight(consumer);
                 }
                 Action::Park => self.spawn(cell)?,
@@ -89,11 +109,44 @@ impl<'graph> Scheduler<'graph> {
             }
         }
         self.release_deferred()?;
-        if self.graph.is_empty() {
-            Ok(())
-        } else {
-            Err(DrainStalled::CellsLive)
+        match (self.graph.is_empty(), self.pending.is_empty()) {
+            (true, true) => Ok(()),
+            (true, false) => Err(DrainStalled::UnitsPending),
+            _ => Err(DrainStalled::CellsLive),
         }
+    }
+
+    /// Give a cell to every unit whose dependencies are all met, and queue it.
+    fn launch(&mut self) -> Result<(), DrainStalled> {
+        while let Some((id, unit)) = self.pending.ready() {
+            let continuation = Continuation::Native {
+                step: unit.step,
+                provenance: Provenance {
+                    place: unit.place,
+                    destination: None,
+                    unit: Some(id),
+                },
+                state: unit.state,
+            };
+            let cell = match unit.place {
+                CellPlace::Slab => self.in_slab(continuation)?.into(),
+                CellPlace::Under(parent) => self.under(parent, unit.placement, continuation)?,
+            };
+            self.queue.push_fresh(cell);
+        }
+        Ok(())
+    }
+
+    /// Release a cell whose work is done, and release the dependents of the unit it answered for.
+    ///
+    /// A chain of tail hops settles once, at its last cell: the provenance travels with the work,
+    /// so it is whoever finishes it that satisfies the dependency, not whoever started it.
+    fn finish(&mut self, cell: CellHandle, provenance: Provenance) -> Result<(), DrainStalled> {
+        self.retire(cell)?;
+        if let Some(unit) = provenance.unit {
+            self.pending.settle(unit);
+        }
+        Ok(())
     }
 
     /// Enter one cell and run the step its continuation names.
@@ -148,6 +201,7 @@ impl<'graph> Scheduler<'graph> {
                     consumer: spawner,
                     slot: request.slot,
                 }),
+                unit: None,
             },
             state: request.state,
         };
@@ -185,6 +239,19 @@ impl<'graph> Scheduler<'graph> {
         self.queue.push_hop(successor);
         self.deferred = Some(cell);
         Ok(())
+    }
+
+    /// One cell born in the slab, under nothing.
+    fn in_slab(
+        &mut self,
+        continuation: Continuation<'graph, 'graph>,
+    ) -> Result<SlabHandle, DrainStalled> {
+        let handle = self
+            .graph
+            .create(Some(continuation))
+            .map_err(|_| DrainStalled::SlabFull)?;
+        self.born();
+        Ok(handle)
     }
 
     /// One cell born under another, through the door its placement names.
@@ -302,6 +369,9 @@ impl Queue {
 pub enum DrainStalled {
     /// The queue emptied with cells still live.
     CellsLive,
+    /// The queue emptied with units still in the table. Their dependencies name each other, so no
+    /// finish will ever release them.
+    UnitsPending,
     /// The slab refused a birth.
     SlabFull,
     /// A cell a step asked to spawn could not be created under its spawner.

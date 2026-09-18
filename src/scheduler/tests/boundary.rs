@@ -15,15 +15,20 @@ const PREFIXES: &[&str] = &[
     "crate::values",
 ];
 
-/// The owning types outside the tests: the drain's own work queues and the buffer a step pushes
-/// its requests into. Each is the scheduler's runtime state, held beside the graph and never
-/// written into a region, so a value's no-drop-glue discipline does not reach them.
+/// The owning types outside the tests: the drain's own work queues, the buffer a step pushes its
+/// requests into, and the submission table's three flat arenas. Each is the scheduler's runtime
+/// state, held beside the graph and never written into a region, so a value's no-drop-glue
+/// discipline does not reach them.
 const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/action.rs", "requests: Vec<Request<'graph>>"),
     ("src/scheduler/action.rs", "Vec::new()"),
     ("src/scheduler/drain.rs", "in_flight: VecDeque<CellHandle>"),
     ("src/scheduler/drain.rs", "fresh: VecDeque<CellHandle>"),
     ("src/scheduler/drain.rs", "VecDeque::new()"),
+    ("src/scheduler/submit.rs", "entries: Vec<Entry<'graph>>"),
+    ("src/scheduler/submit.rs", "edges: Vec<Edge>"),
+    ("src/scheduler/submit.rs", "ready: Vec<UnitId>"),
+    ("src/scheduler/submit.rs", "Vec::new()"),
 ];
 
 #[test]

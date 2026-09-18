@@ -14,6 +14,7 @@ fn place() -> Provenance {
     Provenance {
         place: CellPlace::Slab,
         destination: None,
+        unit: None,
     }
 }
 

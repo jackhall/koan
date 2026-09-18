@@ -9,6 +9,7 @@ use crate::function::KValue;
 use crate::memory::{Dormant, DropFree, StepContext, reattachable};
 use crate::scheduler::action::{Action, Spawns};
 use crate::scheduler::delivery::KDelivery;
+use crate::scheduler::submit::UnitId;
 
 /// The context a native step runs against: koan's continuation families over koan's delivery
 /// bundle, at the brands one [`enter`](crate::memory::CellGraph::enter) quantifies.
@@ -68,7 +69,8 @@ pub enum State<'graph, 'cell> {
     Parked(Dormant<'graph, crate::function::KValueFamily>),
 }
 
-/// What a cell carries about its own place in the graph, for the drain's use.
+/// What a cell carries about itself for the drain's use: where it sits, where its result goes, and
+/// which submission it answers for.
 ///
 /// Every field is brand-free, so it survives a tail hop verbatim.
 #[derive(Clone, Copy)]
@@ -81,6 +83,10 @@ pub struct Provenance {
     /// hop hands this to its successor unchanged, which is what "the successor inherits its
     /// receipt" means.
     pub destination: Option<Destination>,
+    /// The submission this cell completes, for a cell the drain created out of the table. The
+    /// dependents of that unit are released when the cell finishes — after a chain of tail hops,
+    /// by whichever successor finishes it, because this travels with the work.
+    pub unit: Option<UnitId>,
 }
 
 /// Where a cell was born, and so where a sibling or co-tenant of it is born.
