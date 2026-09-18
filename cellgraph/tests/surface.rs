@@ -252,7 +252,7 @@ fn the_delivery_doors_answer_from_outside_the_crate() {
         .enter(producer, |context| {
             assert_eq!(
                 context
-                    .deliver_scratch(consumer, 0, |writer| Active::new(build_number(writer)))
+                    .deliver_scratch(consumer, 0, |writer, _| Active::new(build_number(writer)))
                     .unwrap(),
                 Delivered::Outstanding
             );
@@ -276,12 +276,12 @@ fn the_delivery_doors_answer_from_outside_the_crate() {
             );
             // Both refusals of a filled run, from outside the crate.
             let refused = context
-                .deliver_scratch(consumer, 1, |writer| Active::new(build_number(writer)))
+                .deliver_scratch(consumer, 1, |writer, _| Active::new(build_number(writer)))
                 .unwrap_err();
             assert_eq!(refused, DeliverError::Filled);
             assert_eq!(
                 context
-                    .deliver_scratch(consumer, 2, |writer| Active::new(build_number(writer)))
+                    .deliver_scratch(consumer, 2, |writer, _| Active::new(build_number(writer)))
                     .unwrap_err(),
                 DeliverError::OutOfRange
             );

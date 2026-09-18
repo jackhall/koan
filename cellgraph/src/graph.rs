@@ -3809,7 +3809,7 @@ where
     /// let filed = graph
     ///     .enter(producer, |context| {
     ///         context
-    ///             .deliver_scratch(consumer, 0, |writer| {
+    ///             .deliver_scratch(consumer, 0, |writer, _| {
     ///                 Active::new(&writer.fill(1, |_| 41u32)[0])
     ///             })
     ///             .unwrap()
@@ -3845,7 +3845,7 @@ where
     /// # let producer = graph.create(None).unwrap();
     /// # graph.enter(consumer, |context| context.register_receipts(1).unwrap()).unwrap();
     /// # graph.enter(producer, |context| {
-    /// #     context.deliver_scratch(consumer, 0, |writer| Active::new(&writer.fill(1, |_| 41u32)[0])).unwrap()
+    /// #     context.deliver_scratch(consumer, 0, |writer, _| Active::new(&writer.fill(1, |_| 41u32)[0])).unwrap()
     /// # }).unwrap();
     /// graph
     ///     .enter(consumer, |context| {
@@ -3879,7 +3879,7 @@ where
     /// # let producer = graph.create(None).unwrap();
     /// # graph.enter(consumer, |context| context.register_receipts(1).unwrap()).unwrap();
     /// # graph.enter(producer, |context| {
-    /// #     context.deliver_scratch(consumer, 0, |writer| Active::new(&writer.fill(1, |_| 41u32)[0])).unwrap()
+    /// #     context.deliver_scratch(consumer, 0, |writer, _| Active::new(&writer.fill(1, |_| 41u32)[0])).unwrap()
     /// # }).unwrap();
     /// graph
     ///     .enter(consumer, |context| {
@@ -3915,7 +3915,7 @@ where
     ///     .enter(producer, |context| {
     ///         let mut held: Option<&u32> = None;
     ///         context
-    ///             .deliver_scratch(consumer, 0, |writer| {
+    ///             .deliver_scratch(consumer, 0, |writer, _| {
     ///                 let value = &writer.fill(1, |_| 41u32)[0];
     ///                 held = Some(value);
     ///                 Active::new(value)
@@ -3929,12 +3929,18 @@ where
         &self,
         consumer: impl Into<CellHandle>,
         slot: usize,
-        build: impl for<'their> FnOnce(Writer<'their>) -> Active<'graph, 'their, D::Scratch>,
+        build: impl for<'their> FnOnce(
+            Writer<'their>,
+            &'their &'graph (),
+        ) -> Active<'graph, 'their, D::Scratch>,
     ) -> Result<Delivered, DeliverError> {
         let consumer = consumer.into();
         let (run, home) = self.delivery_target(consumer, slot)?;
-        // The checks are all behind us, so the first byte written is one that lands.
-        let value = build(self.regions.scratch_writer(home)).into_erased();
+        // The checks are all behind us, so the first byte written is one that lands. The build's
+        // second argument is the `'graph: 'their` bound as a value, the same witness
+        // `mint_and_build` passes: a closure quantified over `'their` assumes what its arguments'
+        // types imply, and nothing else would tell it.
+        let value = build(self.regions.scratch_writer(home), &&()).into_erased();
         Ok(run.fill(slot, ReceiptSlot::Value(value)))
     }
 

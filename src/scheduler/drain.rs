@@ -10,10 +10,10 @@ use crate::memory::{
     CellGraph, CellHandle, EnterError, ReleaseAbsorption, SlabHandle, Stale, TenantHandle,
     TreeHandle,
 };
-use crate::scheduler::action::{Action, Spawns, StepError};
+use crate::scheduler::action::{Action, Placement, Request, Spawns, StepError};
 use crate::scheduler::continuation::{
-    CellPlace, Continuation, ContinuationFamily, NativeStep, Provenance, Resume, ScratchFamily,
-    State,
+    CellPlace, Continuation, ContinuationFamily, Destination, NativeStep, Provenance, Resume,
+    ScratchFamily, State,
 };
 use crate::scheduler::delivery::KDelivery;
 
@@ -45,7 +45,7 @@ impl<'graph> Scheduler<'graph> {
             step,
             provenance: Provenance {
                 place: CellPlace::Slab,
-                receipt: None,
+                destination: None,
             },
             state,
         };
@@ -67,7 +67,11 @@ impl<'graph> Scheduler<'graph> {
             let (action, provenance) = self.step(cell)?;
             match action {
                 Action::Done => self.retire(cell, provenance)?,
-                Action::Park => todo!("the drain creates the children the step described"),
+                Action::Wakes(consumer) => {
+                    self.retire(cell, provenance)?;
+                    self.queue.push_in_flight(consumer);
+                }
+                Action::Park => self.spawn(cell)?,
                 Action::Tail(_) => {
                     todo!("the drain creates the successor, then releases the predecessor")
                 }
@@ -104,6 +108,50 @@ impl<'graph> Scheduler<'graph> {
                 }
             })
             .map_err(DrainStalled::from)
+    }
+
+    /// Create every child the parked step asked for, and queue them. The cell itself is left
+    /// alone: it is live, parked on the run it registered, and wakes when the last slot fills.
+    fn spawn(&mut self, cell: CellHandle) -> Result<(), DrainStalled> {
+        for index in 0..self.spawns.len() {
+            let request = self.spawns.get(index);
+            let child = self.create(cell, request)?;
+            self.queue.push_in_flight(child);
+        }
+        Ok(())
+    }
+
+    /// One child under its spawner, at the placement the spawner asked for. Its provenance is the
+    /// drain's to fill: a child is born under the cell that asked for it and reports to that
+    /// cell's run, so no step can name a destination that is not its spawner's.
+    fn create(
+        &mut self,
+        spawner: CellHandle,
+        request: Request<'graph>,
+    ) -> Result<CellHandle, DrainStalled> {
+        let continuation = Continuation::Native {
+            step: request.step,
+            provenance: Provenance {
+                place: CellPlace::Under(spawner),
+                destination: Some(Destination {
+                    consumer: spawner,
+                    slot: request.slot,
+                }),
+            },
+            state: request.state,
+        };
+        match request.placement {
+            Placement::Fresh => self
+                .graph
+                .create_tree(spawner, Some(continuation))
+                .map(CellHandle::from)
+                .map_err(|_| DrainStalled::Unspawnable),
+            Placement::Shares => self
+                .graph
+                .create_tenant(spawner, Some(continuation))
+                .map(CellHandle::from)
+                .map_err(|_| DrainStalled::Unspawnable),
+        }
     }
 
     /// Release a finished cell by its kind. Its step has already filled its consumer's receipt, so
@@ -161,6 +209,10 @@ impl Queue {
     fn push_fresh(&mut self, cell: CellHandle) {
         self.fresh.push_back(cell);
     }
+
+    fn push_in_flight(&mut self, cell: CellHandle) {
+        self.in_flight.push_back(cell);
+    }
 }
 
 /// The drain's own failure: the queue ran dry with work outstanding, or a step could not proceed.
@@ -170,6 +222,8 @@ pub enum DrainStalled {
     CellsLive,
     /// The slab refused a birth.
     SlabFull,
+    /// A cell a step asked to spawn could not be created under its spawner.
+    Unspawnable,
     /// A cell the drain queued was not enterable.
     Unenterable,
     /// A release the drain declared was refused.

@@ -266,7 +266,9 @@ fn delivery(n: u32) {
             graph.enter(producer, |context| {
                 measure(Verb::Deliver, || {
                     context
-                        .deliver_scratch(consumer, i as usize, |writer| Active::new(one(writer, i)))
+                        .deliver_scratch(consumer, i as usize, |writer, _| {
+                            Active::new(one(writer, i))
+                        })
                         .unwrap()
                 });
             })

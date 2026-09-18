@@ -25,6 +25,9 @@ on what the step returns:
 
 - `Done` — the step is finished and has already filled its consumer's receipt,
   so nothing is in flight when the drain releases the cell.
+- `Wakes` — the same, and its delivery filled the last slot of the named
+  consumer's run: the drain releases this cell and queues that consumer. This is
+  the only way a parked cell wakes.
 - `Park` — the step registered a receipt run and described its children; the
   drain creates them and leaves the cell alone until the run completes.
 - `Tail` — the drain creates the successor, then releases this cell, in that
@@ -49,6 +52,12 @@ step is a handle, an index, a dormant carrier or a borrow of program storage.
 That is why `Action` carries no region borrow, and why a step describes its
 children by pushing `Request`s into a drain-owned `Spawns` buffer it is handed
 by `&mut`: a slice of requests would have nowhere to be branded.
+
+A `Request` names the work — a placement, a step, a birth state and a slot — and
+not the place. The drain fills in the child's `Provenance` from the cell the
+request was pushed in and the slot it names, so a child is always born under the
+cell that asked for it and always reports to that cell's run; no step can name a
+destination that is not its spawner's.
 
 A step also cannot create or release a cell. `StepContext` has no `create`, no
 `release` and no second `enter`, so every birth and every death is the drain's,
@@ -76,7 +85,7 @@ through `store_successor` is at `'here` and may hold region borrows freely.
 
 `Provenance` is what a cell carries about its place in the graph, for the drain's
 use: the parent a sibling is born under or the host a co-tenant is born of, and
-the consumer handle and slot its result goes to. Every field is brand-free, so it
+the `Destination` — consumer handle and slot — its result goes to. Every field is brand-free, so it
 survives a tail hop verbatim — which is what "the successor inherits its receipt"
 means. `cellgraph` exposes no parent accessor, so a cell remembers its place here
 rather than in a table beside the graph.
@@ -202,7 +211,10 @@ present: a call, a tail loop, a subtree deeper than any slab cap, a diamond of
 submissions, and a consumer parked on several producers. `tests/continuation.rs`
 holds the round trip a continuation makes between `'graph` and a step's `'here`;
 `tests/drain.rs` holds the loop itself, including two schedulers running beside
-each other and sharing nothing.
+each other and sharing nothing; `tests/calls.rs` holds a call at each placement
+and `tests/delivery.rs` a consumer parked on three producers. A native step is a
+bare `fn` and carries no closure state, so what a step observes it records in
+`tests/native.rs` for the test around it to read back.
 
 ## Open work
 

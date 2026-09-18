@@ -28,8 +28,8 @@ mod tests;
 
 pub use action::{Action, Hop, Placement, Request, Spawns, StepError};
 pub use continuation::{
-    CellPlace, Context, Continuation, ContinuationFamily, NativeStep, Provenance, Receipt, Resume,
-    ScratchFamily, ScratchState, State,
+    CellPlace, Context, Continuation, ContinuationFamily, Destination, NativeStep, Provenance,
+    Resume, ScratchFamily, ScratchState, State,
 };
 pub use delivery::KDelivery;
 pub use drain::{DrainStalled, Scheduler};

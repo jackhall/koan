@@ -82,7 +82,7 @@ fn send(
     let consumer = consumer.into();
     graph
         .enter(producer, |context| {
-            context.deliver_scratch(consumer, slot, |writer| Active::new(one(writer, value)))
+            context.deliver_scratch(consumer, slot, |writer, _| Active::new(one(writer, value)))
         })
         .unwrap()
 }
@@ -107,14 +107,14 @@ fn a_run_rests_where_its_registration_put_it_and_drains_one_slot_at_a_time() {
         .enter(producer, |context| {
             assert_eq!(
                 context
-                    .deliver_scratch(consumer, 0, |writer| Active::new(one(writer, 41u32)))
+                    .deliver_scratch(consumer, 0, |writer, _| Active::new(one(writer, 41u32)))
                     .unwrap(),
                 Delivered::Outstanding,
                 "one slot of two"
             );
             assert_eq!(
                 context
-                    .deliver_scratch(consumer, 1, |writer| Active::new(one(writer, 42u32)))
+                    .deliver_scratch(consumer, 1, |writer, _| Active::new(one(writer, 42u32)))
                     .unwrap(),
                 Delivered::Complete
             );
@@ -482,7 +482,7 @@ fn a_tenants_run_is_its_own_though_the_bytes_under_it_are_its_hosts() {
     graph
         .enter(host, |context| {
             assert_eq!(
-                context.deliver_scratch(tenant, 0, |writer| Active::new(one(writer, 41u32))),
+                context.deliver_scratch(tenant, 0, |writer, _| Active::new(one(writer, 41u32))),
                 Ok(Delivered::Complete)
             );
         })
@@ -614,7 +614,7 @@ fn a_bare_signal_costs_no_bump_byte_beyond_the_run() {
     graph
         .enter(producer, |context| {
             assert_eq!(
-                context.deliver_scratch(consumer, 0, |_| Active::new(())),
+                context.deliver_scratch(consumer, 0, |_, _| Active::new(())),
                 Ok(Delivered::Complete)
             );
         })

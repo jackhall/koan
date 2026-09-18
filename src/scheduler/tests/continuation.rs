@@ -13,7 +13,7 @@ type Graph<'graph> = CellGraph<'graph, ContinuationFamily, ScratchFamily, KDeliv
 fn place() -> Provenance {
     Provenance {
         place: CellPlace::Slab,
-        receipt: None,
+        destination: None,
     }
 }
 

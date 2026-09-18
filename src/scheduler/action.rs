@@ -4,13 +4,16 @@
 //! step's return type can name none of them: what crosses back out is a handle, an index, a
 //! dormant carrier or a borrow of program storage, and nothing else.
 
-use crate::scheduler::continuation::Continuation;
+use crate::memory::CellHandle;
+use crate::scheduler::continuation::{NativeStep, State};
 
 /// What a step hands the drain when it returns.
 pub enum Action<'graph> {
-    /// Finished. The step has already filled its consumer's receipt, if it has one, so nothing is
-    /// in flight when the drain releases the cell.
+    /// Finished, with nothing waiting on it. The drain releases the cell.
     Done,
+    /// Finished, and its last delivery filled the final slot of this consumer's receipt run. The
+    /// drain releases the cell and queues the consumer, which is the only way a parked cell wakes.
+    Wakes(CellHandle),
     /// Parked on the receipt run the step registered, for the children it pushed into
     /// [`Spawns`]. The drain creates them and leaves this cell alone until the run completes.
     Park,
@@ -32,19 +35,32 @@ pub enum Placement {
 }
 
 /// One child a step asked for.
+///
+/// It names the work, not the place: the drain derives the child's [`Provenance`] from the spawner
+/// it was pushed in and the slot named here, so a child always reports to the cell that asked for
+/// it.
+///
+/// [`Provenance`]: crate::scheduler::Provenance
+#[derive(Clone, Copy)]
 pub struct Request<'graph> {
     pub placement: Placement,
-    /// The child's birth continuation, at `'graph` — its arguments reach it as dormant carriers.
-    pub continuation: Continuation<'graph, 'graph>,
+    /// The step the child runs first.
+    pub step: NativeStep<'graph>,
+    /// What the child is born holding, at `'graph` — its arguments reach it as dormant carriers.
+    pub state: State<'graph, 'graph>,
     /// The slot of the spawner's run this child fills.
     pub slot: usize,
 }
 
-/// The successor of a tail call.
+/// The successor of a tail call. It inherits its predecessor's place and destination, so it names
+/// neither.
+#[derive(Clone, Copy)]
 pub struct Hop<'graph> {
     pub placement: Placement,
-    /// The successor's birth continuation, at `'graph`, carrying the predecessor's receipt forward.
-    pub continuation: Continuation<'graph, 'graph>,
+    /// The step the successor runs first.
+    pub step: NativeStep<'graph>,
+    /// What the successor is born holding, at `'graph`.
+    pub state: State<'graph, 'graph>,
 }
 
 /// The drain's own buffer of requests, handed to a step by `&mut` and cleared before each step.
@@ -73,6 +89,11 @@ impl<'graph> Spawns<'graph> {
 
     pub fn is_empty(&self) -> bool {
         self.requests.is_empty()
+    }
+
+    /// One request by position, copied out so the drain reads it while it holds the graph.
+    pub(crate) fn get(&self, index: usize) -> Request<'graph> {
+        self.requests[index]
     }
 
     pub(crate) fn clear(&mut self) {

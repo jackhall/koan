@@ -80,7 +80,7 @@ pub struct Provenance {
     /// Where this cell's result goes: its consumer's handle and the receipt slot it fills. A tail
     /// hop hands this to its successor unchanged, which is what "the successor inherits its
     /// receipt" means.
-    pub receipt: Option<Receipt>,
+    pub destination: Option<Destination>,
 }
 
 /// Where a cell was born, and so where a sibling or co-tenant of it is born.
@@ -92,9 +92,10 @@ pub enum CellPlace {
     Under(crate::memory::CellHandle),
 }
 
-/// One slot of one consumer's receipt run: where a producer's result goes.
+/// One slot of one consumer's receipt run: where a producer's result goes. Named apart from
+/// [`crate::memory::Receipt`], which is what the consumer reads back out of that slot.
 #[derive(Clone, Copy)]
-pub struct Receipt {
+pub struct Destination {
     pub consumer: crate::memory::CellHandle,
     pub slot: usize,
 }
