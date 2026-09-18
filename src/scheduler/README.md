@@ -243,7 +243,11 @@ and `tests/delivery.rs` a consumer parked on three producers.
 producer whose dependent waits out its whole parked subtree. `tests/tail.rs`
 runs a ten-thousand-hop loop at each placement and reads the drain's own
 high-water mark and the process allocation count back: three cells live at the
-peak, and no more heap than the same loop a hundred hops long. A native step is a
+peak, and no more heap than the same loop a hundred hops long.
+`tests/subtree.rs` descends two hundred levels on a slab of one, so a level that
+reached for a slab slot would be refused; `tests/placement.rs` runs one loop at
+each hint and reads the same answer off both, with the heap flat one way round
+and growing the other. A native step is a
 bare `fn` and carries no closure state, so what a step observes it records in
 `tests/native.rs` for the test around it to read back.
 

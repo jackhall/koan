@@ -58,6 +58,10 @@ silence the stale-anchor check; delete a redundant test instead.
   `Writer`: `thin_run` fills the node run while each function's closure run, each data node's
   resident and cell runs, and every held value's deep copy are written into the same region. No
   `unsafe` of its own; the backing `unsafe` is `cellgraph`'s `thin_run`, `fill` and reattach seam.
+- `src/scheduler/drain.rs` — the drain performs every birth and every death: it creates a tail
+  successor, lets it redeem out of its predecessor, and only then releases that predecessor, whose
+  region goes back to the pool for the hop after. No `unsafe` of its own; the backing `unsafe` is
+  `cellgraph`'s creation and release doors, its delivery doors and its reattach seam.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -126,14 +130,31 @@ destination's writer, and is read through its edges after the region it came fro
   naming the ring crosses under a copy verdict, is kept, its home released, and redeemed: every
   edge names a node of the copy and the string reads back.
 
+**Cells the drain creates and releases** ([src/scheduler/drain.rs](../src/scheduler/drain.rs)) — a
+tail hand-off redeeming across a release, and a producer's result filed into a consumer that
+outlives it. What the other groups pin is one cell's region; what this pins is the ordering between
+two.
+
+- `a_hand_off_redeems_out_of_the_region_the_drain_reclaims_next`
+  three hops at each placement: the successor redeems a carrier homed in a predecessor the drain
+  releases the round after, and at `Fresh` that region comes straight back out of the pool for the
+  hop behind it, so every carried byte is written where somebody else's was.
+- `a_shares_call_returns_its_result_through_the_callers_storage`
+  the carrier door: the producer builds its result in the consumer's region with `alloc_into`,
+  keeps it, files the dormant, and dies — and the consumer redeems it out of a producer that is
+  gone.
+- `a_consumer_parked_on_three_producers_wakes_once_when_the_last_slot_fills`
+  three producers filling one receipt run, so the run's slots and the consumer's scratch habitat
+  are written by cells that are released before the consumer reads them back.
+
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-18: 23s — 13 tests, 0 leaks, 0 UB
 - 2026-09-15: 38s — 10 tests, 0 leaks, 0 UB
 - 2026-09-15: 49s — 9 tests, 0 leaks, 0 UB
 - 2026-09-13: 18s — 8 tests, 0 leaks, 0 UB
-- 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
 - 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

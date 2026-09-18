@@ -1,6 +1,7 @@
 //! The drain's loop over native steps: a queued cell runs, finishes and is reclaimed.
 
 use crate::function::KValue;
+use crate::scheduler::tests::native::{record, recorded};
 use crate::scheduler::{Action, Context, Resume, Scheduler, Spawns, State, StepError};
 
 use std::cell::Cell as Tally;
@@ -105,17 +106,49 @@ fn a_step_that_cannot_proceed_stalls_the_drain() {
 
 #[test]
 fn two_schedulers_run_beside_each_other_sharing_nothing() {
-    reset();
+    crate::scheduler::tests::native::reset();
     let mut first: Scheduler<'static> = Scheduler::new(2);
     let mut second: Scheduler<'static> = Scheduler::new(2);
-    let a = first.admit(finish, State::Empty).expect("the slab admits");
-    let b = second.admit(finish, State::Empty).expect("the slab admits");
-    // Neither graph names the other's cell, and each reclaims only its own.
+
+    let a = first
+        .admit(record_state, State::Value(KValue::Number(1.0)))
+        .expect("the slab admits");
+    let b = second
+        .admit(record_state, State::Value(KValue::Number(2.0)))
+        .expect("the slab admits");
+
+    // Each drain runs with the other holding a live cell, and neither graph names the other's.
     first.run().expect("the first drain runs to empty");
     assert!(first.is_empty());
     assert!(second.is_live(b));
+
+    let c = first
+        .admit(record_state, State::Value(KValue::Number(3.0)))
+        .expect("the slab admits, the slot the first cell had being free again");
     second.run().expect("the second drain runs to empty");
     assert!(second.is_empty());
+    assert!(first.is_live(c));
+
+    first.run().expect("the first drain runs to empty again");
+    assert!(first.is_empty());
     assert!(!first.is_live(a));
-    assert_eq!(tally(), 2);
+    assert_eq!(
+        recorded(),
+        ["1", "2", "3"],
+        "each cell ran in its own graph's turn"
+    );
+}
+
+/// Record the number this cell was born with, so an interleaved pair of drains is legible as one
+/// sequence.
+fn record_state<'graph>(
+    _: &mut Context<'graph, '_, '_, '_>,
+    resume: Resume<'graph, '_>,
+    _: &mut Spawns<'graph>,
+) -> Action<'graph> {
+    let State::Value(KValue::Number(mark)) = resume.state else {
+        return Action::Failed(StepError::Stale);
+    };
+    record(mark.to_string());
+    Action::Done
 }

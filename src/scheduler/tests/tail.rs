@@ -230,6 +230,28 @@ fn a_shares_loop_of_ten_thousand_hops_copies_nothing_into_its_host() {
     );
 }
 
+/// The hand-off at its minimal shape, both ways round: three hops, and the carried bytes read
+/// back at the end.
+///
+/// The long loops above read the heap; this one reads the memory. A successor redeems out of a
+/// region the drain reclaims in the round that follows, and — at `Fresh` — hands straight back out
+/// of the pool to the hop after it, so every byte the loop carries is written into a region that
+/// was somebody else's a moment ago.
+#[test]
+fn a_hand_off_redeems_out_of_the_region_the_drain_reclaims_next() {
+    let fresh = run(3, start_fresh);
+    assert_eq!(
+        fresh.recorded,
+        [CARRIED, "24"],
+        "three hops and nothing lost"
+    );
+    assert_eq!(fresh.peak, PEAK);
+
+    let shares = run(3, start_shares);
+    assert_eq!(shares.recorded, fresh.recorded);
+    assert_eq!(shares.peak, PEAK);
+}
+
 /// A slab cell asking to hop. Every other step here is reached through a spawn, so this one is
 /// admitted straight into the slab.
 fn hop_from_the_slab<'graph>(
