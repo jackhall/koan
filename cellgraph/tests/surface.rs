@@ -11,10 +11,11 @@
 use std::marker::PhantomData;
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, Config, CreateError, CrossedOperand, Dormant, DropFree,
-    EnterError, Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError,
-    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale,
-    StepContext, TenantHandle, ThinRun, TreeHandle, Verdict, Writer, reattachable,
+    Active, CellGraph, CellHandle, Config, CreateError, CrossedOperand, DeliverError, Delivered,
+    Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, Operand, Prices, Prose, Ready,
+    Reattachable, Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption,
+    ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext,
+    TenantHandle, ThinRun, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -200,6 +201,123 @@ fn name_release_tenant_error(error: ReleaseTenantError) -> &'static str {
 /// graph's type is spelled from outside the crate.
 struct Worklist;
 reattachable!(Worklist => &'cell [&'cell u32]);
+
+/// The bundle of the two families a graph's cells deliver: a note built in the consumer's own
+/// scratch habitat, and a `Number` carrier filed at rest.
+struct Push;
+
+impl<'graph> Delivery<'graph> for Push {
+    type Scratch = Number;
+    type Carrier = Number;
+}
+
+/// Which arm a receipt came back on — a `Receipt` holds a family's form, so nothing bounds it
+/// `Debug`.
+fn name_receipt<'graph, D: Delivery<'graph>>(
+    receipt: &Receipt<'graph, '_, '_, D, 1>,
+) -> &'static str {
+    match receipt {
+        Receipt::Empty => "empty",
+        Receipt::Value(_) => "value",
+        Receipt::Carrier(Ok(_)) => "carrier",
+        Receipt::Carrier(Err(_)) => "refused",
+    }
+}
+
+#[test]
+fn the_delivery_doors_answer_from_outside_the_crate() {
+    // The default bundle is one an embedder can name, and a graph over it delivers nothing.
+    let mut plain: CellGraph<'static, Work, Work, NoDelivery> = CellGraph::new(1, weigh);
+    let alone = plain.create(None).unwrap();
+    plain
+        .enter(alone, |context| assert_eq!(context.receipt_count(), None))
+        .unwrap();
+    plain.release(alone, ReleaseAbsorption::IntoHolder).unwrap();
+
+    let mut graph: CellGraph<'static, Work, Work, Push> = CellGraph::new(2, weigh);
+    let consumer = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
+
+    // The consumer parks on a two-slot run.
+    graph
+        .enter(consumer, |context| {
+            assert!(matches!(context.receipt(0), Err(ReceiptError::NoRun)));
+            context.register_receipts(2).unwrap();
+        })
+        .unwrap();
+
+    // One slot takes a note built in the consumer's scratch habitat, the other a carrier the
+    // producer placed into the consumer's region and put to rest.
+    graph
+        .enter(producer, |context| {
+            assert_eq!(
+                context
+                    .deliver_scratch(consumer, 0, |writer| Active::new(build_number(writer)))
+                    .unwrap(),
+                Delivered::Outstanding
+            );
+            let value: Ready<'static, '_, Number> = context.lift(one(context.writer(), 7u32));
+            let placed = context
+                .alloc_into::<Number, Number>(
+                    consumer,
+                    &[pinned_operand(&value)],
+                    |writer, views| {
+                        Active::new(match &views[0] {
+                            CrossedOperand::Pinned(value) => *value,
+                            CrossedOperand::Copied(value) => one(writer, **value),
+                        })
+                    },
+                )
+                .unwrap();
+            let carrier: Dormant<'static, Number> = context.keep(placed);
+            assert_eq!(
+                context.deliver_carrier(consumer, 1, carrier).unwrap(),
+                Delivered::Complete
+            );
+            // Both refusals of a filled run, from outside the crate.
+            let refused = context
+                .deliver_scratch(consumer, 1, |writer| Active::new(build_number(writer)))
+                .unwrap_err();
+            assert_eq!(refused, DeliverError::Filled);
+            assert_eq!(
+                context
+                    .deliver_scratch(consumer, 2, |writer| Active::new(build_number(writer)))
+                    .unwrap_err(),
+                DeliverError::OutOfRange
+            );
+        })
+        .unwrap();
+
+    let read = graph
+        .enter(consumer, |context| {
+            assert_eq!(context.receipt_count(), Some(2));
+            assert_eq!(
+                context.register_receipts(1),
+                Err(RegisterError::Undrained),
+                "a registration over an undrained run is refused"
+            );
+            let note = context.receipt(0).unwrap();
+            assert_eq!(name_receipt(&note), "value");
+            let Receipt::Value(note) = note else {
+                panic!("the producer filed a note");
+            };
+            let filed = context.receipt(1).unwrap();
+            assert_eq!(name_receipt(&filed), "carrier");
+            let Receipt::Carrier(Ok(carrier)) = filed else {
+                panic!("the producer filed a carrier the consumer keeps");
+            };
+            assert!(matches!(context.receipt(1).unwrap(), Receipt::Empty));
+            *note + *context.read(&carrier).value()
+        })
+        .unwrap();
+    assert_eq!(read, 14);
+
+    graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+    graph
+        .release(consumer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    assert!(graph.is_empty());
+}
 
 #[test]
 fn a_tenant_and_the_scratch_habitat_answer_from_outside_the_crate() {

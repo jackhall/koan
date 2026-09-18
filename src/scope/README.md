@@ -306,6 +306,9 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
+- [Scheduler on cellgraph](../../roadmap/rewrite/scheduler-on-cellgraph.md) —
+  which habitat each tier of an activation is laid down in, and how a reader
+  parks on a binder that has not run.
 - [Modules](../../roadmap/rewrite/modules.md) — `USING … SCOPE` resolved
   through a module's signature.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.

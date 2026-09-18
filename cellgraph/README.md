@@ -102,9 +102,9 @@ Four absences are design statements rather than gaps:
   transients a long-lived cell would otherwise strand in the region it keeps
   until it dies. It is no part of the region — it never seals, splices or
   absorbs, no price counts its bytes, and it stays at its table index when the
-  region leaves — and it is handed back whole at the first `enter` that finds
-  nothing naming it. A departing cell's scratch is dropped at its disposal. A
-  tenant's scratch is its host's.
+  region leaves — and it is handed back whole at the end of the first step that
+  leaves nothing naming it. A departing cell's scratch is dropped at its
+  disposal. A tenant's scratch is its host's.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and
   **never calls**. It rests in two halves, each in its own slot: the **storage

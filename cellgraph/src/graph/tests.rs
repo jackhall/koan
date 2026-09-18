@@ -3,6 +3,7 @@ mod habitat;
 mod prices;
 mod pricing;
 mod properties;
+mod receipts;
 // Off under Miri with the recycling it pins.
 #[cfg(not(miri))]
 mod recycling;
@@ -115,8 +116,8 @@ fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 
 /// A `Number` carrier homed in the executing cell: the own-region write, then the bridge to a
 /// carrier. What a test that wants a value living where the step runs does.
-fn number_here<'step, C: Reattachable<'static>, S: Reattachable<'static>>(
-    context: &StepContext<'static, 'step, '_, '_, C, S>,
+fn number_here<'step, C: Reattachable<'static>, S: Reattachable<'static>, D: Delivery<'static>>(
+    context: &StepContext<'static, 'step, '_, '_, C, S, D>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))

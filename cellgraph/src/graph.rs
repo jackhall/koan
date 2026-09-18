@@ -3785,6 +3785,145 @@ where
     /// no price on this path.
     ///
     /// Everything else goes by [`deliver_carrier`](Self::deliver_carrier).
+    ///
+    /// ```
+    /// use cellgraph::{Active, CellGraph, Delivered, Delivery, DropFree, Receipt, Verdict, reattachable};
+    /// struct Held;
+    /// reattachable!(Held => &'cell u32);
+    /// struct Note;
+    /// reattachable!(Note => &'cell u32);
+    /// impl DropFree for Note {}
+    /// struct Push;
+    /// impl<'graph> Delivery<'graph> for Push {
+    ///     type Scratch = Note;
+    ///     type Carrier = Note;
+    /// }
+    ///
+    /// let mut graph: CellGraph<'static, Held, Held, Push> = CellGraph::new(2, |_| Verdict::Pin);
+    /// let consumer = graph.create(None).unwrap();
+    /// let producer = graph.create(None).unwrap();
+    /// graph
+    ///     .enter(consumer, |context| context.register_receipts(1).unwrap())
+    ///     .unwrap();
+    /// let filed = graph
+    ///     .enter(producer, |context| {
+    ///         context
+    ///             .deliver_scratch(consumer, 0, |writer| {
+    ///                 Active::new(&writer.fill(1, |_| 41u32)[0])
+    ///             })
+    ///             .unwrap()
+    ///     })
+    ///     .unwrap();
+    /// assert_eq!(filed, Delivered::Complete);
+    /// let read = graph
+    ///     .enter(consumer, |context| match context.receipt(0).unwrap() {
+    ///         Receipt::Value(value) => *value,
+    ///         _ => unreachable!("the producer filed a note"),
+    ///     })
+    ///     .unwrap();
+    /// assert_eq!(read, 41);
+    /// ```
+    ///
+    /// A delivered value is subject to the habitat's rule: it comes back at the consumer's
+    /// `'scratch`, so the scratch half takes it and storage does not.
+    ///
+    /// ```compile_fail
+    /// # use cellgraph::{Active, CellGraph, Delivery, DropFree, Receipt, Verdict, reattachable};
+    /// # struct Held;
+    /// # reattachable!(Held => &'cell u32);
+    /// # struct Note;
+    /// # reattachable!(Note => &'cell u32);
+    /// # impl DropFree for Note {}
+    /// # struct Push;
+    /// # impl<'graph> Delivery<'graph> for Push {
+    /// #     type Scratch = Note;
+    /// #     type Carrier = Note;
+    /// # }
+    /// # let mut graph: CellGraph<'static, Held, Held, Push> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let consumer = graph.create(None).unwrap();
+    /// # let producer = graph.create(None).unwrap();
+    /// # graph.enter(consumer, |context| context.register_receipts(1).unwrap()).unwrap();
+    /// # graph.enter(producer, |context| {
+    /// #     context.deliver_scratch(consumer, 0, |writer| Active::new(&writer.fill(1, |_| 41u32)[0])).unwrap()
+    /// # }).unwrap();
+    /// graph
+    ///     .enter(consumer, |context| {
+    ///         let value = match context.receipt(0).unwrap() {
+    ///             Receipt::Value(value) => value,
+    ///             _ => unreachable!("the producer filed a note"),
+    ///         };
+    ///         // `'here: 'scratch`, so a scratch borrow is not what the storage half takes.
+    ///         context.store_successor(value);
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// The same read, into the half that does take it — which is what makes the refusal above a
+    /// statement about the brand rather than about the door:
+    ///
+    /// ```
+    /// # use cellgraph::{Active, CellGraph, Delivery, DropFree, Receipt, Verdict, reattachable};
+    /// # struct Held;
+    /// # reattachable!(Held => &'cell u32);
+    /// # struct Note;
+    /// # reattachable!(Note => &'cell u32);
+    /// # impl DropFree for Note {}
+    /// # struct Push;
+    /// # impl<'graph> Delivery<'graph> for Push {
+    /// #     type Scratch = Note;
+    /// #     type Carrier = Note;
+    /// # }
+    /// # let mut graph: CellGraph<'static, Held, Held, Push> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let consumer = graph.create(None).unwrap();
+    /// # let producer = graph.create(None).unwrap();
+    /// # graph.enter(consumer, |context| context.register_receipts(1).unwrap()).unwrap();
+    /// # graph.enter(producer, |context| {
+    /// #     context.deliver_scratch(consumer, 0, |writer| Active::new(&writer.fill(1, |_| 41u32)[0])).unwrap()
+    /// # }).unwrap();
+    /// graph
+    ///     .enter(consumer, |context| {
+    ///         let value = match context.receipt(0).unwrap() {
+    ///             Receipt::Value(value) => value,
+    ///             _ => unreachable!("the producer filed a note"),
+    ///         };
+    ///         context.store_scratch_successor(value);
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// And the producer holds nothing at a brand of the consumer's: `build` is quantified over
+    /// `'their`, so nothing it writes can be carried out of the call.
+    ///
+    /// ```compile_fail
+    /// # use cellgraph::{Active, CellGraph, Delivery, DropFree, Verdict, reattachable};
+    /// # struct Held;
+    /// # reattachable!(Held => &'cell u32);
+    /// # struct Note;
+    /// # reattachable!(Note => &'cell u32);
+    /// # impl DropFree for Note {}
+    /// # struct Push;
+    /// # impl<'graph> Delivery<'graph> for Push {
+    /// #     type Scratch = Note;
+    /// #     type Carrier = Note;
+    /// # }
+    /// # let mut graph: CellGraph<'static, Held, Held, Push> = CellGraph::new(2, |_| Verdict::Pin);
+    /// # let consumer = graph.create(None).unwrap();
+    /// # let producer = graph.create(None).unwrap();
+    /// # graph.enter(consumer, |context| context.register_receipts(1).unwrap()).unwrap();
+    /// let escaped: &u32 = graph
+    ///     .enter(producer, |context| {
+    ///         let mut held: Option<&u32> = None;
+    ///         context
+    ///             .deliver_scratch(consumer, 0, |writer| {
+    ///                 let value = &writer.fill(1, |_| 41u32)[0];
+    ///                 held = Some(value);
+    ///                 Active::new(value)
+    ///             })
+    ///             .unwrap();
+    ///         held.unwrap()
+    ///     })
+    ///     .unwrap();
+    /// ```
     pub fn deliver_scratch(
         &self,
         consumer: impl Into<CellHandle>,
