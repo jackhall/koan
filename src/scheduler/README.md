@@ -30,8 +30,8 @@ on what the step returns:
   the only way a parked cell wakes.
 - `Park` — the step registered a receipt run and described its children; the
   drain creates them and leaves the cell alone until the run completes.
-- `Tail` — the drain creates the successor, then releases this cell, in that
-  order.
+- `Tail` — the drain creates the successor and queues it ahead of everything,
+  and releases this cell once that successor's first step has run.
 - `Failed` — the drain abandons the run.
 
 Two queues, `in_flight` strictly ahead of `fresh`: an in-progress computation
@@ -172,19 +172,28 @@ homed in it. The hand-off:
 
 1. The predecessor's step `keep`s every argument the successor needs, getting
    dormant carriers, and puts them in the successor's birth continuation.
-2. It returns `Action::Tail`, carrying its `Provenance.receipt` forward
-   unchanged.
+2. It returns `Action::Tail` with a `Hop` — a placement, a step and a birth
+   state. Its `Provenance` travels verbatim, so the successor is born in the
+   same place and reports to the same slot.
 3. The drain creates the successor — `create_tree` under the predecessor's own
    parent for `Fresh`, `create_tenant` on the same host for `Shares`.
 4. The successor's first step redeems each dormant carrier, entitled by root
    identity, and copies it in through `alloc_here`.
 5. Only then does the drain release the predecessor.
 
+Step 5 is why the release is not part of step 3: the drain holds the predecessor
+aside and releases it at the top of the round that follows, which is the
+successor's own, because a released cell with no pledge reclaims its bump and the
+bytes the successor is about to redeem would be gone. The successor is queued at
+the *front* of `in_flight`, so that round is the very next one and at most two
+hops of a loop are live at once.
+
 A tail hop is a tree cell or a tenant, never a slab cell. A slab successor would
 have to `hold` its predecessor to redeem, which pins the predecessor's region
 into its row, so the release would seal rather than reclaim and constant
 occupancy would be lost. Tree siblings share a root, and root identity is the
-entitlement — no hold, no pin, no seal.
+entitlement — no hold, no pin, no seal. A slab cell is under nothing and so has
+no sibling to become: a hop out of one is `DrainStalled::Unhoppable`.
 
 ## Memory
 
@@ -212,7 +221,10 @@ submissions, and a consumer parked on several producers. `tests/continuation.rs`
 holds the round trip a continuation makes between `'graph` and a step's `'here`;
 `tests/drain.rs` holds the loop itself, including two schedulers running beside
 each other and sharing nothing; `tests/calls.rs` holds a call at each placement
-and `tests/delivery.rs` a consumer parked on three producers. A native step is a
+and `tests/delivery.rs` a consumer parked on three producers. `tests/tail.rs`
+runs a ten-thousand-hop loop at each placement and reads the drain's own
+high-water mark and the process allocation count back: three cells live at the
+peak, and no more heap than the same loop a hundred hops long. A native step is a
 bare `fn` and carries no closure state, so what a step observes it records in
 `tests/native.rs` for the test around it to read back.
 

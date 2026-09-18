@@ -10,7 +10,7 @@ use crate::memory::{
     CellGraph, CellHandle, EnterError, ReleaseAbsorption, SlabHandle, Stale, TenantHandle,
     TreeHandle,
 };
-use crate::scheduler::action::{Action, Placement, Request, Spawns, StepError};
+use crate::scheduler::action::{Action, Hop, Placement, Request, Spawns, StepError};
 use crate::scheduler::continuation::{
     CellPlace, Continuation, ContinuationFamily, Destination, NativeStep, Provenance, Resume,
     ScratchFamily, State,
@@ -22,6 +22,11 @@ pub struct Scheduler<'graph> {
     graph: CellGraph<'graph, ContinuationFamily, ScratchFamily, KDelivery>,
     queue: Queue,
     spawns: Spawns<'graph>,
+    /// A tail hop's predecessor, waiting on its successor's first step. The successor redeems out
+    /// of it, so its release is the last move of the hand-off rather than part of the creation.
+    deferred: Option<CellHandle>,
+    live: usize,
+    peak: usize,
 }
 
 impl<'graph> Scheduler<'graph> {
@@ -31,6 +36,9 @@ impl<'graph> Scheduler<'graph> {
             graph: CellGraph::new(cap, crate::values::verdict),
             queue: Queue::new(),
             spawns: Spawns::new(),
+            deferred: None,
+            live: 0,
+            peak: 0,
         }
     }
 
@@ -53,6 +61,7 @@ impl<'graph> Scheduler<'graph> {
             .graph
             .create(Some(continuation))
             .map_err(|_| DrainStalled::SlabFull)?;
+        self.born();
         self.queue.push_fresh(handle.into());
         Ok(handle)
     }
@@ -65,19 +74,21 @@ impl<'graph> Scheduler<'graph> {
     pub fn run(&mut self) -> Result<(), DrainStalled> {
         while let Some(cell) = self.queue.pop() {
             let (action, provenance) = self.step(cell)?;
+            // The hop whose successor the step just was: what that successor redeemed is copied in
+            // and its own hand-off is behind it, so the predecessor's region can go now.
+            self.release_deferred()?;
             match action {
-                Action::Done => self.retire(cell, provenance)?,
+                Action::Done => self.retire(cell)?,
                 Action::Wakes(consumer) => {
-                    self.retire(cell, provenance)?;
+                    self.retire(cell)?;
                     self.queue.push_in_flight(consumer);
                 }
                 Action::Park => self.spawn(cell)?,
-                Action::Tail(_) => {
-                    todo!("the drain creates the successor, then releases the predecessor")
-                }
+                Action::Tail(hop) => self.hop(cell, provenance, hop)?,
                 Action::Failed(error) => return Err(DrainStalled::Step(error)),
             }
         }
+        self.release_deferred()?;
         if self.graph.is_empty() {
             Ok(())
         } else {
@@ -140,23 +151,82 @@ impl<'graph> Scheduler<'graph> {
             },
             state: request.state,
         };
-        match request.placement {
+        self.under(spawner, request.placement, continuation)
+    }
+
+    /// Hand one cell's work to its successor.
+    ///
+    /// The successor is born first and the predecessor released last, because the successor's first
+    /// step redeems what the predecessor kept: the release waits for that step to return, which is
+    /// what [`release_deferred`](Self::release_deferred) does at the top of the next round.
+    ///
+    /// It is a sibling under the same parent, or a co-tenant of the same host — never a slab cell,
+    /// which would have to hold the predecessor to redeem, pinning its region into the hold so the
+    /// release sealed instead of reclaiming. That is why a hop out of a slab cell is refused: a
+    /// slab cell is under nothing, so it has no sibling to hop to.
+    ///
+    /// The provenance travels verbatim. Same place, same destination — the successor inherits its
+    /// predecessor's receipt, which is what makes a loop of hops one consumer's single result.
+    fn hop(
+        &mut self,
+        cell: CellHandle,
+        provenance: Provenance,
+        hop: Hop<'graph>,
+    ) -> Result<(), DrainStalled> {
+        let CellPlace::Under(place) = provenance.place else {
+            return Err(DrainStalled::Unhoppable);
+        };
+        let continuation = Continuation::Native {
+            step: hop.step,
+            provenance,
+            state: hop.state,
+        };
+        let successor = self.under(place, hop.placement, continuation)?;
+        self.queue.push_hop(successor);
+        self.deferred = Some(cell);
+        Ok(())
+    }
+
+    /// One cell born under another, through the door its placement names.
+    fn under(
+        &mut self,
+        under: CellHandle,
+        placement: Placement,
+        continuation: Continuation<'graph, 'graph>,
+    ) -> Result<CellHandle, DrainStalled> {
+        let born = match placement {
             Placement::Fresh => self
                 .graph
-                .create_tree(spawner, Some(continuation))
-                .map(CellHandle::from)
-                .map_err(|_| DrainStalled::Unspawnable),
+                .create_tree(under, Some(continuation))
+                .map(CellHandle::from),
             Placement::Shares => self
                 .graph
-                .create_tenant(spawner, Some(continuation))
-                .map(CellHandle::from)
-                .map_err(|_| DrainStalled::Unspawnable),
+                .create_tenant(under, Some(continuation))
+                .map(CellHandle::from),
         }
+        .map_err(|_| DrainStalled::Unspawnable)?;
+        self.born();
+        Ok(born)
+    }
+
+    /// Release the predecessor a hop left behind, if there is one.
+    fn release_deferred(&mut self) -> Result<(), DrainStalled> {
+        match self.deferred.take() {
+            Some(predecessor) => self.retire(predecessor),
+            None => Ok(()),
+        }
+    }
+
+    /// Count one birth, and move the high-water mark if it rose.
+    fn born(&mut self) {
+        self.live += 1;
+        self.peak = self.peak.max(self.live);
     }
 
     /// Release a finished cell by its kind. Its step has already filled its consumer's receipt, so
     /// nothing is in flight at the death.
-    fn retire(&mut self, cell: CellHandle, _provenance: Provenance) -> Result<(), DrainStalled> {
+    fn retire(&mut self, cell: CellHandle) -> Result<(), DrainStalled> {
+        self.live -= 1;
         match cell {
             CellHandle::Slab(handle) => self
                 .graph
@@ -181,6 +251,12 @@ impl<'graph> Scheduler<'graph> {
     /// Whether the named cell is still live — what a test reads to watch a release land.
     pub fn is_live(&self, cell: impl Into<CellHandle>) -> bool {
         self.graph.is_live(cell)
+    }
+
+    /// The most cells the drain has held live at once — what a test reads to hold a loop of tail
+    /// hops to its two-cell hand-off.
+    pub fn peak_live_cells(&self) -> usize {
+        self.peak
     }
 }
 
@@ -213,6 +289,12 @@ impl Queue {
     fn push_in_flight(&mut self, cell: CellHandle) {
         self.in_flight.push_back(cell);
     }
+
+    /// A tail successor goes to the *front*: it is the continuation of the step that just ran, and
+    /// its predecessor is not released until it has run.
+    fn push_hop(&mut self, cell: CellHandle) {
+        self.in_flight.push_front(cell);
+    }
 }
 
 /// The drain's own failure: the queue ran dry with work outstanding, or a step could not proceed.
@@ -224,6 +306,8 @@ pub enum DrainStalled {
     SlabFull,
     /// A cell a step asked to spawn could not be created under its spawner.
     Unspawnable,
+    /// A slab cell asked to hop. It is under nothing, so it has no sibling to hop to.
+    Unhoppable,
     /// A cell the drain queued was not enterable.
     Unenterable,
     /// A release the drain declared was refused.
