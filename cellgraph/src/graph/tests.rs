@@ -209,7 +209,7 @@ fn a_cap_above_the_width_is_refused_at_construction() {
 fn a_two_word_graph_names_slots_across_the_chunk_boundary() {
     // The shape that exercises the matrix's chunk arithmetic: a pin whose ends sit in different
     // chunks of the same row.
-    let mut graph: CellGraph<'static, Owned, Owned, 2> = CellGraph::new(128, pin);
+    let mut graph: CellGraph<'static, Owned, Owned, NoDelivery, 2> = CellGraph::new(128, pin);
     let cells: Vec<SlabHandle> = (0..128).map(|_| graph.create(None).unwrap()).collect();
     assert_eq!(graph.create(None), Err(CreateError::SlabFull));
 

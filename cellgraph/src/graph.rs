@@ -9,6 +9,7 @@
 #[cfg(test)]
 mod tests;
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 
 use smallvec::SmallVec;
@@ -19,6 +20,7 @@ use crate::handle::{CellHandle, HomeHandle, SlabHandle, Stale, TenantHandle, Tre
 use crate::matrix::{Bits, Matrix};
 use crate::reach::GraphReach;
 use crate::reattach::{DropFree, Erased, Halves, Reattachable};
+use crate::receipt::{Delivered, Delivery, NoDelivery, ReceiptRun, ReceiptSlot, Receipts};
 use crate::region::{Region, Regions, Writer};
 use crate::scratch::{Scratch, ScratchVec};
 use crate::sealed::{ScratchSet, SealedCell, SealedId, SealedSet, SealedTier};
@@ -80,6 +82,42 @@ pub enum RedeemError {
     /// only transitively does not entitle — the entitling relation is the one that keeps the home
     /// in the slab with its storage intact.
     Unheld,
+}
+
+/// Refusals from [`StepContext::receipt`]. An *empty* slot is not one of them — empty is one of the
+/// three states a slot has, and comes back as [`Receipt::Empty`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReceiptError {
+    /// The cell has no receipt run at rest. A step drains the run one of its own earlier steps
+    /// registered, so a cell that has registered none has nothing to drain.
+    NoRun,
+    /// The run is not that wide.
+    OutOfRange,
+}
+
+/// Refusals from [`StepContext::register_receipts`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RegisterError {
+    /// The run at rest still holds a receipt. A registration replaces the run, which would strand
+    /// it: drain first, then register.
+    Undrained,
+}
+
+/// Refusals from [`StepContext::deliver_scratch`] and [`StepContext::deliver_carrier`]. Each leaves
+/// the consumer's run exactly as it found it, and writes no byte of its scratch habitat.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeliverError {
+    /// The named consumer is not live — the same refusal a placement into it would give.
+    Stale(Stale<CellHandle>),
+    /// The consumer has no receipt run at rest, so there is nothing to file against. A consumer
+    /// whose registration is still pending — one whose step panicked before its end — reads as
+    /// this until its next step end lays the run down.
+    NoRun,
+    /// The consumer's run is not that wide.
+    OutOfRange,
+    /// The slot already holds a receipt. A fill never overwrites one: the consumer's drain is what
+    /// empties a slot.
+    Filled,
 }
 
 /// Whether a dying cell's storage may fold into a unique live holder rather than mint a sealed cell
@@ -508,7 +546,13 @@ struct Relocation {
     next: Option<SlabHandle>,
 }
 
-struct SlabCell<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize> {
+struct SlabCell<
+    'graph,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph>,
+    D: Delivery<'graph>,
+    const W: usize,
+> {
     generation: u32,
     state: SlabState,
     /// What the release of this cell said about death-time absorption. Read at the slot's
@@ -519,9 +563,17 @@ struct SlabCell<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const 
     /// covers — its own region, or a region a pinned crossing minted in.
     continuation: Option<Erased<'graph, C>>,
     /// The scratch half of the continuation, at rest: what names this cell's scratch bump across a
-    /// park, and so what holds off the bump's reset at the next `enter`. Empty at birth, and
-    /// cleared when the cell's death is declared — a dead cell is never entered.
+    /// park, and so one of the two things that hold off the bump's reset at a step's end. Empty at
+    /// birth, and cleared when the cell's death is declared — a dead cell is never entered.
     scratch_continuation: Option<Erased<'graph, S>>,
+    /// The receipt run at rest, over the same bump — the other thing that names it. Cleared with
+    /// the half at the cell's death, and holding nothing alive: its slots carry `Dormant`s, which
+    /// carry no reach, and erased values, which are bytes.
+    receipts: Option<Erased<'graph, ReceiptRun<D>>>,
+    /// A slot count a step registered, waiting for that step's end to lay it down. It names no
+    /// byte, so it holds no reset off; the lay-down runs after the reset, which is what puts a
+    /// re-registering cell's next run at the foot of a fresh bump.
+    pending_receipts: Option<usize>,
     /// The reach of every value kept in this cell's region, interned on content — the one durable
     /// habitat of a mask on the slab side, and what the seal transition's step 1 rewrites. One
     /// entry per distinct reach is what bounds that rewrite.
@@ -543,8 +595,8 @@ struct SlabCell<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const 
     tree_tombstones: Option<u32>,
 }
 
-impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
-    SlabCell<'graph, C, S, W>
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>, const W: usize>
+    SlabCell<'graph, C, S, D, W>
 {
     /// A slot with no occupant, under the given generation.
     fn free(generation: u32) -> Self {
@@ -554,6 +606,8 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
             absorption: ReleaseAbsorption::IntoHolder,
             continuation: None,
             scratch_continuation: None,
+            receipts: None,
+            pending_receipts: None,
             reaches: ReachTable::default(),
             lineage: None,
             tree_children: 0,
@@ -663,9 +717,10 @@ pub struct CellGraph<
     'graph,
     C: Reattachable<'graph>,
     S: Reattachable<'graph> = C,
+    D: Delivery<'graph> = NoDelivery,
     const W: usize = 1,
 > {
-    cells: Cells<'graph, C, S, W>,
+    cells: Cells<'graph, C, S, D, W>,
     regions: Regions,
     /// Invariant in `'graph`: a covariant graph lifetime could shorten to a step brand, and a
     /// borrow at it would stop meaning storage that outlives the graph.
@@ -674,8 +729,14 @@ pub struct CellGraph<
 
 /// Everything about the cells but their bytes: the slab and its relations, the tree pool, the
 /// sealed tier, and the scratch. A step mutates this half; the region table it reads beside it.
-struct Cells<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize> {
-    slots: Box<[SlabCell<'graph, C, S, W>]>,
+struct Cells<
+    'graph,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph>,
+    D: Delivery<'graph>,
+    const W: usize,
+> {
+    slots: Box<[SlabCell<'graph, C, S, D, W>]>,
     free: Vec<u32>,
     /// The pin relation's slab half: row M is the set of live cells whose region storage M's own
     /// dormant values read. Written only by [`CellGraph::mint`], which is the mint OR of
@@ -691,10 +752,10 @@ struct Cells<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: 
     sealed: SealedTier<W>,
     /// The tree pool: the third region habitat, uncapped and outside every relation. See
     /// [tree](crate::tree).
-    trees: TreePool<'graph, C, S>,
+    trees: TreePool<'graph, C, S, D>,
     /// The tenant pool: cells with no region of their own, each writing its host's. See
     /// [tenant](crate::tenant).
-    tenants: TenantPool<'graph, C, S>,
+    tenants: TenantPool<'graph, C, S, D>,
     /// Where the dormant carriers of a cell that has left the slab went, one list per slab slot. A
     /// departed handle maps to the live cell whose reach table absorbed its masks, or to the sealed
     /// cell its storage sealed into; a cell with an empty reach table leaves no entry. Rewritten at
@@ -749,8 +810,8 @@ pub(crate) struct Merges {
     pub(crate) into_namer: u64,
 }
 
-impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
-    CellGraph<'graph, C, S, W>
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>, const W: usize>
+    CellGraph<'graph, C, S, D, W>
 {
     /// A slab of `cap` cells. The cap is fixed here and the graph never grows past it, and it is at
     /// or below `64 · W`, the slab width the graph's *type* fixes: every slab relation is a row of
@@ -850,10 +911,13 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
     pub fn enter<R>(
         &mut self,
         cell: impl Into<CellHandle>,
-        step: impl FnOnce(&mut StepContext<'graph, '_, '_, '_, C, S, W>) -> R,
+        step: impl FnOnce(&mut StepContext<'graph, '_, '_, '_, C, S, D, W>) -> R,
     ) -> Result<R, EnterError> {
         let cell = cell.into();
         let home = self.cells.begin(cell)?;
+        // Read before the halves come off the cell, so the two readings the count moves between are
+        // of one predicate on one state.
+        let named_at_entry = self.cells.names_scratch(cell);
         let (stored, stored_scratch) = self.cells.take_halves(cell);
         // The two halves borrowed apart for the whole step: the region table shared, which is the
         // `'here` brand, and the cells exclusively. Both writers are taken here, once, so the
@@ -909,8 +973,9 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
                 cell,
                 home,
                 continuation,
-                scratch_was_named: scratch_continuation.is_some(),
+                named_at_entry,
                 scratch_continuation,
+                pending_receipts: None,
                 writer,
                 scratch_writer,
                 scratch: Some(scratch),
@@ -931,6 +996,19 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
         // settled; the bump keeps its bytes until the cell's next step end.
         if !self.cells.scratch_named(home) {
             self.regions.reset_scratch(home);
+        }
+        // The run the step registered goes down *after* that reset, so a cell that parks round
+        // after round on receipts alone starts every round at the foot of a bump handed back
+        // whole. What is drained is whatever is pending, which is how a registration a panicking
+        // step left behind is honoured at the cell's next step end. The run is addressed by the
+        // cell, the writer by the write home: for a tenant the run is the tenant's and the bytes
+        // are its host's.
+        if let Some(count) = self.cells.take_pending_receipts(cell) {
+            let writer = self.regions.scratch_writer(home);
+            let filled = &writer.fill(1, |_| Cell::new(0u32))[0];
+            let slots = writer.fill(count, |_| Cell::new(ReceiptSlot::<D>::Empty));
+            let run = Erased::erase(Receipts::new(filled, slots));
+            self.cells.lay_receipts(cell, home, run);
         }
         Ok(result)
     }
@@ -955,8 +1033,11 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
         let cell = &mut self.cells.slots[slot as usize];
         cell.state = SlabState::Dead;
         cell.absorption = absorption;
-        // A dead cell is never entered, so nothing will read its scratch half again.
+        // A dead cell is never entered, so nothing will read what it parked in scratch again, and
+        // it stops holding its own bump's reset off while its tenants run on.
         cell.scratch_continuation = None;
+        cell.receipts = None;
+        cell.pending_receipts = None;
         // A release runs its disposal outside any step, so the scratch region is taken and reset
         // here for the same reason `enter` takes and resets it: a verb's transients start on empty
         // ground.
@@ -1133,7 +1214,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
 
     /// The scratch region off the graph and reset, under a guard that hands it back however the
     /// verb ends.
-    fn park(&mut self) -> Parked<'_, 'graph, C, S, W> {
+    fn park(&mut self) -> Parked<'_, 'graph, C, S, D, W> {
         let mut scratch = self.cells.take_scratch_owned();
         scratch.reset();
         Parked {
@@ -1144,8 +1225,8 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
     }
 }
 
-impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
-    Cells<'graph, C, S, W>
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>, const W: usize>
+    Cells<'graph, C, S, D, W>
 {
     fn new(cap: u32, verdict: impl FnMut(Prices) -> Verdict + 'static) -> Self {
         assert!(
@@ -1412,18 +1493,109 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
         }
     }
 
-    /// Whether a scratch half is at rest over the scratch bump `home` owns — what holds off that
-    /// bump's reset. The bump is shared by the cell and every tenant of it, so the answer is the
-    /// cell's own slot or any tenant's: the count is the whole rule, and no `enter` walks the
-    /// tenants. A host whose death was declared had its own slot cleared then, so it stops holding
-    /// the reset off while its tenants run on. Read where a step ends, once the halves are back on
-    /// the cell and a tenant's count has moved.
+    /// Whether anything at rest names the scratch bump `home` owns — what holds off that bump's
+    /// reset. The bump is shared by the cell and every tenant of it, so the answer is the cell's
+    /// own slots or any tenant's: the count is the whole rule, and no step end walks the tenants. A
+    /// host whose death was declared had its own slots cleared then, so it stops holding the reset
+    /// off while its tenants run on. Read where a step ends, once the halves are back on the cell
+    /// and a tenant's count has moved.
     fn scratch_named(&self, home: CellHome) -> bool {
         let own = match home {
-            CellHome::Slab(slot) => self.slots[slot as usize].scratch_continuation.is_some(),
-            CellHome::Tree(index) => self.trees.scratch_named(index),
+            CellHome::Slab(slot) => {
+                let cell = &self.slots[slot as usize];
+                cell.scratch_continuation.is_some() || cell.receipts.is_some()
+            }
+            CellHome::Tree(index) => self.trees.names_scratch(index),
         };
         own || self.tenancy(home).scratch_tenants > 0
+    }
+
+    /// Whether anything at rest on `cell` itself names the scratch bump it writes: its scratch half,
+    /// or its receipt run. **One definition, three readings** — a step's entry, a step's end, and a
+    /// tenant's departure — so the count a host keeps moves by the same rule it is read by.
+    ///
+    /// A pending registration is deliberately not one of them. It names no byte until the step end
+    /// that lays it down, and that lay-down happens *after* the reset, which is what puts a
+    /// re-registering cell's next run at the foot of a bump handed back whole.
+    fn names_scratch(&self, cell: CellHandle) -> bool {
+        match cell {
+            CellHandle::Slab(handle) => {
+                let cell = &self.slots[handle.slot() as usize];
+                cell.scratch_continuation.is_some() || cell.receipts.is_some()
+            }
+            CellHandle::Tree(handle) => self.trees.names_scratch(handle.index()),
+            CellHandle::Tenant(handle) => self.tenants.names_scratch(handle.index()),
+        }
+    }
+
+    /// The receipt run at rest on `cell`, erased. A tenant's run is the tenant's own, though the
+    /// bytes it lives in are its host's — so this never routes a handle through `write_home`.
+    fn receipts(&self, cell: CellHandle) -> Option<Erased<'graph, ReceiptRun<D>>> {
+        match cell {
+            CellHandle::Slab(handle) => self.slots[handle.slot() as usize].receipts,
+            CellHandle::Tree(handle) => self.trees.receipts(handle.index()),
+            CellHandle::Tenant(handle) => self.tenants.receipts(handle.index()),
+        }
+    }
+
+    /// The receipt run at rest on `cell`, re-anchored at a lifetime this borrow bounds.
+    ///
+    /// The one re-anchor of a run's spine, so the argument for it is made in one place. The
+    /// referents are two chunks of the write home's scratch bump, which is pinned to its table
+    /// index, pointer-stable under every append, and handed back only at a step end that found
+    /// nothing at rest naming it — the run among those things, until the step that clears it.
+    /// `'cell` is bounded by a borrow of the cells, which is inside a step, and nothing is disposed
+    /// of inside one. The family is invariant in `'cell`, and what is written through the run is
+    /// written through the very cells the copy at rest names, so no borrow at `'cell` is stored
+    /// where a longer one could read it back.
+    fn run_at<'cell>(&'cell self, cell: CellHandle) -> Option<Receipts<'graph, 'cell, D>> {
+        let run = self.receipts(cell)?;
+        // SAFETY: see the method's own contract, above.
+        Some(unsafe { run.reattach::<'cell>() })
+    }
+
+    fn set_receipts(&mut self, cell: CellHandle, run: Option<Erased<'graph, ReceiptRun<D>>>) {
+        match cell {
+            CellHandle::Slab(handle) => self.slots[handle.slot() as usize].receipts = run,
+            CellHandle::Tree(handle) => self.trees.set_receipts(handle.index(), run),
+            CellHandle::Tenant(handle) => self.tenants.set_receipts(handle.index(), run),
+        }
+    }
+
+    /// Lay a run down on `cell`, over `home`'s scratch bump, and fold it into the host's count when
+    /// it is the first thing at rest that names the bump on this cell's behalf.
+    fn lay_receipts(
+        &mut self,
+        cell: CellHandle,
+        home: CellHome,
+        run: Erased<'graph, ReceiptRun<D>>,
+    ) {
+        let named = self.names_scratch(cell);
+        self.set_receipts(cell, Some(run));
+        if !named && matches!(cell, CellHandle::Tenant(_)) {
+            self.tenancy_mut(home).scratch_tenants += 1;
+        }
+    }
+
+    /// The slot count waiting to be laid down on `cell`, taken. Whatever is pending, not only what
+    /// the step that just ended registered: a step that panicked left its registration here, and
+    /// this is where it is honoured.
+    fn take_pending_receipts(&mut self, cell: CellHandle) -> Option<usize> {
+        match cell {
+            CellHandle::Slab(handle) => self.slots[handle.slot() as usize].pending_receipts.take(),
+            CellHandle::Tree(handle) => self.trees.take_pending_receipts(handle.index()),
+            CellHandle::Tenant(handle) => self.tenants.take_pending_receipts(handle.index()),
+        }
+    }
+
+    fn set_pending_receipts(&mut self, cell: CellHandle, count: usize) {
+        match cell {
+            CellHandle::Slab(handle) => {
+                self.slots[handle.slot() as usize].pending_receipts = Some(count)
+            }
+            CellHandle::Tree(handle) => self.trees.set_pending_receipts(handle.index(), count),
+            CellHandle::Tenant(handle) => self.tenants.set_pending_receipts(handle.index(), count),
+        }
     }
 
     /// Both halves of a live cell's continuation, off the cell for the length of its step.
@@ -2356,7 +2528,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
     /// The tree pool, for the assertions that read a cell's chain links, its pledge and the
     /// tombstones hanging off it — none of which is observable through a public verb.
     #[cfg(test)]
-    pub(crate) fn trees(&self) -> &TreePool<'graph, C, S> {
+    pub(crate) fn trees(&self) -> &TreePool<'graph, C, S, D> {
         &self.trees
     }
 
@@ -2961,6 +3133,26 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
     }
 }
 
+/// What one slot of a receipt run held, drained into the step that owns the run.
+///
+/// The two filled forms answer the two ways a producer delivers: a value it built in this cell's own
+/// scratch habitat, which comes back at this step's `'scratch`; and a carrier it filed at rest,
+/// which comes back redeemed into this step, on the same terms as any other
+/// [`redeem`](StepContext::redeem).
+pub enum Receipt<'graph, 'step, 'scratch, D: Delivery<'graph>, const W: usize = 1>
+where
+    'graph: 'scratch,
+{
+    /// Nothing was filed here, or the run's owner has already drained it.
+    Empty,
+    /// A value built in this cell's scratch habitat. It lasts as long as a scratch continuation
+    /// naming it does, and never past the cell.
+    Value(<D::Scratch as Reattachable<'graph>>::At<'scratch>),
+    /// A carrier filed at rest, redeemed — or the refusal the redeem gave, which is what a producer
+    /// that built in its own region and died leaves behind.
+    Carrier(Result<Ready<'graph, 'step, D::Carrier, W>, RedeemError>),
+}
+
 /// The view of the graph a step gets: its own cell's continuation slot, the cell-region doors, and
 /// its own identity.
 ///
@@ -3000,12 +3192,13 @@ pub struct StepContext<
     'scratch,
     C: Reattachable<'graph>,
     S: Reattachable<'graph> = C,
+    D: Delivery<'graph> = NoDelivery,
     const W: usize = 1,
 > where
     'graph: 'step + 'here,
     'here: 'scratch,
 {
-    cells: &'step mut Cells<'graph, C, S, W>,
+    cells: &'step mut Cells<'graph, C, S, D, W>,
     /// Every live cell's region, borrowed shared for the whole step — the borrow `'here` names.
     /// A placement's destination is minted and written through it, and nothing a step can reach
     /// takes it exclusively, which is what keeps every writer into it live to the step's end.
@@ -3022,9 +3215,12 @@ pub struct StepContext<
     continuation: Option<C::At<'here>>,
     /// The scratch half, the same way at `'scratch`.
     scratch_continuation: Option<S::At<'scratch>>,
-    /// Whether the scratch half was at rest when the step began — what a tenant step's end compares
-    /// against to move its host's count.
-    scratch_was_named: bool,
+    /// Whether anything at rest on the cell named its write home's scratch bump when the step
+    /// began — what a tenant step's end compares against to move its host's count.
+    named_at_entry: bool,
+    /// The slot count this step registered, if it did. Written onto the cell by `Drop` and laid
+    /// down by `enter`'s tail, so a run never rests in bytes the reset between them hands back.
+    pending_receipts: Option<usize>,
     /// The executing cell's write surface, minted once at `enter`. A `Copy` field, so
     /// [`writer`](Self::writer) is a read rather than a door onto the region.
     writer: Writer<'here>,
@@ -3040,13 +3236,14 @@ pub struct StepContext<
     _scratch: PhantomData<fn(&'scratch ()) -> &'scratch ()>,
 }
 
-impl<'graph, 'step, 'here, 'scratch, C, S, const W: usize>
-    StepContext<'graph, 'step, 'here, 'scratch, C, S, W>
+impl<'graph, 'step, 'here, 'scratch, C, S, D, const W: usize>
+    StepContext<'graph, 'step, 'here, 'scratch, C, S, D, W>
 where
     'graph: 'step + 'here,
     'here: 'scratch,
     C: Reattachable<'graph>,
     S: Reattachable<'graph>,
+    D: Delivery<'graph>,
 {
     /// The cell this step is running in, of any kind.
     pub fn cell(&self) -> CellHandle {
@@ -3511,6 +3708,138 @@ where
         self.scratch_continuation = Some(continuation);
     }
 
+    /// How many slots this cell's receipt run has, or `None` when none is at rest.
+    pub fn receipt_count(&self) -> Option<usize> {
+        self.cells.run_at(self.cell).map(Receipts::width)
+    }
+
+    /// Take one slot of this cell's receipt run, leaving it empty.
+    ///
+    /// The consumer half of a push: what other cells' steps filed here while this one was parked.
+    /// A `Value` slot comes back at this step's `'scratch`, so it reads for the length of the step
+    /// and rides a park only through
+    /// [`store_scratch_successor`](Self::store_scratch_successor); a `Carrier` slot comes back
+    /// redeemed into this step, or as the refusal [`redeem`](Self::redeem) gives.
+    ///
+    /// A run holds nothing alive. Its slots carry values that are bytes and carriers that carry no
+    /// reach, so nothing was minted, priced or held on the run's behalf, and a producer that filed
+    /// a carrier homed in itself and then died leaves an honest `Gone` here.
+    pub fn receipt(
+        &self,
+        index: usize,
+    ) -> Result<Receipt<'graph, 'step, 'scratch, D, W>, ReceiptError> {
+        let run = self.cells.run_at(self.cell).ok_or(ReceiptError::NoRun)?;
+        Ok(match run.take(index).ok_or(ReceiptError::OutOfRange)? {
+            ReceiptSlot::Empty => Receipt::Empty,
+            // SAFETY: the value's referents are chunks of this cell's write home scratch bump, on
+            // the argument `scratch_continuation` makes — pinned to its table index,
+            // pointer-stable, handed back only at a step end that found nothing at rest naming it,
+            // and the run that held this value was one of those things. What is added is that the
+            // erase was another cell's step rather than this one's: that step could have built the
+            // value nowhere but through this cell's own scratch writer, since the build takes no
+            // operands and its brand is quantified by the call, so its referents are bytes of this
+            // very bump. A cell whose run is at rest is not executing — the graph is one mutator
+            // and `enter` holds it exclusively — so no step of this cell's was running when the
+            // value landed. `'scratch` is quantified by this cell's `enter` and nameable nowhere
+            // outside it, which discharges the invariant-family condition.
+            ReceiptSlot::Value(value) => Receipt::Value(unsafe { value.reattach::<'scratch>() }),
+            ReceiptSlot::Carrier(carrier) => Receipt::Carrier(self.redeem(carrier)),
+        })
+    }
+
+    /// Register the receipt run the next round of this cell parks on: `count` slots, laid down by
+    /// the substrate in the write home's scratch habitat at the end of this step.
+    ///
+    /// The substrate lays it down rather than the step, and after the step's reset rather than
+    /// before it, so a cell that parks round after round on receipts alone starts every round at
+    /// the foot of a bump handed back whole. A count of `0` is a degenerate run, complete from
+    /// birth.
+    ///
+    /// A registration **replaces** the run at rest, and is refused while that run still holds a
+    /// receipt. Drain, then register.
+    pub fn register_receipts(&mut self, count: usize) -> Result<(), RegisterError> {
+        if self
+            .cells
+            .run_at(self.cell)
+            .is_some_and(|run| !run.drained())
+        {
+            return Err(RegisterError::Undrained);
+        }
+        self.pending_receipts = Some(count);
+        Ok(())
+    }
+
+    /// Build a value in `consumer`'s scratch habitat, with no operands, and file it in one slot of
+    /// its receipt run.
+    ///
+    /// The producer half of a push, in the shape that carries a fresh result: the consumer reads it
+    /// and cannot embed it in storage, since it comes back at `'scratch` and every door into
+    /// storage asks for `'here`. It lasts for as long as the consumer's scratch continuation names
+    /// it, across any number of steps, and never past the cell.
+    ///
+    /// The producer names no brand of the consumer's. `build` is quantified over `'their`, so it
+    /// must typecheck at every lifetime and can therefore neither embed a borrow of its own nor
+    /// hand back anything but what it built through the writer it was given. It takes **no
+    /// operands**, which is the other half of that: an operand would be the one route to a
+    /// reference the consumer does not already keep, and with none there is no verdict, no mint and
+    /// no price on this path.
+    ///
+    /// Everything else goes by [`deliver_carrier`](Self::deliver_carrier).
+    pub fn deliver_scratch(
+        &self,
+        consumer: impl Into<CellHandle>,
+        slot: usize,
+        build: impl for<'their> FnOnce(Writer<'their>) -> Active<'graph, 'their, D::Scratch>,
+    ) -> Result<Delivered, DeliverError> {
+        let consumer = consumer.into();
+        let (run, home) = self.delivery_target(consumer, slot)?;
+        // The checks are all behind us, so the first byte written is one that lands.
+        let value = build(self.regions.scratch_writer(home)).into_erased();
+        Ok(run.fill(slot, ReceiptSlot::Value(value)))
+    }
+
+    /// File a carrier this step already holds at rest in one slot of `consumer`'s receipt run.
+    ///
+    /// The shape everything but a fresh operand-free result goes by: a result bound for the
+    /// consumer's storage, built with [`alloc_into`](Self::alloc_into) and
+    /// [`keep`](Self::keep)ed; one that borrows data already there; and one a tenant wrote at its
+    /// own `'here`, a brand a quantified build cannot see. A [`Dormant`](crate::Dormant) carries no
+    /// region brand and no reach, so filing one reaches nothing and prices nothing — what the
+    /// consumer's drain redeems is exactly what the producer's `keep` registered.
+    pub fn deliver_carrier(
+        &self,
+        consumer: impl Into<CellHandle>,
+        slot: usize,
+        carrier: Dormant<'graph, D::Carrier>,
+    ) -> Result<Delivered, DeliverError> {
+        let consumer = consumer.into();
+        let (run, _) = self.delivery_target(consumer, slot)?;
+        Ok(run.fill(slot, ReceiptSlot::Carrier(carrier)))
+    }
+
+    /// The run a delivery fills and the bump it may build in, with every refusal taken first.
+    ///
+    /// The run is the **consumer's own**, even for a tenant, whose run is its own though the bytes
+    /// under it are its host's; the bump is the consumer's **write home**'s, which for a tenant is
+    /// the host's. Routing the handle through `write_home` to find the run would fill the host's.
+    fn delivery_target(
+        &self,
+        consumer: CellHandle,
+        slot: usize,
+    ) -> Result<(Receipts<'graph, '_, D>, CellHome), DeliverError> {
+        // Liveness first: everything after it addresses the cell by bare slot or index.
+        let home = self
+            .cells
+            .write_home(consumer)
+            .map_err(DeliverError::Stale)?;
+        let run = self.cells.run_at(consumer).ok_or(DeliverError::NoRun)?;
+        match run.vacant(slot) {
+            None => Err(DeliverError::OutOfRange),
+            Some(false) => Err(DeliverError::Filled),
+            Some(true) => Ok((run, home)),
+        }
+    }
+
     /// The own-cell crossing: price `operands` into the executing cell, mint what pins into its
     /// hold set, and run `build` with the cell's own writer beside the views.
     ///
@@ -3909,17 +4238,24 @@ where
 /// behind, so a hand-back written after the cascade would be the one thing a panic in it skips,
 /// and every later verb would then fail on the missing scratch region rather than on the original
 /// fault.
-struct Parked<'dispose, 'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize> {
-    cells: &'dispose mut Cells<'graph, C, S, W>,
+struct Parked<
+    'dispose,
+    'graph,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph>,
+    D: Delivery<'graph>,
+    const W: usize,
+> {
+    cells: &'dispose mut Cells<'graph, C, S, D, W>,
     regions: &'dispose mut Regions,
     scratch: Option<Scratch>,
 }
 
-impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
-    Parked<'_, 'graph, C, S, W>
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>, const W: usize>
+    Parked<'_, 'graph, C, S, D, W>
 {
     /// Run one verb's body against the graph and the scratch region parked off it.
-    fn run(&mut self, body: impl FnOnce(&mut Cells<'graph, C, S, W>, &mut Regions, &Scratch)) {
+    fn run(&mut self, body: impl FnOnce(&mut Cells<'graph, C, S, D, W>, &mut Regions, &Scratch)) {
         let Parked {
             cells,
             regions,
@@ -3932,21 +4268,22 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
     }
 }
 
-impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize> Drop
-    for Parked<'_, 'graph, C, S, W>
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>, const W: usize>
+    Drop for Parked<'_, 'graph, C, S, D, W>
 {
     fn drop(&mut self) {
         self.cells.scratch = self.scratch.take();
     }
 }
 
-impl<'graph, 'step, 'here, 'scratch, C, S, const W: usize> Drop
-    for StepContext<'graph, 'step, 'here, 'scratch, C, S, W>
+impl<'graph, 'step, 'here, 'scratch, C, S, D, const W: usize> Drop
+    for StepContext<'graph, 'step, 'here, 'scratch, C, S, D, W>
 where
     'graph: 'step + 'here,
     'here: 'scratch,
     C: Reattachable<'graph>,
     S: Reattachable<'graph>,
+    D: Delivery<'graph>,
 {
     fn drop(&mut self) {
         // Both halves go back to rest as the step left them, erased — and before the executing
@@ -3956,8 +4293,14 @@ where
             self.continuation.take().map(Erased::<C>::erase),
             self.scratch_continuation.take().map(Erased::<S>::erase),
         );
-        let scratch_named = halves.1.is_some();
         self.cells.put_halves(self.cell, halves);
+        // A registration replaces the run at rest, and clearing it here is what lets this step's
+        // end hand the bump back before the tail lays the new one down in it. `register_receipts`
+        // refused unless every slot of the old run was drained, so nothing is lost with it.
+        if let Some(count) = self.pending_receipts {
+            self.cells.set_receipts(self.cell, None);
+            self.cells.set_pending_receipts(self.cell, count);
+        }
         match self.cell {
             CellHandle::Slab(handle) => {
                 self.cells.executing.clear(handle.slot());
@@ -3965,11 +4308,13 @@ where
             CellHandle::Tree(handle) => self.cells.trees.set_executing(handle.index(), false),
             CellHandle::Tenant(handle) => {
                 self.cells.tenants.set_executing(handle.index(), false);
-                // The host counts the tenants whose scratch half is at rest, and this is one of
-                // the two places that count moves: by what this step did to the slot, read once
-                // here rather than at each door.
+                // The host counts the tenants that name its bump, and this is one of the three
+                // places that count moves: by what this step did to the slots, read once here
+                // rather than at each door. The other two are the lay-down at the tail of `enter`,
+                // and a tenant's departure.
+                let named_at_exit = self.cells.names_scratch(self.cell);
                 let tenancy = self.cells.tenancy_mut(self.home);
-                match (self.scratch_was_named, scratch_named) {
+                match (self.named_at_entry, named_at_exit) {
                     (false, true) => tenancy.scratch_tenants += 1,
                     (true, false) => tenancy.scratch_tenants -= 1,
                     _ => {}

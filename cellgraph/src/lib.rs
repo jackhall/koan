@@ -20,6 +20,7 @@ mod handle;
 mod matrix;
 mod reach;
 mod reattach;
+mod receipt;
 mod region;
 mod scratch;
 mod sealed;
@@ -29,9 +30,11 @@ mod tree;
 pub use carrier::{Active, Ready};
 pub use dormant::Dormant;
 pub use graph::{
-    CellGraph, Config, CreateError, CrossedOperand, EnterError, Operand, Prices, RedeemError,
-    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
+    CellGraph, Config, CreateError, CrossedOperand, DeliverError, EnterError, Operand, Prices,
+    Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption, ReleaseError,
+    ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
 };
 pub use handle::{CellHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
 pub use reattach::{DropFree, Erased, Reattachable};
+pub use receipt::{Delivered, Delivery, NoDelivery};
 pub use region::{Prose, Run, ThinRun, Writer};

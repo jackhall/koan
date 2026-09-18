@@ -11,7 +11,8 @@
 //! What a host carries for its tenants is two counts ([`Tenancy`]). The first holds its disposal
 //! off: a host whose death is declared waits, region in place, until its last tenant leaves —
 //! which is what makes the bare slot or pool index a tenant keeps a sound name for it. The second
-//! holds its scratch bump's reset off while any tenant has a scratch half at rest over it.
+//! holds its scratch bump's reset off while any tenant names it — with a scratch half at rest, or
+//! with a receipt run, which is the tenant's own though the bytes under it are the host's.
 //!
 //! A tenant has no dead-but-undisposed state. Nothing can be under one — a tenant named as a
 //! parent, a host or a destination means its host — so its release takes it out at once, and its
@@ -23,6 +24,7 @@
 use crate::carrier::CellHome;
 use crate::handle::{Stale, TenantHandle};
 use crate::reattach::{Erased, Halves, Reattachable};
+use crate::receipt::{Delivery, ReceiptRun};
 
 /// What a region-owning cell carries for the tenants that write its region.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -30,14 +32,15 @@ pub(crate) struct Tenancy {
     /// Tenants created on this cell and not yet released. The second thing, beside an undisposed
     /// tree child, that keeps a cell in its table past its death.
     pub(crate) tenants: u32,
-    /// How many of those have a scratch half at rest. They share this cell's scratch bump, so its
-    /// reset waits on this count as well as on the cell's own scratch slot. Moved where a tenant
-    /// step ends and where a tenant leaves, and read only where a step ends.
+    /// How many of those name this cell's scratch bump — a scratch half at rest, or a receipt run.
+    /// They share this cell's scratch bump, so its reset waits on this count as well as on the
+    /// cell's own slots. Moved where a tenant step ends, where a run is laid down and where a
+    /// tenant leaves, and read only where a step ends.
     pub(crate) scratch_tenants: u32,
 }
 
 /// One tenant.
-struct Tenant<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> {
+struct Tenant<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>> {
     /// The cell whose region this tenant writes, by bare slot or pool index: the host cannot
     /// dispose while this tenant is counted on it, so the index names the same occupant for the
     /// tenant's whole life.
@@ -45,12 +48,17 @@ struct Tenant<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> {
     executing: bool,
     continuation: Option<Erased<'graph, C>>,
     scratch_continuation: Option<Erased<'graph, S>>,
+    /// The receipt run at rest, over the host's scratch bump. The run is this tenant's; only the
+    /// bytes it lives in are the host's.
+    receipts: Option<Erased<'graph, ReceiptRun<D>>>,
+    /// A slot count a step registered, waiting for that step's end to lay it down.
+    pending_receipts: Option<usize>,
 }
 
 /// One pool index: its generation, and its occupant if it has one.
-struct TenantCell<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> {
+struct TenantCell<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>> {
     generation: u32,
-    occupant: Option<Tenant<'graph, C, S>>,
+    occupant: Option<Tenant<'graph, C, S, D>>,
 }
 
 /// What a released tenant leaves its host to settle: which host, and whether the tenant's scratch
@@ -61,12 +69,19 @@ pub(crate) struct Departed {
 }
 
 /// The growable pool of tenants.
-pub(crate) struct TenantPool<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> {
-    slots: Vec<TenantCell<'graph, C, S>>,
+pub(crate) struct TenantPool<
+    'graph,
+    C: Reattachable<'graph>,
+    S: Reattachable<'graph>,
+    D: Delivery<'graph>,
+> {
+    slots: Vec<TenantCell<'graph, C, S, D>>,
     free: Vec<u32>,
 }
 
-impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TenantPool<'graph, C, S> {
+impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>>
+    TenantPool<'graph, C, S, D>
+{
     pub(crate) fn new(cap: u32) -> Self {
         TenantPool {
             slots: Vec::with_capacity(cap as usize),
@@ -90,6 +105,8 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TenantPool<'graph
             executing: false,
             continuation,
             scratch_continuation: None,
+            receipts: None,
+            pending_receipts: None,
         });
         match self.free.pop() {
             Some(index) => {
@@ -117,14 +134,14 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TenantPool<'graph
         }
     }
 
-    fn tenant(&self, index: u32) -> &Tenant<'graph, C, S> {
+    fn tenant(&self, index: u32) -> &Tenant<'graph, C, S, D> {
         self.slots[index as usize]
             .occupant
             .as_ref()
             .unwrap_or_else(|| panic!("tenant pool slot {index} is free"))
     }
 
-    fn tenant_mut(&mut self, index: u32) -> &mut Tenant<'graph, C, S> {
+    fn tenant_mut(&mut self, index: u32) -> &mut Tenant<'graph, C, S, D> {
         self.slots[index as usize]
             .occupant
             .as_mut()
@@ -142,6 +159,31 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TenantPool<'graph
 
     pub(crate) fn set_executing(&mut self, index: u32, executing: bool) {
         self.tenant_mut(index).executing = executing;
+    }
+
+    /// Whether anything at rest on the tenant names its host's scratch bump: a scratch half, or a
+    /// receipt run. A pending registration is not one of them — it names no byte until the step
+    /// end that lays it down, which is after that end's reset.
+    pub(crate) fn names_scratch(&self, index: u32) -> bool {
+        let tenant = self.tenant(index);
+        tenant.scratch_continuation.is_some() || tenant.receipts.is_some()
+    }
+
+    /// The receipt run at rest, erased.
+    pub(crate) fn receipts(&self, index: u32) -> Option<Erased<'graph, ReceiptRun<D>>> {
+        self.tenant(index).receipts
+    }
+
+    pub(crate) fn set_receipts(&mut self, index: u32, run: Option<Erased<'graph, ReceiptRun<D>>>) {
+        self.tenant_mut(index).receipts = run;
+    }
+
+    pub(crate) fn take_pending_receipts(&mut self, index: u32) -> Option<usize> {
+        self.tenant_mut(index).pending_receipts.take()
+    }
+
+    pub(crate) fn set_pending_receipts(&mut self, index: u32, count: usize) {
+        self.tenant_mut(index).pending_receipts = Some(count);
     }
 
     /// Both halves of the continuation, off the tenant for the length of a step.
@@ -172,18 +214,21 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>> TenantPool<'graph
         self.free.push(index);
         Departed {
             host: tenant.host,
-            scratch_named: tenant.scratch_continuation.is_some(),
+            scratch_named: tenant.scratch_continuation.is_some() || tenant.receipts.is_some(),
         }
     }
 
-    /// Every live tenant's host and whether its scratch half is at rest — what the property test
-    /// recounts the hosts' tallies from.
+    /// Every live tenant's host and whether it names that host's scratch bump — what the property
+    /// test recounts the hosts' tallies from.
     #[cfg(test)]
     pub(crate) fn census(&self) -> impl Iterator<Item = (CellHome, bool)> + '_ {
         self.slots.iter().filter_map(|cell| {
-            cell.occupant
-                .as_ref()
-                .map(|tenant| (tenant.host, tenant.scratch_continuation.is_some()))
+            cell.occupant.as_ref().map(|tenant| {
+                (
+                    tenant.host,
+                    tenant.scratch_continuation.is_some() || tenant.receipts.is_some(),
+                )
+            })
         })
     }
 }

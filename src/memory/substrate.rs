@@ -8,8 +8,9 @@
 pub const WIDTH: usize = 2;
 
 pub use cellgraph::{
-    Active, CellHandle, Config, CreateError, CrossedOperand, Dormant, DropFree, EnterError, Erased,
-    Prices, Prose, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
+    Active, CellHandle, Config, CreateError, CrossedOperand, DeliverError, Delivered, Delivery,
+    Dormant, DropFree, EnterError, Erased, NoDelivery, Prices, Prose, Reattachable, ReceiptError,
+    RedeemError, RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
     ReleaseTreeError, Run, SlabHandle, Stale, TenantHandle, ThinRun, TreeHandle, Verdict, Writer,
     reattachable,
 };
@@ -21,16 +22,21 @@ pub type Ready<'graph, 'home, T> = cellgraph::Ready<'graph, 'home, T, WIDTH>;
 /// One operand of a placement: a ready carrier and how it crosses into the destination.
 pub type Operand<'graph, 'a, 'step, V> = cellgraph::Operand<'graph, 'a, 'step, V, WIDTH>;
 
+/// What one slot of a cell's receipt run held, drained into the step that owns the run.
+pub type Receipt<'graph, 'step, 'scratch, D> =
+    cellgraph::Receipt<'graph, 'step, 'scratch, D, WIDTH>;
+
 /// The graph of cells, their regions and the liveness matrix over them, over storage `'graph` that
 /// outlives it.
 ///
-/// `S` is the family of a continuation's scratch half, and the continuation family unless named.
-pub type CellGraph<'graph, C, S = C> = cellgraph::CellGraph<'graph, C, S, WIDTH>;
+/// `S` is the family of a continuation's scratch half, and the continuation family unless named;
+/// `D` is the bundle of the two families its cells deliver, which is nothing unless named.
+pub type CellGraph<'graph, C, S = C, D = NoDelivery> = cellgraph::CellGraph<'graph, C, S, D, WIDTH>;
 
 /// What a step running in a cell holds: the cell's brand `'here`, its scratch habitat's brand
 /// `'scratch`, a writer at each, and the step's doors.
-pub type StepContext<'graph, 'step, 'here, 'scratch, C, S = C> =
-    cellgraph::StepContext<'graph, 'step, 'here, 'scratch, C, S, WIDTH>;
+pub type StepContext<'graph, 'step, 'here, 'scratch, C, S = C, D = NoDelivery> =
+    cellgraph::StepContext<'graph, 'step, 'here, 'scratch, C, S, D, WIDTH>;
 
 /// Store one value in the region and hand back its resident borrow — [`Writer::fill`] at length
 /// one.
