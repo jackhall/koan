@@ -4435,7 +4435,7 @@ where
         self.cells.put_halves(self.cell, halves);
         // A registration replaces the run at rest, and clearing it here is what lets this step's
         // end hand the bump back before the tail lays the new one down in it. `register_receipts`
-        // refused unless every slot of the old run was drained, so nothing is lost with it.
+        // refused unless every slot of the run it replaces was drained, so nothing is lost with it.
         if let Some(count) = self.pending_receipts {
             self.cells.set_receipts(self.cell, None);
             self.cells.set_pending_receipts(self.cell, count);
