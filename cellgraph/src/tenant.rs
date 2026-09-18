@@ -32,7 +32,7 @@ pub(crate) struct Tenancy {
     pub(crate) tenants: u32,
     /// How many of those have a scratch half at rest. They share this cell's scratch bump, so its
     /// reset waits on this count as well as on the cell's own scratch slot. Moved where a tenant
-    /// step ends and where a tenant leaves, and read only at an `enter`.
+    /// step ends and where a tenant leaves, and read only where a step ends.
     pub(crate) scratch_tenants: u32,
 }
 

@@ -207,8 +207,8 @@ pub(crate) struct Regions {
     /// a cell's creation finds its region already waiting, and pays a length check for it.
     tree: Vec<Region>,
     /// One **scratch bump** per slab slot and per tree-pool index, beside the regions rather than
-    /// inside them: the second bump a step writes at its `'scratch` brand, reset at the cell's
-    /// `enter` once nothing names it. A `Region` is what seals, splices and absorbs, and a scratch
+    /// inside them: the second bump a step writes at its `'scratch` brand, reset at a step's end
+    /// once nothing names it. A `Region` is what seals, splices and absorbs, and a scratch
     /// bump is none of that — it is pinned to its table index and never travels, so an absorb
     /// leaves the absorber's scratch alone and a seal retains no scratch, by construction. Its
     /// bytes are in no price either: a hold never extends a scratch byte's life.
@@ -365,8 +365,8 @@ impl Regions {
         Writer(self.scratch_bump(home))
     }
 
-    /// Hand `home`'s scratch bump back whole. The caller has established that nothing names a
-    /// byte of it: no scratch half is at rest over it, and no step is running.
+    /// Hand `home`'s scratch bump back whole. The caller has established that nothing at rest names
+    /// a byte of it, and that no step is running.
     ///
     /// Under Miri the bump is rebuilt rather than reset, so its chunk goes back to the allocator
     /// and a stale `'scratch` reference is an error Miri can see.

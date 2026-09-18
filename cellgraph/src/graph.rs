@@ -854,76 +854,85 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
     ) -> Result<R, EnterError> {
         let cell = cell.into();
         let home = self.cells.begin(cell)?;
-        // The scratch bump goes back whole when no scratch half is at rest over it: a `'scratch`
-        // reference outlives its step only through that slot, so an empty slot means nothing names
-        // a byte of the bump. Read before the halves come off the cell, and done before the table
-        // is borrowed shared — a reset needs it exclusively. No failable check: the slot's
-        // emptiness is the whole condition.
-        if !self.cells.scratch_named(home) {
-            self.regions.reset_scratch(home);
-        }
         let (stored, stored_scratch) = self.cells.take_halves(cell);
         // The two halves borrowed apart for the whole step: the region table shared, which is the
         // `'here` brand, and the cells exclusively. Both writers are taken here, once, so the
         // doors that hand them out are field copies; every slot carries both bumps, and an empty
         // bump claims no chunk, so a step that never writes costs none.
-        let regions = &self.regions;
-        let writer = regions.region(home).writer();
-        let scratch_writer = regions.scratch_writer(home);
-        // Both halves of the continuation are re-anchored here, beside the two writers whose
-        // brands they come back at, so the pairing of slot with brand is made in this one place.
-        // The brands themselves are fixed by the fields the values land in.
-        //
-        // SAFETY: a value handed in at `create` or `create_tree` is at `'graph` and names no
-        // region, and a `'graph` borrow in any value outlives the graph and so this step. Otherwise
-        // the value came in through `store_successor` at some earlier step's `'here`, so its region
-        // referents are storage that brand covers: this cell's own region, whose chunks are
-        // pointer-stable and which a seal detaches and a merge absorbs unmoved, or a region a
-        // pinned crossing minted into this cell's hold set — a live cell, or a sealed cell the
-        // hold has followed into the tier, both of which keep their chunks. The cell is live for
-        // all of this step (it is the one executing) and its holds are monotone for its life, so
-        // every one of them is still there. For a tree step the hold set is the root's, and a
-        // capture's own storage is the root's, one of the cells it holds, or a tree cell on this
-        // one's chain — an ancestor, which outlives it, or the executing cell itself. For a tenant
-        // step `'here` is the host's, and every clause above holds with the host for the cell: the
-        // host's region cannot move or drop while this tenant is counted on it, since both
-        // disposal gates wait on that count, and its chunks stay put under every append the host
-        // or another tenant makes — growth claims a new chunk and moves none; the host's hold set
-        // (its row, or its root's) is monotone until the host disposes, which is after this
-        // tenant; and for a tree host the chain is the host's. `'here` is quantified by this
-        // call's `step` and nameable nowhere outside it, which discharges the invariant-family
-        // condition: nothing anchored at it escapes the step.
-        let continuation = stored.map(|half| unsafe { half.reattach() });
-        // SAFETY: the value came in through `store_scratch_successor` at some earlier step's
-        // `'scratch`, and its referents are of two kinds. The ones at that step's `'here`,
-        // shortened on the way in, are covered by the argument above. The ones at `'scratch` are
-        // chunks of the write home's scratch bump, which is pinned to its table index,
-        // pointer-stable, and reset only by an `enter` that found no scratch half at rest over it
-        // — the home's own or any tenant's, this slot among them — or by the home's disposal,
-        // which waits on every tenant. The slot has been full since the store and the cell live.
-        // `'scratch` is quantified by this call's `step` like `'here`, which discharges the
-        // invariant-family condition.
-        let scratch_continuation = stored_scratch.map(|half| unsafe { half.reattach() });
-        // The scratch comes off the graph for the whole step: the doors take `&mut self`, so a
-        // transient borrowing the field could not coexist with them. The context's `Drop` hands it
-        // back, so a panicking step loses no chunk.
-        let mut scratch = self.cells.take_scratch_owned();
-        scratch.reset();
-        let mut context = StepContext {
-            cells: &mut self.cells,
-            regions,
-            cell,
-            home,
-            continuation,
-            scratch_was_named: scratch_continuation.is_some(),
-            scratch_continuation,
-            writer,
-            scratch_writer,
-            scratch: Some(scratch),
-            _here: PhantomData,
-            _scratch: PhantomData,
+        let result = {
+            let regions = &self.regions;
+            let writer = regions.region(home).writer();
+            let scratch_writer = regions.scratch_writer(home);
+            // Both halves of the continuation are re-anchored here, beside the two writers whose
+            // brands they come back at, so the pairing of slot with brand is made in this one
+            // place. The brands themselves are fixed by the fields the values land in.
+            //
+            // SAFETY: a value handed in at `create` or `create_tree` is at `'graph` and names no
+            // region, and a `'graph` borrow in any value outlives the graph and so this step.
+            // Otherwise the value came in through `store_successor` at some earlier step's
+            // `'here`, so its region referents are storage that brand covers: this cell's own
+            // region, whose chunks are pointer-stable and which a seal detaches and a merge
+            // absorbs unmoved, or a region a pinned crossing minted into this cell's hold set — a
+            // live cell, or a sealed cell the hold has followed into the tier, both of which keep
+            // their chunks. The cell is live for all of this step (it is the one executing) and
+            // its holds are monotone for its life, so every one of them is still there. For a tree
+            // step the hold set is the root's, and a capture's own storage is the root's, one of
+            // the cells it holds, or a tree cell on this one's chain — an ancestor, which outlives
+            // it, or the executing cell itself. For a tenant step `'here` is the host's, and every
+            // clause above holds with the host for the cell: the host's region cannot move or drop
+            // while this tenant is counted on it, since both disposal gates wait on that count,
+            // and its chunks stay put under every append the host or another tenant makes — growth
+            // claims a new chunk and moves none; the host's hold set (its row, or its root's) is
+            // monotone until the host disposes, which is after this tenant; and for a tree host
+            // the chain is the host's. `'here` is quantified by this call's `step` and nameable
+            // nowhere outside it, which discharges the invariant-family condition: nothing
+            // anchored at it escapes the step.
+            let continuation = stored.map(|half| unsafe { half.reattach() });
+            // SAFETY: the value came in through `store_scratch_successor` at some earlier step's
+            // `'scratch`, and its referents are of two kinds. The ones at that step's `'here`,
+            // shortened on the way in, are covered by the argument above. The ones at `'scratch`
+            // are chunks of the write home's scratch bump, which is pinned to its table index,
+            // pointer-stable, and reset only at a step end that found nothing at rest naming it —
+            // the home's own scratch half or any tenant's, this slot among them — or by the home's
+            // disposal, which waits on every tenant. The slot has been full since the store and
+            // the cell live. `'scratch` is quantified by this call's `step` like `'here`, which
+            // discharges the invariant-family condition.
+            let scratch_continuation = stored_scratch.map(|half| unsafe { half.reattach() });
+            // The scratch comes off the graph for the whole step: the doors take `&mut self`, so a
+            // transient borrowing the field could not coexist with them. The context's `Drop`
+            // hands it back, so a panicking step loses no chunk.
+            let mut scratch = self.cells.take_scratch_owned();
+            scratch.reset();
+            let mut context = StepContext {
+                cells: &mut self.cells,
+                regions,
+                cell,
+                home,
+                continuation,
+                scratch_was_named: scratch_continuation.is_some(),
+                scratch_continuation,
+                writer,
+                scratch_writer,
+                scratch: Some(scratch),
+                _here: PhantomData,
+                _scratch: PhantomData,
+            };
+            step(&mut context)
         };
-        Ok(step(&mut context))
+        // The context is gone: both halves are back on the cell, the executing flag has fallen,
+        // a tenant's count has moved, and no borrow of the region table survives — so the scratch
+        // bump goes back whole when no scratch half is at rest over it. A `'scratch` reference
+        // outlives its step only through that slot, so an empty slot means nothing names a byte of
+        // the bump, and this is the one moment a cell that parks round after round has none: the
+        // last read of one round's transients is behind it and the next round's are not yet
+        // written. No failable check: the slot's emptiness is the whole condition.
+        //
+        // A panicking step unwinds past this. `Drop` still runs, so the halves and the flag are
+        // settled; the bump keeps its bytes until the cell's next step end.
+        if !self.cells.scratch_named(home) {
+            self.regions.reset_scratch(home);
+        }
+        Ok(result)
     }
 
     /// Declare the cell's death: the embedder promises never to enter it again.
@@ -1407,7 +1416,8 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, const W: usize>
     /// bump's reset. The bump is shared by the cell and every tenant of it, so the answer is the
     /// cell's own slot or any tenant's: the count is the whole rule, and no `enter` walks the
     /// tenants. A host whose death was declared had its own slot cleared then, so it stops holding
-    /// the reset off while its tenants run on.
+    /// the reset off while its tenants run on. Read where a step ends, once the halves are back on
+    /// the cell and a tenant's count has moved.
     fn scratch_named(&self, home: CellHome) -> bool {
         let own = match home {
             CellHome::Slab(slot) => self.slots[slot as usize].scratch_continuation.is_some(),
@@ -3183,10 +3193,10 @@ where
     /// `'scratch`.
     ///
     /// What a step writes here it can prove it throws away. Nothing at `'scratch` can be embedded in
-    /// storage, so the bump is handed back whole at the first `enter` that finds no scratch half at
-    /// rest — a long-lived cell's multi-step transients go here rather than accreting in the region
-    /// it keeps until it dies. A parked cell keeps its scratch bytes until its next `enter` or its
-    /// death: the hand-back is at entry, never at exit.
+    /// storage, so the bump is handed back whole at the end of the first step that leaves nothing at
+    /// rest naming it — a long-lived cell's multi-step transients go here rather than accreting in
+    /// the region it keeps until it dies. A cell that parks holding nothing over its scratch parks
+    /// on an empty bump.
     ///
     /// `'here: 'scratch`, so a scratch value may reference the cell's storage:
     ///
@@ -3483,8 +3493,8 @@ where
     ///
     /// The second continuation slot: what carries a scratch structure across a park. It has its
     /// own family, `S`, so neither slot can hold the other's form, and it is one-shot like
-    /// [`continuation`](Self::continuation) — a step that leaves it empty is what lets the next
-    /// `enter` hand the scratch bump back.
+    /// [`continuation`](Self::continuation) — a step that leaves it empty is what lets this step's
+    /// end hand the scratch bump back.
     ///
     /// One lifetime per family: an invariant `'here` structure (`&'here Table<'here>`) cannot ride
     /// this half, since it would have to shorten to `'scratch`. It stays in the storage half, and

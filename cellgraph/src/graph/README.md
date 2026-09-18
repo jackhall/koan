@@ -333,14 +333,19 @@ and both writers, so the pairing of slot with brand is audited where it is made
 and the continuation doors contain no `unsafe`. The scratch half's `'here`
 referents, shortened on the way in, stand on the argument above. Its scratch
 referents are chunks of the write home's scratch bump, which is pinned to its
-table index and handed back only by an `enter` that found no scratch half at
-rest over it, or by the home's disposal. There is no failable check: an empty
+table index and handed back only at the end of a step that left no scratch half
+at rest over it, or by the home's disposal. There is no failable check: an empty
 slot is the whole condition, because a `'scratch` reference outlives its step
-through that slot and no other way. For a shared region the bump is the host's
+through that slot and no other way. The reset sits at the step's *end* rather
+than its start, where both halves are back on the cell and no borrow of the
+regions survives: a cell that parks with an empty half holds no scratch bytes
+while parked, and a value another cell built into that scratch survives until
+the owning cell's own next step ends. For a shared region the bump is the host's
 and the condition is the host's own slot and a count of the tenants whose
 scratch half is at rest — moved at a tenant step's end and at a tenant's death,
-read at `enter`, and never walked. A host whose death is declared has its own
-slot cleared then, so it stops holding the reset off while its tenants run on.
+read at each step's end, and never walked. A host whose death is declared has
+its own slot cleared then, so it stops holding the reset off while its tenants
+run on.
 
 **A tenant's `'here` is its host's**, and every clause above holds with the host
 for the cell. The host's region cannot move or drop while the tenant is counted

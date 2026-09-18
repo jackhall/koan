@@ -1,7 +1,7 @@
 //! The scratch habitat: a second bump per cell at the `'scratch` brand, a second continuation slot
-//! over its own family that carries a scratch structure across a park, and a reset at `enter`
-//! whenever that slot is empty. Named apart from [`scratch`](super::scratch), which is about the
-//! graph's one verb-transient region.
+//! over its own family that carries a scratch structure across a park, and a reset at the end of
+//! every step that leaves that slot empty. Named apart from [`scratch`](super::scratch), which is
+//! about the graph's one verb-transient region.
 //!
 //! What these pin: a scratch structure — an invariant one, written through after its re-anchor —
 //! survives parks and goes once unnamed, in both region-owning kinds; an absorb moves a region and
@@ -84,7 +84,7 @@ fn round_trip(graph: &mut Graph, cell: CellHandle) {
     let held = scratch_in_use(graph, cell);
     assert!(held > 0);
 
-    // Step three: read it out and store nothing back.
+    // Step three: read it out and store nothing back, so the step's end hands the bump over.
     graph
         .enter(cell, |context| {
             let Parked { spine, slot } = context
@@ -98,11 +98,11 @@ fn round_trip(graph: &mut Graph, cell: CellHandle) {
         .unwrap();
     assert_eq!(
         scratch_in_use(graph, cell),
-        held,
-        "nothing resets at a step's exit"
+        0,
+        "the step left the slot empty, so it parks holding no scratch bytes"
     );
 
-    // Step four: the slot was empty at entry, so the scratch is gone and storage is not.
+    // Step four: the scratch is gone and storage is not, and the step ends on empty ground again.
     graph
         .enter(cell, |context| {
             let numbers = context.continuation().expect("the storage half was stored");
@@ -254,6 +254,8 @@ fn scratch_bytes_are_in_no_price() {
                     |_, views| Active::new(super::pinned(&views[0])),
                 )
                 .unwrap();
+            // Parked, so the bytes are still there to be compared against the price.
+            park_one(context, 7);
         })
         .unwrap();
     let region_bytes = graph.region_bytes(producer).unwrap();
@@ -371,13 +373,11 @@ fn a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant() {
             assert_eq!((*spine[0], *slot.get()), (41, 41));
         })
         .unwrap();
+    // That was the last half over the bump, so its own step's end handed it back.
     assert_eq!(graph.cells.tenancy(home).scratch_tenants, 0);
-    assert!(
-        scratch_in_use(&graph, host) > 0,
-        "nothing resets at a step's exit"
-    );
+    assert_eq!(scratch_in_use(&graph, host), 0);
 
-    // Nothing names the bump now, so the next `enter` of any of the three hands it back.
+    // Every cell over the bump now starts its step on empty ground.
     graph.enter(second, |_| ()).unwrap();
     assert_eq!(scratch_in_use(&graph, host), 0);
 
