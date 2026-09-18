@@ -1,6 +1,7 @@
-//! The receipt run: a fixed-width run of slots a cell parks on, laid down by the substrate in the
-//! cell's write home scratch habitat, filled by other cells' steps and drained by the owning cell.
-//! The producer half of a push — see [../README.md](../README.md) § Passing values between cells.
+//! The receipt run: a fixed-width run of slots a cell parks on, laid down by the substrate in its
+//! write home's scratch habitat, filled by other cells' steps and drained by the owning cell. The
+//! consumer half of a push, and what the delivery doors fill — see
+//! [../README.md](../README.md) § Passing values between cells.
 //!
 //! A run holds **nothing alive**. Its slots carry `Dormant`s, which carry no reach, and `Erased`
 //! values, which are bytes; no mint, no verdict, no price and no table entry stand behind one. What

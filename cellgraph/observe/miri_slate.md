@@ -24,7 +24,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-36 tests, grouped by the unsafe site each pins down. Names below are the exact
+39 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -163,7 +163,8 @@ the slab entirely — the root seals, and a holder reads a tree-homed value out 
 **The scratch habitat's re-anchor** ([src/graph.rs](../src/graph.rs),
 [src/region.rs](../src/region.rs)) — the same `retype` primitive at the second re-anchor `enter`
 makes: the scratch half of a continuation, handed back at a fresh `'scratch` each step over a
-second bump that is reset whenever no scratch half is at rest. The family is invariant — a
+second bump that is reset at the end of every step that leaves nothing at rest naming it. The
+family is invariant — a
 `Cell<&'cell u32>` beside a spine of borrows — and the test writes through the re-anchored `Cell`
 and reads the write back a step later, so what Miri checks is an interior write through a value
 retyped at a new brand each wake, scratch bytes that embed borrows of the cell's own region, and —
@@ -176,6 +177,23 @@ waits on all of them.
 - `graph::tests::habitat::a_tree_cells_scratch_survives_parks_and_resets_once_unnamed`
 - `graph::tests::habitat::an_absorb_leaves_the_absorbers_named_scratch_alone`
 - `graph::tests::habitat::a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant`
+
+**Delivery into a parked cell's scratch** ([src/receipt.rs](../src/receipt.rs),
+[src/graph.rs](../src/graph.rs)) — the same `retype` primitive at the two call sites a receipt run
+adds: the run's own spine, laid down in the write home's scratch bump at a step's end and
+re-anchored wherever it is read, and a delivered value, erased by *another* cell's step through
+this cell's scratch writer and re-anchored at the owning cell's fresh `'scratch` a park later. The
+shape is one slot written by a producer's step, read back by the run's owner across a park, while
+the bump grows under the run at rest and goes back whole at the step end that finds the run
+replaced — and because a reset rebuilds the bump under Miri, a stale `'scratch` reference is an
+error Miri can see. One test per habitat: the first is the load-bearing one, a slab home that
+registers, is filled, drains and re-registers round after round, so every round's run is read out of
+a bump that was handed back and re-laid; the second is a tree home; the third is a tenant's, whose
+run is its own though the bytes under it are its host's, with the host writing into it.
+
+- `graph::tests::receipts::a_cell_parking_on_receipts_alone_starts_every_round_at_the_foot_of_the_bump`
+- `graph::tests::receipts::a_tree_cell_parks_on_a_run_in_its_own_bump`
+- `graph::tests::receipts::a_tenants_run_is_its_own_though_the_bytes_under_it_are_its_hosts`
 
 **Tenancy — a second writer under a parked borrow** ([src/tenant.rs](../src/tenant.rs),
 [src/graph.rs](../src/graph.rs)) — no unsafe site of its own, and a second reading of the re-anchor in `enter`:
@@ -209,9 +227,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-18: 287.08s — 164 tests, 0 leaks, 0 UB
 - 2026-09-17: 284.76s — 149 tests, 0 leaks, 0 UB
 - 2026-09-14: 222.81s — 123 tests, 0 leaks, 0 UB
 - 2026-09-13: 215.91s — 115 tests, 0 leaks, 0 UB
 - 2026-09-12: 172.91s — 115 tests, 0 leaks, 0 UB
-- 2026-09-12: 237.58s — 109 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

@@ -35,13 +35,16 @@ pub enum Verb {
     Keep,
     Redeem,
     Read,
+    Register,
+    Deliver,
+    Receipt,
     Harness,
     Resident,
 }
 
 impl Verb {
     /// Every verb, in the order rows are printed.
-    pub const ALL: [Verb; 14] = [
+    pub const ALL: [Verb; 17] = [
         Verb::Create,
         Verb::Enter,
         Verb::Release,
@@ -54,6 +57,9 @@ impl Verb {
         Verb::Keep,
         Verb::Redeem,
         Verb::Read,
+        Verb::Register,
+        Verb::Deliver,
+        Verb::Receipt,
         Verb::Harness,
         Verb::Resident,
     ];
@@ -73,6 +79,9 @@ impl Verb {
             Verb::Keep => "keep",
             Verb::Redeem => "redeem",
             Verb::Read => "read",
+            Verb::Register => "register_receipts",
+            Verb::Deliver => "deliver_scratch",
+            Verb::Receipt => "receipt",
             Verb::Harness => "harness",
             Verb::Resident => "resident",
         }

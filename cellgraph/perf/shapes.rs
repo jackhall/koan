@@ -1,4 +1,4 @@
-//! The benchmark shapes: eight traversals of the substrate, each sized to the smallest `n` that
+//! The benchmark shapes: nine traversals of the substrate, each sized to the smallest `n` that
 //! shows its trend.
 //!
 //! Every shape builds its own graph, drives public doors only, and ends with an `is_empty` assert —
@@ -11,9 +11,9 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, CrossedOperand, Dormant, DropFree, Operand, Prices, Ready,
-    Reattachable, ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict, Writer,
-    reattachable,
+    Active, CellGraph, CellHandle, CrossedOperand, Delivery, Dormant, DropFree, Operand, Prices,
+    Ready, Reattachable, Receipt, ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict,
+    Writer, reattachable,
 };
 
 use crate::counting_alloc::thread_live_bytes;
@@ -38,6 +38,16 @@ reattachable!(
 
 impl DropFree for Number {}
 impl DropFree for Numbers {}
+
+/// The delivery bundle the receipt shape crosses through: a note a producer builds in the
+/// consumer's scratch habitat, and a carrier it files there at rest. Every other shape's graph
+/// takes the default bundle and delivers nothing.
+struct Push;
+
+impl<'graph> Delivery<'graph> for Push {
+    type Scratch = Number;
+    type Carrier = Number;
+}
 
 /// The always-pin embedder the roadmap names: every operand crosses pinned, so every placement
 /// over operands pays the pricing walk. This is the shape that makes `pin_price` a per-verb cost.
@@ -70,8 +80,8 @@ fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 
 /// A value homed in the executing cell: the own-region write, then the bridge that makes it a
 /// carrier. What every shape's `Verb::Alloc` row measures.
-fn number_here<'step>(
-    context: &StepContext<'static, 'step, '_, '_, Work>,
+fn number_here<'step, D: Delivery<'static>>(
+    context: &StepContext<'static, 'step, '_, '_, Work, Work, D>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))
@@ -220,6 +230,70 @@ fn push_chain(n: u32) {
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
                 assert_eq!(value, i as u32);
             }
+        })
+    })
+    .unwrap();
+
+    measure(Verb::Release, || {
+        graph.release(consumer, ReleaseAbsorption::IntoHolder)
+    })
+    .unwrap();
+    assert!(graph.is_empty());
+}
+
+/// The push completed through the consumer's receipt run rather than through a dormant carrier the
+/// embedder parks: the consumer registers a run of `n` slots, `n` producers each build a note in
+/// the consumer's own scratch habitat and file it in one slot before dying, and the consumer drains
+/// the run and registers the next.
+///
+/// [`push_chain`] is the row this is read against — the same crossing, through `alloc_into` and a
+/// carrier the embedder holds between steps, instead.
+fn delivery(n: u32) {
+    let mut graph: CellGraph<'static, Work, Work, Push> = CellGraph::new(CAP, always_pin);
+    let consumer = measure(Verb::Create, || graph.create(None)).unwrap();
+    measure(Verb::Enter, || {
+        graph.enter(consumer, |context| {
+            measure(Verb::Register, || {
+                context.register_receipts(n as usize).unwrap()
+            });
+        })
+    })
+    .unwrap();
+
+    for i in 0..n {
+        let producer = measure(Verb::Create, || graph.create(None)).unwrap();
+        measure(Verb::Enter, || {
+            graph.enter(producer, |context| {
+                measure(Verb::Deliver, || {
+                    context
+                        .deliver_scratch(consumer, i as usize, |writer| Active::new(one(writer, i)))
+                        .unwrap()
+                });
+            })
+        })
+        .unwrap();
+        measure(Verb::Release, || {
+            graph.release(producer, ReleaseAbsorption::IntoHolder)
+        })
+        .unwrap();
+    }
+
+    measure(Verb::Enter, || {
+        graph.enter(consumer, |context| {
+            for i in 0..n {
+                let read = measure(Verb::Receipt, || {
+                    match context.receipt(i as usize).unwrap() {
+                        Receipt::Value(value) => *value,
+                        _ => unreachable!("every slot took a note"),
+                    }
+                });
+                assert_eq!(read, i);
+            }
+            // Drained, so the registration replaces the run and the step's end hands the bump back
+            // before it lays the next one down.
+            measure(Verb::Register, || {
+                context.register_receipts(n as usize).unwrap()
+            });
         })
     })
     .unwrap();
@@ -539,7 +613,7 @@ fn tail_hop(n: u32) {
 
 /// Every shape. Each is swept at both its sizes, so the per-unit trend is the difference over the
 /// difference in `n` — a term needs both readings.
-pub const SHAPES: [Shape; 8] = [
+pub const SHAPES: [Shape; 9] = [
     Shape {
         name: "keep_redeem",
         run: keep_redeem,
@@ -549,6 +623,12 @@ pub const SHAPES: [Shape; 8] = [
     Shape {
         name: "push_chain",
         run: push_chain,
+        small: 8,
+        large: 32,
+    },
+    Shape {
+        name: "delivery",
+        run: delivery,
         small: 8,
         large: 32,
     },
