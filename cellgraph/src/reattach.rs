@@ -2,7 +2,7 @@
 //! lifetime `'graph` it may also borrow through; its erased form at `'graph`; and the single
 //! lifetime-retype that moves `'cell` between the two. The cell graph stores a continuation erased
 //! in a slot free of every step brand and hands it back re-anchored at the step's, which is the only
-//! reason this seam exists — see [../README.md](../README.md) § The contract: two embedder types.
+//! reason this seam exists — see [../README.md](../README.md) § The contract: three embedder types.
 
 use std::mem::ManuallyDrop;
 

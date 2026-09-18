@@ -6,8 +6,8 @@
 //! - a recycled slot is named by nothing — no occupant's pin row, and no frozen aggregate;
 //! - a cell undisposed after its declared death has an undisposed tree cell under it or a tenant
 //!   still writing its region, which are the two things that can hold a cell past its death;
-//! - every host's two tenant counts equal the tenants that name it, and the ones among them with a
-//!   scratch half at rest;
+//! - every host's two tenant counts equal the tenants that name it, and the ones among them that
+//!   name its scratch bump — with a scratch half at rest, or with a receipt run;
 //! - every sealed cell's holder count equals the number of hold sets that name it, and the reverse
 //!   naming index is exactly the transpose of the aggregates;
 //! - every bit and id of a dormant carrier's mask is covered by storage its cell is answerable

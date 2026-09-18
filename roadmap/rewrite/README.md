@@ -12,8 +12,8 @@ module over the ones below it that carries its design doc as its own
 place. [Values](../../src/values/README.md) sit on `memory`, since a value is
 what every layer above passes around, and [scopes](../../src/scope/README.md)
 sit on values and types. The items here complete the path to running a
-program: a scheduler on the cell substrate, written as a fresh crate that
-replaces `workgraph`; function values, whose captured environment is a scope's
+program: a scheduler on the cell substrate, written as a fresh koan
+module that replaces `workgraph`; function values, whose captured environment is a scope's
 closure bindings, over `memory`'s [knot](../../src/memory/README.md#the-knot),
 the shape mutually recursive functions and circular values are born in; dispatch
 over both; modules beside functions; and yielding iterators

@@ -103,8 +103,10 @@ Four absences are design statements rather than gaps:
   until it dies. It is no part of the region — it never seals, splices or
   absorbs, no price counts its bytes, and it stays at its table index when the
   region leaves — and it is handed back whole at the end of the first step that
-  leaves nothing naming it. A departing cell's scratch is dropped at its
-  disposal. A tenant's scratch is its host's.
+  leaves nothing naming it. Two things at rest name it: the continuation's
+  scratch half, and the receipt run below. Either on the cell itself, or on any
+  of its tenants, holds the reset off. A departing cell's scratch is dropped at
+  its disposal. A tenant's scratch is its host's.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and
   **never calls**. It rests in two halves, each in its own slot: the **storage
@@ -118,15 +120,32 @@ Four absences are design statements rather than gaps:
   **storage-only**: the answer to "a
   region that outlives its step but is never executed in" — a cart a loop
   accumulates into, a mailbox a scheduler parks values in.
+- **Receipt run**, optional ([src/receipt.rs](src/receipt.rs)). A fixed-width
+  run of slots a cell parks on, in a slot of its own beside the two
+  continuation halves. A step registers one by slot count and the *substrate*
+  lays it down in the write home's scratch habitat at that step's end, after
+  the reset — so a cell that parks round after round on receipts alone starts
+  every round at the foot of a bump handed back whole. Other cells' steps fill
+  its slots through the [delivery doors](#passing-values-between-cells); the
+  owning cell drains them one at a time in a step of its own. A registration
+  replaces the run at rest and is refused while that run still holds a receipt.
+  The run is the tenant's own where the bytes under it are its host's, it is
+  cleared when the cell's death is declared, and it holds nothing alive — its
+  slots carry `Dormant`s, which carry no reach, and erased values, which are
+  bytes, so no mint, no verdict, no price and no table entry stand behind one.
+  What it does hold is the reset of the bump it lives in, and it holds it until
+  the registration that replaces it or the cell's death: there is no door that
+  drops a run at rest, so a cell that has registered once parks on run-sized
+  bytes for the rest of its life.
 - **Holds**, in one relation — *pin*: value reach, accruing as values are minted
   in. It is monotone for the cell's life and releases wholesale rather than per
   reason. A slab cell stands under nothing; the parent chain is the tree pool's,
   and it is no relation at all. The structure and the discipline are
   [src/graph/README.md](src/graph/README.md).
 
-## The contract: two embedder types
+## The contract: three embedder types
 
-Everything an embedder knows that the substrate does not rides in one of two
+Everything an embedder knows that the substrate does not rides in one of three
 type parameters.
 
 **Continuation** — the work. A reattachable family
@@ -166,6 +185,24 @@ region stores this value is live, and its storage fixed-address, for all of
 liveness, and the brand a step's doors hand out is the step's own — so "a
 carrier is reachable only inside an `enter` scope" is a lifetime rather than a
 rule.
+
+**Delivery** — what a cell's [receipt run](#the-cell) holds. One trait
+([src/receipt.rs](src/receipt.rs)) naming two reattachable families at once: a
+`Scratch` form, the value a producer builds operand-free in the consumer's own
+scratch habitat, and a `Carrier` form, a `Dormant` the producer already holds
+and files at rest. The graph takes the pair as a single bundle parameter with a
+delivers-nothing default, `NoDelivery`, whose form at both positions is `()` —
+so a graph that never delivers names nothing and the lay-down's no-drop-glue
+assert holds for it. One bundle rather than two loose parameters is what keeps
+the `DropFree` bound both families need — a delivered value lands in a bump —
+on the trait rather than propagating it into the cell and the pools, and what
+keeps the run's own family at one parameter. The consequence an embedder lives
+with is one carrier family and one scratch family per graph. A `Dormant` carries
+no region brand, so both kinds rest at `'scratch` and a second run would
+separate nothing; and a consumer parked on several producers awaits a mix, which
+makes completeness a conjunction one run answers in a single read. An embedder
+constructs no slot and writes none: the slot type and the outstanding count are
+the substrate's.
 
 **Three brands per step, under the graph's lifetime.** `'step` is the step: a
 carrier branded to it was built or redeemed by this step's doors and dies with
@@ -256,8 +293,12 @@ on the read out, which re-anchors at the same `'cell`.
   is the cell itself; mint a bare hold on another cell; read a carrier it
   built; store a successor continuation, over captures or over nothing, and a
   scratch successor beside it (`store_scratch_successor`); `keep`
-  a carrier it holds, which hands back the at-rest form; and `redeem` one a
-  previous step put to rest.
+  a carrier it holds, which hands back the at-rest form; `redeem` one a
+  previous step put to rest; register the receipt run its next round parks on
+  (`register_receipts`) and drain the one an earlier step registered, a slot at
+  a time (`receipt_count`, `receipt`); and fill one slot of another cell's run,
+  with a value built in that cell's scratch habitat (`deliver_scratch`) or with
+  a carrier it already holds (`deliver_carrier`).
 
   The continuation read *is* the sealed tier's accessor — a capture whose region
   sealed since it was stored comes back reading storage that sealed cell still
@@ -347,11 +388,14 @@ asserted the same way at compile time.
 
 ## Passing values between cells
 
-There is no delivery protocol. A value always rests in a live cell's region, is
-transient inside an executing cell's step, or is sealed with its region. Nothing
-else holds a value: **there is no free-standing envelope with pins of its own**,
-and that absence is what the staleness argument in
-[src/graph/README.md](src/graph/README.md) turns on.
+A value always rests in a live cell's region, is transient inside an executing
+cell's step, rests in a slot of a live cell's receipt run, or is sealed with its
+region. Nothing else holds a value: **there is no free-standing envelope with
+pins of its own**, and that absence is what the staleness argument in
+[src/graph/README.md](src/graph/README.md) turns on. A receipt run is no
+exception to it — it is not a thing beside the cells but a run of bytes in one
+cell's own scratch habitat: it holds no reach, prices nothing, is named by no
+relation, and dies with the cell it belongs to.
 
 Crossing a step boundary therefore takes one of two shapes, both built from the
 verbs above, and both completing through `keep` on the producing side and
@@ -367,9 +411,39 @@ verbs above, and both completing through `keep` on the producing side and
   resolves to the sealed cell, the consumer's hold on it is the entitlement, and
   the value comes back reaching that sealed cell's id alone.
 
-Which shape an edge takes is the embedder's choice, per edge, and delivering the
-at-rest carrier is the embedder's job too — the substrate ships no queue and no
-mailbox, only the two doors.
+Which shape an edge takes is the embedder's choice, per edge.
+
+**The push completes without the embedder carrying the at-rest form.** A cell
+parks on a [receipt run](#the-cell) it registered, and a producer's step files
+into one of its slots by handle, in one of two ways:
+
+- **`deliver_scratch`** builds a value in the consumer's own scratch habitat
+  and stores it there. The build takes **no operands** and is quantified over
+  the consumer's brand, so it can embed no borrow of the producer's and hand
+  back nothing but what it wrote through the writer it was given — which is why
+  there is no verdict, no mint and no price on this path, and why the producer
+  names no brand of the consumer's. What it carries is a fresh result the
+  consumer reads and cannot embed in storage: the value comes back at the
+  consumer's `'scratch`, so it lasts for as long as that cell's scratch
+  continuation names it and never past the cell. A build that allocates nothing
+  is the bare signal, "re-read your slot".
+- **`deliver_carrier`** files a `Dormant` the producer already holds. That is
+  the shape for everything else — a result bound for the consumer's storage,
+  built by `alloc_into` and `keep`ed; one that borrows data already there; and
+  one a tenant wrote at its own `'here`, a brand a quantified build cannot see.
+
+Each fill answers whether the run is now complete — a read of the run's own
+outstanding count, not a wake-up: nothing about scheduling is the substrate's.
+Each refuses a stale consumer the way a placement into it would, a consumer
+with no run at rest, a slot the run does not have, and a slot already filled;
+every refusal leaves the run byte for byte as it found it. The consumer's next
+step drains the slots it wants, taking a scratch fill back at its own
+`'scratch` and a carrier fill back redeemed — or as the refusal `redeem` gives,
+which is what a producer that filed a carrier homed in itself and then died
+honestly leaves behind.
+
+So the substrate ships a per-cell run and two doors, and still no queue and no
+mailbox: nothing holds a value at rest outside a cell.
 
 ### The crossing verdict
 
@@ -463,6 +537,8 @@ exactly one decision.
   reach, and the per-cell reach table that reach lives in.
 - [src/reattach.rs](src/reattach.rs) — the reattachable contract and the single
   lifetime-retype the crate is built on.
+- [src/receipt.rs](src/receipt.rs) — the `Delivery` bundle and the delivers-
+  nothing default, the receipt run and its slots, and what a fill answers.
 - [tests/surface.rs](tests/surface.rs) — the public surface, named and exercised
   from outside the crate. Everything an embedder may reach is used here and
   nothing else is reachable to use, so an item that widens shows up as an unused

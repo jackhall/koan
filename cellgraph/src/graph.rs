@@ -3179,7 +3179,8 @@ where
 /// `'here`. Every door into storage does: the successor store, [`lift`](Self::lift), both
 /// placement doors, and a write through a `'here`-homed slot. A scratch structure crosses a park
 /// only through [`store_scratch_successor`](Self::store_scratch_successor), and the bump is
-/// handed back whole at the first `enter` that finds that slot empty.
+/// handed back whole at the end of the first step that leaves neither that slot nor the cell's
+/// receipt run naming it.
 ///
 /// `'graph` outlives both. It is the graph's lifetime — storage the embedder owns outside the graph,
 /// which the graph cannot outlive — and the where-clause is what lets a step capture a `&'graph`

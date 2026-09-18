@@ -1,7 +1,7 @@
 //! [`Dormant`] — the carrier at rest: a value put down in its home cell's region between steps,
 //! with no step brand — only `'graph`, the storage outliving the graph it may borrow. The least
 //! live of the three states a value with reach passes through ([../README.md](../README.md) § The
-//! contract: two embedder types), and the only one an embedder may hold across an `enter` scope.
+//! contract: three embedder types), and the only one an embedder may hold across an `enter` scope.
 //!
 //! A dormant carrier carries **no reach**. Its mask lives in its home cell's reach table, where
 //! the seal transition can rewrite it as the slab bit it names becomes a sealed id; the dormant

@@ -333,19 +333,39 @@ and both writers, so the pairing of slot with brand is audited where it is made
 and the continuation doors contain no `unsafe`. The scratch half's `'here`
 referents, shortened on the way in, stand on the argument above. Its scratch
 referents are chunks of the write home's scratch bump, which is pinned to its
-table index and handed back only at the end of a step that left no scratch half
-at rest over it, or by the home's disposal. There is no failable check: an empty
-slot is the whole condition, because a `'scratch` reference outlives its step
-through that slot and no other way. The reset sits at the step's *end* rather
-than its start, where both halves are back on the cell and no borrow of the
-regions survives: a cell that parks with an empty half holds no scratch bytes
-while parked, and a value another cell built into that scratch survives until
-the owning cell's own next step ends. For a shared region the bump is the host's
-and the condition is the host's own slot and a count of the tenants whose
-scratch half is at rest — moved at a tenant step's end and at a tenant's death,
-read at each step's end, and never walked. A host whose death is declared has
-its own slot cleared then, so it stops holding the reset off while its tenants
-run on.
+table index and handed back only at the end of a step that left nothing at rest
+naming it, or by the home's disposal. There is no failable check: emptiness of
+the slots is the whole condition, because a `'scratch` reference outlives its
+step through one of them and no other way. Two slots carry it — the scratch
+half, and the [receipt run](../receipt.rs) laid down over the same bump — and
+either one full is the whole of what holds the reset off. The reset sits at the
+step's *end* rather than its start, where both halves are back on the cell and
+no borrow of the regions survives: a cell that parks with both slots empty holds
+no scratch bytes while parked, and a value another cell built into that scratch
+survives until the owning cell's own next step ends. A registration a step made
+is laid down *after* that reset, and names no byte before it does, which is what
+puts a re-registering cell's next run at the foot of a bump handed back whole.
+For a shared region the bump is the host's and the condition is the host's own
+slots and a count of the tenants that name it — moved where a tenant's step
+ends, by what that step left in its slots and again where the tail lays a fresh
+run down, and at a tenant's death, read at each step's end and never walked. A
+host whose death is declared has its own slots cleared then, so it stops holding
+the reset off while its tenants run on.
+
+**A run's spine and a delivered value re-anchor on the same argument**, at two
+call sites the delivery doors add rather than an `unsafe` operation of their
+own: every write on the path is safe code, a write through a shared borrow of
+the bump and a `Cell` write of known layout. The spine is two shared borrows of
+chunks of the write home's scratch bump, read back wherever the run is named,
+and it is itself one of the things at rest whose emptiness the reset waits on,
+so those chunks are there for as long as any borrow of them can be taken. A
+delivered value adds one clause to the scratch half's argument: the erase was
+*another* cell's step. What covers it is that the producer could have built the
+value nowhere but through this cell's own scratch writer — the build takes no
+operands and its brand is quantified by the call — so its referents are bytes of
+this very bump; and that a cell whose run is at rest is not executing, since the
+graph is one mutator and `enter` holds it exclusively, so no step of the owner's
+was running when the value landed.
 
 **A tenant's `'here` is its host's**, and every clause above holds with the host
 for the cell. The host's region cannot move or drop while the tenant is counted
