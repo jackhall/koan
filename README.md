@@ -419,7 +419,7 @@ a standalone library rather than as Koan's internals; work items cross-link
 across the trees and `doclinks` gates them as one dependency graph, but each tree
 derives its own "Next items" list. The
 [workgraph/](workgraph/README.md) scheduler is the old runtime's and is replaced
-by a fresh crate ([roadmap/rewrite/scheduler-on-cellgraph.md](roadmap/rewrite/scheduler-on-cellgraph.md));
+by a koan module ([roadmap/rewrite/scheduler-on-cellgraph.md](roadmap/rewrite/scheduler-on-cellgraph.md));
 its design and roadmap trees are retired under `old_` prefixes, as is the
 boundary doc [old_design/scheduler-library.md](old_design/scheduler-library.md).
 

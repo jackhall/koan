@@ -4,8 +4,8 @@
 //! The library takes no Koan parameter, so a name arrives here verbatim unless it carries the
 //! liveness matrix's width, and the width is bound here once — [`WIDTH`] — and nowhere else.
 
-/// The liveness matrix's width in 64-bit words: 128 slab slots, a 2 KiB matrix, 16-byte masks.
-pub const WIDTH: usize = 2;
+/// The liveness matrix's width in 64-bit words: 64 slab slots, a 512-byte matrix, 8-byte masks.
+pub const WIDTH: usize = 1;
 
 pub use cellgraph::{
     Active, CellHandle, Config, CreateError, CrossedOperand, DeliverError, Delivered, Delivery,

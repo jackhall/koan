@@ -223,8 +223,8 @@ holds a string cell and an anonymous list node.
   function node.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — calling a function, and
   builtins as function values with native bodies.
-- [Scheduler on cellgraph](../../roadmap/rewrite/scheduler-on-cellgraph.md) —
-  a component submitted as one unit of work, whose eager parts the step
+- [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
+  — a component submitted as one unit of work, whose eager parts the step
   evaluates and supplies to the tie by site.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a function
   value born outside a binder's root, and union-variant construction in a

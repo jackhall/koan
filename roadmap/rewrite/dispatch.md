@@ -51,7 +51,7 @@ program runs on the rewritten stack.
 
 **Requires:**
 
-- [Scheduler on cellgraph](scheduler-on-cellgraph.md) — running a program needs the scheduler that drives it.
+- [The top level on the scheduler](top-level-on-the-scheduler.md) — running a program needs the scheduler that drives it.
 
 **Unblocks:**
 

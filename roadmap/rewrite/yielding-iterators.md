@@ -77,7 +77,7 @@ elements a consumer takes lazily.
 **Requires:**
 
 - [Dispatch](dispatch.md) — a demand for an element is an ordinary dispatch.
-- [Scheduler on cellgraph](scheduler-on-cellgraph.md) — a flat consumer loop is its tail call.
+- [The top level on the scheduler](top-level-on-the-scheduler.md) — a flat consumer loop is its tail call.
 
 **Unblocks:**
 

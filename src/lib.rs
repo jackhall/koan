@@ -28,6 +28,9 @@ pub mod machine;
 /// spelling and the slot array — and the bump tier outside the graph, where program storage lives.
 pub mod memory;
 pub mod parse;
+/// The deferred-work drain koan runs on: a unit of work is a `cellgraph` cell, and the module adds
+/// the submission table, the work queue, the drain protocol and delivery over it.
+pub mod scheduler;
 /// Lexical environments over values and types: the shape a body resolves its names through, the
 /// closure bindings a callable captures, and the activation a call reads and binds.
 pub mod scope;
