@@ -12,7 +12,7 @@ use crate::parse::BinderSymbol;
 use crate::values::{Knotted, Link, Value, Weight};
 
 use super::activation::{Activation, Binding};
-use super::shape::{CaptureSlot, CaptureSource, Shape};
+use super::shape::{BodyShape, CaptureSlot, CaptureSource};
 
 /// A callable's closure bindings, in capture-slot order.
 #[derive(Clone, Copy)]
@@ -40,7 +40,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
     /// its binder's handle. A `Member` source is `edge(index)`, the edge the caller minted for
     /// member `index` of the component the callable is born in. Nothing is written to a region.
     pub fn read_captures<'x>(
-        shape: &Shape<'_>,
+        shape: &BodyShape<'_>,
         enclosing: &Activation<'graph, 'cell, X>,
         scratch: BumpAllocator<'x>,
         mut edge: impl FnMut(u32) -> Edge,

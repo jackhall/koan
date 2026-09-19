@@ -4,15 +4,17 @@
 use proptest::prelude::*;
 
 use crate::memory::{ProgramBrand, program_storage};
-use crate::parse::forms::binder::BinderFacts;
-use crate::parse::forms::{FORMS, Form, KeyElementSpec, form_for, render_key};
+use crate::parse::builtin_shapes::binder::BinderFacts;
+use crate::parse::builtin_shapes::{
+    BUILTIN_SHAPES, BuiltinShape, KeyElementSpec, builtin_shape_for, render_key,
+};
 use crate::parse::labels::Symbol;
 use crate::parse::{ExpressionPart, KExpression, LabelInterner, parse};
 use crate::source::Spanned;
 
 /// Every form the table gives binder facts, with those facts beside it.
-fn binder_forms() -> impl Iterator<Item = (&'static Form, BinderFacts)> {
-    FORMS
+fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
+    BUILTIN_SHAPES
         .iter()
         .filter_map(|form| form.binder.map(|binder| (form, binder)))
 }
@@ -133,7 +135,7 @@ fn parse_one<'a>(brand: ProgramBrand<'a>, source: &str) -> KExpression<'a> {
 }
 
 /// A form key spelled out: keywords verbatim, each slot filled with `filler`.
-fn render_form(form: &Form, fillers: &[String]) -> String {
+fn render_form(form: &BuiltinShape, fillers: &[String]) -> String {
     let mut slot = 0;
     let mut out = Vec::new();
     for element in form.key {
@@ -181,7 +183,7 @@ proptest! {
         let program = program_storage();
         let brand = program.brand();
 
-        for (form, fillers) in FORMS
+        for (form, fillers) in BUILTIN_SHAPES
             .iter()
             .flat_map(|form| [(form, &value_fillers), (form, &type_fillers)])
         {
@@ -189,7 +191,7 @@ proptest! {
             let statement = parse_one(brand, &source);
             let cached = statement
                 .cache()
-                .form()
+                .builtin_shape()
                 .unwrap_or_else(|| panic!("{source}: a spelled form key matches its entry"));
             prop_assert!(
                 std::ptr::eq(cached, form),
@@ -240,8 +242,8 @@ proptest! {
             brand.allocator(),
             run.into_iter().map(Spanned::bare),
         );
-        prop_assume!(form_for(user.stored_key().iter().copied()).is_none());
-        prop_assert!(user.cache().form().is_none());
+        prop_assume!(builtin_shape_for(user.stored_key().iter().copied()).is_none());
+        prop_assert!(user.cache().builtin_shape().is_none());
         prop_assert!(user.binder_plan().is_none());
         prop_assert!(user.binder_name_slot().is_none());
         for slot in 0..user.parts.len() {

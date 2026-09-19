@@ -32,14 +32,14 @@ pub use birth::{Untieable, tie};
 use std::fmt;
 
 use crate::memory::{DropFree, Edge, Member, reattachable};
-use crate::scope::{Activation, ClosureBindings, Shape};
+use crate::scope::{Activation, BodyShape, ClosureBindings};
 use crate::type_lattice::KType;
 use crate::values::{self, Circular, Resolved, Value, ValueCarrier, ValueFamily, Weight};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
     ktype: KType,
-    shape: &'graph Shape<'graph>,
+    shape: &'graph BodyShape<'graph>,
     closure: &'cell ClosureBindings<'graph, 'cell, X>,
     /// What rebuilding the whole knot this node sits in writes, the same on every node.
     knot_weight: Weight,
@@ -60,7 +60,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     }
 
     /// The body shape a call activates.
-    pub fn shape(&self) -> &'graph Shape<'graph> {
+    pub fn shape(&self) -> &'graph BodyShape<'graph> {
         self.shape
     }
 

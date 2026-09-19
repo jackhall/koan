@@ -19,7 +19,7 @@
 use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
-use crate::parse::forms::FormId;
+use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
 use crate::values::Knotted;
 
@@ -199,7 +199,7 @@ pub struct Component<'graph> {
 
 /// One body's resolved lexical structure. See the module documentation.
 #[derive(Clone, Copy)]
-pub struct Shape<'graph> {
+pub struct BodyShape<'graph> {
     kind: ShapeKind,
     /// Each declared name at its slot, beside the position it writes at.
     names: Channels<'graph, Position>,
@@ -211,26 +211,26 @@ pub struct Shape<'graph> {
     components: &'graph [Component<'graph>],
     mentions: &'graph [Mention],
     captures: &'graph [CaptureSpec],
-    nested: &'graph [(Site, &'graph Shape<'graph>)],
+    nested: &'graph [(Site, &'graph BodyShape<'graph>)],
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
     /// Each binder whose right-hand side births a callable, beside that callable's body, by slot.
-    births: &'graph [(Slot, &'graph Shape<'graph>)],
+    births: &'graph [(Slot, &'graph BodyShape<'graph>)],
     /// Each `LET` binder beside its right-hand side part, by slot.
     rhs: &'graph [(Slot, &'graph ExpressionPart<'graph>)],
     keeps_defining_scope: bool,
 }
 
-const _: () = assert!(!std::mem::needs_drop::<Shape<'static>>());
+const _: () = assert!(!std::mem::needs_drop::<BodyShape<'static>>());
 
-impl<'graph> Shape<'graph> {
+impl<'graph> BodyShape<'graph> {
     /// The shape of a program's top-level statements.
     pub fn of_program<X: Knotted>(
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
         builtins: &Builtins<'_, '_, X>,
         scratch: BumpAllocator<'_>,
-    ) -> Result<&'graph Shape<'graph>, ShapeError> {
+    ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
         build::program(brand, statements, builtins, scratch)
     }
 
@@ -242,7 +242,7 @@ impl<'graph> Shape<'graph> {
         site: &Activation<'graph, '_, X>,
         at: Position,
         scratch: BumpAllocator<'_>,
-    ) -> Result<&'graph Shape<'graph>, ShapeError> {
+    ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
         build::eval(brand, body, site, at, scratch)
     }
 
@@ -312,7 +312,7 @@ impl<'graph> Shape<'graph> {
     }
 
     /// The shape of the body or arm whose part sits at `site`.
-    pub fn nested(&self, site: Site) -> Option<&'graph Shape<'graph>> {
+    pub fn nested(&self, site: Site) -> Option<&'graph BodyShape<'graph>> {
         let index = self
             .nested
             .binary_search_by_key(&site, |(nested, _)| *nested)
@@ -321,7 +321,7 @@ impl<'graph> Shape<'graph> {
     }
 
     /// Every nested shape by site.
-    pub fn nested_shapes(&self) -> &'graph [(Site, &'graph Shape<'graph>)] {
+    pub fn nested_shapes(&self) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
         self.nested
     }
 
@@ -335,7 +335,7 @@ impl<'graph> Shape<'graph> {
     /// callable form at its root (`LET f = FN …`) and for a combined form (`LET f = FN EXPR …`,
     /// `LET f = OP …`); `None` for a data binder, a parameter, and a callable nested under anything
     /// else.
-    pub fn births(&self, slot: Slot) -> Option<&'graph Shape<'graph>> {
+    pub fn births(&self, slot: Slot) -> Option<&'graph BodyShape<'graph>> {
         let index = self
             .births
             .binary_search_by_key(&slot, |(binder, _)| *binder)
@@ -404,9 +404,9 @@ pub enum ShapeError {
     /// A component containing an eager mention of one of its own members.
     EagerCycle { members: Vec<BinderSymbol> },
     /// A form the shape builder does not resolve.
-    Unsupported { form: FormId, at: Position },
+    Unsupported { form: BuiltinShapeId, at: Position },
     /// A form whose body or branches are not the shape it declares.
-    Malformed { form: FormId, at: Position },
+    Malformed { form: BuiltinShapeId, at: Position },
 }
 
 impl ShapeError {

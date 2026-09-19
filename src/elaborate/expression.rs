@@ -2,7 +2,7 @@
 //! the handles its parts elaborate to.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::forms::{FormId, KEYWORDS};
+use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression, KeywordSymbol, StaticName, TypeSymbol};
 use crate::scope::{Activation, Binding, Site, pair_name};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
@@ -147,16 +147,16 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
         if let [only] = parts {
             return self.part(&only.value, groups);
         }
-        if let Some(form) = node.cache().form() {
+        if let Some(form) = node.cache().builtin_shape() {
             let part = |index: usize| &parts[index].value;
             return match form.id {
-                FormId::LambdaType => self.function(part(1), part(3), groups),
-                FormId::ExpressionHead => self.shape(&[], part(1), part(3), groups),
-                FormId::QuantifiedExpressionHead => {
+                BuiltinShapeId::LambdaType => self.function(part(1), part(3), groups),
+                BuiltinShapeId::ExpressionHead => self.shape(&[], part(1), part(3), groups),
+                BuiltinShapeId::QuantifiedExpressionHead => {
                     let names = quantifiers(part(3), self.scratch);
                     self.shape(&names, part(4), part(6), groups)
                 }
-                FormId::Attribute => {
+                BuiltinShapeId::Attribute => {
                     let union = self.part(part(1), groups)?;
                     let tag = match part(2) {
                         ExpressionPart::Type(name) => name.symbol(),

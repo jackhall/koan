@@ -3,15 +3,15 @@
 //! A builtin form is recognized by its **full untyped bucket key**, every keyword pinned in
 //! position. That recognition is sound because builtin buckets are unshadowable: a node whose key
 //! matches a table entry can only ever resolve to that builtin's overloads, and a key the table
-//! marks [`reserved`](Form::reserved) is refused to user registration for the same reason.
+//! marks [`reserved`](BuiltinShape::reserved) is refused to user registration for the same reason.
 //!
-//! [`FORMS`] is the one table. Each entry carries every fact the machine reads off a form — the
+//! [`BUILTIN_SHAPES`] is the one table. Each entry carries every fact the machine reads off a form — the
 //! binder it installs, the slots that stay raw, whether the shape is reserved — under one
-//! [`FormId`] tag. A node resolves its entry once, at construction ([`NodeCache`]), and every
+//! [`BuiltinShapeId`] tag. A node resolves its entry once, at construction ([`NodeCache`]), and every
 //! later reader indexes by the tag rather than re-walking a key: the close-inference rules
 //! ([`CLOSE_RULES`](crate::machine::model::close_inference)) and the miss diagnostics
 //! ([`MISS_DIAGNOSTICS`](crate::machine::model::miss_diagnostics::MISS_DIAGNOSTICS)) are
-//! `(FormId, …)` pairs and hold no key of their own.
+//! `(BuiltinShapeId, …)` pairs and hold no key of their own.
 //!
 //! [`NodeCache`]: crate::parse::ast::NodeCache
 
@@ -20,15 +20,15 @@ pub mod layout;
 pub mod lazy;
 
 use crate::parse::ast::KeyElement;
-use crate::parse::forms::binder::{
+use crate::parse::builtin_shapes::binder::{
     BinderFacts, BinderSurface, fn_def_binder_bucket, identifier_part_binder_name,
     op_def_binder_bucket, type_decl_binder_name, type_part_binder_name,
 };
-use crate::parse::forms::lazy::LazyKinds;
+use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::parse::labels::{KeywordSymbol, StaticName};
 
 /// The fixed tokens the builtin forms are spelled with, each declared once and minted once. Every
-/// [`FORMS`] entry names its keywords out of this group, and the binder module's reserved-symbol
+/// [`BUILTIN_SHAPES`] entry names its keywords out of this group, and the binder module's reserved-symbol
 /// list and its `FN` / `UNARY` position reads compare against the same memoized symbols, so the
 /// spelling of a surface token is written in exactly one place.
 pub(crate) struct SurfaceKeywords {
@@ -108,7 +108,7 @@ pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
     otherwise: crate::static_name!(KeywordSymbol, ":!"),
 };
 
-/// One element of a static bucket key: a fixed keyword token or a slot. [`FORMS`] is `static`, so a
+/// One element of a static bucket key: a fixed keyword token or a slot. [`BUILTIN_SHAPES`] is `static`, so a
 /// keyword rests as one of the [`KEYWORDS`] names and matching compares its memoized symbol against
 /// the symbol a stored key carries — a table probe is a walk over short runs that hashes nothing
 /// past each name's first touch.
@@ -144,8 +144,8 @@ pub fn key_matches(
 }
 
 /// One builtin form, recognized by its full bucket key. Every key is spelled here and nowhere else.
-pub struct Form {
-    pub id: FormId,
+pub struct BuiltinShape {
+    pub id: BuiltinShapeId,
     /// Full untyped bucket key — ALL keywords in position, never just the lead keyword.
     pub key: &'static [KeyElementSpec],
     /// What the form installs when submitted as a statement. `None` for a form that binds nothing.
@@ -162,7 +162,7 @@ pub struct Form {
     pub reserved: bool,
 }
 
-impl Form {
+impl BuiltinShape {
     /// The kinds that stay raw at `index`, empty when the slot evaluates. A linear scan over a run
     /// of at most four pairs, which is cheaper than any index-keyed structure at this size.
     pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
@@ -173,11 +173,11 @@ impl Form {
     }
 }
 
-/// One variant per [`FORMS`] entry, in table order — the tag every other table keys by, so a rule
+/// One variant per [`BUILTIN_SHAPES`] entry, in table order — the tag every other table keys by, so a rule
 /// or a diagnostic names a form without respelling its key. The table-order property pins each tag
 /// to its index.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FormId {
+pub enum BuiltinShapeId {
     LetValue,
     TypeDeclaration,
     Module,
@@ -227,11 +227,15 @@ pub enum FormId {
     Eval,
 }
 
-/// The [`FORMS`] entry `key` matches, or `None` for every user-defined bucket. The one table probe:
+/// The [`BUILTIN_SHAPES`] entry `key` matches, or `None` for every user-defined bucket. The one table probe:
 /// a node resolves its entry here at construction and caches it, and every later reader goes
 /// through the cache.
-pub fn form_for(key: impl ExactSizeIterator<Item = KeyElement> + Clone) -> Option<&'static Form> {
-    FORMS.iter().find(|form| key_matches(form.key, key.clone()))
+pub fn builtin_shape_for(
+    key: impl ExactSizeIterator<Item = KeyElement> + Clone,
+) -> Option<&'static BuiltinShape> {
+    BUILTIN_SHAPES
+        .iter()
+        .find(|form| key_matches(form.key, key.clone()))
 }
 
 use KeyElementSpec::{Keyword as Kw, Slot};
@@ -244,15 +248,15 @@ const RECORD_TYPE: LazyKinds = LazyKinds::RECORD_TYPE;
 const RAW_TYPE: LazyKinds = TYPE_EXPR.with(RECORD_TYPE);
 
 /// The single source of truth for the builtin forms. One entry per distinct untyped bucket key, in
-/// [`FormId`] order; the keys are pinned against the live builtin registration table by the
+/// [`BuiltinShapeId`] order; the keys are pinned against the live builtin registration table by the
 /// table⟺registration property, so an entry whose builtin was renamed, re-shaped, or dropped fails
 /// the suite, and so does a builtin that grows a raw-capture slot without an entry here.
-pub static FORMS: &[Form] = &[
+pub static BUILTIN_SHAPES: &[BuiltinShape] = &[
     // ---------- the name binders ----------
     //
     // LET <name> = <value>: value-name overload then type-alias overload.
-    Form {
-        id: FormId::LetValue,
+    BuiltinShape {
+        id: BuiltinShapeId::LetValue,
         key: &[Kw(&KEYWORDS.let_), Slot, Kw(&KEYWORDS.equals), Slot],
         binder: Some(BinderFacts {
             names: &[identifier_part_binder_name, type_part_binder_name],
@@ -265,8 +269,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
-    Form {
-        id: FormId::TypeDeclaration,
+    BuiltinShape {
+        id: BuiltinShapeId::TypeDeclaration,
         key: &[Kw(&KEYWORDS.type_), Slot],
         binder: Some(BinderFacts {
             names: &[type_decl_binder_name],
@@ -280,8 +284,8 @@ pub static FORMS: &[Form] = &[
     },
     // MODULE <name> = <body> (a module is a value, so the name slot is an `Identifier`; a
     // Type-token name registers nothing and takes the miss table's respelling diagnostic).
-    Form {
-        id: FormId::Module,
+    BuiltinShape {
+        id: BuiltinShapeId::Module,
         key: &[Kw(&KEYWORDS.module), Slot, Kw(&KEYWORDS.equals), Slot],
         binder: Some(BinderFacts {
             names: &[identifier_part_binder_name],
@@ -294,8 +298,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // GROUP <name> FOLD LEFT = <body>.
-    Form {
-        id: FormId::GroupFoldLeft,
+    BuiltinShape {
+        id: BuiltinShapeId::GroupFoldLeft,
         key: &[
             Kw(&KEYWORDS.group),
             Slot,
@@ -315,8 +319,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // GROUP <name> FOLD RIGHT = <body>.
-    Form {
-        id: FormId::GroupFoldRight,
+    BuiltinShape {
+        id: BuiltinShapeId::GroupFoldRight,
         key: &[
             Kw(&KEYWORDS.group),
             Slot,
@@ -336,8 +340,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT = <body>.
-    Form {
-        id: FormId::GroupPairwiseFoldLeft,
+    BuiltinShape {
+        id: BuiltinShapeId::GroupPairwiseFoldLeft,
         key: &[
             Kw(&KEYWORDS.group),
             Slot,
@@ -359,8 +363,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // GROUP <name> PAIRWISE FOLD <combiner> RIGHT = <body>.
-    Form {
-        id: FormId::GroupPairwiseFoldRight,
+    BuiltinShape {
+        id: BuiltinShapeId::GroupPairwiseFoldRight,
         key: &[
             Kw(&KEYWORDS.group),
             Slot,
@@ -382,8 +386,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // SIG <name> = <body>.
-    Form {
-        id: FormId::Sig,
+    BuiltinShape {
+        id: BuiltinShapeId::Sig,
         key: &[Kw(&KEYWORDS.sig), Slot, Kw(&KEYWORDS.equals), Slot],
         binder: Some(BinderFacts {
             names: &[type_part_binder_name],
@@ -396,8 +400,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // UNION <name> = <schema>.
-    Form {
-        id: FormId::Union,
+    BuiltinShape {
+        id: BuiltinShapeId::Union,
         key: &[Kw(&KEYWORDS.union), Slot, Kw(&KEYWORDS.equals), Slot],
         binder: Some(BinderFacts {
             names: &[type_part_binder_name],
@@ -413,8 +417,8 @@ pub static FORMS: &[Form] = &[
     // type but is deliberately unmasked: a bare `(…)` there already works by evaluation, so
     // flipping it would change a working spelling's route for nothing. A `:(…)` or `:{…}` there is
     // captured raw while a bare `(…)` evaluates — the mixed index the kind set exists for.
-    Form {
-        id: FormId::NewTypeDefinition,
+    BuiltinShape {
+        id: BuiltinShapeId::NewTypeDefinition,
         key: &[Kw(&KEYWORDS.newtype), Slot, Kw(&KEYWORDS.equals), Slot],
         binder: Some(BinderFacts {
             names: &[type_part_binder_name],
@@ -427,8 +431,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
-    Form {
-        id: FormId::NewTypeDeclaration,
+    BuiltinShape {
+        id: BuiltinShapeId::NewTypeDeclaration,
         key: &[Kw(&KEYWORDS.newtype), Slot],
         binder: Some(BinderFacts {
             names: &[type_decl_binder_name],
@@ -443,8 +447,8 @@ pub static FORMS: &[Form] = &[
     // VAL <name> <ty> — a declaration form with no install channel. It records into the decl
     // scope's slot collector, not a binding map any name lookup can see, so it installs nothing; it
     // appears here so the one-place specification of the declaration forms is complete.
-    Form {
-        id: FormId::Val,
+    BuiltinShape {
+        id: BuiltinShapeId::Val,
         key: &[Kw(&KEYWORDS.val), Slot, Slot],
         binder: Some(BinderFacts {
             names: &[],
@@ -463,8 +467,8 @@ pub static FORMS: &[Form] = &[
     // `(…)` return spelling rewrites to a sigiled type expression as it does on every other form.
     // The signature slot resolves: a `:{…}` record is a type the lane can evaluate where it stands,
     // unlike a head, whose tokens name nothing until the definition binds them.
-    Form {
-        id: FormId::Lambda,
+    BuiltinShape {
+        id: BuiltinShapeId::Lambda,
         key: &[
             Kw(&KEYWORDS.fn_),
             Slot,
@@ -484,8 +488,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // FN <record schema> -> <return type> — the lambda type expression, no body.
-    Form {
-        id: FormId::LambdaType,
+    BuiltinShape {
+        id: BuiltinShapeId::LambdaType,
         key: &[Kw(&KEYWORDS.fn_), Slot, Kw(&KEYWORDS.arrow), Slot],
         binder: None,
         lazy_slots: &[],
@@ -496,8 +500,8 @@ pub static FORMS: &[Form] = &[
     // registers here. The lazy stamp is what keeps its miss a miss, holding the body raw so the
     // statement reports the shape it got rather than an error from evaluating a body whose
     // parameters no binder ever bound.
-    Form {
-        id: FormId::CombinedLambda,
+    BuiltinShape {
+        id: BuiltinShapeId::CombinedLambda,
         key: &[
             Kw(&KEYWORDS.let_),
             Slot,
@@ -514,8 +518,8 @@ pub static FORMS: &[Form] = &[
         reserved: true,
     },
     // EXPR <head> -> <return type> = <body> (every EXPR definition overload shares this key).
-    Form {
-        id: FormId::ExpressionDefinition,
+    BuiltinShape {
+        id: BuiltinShapeId::ExpressionDefinition,
         key: &[
             Kw(&KEYWORDS.expr),
             Slot,
@@ -537,16 +541,16 @@ pub static FORMS: &[Form] = &[
     // EXPR <head> -> <return type> — the bodyless head, whose carrier is the head's expression
     // shape. Only the head captures raw: it is the declarator's own operand and must reach it
     // unevaluated, while the return slot is an ordinary kind expectation, as on every bodyless head.
-    Form {
-        id: FormId::ExpressionHead,
+    BuiltinShape {
+        id: BuiltinShapeId::ExpressionHead,
         key: &[Kw(&KEYWORDS.expr), Slot, Kw(&KEYWORDS.arrow), Slot],
         binder: None,
         lazy_slots: &[(1, CODE)],
         reserved: false,
     },
     // EXPR FOR ALL <names> <head> -> <return type> = <body>.
-    Form {
-        id: FormId::QuantifiedExpressionDefinition,
+    BuiltinShape {
+        id: BuiltinShapeId::QuantifiedExpressionDefinition,
         key: &[
             Kw(&KEYWORDS.expr),
             Kw(&KEYWORDS.for_),
@@ -572,8 +576,8 @@ pub static FORMS: &[Form] = &[
     // captures raw beside the head: its tokens name nothing yet, so the lane must not try to
     // resolve them. The return stages too, because it may name a quantifier and so resolves against
     // the group's own scope rather than the surrounding one.
-    Form {
-        id: FormId::QuantifiedExpressionHead,
+    BuiltinShape {
+        id: BuiltinShapeId::QuantifiedExpressionHead,
         key: &[
             Kw(&KEYWORDS.expr),
             Kw(&KEYWORDS.for_),
@@ -590,8 +594,8 @@ pub static FORMS: &[Form] = &[
     // LET <name> = FN EXPR <head> -> <return type> = <body> — a combined statement, one binder
     // filling both channels: the LET value name and the bucket key the declaration's body
     // registers under.
-    Form {
-        id: FormId::CombinedExpression,
+    BuiltinShape {
+        id: BuiltinShapeId::CombinedExpression,
         key: &[
             Kw(&KEYWORDS.let_),
             Slot,
@@ -615,8 +619,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // LET <name> = FN EXPR FOR ALL <names> <head> -> <return type> = <body>.
-    Form {
-        id: FormId::CombinedQuantifiedExpression,
+    BuiltinShape {
+        id: BuiltinShapeId::CombinedQuantifiedExpression,
         key: &[
             Kw(&KEYWORDS.let_),
             Slot,
@@ -645,8 +649,8 @@ pub static FORMS: &[Form] = &[
     // ---------- the operator declarators ----------
     //
     // OP <symbol> OVER <operand> = <body>.
-    Form {
-        id: FormId::OperatorDefinition,
+    BuiltinShape {
+        id: BuiltinShapeId::OperatorDefinition,
         key: &[
             Kw(&KEYWORDS.op),
             Slot,
@@ -666,8 +670,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // OP <symbol> OVER <operand> -> <return type> = <body>.
-    Form {
-        id: FormId::OperatorDefinitionReturning,
+    BuiltinShape {
+        id: BuiltinShapeId::OperatorDefinitionReturning,
         key: &[
             Kw(&KEYWORDS.op),
             Slot,
@@ -690,8 +694,8 @@ pub static FORMS: &[Form] = &[
     },
     // UNARY OP <symbol> OVER <operand> = <body> — reserved: the result segment is mandatory, so
     // this shape's only reading is the mistake the miss table names.
-    Form {
-        id: FormId::UnaryOperatorDefinition,
+    BuiltinShape {
+        id: BuiltinShapeId::UnaryOperatorDefinition,
         key: &[
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
@@ -706,8 +710,8 @@ pub static FORMS: &[Form] = &[
         reserved: true,
     },
     // UNARY OP <symbol> OVER <operand> -> <return type> = <body>.
-    Form {
-        id: FormId::UnaryOperatorDefinitionReturning,
+    BuiltinShape {
+        id: BuiltinShapeId::UnaryOperatorDefinitionReturning,
         key: &[
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
@@ -739,8 +743,8 @@ pub static FORMS: &[Form] = &[
     // `FN` head's return slot does.
     //
     // OP <symbol> OVER <operand>.
-    Form {
-        id: FormId::OperatorHead,
+    BuiltinShape {
+        id: BuiltinShapeId::OperatorHead,
         key: &[Kw(&KEYWORDS.op), Slot, Kw(&KEYWORDS.over), Slot],
         binder: Some(BinderFacts {
             names: &[],
@@ -753,8 +757,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // OP <symbol> OVER <operand> -> <result>.
-    Form {
-        id: FormId::OperatorHeadReturning,
+    BuiltinShape {
+        id: BuiltinShapeId::OperatorHeadReturning,
         key: &[
             Kw(&KEYWORDS.op),
             Slot,
@@ -776,8 +780,8 @@ pub static FORMS: &[Form] = &[
     // UNARY OP <symbol> OVER <operand> — the head form, missing its result. Reserved for the same
     // reason the definition form is: the shape has no other reading, and a user form claiming the
     // key would turn the pointed message into a typed miss under its own bucket.
-    Form {
-        id: FormId::UnaryOperatorHead,
+    BuiltinShape {
+        id: BuiltinShapeId::UnaryOperatorHead,
         key: &[
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
@@ -790,8 +794,8 @@ pub static FORMS: &[Form] = &[
         reserved: true,
     },
     // UNARY OP <symbol> OVER <operand> -> <result>.
-    Form {
-        id: FormId::UnaryOperatorHeadReturning,
+    BuiltinShape {
+        id: BuiltinShapeId::UnaryOperatorHeadReturning,
         key: &[
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
@@ -812,8 +816,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // LET <name> = OP <symbol> OVER <operand> = <body>.
-    Form {
-        id: FormId::CombinedOperator,
+    BuiltinShape {
+        id: BuiltinShapeId::CombinedOperator,
         key: &[
             Kw(&KEYWORDS.let_),
             Slot,
@@ -836,8 +840,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // LET <name> = OP <symbol> OVER <operand> -> <return type> = <body>.
-    Form {
-        id: FormId::CombinedOperatorReturning,
+    BuiltinShape {
+        id: BuiltinShapeId::CombinedOperatorReturning,
         key: &[
             Kw(&KEYWORDS.let_),
             Slot,
@@ -863,8 +867,8 @@ pub static FORMS: &[Form] = &[
     },
     // LET <name> = UNARY OP <symbol> OVER <operand> = <body> — reserved, the combined twin of the
     // missing-result mistake.
-    Form {
-        id: FormId::CombinedUnaryOperator,
+    BuiltinShape {
+        id: BuiltinShapeId::CombinedUnaryOperator,
         key: &[
             Kw(&KEYWORDS.let_),
             Slot,
@@ -883,8 +887,8 @@ pub static FORMS: &[Form] = &[
     },
     // LET <name> = UNARY OP <symbol> OVER <operand> -> <return type> = <body> — the two-bucket
     // maximum: a value name and both keys a `UNARY OP` body registers under.
-    Form {
-        id: FormId::CombinedUnaryOperatorReturning,
+    BuiltinShape {
+        id: BuiltinShapeId::CombinedUnaryOperatorReturning,
         key: &[
             Kw(&KEYWORDS.let_),
             Slot,
@@ -912,8 +916,8 @@ pub static FORMS: &[Form] = &[
     // ---------- the SIG-body group heads: the definition spellings minus the name slot ----------
     //
     // GROUP FOLD LEFT = <heads>.
-    Form {
-        id: FormId::GroupHeadFoldLeft,
+    BuiltinShape {
+        id: BuiltinShapeId::GroupHeadFoldLeft,
         key: &[
             Kw(&KEYWORDS.group),
             Kw(&KEYWORDS.fold),
@@ -926,8 +930,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // GROUP FOLD RIGHT = <heads>.
-    Form {
-        id: FormId::GroupHeadFoldRight,
+    BuiltinShape {
+        id: BuiltinShapeId::GroupHeadFoldRight,
         key: &[
             Kw(&KEYWORDS.group),
             Kw(&KEYWORDS.fold),
@@ -940,8 +944,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // GROUP PAIRWISE FOLD <combiner> LEFT = <heads>.
-    Form {
-        id: FormId::GroupHeadPairwiseFoldLeft,
+    BuiltinShape {
+        id: BuiltinShapeId::GroupHeadPairwiseFoldLeft,
         key: &[
             Kw(&KEYWORDS.group),
             Kw(&KEYWORDS.pairwise),
@@ -956,8 +960,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // GROUP PAIRWISE FOLD <combiner> RIGHT = <heads>.
-    Form {
-        id: FormId::GroupHeadPairwiseFoldRight,
+    BuiltinShape {
+        id: BuiltinShapeId::GroupHeadPairwiseFoldRight,
         key: &[
             Kw(&KEYWORDS.group),
             Kw(&KEYWORDS.pairwise),
@@ -974,8 +978,8 @@ pub static FORMS: &[Form] = &[
     // ---------- the control forms ----------
     //
     // MATCH <scrutinee> -> <result type> WITH <branches>.
-    Form {
-        id: FormId::Match,
+    BuiltinShape {
+        id: BuiltinShapeId::Match,
         key: &[
             Kw(&KEYWORDS.match_),
             Slot,
@@ -989,8 +993,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // MATCH <scrutinee> OVER <union> -> <result type> WITH <branches>.
-    Form {
-        id: FormId::MatchOver,
+    BuiltinShape {
+        id: BuiltinShapeId::MatchOver,
         key: &[
             Kw(&KEYWORDS.match_),
             Slot,
@@ -1006,8 +1010,8 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // TRY <body> -> <result type> WITH <branches>.
-    Form {
-        id: FormId::Try,
+    BuiltinShape {
+        id: BuiltinShapeId::Try,
         key: &[
             Kw(&KEYWORDS.try_),
             Slot,
@@ -1021,56 +1025,56 @@ pub static FORMS: &[Form] = &[
         reserved: false,
     },
     // CATCH <body>.
-    Form {
-        id: FormId::Catch,
+    BuiltinShape {
+        id: BuiltinShapeId::Catch,
         key: &[Kw(&KEYWORDS.catch), Slot],
         binder: None,
         lazy_slots: &[(1, CODE)],
         reserved: false,
     },
     // USING <module> SCOPE <body>.
-    Form {
-        id: FormId::UsingScope,
+    BuiltinShape {
+        id: BuiltinShapeId::UsingScope,
         key: &[Kw(&KEYWORDS.using), Slot, Kw(&KEYWORDS.scope), Slot],
         binder: None,
         lazy_slots: &[(3, CODE)],
         reserved: false,
     },
     // CLOSE OVER <captures> <body>.
-    Form {
-        id: FormId::CloseOver,
+    BuiltinShape {
+        id: BuiltinShapeId::CloseOver,
         key: &[Kw(&KEYWORDS.close), Kw(&KEYWORDS.over), Slot, Slot],
         binder: None,
         lazy_slots: &[(2, CODE), (3, CODE)],
         reserved: false,
     },
     // CLOSE <body> — the inferred-capture form.
-    Form {
-        id: FormId::Close,
+    BuiltinShape {
+        id: BuiltinShapeId::Close,
         key: &[Kw(&KEYWORDS.close), Slot],
         binder: None,
         lazy_slots: &[(1, CODE)],
         reserved: false,
     },
     // <field list> FROM <record>.
-    Form {
-        id: FormId::Projection,
+    BuiltinShape {
+        id: BuiltinShapeId::Projection,
         key: &[Slot, Kw(&KEYWORDS.from), Slot],
         binder: None,
         lazy_slots: &[(0, CODE)],
         reserved: false,
     },
     // ATTR <record> <field> — the parse of `m.x`.
-    Form {
-        id: FormId::Attribute,
+    BuiltinShape {
+        id: BuiltinShapeId::Attribute,
         key: &[Kw(&KEYWORDS.attr), Slot, Slot],
         binder: None,
         lazy_slots: &[],
         reserved: false,
     },
     // EVAL <expr> — the parse of `$(expr)`.
-    Form {
-        id: FormId::Eval,
+    BuiltinShape {
+        id: BuiltinShapeId::Eval,
         key: &[Kw(&KEYWORDS.eval), Slot],
         binder: None,
         lazy_slots: &[],

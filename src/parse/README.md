@@ -143,7 +143,7 @@ chain, the two head-deferred forms, and the general keyworded case.
 
 ## The form table: one entry, every fact
 
-[forms.rs](forms.rs) holds `FORMS`, the one table of every fixed form the machine
+[forms.rs](builtin_shapes.rs) holds `FORMS`, the one table of every fixed form the machine
 recognizes, spelled once.
 
 A builtin form is recognized by its **full untyped bucket key**, every keyword
@@ -160,11 +160,11 @@ indexes by the tag — the close-inference rules and the miss diagnostics are
 
 Three readers hang off the table:
 
-- **Binder discovery** ([forms/binder.rs](forms/binder.rs)) — pure structural
+- **Binder discovery** ([forms/binder.rs](builtin_shapes/binder.rs)) — pure structural
   readers plus the facts that ride an entry. A form is a binder *because* its
   entry carries them, and nothing else declares it. What a binder then *does*
   is the machine's.
-- **Lazy slots** ([forms/lazy.rs](forms/lazy.rs)) — which child slots a form
+- **Lazy slots** ([forms/lazy.rs](builtin_shapes/lazy.rs)) — which child slots a form
   captures raw instead of evaluating. This is a **seal-time** fact, not a
   dispatch-time one: a bare `(…)` evaluates before its parent dispatches
   everywhere except a lazy slot of a fixed builtin form, the node's entry is the
@@ -173,7 +173,7 @@ Three readers hang off the table:
   reader can tell locally whether a group runs. Lazy declaration is available only
   to builtin registration — a user `FN` signature never receives a raw unquoted
   group.
-- **Slot layout** ([forms/layout.rs](forms/layout.rs)) — a body's value binders
+- **Slot layout** ([forms/layout.rs](builtin_shapes/layout.rs)) — a body's value binders
   as a symbol-sorted run, computed once where the shape is lexically fixed and
   read by every activation of that body, so an activation allocates one sized
   array instead of building a table from nothing. **Slot order is symbol order**,

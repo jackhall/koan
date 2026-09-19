@@ -6,19 +6,19 @@ canonical spelling.
 **Problem.** The round-trip law — `describe(parse(render(tree, tape))) == expected(tree)` —
 runs over a generated tree whose keyword pool (`ZZ QQ WW + * < > |`,
 [properties.rs](../../src/parse/tests/properties.rs)) is deliberately disjoint from the
-keywords [`FORMS`](../../src/parse/forms.rs) spells. No generated run therefore matches a
+keywords [`FORMS`](../../src/parse/builtin_shapes.rs) spells. No generated run therefore matches a
 `FORMS` key, and three things go untested under arbitrary layout as a result: the parse-time
 bare-parenthesized type-slot rewrite
-([`admit_bare_type_slots`](../../src/parse/forms/binder.rs)) never fires inside the law, since it
+([`admit_bare_type_slots`](../../src/parse/builtin_shapes/binder.rs)) never fires inside the law, since it
 only rewrites at a masked slot of a matched key; a form's lazy stamp and binder plan are never
 observed on a run the tape spelled across indented child lines, redundant `(…)` wrappers and
 sprinkled commas; and the `:(…)` ≡ `(…)` equivalence at those slots is pinned only by the three
 surface tests that survived in [type_sigil.rs](../../src/parse/tests/type_sigil.rs).
 
 What does cover the builtin spines is narrower. Law 24
-([forms/tests/binder.rs](../../src/parse/forms/tests/binder.rs)) renders each `FORMS` entry with
+([forms/tests/binder.rs](../../src/parse/builtin_shapes/tests/binder.rs)) renders each `FORMS` entry with
 fresh identifier fillers at one canonical layout and checks the cache it produces; the
-table⟺registration law ([registration.rs](../../src/parse/forms/tests/registration.rs)) compares
+table⟺registration law ([registration.rs](../../src/parse/builtin_shapes/tests/registration.rs)) compares
 keys to live signatures and parses nothing. Every other reading of a builtin spine under a
 non-canonical layout is incidental, from an end-to-end test that happened to be written with an
 indented body.

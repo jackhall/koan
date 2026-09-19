@@ -64,7 +64,7 @@ pub enum CaptureShape {
 }
 
 /// A set of [`CaptureShape`]s, modeled on
-/// [`LazyKinds`](crate::parse::forms::lazy::LazyKinds).
+/// [`LazyKinds`](crate::parse::builtin_shapes::lazy::LazyKinds).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct CaptureShapes(u8);
 
@@ -156,7 +156,7 @@ pub fn capture_footprint(kt: KType) -> CaptureShapes {
 ///
 /// 1. No `KExpression` member. A `(…)` group is *the* eager sub-expression shape, so a
 ///    CODE-capturing union member would make the seal-time raw-kind derivation
-///    ([`Form::lazy_slots`](crate::parse::forms::Form::lazy_slots)) and the group's
+///    ([`BuiltinShape::lazy_slots`](crate::parse::builtin_shapes::BuiltinShape::lazy_slots)) and the group's
 ///    staging ambiguous.
 /// 2. Pairwise capture-footprint disjointness across *all* members, so at most one member ever
 ///    claims a part shape.

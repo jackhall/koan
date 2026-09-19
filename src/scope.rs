@@ -1,6 +1,6 @@
 //! Koan's lexical environments: what a name means at the point it is read, in three tiers.
 //!
-//! - The [`Shape`] — one per body, built once into program storage — declares the body's value and
+//! - The [`BodyShape`] — one per body, built once into program storage — declares the body's value and
 //!   type names, classifies every mention eager or deferred, delimits the components its bindings
 //!   form, and resolves every name the body reads to a [`Coordinate`].
 //! - [`ClosureBindings`] — one run per callable, born from the enclosing activation through the
@@ -13,7 +13,7 @@
 //! takes; `scope` threads it through and reads a callable only to resolve an edge capture.
 //!
 //! A read through a coordinate searches nothing by name. The walk `EVAL` runs is
-//! [`Shape::for_eval`], which resolves each free name through [`Activation::coordinate_of`] and lands
+//! [`BodyShape::for_eval`], which resolves each free name through [`Activation::coordinate_of`] and lands
 //! where the coordinate would.
 //!
 //! **Imports.** This module may name `crate::memory`, `crate::parse`, `crate::type_lattice` and
@@ -40,6 +40,6 @@ pub use activation::{Activation, Binding};
 pub use builtins::Builtins;
 pub use closure::{ClosureBindings, ClosureRefused};
 pub use shape::{
-    BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate,
-    Mention, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
+    BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex,
+    Coordinate, Mention, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target,
 };

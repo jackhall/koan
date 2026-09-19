@@ -16,7 +16,7 @@ use crate::memory::{
     StepContext, Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::{BinderSymbol, KExpression, LabelInterner, TypeSymbol, ValueSymbol, parse};
-use crate::scope::{Binding, Builtins, Component, Shape, Slot};
+use crate::scope::{Binding, BodyShape, Builtins, Component, Slot};
 use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry};
 use crate::values::{Circular, Knotted as _, Link, TypeValue, Value};
 
@@ -142,7 +142,7 @@ impl<'graph> Fixture<'_, 'graph> {
         nominals: &[(&str, KType)],
     ) -> &'cell KActivation<'graph, 'cell> {
         let builtins = self.builtins(writer, nominals);
-        let shape = Shape::of_program(self.program, lines, builtins, self.scratch)
+        let shape = BodyShape::of_program(self.program, lines, builtins, self.scratch)
             .unwrap_or_else(|error| panic!("the program shapes: {}", error.display(self.labels)));
         let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
         for slot in 0..shape.slots() {

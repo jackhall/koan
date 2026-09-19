@@ -9,7 +9,7 @@ fn binder_name_extracts_let_name() {
     let program = program_storage();
     let labels = crate::parse::LabelInterner::new();
     let expr = parse_one(&program, &labels, "LET hello = 1");
-    let name = crate::parse::forms::binder::identifier_part_binder_name(&expr)
+    let name = crate::parse::builtin_shapes::binder::identifier_part_binder_name(&expr)
         .expect("`LET hello = 1` names a binder");
     assert_eq!(name.bind_kind(), crate::parse::BindKind::Value);
     assert_eq!(labels.render(name.symbol()), "hello");

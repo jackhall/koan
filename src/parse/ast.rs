@@ -16,9 +16,9 @@
 use crate::source::{FileId, Span, Spanned};
 
 use crate::memory::{BumpAllocator, ProgramBrand};
-use crate::parse::forms::binder::{StoredBinderKey, binder_plan_for};
-use crate::parse::forms::layout::SlotLayout;
-use crate::parse::forms::lazy::LazyKinds;
+use crate::parse::builtin_shapes::binder::{StoredBinderKey, binder_plan_for};
+use crate::parse::builtin_shapes::layout::SlotLayout;
+use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::parse::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 
 pub mod program;
@@ -26,7 +26,7 @@ pub mod shape;
 
 pub use program::{ProgramExpression, ProgramNode};
 pub use shape::{
-    DispatchShape, KeyElement, NodeCache, PartClass, UntypedKey, classify_dispatch_shape,
+    DispatchShape, ExpressionKey, KeyElement, NodeCache, PartClass, classify_dispatch_shape,
     operator_probe_for, stored_untyped_key,
 };
 
@@ -321,7 +321,8 @@ impl<'a> KExpression<'a> {
         // The extractors read the node, so the plan is filled once it stands. It is bumped behind a
         // reference rather than stored inline: it is the widest thing a node would carry, and
         // `KExpression` is copied on every part walk.
-        let plan = binder_plan_for(brand, cache.form(), &expression).map(|key| &*brand.alloc(key));
+        let plan = binder_plan_for(brand, cache.builtin_shape(), &expression)
+            .map(|key| &*brand.alloc(key));
         expression.cache = cache.declaring(plan);
         // The value binders this node would open a frame over, read off the same statement plans
         // the claim stamp and the `CLOSE` capture walk read. Filled for every node — a node is a
@@ -418,7 +419,7 @@ impl<'a> KExpression<'a> {
     }
 
     /// The declared-name position of the binder form this node's bucket key matches
-    /// ([`BinderFacts::name_slot`](crate::parse::forms::binder::BinderFacts::name_slot)); `None`
+    /// ([`BinderFacts::name_slot`](crate::parse::builtin_shapes::binder::BinderFacts::name_slot)); `None`
     /// when the node is not a binder form, or the form's spine carries no declared name (`FN`,
     /// `OP`).
     pub fn binder_name_slot(&self) -> Option<usize> {

@@ -2,7 +2,7 @@
 //! declaration pre-scan a module body runs.
 //!
 //! The structural reading — which form is a binder, what name and bucket keys it declares — is the
-//! parser's, in [`crate::parse::forms::binder`].
+//! parser's, in [`crate::parse::builtin_shapes::binder`].
 
 pub(crate) mod signature;
 
@@ -10,9 +10,9 @@ use crate::machine::core::{KError, KErrorKind, body_statement_refs};
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::{AnnouncedData, display_label, pair_list_names};
 use crate::parse::ast::KExpression;
-pub(crate) use crate::parse::forms::binder::union_schema;
+pub(crate) use crate::parse::builtin_shapes::binder::union_schema;
 
-use crate::parse::forms::binder::{BinderSurface, SymbolError};
+use crate::parse::builtin_shapes::binder::{BinderSurface, SymbolError};
 use crate::parse::labels::{LabelInterner, StaticName, ValueSymbol};
 
 /// The names the machine itself fixes in Rust source for binders no program spells a declaration
@@ -72,7 +72,7 @@ pub(crate) enum TypeDeclarationSurface {
 /// What `expression` announces to its module body's declaration window, or `None` if it announces
 /// nothing.
 ///
-/// Recognition is by the node's cached [`FORMS`](crate::parse::forms::FORMS) entry —
+/// Recognition is by the node's cached [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry —
 /// a full bucket key, every keyword pinned in position — so a user overload that merely shares a
 /// head keyword announces nothing, and the constructor-family key `NEWTYPE <decl>` is excluded
 /// structurally rather than by inspecting what its extractor would return. Only a statement at the
@@ -81,7 +81,7 @@ pub(crate) enum TypeDeclarationSurface {
 pub(crate) fn announced_type_declaration(
     expression: &KExpression<'_>,
 ) -> Option<TypeDeclarationSurface> {
-    match expression.cache().form()?.binder?.surface {
+    match expression.cache().builtin_shape()?.binder?.surface {
         BinderSurface::NewTypeDef => Some(TypeDeclarationSurface::NewType),
         BinderSurface::UnionDef => Some(TypeDeclarationSurface::Union),
         BinderSurface::OperatorDef | BinderSurface::Other => None,

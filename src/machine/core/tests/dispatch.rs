@@ -225,10 +225,10 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     let registries = RunRegistries::new();
     use crate::builtins::test_support::key_keyword;
     use crate::machine::ProducerId;
-    use crate::parse::{KeyElement, UntypedKey};
+    use crate::parse::{ExpressionKey, KeyElement};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let bucket_single: UntypedKey = vec![key_keyword("MAKESET"), KeyElement::Slot];
+    let bucket_single: ExpressionKey = vec![key_keyword("MAKESET"), KeyElement::Slot];
     scope
         .install_pending_overload(
             &bucket_single,
@@ -551,10 +551,10 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let registries = RunRegistries::new();
     use crate::builtins::test_support::key_keyword;
     use crate::machine::ProducerId;
-    use crate::parse::{KeyElement, UntypedKey};
+    use crate::parse::{ExpressionKey, KeyElement};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let bucket: UntypedKey = vec![key_keyword("PICK"), KeyElement::Slot];
+    let bucket: ExpressionKey = vec![key_keyword("PICK"), KeyElement::Slot];
     scope
         .install_pending_overload(
             &bucket,

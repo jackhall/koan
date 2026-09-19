@@ -9,13 +9,13 @@ stages. [`KErrorKind::ShapeError`](../../src/machine/core/kerror.rs) is their on
 (~170 raise sites); there is no shared recognizer, so a new builtin form has to wire up its own
 detector at every stage it wants to be diagnosed at. They group as:
 
-- **Full-bucket-key probes.** [`form_for`](../../src/parse/forms.rs) and `key_matches`, the four
+- **Full-bucket-key probes.** [`form_for`](../../src/parse/builtin_shapes.rs) and `key_matches`, the four
   `reserved: true` rows, [`diagnose_miss`](../../src/machine/model/miss_diagnostics.rs) and
   `key_is_reserved` at the overload write door
   ([ops.rs](../../src/machine/core/bindings/ops.rs)), and
-  [`admit_bare_type_slots`](../../src/parse/forms/binder.rs).
+  [`admit_bare_type_slots`](../../src/parse/builtin_shapes/binder.rs).
 - **A body re-inspecting a slot its own signature admitted.** `SymbolError` / `RESERVED_SYMBOLS` and
-  `op_declaration_arity` ([binder.rs](../../src/parse/forms/binder.rs)), `GROUP`'s
+  `op_declaration_arity` ([binder.rs](../../src/parse/builtin_shapes/binder.rs)), `GROUP`'s
   `check_group_context` ([group_def.rs](../../src/builtins/group_def.rs)), the `LET`
   binder-channel class check, the `FN` signature inner re-parse
   ([fn_def/signature.rs](../../src/builtins/fn_def/signature.rs)), and
@@ -28,7 +28,7 @@ detector at every stage it wants to be diagnosed at. They group as:
   ([lower.rs](../../src/parse/lower.rs), [atom.rs](../../src/parse/atom.rs)).
 - **Static consistency tests.** The table-shape walks, the table⟺registration law, the binder-plan
   properties, the reserved-key registration test and the lazy-kind derivation law
-  ([forms/tests/](../../src/parse/forms/tests.rs)).
+  ([forms/tests/](../../src/parse/builtin_shapes/tests.rs)).
 
 Nothing forces the stages to agree. A key the parse admits, dispatch refuses and the miss table has
 no row for produces a generic failure; a key one stage treats as reserved and another does not is

@@ -416,7 +416,7 @@ fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
         &registries,
     );
     let sealed_key = f.open(|f| f.signature.untyped_key());
-    let bridge_key: UntypedKey = SignatureDraft {
+    let bridge_key: ExpressionKey = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Keyword(probe_symbol("BRIDGE"))],
     }
@@ -649,7 +649,7 @@ fn bump_backed_tables_full_churn() {
 
         // A second producer's claim on its own bucket, retired without a commit — the failed-binder
         // path, which strands the claim's bump bytes, exercised so the leak check sees it.
-        let purged_key: UntypedKey = SignatureDraft {
+        let purged_key: ExpressionKey = SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
             elements: vec![SignatureElement::Keyword(probe_symbol("BAR"))],
         }

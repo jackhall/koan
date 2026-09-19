@@ -521,7 +521,7 @@ impl<'a> WorkingExpression<'a> {
 
     /// The kinds of part that stay raw at slot `index` — the seal-time lazy-slot stamp, empty at
     /// every slot of every form that has none. See
-    /// [`Form::lazy_slots`](crate::parse::forms::Form::lazy_slots).
+    /// [`BuiltinShape::lazy_slots`](crate::parse::builtin_shapes::BuiltinShape::lazy_slots).
     pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
         self.cache.lazy_kinds_at(index)
     }

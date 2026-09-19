@@ -2,7 +2,7 @@
 //! and bucket keys they declare.
 //!
 //! Everything here is a pure `&KExpression -> Option<…>` reader plus the [`BinderFacts`] that ride
-//! a [`FORMS`](super::FORMS) entry — a form is a binder because its entry carries them, and nothing
+//! a [`BUILTIN_SHAPES`](super::BUILTIN_SHAPES) entry — a form is a binder because its entry carries them, and nothing
 //! else declares it. The keys are pinned against the live builtin registration table by the
 //! table⟺registration property, so an entry whose builtin was renamed, re-shaped, or dropped fails
 //! the suite.
@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 
 use crate::memory::BumpAllocator;
 use crate::parse::ast::{ExpressionPart, KExpression, KeyElement};
-use crate::parse::forms::{Form, KEYWORDS, form_for};
+use crate::parse::builtin_shapes::{BuiltinShape, KEYWORDS, builtin_shape_for};
 use crate::parse::labels::{BinderSymbol, KeywordSymbol, StaticName, WILDCARD};
 use crate::source::Spanned;
 
@@ -330,7 +330,7 @@ pub enum BinderSurface {
 }
 
 /// What a binder-introducing form installs: the extractors that read its declared name and bucket
-/// keys out of the AST, plus the positions its spine fixes. Rides its [`Form`] entry, which is what
+/// keys out of the AST, plus the positions its spine fixes. Rides its [`BuiltinShape`] entry, which is what
 /// names the key.
 ///
 /// The two channels are separate fields rather than one extractor list because a combined form
@@ -385,7 +385,7 @@ impl BinderFacts {
 ///
 /// A variant change is the whole of it, and everything downstream follows by construction: the
 /// statement's untyped key is unchanged (both variants are slots), the form's
-/// [`lazy_slots`](crate::parse::forms::Form::lazy_slots) already stamp `TYPE_EXPR` at
+/// [`lazy_slots`](crate::parse::builtin_shapes::BuiltinShape::lazy_slots) already stamp `TYPE_EXPR` at
 /// each masked index so the part is captured raw instead of staged, and the return/operand slot's
 /// carrier union already lists `SIGILED_TYPE_EXPR`. The two spellings are the same part by the time
 /// anything semantic looks at them, so parity is exact.
@@ -397,8 +397,8 @@ impl BinderFacts {
 /// structural cache are bumped together and never touched again, so this must run before the
 /// freeze. The run has no stored key yet, so it feeds the matcher the key elements its parts spell.
 pub(crate) fn admit_bare_type_slots(parts: &mut [Spanned<ExpressionPart<'_>>]) {
-    let Some(binder) =
-        form_for(parts.iter().map(|part| part.value.key_element())).and_then(|form| form.binder)
+    let Some(binder) = builtin_shape_for(parts.iter().map(|part| part.value.key_element()))
+        .and_then(|form| form.binder)
     else {
         return;
     };
@@ -428,7 +428,7 @@ pub(crate) fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpressio
 /// statement's slot. `GROUP` reads its members' symbols off exactly the statements this admits.
 #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
 pub(crate) fn op_declaration_arity(expression: &KExpression<'_>) -> Option<OpArity> {
-    let binder = expression.cache().form()?.binder?;
+    let binder = expression.cache().builtin_shape()?.binder?;
     if binder.surface != BinderSurface::OperatorDef {
         return None;
     }
@@ -453,7 +453,7 @@ pub enum OpArity {
 /// anonymous `FN :{…}` whose signature part names no bucket).
 pub(crate) fn binder_plan_for<'a>(
     brand: BumpAllocator<'a>,
-    form: Option<&'static Form>,
+    form: Option<&'static BuiltinShape>,
     expression: &KExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {
     let binder = form?.binder?;

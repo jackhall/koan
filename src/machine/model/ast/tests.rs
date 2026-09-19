@@ -5,8 +5,8 @@ use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::memory::{ProgramBrand, program_storage};
-use crate::parse::forms::FormId;
-use crate::parse::forms::lazy::LazyKinds;
+use crate::parse::builtin_shapes::BuiltinShapeId;
+use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, KeywordSymbol, LabelInterner};
 use crate::source::Spanned;
 
@@ -268,8 +268,8 @@ fn a_synthesized_run_spelling_a_binder_key_declares_nothing() {
     );
 
     assert_eq!(
-        synthesized.cache().form().map(|form| form.id),
-        Some(FormId::TypeDeclaration),
+        synthesized.cache().builtin_shape().map(|form| form.id),
+        Some(BuiltinShapeId::TypeDeclaration),
         "the synthesized key really does match the declaration form",
     );
     assert_eq!(synthesized.binder_name_slot(), None);

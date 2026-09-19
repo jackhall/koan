@@ -114,7 +114,7 @@ enum Capture<'a> {
     /// A bare name on the type channel — `Meters`.
     Type(TypeSymbol),
     /// A signature-shaped group naming one full untyped bucket key — `(HELPER _)`. The key is a
-    /// scratch-staged run rather than an owned `UntypedKey`: [`KeyElement`] is `Copy`, so the run
+    /// scratch-staged run rather than an owned `ExpressionKey`: [`KeyElement`] is `Copy`, so the run
     /// probes the bucket tables directly through the same slice door a node's own bumped key uses.
     Pattern(BumpVec<'a, KeyElement>),
 }

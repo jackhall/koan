@@ -9,8 +9,8 @@ use proptest::prelude::*;
 use crate::memory::{BumpAllocator, CellHandle, KnotPlan, Writer, resident};
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
 use crate::scope::{
-    Activation, Binding, Builtins, CaptureSource, ClosureBindings, ClosureRefused, Coordinate,
-    MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
+    Activation, Binding, BodyShape, Builtins, CaptureSource, ClosureBindings, ClosureRefused,
+    Coordinate, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target,
 };
 use crate::type_lattice::KType;
 use crate::values::{Link, Value};
@@ -23,13 +23,17 @@ use super::{Probe, builtins, with_fixture};
 /// A name part or a nested body met walking parsed parts in source order.
 enum Met<'g> {
     Name(Site),
-    Open(&'g Shape<'g>),
+    Open(&'g BodyShape<'g>),
     Close,
 }
 
 /// Walk `part` in source order. With a shape chain, a part the innermost shape nests a body at opens
 /// that body's shape.
-fn walk<'g>(part: &ExpressionPart<'g>, shapes: &mut Vec<&'g Shape<'g>>, met: &mut Vec<Met<'g>>) {
+fn walk<'g>(
+    part: &ExpressionPart<'g>,
+    shapes: &mut Vec<&'g BodyShape<'g>>,
+    met: &mut Vec<Met<'g>>,
+) {
     match part {
         ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
             met.push(Met::Name(Site::of(part)))
@@ -75,14 +79,14 @@ fn walk<'g>(part: &ExpressionPart<'g>, shapes: &mut Vec<&'g Shape<'g>>, met: &mu
 /// Where each planned read and each planned scope landed in the parsed source.
 struct Located<'g> {
     sites: Vec<Site>,
-    shapes: Vec<Option<&'g Shape<'g>>>,
+    shapes: Vec<Option<&'g BodyShape<'g>>>,
 }
 
 /// Pair the rendering's tokens with the names and bodies met walking `nodes`. Without a `root`
 /// shape, only the names are paired.
 fn locate<'g>(
     rendering: &Rendering<'_>,
-    root: Option<&'g Shape<'g>>,
+    root: Option<&'g BodyShape<'g>>,
     nodes: &[&KExpression<'g>],
 ) -> Located<'g> {
     let mut met = Vec::new();
@@ -149,7 +153,7 @@ enum Found {
 }
 
 /// Follow `coordinate`, read at `level`, back through the chain's block steps and captures.
-fn follow(chain: &[&Shape<'_>], level: usize, coordinate: Coordinate) -> Found {
+fn follow(chain: &[&BodyShape<'_>], level: usize, coordinate: Coordinate) -> Found {
     let (hops, target) = match coordinate {
         Coordinate::Builtin(_) => return Found::Builtin,
         Coordinate::Activation { hops, target } => (hops, target),
@@ -230,7 +234,7 @@ fn check(
     labels: &LabelInterner,
     rendering: &Rendering<'_>,
     located: &Located<'_>,
-    prefix: &[&Shape<'_>],
+    prefix: &[&BodyShape<'_>],
 ) {
     let source = &rendering.source;
     for (index, rendered) in rendering.scopes.iter().enumerate() {
@@ -378,7 +382,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
         let lines = fixture.parse(&rendering.source);
         fixture.in_cell(|writer, handles| {
             let table = builtins(fixture, writer);
-            let shape = Shape::of_program(fixture.program, &lines, table, fixture.scratch())
+            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
                 .unwrap_or_else(|error| {
                     panic!(
                         "`{}` shapes: {}",
@@ -407,7 +411,7 @@ struct ShapedPlan<'p, 'g, 'c> {
     scratch: BumpAllocator<'p>,
     rendering: &'p Rendering<'p>,
     located: Located<'g>,
-    shape: &'g Shape<'g>,
+    shape: &'g BodyShape<'g>,
     writer: Writer<'c>,
     table: &'c Builtins<'g, 'c, Probe>,
     handles: &'p [CellHandle],
@@ -563,7 +567,7 @@ proptest! {
             fixture.in_cell(|writer, _| {
                 let table: &Builtins = builtins(fixture, writer);
                 let source = &rendering.source;
-                let error = Shape::of_program(fixture.program, &lines, table, fixture.scratch())
+                let error = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
                     .err()
                     .unwrap_or_else(|| panic!("`{source}` is refused with {refusal:?}"));
                 let labels = fixture.labels;
@@ -742,7 +746,7 @@ proptest! {
             fixture.in_cell(|writer, _| {
                 let table = builtins(fixture, writer);
                 let program_shape =
-                    Shape::of_program(fixture.program, &lines, table, fixture.scratch())
+                    BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
                         .expect("a planned program shapes");
                 let nodes: Vec<_> = lines.iter().collect();
                 let located = locate(&rendering, Some(program_shape), &nodes);
@@ -770,7 +774,7 @@ proptest! {
                 }
                 let site = site.expect("the chain holds the program");
                 let position = Position::statement(at as usize);
-                let shape = Shape::for_eval(fixture.program, quote, site, position, fixture.scratch())
+                let shape = BodyShape::for_eval(fixture.program, quote, site, position, fixture.scratch())
                     .unwrap_or_else(|error| panic!(
                         "`{}` over `{}` shapes: {}",
                         quoted.source,

@@ -2,8 +2,8 @@
 //! parameter schema, an `EXPR`'s or `OP`'s expression shape over its head.
 
 use crate::memory::BumpAllocator;
-use crate::parse::forms::FormId;
-use crate::parse::forms::binder::symbol_from_quote_body;
+use crate::parse::builtin_shapes::BuiltinShapeId;
+use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{Activation, BodyKind, Role, Site, roles};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
@@ -28,7 +28,7 @@ pub fn callable_type<'graph, X: Knotted>(
 ) -> Result<KType, Elaboration> {
     let id = form
         .cache()
-        .form()
+        .builtin_shape()
         .expect("a callable's body sits in a builtin form")
         .id;
     let elaborator = Elaborator {
@@ -69,7 +69,7 @@ pub fn callable_type<'graph, X: Knotted>(
             let (Some(signature), Some(ret)) = (signature, type_parts[0]) else {
                 return Err(unsupported);
             };
-            if id == FormId::Lambda {
+            if id == BuiltinShapeId::Lambda {
                 return elaborator.function(signature, ret, &top);
             }
             let names = group.map(|group| quantifiers(group, scratch));

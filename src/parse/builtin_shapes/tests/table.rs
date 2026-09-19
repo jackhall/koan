@@ -1,18 +1,20 @@
-//! Form-table shape: the invariants every reader of [`FORMS`] depends on.
+//! BuiltinShape-table shape: the invariants every reader of [`BUILTIN_SHAPES`] depends on.
 
-use crate::parse::forms::binder::{BinderFacts, BinderSurface};
-use crate::parse::forms::{FORMS, Form, FormId, KeyElementSpec, render_key};
+use crate::parse::builtin_shapes::binder::{BinderFacts, BinderSurface};
+use crate::parse::builtin_shapes::{
+    BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, KeyElementSpec, render_key,
+};
 use crate::parse::{DispatchShape, KeyElement, PartClass, classify_dispatch_shape};
 
 /// Every form the table gives binder facts, with those facts beside it.
-fn binder_forms() -> impl Iterator<Item = (&'static Form, BinderFacts)> {
-    FORMS
+fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
+    BUILTIN_SHAPES
         .iter()
         .filter_map(|form| form.binder.map(|binder| (form, binder)))
 }
 
 /// A spec key as the key a parts run spelling it would store.
-fn key_elements(form: &Form) -> Vec<KeyElement> {
+fn key_elements(form: &BuiltinShape) -> Vec<KeyElement> {
     form.key
         .iter()
         .map(|element| match element {
@@ -22,11 +24,11 @@ fn key_elements(form: &Form) -> Vec<KeyElement> {
         .collect()
 }
 
-/// A tag names its own row. `FormId` is declared in table order, so a reader that has a tag can
+/// A tag names its own row. `BuiltinShapeId` is declared in table order, so a reader that has a tag can
 /// index the table by it, and a row inserted without its tag — or a tag reordered — fails here.
 #[test]
 fn every_tag_sits_at_its_own_index() {
-    for (index, form) in FORMS.iter().enumerate() {
+    for (index, form) in BUILTIN_SHAPES.iter().enumerate() {
         assert_eq!(
             form.id as usize,
             index,
@@ -37,12 +39,12 @@ fn every_tag_sits_at_its_own_index() {
     }
 }
 
-/// Keys are pairwise distinct. `form_for` takes the first match, so two rows spelling one run would
+/// Keys are pairwise distinct. `builtin_shape_for` takes the first match, so two rows spelling one run would
 /// make every fact a node caches depend on table order.
 #[test]
 fn no_two_forms_spell_the_same_key() {
-    for (index, form) in FORMS.iter().enumerate() {
-        for other in &FORMS[index + 1..] {
+    for (index, form) in BUILTIN_SHAPES.iter().enumerate() {
+        for other in &BUILTIN_SHAPES[index + 1..] {
             assert_ne!(
                 render_key(form.key),
                 render_key(other.key),
@@ -57,7 +59,7 @@ fn no_two_forms_spell_the_same_key() {
 /// a statement that reached a live bucket.
 #[test]
 fn no_reserved_form_declares_a_binder() {
-    for form in FORMS.iter().filter(|form| form.reserved) {
+    for form in BUILTIN_SHAPES.iter().filter(|form| form.reserved) {
         assert!(
             form.binder.is_none(),
             "reserved form {:?} declares a binder",
@@ -71,7 +73,7 @@ fn no_reserved_form_declares_a_binder() {
 /// or a run out of order would misread the statement.
 #[test]
 fn every_lazy_slot_names_a_slot_position() {
-    for form in FORMS {
+    for form in BUILTIN_SHAPES {
         assert!(
             form.lazy_slots.windows(2).all(|pair| pair[0].0 < pair[1].0),
             "form key {:?} lists its slots out of ascending order",
@@ -97,10 +99,10 @@ fn every_lazy_slot_names_a_slot_position() {
     }
 }
 
-/// The tag vocabulary is exhaustive over the table: `FormId` gains no variant without a row.
+/// The tag vocabulary is exhaustive over the table: `BuiltinShapeId` gains no variant without a row.
 #[test]
 fn the_table_is_as_long_as_the_tag_vocabulary() {
-    assert_eq!(FORMS.len(), FormId::Eval as usize + 1);
+    assert_eq!(BUILTIN_SHAPES.len(), BuiltinShapeId::Eval as usize + 1);
 }
 
 /// Every masked index names a slot position of its own key — the flip writes `parts[index]`, so a

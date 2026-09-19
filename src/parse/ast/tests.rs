@@ -18,9 +18,9 @@ use crate::memory::{ProgramBrand, program_storage};
 #[cfg(feature = "pending_rewrite")]
 use crate::parse::ast::shape::operator_probe_for;
 #[cfg(feature = "pending_rewrite")]
-use crate::parse::classify_dispatch_shape;
+use crate::parse::builtin_shapes::builtin_shape_for;
 #[cfg(feature = "pending_rewrite")]
-use crate::parse::forms::form_for;
+use crate::parse::classify_dispatch_shape;
 use crate::parse::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, PartClass};
 use crate::source::Spanned;
@@ -335,8 +335,8 @@ proptest! {
             operator_probe_for(expression.stored_key(), expression.shape()),
         );
         prop_assert_eq!(
-            expression.cache().form().map(|form| form.id),
-            form_for(expression.stored_key().iter().copied()).map(|form| form.id),
+            expression.cache().builtin_shape().map(|form| form.id),
+            builtin_shape_for(expression.stored_key().iter().copied()).map(|form| form.id),
         );
 
         let copy = expression;
@@ -360,8 +360,8 @@ proptest! {
         prop_assert!(std::ptr::eq(working.stored_key(), respliced.stored_key()));
         prop_assert_eq!(working.operator_probe(), respliced.operator_probe());
         prop_assert_eq!(
-            working.cache().form().map(|form| form.id),
-            respliced.cache().form().map(|form| form.id),
+            working.cache().builtin_shape().map(|form| form.id),
+            respliced.cache().builtin_shape().map(|form| form.id),
         );
         prop_assert!(respliced.under_type_sigil());
     }

@@ -14,9 +14,9 @@
 use smallvec::SmallVec;
 
 use crate::memory::BumpAllocator;
-use crate::parse::forms::binder::StoredBinderKey;
-use crate::parse::forms::lazy::LazyKinds;
-use crate::parse::forms::{Form, form_for};
+use crate::parse::builtin_shapes::binder::StoredBinderKey;
+use crate::parse::builtin_shapes::lazy::LazyKinds;
+use crate::parse::builtin_shapes::{BuiltinShape, builtin_shape_for};
 use crate::parse::labels::KeywordSymbol;
 
 /// One position of a bucket key: a fixed token as its [`KeywordSymbol`], or an argument slot.
@@ -38,7 +38,7 @@ pub enum KeyElement {
 /// [`is_keyword_token`](crate::parse::labels::is_keyword_token) and mints each one's symbol there;
 /// `SignatureElement::keyword` uppercases a lowercase Rust-spelled token before minting, so a
 /// registration and a call arrive at the same symbol for the same token.
-pub type UntypedKey = Vec<KeyElement>;
+pub type ExpressionKey = Vec<KeyElement>;
 
 /// The structural family a part belongs to — the axis shape classification, the bucket key and the
 /// operator probe read. A keyword carries the symbol its parse minted, which is what all three
@@ -242,12 +242,12 @@ pub struct NodeCache<'a> {
     key: &'a [KeyElement],
     shape: DispatchShape,
     operator_probe: Option<KeywordSymbol>,
-    form: Option<&'static Form>,
-    /// The form this node declares under — `Some` only once the AST seal has run, so the binder
+    builtin_shape: Option<&'static BuiltinShape>,
+    /// The builtin shape this node declares under — `Some` only once the AST seal has run, so the binder
     /// facts of a coincidental key match on a synthesized run are never read. See [`declaring`].
     ///
     /// [`declaring`]: Self::declaring
-    declared: Option<&'static Form>,
+    declared: Option<&'static BuiltinShape>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
 }
 
@@ -260,7 +260,7 @@ impl<'a> NodeCache<'a> {
             key,
             shape,
             operator_probe: operator_probe_for(key, shape),
-            form: form_for(key.iter().copied()),
+            builtin_shape: builtin_shape_for(key.iter().copied()),
             declared: None,
             binder_plan: None,
         }
@@ -277,7 +277,7 @@ impl<'a> NodeCache<'a> {
     /// about the key alone.
     pub fn declaring(self, binder_plan: Option<&'a StoredBinderKey<'a>>) -> Self {
         NodeCache {
-            declared: self.form,
+            declared: self.builtin_shape,
             binder_plan,
             ..self
         }
@@ -308,10 +308,10 @@ impl<'a> NodeCache<'a> {
         self.operator_probe
     }
 
-    /// The [`FORMS`](crate::parse::forms::FORMS) entry this node's bucket key matches,
+    /// The [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry this node's bucket key matches,
     /// `None` for every user-defined bucket.
-    pub fn form(&self) -> Option<&'static Form> {
-        self.form
+    pub fn builtin_shape(&self) -> Option<&'static BuiltinShape> {
+        self.builtin_shape
     }
 
     /// This node's own binder plan — `Some` iff this node is itself a binder.
@@ -326,7 +326,7 @@ impl<'a> NodeCache<'a> {
     }
 
     /// The declared-name position of the binder form this node's bucket key matches
-    /// ([`BinderFacts::name_slot`](crate::parse::forms::binder::BinderFacts::name_slot)); `None`
+    /// ([`BinderFacts::name_slot`](crate::parse::builtin_shapes::binder::BinderFacts::name_slot)); `None`
     /// when the node matches no form, the form installs no binder, or its spine carries no declared
     /// name (`FN`, `OP`).
     pub fn binder_name_slot(&self) -> Option<usize> {
@@ -335,7 +335,7 @@ impl<'a> NodeCache<'a> {
 
     /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates.
     pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
-        self.form
-            .map_or(LazyKinds::EMPTY, |form| form.lazy_kinds_at(index))
+        self.builtin_shape
+            .map_or(LazyKinds::EMPTY, |shape| shape.lazy_kinds_at(index))
     }
 }

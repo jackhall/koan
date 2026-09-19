@@ -7,7 +7,7 @@
 //! uses rather than restating it:
 //!
 //! - which slots hold raw code — [`KExpression::lazy_kinds_at`], the seal-time
-//!   [`Form::lazy_slots`](crate::parse::forms::Form::lazy_slots) stamp;
+//!   [`BuiltinShape::lazy_slots`](crate::parse::builtin_shapes::BuiltinShape::lazy_slots) stamp;
 //! - what a statement declares — [`KExpression::statement_binder_plan`];
 //! - which position of a declaration form is the declared name — [`KExpression::binder_name_slot`];
 //! - which surfaces are nominal declarations — [`announced_type_declaration`];
@@ -17,7 +17,7 @@
 //!
 //! What is left is stated here and pinned by properties: the positional visibility rule, and the
 //! label positions no table answers. [`CLOSE_RULES`] holds the second — one entry per builtin form
-//! whose slots the generic walk would misread, named by the [`FormId`] the node already resolved at
+//! whose slots the generic walk would misread, named by the [`BuiltinShapeId`] the node already resolved at
 //! construction, so no key is respelled here.
 //!
 //! The walk is exact rather than conservative, because laziness is static: a bare `(…)` outside a
@@ -33,7 +33,7 @@ use crate::machine::model::{
 };
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::LazyKinds;
-use crate::parse::forms::FormId;
+use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::source::{FileId, Span};
@@ -155,16 +155,16 @@ enum FormRule {
 }
 
 /// The rules the walk reads a recognized form's slots by, tagged with the form's
-/// [`FormId`]. Every key lives in [`FORMS`](crate::parse::forms::FORMS); an entry here
+/// [`BuiltinShapeId`]. Every key lives in [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES); an entry here
 /// names only what the sourced readers do not.
 ///
 /// The nominal declarations (`NEWTYPE <name> = <repr>`, `UNION <name> = <schema>`) are absent on
 /// purpose: [`announced_type_declaration`] already recognizes them off their binder facts, so the
 /// walk asks that rather than restating them.
-static CLOSE_RULES: &[(FormId, FormRule)] = &[
+static CLOSE_RULES: &[(BuiltinShapeId, FormRule)] = &[
     // FN <record schema> -> <return type> — the lambda type expression, no body.
     (
-        FormId::LambdaType,
+        BuiltinShapeId::LambdaType,
         FormRule::Signature {
             signature: 1,
             body: None,
@@ -172,7 +172,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // FN <record schema> -> <return type> = <body> — the lambda.
     (
-        FormId::Lambda,
+        BuiltinShapeId::Lambda,
         FormRule::Signature {
             signature: 1,
             body: Some(5),
@@ -180,7 +180,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // EXPR <head> -> <return type> — the bodyless head, no body.
     (
-        FormId::ExpressionHead,
+        BuiltinShapeId::ExpressionHead,
         FormRule::Signature {
             signature: 1,
             body: None,
@@ -188,7 +188,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // EXPR <head> -> <return type> = <body>
     (
-        FormId::ExpressionDefinition,
+        BuiltinShapeId::ExpressionDefinition,
         FormRule::Signature {
             signature: 1,
             body: Some(5),
@@ -196,7 +196,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // LET <name> = FN EXPR <head> -> <return type> = <body>
     (
-        FormId::CombinedExpression,
+        BuiltinShapeId::CombinedExpression,
         FormRule::Signature {
             signature: 5,
             body: Some(9),
@@ -204,7 +204,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // EXPR FOR ALL <names> <head> -> <return type> — the quantified bodyless head.
     (
-        FormId::QuantifiedExpressionHead,
+        BuiltinShapeId::QuantifiedExpressionHead,
         FormRule::Signature {
             signature: 4,
             body: None,
@@ -212,7 +212,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // EXPR FOR ALL <names> <head> -> <return type> = <body>
     (
-        FormId::QuantifiedExpressionDefinition,
+        BuiltinShapeId::QuantifiedExpressionDefinition,
         FormRule::Signature {
             signature: 4,
             body: Some(8),
@@ -220,7 +220,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // LET <name> = FN EXPR FOR ALL <names> <head> -> <return type> = <body>
     (
-        FormId::CombinedQuantifiedExpression,
+        BuiltinShapeId::CombinedQuantifiedExpression,
         FormRule::Signature {
             signature: 8,
             body: Some(12),
@@ -228,7 +228,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // OP <symbol> OVER <operand> = <body>
     (
-        FormId::OperatorDefinition,
+        BuiltinShapeId::OperatorDefinition,
         FormRule::Operator {
             unary: false,
             body: 5,
@@ -236,7 +236,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // OP <symbol> OVER <operand> -> <return type> = <body>
     (
-        FormId::OperatorDefinitionReturning,
+        BuiltinShapeId::OperatorDefinitionReturning,
         FormRule::Operator {
             unary: false,
             body: 7,
@@ -244,7 +244,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // UNARY OP <symbol> OVER <operand> = <body>
     (
-        FormId::UnaryOperatorDefinition,
+        BuiltinShapeId::UnaryOperatorDefinition,
         FormRule::Operator {
             unary: true,
             body: 6,
@@ -252,7 +252,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // UNARY OP <symbol> OVER <operand> -> <return type> = <body>
     (
-        FormId::UnaryOperatorDefinitionReturning,
+        BuiltinShapeId::UnaryOperatorDefinitionReturning,
         FormRule::Operator {
             unary: true,
             body: 8,
@@ -260,7 +260,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // LET <name> = OP <symbol> OVER <operand> = <body>
     (
-        FormId::CombinedOperator,
+        BuiltinShapeId::CombinedOperator,
         FormRule::Operator {
             unary: false,
             body: 8,
@@ -268,7 +268,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // LET <name> = OP <symbol> OVER <operand> -> <return type> = <body>
     (
-        FormId::CombinedOperatorReturning,
+        BuiltinShapeId::CombinedOperatorReturning,
         FormRule::Operator {
             unary: false,
             body: 10,
@@ -276,7 +276,7 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // LET <name> = UNARY OP <symbol> OVER <operand> = <body>
     (
-        FormId::CombinedUnaryOperator,
+        BuiltinShapeId::CombinedUnaryOperator,
         FormRule::Operator {
             unary: true,
             body: 9,
@@ -284,59 +284,71 @@ static CLOSE_RULES: &[(FormId, FormRule)] = &[
     ),
     // LET <name> = UNARY OP <symbol> OVER <operand> -> <return type> = <body>
     (
-        FormId::CombinedUnaryOperatorReturning,
+        BuiltinShapeId::CombinedUnaryOperatorReturning,
         FormRule::Operator {
             unary: true,
             body: 11,
         },
     ),
     // MATCH <scrutinee> -> <result type> WITH <branches>
-    (FormId::Match, FormRule::Arms { arms: 5 }),
+    (BuiltinShapeId::Match, FormRule::Arms { arms: 5 }),
     // TRY <body> -> <result type> WITH <branches>
-    (FormId::Try, FormRule::MemberArms { arms: 5 }),
+    (BuiltinShapeId::Try, FormRule::MemberArms { arms: 5 }),
     // MATCH <scrutinee> OVER <union> -> <result type> WITH <branches>
-    (FormId::MatchOver, FormRule::MemberArms { arms: 7 }),
+    (BuiltinShapeId::MatchOver, FormRule::MemberArms { arms: 7 }),
     // MODULE <name> = <body>
-    (FormId::Module, FormRule::ModuleBody { body: 3 }),
+    (BuiltinShapeId::Module, FormRule::ModuleBody { body: 3 }),
     // GROUP <name> FOLD LEFT|RIGHT = <body>
-    (FormId::GroupFoldLeft, FormRule::ModuleBody { body: 5 }),
-    (FormId::GroupFoldRight, FormRule::ModuleBody { body: 5 }),
+    (
+        BuiltinShapeId::GroupFoldLeft,
+        FormRule::ModuleBody { body: 5 },
+    ),
+    (
+        BuiltinShapeId::GroupFoldRight,
+        FormRule::ModuleBody { body: 5 },
+    ),
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT|RIGHT = <body>
     (
-        FormId::GroupPairwiseFoldLeft,
+        BuiltinShapeId::GroupPairwiseFoldLeft,
         FormRule::ModuleBody { body: 7 },
     ),
     (
-        FormId::GroupPairwiseFoldRight,
+        BuiltinShapeId::GroupPairwiseFoldRight,
         FormRule::ModuleBody { body: 7 },
     ),
     // ATTR <record> <field> — the parse of `m.x`.
-    (FormId::Attribute, FormRule::Attribute { field: 2 }),
+    (BuiltinShapeId::Attribute, FormRule::Attribute { field: 2 }),
     // <field list> FROM <record>
-    (FormId::Projection, FormRule::Projection { fields: 0 }),
+    (
+        BuiltinShapeId::Projection,
+        FormRule::Projection { fields: 0 },
+    ),
     // CLOSE OVER <captures> <body>
     (
-        FormId::CloseOver,
+        BuiltinShapeId::CloseOver,
         FormRule::ExplicitClose {
             captures: 2,
             body: 3,
         },
     ),
     // CLOSE <body>
-    (FormId::Close, FormRule::InferredClose { body: 1 }),
+    (BuiltinShapeId::Close, FormRule::InferredClose { body: 1 }),
     // USING <module> SCOPE <body>
     (
-        FormId::UsingScope,
+        BuiltinShapeId::UsingScope,
         FormRule::Dynamic(DynamicNameForm::Using),
     ),
     // EVAL <expr> — the parse of `$(expr)`.
-    (FormId::Eval, FormRule::Dynamic(DynamicNameForm::Eval)),
+    (
+        BuiltinShapeId::Eval,
+        FormRule::Dynamic(DynamicNameForm::Eval),
+    ),
 ];
 
 /// The [`CLOSE_RULES`] entry for `expression`'s cached form, or `None` when the generic walk reads
 /// every slot correctly. The one rule probe.
 fn form_rule_for(expression: &KExpression<'_>) -> Option<&'static FormRule> {
-    let id = expression.cache().form()?.id;
+    let id = expression.cache().builtin_shape()?.id;
     CLOSE_RULES
         .iter()
         .find(|(tag, _)| *tag == id)

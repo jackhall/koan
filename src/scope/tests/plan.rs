@@ -1,4 +1,4 @@
-//! Shape plans: what a program's shapes are to be, generated as data and rendered to koan source for
+//! Body-shape plans: what a program's shapes are to be, generated as data and rendered to koan source for
 //! the builder to shape back.
 //!
 //! A plan is valid by construction. Names are unique across the program. Each scope partitions its
@@ -158,11 +158,11 @@ pub(super) struct Scope {
 #[derive(Clone, Debug)]
 pub(super) struct Statement {
     pub binder: Option<Name>,
-    pub form: Form,
+    pub form: BuiltinShape,
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum Form {
+pub(super) enum BuiltinShape {
     /// `LET x = <carriers>`.
     Let(Vec<Carrier>),
     /// `LET x = FN EXPR (ZZ <signature>) -> <returns> = <body>`.
@@ -213,8 +213,8 @@ impl Scope {
         let mut out = Vec::new();
         for statement in &self.statements {
             match &statement.form {
-                Form::Function(callable) => out.push(&callable.body),
-                Form::Let(carriers) | Form::Bare(carriers) => {
+                BuiltinShape::Function(callable) => out.push(&callable.body),
+                BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => {
                     for carrier in carriers {
                         match carrier {
                             Carrier::Read(_) => {}
@@ -225,7 +225,7 @@ impl Scope {
                         }
                     }
                 }
-                Form::Union(_) => {}
+                BuiltinShape::Union(_) => {}
             }
         }
         out
@@ -235,8 +235,8 @@ impl Scope {
         let mut out = Vec::new();
         for statement in &mut self.statements {
             match &mut statement.form {
-                Form::Function(callable) => out.push(&mut callable.body),
-                Form::Let(carriers) | Form::Bare(carriers) => {
+                BuiltinShape::Function(callable) => out.push(&mut callable.body),
+                BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => {
                     for carrier in carriers {
                         match carrier {
                             Carrier::Read(_) => {}
@@ -247,7 +247,7 @@ impl Scope {
                         }
                     }
                 }
-                Form::Union(_) => {}
+                BuiltinShape::Union(_) => {}
             }
         }
         out
@@ -258,12 +258,12 @@ impl Scope {
         let mut out = Vec::new();
         for statement in &mut self.statements {
             match &mut statement.form {
-                Form::Function(callable) => {
+                BuiltinShape::Function(callable) => {
                     out.extend(callable.types.iter_mut());
                     out.push(&mut callable.returns);
                 }
-                Form::Union(reads) => out.extend(reads.iter_mut()),
-                Form::Let(carriers) | Form::Bare(carriers) => {
+                BuiltinShape::Union(reads) => out.extend(reads.iter_mut()),
+                BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => {
                     for carrier in carriers {
                         match carrier {
                             Carrier::Read(read) => out.push(read),
@@ -294,10 +294,10 @@ impl Scope {
             .statements
             .iter()
             .any(|statement| match &statement.form {
-                Form::Let(carriers) | Form::Bare(carriers) => carriers
+                BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => carriers
                     .iter()
                     .any(|carrier| matches!(carrier, Carrier::Read(read) if read.eval)),
-                Form::Function(_) | Form::Union(_) => false,
+                BuiltinShape::Function(_) | BuiltinShape::Union(_) => false,
             });
         here || self
             .children()
@@ -732,14 +732,16 @@ impl<'c> Generator<'c> {
         for (index, draft) in drafts.into_iter().enumerate() {
             let own = std::mem::take(&mut reads[index]);
             let form = match draft {
-                Draft::Union => Form::Union(own),
+                Draft::Union => BuiltinShape::Union(own),
                 Draft::Function(parameters) => {
                     let (signature, routed) =
                         own.into_iter().partition(|read| read.class == Class::Eager);
-                    Form::Function(self.callable(depth, parameters, signature, routed, &enclosing))
+                    BuiltinShape::Function(
+                        self.callable(depth, parameters, signature, routed, &enclosing),
+                    )
                 }
-                Draft::Let => Form::Let(self.carriers(depth, own, &enclosing)),
-                Draft::Bare => Form::Bare(self.carriers(depth, own, &enclosing)),
+                Draft::Let => BuiltinShape::Let(self.carriers(depth, own, &enclosing)),
+                Draft::Bare => BuiltinShape::Bare(self.carriers(depth, own, &enclosing)),
             };
             statements.push(Statement {
                 binder: binders[index],
@@ -1189,7 +1191,7 @@ impl Generator<'_> {
             let inner = self.fresh(false);
             program.statements.push(Statement {
                 binder: Some(outer),
-                form: Form::Let(Vec::new()),
+                form: BuiltinShape::Let(Vec::new()),
             });
             program.components.push(BTreeSet::from([outer]));
             let body = Scope {
@@ -1197,7 +1199,7 @@ impl Generator<'_> {
                 parameters: vec![inner],
                 statements: vec![Statement {
                     binder: None,
-                    form: Form::Bare(Vec::new()),
+                    form: BuiltinShape::Bare(Vec::new()),
                 }],
                 components: vec![BTreeSet::from([inner])],
             };
@@ -1209,7 +1211,7 @@ impl Generator<'_> {
             };
             program.statements.push(Statement {
                 binder: None,
-                form: Form::Bare(vec![Carrier::Lambda(Class::Deferred, callable)]),
+                form: BuiltinShape::Bare(vec![Carrier::Lambda(Class::Deferred, callable)]),
             });
             candidates = Self::shadow_candidates(program);
         }
@@ -1219,14 +1221,14 @@ impl Generator<'_> {
         nested.rename_binder(renamed, name);
         nested.statements.push(Statement {
             binder: None,
-            form: Form::Bare(vec![Carrier::Read(Read::local(name, Class::Deferred))]),
+            form: BuiltinShape::Bare(vec![Carrier::Read(Read::local(name, Class::Deferred))]),
         });
         program
             .at_path(&path[..declaring])
             .statements
             .push(Statement {
                 binder: None,
-                form: Form::Bare(vec![Carrier::Read(Read::local(name, Class::Deferred))]),
+                form: BuiltinShape::Bare(vec![Carrier::Read(Read::local(name, Class::Deferred))]),
             });
     }
 
@@ -1401,13 +1403,13 @@ impl<'p> Renderer<'p> {
     fn statement(&mut self, index: usize, statement: &'p Statement) {
         self.statement = index as u32;
         match &statement.form {
-            Form::Let(carriers) => {
+            BuiltinShape::Let(carriers) => {
                 self.text("LET ");
                 self.other(statement.binder.expect("a LET binds"));
                 self.text(" = ");
                 self.carriers(carriers);
             }
-            Form::Function(callable) => {
+            BuiltinShape::Function(callable) => {
                 self.text("LET ");
                 self.other(statement.binder.expect("a function binds"));
                 self.text(" = FN EXPR (ZZ");
@@ -1422,7 +1424,7 @@ impl<'p> Renderer<'p> {
                 self.text(" = ");
                 self.body(&callable.body);
             }
-            Form::Union(reads) => {
+            BuiltinShape::Union(reads) => {
                 self.text("UNION ");
                 self.other(statement.binder.expect("a UNION binds"));
                 self.text(" = (");
@@ -1434,7 +1436,7 @@ impl<'p> Renderer<'p> {
                 }
                 self.text(")");
             }
-            Form::Bare(carriers) => {
+            BuiltinShape::Bare(carriers) => {
                 self.text("(");
                 self.carriers(carriers);
                 self.text(")");

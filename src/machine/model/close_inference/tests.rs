@@ -9,11 +9,11 @@ use super::{CLOSE_RULES, DynamicNameForm, FormRule, infer_close_captures};
 use crate::builtins::test_support::TestRun;
 use crate::machine::model::render_label;
 use crate::memory::{ProgramStorage, program_storage, run_root_storage};
-use crate::parse::forms::{FormId, KeyElementSpec, render_key};
+use crate::parse::builtin_shapes::{BuiltinShapeId, KeyElementSpec, render_key};
 
-/// The [`FORMS`](crate::parse::forms::FORMS) entry a rule tags.
-fn form_of(id: FormId) -> &'static crate::parse::forms::Form {
-    crate::parse::forms::FORMS
+/// The [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry a rule tags.
+fn form_of(id: BuiltinShapeId) -> &'static crate::parse::builtin_shapes::BuiltinShape {
+    crate::parse::builtin_shapes::BUILTIN_SHAPES
         .iter()
         .find(|form| form.id == id)
         .expect("every tag names a table entry")
@@ -23,10 +23,10 @@ fn form_of(id: FormId) -> &'static crate::parse::forms::Form {
 /// entries under one tag would make the walk's reading depend on table order; a claim pointing past
 /// the run, or at one of the form's keywords, would read the wrong part.
 ///
-/// The [`FORMS`] half of the same law — tag order, key distinctness, the lazy and type-slot indices
-/// — lives with the table, in `parse::forms::tests::table`.
+/// The [`BUILTIN_SHAPES`] half of the same law — tag order, key distinctness, the lazy and type-slot indices
+/// — lives with the table, in `parse::builtin_shapes::tests::table`.
 ///
-/// [`FORMS`]: crate::parse::forms::FORMS
+/// [`BUILTIN_SHAPES`]: crate::parse::builtin_shapes::BUILTIN_SHAPES
 #[test]
 fn every_close_rule_tags_one_form_and_claims_its_slot_positions() {
     for (index, (id, rule)) in CLOSE_RULES.iter().enumerate() {
@@ -199,7 +199,7 @@ fn free_names(statements: &[BlockStatement]) -> Vec<String> {
 
 /// One recognized form, spelled out, with the role each name it mentions plays.
 struct FormTemplate {
-    id: FormId,
+    id: BuiltinShapeId,
     /// `{a}`, `{b}` and `{c}` are filled with three distinct fresh names.
     source: &'static str,
     /// Names the form declares: a read of one inside the form is not free outside it.
@@ -215,7 +215,7 @@ struct FormTemplate {
 
 const TEMPLATES: &[FormTemplate] = &[
     FormTemplate {
-        id: FormId::LambdaType,
+        id: BuiltinShapeId::LambdaType,
         source: "FN :{{a} :Number} -> Number",
         bound: &[],
         free: &[],
@@ -223,7 +223,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::Lambda,
+        id: BuiltinShapeId::Lambda,
         source: "FN :{{a} :Number} -> Number = ({a} + {b})",
         bound: &["{a}"],
         free: &["{b}"],
@@ -231,7 +231,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::ExpressionHead,
+        id: BuiltinShapeId::ExpressionHead,
         source: "EXPR (KAPOW {a} :Number) -> Number",
         bound: &[],
         free: &[],
@@ -239,7 +239,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::ExpressionDefinition,
+        id: BuiltinShapeId::ExpressionDefinition,
         source: "EXPR (KAPOW {a} :Number) -> Number = ({a} + {b})",
         bound: &["{a}"],
         free: &["{b}"],
@@ -247,7 +247,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::CombinedExpression,
+        id: BuiltinShapeId::CombinedExpression,
         source: "LET zfun = FN EXPR (KAPOW {a} :Number) -> Number = ({a} + {b})",
         bound: &["{a}"],
         free: &["{b}"],
@@ -255,7 +255,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::QuantifiedExpressionHead,
+        id: BuiltinShapeId::QuantifiedExpressionHead,
         source: "EXPR FOR ALL (Elt) (KAPOW {a} :Elt) -> Elt",
         bound: &[],
         free: &[],
@@ -263,7 +263,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::QuantifiedExpressionDefinition,
+        id: BuiltinShapeId::QuantifiedExpressionDefinition,
         source: "EXPR FOR ALL (Elt) (KAPOW {a} :Elt) -> Elt = ({a} + {b})",
         bound: &["{a}"],
         free: &["{b}"],
@@ -271,7 +271,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::CombinedQuantifiedExpression,
+        id: BuiltinShapeId::CombinedQuantifiedExpression,
         source: "LET zfun = FN EXPR FOR ALL (Elt) (KAPOW {a} :Elt) -> Elt = ({a} + {b})",
         bound: &["{a}"],
         free: &["{b}"],
@@ -279,7 +279,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::OperatorDefinition,
+        id: BuiltinShapeId::OperatorDefinition,
         source: "OP #(⊕) OVER Number = (left + right + {b})",
         bound: &["left", "right"],
         free: &["{b}"],
@@ -287,7 +287,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::OperatorDefinitionReturning,
+        id: BuiltinShapeId::OperatorDefinitionReturning,
         source: "OP #(⊗) OVER Number -> Number = (left + right + {b})",
         bound: &["left", "right"],
         free: &["{b}"],
@@ -295,7 +295,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::UnaryOperatorDefinition,
+        id: BuiltinShapeId::UnaryOperatorDefinition,
         source: "UNARY OP #(≺) OVER Number = (operands + {b})",
         bound: &["operands"],
         free: &["{b}"],
@@ -303,7 +303,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::UnaryOperatorDefinitionReturning,
+        id: BuiltinShapeId::UnaryOperatorDefinitionReturning,
         source: "UNARY OP #(⊸) OVER Number -> Number = (operands + {b})",
         bound: &["operands"],
         free: &["{b}"],
@@ -311,7 +311,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::CombinedOperator,
+        id: BuiltinShapeId::CombinedOperator,
         source: "LET zop = OP #(⊛) OVER Number = (left + right + {b})",
         bound: &["left", "right"],
         free: &["{b}"],
@@ -319,7 +319,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::CombinedOperatorReturning,
+        id: BuiltinShapeId::CombinedOperatorReturning,
         source: "LET zop = OP #(⊙) OVER Number -> Number = (left + right + {b})",
         bound: &["left", "right"],
         free: &["{b}"],
@@ -327,7 +327,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::CombinedUnaryOperator,
+        id: BuiltinShapeId::CombinedUnaryOperator,
         source: "LET zop = UNARY OP #(⊚) OVER Number = (operands + {b})",
         bound: &["operands"],
         free: &["{b}"],
@@ -335,7 +335,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::CombinedUnaryOperatorReturning,
+        id: BuiltinShapeId::CombinedUnaryOperatorReturning,
         source: "LET zop = UNARY OP #(⊝) OVER Number -> Number = (operands + {b})",
         bound: &["operands"],
         free: &["{b}"],
@@ -343,7 +343,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::Match,
+        id: BuiltinShapeId::Match,
         source: "MATCH {b} -> Number WITH (Some -> (it) None -> (1))",
         bound: &["it"],
         free: &["{b}"],
@@ -351,7 +351,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::Try,
+        id: BuiltinShapeId::Try,
         source: "TRY ({b}) -> Number WITH (Error -> (it))",
         bound: &["it"],
         free: &["{b}"],
@@ -359,7 +359,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::MatchOver,
+        id: BuiltinShapeId::MatchOver,
         source: "MATCH {b} OVER Shape -> Number WITH (Circle -> (it))",
         bound: &["it"],
         free: &["{b}"],
@@ -367,7 +367,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::Module,
+        id: BuiltinShapeId::Module,
         source: "MODULE zmod = ((LET {a} = 1) ({a} + {b}))",
         bound: &["{a}"],
         free: &["{b}"],
@@ -375,7 +375,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::GroupFoldLeft,
+        id: BuiltinShapeId::GroupFoldLeft,
         source: "GROUP zgrp FOLD LEFT = ((LET {a} = 1) ({a} + {b}))",
         bound: &["{a}"],
         free: &["{b}"],
@@ -383,7 +383,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::GroupFoldRight,
+        id: BuiltinShapeId::GroupFoldRight,
         source: "GROUP zgrp FOLD RIGHT = ((LET {a} = 1) ({a} + {b}))",
         bound: &["{a}"],
         free: &["{b}"],
@@ -391,7 +391,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::GroupPairwiseFoldLeft,
+        id: BuiltinShapeId::GroupPairwiseFoldLeft,
         source: "GROUP zgrp PAIRWISE FOLD ({c}) LEFT = ((LET {a} = 1) ({a} + {b}))",
         bound: &["{a}"],
         free: &["{b}", "{c}"],
@@ -399,7 +399,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::GroupPairwiseFoldRight,
+        id: BuiltinShapeId::GroupPairwiseFoldRight,
         source: "GROUP zgrp PAIRWISE FOLD ({c}) RIGHT = ((LET {a} = 1) ({a} + {b}))",
         bound: &["{a}"],
         free: &["{b}", "{c}"],
@@ -407,7 +407,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::Attribute,
+        id: BuiltinShapeId::Attribute,
         source: "{b}.{c}",
         bound: &[],
         free: &["{b}"],
@@ -415,7 +415,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::Projection,
+        id: BuiltinShapeId::Projection,
         source: "({a} {c}) FROM {b}",
         bound: &[],
         free: &["{b}"],
@@ -423,7 +423,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::CloseOver,
+        id: BuiltinShapeId::CloseOver,
         source: "CLOSE OVER ({b}) ({a})",
         bound: &[],
         free: &["{b}"],
@@ -431,7 +431,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::Close,
+        id: BuiltinShapeId::Close,
         source: "CLOSE ((LET {a} = 1) ({a} + {b}))",
         bound: &["{a}"],
         free: &["{b}"],
@@ -439,7 +439,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: None,
     },
     FormTemplate {
-        id: FormId::UsingScope,
+        id: BuiltinShapeId::UsingScope,
         source: "USING zmod SCOPE ({b})",
         bound: &[],
         free: &[],
@@ -447,7 +447,7 @@ const TEMPLATES: &[FormTemplate] = &[
         conflict: Some(DynamicNameForm::Using),
     },
     FormTemplate {
-        id: FormId::Eval,
+        id: BuiltinShapeId::Eval,
         source: "EVAL {b}",
         bound: &[],
         free: &[],

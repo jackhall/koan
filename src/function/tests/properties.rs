@@ -16,7 +16,7 @@ use proptest::prelude::*;
 use crate::memory::{CellGraph, Edge, ReleaseAbsorption, Writer, resident};
 use crate::parse::{BinderSymbol, ExpressionPart};
 use crate::scope::{
-    Binding, CaptureSlot, CaptureSource, Component, Coordinate, Shape, ShapeKind, Site, Slot,
+    Binding, BodyShape, CaptureSlot, CaptureSource, Component, Coordinate, ShapeKind, Site, Slot,
     Target,
 };
 use crate::type_lattice::KType;
@@ -79,7 +79,7 @@ fn synthetic<'graph, 'cell>(
 /// index of a fellow member it reads, the coordinate of any other read, or `None` for a
 /// parenthesized item the caller evaluates.
 fn planned_items(
-    shape: &Shape<'_>,
+    shape: &BodyShape<'_>,
     component: &Component<'_>,
     slot: Slot,
 ) -> Vec<Option<Result<u32, Coordinate>>> {
@@ -325,7 +325,7 @@ proptest! {
                 .enter(home, |context| {
                     let writer = context.writer();
                     let builtins = fixture.builtins(writer, &[]);
-                    let shape = crate::scope::Shape::of_program(fixture.program, &lines, builtins, fixture.scratch())
+                    let shape = crate::scope::BodyShape::of_program(fixture.program, &lines, builtins, fixture.scratch())
                         .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(fixture.labels)));
                     let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
                     let mut tied = Vec::new();

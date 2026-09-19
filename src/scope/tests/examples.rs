@@ -1,10 +1,10 @@
 //! Fixed shapes: the design document's classification examples, the diagnostics each error renders,
 //! the kinds of nested shape, and the forms the builder refuses.
 
-use crate::parse::forms::FormId;
+use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression};
 use crate::scope::{
-    Builtins, CaptureSource, Coordinate, MentionClass, Position, Shape, ShapeError, ShapeKind,
+    BodyShape, Builtins, CaptureSource, Coordinate, MentionClass, Position, ShapeError, ShapeKind,
     Slot, Target,
 };
 
@@ -20,21 +20,24 @@ fn shaped<R>(
     check: impl for<'f, 'graph> FnOnce(
         &Fixture<'f, 'graph>,
         &[KExpression<'graph>],
-        Result<&'graph Shape<'graph>, ShapeError>,
+        Result<&'graph BodyShape<'graph>, ShapeError>,
     ) -> R,
 ) -> R {
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = Shape::of_program(fixture.program, &lines, table, fixture.scratch());
+            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch());
             check(fixture, &lines, shape)
         })
     })
 }
 
 /// The mention of `name` in `shape`, which must be unique.
-fn mention_of<'graph>(shape: &Shape<'graph>, name: BinderSymbol) -> &'graph crate::scope::Mention {
+fn mention_of<'graph>(
+    shape: &BodyShape<'graph>,
+    name: BinderSymbol,
+) -> &'graph crate::scope::Mention {
     let mut found = shape
         .mentions()
         .iter()
@@ -46,11 +49,11 @@ fn mention_of<'graph>(shape: &Shape<'graph>, name: BinderSymbol) -> &'graph crat
 
 /// The shape nested at part `index` of a top-level line, reached through a parenthesized node.
 fn nested_at<'graph>(
-    shape: &Shape<'graph>,
+    shape: &BodyShape<'graph>,
     line: &KExpression<'graph>,
     index: usize,
     body: usize,
-) -> &'graph Shape<'graph> {
+) -> &'graph BodyShape<'graph> {
     let ExpressionPart::Expression(node) = line.parts[index].value else {
         panic!("part {index} is a parenthesized node");
     };
@@ -307,10 +310,10 @@ fn each_error_names_what_a_user_needs() {
 
 #[test]
 fn every_capture_limiting_or_module_importing_form_is_unsupported() {
-    let cases: &[(&str, FormId)] = &[
-        ("USING m SCOPE (x)", FormId::UsingScope),
-        ("CLOSE OVER (x) (x)", FormId::CloseOver),
-        ("CLOSE (x)", FormId::Close),
+    let cases: &[(&str, BuiltinShapeId)] = &[
+        ("USING m SCOPE (x)", BuiltinShapeId::UsingScope),
+        ("CLOSE OVER (x) (x)", BuiltinShapeId::CloseOver),
+        ("CLOSE (x)", BuiltinShapeId::Close),
     ];
     for (source, form) in cases {
         shaped(source, |_, _, shape| {
@@ -408,26 +411,26 @@ LET k = 1";
         assert_eq!(f.kind(), ShapeKind::Callable);
         assert_eq!(
             f.form()
-                .and_then(|form| form.cache().form())
+                .and_then(|form| form.cache().builtin_shape())
                 .map(|form| form.id),
-            Some(FormId::Lambda)
+            Some(BuiltinShapeId::Lambda)
         );
         assert!(std::ptr::eq(f, nested_at(shape, &lines[0], 3, 5)));
         let e = shape.births(slot("e")).expect("a combined EXPR is a birth");
         assert_eq!(
             e.form()
-                .and_then(|form| form.cache().form())
+                .and_then(|form| form.cache().builtin_shape())
                 .map(|form| form.id),
-            Some(FormId::CombinedExpression)
+            Some(BuiltinShapeId::CombinedExpression)
         );
         let plus = shape
             .births(slot("plus"))
             .expect("a combined OP is a birth");
         assert_eq!(
             plus.form()
-                .and_then(|form| form.cache().form())
+                .and_then(|form| form.cache().builtin_shape())
                 .map(|form| form.id),
-            Some(FormId::CombinedOperator)
+            Some(BuiltinShapeId::CombinedOperator)
         );
         assert!(
             shape.births(slot("wrapped")).is_none(),

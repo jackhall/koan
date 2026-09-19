@@ -1,4 +1,4 @@
-//! The live builtin registration set, derived once, and the law that pins [`FORMS`] against it.
+//! The live builtin registration set, derived once, and the law that pins [`BUILTIN_SHAPES`] against it.
 //!
 //! Recognizing a builtin form by its full bucket key is sound only because a matched key can
 //! resolve to nothing but that builtin's overloads. That soundness is a claim about the *live*
@@ -11,15 +11,15 @@ use std::collections::BTreeMap;
 use crate::builtins::test_support::TestRun;
 use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry};
 use crate::memory::{program_storage, run_root_storage};
-use crate::parse::UntypedKey;
-use crate::parse::forms::binder::BinderFacts;
-use crate::parse::forms::lazy::LazyKinds;
-use crate::parse::forms::{FORMS, Form, key_matches, render_key};
+use crate::parse::ExpressionKey;
+use crate::parse::builtin_shapes::binder::BinderFacts;
+use crate::parse::builtin_shapes::lazy::LazyKinds;
+use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShape, key_matches, render_key};
 
 /// One live builtin bucket: the key it registers under, and per argument index the slot type each
 /// of its overloads declares there.
 struct LiveBucket {
-    key: UntypedKey,
+    key: ExpressionKey,
     slot_types: BTreeMap<usize, Vec<KType>>,
 }
 
@@ -90,8 +90,8 @@ fn declared_lazy_slots(bucket: &LiveBucket, types: &TypeRegistry) -> BTreeMap<us
 }
 
 /// Every form the table gives binder facts, with those facts beside it.
-fn binder_forms() -> impl Iterator<Item = (&'static Form, BinderFacts)> {
-    FORMS
+fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
+    BUILTIN_SHAPES
         .iter()
         .filter_map(|form| form.binder.map(|binder| (form, binder)))
 }
@@ -119,12 +119,12 @@ fn the_form_table_matches_the_live_registrations() {
     let live = live_registrations(&run);
     let types = run.types();
 
-    let matching = |form: &'static Form| {
+    let matching = |form: &'static BuiltinShape| {
         live.iter()
             .filter(move |bucket| key_matches(form.key, bucket.key.iter().copied()))
     };
 
-    for form in FORMS {
+    for form in BUILTIN_SHAPES {
         let registered = matching(form).count();
         if form.reserved {
             assert_eq!(
@@ -147,9 +147,10 @@ fn the_form_table_matches_the_live_registrations() {
         if expected.is_empty() {
             continue;
         }
-        let form = crate::parse::forms::form_for(bucket.key.iter().copied()).unwrap_or_else(|| {
-            panic!("live bucket with lazy slots {expected:?} has no FORMS entry")
-        });
+        let form = crate::parse::builtin_shapes::builtin_shape_for(bucket.key.iter().copied())
+            .unwrap_or_else(|| {
+                panic!("live bucket with lazy slots {expected:?} has no BUILTIN_SHAPES entry")
+            });
         let declared: BTreeMap<usize, LazyKinds> = form
             .lazy_slots
             .iter()

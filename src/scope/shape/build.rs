@@ -18,7 +18,7 @@
 use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, strongly_connected_components,
 };
-use crate::parse::forms::{FormId, KEYWORDS};
+use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{
     BinderSymbol, ExpressionPart, KExpression, StaticName, TypeSymbol, ValueSymbol,
 };
@@ -27,13 +27,13 @@ use crate::values::Knotted;
 use super::super::activation::Activation;
 use super::super::builtins::Builtins;
 use super::super::channels::Channels;
-use super::super::roles::{BodyKind, Heads, Role, SchemaKind, roles};
+use super::super::roles::{BodyKind, DefinitionKind, Heads, Role, roles};
 use super::super::signature::{
     body_of, declare_parameters, declare_quantifiers, pair_name, signature_run,
 };
 use super::{
-    BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate,
-    Mention, MentionClass, Position, Shape, ShapeError, ShapeKind, Site, Slot, Target,
+    BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex,
+    Coordinate, Mention, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target,
     resolve_here,
 };
 
@@ -61,7 +61,7 @@ pub(super) fn program<'graph, X: Knotted>(
     statements: &[KExpression<'graph>],
     builtins: &Builtins<'_, '_, X>,
     scratch: BumpAllocator<'_>,
-) -> Result<&'graph Shape<'graph>, ShapeError> {
+) -> Result<&'graph BodyShape<'graph>, ShapeError> {
     let lookup = |name| builtins.lookup(name);
     let mut builder = Builder::new(brand, scratch, &lookup, None);
     let statements = statements
@@ -79,7 +79,7 @@ pub(super) fn eval<'graph, X: Knotted>(
     site: &Activation<'graph, '_, X>,
     at: Position,
     scratch: BumpAllocator<'_>,
-) -> Result<&'graph Shape<'graph>, ShapeError> {
+) -> Result<&'graph BodyShape<'graph>, ShapeError> {
     let lookup = |name| site.builtins().lookup(name);
     let outer = |name, position| site.through_chain(name, position);
     let mut builder = Builder::new(brand, scratch, &lookup, Some((&outer, at)));
@@ -99,7 +99,7 @@ enum State {
 }
 
 impl State {
-    /// Entering a constructor slot: a list element, a dict value, a record field, a schema, a
+    /// Entering a constructor slot: a list element, a dict value, a record field, a definition, a
     /// nominal construction's payload.
     fn constructor(self) -> State {
         match self {
@@ -357,7 +357,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         node: &KExpression<'graph>,
         state: State,
     ) -> Result<(), ShapeError> {
-        let Some(form) = node.cache().form() else {
+        let Some(form) = node.cache().builtin_shape() else {
             if let [only] = node.parts {
                 return self.walk_part(level, statement, &only.value, state);
             }
@@ -385,7 +385,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             node.parts.len(),
             "a form's parts match its key"
         );
-        if form.id == FormId::Eval {
+        if form.id == BuiltinShapeId::Eval {
             for draft in self.chain.iter_mut() {
                 draft.keeps_defining_scope = true;
             }
@@ -424,7 +424,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         level: usize,
         statement: u32,
         node: &KExpression<'graph>,
-        form: FormId,
+        form: BuiltinShapeId,
         roles: &[Role],
         parameters: &[BinderSymbol],
         state: State,
@@ -451,8 +451,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     self.enter_body(level, statement, node, part, kind, parameters, state)?
                 }
                 Role::Branches(heads) => self.enter_arms(level, statement, form, part, heads)?,
-                Role::Schema(kind) => {
-                    self.walk_schema(level, statement, part, kind, state.constructor())?
+                Role::Definition(kind) => {
+                    self.walk_definition(level, statement, part, kind, state.constructor())?
                 }
                 Role::Unsupported => unreachable!("an unsupported form returned above"),
             }
@@ -543,21 +543,21 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
     }
 
-    /// A type's schema, under the constructor state: labels and the schema's own `TYPE`
-    /// declarations are not mentions, and every other type name is.
-    fn walk_schema(
+    /// A type declaration's definition, under the constructor state: labels and the definition's
+    /// own `TYPE` declarations are not mentions, and every other type name is.
+    fn walk_definition(
         &mut self,
         level: usize,
         statement: u32,
         part: &ExpressionPart<'graph>,
-        kind: SchemaKind,
+        kind: DefinitionKind,
         state: State,
     ) -> Result<(), ShapeError> {
         let mut own = BumpVec::new_in(self.scratch);
         if let ExpressionPart::Expression(run) = part {
             own.extend(run.body_statements().filter_map(|(node, _)| {
-                let form = node.statement_spine().cache().form()?;
-                (form.id == FormId::TypeDeclaration)
+                let form = node.statement_spine().cache().builtin_shape()?;
+                (form.id == BuiltinShapeId::TypeDeclaration)
                     .then(|| node.statement_binder_plan()?.name)
                     .flatten()
                     .and_then(|name| match name {
@@ -568,17 +568,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
         let mark = self.skip.len();
         self.skip.extend_from_slice(&own);
-        let walked = self.walk_schema_part(level, statement, part, kind, state);
+        let walked = self.walk_definition_part(level, statement, part, kind, state);
         self.skip.truncate(mark);
         walked
     }
 
-    fn walk_schema_part(
+    fn walk_definition_part(
         &mut self,
         level: usize,
         statement: u32,
         part: &ExpressionPart<'graph>,
-        kind: SchemaKind,
+        kind: DefinitionKind,
         state: State,
     ) -> Result<(), ShapeError> {
         let run = match part {
@@ -600,11 +600,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             | ExpressionPart::QuotedExpression(_) => return Ok(()),
         };
         for (index, inner) in run.parts.iter().enumerate() {
-            let tag = kind == SchemaKind::Union && index % 2 == 0;
+            let tag = kind == DefinitionKind::Union && index % 2 == 0;
             if tag && matches!(inner.value, ExpressionPart::Type(_)) {
                 continue;
             }
-            self.walk_schema_part(level, statement, &inner.value, SchemaKind::Plain, state)?;
+            self.walk_definition_part(
+                level,
+                statement,
+                &inner.value,
+                DefinitionKind::Plain,
+                state,
+            )?;
         }
         Ok(())
     }
@@ -622,7 +628,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Result<(), ShapeError> {
         let Some(body) = body_of(part) else {
             return Err(ShapeError::Malformed {
-                form: node.cache().form().expect("a body role is a form's").id,
+                form: node
+                    .cache()
+                    .builtin_shape()
+                    .expect("a body role is a form's")
+                    .id,
                 at: Position::statement(statement as usize),
             });
         };
@@ -668,7 +678,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
-        form: FormId,
+        form: BuiltinShapeId,
         part: &ExpressionPart<'graph>,
         heads: Heads,
     ) -> Result<(), ShapeError> {
@@ -945,7 +955,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &self,
         draft: Draft<'x>,
         form: Option<&'graph KExpression<'graph>>,
-    ) -> &'graph Shape<'graph> {
+    ) -> &'graph BodyShape<'graph> {
         let storage = self.brand.allocator();
         let mut nested = BumpVec::with_capacity_in(draft.children.len(), self.scratch);
         for (site, child) in draft.children {
@@ -980,7 +990,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             deferred_only: component.deferred_only,
             cyclic: component.cyclic,
         }));
-        storage.alloc(Shape {
+        storage.alloc(BodyShape {
             kind: draft.kind,
             names: Channels::new(
                 storage.alloc_slice_copy(&draft.values),

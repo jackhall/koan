@@ -14,7 +14,7 @@
 use crate::elaborate::{Elaboration, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, CellHandle, Knot, KnotPlan, Writer};
 use crate::parse::{BinderSymbol, ExpressionPart};
-use crate::scope::{ClosureBindings, ClosureRefused, Component, Shape, Site};
+use crate::scope::{BodyShape, ClosureBindings, ClosureRefused, Component, Site};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{ConstructionRefused, KeyRejected, Link, Weight};
 
@@ -56,7 +56,7 @@ pub enum Untieable<'x> {
 
 /// A function member, read and not yet written.
 struct StagedFunction<'graph, 'cell, 'x> {
-    shape: &'graph Shape<'graph>,
+    shape: &'graph BodyShape<'graph>,
     ktype: KType,
     captures: BumpVec<'x, Link<'graph, 'cell, Knotted<'graph, 'cell>>>,
 }

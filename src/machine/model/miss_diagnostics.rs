@@ -8,20 +8,20 @@
 //! has already failed, each entry pairing a full untyped key with a render fn that confirms the
 //! mistake from the raw parts. No hit means the generic miss reason stands.
 //!
-//! Recognition is by the [`FormId`] the node resolved at construction — a full untyped bucket key,
+//! Recognition is by the [`BuiltinShapeId`] the node resolved at construction — a full untyped bucket key,
 //! sound because builtin buckets are unshadowable, so a node whose key matches a
-//! [`FORMS`](crate::parse::forms::FORMS) entry can only ever resolve to that builtin's
+//! [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry can only ever resolve to that builtin's
 //! overloads. A form whose key has *no* registration at all — the missing-result `UNARY OP` forms,
 //! whose only shape is the mistake — carries that argument itself: its entry is marked
-//! [`reserved`](crate::parse::forms::Form::reserved), and the overload write door
+//! [`reserved`](crate::parse::builtin_shapes::BuiltinShape::reserved), and the overload write door
 //! refuses a user registration under a reserved key, so the shape stays unshadowable and the
 //! diagnosis stays sound.
 
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::{WorkingExpression, render_label};
-use crate::parse::forms::{FormId, form_for};
+use crate::parse::builtin_shapes::{BuiltinShapeId, builtin_shape_for};
 use crate::parse::snake_case_identifier;
-use crate::parse::{ExpressionPart, UntypedKey};
+use crate::parse::{ExpressionKey, ExpressionPart};
 
 /// The targeted message a miss under one form earns, when the parts confirm the mistake the entry
 /// names (the name slot really is a Type token, say); `None` leaves the generic dispatch-miss reason
@@ -35,7 +35,7 @@ pub(crate) fn diagnose_miss(
     expr: &WorkingExpression<'_>,
     registries: &RunRegistries,
 ) -> Option<String> {
-    let id = expr.cache().form()?.id;
+    let id = expr.cache().builtin_shape()?.id;
     MISS_DIAGNOSTICS
         .iter()
         .filter(|(tag, _)| *tag == id)
@@ -44,8 +44,8 @@ pub(crate) fn diagnose_miss(
 
 /// True iff `key` names a reserved form — a shape whose only reading is the mistake it diagnoses,
 /// which therefore admits no registration at all.
-pub(crate) fn key_is_reserved(key: &UntypedKey) -> bool {
-    form_for(key.iter().copied()).is_some_and(|form| form.reserved)
+pub(crate) fn key_is_reserved(key: &ExpressionKey) -> bool {
+    builtin_shape_for(key.iter().copied()).is_some_and(|form| form.reserved)
 }
 
 // ---------- part reads ----------
@@ -227,40 +227,55 @@ fn combined_expr_value_named_return(
 /// are the missing-result `UNARY OP` shapes and the combined `LET … = FN <signature> …` statement;
 /// every other form here keeps success-path siblings, and its entry speaks only when its own render
 /// confirms the mistake.
-pub static MISS_DIAGNOSTICS: &[(FormId, MissRender)] = &[
+pub static MISS_DIAGNOSTICS: &[(BuiltinShapeId, MissRender)] = &[
     // UNARY OP <symbol> OVER <operand> = <body> — the shape whose only reading is the mistake.
-    (FormId::UnaryOperatorDefinition, unary_missing_result),
+    (
+        BuiltinShapeId::UnaryOperatorDefinition,
+        unary_missing_result,
+    ),
     // UNARY OP <symbol> OVER <operand> — the head form, missing its result.
-    (FormId::UnaryOperatorHead, unary_head_missing_result),
+    (BuiltinShapeId::UnaryOperatorHead, unary_head_missing_result),
     // LET <name> = UNARY OP <symbol> OVER <operand> = <body>.
-    (FormId::CombinedUnaryOperator, unary_missing_result_combined),
+    (
+        BuiltinShapeId::CombinedUnaryOperator,
+        unary_missing_result_combined,
+    ),
     // MODULE <name> = <body>.
-    (FormId::Module, module_type_named),
+    (BuiltinShapeId::Module, module_type_named),
     // GROUP <name> FOLD LEFT|RIGHT = <body>.
-    (FormId::GroupFoldLeft, module_type_named),
-    (FormId::GroupFoldRight, module_type_named),
+    (BuiltinShapeId::GroupFoldLeft, module_type_named),
+    (BuiltinShapeId::GroupFoldRight, module_type_named),
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT|RIGHT = <body>.
-    (FormId::GroupPairwiseFoldLeft, module_type_named),
-    (FormId::GroupPairwiseFoldRight, module_type_named),
+    (BuiltinShapeId::GroupPairwiseFoldLeft, module_type_named),
+    (BuiltinShapeId::GroupPairwiseFoldRight, module_type_named),
     // LET <name> = FN <signature> -> <return type> = <body>.
-    (FormId::CombinedLambda, combined_lambda_has_no_binder),
+    (
+        BuiltinShapeId::CombinedLambda,
+        combined_lambda_has_no_binder,
+    ),
     // EXPR <head> -> <return type> = <body>: a value-named return slot.
-    (FormId::ExpressionDefinition, fn_value_named_return),
+    (BuiltinShapeId::ExpressionDefinition, fn_value_named_return),
     // LET <name> = FN EXPR <head> -> <return type> = <body>: a Type-classified binder, or a
     // value-named return slot. Two mistakes under one form, each confirmed by its own render.
-    (FormId::CombinedExpression, function_bound_type_named),
-    (FormId::CombinedExpression, combined_expr_value_named_return),
-    // The quantified twins of the two rows above, whose group shifts every slot after it.
     (
-        FormId::QuantifiedExpressionDefinition,
-        quantified_value_named_return,
-    ),
-    (
-        FormId::CombinedQuantifiedExpression,
+        BuiltinShapeId::CombinedExpression,
         function_bound_type_named,
     ),
     (
-        FormId::CombinedQuantifiedExpression,
+        BuiltinShapeId::CombinedExpression,
+        combined_expr_value_named_return,
+    ),
+    // The quantified twins of the two rows above, whose group shifts every slot after it.
+    (
+        BuiltinShapeId::QuantifiedExpressionDefinition,
+        quantified_value_named_return,
+    ),
+    (
+        BuiltinShapeId::CombinedQuantifiedExpression,
+        function_bound_type_named,
+    ),
+    (
+        BuiltinShapeId::CombinedQuantifiedExpression,
         combined_quantified_value_named_return,
     ),
 ];

@@ -10,13 +10,13 @@ use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::memory::Global;
 use crate::memory::{program_storage, run_root_storage};
-use crate::parse::UntypedKey;
+use crate::parse::ExpressionKey;
 
 use super::body_no_op;
 
 /// The untyped bucket key for a signature shape, built the way the registration door derives it —
 /// keyword spellings and slots, types irrelevant.
-fn key(elements: Vec<SignatureElement>) -> UntypedKey {
+fn key(elements: Vec<SignatureElement>) -> ExpressionKey {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements,

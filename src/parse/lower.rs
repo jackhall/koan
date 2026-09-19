@@ -18,7 +18,7 @@ use sexlex::{Item, Kind, Node};
 use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
-use crate::parse::forms::binder::admit_bare_type_slots;
+use crate::parse::builtin_shapes::binder::admit_bare_type_slots;
 use crate::parse::labels::{KeywordSymbol, LabelInterner};
 use crate::source::{FileId, Span, Spanned};
 

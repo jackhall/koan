@@ -58,7 +58,7 @@ impl<'a> Scope<'a> {
     /// user FN whose untyped signature key collides with a builtin is a
     /// `Rebind`; it must never merge into the builtin bucket. The consult reads the
     /// root directly.
-    pub(crate) fn shadows_builtin_function(&self, key: &crate::parse::UntypedKey) -> bool {
+    pub(crate) fn shadows_builtin_function(&self, key: &crate::parse::ExpressionKey) -> bool {
         self.root_scope().bindings().has_builtin_function(key)
     }
 

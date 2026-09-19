@@ -1,6 +1,6 @@
 //! Expression-signature machinery: the call shape a `KFunction` matches against — an ordered
 //! mix of fixed `Keyword` tokens and typed `Argument` slots, plus a `return_type`.
-//! `UntypedKey` groups overloads by shape; `Specificity` ranks candidates within a bucket.
+//! `ExpressionKey` groups overloads by shape; `Specificity` ranks candidates within a bucket.
 //!
 //! Not to be confused with the **module-signature** content (`SIG`-declared) at
 //! [`crate::machine::model::types::sig_schema::SigSchema`].
@@ -18,7 +18,7 @@ use super::ktype::{KType, display_label};
 use super::node::TypeNode;
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
-use crate::parse::ast::{KeyElement, UntypedKey};
+use crate::parse::ast::{ExpressionKey, KeyElement};
 use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
 
 /// The definition-time identity of a signature for bucket dedupe: element shape plus the
@@ -155,7 +155,7 @@ fn normalized_keyword(token: &str) -> std::borrow::Cow<'_, str> {
 /// [`ExpressionSignature::untyped_key`] read off the buffer rather than off a signature. A
 /// pre-mint keyword already carries the symbol of its **normalized** spelling
 /// ([`SignatureElement::keyword`]), so the key is read straight off the elements.
-pub fn untyped_key_of(elements: &[SignatureElement]) -> UntypedKey {
+pub fn untyped_key_of(elements: &[SignatureElement]) -> ExpressionKey {
     elements
         .iter()
         .map(|el| match el {
@@ -167,7 +167,7 @@ pub fn untyped_key_of(elements: &[SignatureElement]) -> UntypedKey {
 
 impl SignatureDraft<'_> {
     /// The bucket key this draft will key once minted.
-    pub fn untyped_key(&self) -> UntypedKey {
+    pub fn untyped_key(&self) -> ExpressionKey {
         untyped_key_of(&self.elements)
     }
 }
@@ -535,7 +535,7 @@ impl<'a> ExpressionSignature<'a> {
 
     /// Slot types are erased — same shape with different types lives in the same bucket and
     /// competes on specificity at dispatch time.
-    pub fn untyped_key(&self) -> UntypedKey {
+    pub fn untyped_key(&self) -> ExpressionKey {
         self.elements()
             .iter()
             .map(|el| match el {
@@ -561,7 +561,7 @@ impl<'a> ExpressionSignature<'a> {
         )
     }
 
-    /// Assumes `self` and `other` share an `UntypedKey` — only argument slots contribute,
+    /// Assumes `self` and `other` share an `ExpressionKey` — only argument slots contribute,
     /// since fixed-token positions are equal by construction.
     pub fn specificity_vs(
         &self,

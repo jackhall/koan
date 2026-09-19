@@ -11,7 +11,7 @@
 //! surface rule stay in the sibling files.
 //!
 //! Two facts shape the generator. A keyword is drawn from a pool disjoint from the surface
-//! keywords [`FORMS`](crate::parse::forms::FORMS) spells, so no generated run matches a builtin
+//! keywords [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) spells, so no generated run matches a builtin
 //! form and the bare-parenthesized type-slot flip never fires. And a `:(…)` body of exactly one
 //! sub-expression is re-labelled rather than re-wrapped, so a lone group is never a type sigil's
 //! whole body.

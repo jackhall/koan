@@ -9,7 +9,7 @@ use crate::memory::{
     Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::{BinderSymbol, KExpression, LabelInterner, TypeSymbol, parse};
-use crate::scope::{Activation, Builtins, Shape, Slot};
+use crate::scope::{Activation, BodyShape, Builtins, Slot};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{TypeValue, Value};
 
@@ -41,7 +41,7 @@ impl<'graph> Program<'_, 'graph, '_> {
     }
 
     /// The body shape the binder `name` births.
-    pub fn birth(&self, name: &str) -> &'graph Shape<'graph> {
+    pub fn birth(&self, name: &str) -> &'graph BodyShape<'graph> {
         let name = BinderSymbol::classify(name).expect("a binder name");
         let (slot, _) = self
             .activation
@@ -99,7 +99,7 @@ pub(super) fn with_program<R>(
                 })
                 .collect();
             let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table);
-            let shape = Shape::of_program(program, &lines, builtins, &scratch)
+            let shape = BodyShape::of_program(program, &lines, builtins, &scratch)
                 .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(&labels)));
             let activation = resident(writer, Activation::of_program(writer, shape, builtins));
             for slot in 0..shape.slots() {

@@ -20,7 +20,7 @@ use crate::values::{Knotted, Link, Nothing, Value};
 
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
-use super::shape::{Coordinate, Position, Shape, ShapeKind, Slot, Target};
+use super::shape::{BodyShape, Coordinate, Position, ShapeKind, Slot, Target};
 
 /// One body's bindings for one call or one block entry.
 ///
@@ -29,7 +29,7 @@ use super::shape::{Coordinate, Position, Shape, ShapeKind, Slot, Target};
 /// whose builtin table it shares.
 #[derive(Clone, Copy)]
 pub struct Activation<'graph, 'cell, X = Nothing> {
-    shape: &'graph Shape<'graph>,
+    shape: &'graph BodyShape<'graph>,
     closure: &'cell ClosureBindings<'graph, 'cell, X>,
     builtins: &'cell Builtins<'graph, 'cell, X>,
     enclosing: Option<&'cell Activation<'graph, 'cell, X>>,
@@ -55,7 +55,7 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
     /// A fresh activation of the program shape `shape`, every slot `Empty`.
     pub fn of_program(
         writer: Writer<'cell>,
-        shape: &'graph Shape<'graph>,
+        shape: &'graph BodyShape<'graph>,
         builtins: &'cell Builtins<'graph, 'cell, X>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Program);
@@ -73,7 +73,7 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
     /// closure bindings, every slot `Empty`.
     pub fn of_callable(
         writer: Writer<'cell>,
-        shape: &'graph Shape<'graph>,
+        shape: &'graph BodyShape<'graph>,
         callable: X,
         closure: &'cell ClosureBindings<'graph, 'cell, X>,
         builtins: &'cell Builtins<'graph, 'cell, X>,
@@ -100,7 +100,7 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
     /// A fresh activation of the block shape `shape` beside `enclosing`, every slot `Empty`.
     pub fn of_block(
         writer: Writer<'cell>,
-        shape: &'graph Shape<'graph>,
+        shape: &'graph BodyShape<'graph>,
         enclosing: &'cell Activation<'graph, 'cell, X>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Block);
@@ -114,7 +114,7 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
         }
     }
 
-    pub fn shape(&self) -> &'graph Shape<'graph> {
+    pub fn shape(&self) -> &'graph BodyShape<'graph> {
         self.shape
     }
 

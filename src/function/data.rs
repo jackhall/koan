@@ -20,7 +20,7 @@
 
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected_components};
 use crate::parse::{BinderSymbol, ExpressionPart, KExpression, KLiteral};
-use crate::scope::{Binding, Component, Coordinate, Shape, Site, Target};
+use crate::scope::{Binding, BodyShape, Component, Coordinate, Site, Target};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{
     Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged, TypeValue, Value,
@@ -60,7 +60,7 @@ pub(super) type Nodes<'graph, 'cell, 'x> = BumpVec<'x, Option<Node<'graph, 'cell
 /// The constructor a data member's right-hand side is rooted at, through one-part groups: a list,
 /// dict or record literal, or a nominal construction. `None` for anything else.
 pub(super) fn root<'graph>(
-    shape: &Shape<'graph>,
+    shape: &BodyShape<'graph>,
     part: &'graph ExpressionPart<'graph>,
 ) -> Option<&'graph ExpressionPart<'graph>> {
     match part {
@@ -70,7 +70,7 @@ pub(super) fn root<'graph>(
         ExpressionPart::Expression(node) => {
             let node = node.reference();
             match node.parts {
-                [only] if node.cache().form().is_none() => root(shape, &only.value),
+                [only] if node.cache().builtin_shape().is_none() => root(shape, &only.value),
                 _ => construction_parts(shape, node).map(|_| part),
             }
         }
@@ -81,7 +81,7 @@ pub(super) fn root<'graph>(
 /// A nominal construction's head and payload: a formless two-part node whose head is a type name
 /// the shape reads.
 fn construction_parts<'graph>(
-    shape: &Shape<'graph>,
+    shape: &BodyShape<'graph>,
     node: &'graph KExpression<'graph>,
 ) -> Option<(
     &'graph ExpressionPart<'graph>,
@@ -89,7 +89,7 @@ fn construction_parts<'graph>(
 )> {
     match node.parts {
         [head, payload]
-            if node.cache().form().is_none()
+            if node.cache().builtin_shape().is_none()
                 && matches!(head.value, ExpressionPart::Type(_))
                 && shape.mention(Site::of(&head.value)).is_some() =>
         {
@@ -168,7 +168,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
             ExpressionPart::Expression(node) => {
                 let node = node.reference();
                 if let [only] = node.parts
-                    && node.cache().form().is_none()
+                    && node.cache().builtin_shape().is_none()
                 {
                     return self.part(&only.value, root);
                 }

@@ -6,8 +6,8 @@
 //! koan's meaning. The three entry points below are the entire text-to-AST surface; `atom`,
 //! `brace`, `lower` and `operators` are private.
 //!
-//! [`labels`], [`ast`] and [`forms`] are the vocabulary the products are written in. A node fills
-//! its structural cache at construction by probing [`forms::FORMS`], so every later reader — the
+//! [`labels`], [`ast`] and [`builtin_shapes`] are the vocabulary the products are written in. A node fills
+//! its structural cache at construction by probing [`builtin_shapes::BUILTIN_SHAPES`], so every later reader — the
 //! dispatch driver, the scheduler's laziness decision, the close-inference walk, the miss
 //! diagnosis — reads a cached fact rather than re-walking the run.
 //!
@@ -24,7 +24,7 @@
 //! See [parse/README.md](parse/README.md).
 
 pub mod ast;
-pub mod forms;
+pub mod builtin_shapes;
 pub mod labels;
 
 mod atom;
@@ -41,11 +41,11 @@ use crate::source::{self, CurrentFileGuard, FileId, SourceFile};
 pub use error::ParseError;
 
 pub use ast::{
-    DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, NodeCache, PartClass,
-    ProgramExpression, ProgramNode, UntypedKey, classify_dispatch_shape,
+    DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KeyElement, NodeCache,
+    PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
 };
-pub use forms::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinderKey};
-pub use forms::lazy::LazyKinds;
+pub use builtin_shapes::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinderKey};
+pub use builtin_shapes::lazy::LazyKinds;
 pub use labels::{
     BindKind, BinderSymbol, ClassifiedSymbol, IdentityBuildHasher, IdentityHasher, KeywordSymbol,
     LabelDisplay, LabelInterner, StaticName, Symbol, TypeSymbol, ValueSymbol, WILDCARD,
@@ -53,11 +53,11 @@ pub use labels::{
 };
 
 #[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
-pub(crate) use forms::binder::{
+pub(crate) use builtin_shapes::binder::{
     OpArity, op_declaration_arity, symbol_from_parts, symbol_from_quote_body,
 };
 #[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
-pub(crate) use forms::layout::SlotLayout;
+pub(crate) use builtin_shapes::layout::SlotLayout;
 #[cfg(feature = "alloc-count")]
 pub use labels::symbols_minted;
 

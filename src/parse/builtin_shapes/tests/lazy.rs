@@ -4,7 +4,7 @@
 use proptest::prelude::*;
 
 use crate::memory::program_storage;
-use crate::parse::forms::lazy::LazyKinds;
+use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::type_lattice::{KType, TypeNode, TypeRegistry};
 
 /// The kind an exact raw-capture slot type stands for; `None` for a slot type that captures
