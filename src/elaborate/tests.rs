@@ -2,6 +2,7 @@
 //! values, activated in a cell with each slot bound — or claimed — as the test asks.
 
 mod boundary;
+mod builtin;
 mod examples;
 
 use crate::memory::{

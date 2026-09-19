@@ -4,8 +4,10 @@
 //! already resolved to coordinates. [`type_expression`] turns one into a [`KType`] by reading each
 //! name through the activation the expression is read in — a type binding holds a
 //! [`TypeValue`](crate::values::TypeValue) — and building lattice nodes over what it reads.
-//! [`callable_type`] reads a callable's signature and return off the form node its body sits in,
-//! where the callable is born.
+//! [`callable_type`] reads a callable's signature and return off the builtin shape node its body
+//! sits in, where the callable is born, and [`builtin_shape_types`] interns a builtin bucket's own
+//! overloads — the `static` slot types of a
+//! [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry — as one handle apiece.
 //!
 //! Elaborated: a bare type name, `LIST OF T`, `MAP K -> V`, `FN :{…} -> R`, `EXPR (head) -> R` with
 //! and without `FOR ALL`, `A | B`, a record type `:{…}` and a union member `Union.Tag`. A name a
@@ -20,12 +22,14 @@
 //!
 //! [`Unsupported`]: Elaboration::Unsupported
 
+mod builtin;
 mod expression;
 mod signature;
 
 #[cfg(test)]
 mod tests;
 
+pub use builtin::builtin_shape_types;
 pub use expression::type_expression;
 pub use signature::callable_type;
 
