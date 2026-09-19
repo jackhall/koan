@@ -43,13 +43,16 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
 `memory`, `parse`, `scope`, `source`, `type_lattice`, `values`, `elaborate`,
-`function` and the embedded crates `cellgraph` and `sexlex` — are what a default
-koan build compiles and a default `cargo test` runs. `workgraph` is no longer a koan dependency; it still builds and tests as a
-workspace member. Everything above the kept modules — `machine`, `builtins`, the
+`function`, `scheduler` and the embedded crates `cellgraph` and `sexlex` — are
+what a default koan build compiles and a default `cargo test` runs. `workgraph`
+is no longer a koan dependency; it still builds and tests as a workspace member.
+Everything above the kept modules — `machine`, `builtins`, the
 interpreter binary, the guard fixtures and every `tests/*.rs` integration binary —
 sits behind the `pending_rewrite` cargo feature, and **that build no longer
-compiles**: `memory` is narrowed onto `cellgraph`, and the old runtime names the
-items it deleted. It is re-implemented layer by layer rather than kept building;
+compiles**: `memory` is narrowed onto `cellgraph`, the old runtime names the
+items it deleted, and the `pub use workgraph::scheduler` re-export
+[src/lib.rs](src/lib.rs) keeps behind that feature collides with koan's own
+`scheduler` module. It is re-implemented layer by layer rather than kept building;
 [old_design/](old_design/) and
 [observe/miri_slate_pending_rewrite.md](observe/miri_slate_pending_rewrite.md) are
 its requirements record. Every other koan feature (`alloc-count`, `dhat`,

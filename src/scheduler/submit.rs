@@ -4,8 +4,8 @@
 //! This is what a binder dependency is waited on with. A body's reference graph is known before it
 //! runs, so a unit is submitted with a count of dependencies not yet met, the count falls as each
 //! producing unit finishes, and the drain creates the cell only when it reaches zero. A reader
-//! therefore never observes a binding whose binder has not run, and the drain holds a record per
-//! *unsubmitted* unit — O(units in flight) — rather than one per parked cell.
+//! therefore never observes a binding whose binder has not run, and the drain's bookkeeping is one
+//! record per *unit* rather than one per parked cell.
 //!
 //! See [scheduler/README.md](README.md#the-two-ways-a-cell-waits).
 
@@ -45,13 +45,17 @@ struct Entry<'graph> {
 }
 
 /// One dependency edge. They live in a flat arena threaded by `next` rather than a list per unit,
-/// so a table of any width costs two allocations rather than one per unit.
+/// so a table of any width costs a handful of amortized allocations rather than one per unit.
 struct Edge {
     dependent: UnitId,
     next: Option<usize>,
 }
 
-/// Every unit the drain has been given and has not yet seen finish.
+/// Every unit the drain has been given, and the counts that decide when each gets a cell.
+///
+/// A [`UnitId`] is an index into `entries`, so a settled unit's entry stays where it is with its
+/// work taken out of it: the arena is sized by the units submitted over the run rather than by the
+/// units outstanding at any moment.
 pub struct Submissions<'graph> {
     entries: Vec<Entry<'graph>>,
     edges: Vec<Edge>,

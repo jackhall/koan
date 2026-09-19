@@ -3,7 +3,7 @@
 What turns a koan program into work for the drain: the root cell a top-level
 binding lives in, the components its statements are, and the tie that binds them.
 
-**Problem.** The [scheduler](scheduler-on-cellgraph.md) drives native steps —
+**Problem.** The [scheduler](../../src/scheduler/README.md) drives native steps —
 a function pointer over a state value — and nothing turns a program into those.
 The pieces it would compose already ship and have never been wired to each
 other: [shapes](../../src/scope/README.md) resolve a body's names to slot
@@ -110,7 +110,8 @@ part a refused tie names.
   order on the condensation, so a component's count is the number of distinct
   lower components its members read, and the edges are the reads themselves.
   This is what makes a refused tie naming a pending binder unreachable, and it
-  is why the [scheduler](scheduler-on-cellgraph.md) needs no park on a slot.
+  is why the [scheduler](../../src/scheduler/README.md#the-two-ways-a-cell-waits)
+  needs no park on a slot.
 - *What the `Pending` refusal becomes — open.* `function::Untieable::Pending`
   and `scope::Binding::Pending` both carry a producer `CellHandle` that nothing
   reads once dependencies are wired statically, and `SlotArray`'s `Claimed`
@@ -122,8 +123,6 @@ part a refused tie names.
 
 **Requires:**
 
-- [Scheduler on cellgraph](scheduler-on-cellgraph.md) — a koan program needs the
-  drain that runs it.
 
 **Unblocks:**
 

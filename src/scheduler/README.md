@@ -44,7 +44,8 @@ that answers for it finishes, which is why the launch is the drain's rather than
 the finishing step's.
 
 The queue emptying with the graph and the submission table empty beside it is
-success. Anything else is `DrainStalled`, the only error the scheduler defines. A koan error is a
+success. Anything else is `DrainStalled`, the only error the scheduler defines.
+A koan error is a
 [tagged value](../values/README.md#what-a-value-is) and travels between cells as
 data, so no `Result` passes from one cell to another and a consumer checks the
 results it redeems.
@@ -80,20 +81,23 @@ state across a park.
 cell's `Provenance`, and the `State` the step runs over. The pointer is
 higher-ranked over the three step brands and not over `'graph`, so one pointer
 runs in any cell at any step while the state it reads, the children it describes
-and the action it returns all name the graph they belong to. The rewrite's second
-layer adds a component arm beside `Native`, and nothing else.
+and the action it returns all name the graph they belong to. The arm beside
+`Native` is a component step, and it is
+[the top level's](../../roadmap/rewrite/top-level-on-the-scheduler.md) to add;
+nothing else joins them.
 
 A *birth* continuation is the family at `'cell = 'graph`, because `create`,
 `create_tree` and `create_tenant` all take one there: its state holds only words,
 program storage and dormant carriers. A continuation a step stores for itself
 through `store_successor` is at `'here` and may hold region borrows freely.
 
-`Provenance` is what a cell carries about its place in the graph, for the drain's
-use: the parent a sibling is born under or the host a co-tenant is born of, and
-the `Destination` — consumer handle and slot — its result goes to. Every field is brand-free, so it
-survives a tail hop verbatim — which is what "the successor inherits its receipt"
-means. `cellgraph` exposes no parent accessor, so a cell remembers its place here
-rather than in a table beside the graph.
+`Provenance` is what a cell carries about itself, for the drain's use: the
+`CellPlace` it was born at — the parent a sibling is born under, the host a
+co-tenant is born of, or the slab — the `Destination` its result goes to, a
+consumer handle and a slot, and the submission it answers for. Every field is
+brand-free, so it survives a tail hop verbatim — which is what "the successor
+inherits its receipt" means. `cellgraph` exposes no parent accessor, so a cell
+remembers its place here rather than in a table beside the graph.
 
 ## The two ways a cell waits
 
@@ -106,8 +110,8 @@ the drain creates the cell when it reaches zero. A reader therefore never
 observes a binding whose binder has not run — the discipline
 [scopes](../scope/README.md#placeholders-and-writes) already assert, where a read
 that finds an empty slot is a scheduler bug. This is why there is no wait record,
-no waiter list and no per-slot park, and why the drain holds a record per
-*unsubmitted* unit rather than per parked cell.
+no waiter list and no per-slot park, and why the drain's bookkeeping is per
+*unit* rather than per parked cell.
 
 That record is `submit.rs`'s table. A `Unit` names where its cell will be born
 and what it will run, and nothing about where its result goes: a submitted unit
@@ -115,9 +119,12 @@ reports by finishing, not by filling a slot. `submit` takes the count, `edge`
 says which finishes answer for it, and both are wired before the run. A cell
 carries the unit it answers for in its `Provenance`, so a chain of tail hops
 settles once, at whichever successor finishes the work. Entries and edges live
-in flat arenas threaded by index, so a table of any width costs a fixed number
-of allocations rather than one per unit. Units left waiting on each other never
-reach zero and never get a cell: the queue runs dry with the graph already
+in two flat arenas threaded by index, so a table of any width costs a handful of
+amortized allocations rather than one per unit. A `UnitId` is an index into the
+entry arena, so a settled unit's entry stays where it is with its work taken out
+of it: the arena is sized by the units the drain has been given over the run,
+not by the units outstanding at any moment. Units left waiting on each other
+never reach zero and never get a cell: the queue runs dry with the graph already
 empty, which the drain reports as `DrainStalled::UnitsPending`.
 
 A **sub-dispatch** is waited on by a live, parked cell, and the count lives in
@@ -144,8 +151,9 @@ says.
 
 The hint is never a contract. A wrong `Fresh` costs a priced copy, a wrong
 `Shares` costs delayed reclaim, and soundness rests on the substrate's brands
-either way. Where the bit comes from for a koan function is the top level's, not
-this module's.
+either way. This module ships the bit as a mechanism its caller supplies per
+spawn; where it comes from for a koan function is
+[the top level's](../../roadmap/rewrite/top-level-on-the-scheduler.md).
 
 A tenant's scratch is its host's, so a tenant writes its intermediates there
 while a result bound for storage is built in host storage from the start.
@@ -214,7 +222,8 @@ no sibling to become: a hop out of one is `DrainStalled::Unhoppable`.
 ## Memory
 
 Slab cells are rare: the tree pool takes no cap, so a call subtree deeper than
-any slab cap runs on tree cells without touching the matrix, and the top level's
+any slab cap runs on tree cells without touching the matrix, and
+[the top level's](../../roadmap/rewrite/top-level-on-the-scheduler.md)
 statements are tree children of one storage-only root. The matrix width is
 therefore one word — `WIDTH` in [substrate.rs](../memory/substrate.rs) is `1`,
 sixty-four slab slots.
@@ -239,8 +248,9 @@ holds the round trip a continuation makes between `'graph` and a step's `'here`;
 `tests/drain.rs` holds the loop itself, including two schedulers running beside
 each other and sharing nothing; `tests/calls.rs` holds a call at each placement
 and `tests/delivery.rs` a consumer parked on three producers.
-`tests/submissions.rs` holds a diamond of four submitted units, a pair that wait on each other, and a
-producer whose dependent waits out its whole parked subtree. `tests/tail.rs`
+`tests/submissions.rs` holds a diamond of four submitted units, a pair that wait
+on each other, and a producer whose dependent waits out its whole parked subtree.
+`tests/tail.rs`
 runs a ten-thousand-hop loop at each placement and reads the drain's own
 high-water mark and the process allocation count back: three cells live at the
 peak, and no more heap than the same loop a hundred hops long.

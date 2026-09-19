@@ -48,12 +48,6 @@ pub mod type_lattice;
 /// Koan's data values and the per-dispatch expression form, laid down in a cell's region over
 /// `memory`'s shapes, typed by memoized `type_lattice` handles.
 pub mod values;
-/// The workload-generic DAG scheduler, re-exported from the `workgraph` crate so `machine` and
-/// integration tests keep resolving `koan::scheduler::…` paths unchanged. The carrier substrate
-/// beside it reaches Koan through [`memory`], never from here.
-#[cfg(feature = "pending_rewrite")]
-pub use workgraph::scheduler;
-
 /// Crate-wide test scaffolding: installs the counting global allocator from
 /// [`audit/counting_alloc.rs`](../audit/counting_alloc.rs) for the lib-test binary and exposes
 /// the thread-local tally an allocation-count bracket reads — the type lattice's heap contract,

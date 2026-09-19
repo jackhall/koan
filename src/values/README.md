@@ -191,6 +191,11 @@ The graph consults an embedder closure for each operand's verdict, and this
 module owns it: [`verdict`](crossing.rs) copies when the copy costs less than a
 `COPY_RATIO`th of the bytes a pin would newly retain, and pins otherwise. The
 comparison saturates, and the occupancy the prices also carry does not move it.
+The [scheduler](../scheduler/README.md) builds its graph with this closure, so
+every crossing a running program makes is priced by it; how a value reaches
+another cell at all is [its delivery](../scheduler/README.md#delivery). Both
+doors are generic in the graph's delivery bundle, so a step at any bundle —
+`NoDelivery` in a fixture, `KDelivery` under the drain — reaches them.
 
 ## Dict key order
 
@@ -328,9 +333,3 @@ the one path only `values` drives — a deep copy nesting `fill` inside `fill`
 with string writes between and a program node embedded, read after the region
 it was copied from is released. The pinned and kept paths it would otherwise
 pair with are `cellgraph`'s own slate.
-
-## Open work
-
-- [Scheduler on cellgraph](../../roadmap/rewrite/scheduler-on-cellgraph.md) —
-  the scheduler that builds its graph with `verdict` and delivers values
-  between cells.

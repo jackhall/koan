@@ -99,7 +99,7 @@ The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/READ
 
 ## Source layout
 
-The crate splits into nine top-level modules: [memory/](src/memory) (where a
+The crate splits into ten top-level modules: [memory/](src/memory) (where a
 value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus the
 symbol, AST and form-table vocabulary that output is written in),
 [values/](src/values.rs) (the data values and the per-dispatch expression form,
@@ -111,6 +111,8 @@ through, closure bindings and activations — see
 where they are read — see [src/elaborate/README.md](src/elaborate/README.md)),
 [function/](src/function.rs) (functions and circular data as values: the knot
 nodes a function or a data node is, their tie and their copy — see [src/function/README.md](src/function/README.md)),
+[scheduler/](src/scheduler.rs) (the deferred-work drain, where a unit of work is
+a `cellgraph` cell — see [src/scheduler/README.md](src/scheduler/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
 type nodes — see [src/type_lattice/README.md](src/type_lattice/README.md)),
@@ -174,7 +176,7 @@ deleting the files above is
 ```
 src/
 ├── main.rs              CLI entry point — reads source, calls interpret_with_writer_path
-├── lib.rs               library facade — declares `memory`, `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph, and re-exports workgraph's DAG scheduler as `koan::scheduler`
+├── lib.rs               library facade — declares every kept module plus, behind `pending_rewrite`, `builtins` and `machine`, so integration tests under tests/ link against the same module graph; `koan::scheduler` is the kept module below, and the `pending_rewrite` re-export of workgraph's DAG scheduler under that same name is one of the reasons that build no longer resolves
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally fixed-cost measurements read; tests/boundary.rs is the source scanner every rewrite module's boundary test hands its import lists to
 ├── source.rs            source-span and provenance carrier for errors
 ├── memory.rs            pub mod memory — where a value lives and how long, in two tiers: the cell tier over cellgraph and the bump tier outside the graph
@@ -292,6 +294,13 @@ src/
 │   ├── birth.rs          tie — a component of value binders staged into scratch, memos derived and constructions checked, then laid down as one knot; Untieable
 │   ├── data.rs           a knot's data members: the staging walk with its anonymous nodes and evaluator by site, container memos by the nominal cut, the construction check, and the node write
 │   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
+├── scheduler.rs      pub mod scheduler — the deferred-work drain over cellgraph's cells and liveness matrix: a unit of work is a cell, and this module adds the submission table, the work queue, the drain protocol and delivery
+├── scheduler/
+│   ├── drain.rs          Scheduler — the loop, the two queues (in_flight ahead of fresh), the deferred release a tail hand-off needs, and DrainStalled; every birth and every death is the drain's
+│   ├── action.rs         Action (Done / Wakes / Park / Tail / Failed), Placement, Request, Hop, Spawns, StepError — what a step hands back, all of it brand-free
+│   ├── continuation.rs   ContinuationFamily / ScratchFamily, the two reattachable halves of what a cell will do next; NativeStep, Continuation, Resume, State, Provenance, CellPlace, Destination, Context
+│   ├── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
+│   └── submit.rs         Submissions / Unit / UnitId — units with no cell yet, and the dependency counts that decide when each gets one
 ├── machine.rs           pub mod core / model / execute
 └── machine/
     ├── model.rs            re-exports from model::types and model::values
@@ -394,6 +403,15 @@ from that module's top-of-file comment. The kept modules carry theirs:
   digest identity, the node vocabulary, the interning registry, the one order
   and the lattice operations over it, and the unifier that solves a quantified
   position.
+- [src/elaborate/README.md](src/elaborate/README.md) — type expressions
+  elaborated into lattice handles through the activation they are read in, and
+  why one did not.
+- [src/function/README.md](src/function/README.md) — functions and circular data
+  as values: the knot a component is tied into, what a birth may name, and the
+  copy that re-ties a whole knot at its destination.
+- [src/scheduler/README.md](src/scheduler/README.md) — the deferred-work drain:
+  what a step may hand back, the two halves of a continuation, the two ways a
+  cell waits, the placement hint, delivery, and the tail hand-off.
 - [sexlex/README.md](sexlex/README.md) — the layout half of the parser: what it
   decides, the three things it refuses, and the three indentation regimes.
 - [cellgraph/README.md](cellgraph/README.md) — the cell substrate's contract and
@@ -419,7 +437,7 @@ a standalone library rather than as Koan's internals; work items cross-link
 across the trees and `doclinks` gates them as one dependency graph, but each tree
 derives its own "Next items" list. The
 [workgraph/](workgraph/README.md) scheduler is the old runtime's and is replaced
-by a koan module ([roadmap/rewrite/scheduler-on-cellgraph.md](roadmap/rewrite/scheduler-on-cellgraph.md));
+by a koan module ([src/scheduler/README.md](src/scheduler/README.md));
 its design and roadmap trees are retired under `old_` prefixes, as is the
 boundary doc [old_design/scheduler-library.md](old_design/scheduler-library.md).
 

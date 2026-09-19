@@ -55,4 +55,7 @@ old runtime's [`Module`](../../src/machine/model/values/module.rs) holds a bare
 
 - [Dispatch](dispatch.md) — a module program runs only under dispatch.
 
-**Unblocks:** none — a leaf of the rewrite.
+**Unblocks:**
+
+- [Retire the old runtime](retire-the-old-runtime.md) — the last of the language
+  surface `machine` still owns.

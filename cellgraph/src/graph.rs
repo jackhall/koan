@@ -3785,6 +3785,11 @@ where
     /// reference the consumer does not already keep, and with none there is no verdict, no mint and
     /// no price on this path.
     ///
+    /// `build`'s second argument is the `'graph: 'their` bound as a value, the same witness the
+    /// placement doors hand their builds: a closure quantified over `'their` assumes only what its
+    /// arguments' types imply, and a build that writes a `'graph` borrow into the value it returns
+    /// needs that outlives relation spelled. A build that does not can ignore it, `|writer, _|`.
+    ///
     /// Everything else goes by [`deliver_carrier`](Self::deliver_carrier).
     ///
     /// ```
