@@ -12,7 +12,7 @@ Nothing turns that component into handles.
 [`elaborate`](../../src/elaborate/README.md) walks *type expressions* — a bare
 name, `LIST OF`, `MAP`, `FN`, `EXPR`, a union of members, a record type, a union
 projection — and no schema: a declaration's [`Schema`
-role](../../src/scope/roles.rs) reaches no door, and
+role](../../src/parse/builtin_shapes/role.rs) reaches no door, and
 `Shape::rhs` carries only a `LET` binder's right-hand side, so a declaration's
 own part is not reachable from the shape at all. The
 [lattice](../../src/type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)

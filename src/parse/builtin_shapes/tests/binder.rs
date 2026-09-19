@@ -6,7 +6,7 @@ use proptest::prelude::*;
 use crate::memory::{ProgramBrand, program_storage};
 use crate::parse::builtin_shapes::binder::BinderFacts;
 use crate::parse::builtin_shapes::{
-    BUILTIN_SHAPES, BuiltinShape, KeyElementSpec, builtin_shape_for, render_key,
+    BUILTIN_SHAPES, BuiltinShape, ShapeElement, builtin_shape_for, render_key,
 };
 use crate::parse::labels::Symbol;
 use crate::parse::{ExpressionPart, KExpression, LabelInterner, parse};
@@ -31,7 +31,7 @@ fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> 
 fn binder_channels_cover_every_installing_form() {
     let silent: Vec<Vec<String>> = binder_forms()
         .filter(|(_, binder)| binder.installs_nothing())
-        .map(|(form, _)| render_key(form.key))
+        .map(|(form, _)| render_key(form.elements))
         .collect();
     assert_eq!(
         silent,
@@ -138,10 +138,10 @@ fn parse_one<'a>(brand: ProgramBrand<'a>, source: &str) -> KExpression<'a> {
 fn render_form(form: &BuiltinShape, fillers: &[String]) -> String {
     let mut slot = 0;
     let mut out = Vec::new();
-    for element in form.key {
+    for element in form.elements {
         match element {
-            KeyElementSpec::Keyword(name) => out.push(name.text().to_string()),
-            KeyElementSpec::Slot => {
+            ShapeElement::Keyword(name) => out.push(name.text().to_string()),
+            ShapeElement::Slot { .. } => {
                 out.push(fillers[slot % fillers.len()].clone());
                 slot += 1;
             }
@@ -197,7 +197,7 @@ proptest! {
                 std::ptr::eq(cached, form),
                 "{} parses to the entry {:?}",
                 source,
-                render_key(cached.key),
+                render_key(cached.elements),
             );
 
             prop_assert_eq!(

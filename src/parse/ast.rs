@@ -4,8 +4,8 @@
 //! rebuild.
 //!
 //! A node's structural cache ([`NodeCache`]) is filled at construction from the parts run and the
-//! form table, so a reader answers "which dispatch shape, which bucket key, which builtin form,
-//! what does this install" without walking the run again.
+//! builtin shape table, so a reader answers "which dispatch shape, which bucket key, which
+//! builtin shape, what does this install" without walking the run again.
 //!
 //! The scheduler's own per-dispatch form is `WorkingExpression`, a distinct type in
 //! [`values::working`](crate::values::working). A resolved sub-result and a staging hole live only
@@ -223,7 +223,7 @@ impl<'a> ExpressionPart<'a> {
 /// `span` and `file` are `None` for hand-built ASTs.
 ///
 /// [`cache`](Self::cache) is the structural cache the construction doors fill once the parts run is
-/// complete — the bucket key, the dispatch shape, the operator probe, the matched builtin form and
+/// complete — the bucket key, the dispatch shape, the operator probe, the matched builtin shape and
 /// the binder plan — so the dispatch driver reads it rather than re-deriving on every call of the
 /// enclosing function. The binder plan is per-node only: what this node installs when it is
 /// submitted as a statement, and `None` when it is not itself a binder. A statement's namespace is

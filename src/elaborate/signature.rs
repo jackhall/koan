@@ -4,8 +4,9 @@
 use crate::memory::BumpAllocator;
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
+use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Activation, BodyKind, Role, Site, roles};
+use crate::scope::{Activation, Site};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
 use crate::values::Knotted;
 
@@ -26,11 +27,10 @@ pub fn callable_type<'graph, X: Knotted>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, Elaboration> {
-    let id = form
+    let shape = form
         .cache()
         .builtin_shape()
-        .expect("a callable's body sits in a builtin form")
-        .id;
+        .expect("a callable's body sits in a builtin shape");
     let elaborator = Elaborator {
         reader,
         types,
@@ -46,10 +46,10 @@ pub fn callable_type<'graph, X: Knotted>(
     let mut symbol = None;
     let mut type_parts = [None; 2];
     let mut type_count = 0;
-    for (role, part) in roles(id).iter().zip(form.parts) {
+    for (role, part) in shape.roles().zip(form.parts) {
         let part = &part.value;
         match role {
-            Role::Body(kind) => body = Some((*kind, part)),
+            Role::Body(kind) => body = Some((kind, part)),
             Role::Signature => signature = Some(part),
             Role::Quantifiers => group = Some(part),
             Role::Data => symbol = Some(part),
@@ -69,7 +69,7 @@ pub fn callable_type<'graph, X: Knotted>(
             let (Some(signature), Some(ret)) = (signature, type_parts[0]) else {
                 return Err(unsupported);
             };
-            if id == BuiltinShapeId::Lambda {
+            if shape.id == BuiltinShapeId::Lambda {
                 return elaborator.function(signature, ret, &top);
             }
             let names = group.map(|group| quantifiers(group, scratch));

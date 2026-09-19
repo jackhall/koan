@@ -3,7 +3,7 @@
 //!
 //! A node's parts contribute exactly two things to every structural question: the bucket key they
 //! spell and the class of the head part. [`NodeCache`] holds the answers — the key, the dispatch
-//! shape, the operator probe, the matched builtin form and the binder plan — computed once at
+//! shape, the operator probe, the matched builtin shape and the binder plan — computed once at
 //! construction, so the dispatch driver reads the cache rather than re-deriving per call.
 //!
 //! [`KExpression`](super::KExpression) holds raw AST parts and
@@ -230,11 +230,11 @@ pub fn stored_untyped_key<'a>(
     brand.alloc_slice_fill_iter(elements)
 }
 
-/// The structural facts a node caches at construction: a function of its parts run and the form
-/// table, computed once, shared by the AST node and the scheduler's working node.
+/// The structural facts a node caches at construction: a function of its parts run and the builtin
+/// shape table, computed once, shared by the AST node and the scheduler's working node.
 ///
 /// Every field but the binder plan is settled the moment the key is: a splice substitutes slots one
-/// for one and writes no keyword position, so the key, the probe and the form entry are invariant
+/// for one and writes no keyword position, so the key, the probe and the table entry are invariant
 /// under it. The plan is filled by the AST node's seal alone — a binder is always parsed AST — and
 /// rides a working copy unchanged.
 #[derive(Clone, Copy)]
@@ -267,14 +267,14 @@ impl<'a> NodeCache<'a> {
     }
 
     /// This cache read as a declaration — the second half of the AST node's seal, once the node the
-    /// extractors read is standing: the matched form's binder facts and the plan they produced.
+    /// extractors read is standing: the matched shape's binder facts and the plan they produced.
     ///
     /// Only a parsed node passes through here, which is what keeps a *synthesized* run from
     /// declaring anything. A synthesis writes its own keyword spine — a unary chain reduction emits
     /// `<operator> <operands>`, the shape `TYPE _` and `NEWTYPE _` also spell — so its key can match
-    /// a binder form by coincidence. Such a node is not that declaration, so it reports no declared
-    /// name and installs nothing, while still reading the form for its lazy slots, which are a fact
-    /// about the key alone.
+    /// a binder shape by coincidence. Such a node is not that declaration, so it reports no
+    /// declared name and installs nothing, while still reading the shape for its raw-capture kinds,
+    /// which are a fact about the key alone.
     pub fn declaring(self, binder_plan: Option<&'a StoredBinderKey<'a>>) -> Self {
         NodeCache {
             declared: self.builtin_shape,
@@ -308,8 +308,8 @@ impl<'a> NodeCache<'a> {
         self.operator_probe
     }
 
-    /// The [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry this node's bucket key matches,
-    /// `None` for every user-defined bucket.
+    /// The [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry this node's
+    /// bucket key matches, `None` for every user-defined bucket.
     pub fn builtin_shape(&self) -> Option<&'static BuiltinShape> {
         self.builtin_shape
     }
@@ -325,10 +325,10 @@ impl<'a> NodeCache<'a> {
         self.binder_plan
     }
 
-    /// The declared-name position of the binder form this node's bucket key matches
-    /// ([`BinderFacts::name_slot`](crate::parse::builtin_shapes::binder::BinderFacts::name_slot)); `None`
-    /// when the node matches no form, the form installs no binder, or its spine carries no declared
-    /// name (`FN`, `OP`).
+    /// The declared-name position of the binder shape this node's bucket key matches
+    /// ([`BinderFacts::name_slot`](crate::parse::builtin_shapes::binder::BinderFacts::name_slot));
+    /// `None` when the node matches no shape, the shape installs no binder, or its spine carries no
+    /// declared name (`FN`, `OP`).
     pub fn binder_name_slot(&self) -> Option<usize> {
         self.declared?.binder?.name_slot
     }

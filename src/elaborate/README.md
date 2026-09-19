@@ -43,7 +43,7 @@ A name only an *outer* group declares, read under a nested group, is refused.
 
 [`callable_type`](signature.rs) reads a callable's type off the form node its
 body sits in — `Shape::form` of the body shape the binder births — walking the
-form's parts by their [roles](../scope/roles.rs):
+form's parts by their [roles](../parse/builtin_shapes/role.rs):
 
 - a `FN` is the function type over its `:{…}` schema and its return;
 - an `EXPR` is the expression shape over its head and its return, quantified

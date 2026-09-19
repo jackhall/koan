@@ -14,7 +14,7 @@ use crate::memory::{program_storage, run_root_storage};
 use crate::parse::ExpressionKey;
 use crate::parse::builtin_shapes::binder::BinderFacts;
 use crate::parse::builtin_shapes::lazy::LazyKinds;
-use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShape, key_matches, render_key};
+use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShape, render_key};
 
 /// One live builtin bucket: the key it registers under, and per argument index the slot type each
 /// of its overloads declares there.
@@ -121,7 +121,7 @@ fn the_form_table_matches_the_live_registrations() {
 
     let matching = |form: &'static BuiltinShape| {
         live.iter()
-            .filter(move |bucket| key_matches(form.key, bucket.key.iter().copied()))
+            .filter(move |bucket| form.matches(bucket.key.iter().copied()))
     };
 
     for form in BUILTIN_SHAPES {
@@ -131,13 +131,13 @@ fn the_form_table_matches_the_live_registrations() {
                 registered,
                 0,
                 "reserved form key {:?} has a registered bucket",
-                render_key(form.key)
+                render_key(form.elements)
             );
         } else {
             assert!(
                 registered > 0,
                 "form key {:?} has no registered bucket",
-                render_key(form.key)
+                render_key(form.elements)
             );
         }
     }
@@ -160,7 +160,7 @@ fn the_form_table_matches_the_live_registrations() {
             declared,
             expected,
             "form key {:?} declares the wrong lazy slots",
-            render_key(form.key)
+            render_key(form.elements)
         );
     }
 
@@ -178,19 +178,19 @@ fn the_form_table_matches_the_live_registrations() {
             assert!(
                 !slot_types.is_empty(),
                 "form key {:?} masks slot {index}, which no live registration types",
-                render_key(form.key)
+                render_key(form.elements)
             );
             assert!(
                 slot_types.iter().any(admits_sigiled),
                 "form key {:?} masks slot {index}, which no registration admits a `:(…)` at",
-                render_key(form.key)
+                render_key(form.elements)
             );
             assert!(
                 !slot_types
                     .iter()
                     .any(|ktype| ktype.union_has_member(KType::KEXPRESSION, types)),
                 "form key {:?} masks slot {index}, which some registration reads as code",
-                render_key(form.key)
+                render_key(form.elements)
             );
         }
     }

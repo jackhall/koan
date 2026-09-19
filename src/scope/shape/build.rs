@@ -18,7 +18,7 @@
 use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, strongly_connected_components,
 };
-use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
+use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, KEYWORDS};
 use crate::parse::{
     BinderSymbol, ExpressionPart, KExpression, StaticName, TypeSymbol, ValueSymbol,
 };
@@ -27,7 +27,6 @@ use crate::values::Knotted;
 use super::super::activation::Activation;
 use super::super::builtins::Builtins;
 use super::super::channels::Channels;
-use super::super::roles::{BodyKind, DefinitionKind, Heads, Role, roles};
 use super::super::signature::{
     body_of, declare_parameters, declare_quantifiers, pair_name, signature_run,
 };
@@ -36,6 +35,7 @@ use super::{
     Coordinate, Mention, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target,
     resolve_here,
 };
+use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Role};
 
 /// The names a body declares without a binder statement.
 struct ImplicitNames {
@@ -373,17 +373,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
             return Ok(());
         };
-        let roles = roles(form.id);
-        if roles == [Role::Unsupported] {
+        if !form.supported() {
             return Err(ShapeError::Unsupported {
                 form: form.id,
                 at: Position::statement(statement as usize),
             });
         }
         debug_assert_eq!(
-            roles.len(),
+            form.elements.len(),
             node.parts.len(),
-            "a form's parts match its key"
+            "a builtin shape's parts match its run"
         );
         if form.id == BuiltinShapeId::Eval {
             for draft in self.chain.iter_mut() {
@@ -393,12 +392,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
         // A callable's parameters are declared before any part is read, so a type parameter a
         // signature names is never taken for a mention of the enclosing shape.
-        let declares = roles
-            .iter()
+        let declares = form
+            .roles()
             .any(|role| matches!(role, Role::Signature | Role::Quantifiers));
         let mut parameters = BumpVec::new_in(self.scratch);
         if declares {
-            for (role, part) in roles.iter().zip(node.parts) {
+            for (role, part) in form.roles().zip(node.parts) {
                 match role {
                     Role::Signature => declare_parameters(&part.value, &mut parameters),
                     Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
@@ -412,7 +411,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 BinderSymbol::Type(name) => Some(*name),
                 BinderSymbol::Value(_) => None,
             }));
-        let walked = self.walk_parts(level, statement, node, form.id, roles, &parameters, state);
+        let walked = self.walk_parts(level, statement, node, form, &parameters, state);
         self.skip.truncate(mark);
         walked
     }
@@ -424,14 +423,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         level: usize,
         statement: u32,
         node: &KExpression<'graph>,
-        form: BuiltinShapeId,
-        roles: &[Role],
+        form: &'static BuiltinShape,
         parameters: &[BinderSymbol],
         state: State,
     ) -> Result<(), ShapeError> {
-        for (role, part) in roles.iter().zip(node.parts) {
+        for (role, part) in form.roles().zip(node.parts) {
             let part = &part.value;
-            match *role {
+            match role {
                 Role::Keyword | Role::Name | Role::Data | Role::Label | Role::Quantifiers => {}
                 Role::Rhs => {
                     let draft = &mut self.chain[level];
@@ -450,7 +448,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Role::Body(kind) => {
                     self.enter_body(level, statement, node, part, kind, parameters, state)?
                 }
-                Role::Branches(heads) => self.enter_arms(level, statement, form, part, heads)?,
+                Role::Branches(heads) => self.enter_arms(level, statement, form.id, part, heads)?,
                 Role::Definition(kind) => {
                     self.walk_definition(level, statement, part, kind, state.constructor())?
                 }

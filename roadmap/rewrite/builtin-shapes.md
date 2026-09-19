@@ -15,7 +15,7 @@ key is that shape with the types erased: the first runtime's
 overloads under the one `NEWTYPE _ = _` key, and its `untyped_key` must agree
 with the table's by convention alone. `lazy_slots` repeats a third time what a
 slot typed `KExpression`, `SigiledTypeExpr` or `RecordType` already says.
-[`roles`](../../src/scope/roles.rs) is a fourth column, keyed by `FormId` beside
+[`roles`](../../src/parse/builtin_shapes/role.rs) is a fourth column, keyed by `FormId` beside
 the table rather than in it. The names hide the relation: `Form` and
 [`Shape`](../../src/scope/README.md#three-tiers) are both bare words beside
 `ExpressionShape`, and the `Schema` role — the part of a type declaration after

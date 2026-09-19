@@ -118,6 +118,13 @@ impl KType {
         self.0
     }
 
+    /// Handle equality in `const` context — the one digest word compared. Derived `PartialEq` is
+    /// not `const`, and a `static` table of slot types is checked against the raw-capture leaves
+    /// where it is built.
+    pub const fn same_as(self, other: KType) -> bool {
+        self.0.0 == other.0.0
+    }
+
     /// Look up a `KType` by the name a user can write in source (e.g. `Number`, `List`). Every
     /// name here lowers to a fixed handle, so the lookup needs no registry: the content each one
     /// names is pre-seeded into every registry at construction.

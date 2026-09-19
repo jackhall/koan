@@ -1,20 +1,24 @@
 //! The parser and what it produces: the label vocabulary every symbol is minted in, the syntax AST,
-//! and the form table every node is classified against at construction.
+//! and the builtin shape table every node is classified against at construction.
 //!
 //! Source text becomes a sequence of [`KExpression`]s in two passes: the [`sexlex`] crate reads the
 //! text into a layout tree of atoms, strings, commas and groups, and [`lower`] gives that tree
 //! koan's meaning. The three entry points below are the entire text-to-AST surface; `atom`,
 //! `brace`, `lower` and `operators` are private.
 //!
-//! [`labels`], [`ast`] and [`builtin_shapes`] are the vocabulary the products are written in. A node fills
-//! its structural cache at construction by probing [`builtin_shapes::BUILTIN_SHAPES`], so every later reader — the
-//! dispatch driver, the scheduler's laziness decision, the close-inference walk, the miss
-//! diagnosis — reads a cached fact rather than re-walking the run.
+//! [`labels`], [`ast`] and [`builtin_shapes`] are the vocabulary the products are written in. A node
+//! fills its structural cache at construction by probing
+//! [`builtin_shapes::BUILTIN_SHAPES`], so every later reader — the dispatch driver, the scheduler's
+//! laziness decision, the close-inference walk, the miss diagnosis — reads a cached fact rather
+//! than re-walking the run.
 //!
-//! Outside `#[cfg(test)]` and doc comments this module reaches only [`source`] and
-//! [`crate::memory`]; a failure is its own [`ParseError`]. The runtime operations on the types
-//! here — lowering a literal, resolving a part to a cell, installing a binder — are inherent impls
-//! in the runtime, which imports them by name.
+//! Outside `#[cfg(test)]` and doc comments this module reaches [`source`], [`crate::memory`] and
+//! one name from [`crate::type_lattice`]: [`KType`](crate::type_lattice::KType), whose builtin
+//! handles are `const` content digests, so a builtin shape states its slots' types without a
+//! registry in hand. That edge closes a cycle with the lattice's import of this module's labels. A
+//! failure is this module's own [`ParseError`]. The runtime operations on the types here —
+//! lowering a literal, resolving a part to a cell, installing a binder — are inherent impls in the
+//! runtime, which imports them by name.
 //!
 //! The runtime is this module's consumer, and the runtime is `pending_rewrite`: an item marked
 //! `cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))` — or an `unused_imports` twin on

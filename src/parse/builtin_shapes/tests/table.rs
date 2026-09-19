@@ -1,8 +1,9 @@
 //! BuiltinShape-table shape: the invariants every reader of [`BUILTIN_SHAPES`] depends on.
 
 use crate::parse::builtin_shapes::binder::{BinderFacts, BinderSurface};
+use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::parse::builtin_shapes::{
-    BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, KeyElementSpec, render_key,
+    BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, render_key,
 };
 use crate::parse::{DispatchShape, KeyElement, PartClass, classify_dispatch_shape};
 
@@ -13,15 +14,154 @@ fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> 
         .filter_map(|form| form.binder.map(|binder| (form, binder)))
 }
 
-/// A spec key as the key a parts run spelling it would store.
+/// An entry's run erased to the key a parts run spelling it would store.
 fn key_elements(form: &BuiltinShape) -> Vec<KeyElement> {
-    form.key
+    form.elements
         .iter()
         .map(|element| match element {
-            KeyElementSpec::Keyword(name) => KeyElement::Keyword(name.symbol()),
-            KeyElementSpec::Slot => KeyElement::Slot,
+            ShapeElement::Keyword(name) => KeyElement::Keyword(name.symbol()),
+            ShapeElement::Slot { .. } => KeyElement::Slot,
         })
         .collect()
+}
+
+/// The raw-capture kinds each bucket declared before they were derived, copied verbatim from the
+/// hand-kept `lazy_slots` column the entries used to carry. An index the run omits keeps nothing
+/// raw. This is the regression pin on the derivation: every reader of `lazy_kinds_at` must read the
+/// answer it read when the column was written out by hand.
+const RECORDED_RAW_SLOTS: &[(BuiltinShapeId, &[(usize, LazyKinds)])] = &[
+    (BuiltinShapeId::LetValue, &[]),
+    (BuiltinShapeId::TypeDeclaration, &[(1, CODE)]),
+    (BuiltinShapeId::Module, &[(3, CODE)]),
+    (BuiltinShapeId::GroupFoldLeft, &[(5, CODE)]),
+    (BuiltinShapeId::GroupFoldRight, &[(5, CODE)]),
+    (
+        BuiltinShapeId::GroupPairwiseFoldLeft,
+        &[(4, CODE), (7, CODE)],
+    ),
+    (
+        BuiltinShapeId::GroupPairwiseFoldRight,
+        &[(4, CODE), (7, CODE)],
+    ),
+    (BuiltinShapeId::Sig, &[(3, CODE)]),
+    (BuiltinShapeId::Union, &[(3, CODE)]),
+    (BuiltinShapeId::NewTypeDefinition, &[(3, RAW_TYPE)]),
+    (BuiltinShapeId::NewTypeDeclaration, &[(1, CODE)]),
+    (BuiltinShapeId::Val, &[]),
+    (BuiltinShapeId::Lambda, &[(3, RAW_TYPE), (5, CODE)]),
+    (BuiltinShapeId::LambdaType, &[]),
+    (
+        BuiltinShapeId::CombinedLambda,
+        &[(4, CODE), (6, RAW_TYPE), (8, CODE)],
+    ),
+    (
+        BuiltinShapeId::ExpressionDefinition,
+        &[(1, CODE), (3, RAW_TYPE), (5, CODE)],
+    ),
+    (BuiltinShapeId::ExpressionHead, &[(1, CODE)]),
+    (
+        BuiltinShapeId::QuantifiedExpressionDefinition,
+        &[(3, CODE), (4, CODE), (6, RAW_TYPE), (8, CODE)],
+    ),
+    (
+        BuiltinShapeId::QuantifiedExpressionHead,
+        &[(3, CODE), (4, CODE), (6, RAW_TYPE)],
+    ),
+    (
+        BuiltinShapeId::CombinedExpression,
+        &[(5, CODE), (7, RAW_TYPE), (9, CODE)],
+    ),
+    (
+        BuiltinShapeId::CombinedQuantifiedExpression,
+        &[(7, CODE), (8, CODE), (10, RAW_TYPE), (12, CODE)],
+    ),
+    (
+        BuiltinShapeId::OperatorDefinition,
+        &[(1, CODE), (3, RAW_TYPE), (5, CODE)],
+    ),
+    (
+        BuiltinShapeId::OperatorDefinitionReturning,
+        &[(1, CODE), (3, RAW_TYPE), (5, RAW_TYPE), (7, CODE)],
+    ),
+    (
+        BuiltinShapeId::UnaryOperatorDefinition,
+        &[(2, CODE), (4, RAW_TYPE), (6, CODE)],
+    ),
+    (
+        BuiltinShapeId::UnaryOperatorDefinitionReturning,
+        &[(2, CODE), (4, RAW_TYPE), (6, RAW_TYPE), (8, CODE)],
+    ),
+    (BuiltinShapeId::OperatorHead, &[(1, CODE)]),
+    (BuiltinShapeId::OperatorHeadReturning, &[(1, CODE)]),
+    (BuiltinShapeId::UnaryOperatorHead, &[]),
+    (BuiltinShapeId::UnaryOperatorHeadReturning, &[(2, CODE)]),
+    (
+        BuiltinShapeId::CombinedOperator,
+        &[(4, CODE), (6, RAW_TYPE), (8, CODE)],
+    ),
+    (
+        BuiltinShapeId::CombinedOperatorReturning,
+        &[(4, CODE), (6, RAW_TYPE), (8, RAW_TYPE), (10, CODE)],
+    ),
+    (
+        BuiltinShapeId::CombinedUnaryOperator,
+        &[(5, CODE), (7, RAW_TYPE), (9, CODE)],
+    ),
+    (
+        BuiltinShapeId::CombinedUnaryOperatorReturning,
+        &[(5, CODE), (7, RAW_TYPE), (9, RAW_TYPE), (11, CODE)],
+    ),
+    (BuiltinShapeId::GroupHeadFoldLeft, &[(4, CODE)]),
+    (BuiltinShapeId::GroupHeadFoldRight, &[(4, CODE)]),
+    (
+        BuiltinShapeId::GroupHeadPairwiseFoldLeft,
+        &[(3, CODE), (6, CODE)],
+    ),
+    (
+        BuiltinShapeId::GroupHeadPairwiseFoldRight,
+        &[(3, CODE), (6, CODE)],
+    ),
+    (BuiltinShapeId::Match, &[(5, CODE)]),
+    (BuiltinShapeId::MatchOver, &[(7, CODE)]),
+    (BuiltinShapeId::Try, &[(1, CODE), (5, CODE)]),
+    (BuiltinShapeId::Catch, &[(1, CODE)]),
+    (BuiltinShapeId::UsingScope, &[(3, CODE)]),
+    (BuiltinShapeId::CloseOver, &[(2, CODE), (3, CODE)]),
+    (BuiltinShapeId::Close, &[(1, CODE)]),
+    (BuiltinShapeId::Projection, &[(0, CODE)]),
+    (BuiltinShapeId::Attribute, &[]),
+    (BuiltinShapeId::Eval, &[]),
+];
+
+const CODE: LazyKinds = LazyKinds::CODE;
+/// What a type-position slot captures raw: a `:(…)` type expression or a `:{…}` record type.
+const RAW_TYPE: LazyKinds = LazyKinds::TYPE_EXPR.with(LazyKinds::RECORD_TYPE);
+
+/// The derivation answers the recorded column, at every index of every run — including the indices
+/// the column omits, which keep nothing raw, and one index past the run, which a reader asking
+/// about a part that is not there must survive.
+#[test]
+fn the_derived_raw_slots_are_the_recorded_ones() {
+    assert_eq!(RECORDED_RAW_SLOTS.len(), BUILTIN_SHAPES.len());
+    for (form, (id, recorded)) in BUILTIN_SHAPES.iter().zip(RECORDED_RAW_SLOTS) {
+        assert_eq!(
+            form.id, *id,
+            "the pin is out of table order at {:?}",
+            form.id
+        );
+        for index in 0..=form.elements.len() {
+            let expected = recorded
+                .iter()
+                .find(|(slot, _)| *slot == index)
+                .map_or(LazyKinds::EMPTY, |(_, kinds)| *kinds);
+            assert_eq!(
+                form.lazy_kinds_at(index),
+                expected,
+                "{:?} derives the wrong raw kinds at {index}",
+                render_key(form.elements)
+            );
+        }
+    }
 }
 
 /// A tag names its own row. `BuiltinShapeId` is declared in table order, so a reader that has a tag can
@@ -33,7 +173,7 @@ fn every_tag_sits_at_its_own_index() {
             form.id as usize,
             index,
             "form key {:?} sits at index {index} under tag {:?}",
-            render_key(form.key),
+            render_key(form.elements),
             form.id
         );
     }
@@ -46,10 +186,10 @@ fn no_two_forms_spell_the_same_key() {
     for (index, form) in BUILTIN_SHAPES.iter().enumerate() {
         for other in &BUILTIN_SHAPES[index + 1..] {
             assert_ne!(
-                render_key(form.key),
-                render_key(other.key),
+                render_key(form.elements),
+                render_key(other.elements),
                 "two forms spell the key {:?}",
-                render_key(form.key)
+                render_key(form.elements)
             );
         }
     }
@@ -63,39 +203,8 @@ fn no_reserved_form_declares_a_binder() {
         assert!(
             form.binder.is_none(),
             "reserved form {:?} declares a binder",
-            render_key(form.key)
+            render_key(form.elements)
         );
-    }
-}
-
-/// Every lazy-slot index names a slot position of its own key, in ascending order, and its kind set
-/// is non-empty — the stamp is read as `parts[index]`, so a keyword position, an index past the run,
-/// or a run out of order would misread the statement.
-#[test]
-fn every_lazy_slot_names_a_slot_position() {
-    for form in BUILTIN_SHAPES {
-        assert!(
-            form.lazy_slots.windows(2).all(|pair| pair[0].0 < pair[1].0),
-            "form key {:?} lists its slots out of ascending order",
-            render_key(form.key)
-        );
-        for (index, kinds) in form.lazy_slots {
-            assert!(
-                *index < form.key.len(),
-                "form key {:?} declares slot {index} past its run",
-                render_key(form.key)
-            );
-            assert!(
-                matches!(form.key[*index], KeyElementSpec::Slot),
-                "form key {:?} declares its keyword position {index} lazy",
-                render_key(form.key)
-            );
-            assert!(
-                !kinds.is_empty(),
-                "form key {:?} declares an empty kind set at slot {index}",
-                render_key(form.key)
-            );
-        }
     }
 }
 
@@ -112,14 +221,14 @@ fn every_masked_index_names_a_slot_position() {
     for (form, binder) in binder_forms() {
         for &index in binder.type_slots {
             assert!(
-                index < form.key.len(),
+                index < form.elements.len(),
                 "form key {:?} masks slot {index} past its run",
-                render_key(form.key)
+                render_key(form.elements)
             );
             assert!(
-                matches!(form.key[index], KeyElementSpec::Slot),
+                matches!(form.elements[index], ShapeElement::Slot { .. }),
                 "form key {:?} masks its keyword position {index}",
-                render_key(form.key)
+                render_key(form.elements)
             );
         }
     }
@@ -133,14 +242,14 @@ fn every_masked_index_names_a_slot_position() {
 fn operator_def_marker_agrees_with_the_keys_it_labels() {
     for (form, binder) in binder_forms() {
         let names_op = form
-            .key
+            .elements
             .iter()
-            .any(|element| matches!(element, KeyElementSpec::Keyword(name) if name.text() == "OP"));
+            .any(|element| matches!(element, ShapeElement::Keyword(name) if name.text() == "OP"));
         assert_eq!(
             binder.surface == BinderSurface::OperatorDef,
             names_op,
             "form key {:?} disagrees with its surface marker",
-            render_key(form.key),
+            render_key(form.elements),
         );
     }
 }
@@ -159,7 +268,7 @@ fn every_binder_form_key_classifies_keyworded() {
             classify_dispatch_shape(&key, head),
             DispatchShape::Keyworded,
             "form key {:?} does not classify Keyworded",
-            render_key(form.key)
+            render_key(form.elements)
         );
     }
 }

@@ -1,8 +1,8 @@
-//! Binder discovery: the pure, structural reading of which forms introduce a binder and which name
+//! Binder discovery: the pure, structural reading of which builtin shapes introduce a binder and which name
 //! and bucket keys they declare.
 //!
 //! Everything here is a pure `&KExpression -> Option<…>` reader plus the [`BinderFacts`] that ride
-//! a [`BUILTIN_SHAPES`](super::BUILTIN_SHAPES) entry — a form is a binder because its entry carries them, and nothing
+//! a [`BUILTIN_SHAPES`](super::BUILTIN_SHAPES) entry — a shape is a binder because its entry carries them, and nothing
 //! else declares it. The keys are pinned against the live builtin registration table by the
 //! table⟺registration property, so an entry whose builtin was renamed, re-shaped, or dropped fails
 //! the suite.
@@ -350,7 +350,7 @@ pub struct BinderFacts {
     /// the statement spine (`VAL` declares at this position even though it installs nothing;
     /// `TYPE`'s higher-kinded form nests its name inside the slot, so the position holds no bare
     /// name there and reads as vacuous). `None` for the bucket-only forms (`FN`, `OP`), whose
-    /// spine carries no declared name. Dispatch resolution reads this off the node's cached form
+    /// spine carries no declared name. Dispatch resolution reads this off the node's cached shape
     /// ([`KExpression::binder_name_slot`]) to exempt a declaration slot from parking on a
     /// still-finalizing same-named outer binder. Pinned against `names` by the
     /// name-slot⟺extractor property.
@@ -378,33 +378,33 @@ impl BinderFacts {
 }
 
 /// Parse-side admission of the bare parenthesized type spelling. If `parts` matches a builtin
-/// form's key, every plain `Expression` part at one of that form's
+/// shape's key, every plain `Expression` part at one of that shape's
 /// [`type_slots`](BinderFacts::type_slots) is rewritten to `SigiledTypeExpr` — the same
 /// `ProgramNode` payload under a different parse-context marker, so `(LIST OF Str)` ≡
 /// `:(LIST OF Str)` in exactly those positions and nowhere else.
 ///
 /// A variant change is the whole of it, and everything downstream follows by construction: the
-/// statement's untyped key is unchanged (both variants are slots), the form's
-/// [`lazy_slots`](crate::parse::builtin_shapes::BuiltinShape::lazy_slots) already stamp `TYPE_EXPR` at
-/// each masked index so the part is captured raw instead of staged, and the return/operand slot's
-/// carrier union already lists `SIGILED_TYPE_EXPR`. The two spellings are the same part by the time
+/// statement's bucket key is unchanged (both variants are slots), the shape's
+/// [`lazy_kinds_at`](crate::parse::builtin_shapes::BuiltinShape::lazy_kinds_at) already answers
+/// `TYPE_EXPR` at each masked index — the type carrier those slots are typed with lists
+/// `SigiledTypeExpr` — so the part is captured raw instead of staged. The two spellings are the same part by the time
 /// anything semantic looks at them, so parity is exact.
 ///
 /// Any other part kind at a masked index — a `Type` token, a `:(…)`, a `:{…}`, an identifier — is
-/// left alone, and a run matching no form key is untouched. Idempotent.
+/// left alone, and a run matching no builtin shape is untouched. Idempotent.
 ///
 /// Called from the parse frames, on a run that is still an unfrozen `Vec`: a node's parts and its
 /// structural cache are bumped together and never touched again, so this must run before the
 /// freeze. The run has no stored key yet, so it feeds the matcher the key elements its parts spell.
 pub(crate) fn admit_bare_type_slots(parts: &mut [Spanned<ExpressionPart<'_>>]) {
     let Some(binder) = builtin_shape_for(parts.iter().map(|part| part.value.key_element()))
-        .and_then(|form| form.binder)
+        .and_then(|shape| shape.binder)
     else {
         return;
     };
     for &index in binder.type_slots {
-        // The key match pinned `key.len() == parts.len()`, and the table-shape property pins every
-        // masked index to a slot position of that key, so the index is in range.
+        // The key match pinned `elements.len() == parts.len()`, and the table-shape property pins
+        // every masked index to a slot position of that run, so the index is in range.
         if let ExpressionPart::Expression(node) = parts[index].value {
             parts[index].value = ExpressionPart::SigiledTypeExpr(node);
         }
@@ -421,7 +421,7 @@ pub(crate) fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpressio
 }
 
 /// The arity of the operator declaration `expression` is, or `None` if it is not one. Recognition
-/// is by the node's cached form, admitted only when its binder facts are marked
+/// is by the node's cached shape, admitted only when its binder facts are marked
 /// [`BinderSurface::OperatorDef`] — a full bucket key, every keyword pinned in position — so a
 /// statement that merely spells the `OP` token (a call to a user `FN` whose signature names it as a
 /// keyword) is not an operator declaration, and neither is an `OP` nested inside some other
@@ -446,17 +446,17 @@ pub enum OpArity {
     Unary,
 }
 
-/// What `expression` installs under `form`. Both channels are read — a combined form fills them
+/// What `expression` installs under `shape`. Both channels are read — a combined shape fills them
 /// together. The key is read off the node's own stored run, and a synthesized bucket key is bumped
 /// into `brand`'s region — the node's, since this runs from the construction door. Returns `None`
-/// for a form with no binder facts, and for one whose extractors install nothing (`VAL`, and the
+/// for a shape with no binder facts, and for one whose extractors install nothing (`VAL`, and the
 /// anonymous `FN :{…}` whose signature part names no bucket).
 pub(crate) fn binder_plan_for<'a>(
     brand: BumpAllocator<'a>,
-    form: Option<&'static BuiltinShape>,
+    shape: Option<&'static BuiltinShape>,
     expression: &KExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {
-    let binder = form?.binder?;
+    let binder = shape?.binder?;
     let name = binder.names.iter().find_map(|extract| extract(expression));
     let buckets = binder.bucket.and_then(|extract| extract(brand, expression));
     if name.is_none() && buckets.is_none() {
