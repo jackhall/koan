@@ -2,11 +2,10 @@
 //! producer's delivery completes it, and the consumer wakes exactly once.
 
 use crate::function::KValue;
-use crate::memory::{Active, Delivered, Receipt};
+use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, Continuation, Placement, Request, Resume, Scheduler, Spawns, State, StepError,
-    Work,
+    Action, Context, Placement, Request, Resume, Scheduler, Spawns, State, StepError, Work,
 };
 
 /// How many producers the consumer parks on. Three, so a delivery that is neither the first nor the
@@ -19,25 +18,24 @@ fn park_on_three<'graph>(
     resume: Resume<'graph, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
-    if context.register_receipts(PRODUCERS).is_err() {
-        return Action::Failed(StepError::Undeliverable);
+    for slot in 0..PRODUCERS - 1 {
+        spawns.push(producer(slot));
     }
-    for slot in 0..PRODUCERS {
-        spawns.push(Request {
-            placement: Placement::Fresh,
-            work: Work {
-                step: produce,
-                state: State::Value(KValue::Number(slot as f64)),
-            },
-            slot,
-        });
+    // The last push hands back the slot the park waits on; the pushes before it went to the slots
+    // ahead of it, in that order.
+    let asked = spawns.push(producer(PRODUCERS - 1));
+    Action::park(context, &resume, spawns, asked, drain_the_run, State::Empty)
+}
+
+/// One producer, born holding the number it scales. Which slot it fills is its push position.
+fn producer<'graph>(slot: usize) -> Request<'graph> {
+    Request {
+        placement: Placement::Fresh,
+        work: Work {
+            step: produce,
+            state: State::Value(KValue::Number(slot as f64)),
+        },
     }
-    context.store_successor(Continuation::Native {
-        step: drain_the_run,
-        provenance: resume.provenance,
-        state: State::Empty,
-    });
-    Action::Park
 }
 
 /// One producer: fill the slot the drain gave it with the number it was born holding.
@@ -46,23 +44,15 @@ fn produce<'graph>(
     resume: Resume<'graph, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
-    let Some(destination) = resume.provenance.destination else {
-        return Action::Failed(StepError::Undeliverable);
-    };
     // The number itself, not the value: a value at this producer's brand is not one the consumer's
     // scratch can hold, so what crosses is the word inside it.
     let State::Value(KValue::Number(born)) = resume.state else {
-        return Action::Failed(StepError::Stale);
+        return Action::failed(StepError::Stale);
     };
-    let delivered = context.deliver_scratch(destination.consumer, destination.slot, move |_, _| {
+    Action::deliver_scratch(context, &resume, move |_, _| {
         let value: KValue<'graph, '_> = KValue::Number(born * 10.0);
         Active::new(value)
-    });
-    match delivered {
-        Ok(Delivered::Complete) => Action::Wakes(destination.consumer),
-        Ok(Delivered::Outstanding) => Action::Done,
-        Err(_) => Action::Failed(StepError::Undeliverable),
-    }
+    })
 }
 
 /// The consumer, woken: read every slot of the run it registered.
@@ -75,10 +65,10 @@ fn drain_the_run<'graph>(
     for slot in 0..PRODUCERS {
         match context.receipt(slot) {
             Ok(Receipt::Value(value)) => record(describe(value)),
-            _ => return Action::Failed(StepError::Unredeemable),
+            _ => return Action::failed(StepError::Unredeemable),
         }
     }
-    Action::Done
+    Action::done()
 }
 
 #[test]

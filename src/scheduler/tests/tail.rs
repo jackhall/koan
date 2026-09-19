@@ -5,11 +5,11 @@
 use std::cell::Cell;
 
 use crate::function::{KValue, KValueFamily};
-use crate::memory::{Active, Delivered, Receipt};
+use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, Continuation, DrainStalled, Hop, NativeStep, Placement, Request, Resume,
-    Scheduler, Spawns, State, StepError, Work,
+    Action, Context, DrainStalled, NativeStep, Placement, Request, Resume, Scheduler, Spawns,
+    State, StepError, Work,
 };
 
 /// Enough hops that a per-hop cost would be unmissable in the allocation count.
@@ -36,23 +36,14 @@ fn start<'graph>(
     placement: Placement,
     step: NativeStep<'graph>,
 ) -> Action<'graph> {
-    if context.register_receipts(1).is_err() {
-        return Action::Failed(StepError::Undeliverable);
-    }
-    spawns.push(Request {
+    let asked = spawns.push(Request {
         placement,
         work: Work {
             step,
             state: State::Empty,
         },
-        slot: 0,
     });
-    context.store_successor(Continuation::Native {
-        step: finish,
-        provenance: resume.provenance,
-        state: State::Empty,
-    });
-    Action::Park
+    Action::park(context, &resume, spawns, asked, finish, State::Empty)
 }
 
 /// One turn of the loop: take the carried value in, and either hop again or deliver.
@@ -68,7 +59,7 @@ fn turn<'graph>(
     let carried: KValue<'graph, '_> = match resume.state {
         State::Parked(dormant) => {
             let Ok(carrier) = context.redeem(dormant) else {
-                return Action::Failed(StepError::Unredeemable);
+                return Action::failed(StepError::Unredeemable);
             };
             // What this costs is the placement's whole story. A sibling is `Apart` from the cell
             // that kept the value, so the crossing is a forced copy into this cell's own region; a
@@ -87,7 +78,7 @@ fn turn<'graph>(
     }
     let carrier = context.lift::<KValueFamily>(carried);
     let state = State::Parked(context.keep(carrier));
-    Action::Tail(Hop {
+    Action::tail(Request {
         placement,
         work: Work { step, state },
     })
@@ -100,24 +91,16 @@ fn deliver<'graph>(
     resume: Resume<'graph, '_>,
     carried: KValue<'graph, '_>,
 ) -> Action<'graph> {
-    let Some(destination) = resume.provenance.destination else {
-        return Action::Failed(StepError::Undeliverable);
-    };
     // Recorded here rather than delivered, because what proves the value survived every crossing is
     // its bytes, and its bytes are at this cell's brand.
     record(describe(carried));
     let KValue::Str(text) = carried else {
-        return Action::Failed(StepError::Stale);
+        return Action::failed(StepError::Stale);
     };
     let length = text.len() as f64;
-    let delivered = context.deliver_scratch(destination.consumer, destination.slot, move |_, _| {
+    Action::deliver_scratch(context, &resume, move |_, _| {
         Active::new(KValue::Number(length))
-    });
-    match delivered {
-        Ok(Delivered::Complete) => Action::Wakes(destination.consumer),
-        Ok(Delivered::Outstanding) => Action::Done,
-        Err(_) => Action::Failed(StepError::Undeliverable),
-    }
+    })
 }
 
 /// The caller, woken by the loop's last cell.
@@ -128,9 +111,9 @@ fn finish<'graph>(
 ) -> Action<'graph> {
     match context.receipt(0) {
         Ok(Receipt::Value(value)) => record(describe(value)),
-        _ => return Action::Failed(StepError::Unredeemable),
+        _ => return Action::failed(StepError::Unredeemable),
     }
-    Action::Done
+    Action::done()
 }
 
 fn start_fresh<'graph>(
@@ -260,7 +243,7 @@ fn hop_from_the_slab<'graph>(
     _: Resume<'graph, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
-    Action::Tail(Hop {
+    Action::tail(Request {
         placement: Placement::Fresh,
         work: Work {
             step: hop_from_the_slab,

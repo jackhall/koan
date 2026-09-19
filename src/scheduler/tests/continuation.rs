@@ -24,7 +24,7 @@ fn inert<'graph>(
     _: crate::scheduler::Resume<'graph, '_>,
     _: &mut crate::scheduler::Spawns<'graph>,
 ) -> crate::scheduler::Action<'graph> {
-    crate::scheduler::Action::Done
+    crate::scheduler::Action::done()
 }
 
 #[test]

@@ -2,11 +2,10 @@
 //! and nothing else — which is why the matrix is one word wide.
 
 use crate::function::KValue;
-use crate::memory::{Active, Delivered, Receipt};
+use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, Continuation, Placement, Request, Resume, Scheduler, Spawns, State, StepError,
-    Work,
+    Action, Context, Placement, Request, Resume, Scheduler, Spawns, State, StepError, Work,
 };
 
 /// Deeper than the sixty-four slots a one-word matrix has, several times over.
@@ -18,23 +17,14 @@ fn start<'graph>(
     resume: Resume<'graph, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
-    if context.register_receipts(1).is_err() {
-        return Action::Failed(StepError::Undeliverable);
-    }
-    spawns.push(Request {
+    let asked = spawns.push(Request {
         placement: Placement::Fresh,
         work: Work {
             step: descend,
             state: State::Value(KValue::Number(DEPTH)),
         },
-        slot: 0,
     });
-    context.store_successor(Continuation::Native {
-        step: finish,
-        provenance: resume.provenance,
-        state: State::Empty,
-    });
-    Action::Park
+    Action::park(context, &resume, spawns, asked, finish, State::Empty)
 }
 
 /// One level: park on a child one shallower, or turn around at the bottom.
@@ -44,28 +34,19 @@ fn descend<'graph>(
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     let State::Value(KValue::Number(depth)) = resume.state else {
-        return Action::Failed(StepError::Stale);
+        return Action::failed(StepError::Stale);
     };
     if depth == 0.0 {
         return fill(context, resume, 0.0);
     }
-    if context.register_receipts(1).is_err() {
-        return Action::Failed(StepError::Undeliverable);
-    }
-    spawns.push(Request {
+    let asked = spawns.push(Request {
         placement: Placement::Fresh,
         work: Work {
             step: descend,
             state: State::Value(KValue::Number(depth - 1.0)),
         },
-        slot: 0,
     });
-    context.store_successor(Continuation::Native {
-        step: ascend,
-        provenance: resume.provenance,
-        state: State::Empty,
-    });
-    Action::Park
+    Action::park(context, &resume, spawns, asked, ascend, State::Empty)
 }
 
 /// Woken by the level below: add this level to its count and pass it up.
@@ -75,7 +56,7 @@ fn ascend<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     let Ok(Receipt::Value(KValue::Number(below))) = context.receipt(0) else {
-        return Action::Failed(StepError::Unredeemable);
+        return Action::failed(StepError::Unredeemable);
     };
     fill(context, resume, below + 1.0)
 }
@@ -86,17 +67,9 @@ fn fill<'graph>(
     resume: Resume<'graph, '_>,
     count: f64,
 ) -> Action<'graph> {
-    let Some(destination) = resume.provenance.destination else {
-        return Action::Failed(StepError::Undeliverable);
-    };
-    let delivered = context.deliver_scratch(destination.consumer, destination.slot, move |_, _| {
+    Action::deliver_scratch(context, &resume, move |_, _| {
         Active::new(KValue::Number(count))
-    });
-    match delivered {
-        Ok(Delivered::Complete) => Action::Wakes(destination.consumer),
-        Ok(Delivered::Outstanding) => Action::Done,
-        Err(_) => Action::Failed(StepError::Undeliverable),
-    }
+    })
 }
 
 /// The root, woken by the head of the descent.
@@ -107,9 +80,9 @@ fn finish<'graph>(
 ) -> Action<'graph> {
     match context.receipt(0) {
         Ok(Receipt::Value(KValue::Number(count))) => record(count.to_string()),
-        _ => return Action::Failed(StepError::Unredeemable),
+        _ => return Action::failed(StepError::Unredeemable),
     }
-    Action::Done
+    Action::done()
 }
 
 #[test]

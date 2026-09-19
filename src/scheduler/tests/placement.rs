@@ -5,11 +5,11 @@
 use std::cell::Cell;
 
 use crate::function::KValue;
-use crate::memory::{Active, Delivered, Receipt};
+use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, Continuation, NativeStep, Placement, Request, Resume, Scheduler, Spawns,
-    State, StepError, Work,
+    Action, Context, NativeStep, Placement, Request, Resume, Scheduler, Spawns, State, StepError,
+    Work,
 };
 
 /// Enough turns that a region which only ever grows parts company with one that is recycled.
@@ -37,23 +37,14 @@ fn start<'graph>(
     spawns: &mut Spawns<'graph>,
     step: NativeStep<'graph>,
 ) -> Action<'graph> {
-    if context.register_receipts(1).is_err() {
-        return Action::Failed(StepError::Undeliverable);
-    }
-    spawns.push(Request {
+    let asked = spawns.push(Request {
         placement: Placement::Fresh,
         work: Work {
             step,
             state: State::Empty,
         },
-        slot: 0,
     });
-    context.store_successor(Continuation::Native {
-        step: finish,
-        provenance: resume.provenance,
-        state: State::Empty,
-    });
-    Action::Park
+    Action::park(context, &resume, spawns, asked, finish, State::Empty)
 }
 
 /// One turn: write a blob where this cell stands, then hand on or deliver.
@@ -69,7 +60,7 @@ fn turn<'graph>(
 ) -> Action<'graph> {
     let written: KValue<'graph, '_> = crate::values::text(context.writer(), BLOB);
     let KValue::Str(text) = written else {
-        return Action::Failed(StepError::Stale);
+        return Action::failed(StepError::Stale);
     };
     let length = text.len() as f64;
     let left = REMAINING.with(|remaining| {
@@ -78,7 +69,7 @@ fn turn<'graph>(
         left
     });
     if left > 0 {
-        return Action::Tail(crate::scheduler::Hop {
+        return Action::tail(Request {
             placement,
             work: Work {
                 step,
@@ -86,17 +77,9 @@ fn turn<'graph>(
             },
         });
     }
-    let Some(destination) = resume.provenance.destination else {
-        return Action::Failed(StepError::Undeliverable);
-    };
-    let delivered = context.deliver_scratch(destination.consumer, destination.slot, move |_, _| {
+    Action::deliver_scratch(context, &resume, move |_, _| {
         Active::new(KValue::Number(length))
-    });
-    match delivered {
-        Ok(Delivered::Complete) => Action::Wakes(destination.consumer),
-        Ok(Delivered::Outstanding) => Action::Done,
-        Err(_) => Action::Failed(StepError::Undeliverable),
-    }
+    })
 }
 
 /// The caller, woken by the loop's last cell.
@@ -107,9 +90,9 @@ fn finish<'graph>(
 ) -> Action<'graph> {
     match context.receipt(0) {
         Ok(Receipt::Value(KValue::Number(length))) => record(length.to_string()),
-        _ => return Action::Failed(StepError::Unredeemable),
+        _ => return Action::failed(StepError::Unredeemable),
     }
-    Action::Done
+    Action::done()
 }
 
 fn start_fresh<'graph>(

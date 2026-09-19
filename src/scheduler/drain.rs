@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use crate::memory::{CellGraph, CellHandle, ReleaseAbsorption, SlabHandle};
-use crate::scheduler::action::{Action, Hop, Placement, Request, Spawns, StepError};
+use crate::scheduler::action::{Action, Kind, Placement, Request, Spawns, StepError};
 use crate::scheduler::continuation::{
     CellPlace, Continuation, ContinuationFamily, Destination, NativeStep, Provenance, Resume,
     ScratchFamily, State, Work,
@@ -90,15 +90,15 @@ impl<'graph> Scheduler<'graph> {
             // The hop whose successor the step just was: what that successor redeemed is copied in
             // and its own hand-off is behind it, so the predecessor's region can go now.
             self.release_deferred()?;
-            match action {
-                Action::Done => self.finish(cell, provenance)?,
-                Action::Wakes(consumer) => {
+            match action.kind() {
+                Kind::Done => self.finish(cell, provenance)?,
+                Kind::Wakes(consumer) => {
                     self.finish(cell, provenance)?;
                     self.queue.push_in_flight(consumer);
                 }
-                Action::Park => self.spawn(cell)?,
-                Action::Tail(hop) => self.hop(cell, provenance, hop)?,
-                Action::Failed(error) => return Err(DrainStalled::Step(error)),
+                Kind::Park => self.spawn(cell)?,
+                Kind::Tail(successor) => self.hop(cell, provenance, successor)?,
+                Kind::Failed(error) => return Err(DrainStalled::Step(error)),
             }
         }
         debug_assert!(
@@ -171,25 +171,27 @@ impl<'graph> Scheduler<'graph> {
     fn spawn(&mut self, cell: CellHandle) -> Result<(), DrainStalled> {
         for index in 0..self.spawns.len() {
             let request = self.spawns.get(index);
-            let child = self.create(cell, request)?;
+            let child = self.create(cell, request, index)?;
             self.queue.push_in_flight(child);
         }
         Ok(())
     }
 
-    /// One child under its spawner, at the placement the spawner asked for. Its provenance is the
-    /// drain's to fill: a child is born under the cell that asked for it and reports to that
-    /// cell's run, so no step can name a destination that is not its spawner's.
+    /// One child under its spawner, at the placement the spawner asked for, reporting to `slot` of
+    /// the spawner's run. Its provenance is the drain's to fill: a child is born under the cell
+    /// that asked for it and reports to the slot it was pushed at, so no step can name a
+    /// destination that is not its spawner's.
     fn create(
         &mut self,
         spawner: CellHandle,
         request: Request<'graph>,
+        slot: usize,
     ) -> Result<CellHandle, DrainStalled> {
         let continuation = request.work.continuation(Provenance {
             place: CellPlace::Under(spawner),
             destination: Some(Destination {
                 consumer: spawner,
-                slot: request.slot,
+                slot,
             }),
             unit: None,
         });
@@ -213,13 +215,13 @@ impl<'graph> Scheduler<'graph> {
         &mut self,
         cell: CellHandle,
         provenance: Provenance,
-        hop: Hop<'graph>,
+        successor: Request<'graph>,
     ) -> Result<(), DrainStalled> {
         let CellPlace::Under(place) = provenance.place else {
             return Err(DrainStalled::Unhoppable);
         };
-        let continuation = hop.work.continuation(provenance);
-        let successor = self.under(place, hop.placement, continuation)?;
+        let continuation = successor.work.continuation(provenance);
+        let successor = self.under(place, successor.placement, continuation)?;
         self.queue.push_hop(successor);
         self.deferred = Some(cell);
         Ok(())

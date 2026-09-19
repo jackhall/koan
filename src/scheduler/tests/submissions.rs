@@ -2,11 +2,11 @@
 //! moment the last of them finishes. A diamond is the shape that tells the two failures apart — a
 //! join that runs early, and a join that runs twice.
 
-use crate::memory::{Active, Delivered};
+use crate::memory::Active;
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
-    Action, Birth, Context, Continuation, DrainStalled, Placement, Request, Resume, Scheduler,
-    Spawns, State, StepError, Unit, Work,
+    Action, Birth, Context, DrainStalled, Placement, Request, Resume, Scheduler, Spawns, State,
+    Unit, Work,
 };
 
 /// A unit of the diamond, born in the slab: what the table decides is *when* it runs, never where.
@@ -26,7 +26,7 @@ fn source<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("source"));
-    Action::Done
+    Action::done()
 }
 
 fn left<'graph>(
@@ -35,7 +35,7 @@ fn left<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("left"));
-    Action::Done
+    Action::done()
 }
 
 fn right<'graph>(
@@ -44,7 +44,7 @@ fn right<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("right"));
-    Action::Done
+    Action::done()
 }
 
 fn join<'graph>(
@@ -53,7 +53,7 @@ fn join<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("join"));
-    Action::Done
+    Action::done()
 }
 
 #[test]
@@ -110,23 +110,14 @@ fn spawns_and_parks<'graph>(
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("parks"));
-    if context.register_receipts(1).is_err() {
-        return Action::Failed(StepError::Undeliverable);
-    }
-    spawns.push(Request {
+    let asked = spawns.push(Request {
         placement: Placement::Fresh,
         work: Work {
             step: answers,
             state: State::Empty,
         },
-        slot: 0,
     });
-    context.store_successor(Continuation::Native {
-        step: wakes,
-        provenance: resume.provenance,
-        state: State::Empty,
-    });
-    Action::Park
+    Action::park(context, &resume, spawns, asked, wakes, State::Empty)
 }
 
 fn answers<'graph>(
@@ -135,17 +126,9 @@ fn answers<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("child"));
-    let Some(destination) = resume.provenance.destination else {
-        return Action::Failed(StepError::Undeliverable);
-    };
-    let delivered = context.deliver_scratch(destination.consumer, destination.slot, |_, _| {
+    Action::deliver_scratch(context, &resume, |_, _| {
         Active::new(crate::function::KValue::Number(1.0))
-    });
-    match delivered {
-        Ok(Delivered::Complete) => Action::Wakes(destination.consumer),
-        Ok(Delivered::Outstanding) => Action::Done,
-        Err(_) => Action::Failed(StepError::Undeliverable),
-    }
+    })
 }
 
 fn wakes<'graph>(
@@ -154,7 +137,7 @@ fn wakes<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("wakes"));
-    Action::Done
+    Action::done()
 }
 
 #[test]

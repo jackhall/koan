@@ -27,7 +27,7 @@ fn finish<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     RAN.with(|ran| ran.set(ran.get() + 1));
-    Action::Done
+    Action::done()
 }
 
 /// A step that reads the number it was born with, records it, and finishes.
@@ -37,10 +37,10 @@ fn finish_with_state<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     let State::Value(KValue::Number(count)) = resume.state else {
-        return Action::Failed(StepError::Stale);
+        return Action::failed(StepError::Stale);
     };
     RAN.with(|ran| ran.set(count as u32));
-    Action::Done
+    Action::done()
 }
 
 /// A step that refuses to proceed.
@@ -49,7 +49,7 @@ fn fail<'graph>(
     _: Resume<'graph, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
-    Action::Failed(StepError::Stale)
+    Action::failed(StepError::Stale)
 }
 
 #[test]
@@ -147,8 +147,8 @@ fn record_state<'graph>(
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     let State::Value(KValue::Number(mark)) = resume.state else {
-        return Action::Failed(StepError::Stale);
+        return Action::failed(StepError::Stale);
     };
     record(mark.to_string());
-    Action::Done
+    Action::done()
 }

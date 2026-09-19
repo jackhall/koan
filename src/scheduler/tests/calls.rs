@@ -2,11 +2,11 @@
 //! delivers. Once at each placement, so both spawn doors and both delivery doors are driven.
 
 use crate::function::{KValue, KValueFamily};
-use crate::memory::{Active, Delivered, Receipt};
+use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, Continuation, NativeStep, Placement, Request, Resume, Scheduler, Spawns,
-    State, StepError, Work,
+    Action, Context, NativeStep, Placement, Request, Resume, Scheduler, Spawns, State, StepError,
+    Work,
 };
 
 /// Ask for one child at `placement`, park on its single slot, and read it back in [`read_one`].
@@ -17,23 +17,14 @@ fn ask<'graph>(
     placement: Placement,
     step: NativeStep<'graph>,
 ) -> Action<'graph> {
-    if context.register_receipts(1).is_err() {
-        return Action::Failed(StepError::Undeliverable);
-    }
-    spawns.push(Request {
+    let asked = spawns.push(Request {
         placement,
         work: Work {
             step,
             state: State::Empty,
         },
-        slot: 0,
     });
-    context.store_successor(Continuation::Native {
-        step: read_one,
-        provenance: resume.provenance,
-        state: State::Empty,
-    });
-    Action::Park
+    Action::park(context, &resume, spawns, asked, read_one, State::Empty)
 }
 
 fn call_fresh<'graph>(
@@ -58,20 +49,12 @@ fn place_in_scratch<'graph>(
     resume: Resume<'graph, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
-    let Some(destination) = resume.provenance.destination else {
-        return Action::Failed(StepError::Undeliverable);
-    };
-    let delivered = context.deliver_scratch(destination.consumer, destination.slot, |writer, _| {
+    Action::deliver_scratch(context, &resume, |writer, _| {
         // Annotated because `text` leaves its `'graph` free: it is the consumer's graph, and the
         // brand it is written at is the consumer's own scratch.
         let value: KValue<'graph, '_> = crate::values::text(writer, "seven");
         Active::new(value)
-    });
-    match delivered {
-        Ok(Delivered::Complete) => Action::Wakes(destination.consumer),
-        Ok(Delivered::Outstanding) => Action::Done,
-        Err(_) => Action::Failed(StepError::Undeliverable),
-    }
+    })
 }
 
 /// A result bound for the consumer's storage: built in the consumer's region from the start, kept,
@@ -81,23 +64,21 @@ fn place_in_storage<'graph>(
     resume: Resume<'graph, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
-    let Some(destination) = resume.provenance.destination else {
-        return Action::Failed(StepError::Undeliverable);
+    // The build is the consumer's own region, so this step still names it; where the carrier goes
+    // is the destination's, and `deliver_carrier` reads that off the provenance.
+    let Some(consumer) = resume.provenance.destination.map(|to| to.consumer) else {
+        return Action::failed(StepError::Undeliverable);
     };
     let Ok(placed) =
-        context.alloc_into::<KValueFamily, KValueFamily>(destination.consumer, &[], |writer, _| {
+        context.alloc_into::<KValueFamily, KValueFamily>(consumer, &[], |writer, _| {
             let value: KValue<'graph, '_> = crate::values::text(writer, "seven");
             Active::new(value)
         })
     else {
-        return Action::Failed(StepError::Stale);
+        return Action::failed(StepError::Stale);
     };
     let carrier = context.keep(placed);
-    match context.deliver_carrier(destination.consumer, destination.slot, carrier) {
-        Ok(Delivered::Complete) => Action::Wakes(destination.consumer),
-        Ok(Delivered::Outstanding) => Action::Done,
-        Err(_) => Action::Failed(StepError::Undeliverable),
-    }
+    Action::deliver_carrier(context, &resume, carrier)
 }
 
 /// The caller, woken: drain slot zero, whichever door filled it.
@@ -109,9 +90,9 @@ fn read_one<'graph>(
     match context.receipt(0) {
         Ok(Receipt::Value(value)) => record(describe(value)),
         Ok(Receipt::Carrier(Ok(carrier))) => record(describe(context.read(&carrier).value())),
-        _ => return Action::Failed(StepError::Unredeemable),
+        _ => return Action::failed(StepError::Unredeemable),
     }
-    Action::Done
+    Action::done()
 }
 
 #[test]

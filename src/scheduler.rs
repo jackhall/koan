@@ -27,7 +27,7 @@ mod submit;
 #[cfg(test)]
 mod tests;
 
-pub use action::{Action, Hop, Placement, Request, Spawns, StepError};
+pub use action::{Action, Placement, Request, Slot, Spawns, StepError};
 pub use continuation::{
     CellPlace, Context, Continuation, ContinuationFamily, Destination, NativeStep, Provenance,
     Resume, ScratchFamily, ScratchState, State, Work,

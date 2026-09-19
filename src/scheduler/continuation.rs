@@ -52,12 +52,11 @@ pub enum Continuation<'graph, 'cell> {
 
 /// The work one cell is born to run: the step it starts at, and what it starts holding.
 ///
-/// The three things that describe a birth — a [`Request`], a [`Hop`] and a [`Unit`] — each name a
-/// place and this. It is what the drain turns into a continuation, in the one place any
-/// continuation is built.
+/// The two things that describe a birth — a [`Request`] and a [`Unit`] — each name a place and
+/// this. It is what the drain turns into a continuation, in the one place any continuation is
+/// built.
 ///
 /// [`Request`]: crate::scheduler::Request
-/// [`Hop`]: crate::scheduler::Hop
 /// [`Unit`]: crate::scheduler::Unit
 #[derive(Clone, Copy)]
 pub struct Work<'graph> {
@@ -86,6 +85,26 @@ pub struct Resume<'graph, 'cell> {
     pub provenance: Provenance,
     /// What the previous step left, or what the cell was born with.
     pub state: State<'graph, 'cell>,
+}
+
+impl<'graph, 'cell> Resume<'graph, 'cell> {
+    /// This cell's next step over `state`, under the provenance the drain handed in. The one place
+    /// a step-side continuation gets its provenance, so no step invents one of its own; a park
+    /// goes through it by way of [`Action::park`](crate::scheduler::Action::park).
+    ///
+    /// The brand is the stored successor's, not this resume's: what a step carries forward is
+    /// written at the brand it will come back at.
+    pub fn successor<'here>(
+        &self,
+        step: NativeStep<'graph>,
+        state: State<'graph, 'here>,
+    ) -> Continuation<'graph, 'here> {
+        Continuation::Native {
+            step,
+            provenance: self.provenance,
+            state,
+        }
+    }
 }
 
 /// What a native step runs over.

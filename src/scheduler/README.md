@@ -21,13 +21,13 @@ lazily minted cell, so a second scheduler runs beside the first with nothing
 shared but the program text and the shapes in it.
 
 The loop pops a cell, enters it, runs the step its continuation names, and acts
-on what the step returns:
+on the `Kind` the returned `Action` opens into:
 
 - `Done` — the step is finished and has already filled its consumer's receipt,
   so nothing is in flight when the drain releases the cell.
-- `Wakes` — the same, and its delivery filled the last slot of the named
-  consumer's run: the drain releases this cell and queues that consumer. This is
-  the only way a parked cell wakes.
+- `Wakes` — the same, and the fill that ended the step completed that consumer's
+  run: the drain releases this cell and queues the consumer. This is the only way
+  a parked cell wakes.
 - `Park` — the step registered a receipt run and described its children; the
   drain creates them and leaves the cell alone until the run completes.
 - `Tail` — the drain creates the successor and queues it ahead of everything,
@@ -59,11 +59,23 @@ That is why `Action` carries no region borrow, and why a step describes its
 children by pushing `Request`s into a drain-owned `Spawns` buffer it is handed
 by `&mut`: a slice of requests would have nowhere to be branded.
 
-A `Request` names a placement, a `Work` — the step the child starts at and what
-it starts holding — and a slot, and not the place. The drain fills in the child's `Provenance` from the cell the
-request was pushed in and the slot it names, so a child is always born under the
-cell that asked for it and always reports to that cell's run; no step can name a
-destination that is not its spawner's.
+A `Request` names a placement and a `Work` — the step the child starts at and
+what it starts holding — and neither a place nor a destination. The drain fills
+in the child's `Provenance` from how the request was handed over: pushed into
+`Spawns`, the child is born under the pusher and reports to the slot of its push
+position; handed to `Action::tail`, it inherits its predecessor's provenance
+verbatim. So a cell is always born under the cell that asked for it and always
+reports to that cell's run; no step can name a destination that is not its
+spawner's.
+
+`Action` is opaque — a private field over an internal `Kind` — and a step gets
+one only from a constructor, so the bookkeeping an arm implies has always
+happened by the time the drain reads it. `Action::park` registers the run and
+stores the successor, and takes the `Slot` the last `Spawns::push` handed back,
+so a park with nothing to wait on does not typecheck. `Action::deliver_scratch`
+and `Action::deliver_carrier` read the destination off the `Provenance` and
+decide between `Wakes` and `Done` from what the fill answered, so a wake names
+the consumer whose run the step just completed and nothing else.
 
 A step also cannot create or release a cell. `StepContext` has no `create`, no
 `release` and no second `enter`, so every birth and every death is the drain's,
@@ -172,15 +184,16 @@ Which door depends on where the result is bound:
 - **Bound for the consumer's storage** — one the consumer embeds, binds or passes
   on. The producer builds it in the consumer's region from the start with
   `alloc_into`, `keep`s it, and files the dormant carrier with
-  `deliver_carrier`. Never through scratch first: a value that passes through
-  scratch comes back at `'scratch` and can never be embedded in storage again.
+  `Action::deliver_carrier`. Never through scratch first: a value that passes
+  through scratch comes back at `'scratch` and can never be embedded in storage
+  again.
   The carrier has no region brand, so it rests in a scratch slot like any other.
 - **Fresh and only read** — a condition, a computed lookup key, a discarded
   statement value. The producer fills the consumer's scratch habitat with
-  `deliver_scratch`, whose build takes no operands and is quantified over the
-  consumer's own brand. A scratch result is not short-lived by nature: it lasts
-  for as long as the consumer's scratch continuation names it, and never past the
-  cell.
+  `Action::deliver_scratch`, whose build takes no operands and is quantified over
+  the consumer's own brand. A scratch result is not short-lived by nature: it
+  lasts for as long as the consumer's scratch continuation names it, and never
+  past the cell.
 
 Because the scratch build takes no operands, a read-only result that borrows data
 already in the consumer goes as a carrier too.
@@ -198,7 +211,7 @@ homed in it. The hand-off:
 
 1. The predecessor's step `keep`s every argument the successor needs, getting
    dormant carriers, and puts them in the successor's birth continuation.
-2. It returns `Action::Tail` with a `Hop` — a placement and a `Work`. Its
+2. It returns `Action::tail` with a `Request` — a placement and a `Work`. Its
    `Provenance` travels verbatim, so the successor is born in the same place
    and reports to the same slot.
 3. The drain creates the successor — `create_tree` under the predecessor's own
