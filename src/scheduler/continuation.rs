@@ -50,6 +50,36 @@ pub enum Continuation<'graph, 'cell> {
     },
 }
 
+/// The work one cell is born to run: the step it starts at, and what it starts holding.
+///
+/// The three things that describe a birth — a [`Request`], a [`Hop`] and a [`Unit`] — each name a
+/// place and this. It is what the drain turns into a continuation, in the one place any
+/// continuation is built.
+///
+/// [`Request`]: crate::scheduler::Request
+/// [`Hop`]: crate::scheduler::Hop
+/// [`Unit`]: crate::scheduler::Unit
+#[derive(Clone, Copy)]
+pub struct Work<'graph> {
+    /// The step the cell runs first.
+    pub step: NativeStep<'graph>,
+    /// What it is born holding, at `'graph` — its arguments reach it as dormant carriers.
+    pub state: State<'graph, 'graph>,
+}
+
+impl<'graph> Work<'graph> {
+    /// This work as a birth continuation, under the provenance the drain filled for it. Every
+    /// cell the drain creates is created from one of these, so the drain names no step and no
+    /// birth state of its own.
+    pub(crate) fn continuation(self, provenance: Provenance) -> Continuation<'graph, 'graph> {
+        Continuation::Native {
+            step: self.step,
+            provenance,
+            state: self.state,
+        }
+    }
+}
+
 /// What the drain hands a native step: everything the continuation held but the pointer itself.
 pub struct Resume<'graph, 'cell> {
     /// The cell's place in the graph, to be carried into any successor the step stores or asks for.

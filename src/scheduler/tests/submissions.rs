@@ -5,17 +5,18 @@
 use crate::memory::{Active, Delivered};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
-    Action, CellPlace, Context, Continuation, DrainStalled, Placement, Request, Resume, Scheduler,
-    Spawns, State, StepError, Unit,
+    Action, Birth, Context, Continuation, DrainStalled, Placement, Request, Resume, Scheduler,
+    Spawns, State, StepError, Unit, Work,
 };
 
 /// A unit of the diamond, born in the slab: what the table decides is *when* it runs, never where.
 fn unit(step: crate::scheduler::NativeStep<'static>) -> Unit<'static> {
     Unit {
-        place: CellPlace::Slab,
-        placement: Placement::Fresh,
-        step,
-        state: State::Empty,
+        birth: Birth::Slab,
+        work: Work {
+            step,
+            state: State::Empty,
+        },
     }
 }
 
@@ -114,8 +115,10 @@ fn spawns_and_parks<'graph>(
     }
     spawns.push(Request {
         placement: Placement::Fresh,
-        step: answers,
-        state: State::Empty,
+        work: Work {
+            step: answers,
+            state: State::Empty,
+        },
         slot: 0,
     });
     context.store_successor(Continuation::Native {

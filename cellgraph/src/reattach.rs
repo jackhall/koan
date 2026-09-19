@@ -186,11 +186,6 @@ impl<'graph, T: Reattachable<'graph>> Erased<'graph, T> {
     }
 }
 
-/// A cell's continuation at rest, in its two halves: the storage half, which re-anchors at the
-/// executing cell's `'here`, and the scratch half, which re-anchors at `'scratch`. Each has its own
-/// family, so neither slot can hold the other's form.
-pub(crate) type Halves<'graph, C, S> = (Option<Erased<'graph, C>>, Option<Erased<'graph, S>>);
-
 /// A family whose erased form is `Copy` makes its holder `Copy` too: the erased value names bytes
 /// it does not own, so duplicating the holder duplicates no ownership. This is what lets a carrier
 /// be read without being consumed.

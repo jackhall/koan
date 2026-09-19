@@ -30,8 +30,8 @@ mod tests;
 pub use action::{Action, Hop, Placement, Request, Spawns, StepError};
 pub use continuation::{
     CellPlace, Context, Continuation, ContinuationFamily, Destination, NativeStep, Provenance,
-    Resume, ScratchFamily, ScratchState, State,
+    Resume, ScratchFamily, ScratchState, State, Work,
 };
 pub use delivery::KDelivery;
 pub use drain::{DrainStalled, Scheduler};
-pub use submit::{Submissions, Unit, UnitId};
+pub use submit::{Birth, Submissions, Unit, UnitId};

@@ -6,7 +6,7 @@ use crate::memory::{Active, Delivered, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{
     Action, Context, Continuation, NativeStep, Placement, Request, Resume, Scheduler, Spawns,
-    State, StepError,
+    State, StepError, Work,
 };
 
 /// Ask for one child at `placement`, park on its single slot, and read it back in [`read_one`].
@@ -22,8 +22,10 @@ fn ask<'graph>(
     }
     spawns.push(Request {
         placement,
-        step,
-        state: State::Empty,
+        work: Work {
+            step,
+            state: State::Empty,
+        },
         slot: 0,
     });
     context.store_successor(Continuation::Native {

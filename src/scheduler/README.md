@@ -59,8 +59,8 @@ That is why `Action` carries no region borrow, and why a step describes its
 children by pushing `Request`s into a drain-owned `Spawns` buffer it is handed
 by `&mut`: a slice of requests would have nowhere to be branded.
 
-A `Request` names the work — a placement, a step, a birth state and a slot — and
-not the place. The drain fills in the child's `Provenance` from the cell the
+A `Request` names a placement, a `Work` — the step the child starts at and what
+it starts holding — and a slot, and not the place. The drain fills in the child's `Provenance` from the cell the
 request was pushed in and the slot it names, so a child is always born under the
 cell that asked for it and always reports to that cell's run; no step can name a
 destination that is not its spawner's.
@@ -113,9 +113,10 @@ that finds an empty slot is a scheduler bug. This is why there is no wait record
 no waiter list and no per-slot park, and why the drain's bookkeeping is per
 *unit* rather than per parked cell.
 
-That record is `submit.rs`'s table. A `Unit` names where its cell will be born
-and what it will run, and nothing about where its result goes: a submitted unit
-reports by finishing, not by filling a slot. `submit` takes the count, `edge`
+That record is `submit.rs`'s table. A `Unit` pairs a `Birth` — the slab, or a
+parent and the door to go through — with the same `Work` a request carries, and
+says nothing about where its result goes: a submitted unit reports by finishing,
+not by filling a slot. `submit` takes the count, `edge`
 says which finishes answer for it, and both are wired before the run. A cell
 carries the unit it answers for in its `Provenance`, so a chain of tail hops
 settles once, at whichever successor finishes the work. Entries and edges live
@@ -197,9 +198,9 @@ homed in it. The hand-off:
 
 1. The predecessor's step `keep`s every argument the successor needs, getting
    dormant carriers, and puts them in the successor's birth continuation.
-2. It returns `Action::Tail` with a `Hop` — a placement, a step and a birth
-   state. Its `Provenance` travels verbatim, so the successor is born in the
-   same place and reports to the same slot.
+2. It returns `Action::Tail` with a `Hop` — a placement and a `Work`. Its
+   `Provenance` travels verbatim, so the successor is born in the same place
+   and reports to the same slot.
 3. The drain creates the successor — `create_tree` under the predecessor's own
    parent for `Fresh`, `create_tenant` on the same host for `Shares`.
 4. The successor's first step redeems each dormant carrier, entitled by root

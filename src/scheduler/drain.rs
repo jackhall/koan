@@ -10,10 +10,10 @@ use crate::memory::{CellGraph, CellHandle, ReleaseAbsorption, SlabHandle};
 use crate::scheduler::action::{Action, Hop, Placement, Request, Spawns, StepError};
 use crate::scheduler::continuation::{
     CellPlace, Continuation, ContinuationFamily, Destination, NativeStep, Provenance, Resume,
-    ScratchFamily, State,
+    ScratchFamily, State, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::submit::{Submissions, Unit, UnitId};
+use crate::scheduler::submit::{Birth, Submissions, Unit, UnitId};
 
 /// The drain and the graph of cells it runs.
 pub struct Scheduler<'graph> {
@@ -50,15 +50,11 @@ impl<'graph> Scheduler<'graph> {
         step: NativeStep<'graph>,
         state: State<'graph, 'graph>,
     ) -> Result<SlabHandle, DrainStalled> {
-        let continuation = Continuation::Native {
-            step,
-            provenance: Provenance {
-                place: CellPlace::Slab,
-                destination: None,
-                unit: None,
-            },
-            state,
-        };
+        let continuation = Work { step, state }.continuation(Provenance {
+            place: CellPlace::Slab,
+            destination: None,
+            unit: None,
+        });
         let handle = self.in_slab(continuation)?;
         self.queue.push_fresh(handle.into());
         Ok(handle)
@@ -119,18 +115,14 @@ impl<'graph> Scheduler<'graph> {
     /// Give a cell to every unit whose dependencies are all met, and queue it.
     fn launch(&mut self) -> Result<(), DrainStalled> {
         while let Some((id, unit)) = self.pending.ready() {
-            let continuation = Continuation::Native {
-                step: unit.step,
-                provenance: Provenance {
-                    place: unit.place,
-                    destination: None,
-                    unit: Some(id),
-                },
-                state: unit.state,
-            };
-            let cell = match unit.place {
-                CellPlace::Slab => self.in_slab(continuation)?.into(),
-                CellPlace::Under(parent) => self.under(parent, unit.placement, continuation)?,
+            let continuation = unit.work.continuation(Provenance {
+                place: unit.birth.place(),
+                destination: None,
+                unit: Some(id),
+            });
+            let cell = match unit.birth {
+                Birth::Slab => self.in_slab(continuation)?.into(),
+                Birth::Under(parent, placement) => self.under(parent, placement, continuation)?,
             };
             self.queue.push_fresh(cell);
         }
@@ -193,18 +185,14 @@ impl<'graph> Scheduler<'graph> {
         spawner: CellHandle,
         request: Request<'graph>,
     ) -> Result<CellHandle, DrainStalled> {
-        let continuation = Continuation::Native {
-            step: request.step,
-            provenance: Provenance {
-                place: CellPlace::Under(spawner),
-                destination: Some(Destination {
-                    consumer: spawner,
-                    slot: request.slot,
-                }),
-                unit: None,
-            },
-            state: request.state,
-        };
+        let continuation = request.work.continuation(Provenance {
+            place: CellPlace::Under(spawner),
+            destination: Some(Destination {
+                consumer: spawner,
+                slot: request.slot,
+            }),
+            unit: None,
+        });
         self.under(spawner, request.placement, continuation)
     }
 
@@ -230,11 +218,7 @@ impl<'graph> Scheduler<'graph> {
         let CellPlace::Under(place) = provenance.place else {
             return Err(DrainStalled::Unhoppable);
         };
-        let continuation = Continuation::Native {
-            step: hop.step,
-            provenance,
-            state: hop.state,
-        };
+        let continuation = hop.work.continuation(provenance);
         let successor = self.under(place, hop.placement, continuation)?;
         self.queue.push_hop(successor);
         self.deferred = Some(cell);

@@ -23,8 +23,9 @@
 
 use crate::carrier::CellHome;
 use crate::handle::{Stale, TenantHandle};
-use crate::reattach::{Erased, Halves, Reattachable};
-use crate::receipt::{Delivery, ReceiptRun};
+use crate::reattach::{Erased, Reattachable};
+use crate::receipt::Delivery;
+use crate::slots::StepSlots;
 
 /// What a region-owning cell carries for the tenants that write its region.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -46,13 +47,9 @@ struct Tenant<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Deliv
     /// tenant's whole life.
     host: CellHome,
     executing: bool,
-    continuation: Option<Erased<'graph, C>>,
-    scratch_continuation: Option<Erased<'graph, S>>,
-    /// The receipt run at rest, over the host's scratch bump. The run is this tenant's; only the
-    /// bytes it lives in are the host's.
-    receipts: Option<Erased<'graph, ReceiptRun<D>>>,
-    /// A slot count a step registered, waiting for that step's end to lay it down.
-    pending_receipts: Option<usize>,
+    /// What the tenant carries between its steps. The receipt run among them is the tenant's own;
+    /// only the bytes it lives in — the host's scratch bump — are the host's.
+    step_slots: StepSlots<'graph, C, S, D>,
 }
 
 /// One pool index: its generation, and its occupant if it has one.
@@ -103,10 +100,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         let occupant = Some(Tenant {
             host,
             executing: false,
-            continuation,
-            scratch_continuation: None,
-            receipts: None,
-            pending_receipts: None,
+            step_slots: StepSlots::born(continuation),
         });
         match self.free.pop() {
             Some(index) => {
@@ -161,45 +155,13 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         self.tenant_mut(index).executing = executing;
     }
 
-    /// Whether anything at rest on the tenant names its host's scratch bump: a scratch half, or a
-    /// receipt run. A pending registration is not one of them — it names no byte until the step
-    /// end that lays it down, which is after that end's reset.
-    pub(crate) fn names_scratch(&self, index: u32) -> bool {
-        let tenant = self.tenant(index);
-        tenant.scratch_continuation.is_some() || tenant.receipts.is_some()
+    /// The slots the tenant carries between its steps, over its host's scratch bump.
+    pub(crate) fn step_slots(&self, index: u32) -> &StepSlots<'graph, C, S, D> {
+        &self.tenant(index).step_slots
     }
 
-    /// The receipt run at rest, erased.
-    pub(crate) fn receipts(&self, index: u32) -> Option<Erased<'graph, ReceiptRun<D>>> {
-        self.tenant(index).receipts
-    }
-
-    pub(crate) fn set_receipts(&mut self, index: u32, run: Option<Erased<'graph, ReceiptRun<D>>>) {
-        self.tenant_mut(index).receipts = run;
-    }
-
-    pub(crate) fn take_pending_receipts(&mut self, index: u32) -> Option<usize> {
-        self.tenant_mut(index).pending_receipts.take()
-    }
-
-    pub(crate) fn set_pending_receipts(&mut self, index: u32, count: usize) {
-        self.tenant_mut(index).pending_receipts = Some(count);
-    }
-
-    /// Both halves of the continuation, off the tenant for the length of a step.
-    pub(crate) fn take_halves(&mut self, index: u32) -> Halves<'graph, C, S> {
-        let tenant = self.tenant_mut(index);
-        (
-            tenant.continuation.take(),
-            tenant.scratch_continuation.take(),
-        )
-    }
-
-    /// Both halves back at rest, as the step left them.
-    pub(crate) fn put_halves(&mut self, index: u32, (continuation, scratch): Halves<'graph, C, S>) {
-        let tenant = self.tenant_mut(index);
-        tenant.continuation = continuation;
-        tenant.scratch_continuation = scratch;
+    pub(crate) fn step_slots_mut(&mut self, index: u32) -> &mut StepSlots<'graph, C, S, D> {
+        &mut self.tenant_mut(index).step_slots
     }
 
     /// Take the tenant out: its halves drop, its index frees under a fresh generation, and what
@@ -214,7 +176,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         self.free.push(index);
         Departed {
             host: tenant.host,
-            scratch_named: tenant.scratch_continuation.is_some() || tenant.receipts.is_some(),
+            scratch_named: tenant.step_slots.names_scratch(),
         }
     }
 
@@ -223,12 +185,9 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
     #[cfg(test)]
     pub(crate) fn census(&self) -> impl Iterator<Item = (CellHome, bool)> + '_ {
         self.slots.iter().filter_map(|cell| {
-            cell.occupant.as_ref().map(|tenant| {
-                (
-                    tenant.host,
-                    tenant.scratch_continuation.is_some() || tenant.receipts.is_some(),
-                )
-            })
+            cell.occupant
+                .as_ref()
+                .map(|tenant| (tenant.host, tenant.step_slots.names_scratch()))
         })
     }
 }

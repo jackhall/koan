@@ -9,7 +9,7 @@ use crate::memory::{Active, Delivered, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
     Action, Context, Continuation, NativeStep, Placement, Request, Resume, Scheduler, Spawns,
-    State, StepError,
+    State, StepError, Work,
 };
 
 /// Enough turns that a region which only ever grows parts company with one that is recycled.
@@ -42,8 +42,10 @@ fn start<'graph>(
     }
     spawns.push(Request {
         placement: Placement::Fresh,
-        step,
-        state: State::Empty,
+        work: Work {
+            step,
+            state: State::Empty,
+        },
         slot: 0,
     });
     context.store_successor(Continuation::Native {
@@ -78,8 +80,10 @@ fn turn<'graph>(
     if left > 0 {
         return Action::Tail(crate::scheduler::Hop {
             placement,
-            step,
-            state: State::Empty,
+            work: Work {
+                step,
+                state: State::Empty,
+            },
         });
     }
     let Some(destination) = resume.provenance.destination else {

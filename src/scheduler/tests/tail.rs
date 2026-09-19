@@ -9,7 +9,7 @@ use crate::memory::{Active, Delivered, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{
     Action, Context, Continuation, DrainStalled, Hop, NativeStep, Placement, Request, Resume,
-    Scheduler, Spawns, State, StepError,
+    Scheduler, Spawns, State, StepError, Work,
 };
 
 /// Enough hops that a per-hop cost would be unmissable in the allocation count.
@@ -41,8 +41,10 @@ fn start<'graph>(
     }
     spawns.push(Request {
         placement,
-        step,
-        state: State::Empty,
+        work: Work {
+            step,
+            state: State::Empty,
+        },
         slot: 0,
     });
     context.store_successor(Continuation::Native {
@@ -87,8 +89,7 @@ fn turn<'graph>(
     let state = State::Parked(context.keep(carrier));
     Action::Tail(Hop {
         placement,
-        step,
-        state,
+        work: Work { step, state },
     })
 }
 
@@ -261,8 +262,10 @@ fn hop_from_the_slab<'graph>(
 ) -> Action<'graph> {
     Action::Tail(Hop {
         placement: Placement::Fresh,
-        step: hop_from_the_slab,
-        state: State::Empty,
+        work: Work {
+            step: hop_from_the_slab,
+            state: State::Empty,
+        },
     })
 }
 

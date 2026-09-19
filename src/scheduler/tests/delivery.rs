@@ -6,6 +6,7 @@ use crate::memory::{Active, Delivered, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{
     Action, Context, Continuation, Placement, Request, Resume, Scheduler, Spawns, State, StepError,
+    Work,
 };
 
 /// How many producers the consumer parks on. Three, so a delivery that is neither the first nor the
@@ -24,8 +25,10 @@ fn park_on_three<'graph>(
     for slot in 0..PRODUCERS {
         spawns.push(Request {
             placement: Placement::Fresh,
-            step: produce,
-            state: State::Value(KValue::Number(slot as f64)),
+            work: Work {
+                step: produce,
+                state: State::Value(KValue::Number(slot as f64)),
+            },
             slot,
         });
     }

@@ -24,6 +24,7 @@ mod receipt;
 mod region;
 mod scratch;
 mod sealed;
+mod slots;
 mod tenant;
 mod tree;
 

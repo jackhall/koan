@@ -14,9 +14,10 @@
 //! that say where its bytes went once it did.
 
 use crate::handle::{HomeHandle, SlabHandle, Stale, TreeHandle};
-use crate::reattach::{Erased, Halves, Reattachable};
-use crate::receipt::{Delivery, ReceiptRun};
+use crate::reattach::{Erased, Reattachable};
+use crate::receipt::Delivery;
 use crate::scratch::Scratch;
+use crate::slots::StepSlots;
 use crate::tenant::Tenancy;
 
 /// What one pool index currently holds.
@@ -117,15 +118,8 @@ struct Branch<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Deliv
     /// Whether any value homed here was ever put to rest. A cell nothing was kept in leaves no
     /// tombstone: no key can name it, so nothing will ever ask where its bytes went.
     kept: bool,
-    continuation: Option<Erased<'graph, C>>,
-    /// The scratch half of the continuation, at rest: what names this cell's scratch bump across a
-    /// park. Empty at birth, and cleared when the cell's death is declared.
-    scratch_continuation: Option<Erased<'graph, S>>,
-    /// The receipt run at rest, over this cell's scratch bump — the other thing that names it
-    /// across a park. Cleared with the half when the cell's death is declared.
-    receipts: Option<Erased<'graph, ReceiptRun<D>>>,
-    /// A slot count a step registered, waiting for that step's end to lay it down.
-    pending_receipts: Option<usize>,
+    /// What the cell carries between its steps, over its own scratch bump.
+    step_slots: StepSlots<'graph, C, S, D>,
 }
 
 /// A cell whose bytes have moved, kept only to answer for them.
@@ -232,10 +226,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
             executing: false,
             pledge: None,
             kept: false,
-            continuation,
-            scratch_continuation: None,
-            receipts: None,
-            pending_receipts: None,
+            step_slots: StepSlots::born(continuation),
         });
         match self.free.pop() {
             Some(index) => {
@@ -346,54 +337,20 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
     pub(crate) fn mark_dead(&mut self, index: u32) {
         let branch = self.branch_mut(index);
         branch.life = Life::Dead;
-        branch.scratch_continuation = None;
-        branch.receipts = None;
-        branch.pending_receipts = None;
+        branch.step_slots.clear_scratch();
     }
 
     pub(crate) fn mark_kept(&mut self, index: u32) {
         self.branch_mut(index).kept = true;
     }
 
-    /// Whether anything at rest in the cell's slots names its scratch bump: a scratch half, or a
-    /// receipt run. A pending registration is not one of them — it names no byte until the step
-    /// end that lays it down, which is after that end's reset.
-    pub(crate) fn names_scratch(&self, index: u32) -> bool {
-        let branch = self.branch(index);
-        branch.scratch_continuation.is_some() || branch.receipts.is_some()
+    /// The slots the cell carries between its steps, over its own scratch bump.
+    pub(crate) fn step_slots(&self, index: u32) -> &StepSlots<'graph, C, S, D> {
+        &self.branch(index).step_slots
     }
 
-    /// The receipt run at rest, erased.
-    pub(crate) fn receipts(&self, index: u32) -> Option<Erased<'graph, ReceiptRun<D>>> {
-        self.branch(index).receipts
-    }
-
-    pub(crate) fn set_receipts(&mut self, index: u32, run: Option<Erased<'graph, ReceiptRun<D>>>) {
-        self.branch_mut(index).receipts = run;
-    }
-
-    pub(crate) fn take_pending_receipts(&mut self, index: u32) -> Option<usize> {
-        self.branch_mut(index).pending_receipts.take()
-    }
-
-    pub(crate) fn set_pending_receipts(&mut self, index: u32, count: usize) {
-        self.branch_mut(index).pending_receipts = Some(count);
-    }
-
-    /// Both halves of the continuation, off the cell for the length of a step.
-    pub(crate) fn take_halves(&mut self, index: u32) -> Halves<'graph, C, S> {
-        let branch = self.branch_mut(index);
-        (
-            branch.continuation.take(),
-            branch.scratch_continuation.take(),
-        )
-    }
-
-    /// Both halves back at rest, as the step left them.
-    pub(crate) fn put_halves(&mut self, index: u32, (continuation, scratch): Halves<'graph, C, S>) {
-        let branch = self.branch_mut(index);
-        branch.continuation = continuation;
-        branch.scratch_continuation = scratch;
+    pub(crate) fn step_slots_mut(&mut self, index: u32) -> &mut StepSlots<'graph, C, S, D> {
+        &mut self.branch_mut(index).step_slots
     }
 
     pub(crate) fn add_child(&mut self, index: u32) {

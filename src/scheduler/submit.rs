@@ -9,12 +9,37 @@
 //!
 //! See [scheduler/README.md](README.md#the-two-ways-a-cell-waits).
 
+use crate::memory::CellHandle;
 use crate::scheduler::action::Placement;
-use crate::scheduler::continuation::{CellPlace, NativeStep, State};
+use crate::scheduler::continuation::{CellPlace, Work};
 
 /// One unit in the table, handed back by [`Submissions::submit`] to wire edges against.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct UnitId(usize);
+
+/// Where a submitted unit's cell is born: in the slab under nothing, or under a parent through
+/// the door a placement names.
+///
+/// One enum rather than a place beside a placement, because a slab birth goes through no door: a
+/// placement is meaningless there, and this is what makes it unrepresentable.
+#[derive(Clone, Copy)]
+pub enum Birth {
+    /// In the slab, under nothing.
+    Slab,
+    /// Under this cell, as a tree child of it or a tenant of it.
+    Under(CellHandle, Placement),
+}
+
+impl Birth {
+    /// Where the born cell sits — what its own provenance records, so a successor of it is born
+    /// beside it rather than beside whoever submitted it.
+    pub fn place(self) -> CellPlace {
+        match self {
+            Birth::Slab => CellPlace::Slab,
+            Birth::Under(parent, _) => CellPlace::Under(parent),
+        }
+    }
+}
 
 /// A unit of work with no cell yet: where it will be born, and what it will run.
 ///
@@ -23,14 +48,10 @@ pub struct UnitId(usize);
 /// is the whole difference between the two ways a cell waits.
 #[derive(Clone, Copy)]
 pub struct Unit<'graph> {
-    /// Where the cell is born: under a parent, or in the slab.
-    pub place: CellPlace,
-    /// Which door it is born through, when it is born under a parent.
-    pub placement: Placement,
-    /// The step it runs first.
-    pub step: NativeStep<'graph>,
-    /// What it is born holding, at `'graph`.
-    pub state: State<'graph, 'graph>,
+    /// Where the cell is born.
+    pub birth: Birth,
+    /// What it runs, and what it is born holding.
+    pub work: Work<'graph>,
 }
 
 /// One submitted unit's record.

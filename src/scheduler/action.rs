@@ -5,7 +5,7 @@
 //! dormant carrier or a borrow of program storage, and nothing else.
 
 use crate::memory::CellHandle;
-use crate::scheduler::continuation::{NativeStep, State};
+use crate::scheduler::continuation::Work;
 
 /// What a step hands the drain when it returns.
 pub enum Action<'graph> {
@@ -44,10 +44,8 @@ pub enum Placement {
 #[derive(Clone, Copy)]
 pub struct Request<'graph> {
     pub placement: Placement,
-    /// The step the child runs first.
-    pub step: NativeStep<'graph>,
-    /// What the child is born holding, at `'graph` — its arguments reach it as dormant carriers.
-    pub state: State<'graph, 'graph>,
+    /// What the child runs, and what it is born holding.
+    pub work: Work<'graph>,
     /// The slot of the spawner's run this child fills.
     pub slot: usize,
 }
@@ -57,10 +55,8 @@ pub struct Request<'graph> {
 #[derive(Clone, Copy)]
 pub struct Hop<'graph> {
     pub placement: Placement,
-    /// The step the successor runs first.
-    pub step: NativeStep<'graph>,
-    /// What the successor is born holding, at `'graph`.
-    pub state: State<'graph, 'graph>,
+    /// What the successor runs, and what it is born holding.
+    pub work: Work<'graph>,
 }
 
 /// The drain's own buffer of requests, handed to a step by `&mut` and cleared before each step.

@@ -6,6 +6,7 @@ use crate::memory::{Active, Delivered, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
     Action, Context, Continuation, Placement, Request, Resume, Scheduler, Spawns, State, StepError,
+    Work,
 };
 
 /// Deeper than the sixty-four slots a one-word matrix has, several times over.
@@ -22,8 +23,10 @@ fn start<'graph>(
     }
     spawns.push(Request {
         placement: Placement::Fresh,
-        step: descend,
-        state: State::Value(KValue::Number(DEPTH)),
+        work: Work {
+            step: descend,
+            state: State::Value(KValue::Number(DEPTH)),
+        },
         slot: 0,
     });
     context.store_successor(Continuation::Native {
@@ -51,8 +54,10 @@ fn descend<'graph>(
     }
     spawns.push(Request {
         placement: Placement::Fresh,
-        step: descend,
-        state: State::Value(KValue::Number(depth - 1.0)),
+        work: Work {
+            step: descend,
+            state: State::Value(KValue::Number(depth - 1.0)),
+        },
         slot: 0,
     });
     context.store_successor(Continuation::Native {
