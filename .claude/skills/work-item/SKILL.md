@@ -66,7 +66,7 @@ Then implement the plan directly against the codebase:
 - If you discover the plan is wrong mid-implementation, **surface it and stop** — don't silently re-design. The user may ask to return to planning.
 - Use the `rust-refactor` skill for structural work (renames, file moves, batch rewrites). Don't reinvent its tooling.
 - Use the `miri` skill whenever the work touches memory safety.
-- Update top-of-file and inline source comments as you go, per Claude.md. **Don't** touch a module `README.md` design doc, `old_design/`, `roadmap/` (including its `README.md` index), `README.md`, or `tutorial/` — those are for planning in step 1 or the shepherd in step 3.
+- Update top-of-file and inline source comments as you go, per AGENTS.md. **Don't** touch a module `README.md` design doc, `old_design/`, `roadmap/` (including its `README.md` index), `README.md`, or `tutorial/` — those are for planning in step 1 or the shepherd in step 3.
 - When code-complete, run the `verify-koan` skill so tests + clippy are green and a modgraph baseline is recorded before you hand off to the shepherd (which runs the authoritative final slate after its doc edits).
 
 Your implementation is visible inline as you work, so there is no formal **approval gate** here. If you hit a fork that's genuinely the user's call, raise it conversationally in the moment — don't batch it into a gate.
@@ -115,6 +115,6 @@ Then apply the **approval-gate** skill — this is the work item's disposition g
 - `iterate_action` = "either re-spawn the shepherd (for doc changes), return to implementation (for code changes), or return to planning (for design or scope changes)"
 - `abort_consequence` = "leave all changes uncommitted for the user to inspect (the hold-for-review path). Do not stash."
 
-On **Accept**, make the commit (message summarizing the work); selecting Accept is the explicit per-commit authorization Claude.md requires. Never open a PR from this skill, even if the user asks mid-flow — PRs are out of scope.
+On **Accept**, make the commit (message summarizing the work); selecting Accept is the explicit per-commit authorization AGENTS.md requires. Never open a PR from this skill, even if the user asks mid-flow — PRs are out of scope.
 
 **Only offer Accept when the shepherd returns green or if the user has approved a yellow in conversation.** If the shepherd returns red for any reason (failed verify, scope mismatch, etc.), don't present the approval gate. Instead, explain the situation to the user and ask for guidance. The slate must be green before the commit.
