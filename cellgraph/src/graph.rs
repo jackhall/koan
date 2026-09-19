@@ -9,7 +9,6 @@
 #[cfg(test)]
 mod tests;
 
-use std::cell::Cell;
 use std::marker::PhantomData;
 
 use smallvec::SmallVec;
@@ -849,11 +848,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         );
         CellGraph {
             cells: Cells::new(config.cap, verdict),
-            regions: Regions::new(
-                config.cap,
-                config.spare_proportion,
-                config.spare_window_shift,
-            ),
+            regions: Regions::new(config),
             _graph: PhantomData,
         }
     }
@@ -870,7 +865,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         let handle = self.cells.create(continuation)?;
         // The region a reclaim most recently gave up, if one is spare: a birth right after a death
         // writes into the chunk that death freed, and never reaches the allocator for it.
-        self.regions.warm_slab(handle.slot());
+        self.regions.warm(CellHome::Slab(handle.slot()));
         Ok(handle)
     }
 
@@ -1005,9 +1000,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         // are its host's.
         if let Some(count) = self.cells.take_pending_receipts(cell) {
             let writer = self.regions.scratch_writer(home);
-            let filled = &writer.fill(1, |_| Cell::new(0u32))[0];
-            let slots = writer.fill(count, |_| Cell::new(ReceiptSlot::<D>::Empty));
-            let run = Erased::erase(Receipts::new(filled, slots));
+            let run = Erased::erase(Receipts::<D>::lay_down(writer, count));
             self.cells.lay_receipts(cell, home, run);
         }
         Ok(result)
@@ -1041,11 +1034,8 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         // A release runs its disposal outside any step, so the scratch region is taken and reset
         // here for the same reason `enter` takes and resets it: a verb's transients start on empty
         // ground.
-        self.park().run(|cells, regions, scratch| {
-            if cells.disposable(slot) {
-                cells.dispose(slot, regions, scratch);
-            }
-        });
+        self.park()
+            .run(|cells, regions, scratch| cells.dispose_if_disposable(slot, regions, scratch));
         Ok(())
     }
 
@@ -1080,7 +1070,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
             .trees
             .create(root, tree_parent, depth, continuation);
         self.regions.reach_tree(handle.index());
-        self.regions.warm_tree(handle.index());
+        self.regions.warm(CellHome::Tree(handle.index()));
         match tree_parent {
             Ancestor::Tree(index) => self.cells.trees.add_child(index),
             Ancestor::Root => self.cells.slots[root as usize].tree_children += 1,
@@ -1308,9 +1298,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
                         "a tree cell disposed under a root that counted none"
                     );
                     self.slots[root as usize].tree_children -= 1;
-                    if self.slots[root as usize].state == SlabState::Dead && self.disposable(root) {
-                        self.dispose(root, regions, scratch);
-                    }
+                    self.dispose_if_disposable(root, regions, scratch);
                     return;
                 }
             }
@@ -1483,11 +1471,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
             tenancy.scratch_tenants -= 1;
         }
         match departed.host {
-            CellHome::Slab(slot) => {
-                if self.slots[slot as usize].state == SlabState::Dead && self.disposable(slot) {
-                    self.dispose(slot, regions, scratch);
-                }
-            }
+            CellHome::Slab(slot) => self.dispose_if_disposable(slot, regions, scratch),
             // The chain walk returns at once unless the host is dead with nothing else under it.
             CellHome::Tree(index) => self.dispose_tree_chain(index, regions, scratch),
         }
@@ -1642,8 +1626,8 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         (0..self.cap).filter(|slot| self.slots[*slot as usize].state != SlabState::Free)
     }
 
-    /// Whether a dead cell's slot may leave the slab now: no tree cell under it is undisposed, and
-    /// no tenant is still writing its region.
+    /// Whether the slot is dead and may leave the slab now: no tree cell under it is undisposed,
+    /// and no tenant is still writing its region.
     ///
     /// Those two counts are the only things that can hold a slot past its death. A pin keeps the
     /// cell's *storage*, which seals or folds and lets the slot go; a tree child keeps the slot
@@ -1653,9 +1637,20 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
     /// Execution does not enter the question: `release` refuses an executing cell and `begin`
     /// refuses a dead one, so a dead cell is never executing.
     fn disposable(&self, slot: u32) -> bool {
-        debug_assert!(!self.executing.test(slot), "a dead cell is executing");
         let cell = &self.slots[slot as usize];
+        if cell.state != SlabState::Dead {
+            return false;
+        }
+        debug_assert!(!self.executing.test(slot), "a dead cell is executing");
         cell.tree_children == 0 && cell.tenancy.tenants == 0
+    }
+
+    /// Dispose of the slot if its death is done waiting — the whole of what a site that may have
+    /// just removed the last thing holding it has to do about it.
+    fn dispose_if_disposable(&mut self, slot: u32, regions: &mut Regions, scratch: &Scratch) {
+        if self.disposable(slot) {
+            self.dispose(slot, regions, scratch);
+        }
     }
 
     /// The handle of whatever occupies `slot` right now, at its current generation.
@@ -2627,14 +2622,6 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         }
     }
 
-    /// Chunk bytes of a placement destination's own region bundle, whichever habitat it lives in.
-    fn destination_bytes(&self, dest: Destination, regions: &Regions) -> usize {
-        match dest.home {
-            CellHome::Slab(slot) => regions.slab_bytes(slot),
-            CellHome::Tree(index) => regions.tree_bytes(index),
-        }
-    }
-
     /// Chunk bytes a sealed cell retains, `0` for an id no longer in the tier.
     fn sealed_bytes(&self, id: SealedId) -> usize {
         self.sealed.get(id).map_or(0, SealedCell::retained_bytes)
@@ -3063,7 +3050,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
                 cap,
                 sealed_cells,
                 retained_bytes,
-                destination_bytes: self.destination_bytes(dest, regions),
+                destination_bytes: regions.region(dest.home).allocated_bytes(),
             };
             let verdict = (self.verdict)(prices);
             if verdict == Verdict::Pin {
@@ -3103,10 +3090,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         // The destination's region, through the step's shared borrow of the table: the destination
         // may be the executing cell, whose `'here` writer is out for the whole step, and two shared
         // borrows of one bump coexist — its bytes are interior-mutable.
-        let region = match dest.home {
-            CellHome::Slab(slot) => regions.slab(slot),
-            CellHome::Tree(index) => regions.tree(index),
-        };
+        let region = regions.region(dest.home);
         // The second argument is the `'graph: 'cell` bound as a value: a closure quantified over
         // `'cell` assumes what its arguments' types imply, and nothing else would tell it.
         let value = build(region.writer(), &&()).into_erased();

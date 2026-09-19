@@ -6,10 +6,7 @@
 
 use std::collections::VecDeque;
 
-use crate::memory::{
-    CellGraph, CellHandle, EnterError, ReleaseAbsorption, SlabHandle, Stale, TenantHandle,
-    TreeHandle,
-};
+use crate::memory::{CellGraph, CellHandle, ReleaseAbsorption, SlabHandle};
 use crate::scheduler::action::{Action, Hop, Placement, Request, Spawns, StepError};
 use crate::scheduler::continuation::{
     CellPlace, Continuation, ContinuationFamily, Destination, NativeStep, Provenance, Resume,
@@ -28,8 +25,8 @@ pub struct Scheduler<'graph> {
     /// A tail hop's predecessor, waiting on its successor's first step. The successor redeems out
     /// of it, so its release is the last move of the hand-off rather than part of the creation.
     deferred: Option<CellHandle>,
-    live: usize,
-    peak: usize,
+    #[cfg(test)]
+    census: Census,
 }
 
 impl<'graph> Scheduler<'graph> {
@@ -41,8 +38,8 @@ impl<'graph> Scheduler<'graph> {
             spawns: Spawns::new(),
             pending: Submissions::new(),
             deferred: None,
-            live: 0,
-            peak: 0,
+            #[cfg(test)]
+            census: Census::default(),
         }
     }
 
@@ -108,7 +105,10 @@ impl<'graph> Scheduler<'graph> {
                 Action::Failed(error) => return Err(DrainStalled::Step(error)),
             }
         }
-        self.release_deferred()?;
+        debug_assert!(
+            self.deferred.is_none(),
+            "a hop's successor ran before the queue emptied"
+        );
         match (self.graph.is_empty(), self.pending.is_empty()) {
             (true, true) => Ok(()),
             (true, false) => Err(DrainStalled::UnitsPending),
@@ -171,7 +171,7 @@ impl<'graph> Scheduler<'graph> {
                     ),
                 }
             })
-            .map_err(DrainStalled::from)
+            .map_err(|_| DrainStalled::Unenterable)
     }
 
     /// Create every child the parked step asked for, and queue them. The cell itself is left
@@ -250,7 +250,8 @@ impl<'graph> Scheduler<'graph> {
             .graph
             .create(Some(continuation))
             .map_err(|_| DrainStalled::SlabFull)?;
-        self.born();
+        #[cfg(test)]
+        self.census.born();
         Ok(handle)
     }
 
@@ -272,7 +273,8 @@ impl<'graph> Scheduler<'graph> {
                 .map(CellHandle::from),
         }
         .map_err(|_| DrainStalled::Unspawnable)?;
-        self.born();
+        #[cfg(test)]
+        self.census.born();
         Ok(born)
     }
 
@@ -284,30 +286,20 @@ impl<'graph> Scheduler<'graph> {
         }
     }
 
-    /// Count one birth, and move the high-water mark if it rose.
-    fn born(&mut self) {
-        self.live += 1;
-        self.peak = self.peak.max(self.live);
-    }
-
     /// Release a finished cell by its kind. Its step has already filled its consumer's receipt, so
     /// nothing is in flight at the death.
     fn retire(&mut self, cell: CellHandle) -> Result<(), DrainStalled> {
-        self.live -= 1;
-        match cell {
+        #[cfg(test)]
+        self.census.retired();
+        let released = match cell {
             CellHandle::Slab(handle) => self
                 .graph
                 .release(handle, ReleaseAbsorption::IntoHolder)
-                .map_err(|_| DrainStalled::Unreleasable),
-            CellHandle::Tree(handle) => self
-                .graph
-                .release_tree(handle)
-                .map_err(|_| DrainStalled::Unreleasable),
-            CellHandle::Tenant(handle) => self
-                .graph
-                .release_tenant(handle)
-                .map_err(|_| DrainStalled::Unreleasable),
-        }
+                .is_ok(),
+            CellHandle::Tree(handle) => self.graph.release_tree(handle).is_ok(),
+            CellHandle::Tenant(handle) => self.graph.release_tenant(handle).is_ok(),
+        };
+        released.then_some(()).ok_or(DrainStalled::Unreleasable)
     }
 
     /// Whether every cell the drain created has been reclaimed.
@@ -322,8 +314,33 @@ impl<'graph> Scheduler<'graph> {
 
     /// The most cells the drain has held live at once — what a test reads to hold a loop of tail
     /// hops to its two-cell hand-off.
-    pub fn peak_live_cells(&self) -> usize {
-        self.peak
+    #[cfg(test)]
+    pub(crate) fn peak_live_cells(&self) -> usize {
+        self.census.peak
+    }
+}
+
+/// The drain's own tally of the cells it has created and released. Cellgraph keeps no live count
+/// for tree cells or tenants, so the high-water mark a test reads is counted here, where only a
+/// test build pays for it.
+#[cfg(test)]
+#[derive(Default)]
+struct Census {
+    live: usize,
+    peak: usize,
+}
+
+#[cfg(test)]
+impl Census {
+    /// Count one birth, and move the high-water mark if it rose.
+    fn born(&mut self) {
+        self.live += 1;
+        self.peak = self.peak.max(self.live);
+    }
+
+    /// Count one release.
+    fn retired(&mut self) {
+        self.live -= 1;
     }
 }
 
@@ -384,28 +401,4 @@ pub enum DrainStalled {
     Unreleasable,
     /// A step reported that it could not proceed.
     Step(StepError),
-}
-
-impl From<EnterError> for DrainStalled {
-    fn from(_: EnterError) -> Self {
-        DrainStalled::Unenterable
-    }
-}
-
-impl From<Stale<SlabHandle>> for DrainStalled {
-    fn from(_: Stale<SlabHandle>) -> Self {
-        DrainStalled::Unreleasable
-    }
-}
-
-impl From<Stale<TreeHandle>> for DrainStalled {
-    fn from(_: Stale<TreeHandle>) -> Self {
-        DrainStalled::Unreleasable
-    }
-}
-
-impl From<Stale<TenantHandle>> for DrainStalled {
-    fn from(_: Stale<TenantHandle>) -> Self {
-        DrainStalled::Unreleasable
-    }
 }

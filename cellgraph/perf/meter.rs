@@ -14,78 +14,77 @@ use std::time::Instant;
 
 use crate::counting_alloc;
 
-/// The public doors a row can be about, plus [`Verb::Harness`] for the benchmark's own bookkeeping
-/// that has to happen inside a step — building an operand list. That work is reported as its own
-/// row rather than folded into a door's, so nothing is hidden and nothing inflates a real verb.
+/// Declares [`Verb`] from one table of `Variant => "csv name", Level | Rate` rows, and with it
+/// [`Verb::ALL`], [`Verb::name`] and [`Verb::is_level`], so none of the four can say a different
+/// thing about a verb. `ALL` is written in the table's order, which is discriminant order, so the
+/// tally a row reads at `totals[verb as usize]` belongs to the verb `ALL` zips that row against.
 ///
-/// [`Verb::Resident`] is no door either: it is the row a shape [`record`]s the bytes it still
-/// holds under, read off the allocator's live balance before the shape tears down.
-#[derive(Clone, Copy)]
-pub enum Verb {
-    Create,
-    Enter,
-    Release,
-    CreateTree,
-    /// The `enter` door taken on a tree cell, rowed apart from the slab case.
-    EnterTree,
-    ReleaseTree,
-    Alloc,
-    AllocInto,
-    Hold,
-    Keep,
-    Redeem,
-    Read,
-    Register,
-    Deliver,
-    Receipt,
-    Harness,
-    Resident,
+/// The kind column says what the row is: a `Rate` is a cost the meter times, a `Level` is one
+/// reading of a standing figure.
+macro_rules! verbs {
+    (@is_level Level) => {
+        true
+    };
+    (@is_level Rate) => {
+        false
+    };
+    ($($(#[$attribute:meta])* $variant:ident => $name:literal, $kind:ident;)*) => {
+        /// The public doors a row can be about, plus [`Verb::Harness`] for the benchmark's own
+        /// bookkeeping that has to happen inside a step — building an operand list. That work is
+        /// reported as its own row rather than folded into a door's, so nothing is hidden and
+        /// nothing inflates a real verb.
+        ///
+        /// [`Verb::Resident`] is no door either: it is the row a shape [`record`]s the bytes it
+        /// still holds under, read off the allocator's live balance before the shape tears down.
+        #[derive(Clone, Copy)]
+        pub enum Verb {
+            $($(#[$attribute])* $variant,)*
+        }
+
+        impl Verb {
+            /// How many rows the table declares.
+            pub const COUNT: usize = [$(Verb::$variant,)*].len();
+
+            /// Every verb, in the order rows are printed.
+            pub const ALL: [Verb; Verb::COUNT] = [$(Verb::$variant,)*];
+
+            /// The name the row carries. Lower-case and stable: the recorded dataframe keys on it.
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Verb::$variant => $name,)*
+                }
+            }
+
+            /// Whether the row is a level rather than a cost. A level is a single reading taken
+            /// outside every frame, so it has no block of time for a floor to be about.
+            pub fn is_level(self) -> bool {
+                match self {
+                    $(Verb::$variant => verbs!(@is_level $kind),)*
+                }
+            }
+        }
+    };
 }
 
-impl Verb {
-    /// Every verb, in the order rows are printed.
-    pub const ALL: [Verb; 17] = [
-        Verb::Create,
-        Verb::Enter,
-        Verb::Release,
-        Verb::CreateTree,
-        Verb::EnterTree,
-        Verb::ReleaseTree,
-        Verb::Alloc,
-        Verb::AllocInto,
-        Verb::Hold,
-        Verb::Keep,
-        Verb::Redeem,
-        Verb::Read,
-        Verb::Register,
-        Verb::Deliver,
-        Verb::Receipt,
-        Verb::Harness,
-        Verb::Resident,
-    ];
-
-    /// The name the row carries. Lower-case and stable: the recorded dataframe keys on it.
-    pub fn name(self) -> &'static str {
-        match self {
-            Verb::Create => "create",
-            Verb::Enter => "enter",
-            Verb::Release => "release",
-            Verb::CreateTree => "create_tree",
-            Verb::EnterTree => "enter/tree",
-            Verb::ReleaseTree => "release_tree",
-            Verb::Alloc => "alloc",
-            Verb::AllocInto => "alloc_into",
-            Verb::Hold => "hold",
-            Verb::Keep => "keep",
-            Verb::Redeem => "redeem",
-            Verb::Read => "read",
-            Verb::Register => "register_receipts",
-            Verb::Deliver => "deliver_scratch",
-            Verb::Receipt => "receipt",
-            Verb::Harness => "harness",
-            Verb::Resident => "resident",
-        }
-    }
+verbs! {
+    Create => "create", Rate;
+    Enter => "enter", Rate;
+    Release => "release", Rate;
+    CreateTree => "create_tree", Rate;
+    /// The `enter` door taken on a tree cell, rowed apart from the slab case.
+    EnterTree => "enter/tree", Rate;
+    ReleaseTree => "release_tree", Rate;
+    Alloc => "alloc", Rate;
+    AllocInto => "alloc_into", Rate;
+    Hold => "hold", Rate;
+    Keep => "keep", Rate;
+    Redeem => "redeem", Rate;
+    Read => "read", Rate;
+    Register => "register_receipts", Rate;
+    Deliver => "deliver_scratch", Rate;
+    Receipt => "receipt", Rate;
+    Harness => "harness", Rate;
+    Resident => "resident", Level;
 }
 
 /// One verb's total over a benchmark run. Totals, not means: a per-call figure is a division on

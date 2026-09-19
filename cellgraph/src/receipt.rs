@@ -19,6 +19,7 @@ use std::marker::PhantomData;
 
 use crate::dormant::Dormant;
 use crate::reattach::{DropFree, Erased, Reattachable};
+use crate::region::Writer;
 
 /// What a graph's cells deliver: the family of a value a producer builds in a consumer's scratch
 /// habitat, and the family of a carrier it files there at rest.
@@ -76,13 +77,14 @@ pub(crate) struct Receipts<'graph, 'cell, D: Delivery<'graph>> {
 }
 
 impl<'graph, 'cell, D: Delivery<'graph>> Receipts<'graph, 'cell, D> {
-    /// Bundle a count with the slots it counts. The two land in the bump together, at the step end
-    /// that lays the run down.
-    pub(crate) fn new(
-        filled: &'cell Cell<u32>,
-        slots: &'cell [Cell<ReceiptSlot<'graph, D>>],
-    ) -> Self {
-        Receipts { filled, slots }
+    /// Lay a run of `count` empty slots down behind the count word that counts them, in the bump
+    /// `writer` names. The count word goes first, so a run's bytes are in the order the layout
+    /// describes.
+    pub(crate) fn lay_down(writer: Writer<'cell>, count: usize) -> Self {
+        Receipts {
+            filled: &writer.fill(1, |_| Cell::new(0u32))[0],
+            slots: writer.fill(count, |_| Cell::new(ReceiptSlot::Empty)),
+        }
     }
 
     /// How many slots the run has.

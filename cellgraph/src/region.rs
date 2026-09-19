@@ -21,11 +21,11 @@
 //! takes the table exclusively, which no step can do, so no `&mut` over a live region's bytes can
 //! exist under a writer into it: the borrow checker holds that line.
 //!
-//! Beside each region the table keeps the cell's **scratch bump** — the habitat a step writes at
-//! its `'scratch` brand and the table hands back whole once nothing names it — and, for the whole
-//! graph, a bounded **spare list** of reset bumps: a reclaimed region's chunks wait there for the
-//! next birth, so a release-then-create loop stays off the allocator. Both are reset only through
-//! the table's `&mut` doors, outside any step.
+//! Beside each region the table keeps the cell's **scratch bump** — the half of its habitat a
+//! step writes at its `'scratch` brand and the table hands back whole once nothing names it — and,
+//! for the whole graph, a bounded **spare list** of reset bumps: a reclaimed region's chunks wait
+//! there for the next birth, so a release-then-create loop stays off the allocator. Both are reset
+//! only through the table's `&mut` doors, outside any step.
 //!
 //! A region is a **bundle** of bumps: the one it writes into, plus the bumps of every region
 //! absorbed into it. Absorption is how a merge splices storage
@@ -42,6 +42,7 @@ use std::ptr::NonNull;
 use bumpalo::Bump;
 
 use crate::carrier::CellHome;
+use crate::graph::Config;
 use crate::sealed::SealedId;
 
 #[cfg(test)]
@@ -189,7 +190,30 @@ impl Region {
     }
 }
 
-/// Every live cell's region, slab and tree, in one table the graph keeps beside its cells.
+/// What one table index holds for the cell that occupies it: both halves of its habitat, the
+/// region and the scratch bump beside it.
+///
+/// One index reaches the two together, and they stay separate structs because a [`Region`] is what
+/// seals, splices and absorbs and a scratch bump is none of that — it is pinned to its index and
+/// never travels, so an absorb leaves the absorber's scratch alone and a seal retains no scratch,
+/// by construction.
+struct Habitat {
+    region: Region,
+    /// The second bump a step writes, at its `'scratch` brand, reset at a step's end once nothing
+    /// names it. Its bytes are in no price: a hold never extends a scratch byte's life.
+    scratch: Bump,
+}
+
+impl Habitat {
+    fn new() -> Self {
+        Habitat {
+            region: Region::new(),
+            scratch: Bump::new(),
+        }
+    }
+}
+
+/// Every live cell's habitat, slab and tree, in one table the graph keeps beside its cells.
 ///
 /// Held apart from the cells so a step can borrow the two differently: the table shared, at the
 /// step's `'here` brand, and the cells exclusively. Every slot carries a region from the start —
@@ -200,20 +224,12 @@ impl Region {
 /// and since no `&mut` into the table exists inside a step, every write a step makes into a bump
 /// descends from a shared borrow, which a bump's interior-mutable bytes tolerate.
 pub(crate) struct Regions {
-    /// One region per slab slot, replaced with an empty one when the slot recycles.
-    slab: Box<[Region]>,
-    /// One region per tree-pool index, every index up to the table's capacity filled. The table
+    /// One habitat per slab slot, its region replaced with an empty one when the slot recycles.
+    slab: Box<[Habitat]>,
+    /// One habitat per tree-pool index, every index up to the table's capacity filled. The table
     /// starts a slab's width long, like the pool itself, and doubles from there in step with it;
     /// a cell's creation finds its region already waiting, and pays a length check for it.
-    tree: Vec<Region>,
-    /// One **scratch bump** per slab slot and per tree-pool index, beside the regions rather than
-    /// inside them: the second bump a step writes at its `'scratch` brand, reset at a step's end
-    /// once nothing names it. A `Region` is what seals, splices and absorbs, and a scratch
-    /// bump is none of that — it is pinned to its table index and never travels, so an absorb
-    /// leaves the absorber's scratch alone and a seal retains no scratch, by construction. Its
-    /// bytes are in no price either: a hold never extends a scratch byte's life.
-    slab_scratch: Box<[Bump]>,
-    tree_scratch: Vec<Bump>,
+    tree: Vec<Habitat>,
     /// Reset bumps a reclaim gave up, each still owning its chunk, for the next birth to draw:
     /// last in, first out, so a cell born right after a death writes into the chunk that death
     /// freed, and a push past [`bound`](Self::bound) evicts from the other end, the oldest first. Always empty under Miri, where a reclaimed
@@ -232,17 +248,30 @@ pub(crate) struct Regions {
 }
 
 impl Regions {
-    pub(crate) fn new(cap: u32, spare_proportion: u32, spare_window_shift: u32) -> Self {
+    pub(crate) fn new(config: Config) -> Self {
         Regions {
-            slab: (0..cap).map(|_| Region::new()).collect(),
-            tree: (0..cap).map(|_| Region::new()).collect(),
-            slab_scratch: (0..cap).map(|_| Bump::new()).collect(),
-            tree_scratch: (0..cap).map(|_| Bump::new()).collect(),
-            spare: VecDeque::with_capacity(cap as usize),
+            slab: (0..config.cap).map(|_| Habitat::new()).collect(),
+            tree: (0..config.cap).map(|_| Habitat::new()).collect(),
+            spare: VecDeque::with_capacity(config.cap as usize),
             live: 0,
             average: 0,
-            spare_proportion,
-            spare_window_shift,
+            spare_proportion: config.spare_proportion,
+            spare_window_shift: config.spare_window_shift,
+        }
+    }
+
+    /// One index's habitat.
+    fn habitat(&self, home: CellHome) -> &Habitat {
+        match home {
+            CellHome::Slab(slot) => &self.slab[slot as usize],
+            CellHome::Tree(index) => &self.tree[index as usize],
+        }
+    }
+
+    fn habitat_mut(&mut self, home: CellHome) -> &mut Habitat {
+        match home {
+            CellHome::Slab(slot) => &mut self.slab[slot as usize],
+            CellHome::Tree(index) => &mut self.tree[index as usize],
         }
     }
 
@@ -262,26 +291,17 @@ impl Regions {
 
     /// A region-owning cell was born: count it, and warm its bump off the spare list if one is
     /// there. A slot's region is cold at every birth — disposal left it so — which is why the draw
-    /// is a plain replacement.
-    fn warm(region: &mut Region, spare: &mut VecDeque<Bump>) {
+    /// is a plain replacement. The spare comes off the list before the habitat is indexed, so the
+    /// two borrows never overlap.
+    pub(crate) fn warm(&mut self, home: CellHome) {
+        self.live += 1;
+        self.sample();
+        let spare = self.spare.pop_back();
+        let region = &mut self.habitat_mut(home).region;
         debug_assert!(region.is_untouched(), "a cell is born into a region in use");
-        if let Some(bump) = spare.pop_back() {
+        if let Some(bump) = spare {
             region.bump = bump;
         }
-    }
-
-    /// Count a slab cell's birth and warm its region.
-    pub(crate) fn warm_slab(&mut self, slot: u32) {
-        self.live += 1;
-        self.sample();
-        Self::warm(&mut self.slab[slot as usize], &mut self.spare);
-    }
-
-    /// Count a tree cell's birth and warm its region.
-    pub(crate) fn warm_tree(&mut self, index: u32) {
-        self.live += 1;
-        self.sample();
-        Self::warm(&mut self.tree[index as usize], &mut self.spare);
     }
 
     /// A region-owning cell disposed, by whichever exit.
@@ -335,29 +355,13 @@ impl Regions {
         self.bound()
     }
 
-    /// A slab cell's region.
-    pub(crate) fn slab(&self, slot: u32) -> &Region {
-        &self.slab[slot as usize]
-    }
-
-    /// A tree cell's region.
-    pub(crate) fn tree(&self, index: u32) -> &Region {
-        &self.tree[index as usize]
-    }
-
     /// The region a step homed in `home` writes.
     pub(crate) fn region(&self, home: CellHome) -> &Region {
-        match home {
-            CellHome::Slab(slot) => self.slab(slot),
-            CellHome::Tree(index) => self.tree(index),
-        }
+        &self.habitat(home).region
     }
 
     fn scratch_bump(&self, home: CellHome) -> &Bump {
-        match home {
-            CellHome::Slab(slot) => &self.slab_scratch[slot as usize],
-            CellHome::Tree(index) => &self.tree_scratch[index as usize],
-        }
+        &self.habitat(home).scratch
     }
 
     /// The write surface of `home`'s scratch bump, which a step takes at its `'scratch` brand.
@@ -371,10 +375,7 @@ impl Regions {
     /// Under Miri the bump is rebuilt rather than reset, so its chunk goes back to the allocator
     /// and a stale `'scratch` reference is an error Miri can see.
     pub(crate) fn reset_scratch(&mut self, home: CellHome) {
-        let bump = match home {
-            CellHome::Slab(slot) => &mut self.slab_scratch[slot as usize],
-            CellHome::Tree(index) => &mut self.tree_scratch[index as usize],
-        };
+        let bump = &mut self.habitat_mut(home).scratch;
         if bump.allocated_bytes() > 0 {
             if cfg!(miri) {
                 *bump = Bump::new();
@@ -393,12 +394,12 @@ impl Regions {
 
     /// Chunk bytes a slab cell's region bundle occupies, `0` where it never allocated.
     pub(crate) fn slab_bytes(&self, slot: u32) -> usize {
-        self.slab[slot as usize].allocated_bytes()
+        self.slab[slot as usize].region.allocated_bytes()
     }
 
     /// Chunk bytes a tree cell's region bundle occupies, `0` where it never allocated.
     pub(crate) fn tree_bytes(&self, index: u32) -> usize {
-        self.tree[index as usize].allocated_bytes()
+        self.tree[index as usize].region.allocated_bytes()
     }
 
     /// Make room for a tree-pool index the pool has just minted. Idempotent for one it already
@@ -409,21 +410,21 @@ impl Regions {
             let needed = index + 1 - self.tree.len();
             self.tree.reserve(needed.max(self.tree.len()));
             let room = self.tree.capacity();
-            self.tree.resize_with(room, Region::new);
-            self.tree_scratch.resize_with(room, Bump::new);
+            self.tree.resize_with(room, Habitat::new);
         }
     }
 
     /// Take a slab cell's storage off it, leaving an empty region behind — for the seal, the
-    /// merge or the drop that disposal performs.
+    /// merge or the drop that disposal performs. The scratch bump stays where it is: a seal
+    /// retains no scratch.
     pub(crate) fn take_slab(&mut self, slot: u32) -> Region {
-        std::mem::replace(&mut self.slab[slot as usize], Region::new())
+        std::mem::replace(&mut self.slab[slot as usize].region, Region::new())
     }
 
     /// Retire a slab cell's storage, for the slot's recycling. A region that owns nothing stays
     /// as it is; one that claimed or drew a chunk is replaced, and its bumps retired.
     pub(crate) fn clear_slab(&mut self, slot: u32) {
-        if !self.slab[slot as usize].is_untouched() {
+        if !self.slab[slot as usize].region.is_untouched() {
             let region = self.take_slab(slot);
             self.retire(region);
         }
@@ -432,19 +433,19 @@ impl Regions {
     /// Take a tree cell's storage off it, leaving an empty region behind — for the splice or the
     /// drop that disposal performs.
     pub(crate) fn take_tree(&mut self, index: u32) -> Region {
-        std::mem::replace(&mut self.tree[index as usize], Region::new())
+        std::mem::replace(&mut self.tree[index as usize].region, Region::new())
     }
 
     /// Splice a departing cell's bump into a slab cell's bundle.
     pub(crate) fn splice_into_slab(&mut self, slot: u32, from: Region) {
-        if let Some(bump) = self.slab[slot as usize].absorb(from) {
+        if let Some(bump) = self.slab[slot as usize].region.absorb(from) {
             self.retire_bump(bump);
         }
     }
 
     /// Splice a departing cell's bump into a tree cell's bundle.
     pub(crate) fn splice_into_tree(&mut self, index: u32, from: Region) {
-        if let Some(bump) = self.tree[index as usize].absorb(from) {
+        if let Some(bump) = self.tree[index as usize].region.absorb(from) {
             self.retire_bump(bump);
         }
     }

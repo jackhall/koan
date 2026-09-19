@@ -121,9 +121,10 @@ carries the unit it answers for in its `Provenance`, so a chain of tail hops
 settles once, at whichever successor finishes the work. Entries and edges live
 in two flat arenas threaded by index, so a table of any width costs a handful of
 amortized allocations rather than one per unit. A `UnitId` is an index into the
-entry arena, so a settled unit's entry stays where it is with its work taken out
-of it: the arena is sized by the units the drain has been given over the run,
-not by the units outstanding at any moment. Units left waiting on each other
+entry arena, so a settled unit's entry stays where it is, whole: the arena is
+sized by the units the drain has been given over the run, not by the units
+outstanding at any moment. The ready list is what a unit reaches once, so that
+is what launches it once. Units left waiting on each other
 never reach zero and never get a cell: the queue runs dry with the graph already
 empty, which the drain reports as `DrainStalled::UnitsPending`.
 

@@ -35,9 +35,9 @@ pub struct Unit<'graph> {
 
 /// One submitted unit's record.
 struct Entry<'graph> {
-    /// The work, taken when the unit becomes ready — so a unit is launched once, however many
-    /// edges name it and however the counts fall.
-    unit: Option<Unit<'graph>>,
+    /// The work. It stays in the entry for the life of the table: the `ready` list is what a unit
+    /// reaches once, so that is what launches it once.
+    unit: Unit<'graph>,
     /// Dependencies not yet satisfied.
     unmet: usize,
     /// Head of this unit's dependent list, an index into `edges`.
@@ -53,9 +53,9 @@ struct Edge {
 
 /// Every unit the drain has been given, and the counts that decide when each gets a cell.
 ///
-/// A [`UnitId`] is an index into `entries`, so a settled unit's entry stays where it is with its
-/// work taken out of it: the arena is sized by the units submitted over the run rather than by the
-/// units outstanding at any moment.
+/// A [`UnitId`] is an index into `entries`, so a settled unit's entry stays where it is, whole:
+/// the arena is sized by the units submitted over the run rather than by the units outstanding at
+/// any moment.
 pub struct Submissions<'graph> {
     entries: Vec<Entry<'graph>>,
     edges: Vec<Edge>,
@@ -80,7 +80,7 @@ impl<'graph> Submissions<'graph> {
     pub fn submit(&mut self, unit: Unit<'graph>, dependencies: usize) -> UnitId {
         let id = UnitId(self.entries.len());
         self.entries.push(Entry {
-            unit: Some(unit),
+            unit,
             unmet: dependencies,
             dependents: None,
         });
@@ -123,11 +123,7 @@ impl<'graph> Submissions<'graph> {
     /// The next unit whose dependencies are all met, for the drain to give a cell to.
     pub(crate) fn ready(&mut self) -> Option<(UnitId, Unit<'graph>)> {
         let id = self.ready.pop()?;
-        let unit = self.entries[id.0]
-            .unit
-            .take()
-            .expect("a unit reaches the ready list once");
-        Some((id, unit))
+        Some((id, self.entries[id.0].unit))
     }
 
     /// Whether every submitted unit has finished. False with a unit still waiting on a dependency
