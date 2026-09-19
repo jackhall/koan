@@ -12,11 +12,13 @@ extends the resolution described here rather than replacing it.
 
 A scope is built in three tiers, each at the moment its contents become known.
 
-- **The shape** — one per body, built once in program storage and shared by
-  every scope instance of that body. It records the value names and type names
-  the body declares, each with the lexical position its binder writes at, the
-  class of every mention and the components its bindings form, and it
-  resolves every name the body reads.
+- **The body shape** — `BodyShape`, one per body, built once in program storage
+  and shared by every scope instance of that body. It records the value names and
+  type names the body declares, each with the lexical position its binder writes
+  at, the class of every mention and the components its bindings form, and it
+  resolves every name the body reads. It walks a builtin node's parts by the
+  [roles](../parse/builtin_shapes/role.rs) that node's `BUILTIN_SHAPES` entry
+  gives them.
 - **Closure bindings** — one run per callable, held in the callable value and
   built when the callable is born. Each slot is a `values::Link`, the one
   value-or-edge type a knot's data node holds too. Each name the body reads
@@ -113,9 +115,9 @@ mention is **deferred** when that path is non-empty and every context on it,
 down to the outermost callable-body boundary it crosses, is a constructor slot
 (a list element, a dict value, a record field) or that boundary itself: the
 value is only stored in a container or captured by a callable, never
-inspected. A type declaration's schema — a `UNION`'s variants, a `SIG` or
+inspected. A type declaration's definition part — a `UNION`'s variants, a `SIG` or
 `NEWTYPE`'s fields — is a constructor slot too, so a type naming itself or a
-later sibling in its schema is a deferred mention. So is a nominal
+later sibling in its definition is a deferred mention. So is a nominal
 construction's payload: in a two-part node whose head is a type name,
 `(Ring {next = a})`, the head is an eager mention and the payload a constructor
 slot, so a tagged value naming itself reaches the tie rather than being an
@@ -125,8 +127,8 @@ when it closes a cycle. A union variant's construction (`Tree.Node x`) is a
 attribute form and stays eager. A callable body is opaque — nothing inside it changes the class,
 since none of it runs until the callable is called. Any other mention is
 **eager**: the value is needed at the point it is read. A call, a keyword
-form's slot, an operator's operand, a dict key, a type expression outside a
-schema, a `MODULE` body and a `MATCH` or `TRY` arm are all eager contexts, and
+shape's slot, an operator's operand, a dict key, a type expression outside a
+definition, a `MODULE` body and a `MATCH` or `TRY` arm are all eager contexts, and
 so are a callable's parameter and return types, which are mentions of the
 enclosing shape read where the callable is born. A parenthesized group of one
 part is transparent: it is the part. So in
@@ -179,14 +181,15 @@ module.
 The shape hands the layer above each body's components — each with whether it
 is `deferred_only` and whether it is `cyclic`, holding more than one member or
 a member that reads itself — and the class of every mention, and three facts a
-tie reads: the callable body each binder births — `Shape::births`, set when the
-binder's right-hand side is a callable form at its root or its form is a
-combined one — `Shape::form`, the form node a callable body sits in, where its
-signature is read, and `Shape::rhs`, each `LET` binder's right-hand side part,
+tie reads: the callable body each binder births — `BodyShape::births`, set when
+the binder's right-hand side is a callable shape at its root or its shape is a
+combined one — `BodyShape::form`, the builtin shape node a callable body sits in,
+where its signature is read, and `BodyShape::rhs`, each `LET` binder's right-hand
+side part,
 where a data member is read. A caller ties a component of value binders when
 it is cyclic or every member births a callable; a non-cyclic data binder is an
 ordinary value, and a component of type binders is the elaborator's. A
-component never mixes the two channels: a schema names types only, so no
+component never mixes the two channels: a definition names types only, so no
 mention leaves a type binder for a value binder. Tying is
 [`function`](../function/README.md#the-tie)'s, which writes a deferred mention
 below a nested constructor into the knot as an anonymous node.

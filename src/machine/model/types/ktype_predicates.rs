@@ -156,7 +156,7 @@ pub fn capture_footprint(kt: KType) -> CaptureShapes {
 ///
 /// 1. No `KExpression` member. A `(…)` group is *the* eager sub-expression shape, so a
 ///    CODE-capturing union member would make the seal-time raw-kind derivation
-///    ([`BuiltinShape::lazy_slots`](crate::parse::builtin_shapes::BuiltinShape::lazy_slots)) and the group's
+///    ([`BuiltinShape::lazy_kinds_at`](crate::parse::builtin_shapes::BuiltinShape::lazy_kinds_at)) and the group's
 ///    staging ambiguous.
 /// 2. Pairwise capture-footprint disjointness across *all* members, so at most one member ever
 ///    claims a part shape.

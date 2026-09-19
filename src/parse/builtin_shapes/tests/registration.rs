@@ -1,8 +1,8 @@
 //! The live builtin registration set, derived once, and the law that pins [`BUILTIN_SHAPES`] against it.
 //!
-//! Recognizing a builtin form by its full bucket key is sound only because a matched key can
+//! Recognizing a builtin shape by its full bucket key is sound only because a matched key can
 //! resolve to nothing but that builtin's overloads. That soundness is a claim about the *live*
-//! registration table, not about the form table, so it is checked by walking the seeded root and
+//! registration table, not about the shape table, so it is checked by walking the seeded root and
 //! comparing — never by reading the table against itself. This module holds the one walk; every
 //! table⟺registration question in the test tree is answered from it.
 
@@ -89,14 +89,14 @@ fn declared_lazy_slots(bucket: &LiveBucket, types: &TypeRegistry) -> BTreeMap<us
     slots
 }
 
-/// Every form the table gives binder facts, with those facts beside it.
+/// Every builtin shape the table gives binder facts, with those facts beside it.
 fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
     BUILTIN_SHAPES
         .iter()
         .filter_map(|form| form.binder.map(|binder| (form, binder)))
 }
 
-/// The form table says the same thing about the builtins as the builtins do.
+/// The builtin shape table says the same thing about the builtins as the builtins do.
 ///
 /// Four readings of one walk, in both directions:
 ///
@@ -130,13 +130,13 @@ fn the_form_table_matches_the_live_registrations() {
             assert_eq!(
                 registered,
                 0,
-                "reserved form key {:?} has a registered bucket",
+                "reserved builtin shape {:?} has a registered bucket",
                 render_key(form.elements)
             );
         } else {
             assert!(
                 registered > 0,
-                "form key {:?} has no registered bucket",
+                "builtin shape {:?} has no registered bucket",
                 render_key(form.elements)
             );
         }
@@ -151,15 +151,14 @@ fn the_form_table_matches_the_live_registrations() {
             .unwrap_or_else(|| {
                 panic!("live bucket with lazy slots {expected:?} has no BUILTIN_SHAPES entry")
             });
-        let declared: BTreeMap<usize, LazyKinds> = form
-            .lazy_slots
-            .iter()
-            .map(|(index, kinds)| (*index, *kinds))
+        let derived: BTreeMap<usize, LazyKinds> = (0..form.elements.len())
+            .map(|index| (index, form.lazy_kinds_at(index)))
+            .filter(|(_, kinds)| !kinds.is_empty())
             .collect();
         assert_eq!(
-            declared,
+            derived,
             expected,
-            "form key {:?} declares the wrong lazy slots",
+            "builtin shape {:?} derives the wrong raw-capture kinds",
             render_key(form.elements)
         );
     }

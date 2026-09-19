@@ -23,6 +23,13 @@ The rule is what keeps the algebra closed. A relation that needed a value would
 be a relation the lattice could not state as a law over generated types, and the
 property suite below is only possible because nothing here has a runtime.
 
+The edge runs the other way too, for constants alone: `parse`'s builtin shape
+table types each slot by a `KType`, and since a builtin leaf's handle is a `const`
+content digest the table states a type with no registry in hand. `KType::same_as`
+is the equality that comparison uses, handle against handle in `const` context,
+where the derived `PartialEq` cannot go. Nothing but the handles and that
+comparison crosses back.
+
 ## Identity: a handle *is* a content digest
 
 A [`KType`](handle.rs) is a bare `u128` — no pointer, no index, no reference to

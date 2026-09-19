@@ -656,7 +656,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
-    // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
+    // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` shapes).
     BuiltinShape {
         id: BuiltinShapeId::NewTypeDeclaration,
         elements: &[Kw(&KEYWORDS.newtype), slot(Name, &[CODE])],
@@ -670,9 +670,9 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
-    // VAL <name> <ty> — a declaration form with no install channel. It records into the decl
-    // scope's slot collector, not a binding map any name lookup can see, so it installs nothing; it
-    // appears here so the one-place specification of the declaration forms is complete.
+    // VAL <name> <ty> — a declarator with no install channel. It records into the decl scope's
+    // slot collector, not a binding map any name lookup can see, so it installs nothing; it appears
+    // here so the one-place specification of the declarators is complete.
     BuiltinShape {
         id: BuiltinShapeId::Val,
         elements: &[
@@ -694,7 +694,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     //
     // FN <record schema> -> <return type> = <body> — the lambda. It binds nothing: it has no name
     // and no head to key a bucket on. Its binder facts are here for the type slot alone, so a bare
-    // `(…)` return spelling rewrites to a sigiled type expression as it does on every other form.
+    // `(…)` return spelling rewrites to a sigiled type expression as it does on every other shape.
     // The signature slot resolves: a `:{…}` record is a type the lane can evaluate where it stands,
     // unlike a head, whose tokens name nothing until the definition binds them.
     BuiltinShape {
@@ -1022,8 +1022,8 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
-    // UNARY OP <symbol> OVER <operand> — the head form, missing its result. Reserved for the same
-    // reason the definition form is: the shape has no other reading, and a user form claiming the
+    // UNARY OP <symbol> OVER <operand> — the head shape, missing its result. Reserved for the same
+    // reason the definition is: the run has no other reading, and a user registration claiming the
     // key would turn the pointed message into a typed miss under its own bucket.
     BuiltinShape {
         id: BuiltinShapeId::UnaryOperatorHead,
@@ -1220,7 +1220,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // ---------- the control forms ----------
+    // ---------- the control shapes ----------
     //
     // MATCH <scrutinee> -> <result type> WITH <branches>.
     BuiltinShape {

@@ -5,15 +5,15 @@ component of type binders into being.
 
 **Problem.** [Scopes](../../src/scope/README.md#visibility) resolve a type
 declaration like any other binder — `NEWTYPE`, `UNION`, `SIG` and `TYPE` each
-declare a name in the type channel, and a schema is a constructor context, so a
-type naming itself or a later sibling is a deferred mention and a group of
+declare a name in the type channel, and a definition part is a constructor
+context, so a type naming itself or a later sibling is a deferred mention and a group of
 mutually recursive declarations condenses into one deferred-only component.
 Nothing turns that component into handles.
 [`elaborate`](../../src/elaborate/README.md) walks *type expressions* — a bare
 name, `LIST OF`, `MAP`, `FN`, `EXPR`, a union of members, a record type, a union
-projection — and no schema: a declaration's [`Schema`
+projection — and no definition: a declaration's [`Definition`
 role](../../src/parse/builtin_shapes/role.rs) reaches no door, and
-`Shape::rhs` carries only a `LET` binder's right-hand side, so a declaration's
+`BodyShape::rhs` carries only a `LET` binder's right-hand side, so a declaration's
 own part is not reachable from the shape at all. The
 [lattice](../../src/type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration)
 already holds the machinery a group needs —
@@ -58,12 +58,12 @@ hand and hands it in as a builtin, because no program can declare one.
 - *Where the door lives — decided.* `elaborate`, beside
   [`callable_type`](../../src/elaborate/signature.rs): it reads names through a
   reader and builds lattice nodes, which is what that module is.
-- *How a declaration's part is reached — decided.* A run beside `Shape::rhs`,
-  keyed by slot, holds each type binder's whole declaration node, as
-  `Shape::form` holds a callable's. The door reads which declaration it is and
-  where its definition part sits from the node's
-  [builtin shape](builtin-shapes.md), so a bare `NEWTYPE`, which has no
-  definition part, needs no case of its own.
+- *How a declaration's part is reached — decided.* A run beside
+  `BodyShape::rhs`, keyed by slot, holds each type binder's whole declaration
+  node, as `BodyShape::form` holds a callable's. The door reads which declaration
+  it is and where its definition part sits from the node's
+  [builtin shape](../../src/parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact),
+  so a bare `NEWTYPE`, which has no definition part, needs no case of its own.
 - *Generative versus structural sealing — decided.* Structural, per
   [the lattice](../../src/type_lattice/README.md#identity-a-handle-is-a-content-digest):
   generativity is opaque ascription's and an abstract member's alone, and a
@@ -76,10 +76,8 @@ hand and hands it in as a builtin, because no program can declare one.
 
 ## Dependencies
 
-**Requires:**
-
-- [Builtin shapes](builtin-shapes.md) — the door reads a declaration's
-  definition part through its builtin shape's roles.
+**Requires:** none — the builtin shape table, its roles and the lattice's
+recursive-group window all ship.
 
 **Unblocks:**
 

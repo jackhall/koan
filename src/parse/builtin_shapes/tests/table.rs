@@ -25,10 +25,10 @@ fn key_elements(form: &BuiltinShape) -> Vec<KeyElement> {
         .collect()
 }
 
-/// The raw-capture kinds each bucket declared before they were derived, copied verbatim from the
-/// hand-kept `lazy_slots` column the entries used to carry. An index the run omits keeps nothing
-/// raw. This is the regression pin on the derivation: every reader of `lazy_kinds_at` must read the
-/// answer it read when the column was written out by hand.
+/// Every bucket's raw-capture kinds, written out by hand: one statement of what each entry's slots
+/// keep raw that is independent of the derivation, so the two can be compared. An index the run
+/// omits keeps nothing raw. This is the pin on `lazy_kinds_at` — a slot retyped in a way that
+/// changes what a reader sees fails here rather than silently moving when a group evaluates.
 const RECORDED_RAW_SLOTS: &[(BuiltinShapeId, &[(usize, LazyKinds)])] = &[
     (BuiltinShapeId::LetValue, &[]),
     (BuiltinShapeId::TypeDeclaration, &[(1, CODE)]),

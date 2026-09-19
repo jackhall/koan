@@ -519,9 +519,9 @@ impl<'a> WorkingExpression<'a> {
         self.cache.binder_plan()
     }
 
-    /// The kinds of part that stay raw at slot `index` — the seal-time lazy-slot stamp, empty at
-    /// every slot of every form that has none. See
-    /// [`BuiltinShape::lazy_slots`](crate::parse::builtin_shapes::BuiltinShape::lazy_slots).
+    /// The kinds of part that stay raw at slot `index` — the seal-time raw-capture fact, empty at
+    /// every slot that keeps nothing raw. See
+    /// [`BuiltinShape::lazy_kinds_at`](crate::parse::builtin_shapes::BuiltinShape::lazy_kinds_at).
     pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
         self.cache.lazy_kinds_at(index)
     }

@@ -16,7 +16,7 @@ Every requirements doc in this retired project.
 - [Source the free-identifier walk's last two rules](free-identifier-walk-sourcing.md)
 - [One declaration-window representation](one-declaration-window.md)
 - [One recognizer for a malformed keyword spine](one-malformed-spine-recognizer.md)
-- [Round-trip the builtin forms under arbitrary layout](round-trip-builtin-forms.md)
+- [Round-trip the builtin shapes under arbitrary layout](round-trip-builtin-forms.md)
 - [Rebuild the scope-handles verification list](scope-handles-verification-audit.md)
 - [Seal as a value-bearing producer](seal-as-producer.md)
 - [Substitute, then ask](substitution-walk-collapse.md)

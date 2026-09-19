@@ -13,7 +13,7 @@ parenthesized or sigiled group of parts. Its type names are not searched for:
 the shape builder already resolved each one to a coordinate and recorded it as
 a mention ([Resolution](../scope/README.md#resolution)), so
 [`type_expression`](expression.rs) looks the mention up by the name part's site
-through `Shape::mention` and reads it through the activation the expression is
+through `BodyShape::mention` and reads it through the activation the expression is
 read in. A name bound to a type value elaborates to that value's handle. A
 parameter and return type of a callable are eager mentions of the enclosing
 shape, so the activation a signature is read through is the one the callable
@@ -41,9 +41,10 @@ A name only an *outer* group declares, read under a nested group, is refused.
 
 ## A callable's type
 
-[`callable_type`](signature.rs) reads a callable's type off the form node its
-body sits in — `Shape::form` of the body shape the binder births — walking the
-form's parts by their [roles](../parse/builtin_shapes/role.rs):
+[`callable_type`](signature.rs) reads a callable's type off the builtin shape
+node its body sits in — `BodyShape::form` of the body shape the binder births —
+walking the node's parts by the [roles](../parse/builtin_shapes/role.rs) its
+cached `BUILTIN_SHAPES` entry gives them:
 
 - a `FN` is the function type over its `:{…}` schema and its return;
 - an `EXPR` is the expression shape over its head and its return, quantified
@@ -54,6 +55,27 @@ form's parts by their [roles](../parse/builtin_shapes/role.rs):
   operand, since its body's one parameter `operands` takes the whole run.
 
 A module body has no callable type here.
+
+## Builtin shapes
+
+A [`BUILTIN_SHAPES`](../parse/builtin_shapes.rs) entry states its bucket's
+overloads as `static` data — a slot type per slot per overload, one return apiece
+— because the parser probes that table before any registry exists.
+[`builtin_shape_types`](builtin.rs) is the one door that turns such an entry into
+[`ExpressionShape`](../type_lattice/README.md#the-node-vocabulary) handles: one
+per overload, in overload order. A reserved bucket interns nothing — its slot
+types exist to keep its parts raw so its miss stays a miss, not to name a callable
+anything can reach.
+
+The door is where a slot type stops being a recipe. A leaf slot already rests in
+the table as its own `const` handle and passes straight through; the two compounds
+a builtin slot uses — a union of leaves, the empty record — are interned here,
+which is the whole reason the door exists, since no `const` computes a compound's
+digest. Nothing here reads a name, so nothing here fails: an entry is not a type
+expression, and a `Pending` or `NotAType` has no meaning over `static` data.
+
+Every handle the door interns erases to the entry's own bucket key, so the typed
+shape and the untyped bucket a node probes with cannot drift apart.
 
 ## Refusals
 
@@ -75,9 +97,10 @@ arena it is handed, and every node it builds is interned in the registry.
 
 **Outside doc comments and `#[cfg(test)]`, `elaborate` names `crate::memory`,
 `crate::parse`, `crate::scope`, `crate::type_lattice` and `crate::values`, and
-nothing else in the crate.** It reads the form role table and the pair reader
-`scope` exposes to the crate, so a type expression's parts are walked by the
-same facts the shape builder walked them by.
+nothing else in the crate.** It reads each part's role off `parse`'s own
+builtin shape table and the pair reader `scope` exposes to the crate, so a type
+expression's parts are walked by the same facts the shape builder walked them
+by.
 [`tests::boundary`](tests/boundary.rs) reads this module's own source and fails
 on any other `crate::` path, on an owning heap type outside the tests, and on a
 retired lifetime name.
@@ -85,9 +108,12 @@ retired lifetime name.
 ## Testing
 
 [`tests/examples.rs`](tests/examples.rs) elaborates each production, each
-refusal, and a callable's type off each form that births one, over a program
-shaped and activated in a cell with every slot bound or claimed as the test
-asks.
+refusal, and a callable's type off each builtin shape that births one, over a
+program shaped and activated in a cell with every slot bound or claimed as the
+test asks. [`tests/builtin.rs`](tests/builtin.rs) holds the door's own laws: each
+overload erases to the entry it came from, a bucket interns one handle per
+overload and a reserved bucket none, and the one union a builtin slot names
+interns as the union of its three members.
 
 ## Open work
 

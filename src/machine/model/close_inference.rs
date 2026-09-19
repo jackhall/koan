@@ -6,8 +6,9 @@
 //! scoping question, so the walk sources every binding fact it can from the reader the interpreter
 //! uses rather than restating it:
 //!
-//! - which slots hold raw code — [`KExpression::lazy_kinds_at`], the seal-time
-//!   [`BuiltinShape::lazy_slots`](crate::parse::builtin_shapes::BuiltinShape::lazy_slots) stamp;
+//! - which slots hold raw code — [`KExpression::lazy_kinds_at`], the seal-time fact
+//!   [`BuiltinShape::lazy_kinds_at`](crate::parse::builtin_shapes::BuiltinShape::lazy_kinds_at)
+//!   derives from the slot's own types;
 //! - what a statement declares — [`KExpression::statement_binder_plan`];
 //! - which position of a declaration form is the declared name — [`KExpression::binder_name_slot`];
 //! - which surfaces are nominal declarations — [`announced_type_declaration`];
