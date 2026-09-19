@@ -1162,11 +1162,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
     /// declared, and false for a tree tombstone. The liveness is the named cell's own: a live
     /// tenant is live whatever has been declared about its host.
     pub fn is_live(&self, cell: impl Into<CellHandle>) -> bool {
-        match cell.into() {
-            CellHandle::Slab(handle) => self.cells.live_slot(handle).is_ok(),
-            CellHandle::Tree(handle) => self.cells.trees.live_index(handle).is_ok(),
-            CellHandle::Tenant(handle) => self.cells.tenants.live_index(handle).is_ok(),
-        }
+        self.cells.write_home(cell.into()).is_ok()
     }
 
     /// Chunk bytes a live cell's region bundle occupies, absorbed bumps included. `0` for a cell
@@ -1369,49 +1365,47 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
     /// Hands back the step's **write home**: the cell whose region, and whose scratch bump, the
     /// step writes.
     fn begin(&mut self, cell: CellHandle) -> Result<CellHome, EnterError> {
-        Ok(match cell {
+        let home = self.write_home(cell).map_err(EnterError::Stale)?;
+        if self.is_executing(cell) {
+            return Err(EnterError::AlreadyExecuting);
+        }
+        self.set_executing(cell, true);
+        Ok(home)
+    }
+
+    /// Whether a step holds the named cell. The flag is the cell's own — a tenant executes without
+    /// its host doing so — so, like the step slots, this never routes a handle through
+    /// [`Cells::write_home`]. It reads the handle's own slot or index and asks nothing about
+    /// liveness: every caller resolved that first, or is a step end putting back what it took.
+    fn is_executing(&self, cell: CellHandle) -> bool {
+        match cell {
+            CellHandle::Slab(handle) => self.executing.test(handle.slot()),
+            CellHandle::Tree(handle) => self.trees.is_executing(handle.index()),
+            CellHandle::Tenant(handle) => self.tenants.is_executing(handle.index()),
+        }
+    }
+
+    fn set_executing(&mut self, cell: CellHandle, executing: bool) {
+        match cell {
+            CellHandle::Slab(handle) if executing => {
+                self.executing.set(handle.slot());
+            }
             CellHandle::Slab(handle) => {
-                let slot = self
-                    .live_slot(handle)
-                    .map_err(|stale| EnterError::Stale(stale.into()))?;
-                if self.executing.test(slot) {
-                    return Err(EnterError::AlreadyExecuting);
-                }
-                self.executing.set(slot);
-                CellHome::Slab(slot)
+                self.executing.clear(handle.slot());
             }
-            CellHandle::Tree(handle) => {
-                let index = self
-                    .trees
-                    .live_index(handle)
-                    .map_err(|stale| EnterError::Stale(stale.into()))?;
-                if self.trees.is_executing(index) {
-                    return Err(EnterError::AlreadyExecuting);
-                }
-                self.trees.set_executing(index, true);
-                CellHome::Tree(index)
-            }
-            CellHandle::Tenant(handle) => {
-                let index = self
-                    .tenants
-                    .live_index(handle)
-                    .map_err(|stale| EnterError::Stale(stale.into()))?;
-                if self.tenants.is_executing(index) {
-                    return Err(EnterError::AlreadyExecuting);
-                }
-                self.tenants.set_executing(index, true);
-                self.tenants.host(index)
-            }
-        })
+            CellHandle::Tree(handle) => self.trees.set_executing(handle.index(), executing),
+            CellHandle::Tenant(handle) => self.tenants.set_executing(handle.index(), executing),
+        }
     }
 
     /// The **write home** of a named cell: the cell whose region a step in it writes, and a
     /// placement into it lands in — the cell itself, or a tenant's host.
     ///
-    /// The one resolution every door that asks for a place with storage goes through: a host, a
-    /// tree parent, a placement destination. The liveness check is on the cell *named*. A tenant's
-    /// host is not asked whether it is live: it may be dead, and it is undisposed — its disposal
-    /// waits on this tenant — so its region is in place either way.
+    /// The one liveness resolution in the crate: every door that asks for a place with storage —
+    /// a host, a tree parent, a placement destination — goes through it, and so do `is_live` and
+    /// the entry check. The liveness check is on the cell *named*. A tenant's host is not asked
+    /// whether it is live: it may be dead, and it is undisposed — its disposal waits on this
+    /// tenant — so its region is in place either way.
     fn write_home(&self, cell: CellHandle) -> Result<CellHome, Stale<CellHandle>> {
         Ok(match cell {
             CellHandle::Slab(handle) => CellHome::Slab(self.live_slot(handle)?),
@@ -4354,24 +4348,18 @@ where
             slots.set_receipts(None);
             slots.set_pending_receipts(count);
         }
-        match self.cell {
-            CellHandle::Slab(handle) => {
-                self.cells.executing.clear(handle.slot());
-            }
-            CellHandle::Tree(handle) => self.cells.trees.set_executing(handle.index(), false),
-            CellHandle::Tenant(handle) => {
-                self.cells.tenants.set_executing(handle.index(), false);
-                // The host counts the tenants that name its bump, and this is one of the three
-                // places that count moves: by what this step did to the slots, read once here
-                // rather than at each door. The other two are the lay-down at the tail of `enter`,
-                // and a tenant's departure.
-                let named_at_exit = self.cells.step_slots(self.cell).names_scratch();
-                let tenancy = self.cells.tenancy_mut(self.home);
-                match (self.named_at_entry, named_at_exit) {
-                    (false, true) => tenancy.scratch_tenants += 1,
-                    (true, false) => tenancy.scratch_tenants -= 1,
-                    _ => {}
-                }
+        self.cells.set_executing(self.cell, false);
+        if let CellHandle::Tenant(_) = self.cell {
+            // The host counts the tenants that name its bump, and this is one of the three places
+            // that count moves: by what this step did to the slots, read once here rather than at
+            // each door. The other two are the lay-down at the tail of `enter`, and a tenant's
+            // departure.
+            let named_at_exit = self.cells.step_slots(self.cell).names_scratch();
+            let tenancy = self.cells.tenancy_mut(self.home);
+            match (self.named_at_entry, named_at_exit) {
+                (false, true) => tenancy.scratch_tenants += 1,
+                (true, false) => tenancy.scratch_tenants -= 1,
+                _ => {}
             }
         }
         // Back on the graph, chunk and all, so the next verb starts warm — and so a panicking step
