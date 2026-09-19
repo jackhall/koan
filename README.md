@@ -298,7 +298,7 @@ src/
 ├── scheduler/
 │   ├── drain.rs          Scheduler — the loop, the two queues (in_flight ahead of fresh), the deferred release a tail hand-off needs, and DrainStalled; every birth and every death is the drain's
 │   ├── action.rs         Action (opaque, with its done / failed / tail / park / deliver_scratch / deliver_carrier constructors) over the drain-only Kind, Placement, Request, Slot, Spawns, StepError — what a step hands back, all of it brand-free
-│   ├── continuation.rs   ContinuationFamily / ScratchFamily, the two reattachable halves of what a cell will do next; NativeStep, Continuation, Resume, State, Provenance, CellPlace, Destination, Context
+│   ├── continuation.rs   ContinuationFamily / ScratchFamily, the reattachable family of each slot a cell parks in — the second over both step brands; NativeStep, Continuation, Resume, State, ScratchState, Provenance, CellPlace, Destination, Context
 │   ├── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
 │   └── submit.rs         Submissions / Unit / UnitId — units with no cell yet, and the dependency counts that decide when each gets one
 ├── machine.rs           pub mod core / model / execute

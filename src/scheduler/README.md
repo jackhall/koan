@@ -15,7 +15,7 @@ the instant no hold names it.
 ## The drain
 
 `Scheduler` holds a `CellGraph` over three koan types — the continuation family,
-its scratch half, and the delivery bundle — beside two queues and a buffer of
+the scratch-state family, and the delivery bundle — beside two queues and a buffer of
 requests. Every field is that scheduler's own: no static, no thread-local and no
 lazily minted cell, so a second scheduler runs beside the first with nothing
 shared but the program text and the shapes in it.
@@ -71,8 +71,12 @@ spawner's.
 `Action` is opaque — a private field over an internal `Kind` — and a step gets
 one only from a constructor, so the bookkeeping an arm implies has always
 happened by the time the drain reads it. `Action::park` registers the run and
-stores the successor, and takes the `Slot` the last `Spawns::push` handed back,
-so a park with nothing to wait on does not typecheck. `Action::deliver_scratch`
+stores **both** of the cell's slots — the successor, and the scratch state it
+takes as an `Option` — and takes the `Slot` the last `Spawns::push` handed back,
+so a park with nothing to wait on does not typecheck. `None` clears the scratch
+slot rather than merely not filling it, so a park that carries nothing there
+leaves it empty and that step's end hands the bump back; no step reaches the
+context's scratch doors itself. `Action::deliver_scratch`
 and `Action::deliver_carrier` read the destination off the `Provenance` and
 decide between `Wakes` and `Done` from what the fill answered, so a wake names
 the consumer whose run the step just completed and nothing else.
@@ -83,11 +87,21 @@ performed from the `Action` the step handed back.
 
 ## The continuation
 
-A cell's continuation comes in two halves, each its own family, so the wrong half
-is unrepresentable in each slot. `ContinuationFamily` re-anchors at the executing
-cell's region brand and is what the drain reads to run a step; `ScratchFamily`
-re-anchors at the scratch habitat's brand and carries a parked cell's in-progress
-state across a park.
+A cell parks in two slots, one per habitat, each its own family, so the wrong
+form is unrepresentable in each. `ContinuationFamily` re-anchors at the executing
+cell's region brand and is what the drain reads to run a step; `ScratchFamily` is
+a family over **both** step brands and carries a parked cell's in-progress state
+in the scratch habitat. `ScratchState` has two arms: a `KValue` built in the
+habitat and read back at `'scratch`, and `Gathered`, a run laid down in the
+habitat over values homed in the cell's own storage — `&'scratch [KValue<'graph,
+'here>]`, each element at `'here`, so the step that finally builds in storage
+embeds one as it is, with no `keep` at the park and no `redeem` at the wake.
+
+The drain takes both slots off the cell before it calls the step and hands them
+over in `Resume`: the `Provenance`, the `State` the previous step left in
+storage, and the scratch state as an `Option`. A step that finishes, hops or
+fails never hands the scratch state back, so the slot stays empty and its bump
+goes back at that step's end.
 
 `Continuation` has one arm here, `Native`: a `NativeStep` function pointer, the
 cell's `Provenance`, and the `State` the step runs over. The pointer is
@@ -263,6 +277,9 @@ holds the round trip a continuation makes between `'graph` and a step's `'here`;
 `tests/drain.rs` holds the loop itself, including two schedulers running beside
 each other and sharing nothing; `tests/calls.rs` holds a call at each placement
 and `tests/delivery.rs` a consumer parked on three producers.
+`tests/gather.rs` holds a cell that gathers its children's results into a run in
+its scratch habitat across two parks and builds from them in storage, which is
+what reads the scratch state's two positions back at their own brands.
 `tests/submissions.rs` holds a diamond of four submitted units, a pair that wait
 on each other, and a producer whose dependent waits out its whole parked subtree.
 `tests/tail.rs`

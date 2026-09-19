@@ -39,7 +39,7 @@ part a refused tie names.
   and a top-level binding lives in the root.
 - A deferred-only component of a body's bindings
   ([src/scope/README.md](../../src/scope/README.md#visibility)) is one unit of
-  work: one cell claims every member's slot at submission and binds every
+  work: one cell claims every member's slot as its first act and binds every
   member's slot from the knot the tie hands back.
 - A component's submission carries the count of lower components it reads,
   taken from the shape's reference graph in condensation order, so a refused tie
@@ -47,16 +47,35 @@ part a refused tie names.
   ([src/function/README.md](../../src/function/README.md#the-tie)) is a
   scheduler bug rather than a wait. A statement containing `EVAL`, whose free
   names no shape can enumerate, counts every binder declared before its position.
+- Two units whose counts reach zero in the same round are launched in the order
+  their statements are written, so a run is deterministic and a program whose
+  statements have effects and no data dependency between them takes source
+  order.
+- The statements of a called body reach the submission table from the step that
+  activates the body, which asks for a unit the way it asks for a child: the
+  drain performs every birth, and no step names a place that is not its own.
+- A cell builds its result in the region its spawner named rather than in its
+  consumer's, so a called body's result outlives the frame that ran it and the
+  value a top-level call binds is built in the root from the start.
 - A refused tie naming an eager part of a data member becomes a sub-dispatch
   whose value the step supplies to the tie by site when it re-runs, and a step
   refused on several parts at once wakes once, when the last receipt slot fills.
 - Every statement cell of a called body is a tenant of its frame, so binding a
   claimed slot is a plain write at `'here` and a reader of a bound slot reads it
   where it lies; the value never travels to the reader.
-- The scheduler takes one `evaluate` function at construction that turns a part
-  and its activation into a continuation, and the component step spawns an eager
-  part through it — so evaluating an expression stays [dispatch](dispatch.md)'s
-  and the scheduler names no expression form.
+- The [scheduler](../../src/scheduler/README.md) names no step of koan's: it
+  takes the step state as one bundle parameter, as it takes delivery, and its
+  continuation is one shape with no arm to add. Koan's steps and the state they
+  run over are one module above it, whose design doc is the `README.md` in its
+  source directory and whose top-of-file comment links it.
+- The program record carries one `evaluate` function that turns a node and the
+  environment it is read in into a child the drain can create, and the component
+  step spawns an eager part through it — so evaluating an expression stays
+  [dispatch](dispatch.md)'s and nothing below it names an expression form.
+- A read of a name goes through one interface the activation of a called body
+  and the top level's staged reads both answer, so
+  [the tie](../../src/function/README.md#the-tie) and
+  [elaboration](../../src/elaborate/README.md) name no habitat.
 - The placement bit a spawn carries is derived: a builtin declares it, and a
   user function derives it from its return type, a flat return being one that
   cannot share. A `MODULE` or `GROUP` activation takes no cell of its own — it
@@ -106,12 +125,32 @@ part a refused tie names.
   measurement of copied and retained bytes per function. *Recommended:* ship the
   first cut and leave both extensions to the item that needs them.
 - *How the drain learns a component's dependencies — decided.* From the shape's
-  reference graph, condensed. `Shape::components()` emits in reverse topological
-  order on the condensation, so a component's count is the number of distinct
-  lower components its members read, and the edges are the reads themselves.
-  This is what makes a refused tie naming a pending binder unreachable, and it
-  is why the [scheduler](../../src/scheduler/README.md#the-two-ways-a-cell-waits)
-  needs no park on a slot.
+  reference graph, condensed. The shape emits its statements' units in an order
+  where each follows every unit it reads and two independent units come out as
+  they are written, so a unit's count is the number of distinct lower units its
+  members read, the edges are the reads themselves, and the drain launches the
+  lowest-numbered ready unit first. This is what makes a refused tie naming a
+  pending binder unreachable, and it is why the
+  [scheduler](../../src/scheduler/README.md#the-two-ways-a-cell-waits) needs no
+  park on a slot.
+- *Where koan's steps live — decided.* One module above the
+  [scheduler](../../src/scheduler/README.md), which takes the step state as a
+  bundle parameter beside its delivery bundle. A step's state has to live with
+  the step: the alternative — the scheduler declaring an arm per step of every
+  layer above it — makes the drain the declaration site for dispatch, modules
+  and iterators in turn, and widens its import rule each time.
+- *How a top-level binding reaches a reader — decided.* Staged: the unit
+  redeems the dormant carrier each slot it reads holds and crosses it into its
+  own cell, where the price is zero because the value is already homed in the
+  reader's root, and hands the tie a reader over the staged run. The
+  alternative, an activation over the program's slots materialized in the
+  statement's own region, costs the whole program's slot count per statement and
+  inflates the region enough to flip the binder's upward crossing to a copy.
+- *How effects are ordered — deferred.* Launch order gives source order except
+  where a unit's dependencies are met late, and no rule says more. An effects
+  item chains the statements that can have effects, which is the only ordering
+  that survives a park; until then the gap is recorded under
+  [unplanned work](README.md#unplanned-work).
 - *What the `Pending` refusal becomes — open.* `function::Untieable::Pending`
   and `scope::Binding::Pending` both carry a producer `CellHandle` that nothing
   reads once dependencies are wired statically, and `SlotArray`'s `Claimed`
@@ -123,6 +162,8 @@ part a refused tie names.
 
 **Requires:**
 
+- [Type declarations](type-declarations.md) — a top-level task whose members are
+  type binders has no other way to bind them.
 
 **Unblocks:**
 

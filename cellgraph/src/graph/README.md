@@ -280,8 +280,8 @@ express.
 ### References at `'here`
 
 A reference at `'here` — the executing cell's brand, which a step's own writer,
-its own-cell crossing and the storage half of its continuation all speak —
-carries no mask, so the
+its own-cell crossing, its continuation and the `'here` position of its scratch
+state all speak — carries no mask, so the
 argument above has nothing to rewrite for it. What stands in for a mask is an
 address that does not move and a hold that keeps the storage. Two kinds of
 storage reach the brand, and each has one of those two for the executing cell's
@@ -327,19 +327,22 @@ where it was written. A borrow through `'graph` needs neither an address the
 substrate keeps nor a hold: it names storage the embedder owns outside the
 graph, which the graph cannot outlive.
 
-**Both halves re-anchor in `enter`.** The storage half comes back at `'here`
-and the scratch half at `'scratch`, in the one function that mints both brands
-and both writers, so the pairing of slot with brand is audited where it is made
-and the continuation doors contain no `unsafe`. The scratch half's `'here`
-referents, shortened on the way in, stand on the argument above. Its scratch
-referents are chunks of the write home's scratch bump, which is pinned to its
+**Both slots re-anchor in `enter`.** The continuation comes back at `'here` and
+the scratch state at `'here` and `'scratch` together, in the one function that
+mints both brands and both writers, so the pairing of slot with brand is audited
+where it is made and the continuation doors contain no `unsafe`. The scratch
+state's family is over both brands, so each referent it holds comes back at the
+brand of the habitat it points into: the ones it names at `'here` are storage
+and stand on the argument above clause for clause, unshortened, so nothing about
+them rests on this slot. Its scratch referents are chunks of the write home's
+scratch bump, which is pinned to its
 table index and handed back only at the end of a step that left nothing at rest
 naming it, or by the home's disposal. There is no failable check: emptiness of
 the slots is the whole condition, because a `'scratch` reference outlives its
 step through one of them and no other way. Two slots carry it — the scratch
-half, and the [receipt run](../receipt.rs) laid down over the same bump — and
+state, and the [receipt run](../receipt.rs) laid down over the same bump — and
 either one full is the whole of what holds the reset off. The reset sits at the
-step's *end* rather than its start, where both halves are back on the cell and
+step's *end* rather than its start, where both slots are back on the cell and
 no borrow of the regions survives: a cell that parks with both slots empty holds
 no scratch bytes while parked, and a value another cell built into that scratch
 survives until the owning cell's own next step ends. A registration a step made
@@ -359,7 +362,7 @@ the bump and a `Cell` write of known layout. The spine is two shared borrows of
 chunks of the write home's scratch bump, read back wherever the run is named,
 and it is itself one of the things at rest whose emptiness the reset waits on,
 so those chunks are there for as long as any borrow of them can be taken. A
-delivered value adds one clause to the scratch half's argument: the erase was
+delivered value adds one clause to the scratch state's argument: the erase was
 *another* cell's step. What covers it is that the producer could have built the
 value nowhere but through this cell's own scratch writer — the build takes no
 operands and its brand is quantified by the call — so its referents are bytes of

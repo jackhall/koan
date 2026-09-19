@@ -103,16 +103,17 @@ Four absences are design statements rather than gaps:
   until it dies. It is no part of the region — it never seals, splices or
   absorbs, no price counts its bytes, and it stays at its table index when the
   region leaves — and it is handed back whole at the end of the first step that
-  leaves nothing naming it. Two things at rest name it: the continuation's
-  scratch half, and the receipt run below. Either on the cell itself, or on any
+  leaves nothing naming it. Two things at rest name it: the cell's **scratch
+  state**, and the receipt run below. Either on the cell itself, or on any
   of its tenants, holds the reset off. A departing cell's scratch is dropped at
   its disposal. A tenant's scratch is its host's.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and
-  **never calls**. It rests in two halves, each in its own slot: the **storage
-  half**, captured at `'here`, and the **scratch half**, captured at `'scratch`,
-  which is what carries a scratch structure across a park and is empty at
-  birth. The storage half is captured at `'here` and records no reach of its own: a
+  **never calls**. It rests in a slot of its own, captured at `'here`, beside a
+  second slot holding the cell's **scratch state**: what carries a structure in
+  the scratch habitat across a park, empty at birth, over a family of both step
+  brands — so what it names in storage comes back at `'here` and what it names
+  in the habitat at `'scratch`. The continuation records no reach of its own: a
   cell holds what its continuation reads, and every reference the
   continuation can capture is one the cell's holds already cover — its own
   region, or storage a pinned crossing minted in when it arrived — so the
@@ -121,8 +122,8 @@ Four absences are design statements rather than gaps:
   region that outlives its step but is never executed in" — a cart a loop
   accumulates into, a mailbox a scheduler parks values in.
 - **Receipt run**, optional ([src/receipt.rs](src/receipt.rs)). A fixed-width
-  run of slots a cell parks on, in a slot of its own beside the two
-  continuation halves. A step registers one by slot count and the *substrate*
+  run of slots a cell parks on, in a slot of its own beside the continuation
+  and the scratch state. A step registers one by slot count and the *substrate*
   lays it down in the write home's scratch habitat at that step's end, after
   the reset — so a cell that parks round after round on receipts alone starts
   every round at the foot of a bump handed back whole. Other cells' steps fill
@@ -154,11 +155,26 @@ the graph lifetime `'graph`: an erased storage form at `'graph` and a single
 lifetime-retype that moves `'cell` alone. A cell's name-resolution state, its
 semantic frame, any output obligation — all of it rides inside the
 continuation's captures, or as a value at rest in the cell's region. The
-continuation's scratch half is a family of its own, `S`, which defaults to the
-continuation family: a separate family keeps the wrong half unrepresentable in
-each slot and sizes each slot to its own half, and an embedder that parks
-nothing in scratch never names it. The reattachable contract is the same for
-both — one lifetime per family.
+scratch state is a family of its own, `S`, which defaults to `NoScratch`, whose
+form is `()`. Two slots rather than one merged continuation over two lifetimes,
+because the two have different lifecycles: the scratch state is one of the
+two things at rest that hold the habitat's reset off
+([`names_scratch`](src/slots.rs)), and the continuation is deliberately no part
+of that test. Merged, the test would read "does this cell have a continuation" —
+true of every cell that is not storage-only — and the bump would never come
+back, stranding in the habitat exactly what the habitat exists to reclaim. The
+split also keeps the wrong form unrepresentable in each slot and sizes each slot
+to what it holds, and an embedder that parks nothing in scratch never names `S`.
+
+`S` carries a sibling contract over **both** step brands,
+[`ReattachableOverBoth`](src/reattach.rs), whose form is `At<'here, 'scratch>`:
+a parked form names storage at `'here` and the habitat at `'scratch`, each at
+its own brand, so an invariant `'here` structure and a run gathering `'here`
+values ride the scratch slot unshortened. A lifetime appears only on the family
+that has two habitats to name — the continuation, value and delivery families
+keep the one-lifetime contract, and the erased holder of the two-lifetime one is
+where both calls of the crate's lifetime-retype sit, the one-lifetime holder
+reaching it through an adapter.
 
 **Value** — what passes between cells. Also a reattachable family,
 carried witnessed: born in a region, duplicated per reader, read only under a
@@ -230,15 +246,15 @@ used at `'here`, `lift`, a placement's build into another cell or into the
 executing cell itself, the return of `enter`, and a write through a
 `'here`-homed slot. Each is pinned by a `compile_fail` doctest on
 `scratch_writer` against one compiling control. The trip is one way and the
-habitat's only door across a park is the scratch half of the continuation. Two
-limits follow from one lifetime per family. An invariant `'here` structure
-(`&'here Table<'here>`) cannot ride the scratch half, since it would have to
-shorten to `'scratch`; it stays in the storage half and the step rejoins the
-two each wake. And the region's own writer is covariant, so its output used at
-`'scratch` is sound and useless: the bytes land in storage, stranded until the
-cell dies.
+habitat's only door across a park is the cell's scratch state, whose family
+names each position at its own brand: an invariant `'here` structure
+(`&'here Table<'here>`) rides that slot unshortened and goes on into storage at
+the next wake, and only what the form holds at `'scratch` is confined. One limit
+follows from the brands themselves: the region's own writer is covariant, so its
+output used at `'scratch` is sound and useless — the bytes land in storage,
+stranded until the cell dies.
 
-Both halves are re-anchored in `enter`, the one function that mints both brands
+Both slots are re-anchored in `enter`, the one function that mints both brands
 and both writers, so the pairing of slot with brand is made and audited in one
 place and the continuation doors are field moves.
 
@@ -284,15 +300,16 @@ on the read out, which re-anchors at the same `'cell`.
 - **`enter(handle, step)`** sets the cell's executing bit for the scope of
   `step` and supplies a step context. A cell cannot be entered while it is
   already executing. Within the scope a step can take the cell's continuation
-  re-anchored at `'here` (`continuation`), and its scratch half re-anchored at
-  `'scratch` (`scratch_continuation`); take a `Copy` writer onto its own region
+  re-anchored at `'here` (`continuation`), and its scratch state re-anchored at
+  `'here` and `'scratch` together (`scratch_state`); take a `Copy` writer onto
+  its own region
   at `'here`, and one onto its scratch habitat at `'scratch`
   (`scratch_writer`);
   allocate into any other live cell by handle (destination-homed placement),
   or into itself at `'here`; lift an own-region value to a carrier whose reach
   is the cell itself; mint a bare hold on another cell; read a carrier it
   built; store a successor continuation, over captures or over nothing, and a
-  scratch successor beside it (`store_scratch_successor`); `keep`
+  scratch state beside it (`store_scratch_state`); `keep`
   a carrier it holds, which hands back the at-rest form; `redeem` one a
   previous step put to rest; register the receipt run its next round parks on
   (`register_receipts`) and drain the one an earlier step registered, a slot at
@@ -535,8 +552,10 @@ exactly one decision.
   states that carry a lifetime beside `'graph`.
 - [src/dormant.rs](src/dormant.rs) — `Dormant`, the private key naming its
   reach, and the per-cell reach table that reach lives in.
-- [src/reattach.rs](src/reattach.rs) — the reattachable contract and the single
-  lifetime-retype the crate is built on.
+- [src/reattach.rs](src/reattach.rs) — the reattachable contract in both its
+  arities, over one region lifetime and over both step brands, the erased
+  holders and the unit scratch family, and the single lifetime-retype the crate
+  is built on.
 - [src/receipt.rs](src/receipt.rs) — the `Delivery` bundle and the delivers-
   nothing default, the receipt run and its slots, and what a fill answers.
 - [tests/surface.rs](tests/surface.rs) — the public surface, named and exercised

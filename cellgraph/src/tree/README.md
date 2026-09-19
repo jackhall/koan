@@ -102,7 +102,7 @@ tenant named as a destination, a parent or a host means its host, whatever has
 been declared about the host, because the host cannot have disposed while the
 tenant is counted on it. The region stays put, because a live child or a tenant
 may still borrow it, and its pledge stays writable, because a descendant's later
-upward pin may still walk through it. Its scratch half is cleared, since a dead
+upward pin may still walk through it. Its scratch state is cleared, since a dead
 cell is never entered.
 
 If it has undisposed children or tenants it stops there — **dead but undisposed**, exactly

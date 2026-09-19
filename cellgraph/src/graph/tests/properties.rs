@@ -175,7 +175,7 @@ fn tree_verb() -> impl Strategy<Value = Verb> {
 }
 
 /// The tenant pool's verbs: a tenant of any kind of cell, a placement out of a tenant step, a
-/// scratch half stored or taken — which is what moves a host's second count — and a release.
+/// scratch state stored or taken — which is what moves a host's second count — and a release.
 fn tenant_verb() -> impl Strategy<Value = Verb> {
     prop_oneof![
         2 => (0..8usize, 0..3u8).prop_map(|(host, kind)| Verb::CreateTenant { host, kind }),

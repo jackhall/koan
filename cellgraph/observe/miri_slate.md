@@ -34,7 +34,8 @@ MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p cellgraph --lib
 
 **`retype` primitive — `Erased<'graph, T>`** ([src/reattach.rs](../src/reattach.rs)) — the single audited
 lifetime-retype, a `transmute_copy` behind a `ManuallyDrop` (the one site `transmute`'s
-associated-type size proof can't cover). It is reached through the two doors on `Erased`, and every
+associated-type size proof can't cover). It is reached through the two doors on `ErasedOverBoth`,
+which the one-lifetime `Erased` routes through, and every
 call site shortens a stored form to a lifetime the referents outlive. The tests store a family value
 in a cell's continuation slot and read through it a step later: `enter` re-anchors the slot's value
 at the step's `'here` as it builds the context, and the continuation door hands that value over.

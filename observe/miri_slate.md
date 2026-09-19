@@ -147,10 +147,11 @@ two.
   three producers filling one receipt run, so the run's slots and the consumer's scratch habitat
   are written by cells that are released before the consumer reads them back.
 - `a_cell_gathers_here_values_across_two_parks_and_builds_from_them_in_storage`
-  the scratch state over both brands: a run laid down in the habitat holds values homed in the
-  executing cell at `'here` across two parks, and the last step builds its result out of them with
-  no `keep` and no `redeem` — so what Miri checks is storage read through a run that is retyped at
-  a fresh pair of brands each wake and whose own bytes are handed back under it.
+  the scratch state over both brands: a cell parks twice, and the run it lays down in the habitat
+  carries values homed in the executing cell at `'here` across the second park, so the last step
+  builds its result out of them with no `keep` and no `redeem` — what Miri checks is storage read
+  through a run that is retyped at a fresh pair of brands each wake and whose own bytes are handed
+  back under the result built from it.
 
 ## Recent full-slate run durations
 
