@@ -2,7 +2,7 @@
 //! [../README.md](../README.md) § The cell.
 //!
 //! A tenant is the composition the other two kinds cannot express — many units of work, one region.
-//! It has what a step needs and nothing a region needs: the two continuation halves, an executing
+//! It has what a step needs and nothing a region needs: the two parked slots, an executing
 //! flag and a generation, plus the write home of its host, a slab or tree cell named at its
 //! creation. A step in it is handed the host's writer and the host's scratch writer, places and
 //! mints as the host, and redeems what the host may; so a value it writes embeds a host-homed
@@ -11,7 +11,7 @@
 //! What a host carries for its tenants is two counts ([`Tenancy`]). The first holds its disposal
 //! off: a host whose death is declared waits, region in place, until its last tenant leaves —
 //! which is what makes the bare slot or pool index a tenant keeps a sound name for it. The second
-//! holds its scratch bump's reset off while any tenant names it — with a scratch half at rest, or
+//! holds its scratch bump's reset off while any tenant names it — with a scratch state at rest, or
 //! with a receipt run, which is the tenant's own though the bytes under it are the host's.
 //!
 //! A tenant has no dead-but-undisposed state. Nothing can be under one — a tenant named as a
@@ -23,7 +23,7 @@
 
 use crate::carrier::CellHome;
 use crate::handle::{Stale, TenantHandle};
-use crate::reattach::{Erased, Reattachable};
+use crate::reattach::{Erased, Reattachable, ReattachableOverBoth};
 use crate::receipt::Delivery;
 use crate::slots::StepSlots;
 
@@ -33,7 +33,8 @@ pub(crate) struct Tenancy {
     /// Tenants created on this cell and not yet released. The second thing, beside an undisposed
     /// tree child, that keeps a cell in its table past its death.
     pub(crate) tenants: u32,
-    /// How many of those name this cell's scratch bump — a scratch half at rest, or a receipt run.
+    /// How many of those name this cell's scratch bump — a scratch state at rest, or a receipt
+    /// run.
     /// They share this cell's scratch bump, so its reset waits on this count as well as on the
     /// cell's own slots. Moved where a tenant step ends, where a run is laid down and where a
     /// tenant leaves, and read only where a step ends.
@@ -41,7 +42,8 @@ pub(crate) struct Tenancy {
 }
 
 /// One tenant.
-struct Tenant<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>> {
+struct Tenant<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
+{
     /// The cell whose region this tenant writes, by bare slot or pool index: the host cannot
     /// dispose while this tenant is counted on it, so the index names the same occupant for the
     /// tenant's whole life.
@@ -53,13 +55,18 @@ struct Tenant<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Deliv
 }
 
 /// One pool index: its generation, and its occupant if it has one.
-struct TenantCell<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>> {
+struct TenantCell<
+    'graph,
+    C: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
+    D: Delivery<'graph>,
+> {
     generation: u32,
     occupant: Option<Tenant<'graph, C, S, D>>,
 }
 
 /// What a released tenant leaves its host to settle: which host, and whether the tenant's scratch
-/// half was at rest and so in the host's count.
+/// state was at rest and so in the host's count.
 pub(crate) struct Departed {
     pub(crate) host: CellHome,
     pub(crate) scratch_named: bool,
@@ -69,14 +76,14 @@ pub(crate) struct Departed {
 pub(crate) struct TenantPool<
     'graph,
     C: Reattachable<'graph>,
-    S: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
 > {
     slots: Vec<TenantCell<'graph, C, S, D>>,
     free: Vec<u32>,
 }
 
-impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>>
+impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
     TenantPool<'graph, C, S, D>
 {
     pub(crate) fn new(cap: u32) -> Self {
@@ -164,7 +171,7 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
         &mut self.tenant_mut(index).step_slots
     }
 
-    /// Take the tenant out: its halves drop, its index frees under a fresh generation, and what
+    /// Take the tenant out: both its slots drop, its index frees under a fresh generation, and what
     /// its host has to settle comes back.
     pub(crate) fn remove(&mut self, index: u32) -> Departed {
         let cell = &mut self.slots[index as usize];

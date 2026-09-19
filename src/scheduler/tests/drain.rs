@@ -23,7 +23,7 @@ fn reset() {
 /// A step that records that it ran and finishes.
 fn finish<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     RAN.with(|ran| ran.set(ran.get() + 1));
@@ -33,7 +33,7 @@ fn finish<'graph>(
 /// A step that reads the number it was born with, records it, and finishes.
 fn finish_with_state<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     let State::Value(KValue::Number(count)) = resume.state else {
@@ -46,7 +46,7 @@ fn finish_with_state<'graph>(
 /// A step that refuses to proceed.
 fn fail<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     Action::failed(StepError::Stale)
@@ -143,7 +143,7 @@ fn two_schedulers_run_beside_each_other_sharing_nothing() {
 /// sequence.
 fn record_state<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     let State::Value(KValue::Number(mark)) = resume.state else {

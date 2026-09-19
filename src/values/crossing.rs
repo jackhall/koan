@@ -8,8 +8,8 @@
 //! value the knot holds.
 
 use crate::memory::{
-    Active, CellHandle, CrossedOperand, Delivery, Operand, Prices, Reattachable, Stale,
-    StepContext, Verdict, Writer, collect,
+    Active, CellHandle, CrossedOperand, Delivery, Operand, Prices, Reattachable,
+    ReattachableOverBoth, Stale, StepContext, Verdict, Writer, collect,
 };
 
 use super::{Dict, KnottedFamily, List, Record, Tagged, Value, ValueCarrier, ValueFamily, text};
@@ -34,7 +34,7 @@ pub fn cross<
     'graph,
     'step,
     C: Reattachable<'graph>,
-    S: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
     XF: KnottedFamily<'graph>,
 >(
@@ -65,7 +65,7 @@ pub fn cross_here<
     'step,
     'here,
     C: Reattachable<'graph>,
-    S: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
     XF: KnottedFamily<'graph>,
 >(

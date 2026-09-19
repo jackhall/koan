@@ -152,13 +152,26 @@ impl<'graph> Scheduler<'graph> {
                 let continuation = context
                     .continuation()
                     .expect("a queued cell carries a continuation");
+                // Both slots come off here, so the step is handed what it parked in each and
+                // reaches neither door itself. A step that finishes, hops or fails never hands
+                // the scratch state back, so the slot stays empty and its bump goes back at this
+                // step's end.
+                let scratch = context.scratch_state();
                 match continuation {
                     Continuation::Native {
                         step,
                         provenance,
                         state,
                     } => (
-                        step(context, Resume { provenance, state }, spawns),
+                        step(
+                            context,
+                            Resume {
+                                provenance,
+                                state,
+                                scratch,
+                            },
+                            spawns,
+                        ),
                         provenance,
                     ),
                 }

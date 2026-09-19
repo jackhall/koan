@@ -12,7 +12,7 @@ use crate::scheduler::{
 /// Ask for one child at `placement`, park on its single slot, and read it back in [`read_one`].
 fn ask<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
     placement: Placement,
     step: NativeStep<'graph>,
@@ -24,12 +24,20 @@ fn ask<'graph>(
             state: State::Empty,
         },
     });
-    Action::park(context, &resume, spawns, asked, read_one, State::Empty)
+    Action::park(
+        context,
+        &resume,
+        spawns,
+        asked,
+        read_one,
+        State::Empty,
+        None,
+    )
 }
 
 fn call_fresh<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     ask(context, resume, spawns, Placement::Fresh, place_in_scratch)
@@ -37,7 +45,7 @@ fn call_fresh<'graph>(
 
 fn call_shares<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     ask(context, resume, spawns, Placement::Shares, place_in_storage)
@@ -46,7 +54,7 @@ fn call_shares<'graph>(
 /// A fresh, read-only result: built operand-free in the consumer's scratch habitat.
 fn place_in_scratch<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     Action::deliver_scratch(context, &resume, |writer, _| {
@@ -61,7 +69,7 @@ fn place_in_scratch<'graph>(
 /// and filed as a carrier.
 fn place_in_storage<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     // The build is the consumer's own region, so this step still names it; where the carrier goes
@@ -84,7 +92,7 @@ fn place_in_storage<'graph>(
 /// The caller, woken: drain slot zero, whichever door filled it.
 fn read_one<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     match context.receipt(0) {

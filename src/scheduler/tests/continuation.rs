@@ -21,7 +21,7 @@ fn place() -> Provenance {
 /// A step that does nothing, named only so a continuation has a pointer to hold.
 fn inert<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    _: crate::scheduler::Resume<'graph, '_>,
+    _: crate::scheduler::Resume<'graph, '_, '_>,
     _: &mut crate::scheduler::Spawns<'graph>,
 ) -> crate::scheduler::Action<'graph> {
     crate::scheduler::Action::done()
@@ -54,7 +54,7 @@ fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to
                 state: State::Value(here),
             });
             let there = crate::values::text(context.scratch_writer(), "there");
-            context.store_scratch_successor(ScratchState::Value(there));
+            context.store_scratch_state(ScratchState::Value(there));
         })
         .expect("the cell enters");
 
@@ -63,9 +63,7 @@ fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to
             let Continuation::Native { state, .. } =
                 context.continuation().expect("the stored successor");
             assert!(matches!(state, State::Value(KValue::Str("here"))));
-            let scratch = context
-                .scratch_continuation()
-                .expect("the stored scratch successor");
+            let scratch = context.scratch_state().expect("the stored scratch state");
             assert!(matches!(scratch, ScratchState::Value(KValue::Str("there"))));
         })
         .expect("the cell enters a second time");

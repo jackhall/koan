@@ -1,9 +1,10 @@
-//! What a cell will do when it next runs, in the two halves a cell keeps it in.
+//! What a cell will do when it next runs, and what it carries across a park.
 //!
-//! The storage half — [`ContinuationFamily`] — re-anchors at the executing cell's region brand and
-//! is what the drain reads to run a step. The scratch half — [`ScratchFamily`] — re-anchors at the
-//! scratch habitat's brand and carries a parked cell's in-progress state across a park. Two
-//! families rather than one, so the wrong half is unrepresentable in each slot.
+//! The continuation — [`ContinuationFamily`] — re-anchors at the executing cell's region brand and
+//! is what the drain reads to run a step. The scratch state — [`ScratchFamily`] — is a family over
+//! **both** step brands, so what it carries names storage at `'here` and the habitat at
+//! `'scratch`, each at its own brand. One slot per habitat, so the wrong form is unrepresentable
+//! in each.
 
 use crate::function::KValue;
 use crate::memory::{Dormant, DropFree, StepContext, reattachable};
@@ -23,11 +24,11 @@ pub type Context<'graph, 'step, 'here, 'scratch> =
 /// action it returns all name the graph whose cells they belong to.
 pub type NativeStep<'graph> = for<'step, 'here, 'scratch> fn(
     &mut Context<'graph, 'step, 'here, 'scratch>,
-    Resume<'graph, 'here>,
+    Resume<'graph, 'here, 'scratch>,
     &mut Spawns<'graph>,
 ) -> Action<'graph>;
 
-/// The storage half of a cell's continuation.
+/// The family of what a cell parks in its storage: its continuation.
 pub struct ContinuationFamily;
 
 reattachable!(ContinuationFamily => Continuation<'graph, 'cell>);
@@ -79,15 +80,20 @@ impl<'graph> Work<'graph> {
     }
 }
 
-/// What the drain hands a native step: everything the continuation held but the pointer itself.
-pub struct Resume<'graph, 'cell> {
+/// What the drain hands a native step: everything both slots held but the step pointer itself.
+pub struct Resume<'graph, 'here, 'scratch> {
     /// The cell's place in the graph, to be carried into any successor the step stores or asks for.
     pub provenance: Provenance,
-    /// What the previous step left, or what the cell was born with.
-    pub state: State<'graph, 'cell>,
+    /// What the previous step left in storage, or what the cell was born with.
+    pub state: State<'graph, 'here>,
+    /// What the previous step parked in the scratch habitat, taken off the cell. A step that parks
+    /// again hands this, or its successor, back to
+    /// [`Action::park`](crate::scheduler::Action::park); one that leaves it here lets this step's
+    /// end hand the bump back.
+    pub scratch: Option<ScratchState<'graph, 'here, 'scratch>>,
 }
 
-impl<'graph, 'cell> Resume<'graph, 'cell> {
+impl<'graph> Resume<'graph, '_, '_> {
     /// This cell's next step over `state`, under the provenance the drain handed in. The one place
     /// a step-side continuation gets its provenance, so no step invents one of its own; a park
     /// goes through it by way of [`Action::park`](crate::scheduler::Action::park).
@@ -155,18 +161,21 @@ pub struct Destination {
     pub slot: usize,
 }
 
-/// The scratch half of a cell's continuation.
+/// The family of what a cell parks in its scratch habitat, over both step brands.
 pub struct ScratchFamily;
 
-reattachable!(ScratchFamily => ScratchState<'graph, 'cell>);
+reattachable!(both ScratchFamily => ScratchState<'graph, 'here, 'scratch>);
 
-impl DropFree for ScratchFamily {}
-
-/// A parked cell's in-progress state, held in its scratch habitat across the park.
+/// A parked cell's in-progress state, held in its scratch habitat across the park: scratch at
+/// `'scratch`, and storage at `'here`.
+///
+/// The slot is an `Option`, so an empty park is the absence of one of these rather than an arm.
 #[derive(Clone, Copy)]
-pub enum ScratchState<'graph, 'cell> {
-    /// Nothing carried across the park.
-    Empty,
+pub enum ScratchState<'graph, 'here, 'scratch> {
     /// A value built in the habitat that the woken step reads back.
-    Value(KValue<'graph, 'cell>),
+    Value(KValue<'graph, 'scratch>),
+    /// Values at rest in the cell's storage, gathered by a run in the habitat. Each is held at
+    /// `'here`, so the step that builds in storage embeds it as it is — no `keep` at the park and
+    /// no `redeem` at the wake.
+    Gathered(&'scratch [KValue<'graph, 'here>]),
 }

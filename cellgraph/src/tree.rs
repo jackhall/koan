@@ -14,7 +14,7 @@
 //! that say where its bytes went once it did.
 
 use crate::handle::{HomeHandle, SlabHandle, Stale, TreeHandle};
-use crate::reattach::{Erased, Reattachable};
+use crate::reattach::{Erased, Reattachable, ReattachableOverBoth};
 use crate::receipt::Delivery;
 use crate::scratch::Scratch;
 use crate::slots::StepSlots;
@@ -82,7 +82,8 @@ enum Life {
 /// will go; a tombstone has none of those and knows only where they went. Splitting them is what
 /// makes [`entomb`](TreePool::entomb) one assignment rather than a list of fields to remember to
 /// clear.
-enum TreeSlot<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>> {
+enum TreeSlot<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
+{
     Free,
     InTree(Branch<'graph, C, S, D>),
     Tombstone(Tombstone),
@@ -93,7 +94,8 @@ enum TreeSlot<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Deliv
 /// There is no reach table, no continuation reach and no hold set: a value homed here reaches its
 /// root and nothing else, and the root's row and sealed-hold set are where every mint from inside
 /// the subtree lands.
-struct Branch<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>> {
+struct Branch<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
+{
     life: Life,
     /// The slab slot of the root at the top of this cell's chain. The root cannot recycle while a
     /// tree cell under it is undisposed — its own disposal waits on the child count — so the slot
@@ -136,14 +138,19 @@ struct Tombstone {
 ///
 /// The generation outlives every occupant — it is what tells two of them apart — and a tombstone
 /// list can hang off a cell in either of the other two states, so both sit outside the variant.
-struct TreeCell<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>> {
+struct TreeCell<
+    'graph,
+    C: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
+    D: Delivery<'graph>,
+> {
     generation: u32,
     /// The head of the list of tombstones whose bytes spliced into this slot's occupant.
     tombstones: Option<u32>,
     slot: TreeSlot<'graph, C, S, D>,
 }
 
-impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>>
+impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
     TreeCell<'graph, C, S, D>
 {
     fn free(generation: u32) -> Self {
@@ -165,14 +172,14 @@ impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'grap
 pub(crate) struct TreePool<
     'graph,
     C: Reattachable<'graph>,
-    S: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
     D: Delivery<'graph>,
 > {
     slots: Vec<TreeCell<'graph, C, S, D>>,
     free: Vec<u32>,
 }
 
-impl<'graph, C: Reattachable<'graph>, S: Reattachable<'graph>, D: Delivery<'graph>>
+impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
     TreePool<'graph, C, S, D>
 {
     pub(crate) fn new(cap: u32) -> Self {

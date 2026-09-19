@@ -146,15 +146,20 @@ two.
 - `a_consumer_parked_on_three_producers_wakes_once_when_the_last_slot_fills`
   three producers filling one receipt run, so the run's slots and the consumer's scratch habitat
   are written by cells that are released before the consumer reads them back.
+- `a_cell_gathers_here_values_across_two_parks_and_builds_from_them_in_storage`
+  the scratch state over both brands: a run laid down in the habitat holds values homed in the
+  executing cell at `'here` across two parks, and the last step builds its result out of them with
+  no `keep` and no `redeem` — so what Miri checks is storage read through a run that is retyped at
+  a fresh pair of brands each wake and whose own bytes are handed back under it.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-19: 24s — 14 tests, 0 leaks, 0 UB
 - 2026-09-18: 23s — 13 tests, 0 leaks, 0 UB
 - 2026-09-15: 38s — 10 tests, 0 leaks, 0 UB
 - 2026-09-15: 49s — 9 tests, 0 leaks, 0 UB
 - 2026-09-13: 18s — 8 tests, 0 leaks, 0 UB
-- 2026-09-12: 16s — 8 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

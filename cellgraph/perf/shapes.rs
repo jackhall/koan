@@ -11,9 +11,9 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, CrossedOperand, Delivery, Dormant, DropFree, Operand, Prices,
-    Ready, Reattachable, Receipt, ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict,
-    Writer, reattachable,
+    Active, CellGraph, CellHandle, CrossedOperand, Delivery, Dormant, DropFree, NoScratch, Operand,
+    Prices, Ready, Reattachable, Receipt, ReleaseAbsorption, SlabHandle, StepContext, TreeHandle,
+    Verdict, Writer, reattachable,
 };
 
 use crate::counting_alloc::thread_live_bytes;
@@ -249,7 +249,7 @@ fn push_chain(n: u32) {
 /// [`push_chain`] is the row this is read against — the same crossing, through `alloc_into` and a
 /// carrier the embedder holds between steps, instead.
 fn delivery(n: u32) {
-    let mut graph: CellGraph<'static, Work, Work, Push> = CellGraph::new(CAP, always_pin);
+    let mut graph: CellGraph<'static, Work, NoScratch, Push> = CellGraph::new(CAP, always_pin);
     let consumer = measure(Verb::Create, || graph.create(None)).unwrap();
     measure(Verb::Enter, || {
         graph.enter(consumer, |context| {

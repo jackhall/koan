@@ -116,7 +116,12 @@ fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 
 /// A `Number` carrier homed in the executing cell: the own-region write, then the bridge to a
 /// carrier. What a test that wants a value living where the step runs does.
-fn number_here<'step, C: Reattachable<'static>, S: Reattachable<'static>, D: Delivery<'static>>(
+fn number_here<
+    'step,
+    C: Reattachable<'static>,
+    S: ReattachableOverBoth<'static>,
+    D: Delivery<'static>,
+>(
     context: &StepContext<'static, 'step, '_, '_, C, S, D>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
@@ -136,7 +141,10 @@ fn number(view: &CrossedOperand<'static, '_, '_, Number>) -> u32 {
 /// A release may move these bytes between live cells (a merge into a holder), out to a sealed cell
 /// (a seal), or nowhere at all (a reclaim) — so the total is non-increasing across one. An increase
 /// would mean storage flowed back out of the sealed tier, which no path may do.
-fn live_bytes<C: Reattachable<'static>>(graph: &CellGraph<'static, C>, cap: u32) -> usize {
+fn live_bytes<C: Reattachable<'static>, S: ReattachableOverBoth<'static>>(
+    graph: &CellGraph<'static, C, S>,
+    cap: u32,
+) -> usize {
     (0..cap)
         .filter(|slot| graph.cells.slots[*slot as usize].state != SlabState::Free)
         .map(|slot| graph.regions.slab_bytes(slot))
@@ -210,7 +218,7 @@ fn a_cap_above_the_width_is_refused_at_construction() {
 fn a_two_word_graph_names_slots_across_the_chunk_boundary() {
     // The shape that exercises the matrix's chunk arithmetic: a pin whose ends sit in different
     // chunks of the same row.
-    let mut graph: CellGraph<'static, Owned, Owned, NoDelivery, 2> = CellGraph::new(128, pin);
+    let mut graph: CellGraph<'static, Owned, NoScratch, NoDelivery, 2> = CellGraph::new(128, pin);
     let cells: Vec<SlabHandle> = (0..128).map(|_| graph.create(None).unwrap()).collect();
     assert_eq!(graph.create(None), Err(CreateError::SlabFull));
 

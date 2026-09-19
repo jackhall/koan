@@ -15,7 +15,7 @@ const PRODUCERS: usize = 3;
 /// The consumer: register a run of three, ask for a producer per slot, and park.
 fn park_on_three<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     for slot in 0..PRODUCERS - 1 {
@@ -24,7 +24,15 @@ fn park_on_three<'graph>(
     // The last push hands back the slot the park waits on; the pushes before it went to the slots
     // ahead of it, in that order.
     let asked = spawns.push(producer(PRODUCERS - 1));
-    Action::park(context, &resume, spawns, asked, drain_the_run, State::Empty)
+    Action::park(
+        context,
+        &resume,
+        spawns,
+        asked,
+        drain_the_run,
+        State::Empty,
+        None,
+    )
 }
 
 /// One producer, born holding the number it scales. Which slot it fills is its push position.
@@ -41,7 +49,7 @@ fn producer<'graph>(slot: usize) -> Request<'graph> {
 /// One producer: fill the slot the drain gave it with the number it was born holding.
 fn produce<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     // The number itself, not the value: a value at this producer's brand is not one the consumer's
@@ -58,7 +66,7 @@ fn produce<'graph>(
 /// The consumer, woken: read every slot of the run it registered.
 fn drain_the_run<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(format!("woke on {:?}", context.receipt_count()));

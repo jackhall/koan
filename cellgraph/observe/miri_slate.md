@@ -24,7 +24,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-39 tests, grouped by the unsafe site each pins down. Names below are the exact
+40 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -162,7 +162,7 @@ the slab entirely — the root seals, and a holder reads a tree-homed value out 
 
 **The scratch habitat's re-anchor** ([src/graph.rs](../src/graph.rs),
 [src/region.rs](../src/region.rs)) — the same `retype` primitive at the second re-anchor `enter`
-makes: the scratch half of a continuation, handed back at a fresh `'scratch` each step over a
+makes: a cell's scratch state, handed back at a fresh `'here` and `'scratch` each step over a
 second bump that is reset at the end of every step that leaves nothing at rest naming it. The
 family is invariant — a
 `Cell<&'cell u32>` beside a spine of borrows — and the test writes through the re-anchored `Cell`
@@ -177,6 +177,11 @@ waits on all of them.
 - `graph::tests::habitat::a_tree_cells_scratch_survives_parks_and_resets_once_unnamed`
 - `graph::tests::habitat::an_absorb_leaves_the_absorbers_named_scratch_alone`
 - `graph::tests::habitat::a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant`
+- `graph::tests::habitat::a_parked_form_names_storage_at_here_and_survives_the_bump_going_back`
+  the two-lifetime re-anchor: a parked form holding an invariant `'here` cell beside a `'scratch`
+  one, whose `'here` part is written through after its re-anchor, goes on into the continuation
+  slot and reads a step later — after the step that emptied the scratch slot handed the bump back
+  under it.
 
 **Delivery into a parked cell's scratch** ([src/receipt.rs](../src/receipt.rs),
 [src/graph.rs](../src/graph.rs)) — the same `retype` primitive at the two call sites a receipt run

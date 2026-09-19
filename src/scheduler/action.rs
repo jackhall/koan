@@ -6,14 +6,15 @@
 
 use crate::function::KValueFamily;
 use crate::memory::{Active, CellHandle, DeliverError, Delivered, Dormant, Writer};
-use crate::scheduler::continuation::{Context, NativeStep, Resume, State, Work};
+use crate::scheduler::continuation::{Context, NativeStep, Resume, ScratchState, State, Work};
 
 /// What a step hands the drain when it returns.
 ///
 /// Opaque: the field is private and every way to build one is a constructor below, so the
 /// bookkeeping an arm implies has always happened by the time the drain sees it. A `Park` has
-/// registered its run and stored its successor; a `Wakes` names the consumer of a fill that
-/// completed that consumer's run, so neither a forged nor a spurious wake is representable.
+/// registered its run and stored both its successor and its scratch state; a `Wakes` names the
+/// consumer of a fill that completed that consumer's run, so neither a forged nor a spurious wake
+/// is representable.
 pub struct Action<'graph>(Kind<'graph>);
 
 /// What an [`Action`] turned out to be, read by the drain and by nothing else. Anything in
@@ -62,15 +63,19 @@ impl<'graph> Action<'graph> {
     /// only required, and a step with no child to wait on has none to give — which is how an empty
     /// park is refused at compile time rather than at run time.
     ///
-    /// A step carrying in-progress state across the park stores it with `store_scratch_successor`
-    /// itself, before this call.
-    pub fn park<'here>(
-        context: &mut Context<'graph, '_, 'here, '_>,
-        resume: &Resume<'graph, '_>,
+    /// A park stores **both** slots: `state` is what the woken step resumes over in storage, and
+    /// `scratch` is what it carries in the scratch habitat. `None` clears the scratch slot as well
+    /// as not filling it, so a park that carries nothing there leaves it empty however the step
+    /// left the context — and this step's end hands the bump back before the registered run is
+    /// laid down in it.
+    pub fn park<'here, 'scratch>(
+        context: &mut Context<'graph, '_, 'here, 'scratch>,
+        resume: &Resume<'graph, '_, '_>,
         spawns: &Spawns<'graph>,
         asked: Slot,
         step: NativeStep<'graph>,
         state: State<'graph, 'here>,
+        scratch: Option<ScratchState<'graph, 'here, 'scratch>>,
     ) -> Self {
         // Required, never read: holding one is the proof that the buffer is non-empty.
         let _ = asked;
@@ -80,6 +85,12 @@ impl<'graph> Action<'graph> {
             return Action::failed(StepError::Undeliverable);
         }
         context.store_successor(resume.successor(step, state));
+        match scratch {
+            Some(state) => context.store_scratch_state(state),
+            None => {
+                context.scratch_state();
+            }
+        }
         Action(Kind::Park)
     }
 
@@ -87,7 +98,7 @@ impl<'graph> Action<'graph> {
     /// habitat, and report what the fill did to the consumer's run.
     pub fn deliver_scratch(
         context: &Context<'graph, '_, '_, '_>,
-        resume: &Resume<'graph, '_>,
+        resume: &Resume<'graph, '_, '_>,
         build: impl for<'their> FnOnce(
             Writer<'their>,
             &'their &'graph (),
@@ -106,7 +117,7 @@ impl<'graph> Action<'graph> {
     /// way.
     pub fn deliver_carrier(
         context: &Context<'graph, '_, '_, '_>,
-        resume: &Resume<'graph, '_>,
+        resume: &Resume<'graph, '_, '_>,
         carrier: Dormant<'graph, KValueFamily>,
     ) -> Self {
         let Some(destination) = resume.provenance.destination else {

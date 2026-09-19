@@ -1,6 +1,6 @@
-//! The scratch habitat: a second bump per cell at the `'scratch` brand, a second continuation slot
-//! over its own family that carries a scratch structure across a park, and a reset at the end of
-//! every step that leaves that slot empty. Named apart from [`scratch`](super::scratch), which is
+//! The scratch habitat: a second bump per cell at the `'scratch` brand, a scratch-state slot over
+//! its own family that carries a scratch structure across a park, and a reset at the end of every
+//! step that leaves that slot empty. Named apart from [`scratch`](super::scratch), which is
 //! about the graph's one verb-transient region.
 //!
 //! What these pin: a scratch structure — an invariant one, written through after its re-anchor —
@@ -18,11 +18,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use super::super::*;
 use super::{Number, number_here, operand_at, pin};
 
-/// The storage half: a run in the cell's region.
+/// The continuation: a run in the cell's region.
 struct Storage;
 crate::reattachable!(Storage => &'cell [u32]);
 
-/// The scratch half. Invariant in `'cell` through the `Cell`, so the re-anchor at a fresh
+/// The scratch state. Invariant in `'cell` through the `Cell`, so the re-anchor at a fresh
 /// `'scratch` each step is exercised in the shape an embedder's slot table has.
 #[derive(Clone, Copy)]
 struct Parked<'cell> {
@@ -30,13 +30,13 @@ struct Parked<'cell> {
     slot: &'cell Cell<&'cell u32>,
 }
 struct Spine;
-crate::reattachable!(Spine => Parked<'cell>);
+crate::reattachable!(both Spine => Parked<'scratch>);
 
 type Graph = CellGraph<'static, Storage, Spine>;
 
 /// Scratch bytes in use in the bump a step in `cell` writes: its own, or its host's.
-fn scratch_in_use<S: Reattachable<'static>>(
-    graph: &CellGraph<'static, Storage, S>,
+fn scratch_in_use<C: Reattachable<'static>, S: ReattachableOverBoth<'static>>(
+    graph: &CellGraph<'static, C, S>,
     cell: impl Into<CellHandle>,
 ) -> usize {
     let home = graph
@@ -56,19 +56,19 @@ fn round_trip(graph: &mut Graph, cell: CellHandle) {
                 .fill(2, |index| &numbers[index + 1]);
             let slot = &context.scratch_writer().fill(1, |_| Cell::new(&numbers[0]))[0];
             context.store_successor(numbers);
-            context.store_scratch_successor(Parked { spine, slot });
+            context.store_scratch_state(Parked { spine, slot });
         })
         .unwrap();
     assert!(scratch_in_use(graph, cell) > 0);
 
-    // Step two: both halves come back, the scratch half still reads, and an interior write through
-    // the re-anchored `Cell` lands. More scratch is written and the half goes back.
+    // Step two: both slots come back, the scratch state still reads, and an interior write through
+    // the re-anchored `Cell` lands. More scratch is written and the state goes back.
     graph
         .enter(cell, |context| {
-            let numbers = context.continuation().expect("the storage half was stored");
+            let numbers = context.continuation().expect("the continuation was stored");
             let Parked { spine, slot } = context
-                .scratch_continuation()
-                .expect("the scratch half was stored");
+                .scratch_state()
+                .expect("the scratch state was stored");
             assert_eq!((*spine[0], *spine[1], *slot.get()), (11, 12, 10));
             slot.set(spine[1]);
             // A scratch value over a scratch value, and over storage read this step.
@@ -78,7 +78,7 @@ fn round_trip(graph: &mut Graph, cell: CellHandle) {
                 _ => &numbers[0],
             });
             context.store_successor(numbers);
-            context.store_scratch_successor(Parked { spine: wider, slot });
+            context.store_scratch_state(Parked { spine: wider, slot });
         })
         .unwrap();
     let held = scratch_in_use(graph, cell);
@@ -88,8 +88,8 @@ fn round_trip(graph: &mut Graph, cell: CellHandle) {
     graph
         .enter(cell, |context| {
             let Parked { spine, slot } = context
-                .scratch_continuation()
-                .expect("the scratch half was stored");
+                .scratch_state()
+                .expect("the scratch state was stored");
             assert_eq!(
                 (*spine[0], *spine[1], *spine[2], *slot.get()),
                 (12, 11, 10, 12)
@@ -105,9 +105,9 @@ fn round_trip(graph: &mut Graph, cell: CellHandle) {
     // Step four: the scratch is gone and storage is not, and the step ends on empty ground again.
     graph
         .enter(cell, |context| {
-            let numbers = context.continuation().expect("the storage half was stored");
+            let numbers = context.continuation().expect("the continuation was stored");
             assert_eq!(numbers, &[10, 11, 12]);
-            assert!(context.scratch_continuation().is_none());
+            assert!(context.scratch_state().is_none());
         })
         .unwrap();
     assert_eq!(scratch_in_use(graph, cell), 0);
@@ -145,7 +145,7 @@ fn an_absorb_leaves_the_absorbers_named_scratch_alone() {
             let numbers = context.scratch_writer().fill(1, |_| 41u32);
             let spine = context.scratch_writer().fill(1, |_| &numbers[0]);
             let slot = &context.scratch_writer().fill(1, |_| Cell::new(&numbers[0]))[0];
-            context.store_scratch_successor(Parked { spine, slot });
+            context.store_scratch_state(Parked { spine, slot });
         })
         .unwrap();
     let held = scratch_in_use(&graph, parent);
@@ -176,8 +176,8 @@ fn an_absorb_leaves_the_absorbers_named_scratch_alone() {
     graph
         .enter(parent, |context| {
             let Parked { spine, slot } = context
-                .scratch_continuation()
-                .expect("the scratch half was stored");
+                .scratch_state()
+                .expect("the scratch state was stored");
             assert_eq!((*spine[0], *slot.get()), (41, 41));
         })
         .unwrap();
@@ -197,7 +197,7 @@ fn a_departing_cells_scratch_is_dropped_at_disposal() {
             let numbers = context.scratch_writer().fill(512, |index| index as u32);
             let spine = context.scratch_writer().fill(1, |_| &numbers[0]);
             let slot = &context.scratch_writer().fill(1, |_| Cell::new(&numbers[0]))[0];
-            context.store_scratch_successor(Parked { spine, slot });
+            context.store_scratch_state(Parked { spine, slot });
         })
         .unwrap();
     graph
@@ -269,30 +269,90 @@ fn scratch_bytes_are_in_no_price() {
 }
 
 #[test]
-fn a_store_and_a_read_in_one_step_hand_the_stored_half_back() {
+fn a_store_and_a_read_in_one_step_hand_the_stored_state_back() {
     let mut graph: Graph = CellGraph::new(1, pin);
     let cell = graph.create(None).unwrap();
     graph
         .enter(cell, |context| {
             assert!(context.continuation().is_none());
-            assert!(context.scratch_continuation().is_none());
+            assert!(context.scratch_state().is_none());
             let numbers = context.writer().fill(2, |index| index as u32);
             let spine = context.scratch_writer().fill(1, |_| &numbers[1]);
             let slot = &context.scratch_writer().fill(1, |_| Cell::new(&numbers[0]))[0];
             context.store_successor(numbers);
-            context.store_scratch_successor(Parked { spine, slot });
+            context.store_scratch_state(Parked { spine, slot });
             assert_eq!(context.continuation(), Some(numbers));
-            let parked = context.scratch_continuation().expect("stored a moment ago");
+            let parked = context.scratch_state().expect("stored a moment ago");
             assert_eq!((*parked.spine[0], *parked.slot.get()), (1, 0));
             // One-shot, both of them.
             assert!(context.continuation().is_none());
-            assert!(context.scratch_continuation().is_none());
+            assert!(context.scratch_state().is_none());
         })
         .unwrap();
 }
 
+/// A parked form over both brands: an invariant `'here` structure beside a `'scratch` one of the
+/// same shape, each at the brand of the habitat it points into.
+struct Gather;
+#[derive(Clone, Copy)]
+struct Held<'here, 'scratch> {
+    kept: &'here Cell<&'here u32>,
+    transient: &'scratch Cell<&'here u32>,
+}
+crate::reattachable!(both Gather => Held<'here, 'scratch>);
+
+/// The continuation beside it: the `'here` cell the parked form keeps.
+struct Slot;
+crate::reattachable!(Slot => &'cell Cell<&'cell u32>);
+
+/// The Miri mirror of [`StepContext::store_scratch_state`]'s three-step doctest: the `'here` part
+/// of a parked form comes back at `'here`, goes on into the continuation slot, and reads at a
+/// third step — after the step that emptied the scratch slot handed the bump back under it.
 #[test]
-fn a_panicking_step_leaves_both_halves_as_it_held_them() {
+fn a_parked_form_names_storage_at_here_and_survives_the_bump_going_back() {
+    let mut graph: CellGraph<'static, Slot, Gather> = CellGraph::new(1, pin);
+    let cell = graph.create(None).unwrap();
+    graph
+        .enter(cell, |context| {
+            let number: &u32 = &context.writer().fill(1, |_| 41u32)[0];
+            let kept = &context.writer().fill(1, |_| Cell::new(number))[0];
+            let transient = &context.scratch_writer().fill(1, |_| Cell::new(number))[0];
+            context.store_scratch_state(Held { kept, transient });
+        })
+        .unwrap();
+    assert!(scratch_in_use(&graph, cell) > 0, "the parked form names it");
+
+    graph
+        .enter(cell, |context| {
+            let parked = context.scratch_state().expect("parked at the first step");
+            assert_eq!(*parked.transient.get(), 41);
+            // An interior write through the re-anchored `'here` cell, of storage at `'here`.
+            let second: &u32 = &context.writer().fill(1, |_| 42u32)[0];
+            parked.kept.set(second);
+            context.store_successor(parked.kept);
+        })
+        .unwrap();
+    // The scratch slot went out empty, so that step's end handed the bump back — while the
+    // `'here` part it kept lives on in the continuation slot.
+    assert_eq!(scratch_in_use(&graph, cell), 0);
+
+    let read = graph
+        .enter(cell, |context| {
+            assert!(context.scratch_state().is_none());
+            *context
+                .continuation()
+                .expect("stored at the second step")
+                .get()
+        })
+        .unwrap();
+    assert_eq!(read, 42);
+
+    graph.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn a_panicking_step_leaves_both_slots_as_it_held_them() {
     let mut graph: Graph = CellGraph::new(1, pin);
     let cell = graph.create(None).unwrap();
     graph
@@ -302,15 +362,15 @@ fn a_panicking_step_leaves_both_halves_as_it_held_them() {
         })
         .unwrap();
 
-    // The step takes the storage half, stores a scratch half, and panics holding both as they
+    // The step takes the continuation, stores a scratch state, and panics holding both as they
     // are: the one it took is gone, and the one it stored is at rest.
     let panicked = catch_unwind(AssertUnwindSafe(|| {
         graph
             .enter(cell, |context| {
-                let numbers = context.continuation().expect("the storage half was stored");
+                let numbers = context.continuation().expect("the continuation was stored");
                 let spine = context.scratch_writer().fill(1, |_| &numbers[1]);
                 let slot = &context.scratch_writer().fill(1, |_| Cell::new(&numbers[0]))[0];
-                context.store_scratch_successor(Parked { spine, slot });
+                context.store_scratch_state(Parked { spine, slot });
                 panic!("the step fails");
             })
             .unwrap();
@@ -322,20 +382,20 @@ fn a_panicking_step_leaves_both_halves_as_it_held_them() {
         .enter(cell, |context| {
             assert!(context.continuation().is_none());
             let parked = context
-                .scratch_continuation()
-                .expect("the scratch half went back to rest under the panic");
+                .scratch_state()
+                .expect("the scratch state went back to rest under the panic");
             assert_eq!((*parked.spine[0], *parked.slot.get()), (1, 0));
         })
         .unwrap();
 }
 
-/// A scratch half over one scratch value, for the shared-region tests: what it names is a byte of
+/// A scratch state over one scratch value, for the shared-region tests: what it names is a byte of
 /// the *host's* scratch bump, whichever cell stored it.
 fn park_one<'step>(context: &mut StepContext<'static, 'step, '_, '_, Storage, Spine>, value: u32) {
     let numbers = context.scratch_writer().fill(1, |_| value);
     let spine = context.scratch_writer().fill(1, |_| &numbers[0]);
     let slot = &context.scratch_writer().fill(1, |_| Cell::new(&numbers[0]))[0];
-    context.store_scratch_successor(Parked { spine, slot });
+    context.store_scratch_state(Parked { spine, slot });
 }
 
 #[test]
@@ -353,7 +413,7 @@ fn a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant() {
     assert_eq!(graph.cells.tenancy(home).scratch_tenants, 1);
 
     // The other tenant enters with its own slot empty, and the bump is not handed back: the
-    // first tenant's half is at rest over it. It writes beside that half and stores nothing.
+    // first tenant's state is at rest over it. It writes beside that state and stores nothing.
     graph
         .enter(second, |context| {
             context.scratch_writer().fill(8, |index| index as u64);
@@ -364,16 +424,16 @@ fn a_tenants_scratch_is_its_hosts_and_waits_on_every_tenant() {
     graph.enter(host, |_| ()).unwrap();
     assert!(scratch_in_use(&graph, host) > parked);
 
-    // The first tenant's half comes back intact, and it stores nothing this time.
+    // The first tenant's state comes back intact, and it stores nothing this time.
     graph
         .enter(first, |context| {
             let Parked { spine, slot } = context
-                .scratch_continuation()
-                .expect("the scratch half was stored");
+                .scratch_state()
+                .expect("the scratch state was stored");
             assert_eq!((*spine[0], *slot.get()), (41, 41));
         })
         .unwrap();
-    // That was the last half over the bump, so its own step's end handed it back.
+    // That was the last state over the bump, so its own step's end handed it back.
     assert_eq!(graph.cells.tenancy(home).scratch_tenants, 0);
     assert_eq!(scratch_in_use(&graph, host), 0);
 
@@ -414,11 +474,11 @@ fn a_released_hosts_scratch_slot_no_longer_blocks_its_tenants() {
     let tenant = graph.create_tenant(host, None).unwrap();
     graph.enter(host, |context| park_one(context, 41)).unwrap();
 
-    // While the host lives, its half holds the reset off for its tenant too.
+    // While the host lives, its state holds the reset off for its tenant too.
     graph.enter(tenant, |_| ()).unwrap();
     assert!(scratch_in_use(&graph, tenant) > 0);
 
-    // Its death clears the half — a dead cell is never entered — and the bump stays, for the
+    // Its death clears the state — a dead cell is never entered — and the bump stays, for the
     // tenant to have whole at its next step.
     graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(scratch_in_use(&graph, tenant) > 0);

@@ -33,7 +33,7 @@ thread_local! {
 /// The caller: ask for the loop's head, park on its single slot.
 fn start<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
     step: NativeStep<'graph>,
 ) -> Action<'graph> {
@@ -44,7 +44,7 @@ fn start<'graph>(
             state: State::Empty,
         },
     });
-    Action::park(context, &resume, spawns, asked, finish, State::Empty)
+    Action::park(context, &resume, spawns, asked, finish, State::Empty, None)
 }
 
 /// One turn: write a blob where this cell stands, then hand on or deliver.
@@ -54,7 +54,7 @@ fn start<'graph>(
 /// successor writes its host's, which no turn of the loop ever returns.
 fn turn<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     placement: Placement,
     step: NativeStep<'graph>,
 ) -> Action<'graph> {
@@ -85,7 +85,7 @@ fn turn<'graph>(
 /// The caller, woken by the loop's last cell.
 fn finish<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     match context.receipt(0) {
@@ -97,7 +97,7 @@ fn finish<'graph>(
 
 fn start_fresh<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     start(context, resume, spawns, turn_fresh)
@@ -105,7 +105,7 @@ fn start_fresh<'graph>(
 
 fn start_shares<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     start(context, resume, spawns, turn_shares)
@@ -113,7 +113,7 @@ fn start_shares<'graph>(
 
 fn turn_fresh<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     turn(context, resume, Placement::Fresh, turn_fresh)
@@ -121,7 +121,7 @@ fn turn_fresh<'graph>(
 
 fn turn_shares<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     turn(context, resume, Placement::Shares, turn_shares)

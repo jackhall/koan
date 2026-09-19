@@ -22,7 +22,7 @@ fn unit(step: crate::scheduler::NativeStep<'static>) -> Unit<'static> {
 
 fn source<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("source"));
@@ -31,7 +31,7 @@ fn source<'graph>(
 
 fn left<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("left"));
@@ -40,7 +40,7 @@ fn left<'graph>(
 
 fn right<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("right"));
@@ -49,7 +49,7 @@ fn right<'graph>(
 
 fn join<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("join"));
@@ -106,7 +106,7 @@ fn units_that_wait_on_each_other_stall_the_drain() {
 /// finishing, not its first step returning.
 fn spawns_and_parks<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("parks"));
@@ -117,12 +117,12 @@ fn spawns_and_parks<'graph>(
             state: State::Empty,
         },
     });
-    Action::park(context, &resume, spawns, asked, wakes, State::Empty)
+    Action::park(context, &resume, spawns, asked, wakes, State::Empty, None)
 }
 
 fn answers<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("child"));
@@ -133,7 +133,7 @@ fn answers<'graph>(
 
 fn wakes<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     record(String::from("wakes"));

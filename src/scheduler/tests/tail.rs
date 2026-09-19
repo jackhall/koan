@@ -31,7 +31,7 @@ thread_local! {
 /// The caller: ask for the loop's head at `placement`, park on its single slot.
 fn start<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
     placement: Placement,
     step: NativeStep<'graph>,
@@ -43,7 +43,7 @@ fn start<'graph>(
             state: State::Empty,
         },
     });
-    Action::park(context, &resume, spawns, asked, finish, State::Empty)
+    Action::park(context, &resume, spawns, asked, finish, State::Empty, None)
 }
 
 /// One turn of the loop: take the carried value in, and either hop again or deliver.
@@ -52,7 +52,7 @@ fn start<'graph>(
 /// head of the loop and every hop of it.
 fn turn<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     placement: Placement,
     step: NativeStep<'graph>,
 ) -> Action<'graph> {
@@ -88,7 +88,7 @@ fn turn<'graph>(
 /// destination forward, so the caller sees one result however many cells produced it.
 fn deliver<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     carried: KValue<'graph, '_>,
 ) -> Action<'graph> {
     // Recorded here rather than delivered, because what proves the value survived every crossing is
@@ -106,7 +106,7 @@ fn deliver<'graph>(
 /// The caller, woken by the loop's last cell.
 fn finish<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     match context.receipt(0) {
@@ -118,7 +118,7 @@ fn finish<'graph>(
 
 fn start_fresh<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     start(context, resume, spawns, Placement::Fresh, turn_fresh)
@@ -126,7 +126,7 @@ fn start_fresh<'graph>(
 
 fn start_shares<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     start(context, resume, spawns, Placement::Shares, turn_shares)
@@ -134,7 +134,7 @@ fn start_shares<'graph>(
 
 fn turn_fresh<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     turn(context, resume, Placement::Fresh, turn_fresh)
@@ -142,7 +142,7 @@ fn turn_fresh<'graph>(
 
 fn turn_shares<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     turn(context, resume, Placement::Shares, turn_shares)
@@ -240,7 +240,7 @@ fn a_hand_off_redeems_out_of_the_region_the_drain_reclaims_next() {
 /// admitted straight into the slab.
 fn hop_from_the_slab<'graph>(
     _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     Action::tail(Request {

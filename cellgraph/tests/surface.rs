@@ -12,8 +12,8 @@ use std::marker::PhantomData;
 
 use cellgraph::{
     Active, CellGraph, CellHandle, Config, CreateError, CrossedOperand, DeliverError, Delivered,
-    Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, Operand, Prices, Prose, Ready,
-    Reattachable, Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption,
+    Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, NoScratch, Operand, Prices, Prose,
+    Ready, Reattachable, Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption,
     ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext,
     TenantHandle, ThinRun, TreeHandle, Verdict, Writer, reattachable,
 };
@@ -197,10 +197,11 @@ fn name_release_tenant_error(error: ReleaseTenantError) -> &'static str {
     }
 }
 
-/// The scratch half's family, named apart from the continuation's so the second parameter of the
-/// graph's type is spelled from outside the crate.
+/// The scratch state's family, named apart from the continuation's so the second parameter of the
+/// graph's type is spelled from outside the crate. It is of the two-lifetime contract, and this
+/// form holds scratch alone.
 struct Worklist;
-reattachable!(Worklist => &'cell [&'cell u32]);
+reattachable!(both Worklist => &'scratch [&'scratch u32]);
 
 /// The bundle of the two families a graph's cells deliver: a note built in the consumer's own
 /// scratch habitat, and a `Number` carrier filed at rest.
@@ -227,14 +228,14 @@ fn name_receipt<'graph, D: Delivery<'graph>>(
 #[test]
 fn the_delivery_doors_answer_from_outside_the_crate() {
     // The default bundle is one an embedder can name, and a graph over it delivers nothing.
-    let mut plain: CellGraph<'static, Work, Work, NoDelivery> = CellGraph::new(1, weigh);
+    let mut plain: CellGraph<'static, Work, NoScratch, NoDelivery> = CellGraph::new(1, weigh);
     let alone = plain.create(None).unwrap();
     plain
         .enter(alone, |context| assert_eq!(context.receipt_count(), None))
         .unwrap();
     plain.release(alone, ReleaseAbsorption::IntoHolder).unwrap();
 
-    let mut graph: CellGraph<'static, Work, Work, Push> = CellGraph::new(2, weigh);
+    let mut graph: CellGraph<'static, Work, NoScratch, Push> = CellGraph::new(2, weigh);
     let consumer = graph.create(None).unwrap();
     let producer = graph.create(None).unwrap();
 
@@ -328,13 +329,13 @@ fn a_tenant_and_the_scratch_habitat_answer_from_outside_the_crate() {
     assert!(graph.is_live(tenant));
 
     // A tenant step writes its host's region at `'here` and its host's scratch at `'scratch`,
-    // and parks a half in each slot.
+    // and parks something in each slot.
     let ran_in = graph
         .enter(tenant, |context| {
             let kept = one(context.writer(), 41u32);
             let worklist: &[&u32] = context.scratch_writer().fill(2, |_| kept);
             context.store_successor(kept);
-            context.store_scratch_successor(worklist);
+            context.store_scratch_state(worklist);
             context.cell()
         })
         .unwrap();
@@ -343,10 +344,10 @@ fn a_tenant_and_the_scratch_habitat_answer_from_outside_the_crate() {
 
     let read = graph
         .enter(tenant, |context| {
-            let kept = context.continuation().expect("the storage half was stored");
+            let kept = context.continuation().expect("the continuation was stored");
             let worklist = context
-                .scratch_continuation()
-                .expect("the scratch half was stored");
+                .scratch_state()
+                .expect("the scratch state was stored");
             *kept + *worklist[1]
         })
         .unwrap();

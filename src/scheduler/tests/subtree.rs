@@ -14,7 +14,7 @@ const DEPTH: f64 = 200.0;
 /// Spawn the head of the descent and park on its single slot.
 fn start<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     let asked = spawns.push(Request {
@@ -24,13 +24,13 @@ fn start<'graph>(
             state: State::Value(KValue::Number(DEPTH)),
         },
     });
-    Action::park(context, &resume, spawns, asked, finish, State::Empty)
+    Action::park(context, &resume, spawns, asked, finish, State::Empty, None)
 }
 
 /// One level: park on a child one shallower, or turn around at the bottom.
 fn descend<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     spawns: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     let State::Value(KValue::Number(depth)) = resume.state else {
@@ -46,13 +46,13 @@ fn descend<'graph>(
             state: State::Value(KValue::Number(depth - 1.0)),
         },
     });
-    Action::park(context, &resume, spawns, asked, ascend, State::Empty)
+    Action::park(context, &resume, spawns, asked, ascend, State::Empty, None)
 }
 
 /// Woken by the level below: add this level to its count and pass it up.
 fn ascend<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     let Ok(Receipt::Value(KValue::Number(below))) = context.receipt(0) else {
@@ -64,7 +64,7 @@ fn ascend<'graph>(
 /// Put one number in the slot this cell was born against.
 fn fill<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_>,
+    resume: Resume<'graph, '_, '_>,
     count: f64,
 ) -> Action<'graph> {
     Action::deliver_scratch(context, &resume, move |_, _| {
@@ -75,7 +75,7 @@ fn fill<'graph>(
 /// The root, woken by the head of the descent.
 fn finish<'graph>(
     context: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_>,
+    _: Resume<'graph, '_, '_>,
     _: &mut Spawns<'graph>,
 ) -> Action<'graph> {
     match context.receipt(0) {

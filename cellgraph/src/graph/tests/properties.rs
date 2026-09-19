@@ -7,7 +7,7 @@
 //! - a cell undisposed after its declared death has an undisposed tree cell under it or a tenant
 //!   still writing its region, which are the two things that can hold a cell past its death;
 //! - every host's two tenant counts equal the tenants that name it, and the ones among them that
-//!   name its scratch bump — with a scratch half at rest, or with a receipt run;
+//!   name its scratch bump — with a scratch state at rest, or with a receipt run;
 //! - every sealed cell's holder count equals the number of hold sets that name it, and the reverse
 //!   naming index is exactly the transpose of the aggregates;
 //! - every bit and id of a dormant carrier's mask is covered by storage its cell is answerable
@@ -35,6 +35,11 @@ use proptest::prelude::*;
 use super::super::*;
 use super::{Borrowed, Number, live_bytes, number_here, one, operand_at, pin, take};
 use crate::tree::{Ancestor, TreeState};
+
+/// The scratch state these graphs park: one number in the executing cell's scratch bump, which is
+/// what the tenant verb stores and reads back to move a host's second count.
+struct Transient;
+crate::reattachable!(both Transient => &'scratch u32);
 
 const CAP: u32 = 6;
 
@@ -205,7 +210,7 @@ fn verb() -> impl Strategy<Value = Verb> {
 }
 
 /// The tier's ids in id order, since a walk's answers must not depend on hash iteration order.
-fn sorted_ids(graph: &CellGraph<'static, Borrowed>) -> Vec<SealedId> {
+fn sorted_ids(graph: &CellGraph<'static, Borrowed, Transient>) -> Vec<SealedId> {
     let mut ids: Vec<SealedId> = graph.cells.sealed.ids().collect();
     ids.sort();
     ids
@@ -215,7 +220,7 @@ fn sorted_ids(graph: &CellGraph<'static, Borrowed>) -> Vec<SealedId> {
 /// current set on the way out. Only a price query may write one, so unless the step just run was a
 /// `Price` verb, an id outside that set carrying a memo is one a mint or a release left behind.
 fn check_invariants(
-    graph: &CellGraph<'static, Borrowed>,
+    graph: &CellGraph<'static, Borrowed, Transient>,
     memoized: &mut Vec<SealedId>,
     priced: bool,
 ) {
@@ -473,7 +478,7 @@ fn check_invariants(
 /// executing cell's **root** — its own slot when it is a slab cell — against where the key's home
 /// resolves to now.
 fn expected_redeem(
-    graph: &CellGraph<'static, Borrowed>,
+    graph: &CellGraph<'static, Borrowed, Transient>,
     executing: u32,
     home: HomeHandle,
 ) -> Result<(), RedeemError> {
@@ -511,7 +516,7 @@ fn expected_redeem(
 /// was kept as, which is what says a mask forwarded through a merge — or a tombstone chain — still
 /// names the right storage.
 fn check_redeem(
-    context: &StepContext<'static, '_, '_, '_, Borrowed>,
+    context: &StepContext<'static, '_, '_, '_, Borrowed, Transient>,
     dormant: Dormant<'static, Number>,
     carried: u32,
 ) -> Result<(), RedeemError> {
@@ -529,7 +534,7 @@ fn check_redeem(
 }
 
 /// The tree pool's own invariants, checked after every step beside the matrix ones.
-fn check_tree_invariants(graph: &CellGraph<'static, Borrowed>) {
+fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
     let pool = graph.cells.trees();
     let occupied: Vec<u32> = pool.occupied().collect();
     let alive = |index: u32| matches!(pool.state(index), TreeState::Live | TreeState::Dead);
@@ -706,7 +711,7 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed>) {
 /// checking the invariants after every step. Reports the merges the run performed, which is what
 /// tells a generated corpus that reaches all three shapes from one that only claims to.
 fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merges {
-    let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(CAP, verdict);
+    let mut graph: CellGraph<'static, Borrowed, Transient> = CellGraph::new(CAP, verdict);
     let mut minted: Vec<SlabHandle> = Vec::new();
     // Every tree cell the run created, in creation order. A generated index may name one that has
     // since died, which is the point: the doors have to refuse it.
@@ -936,19 +941,19 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     });
                 }
             }
-            // A scratch half stored or taken, which is what moves the host's second count.
+            // A scratch state stored or taken, which is what moves the host's second count.
             Verb::TenantScratch { tenant, store } => {
                 if let Some(tenant) = wrapped(&lodged, tenant)
                     && graph.is_live(tenant)
                 {
                     graph
                         .enter(tenant, |context| {
-                            if let Some(parked) = context.scratch_continuation() {
+                            if let Some(parked) = context.scratch_state() {
                                 assert_eq!(*parked, 7, "a parked scratch value read other bytes");
                             }
                             if store {
                                 let parked = one(context.scratch_writer(), 7u32);
-                                context.store_scratch_successor(parked);
+                                context.store_scratch_state(parked);
                             }
                         })
                         .unwrap();

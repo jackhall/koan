@@ -12,13 +12,13 @@
 use super::super::*;
 use super::{Number, number_here, one, operand_at, pin, pinned};
 
-/// The storage half of the continuation: a run in the cell's region.
+/// The continuation: a run in the cell's region.
 struct Storage;
 crate::reattachable!(Storage => &'cell [u32]);
 
-/// The scratch half: a borrow of the cell's own scratch bump, so a half at rest names real bytes.
+/// The scratch state: a borrow of the cell's own scratch bump, so a state at rest names real bytes.
 struct Held;
-crate::reattachable!(Held => &'cell u32);
+crate::reattachable!(both Held => &'scratch u32);
 
 /// The delivered scratch family: a number a producer writes into the consumer's scratch habitat.
 struct Note;
