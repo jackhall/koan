@@ -127,15 +127,16 @@ pub fn coerce<'graph, 'cell>(
                 built.with_type(cx.writer, dst)
             }))
         }
+        // Keys are untouched: a dict's key type names no member a signature can declare abstract.
         TypeNode::Dict {
-            value: declared, ..
+            value: cell_type, ..
         } => {
             let Value::Dict(dict) = value else {
                 return Err(CoercionRefused::Unsupported(declared));
             };
             let mut entries = BumpVec::with_capacity_in(dict.len(), cx.scratch);
             for (key, cell) in dict.entries() {
-                entries.push((*key, coerce(cx, *cell, declared)?));
+                entries.push((*key, coerce(cx, *cell, cell_type)?));
             }
             let built = Dict::new(cx.writer, &entries, cx.types, cx.scratch);
             Ok(Value::Dict(if built.ktype() == dst {
@@ -150,10 +151,10 @@ pub fn coerce<'graph, 'cell>(
             };
             let mut built = BumpVec::with_capacity_in(record.len(), cx.scratch);
             for (name, cell) in record.fields() {
-                let (binder, declared) = fields
+                let (binder, field_type) = fields
                     .get_key_value(name)
                     .expect("the record satisfies the slot, so it has every declared field");
-                built.push((binder, coerce(cx, *cell, declared)?));
+                built.push((binder, coerce(cx, *cell, field_type)?));
             }
             let built = Record::new(cx.writer, &built, cx.types, cx.scratch);
             Ok(Value::Record(if built.ktype() == dst {

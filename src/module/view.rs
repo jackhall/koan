@@ -81,7 +81,8 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
 ///
 /// Two callers: an ascription, and a nested signature slot inside one
 /// ([`coerce`](super::coerce::coerce)), which passes the enclosing substitutions unchanged —
-/// a nested boundary mints nothing of its own.
+/// a nested boundary mints nothing of its own. Satisfaction is the caller's: an ascription checks
+/// it outright, and a nested slot was checked when the enclosing one was.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build<'graph, 'cell, 'run, 'x>(
     writer: Writer<'cell>,
