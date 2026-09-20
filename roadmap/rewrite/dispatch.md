@@ -70,22 +70,31 @@ program runs on the rewritten stack.
   at its key because the body-shape builder walks a matching node by the entry's
   roles. An operator's bucket is open by type because its slots are eager
   operands whichever overload is selected, so no walk depends on the selection.
-  How an operator's runs chain is [operator groups](operator-groups.md)' and is
-  never a user's to change.
-- *Shadowable builtins — open.* `==` and `!=` take `Any`, so under builtin-first
-  selection no user overload of them is ever selected; the kind exists so a
-  user-defined equality is possible. Which builtins belong to it, and its
-  selection rule, are undecided — "most specific wins, a builtin wins a tie" may
-  serve this kind and the operator kind alike.
+  How an operator run of it chains is [operator groups](operator-groups.md)' and
+  is never a user's to change.
+- *Shadowable builtins — open.* `==` takes `Any`, so under builtin-first
+  selection no user overload of it is ever selected; the kind exists so a
+  user-defined equality is possible. A user's `==` returns `Bool` and `!=` is
+  never declared: [operator groups](operator-groups.md) holds a program to both
+  and rewrites `a != b` as `NOT (a == b)`, so `NOT` is a builtin over `Bool`
+  and `!=` has no bucket. Which other builtins
+  belong to the kind, and its selection rule, are undecided — "most specific
+  wins, a builtin wins a tie" may serve this kind and the operator kind alike.
 - *An overload that is never selected — open.* A functor is a `FN` or `EXPR`
   returning a module, so an `OP #(+) OVER Elt` in its body learns its operand
   type per call: at `Elt = Number` the builtin is selected first, inside the
   functor's own body too, and nothing reports it. Two user overloads meet the
   same way when an enclosing scope already holds the instantiated one. Koan has
   no warning channel; what reports the overload where it is born is undecided.
-- *Visibility shared with operator groups — open.* A run of operators sees an
-  [operator group](operator-groups.md) under the predicate that admits the
-  group's overloads here, so the two are settled together.
+- *Visibility shared with operator groups — decided.* An operator run sees a
+  user's [operator group](operator-groups.md) inside the `GROUP`'s own body and
+  inside a `USING … SCOPE` body surfacing it, which is where the group's
+  overloads are admitted here; builtin chaining is seen everywhere.
+- *What dispatch evaluates — decided.* The statements a body's shape owns, which
+  [operator groups](operator-groups.md) rewrites, never the parse; and an
+  expression part holding a nested block shape runs as a block whose value is
+  its last statement's, which is how a pairwise operator run's shared operand
+  evaluates once.
 
 ## Dependencies
 

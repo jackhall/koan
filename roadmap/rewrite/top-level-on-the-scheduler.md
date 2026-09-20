@@ -133,6 +133,10 @@ part a refused tie names.
   pending binder unreachable, and it is why the
   [scheduler](../../src/scheduler/README.md#the-two-ways-a-cell-waits) needs no
   park on a slot.
+- *Where a body's statements come from — decided.* From the shape that owns
+  them, since [operator groups](operator-groups.md) rewrites an operator run
+  where the shape is built and every part address a shape records lies inside
+  the statements it owns.
 - *Where koan's steps live — decided.* One module above the
   [scheduler](../../src/scheduler/README.md), which takes the step state as a
   bundle parameter beside its delivery bundle. A step's state has to live with
