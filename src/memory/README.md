@@ -177,7 +177,7 @@ bisimulation over member pairs — and a renderer that terminates on a cycle
 belong to [values](../values/README.md#equality-and-rendering). Which bindings
 may form a knot is delimited by a [scope's shape](../scope/README.md#visibility),
 and tying a component of value binders — functions and data nodes — belongs to
-[`function`](../function/README.md#the-tie).
+[`knot`](../knot/README.md#the-tie).
 
 ## Strongly connected components
 

@@ -16,7 +16,7 @@ operator channel of chaining records, and no koan program reaches either: the
 and `UNARY OP` heads as keyworded members and refuses a bodyless `GROUP`
 [`Unsupported`](../../src/elaborate.rs), so a signature declares an operator's
 bucket and never how a run of it chains. A `GROUP` binds a
-[module value](../../src/module/README.md), whose signature carries no operator
+[module value](../../src/knot/module/README.md), whose signature carries no operator
 record.
 
 **Acceptance criteria.**

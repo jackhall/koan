@@ -14,11 +14,11 @@ what every layer above passes around, and [scopes](../../src/scope/README.md)
 sit on values and types, and the
 [scheduler](../../src/scheduler/README.md) — the deferred-work drain, a koan
 module over the cell substrate — sits on both.
-[Function values](../../src/function/README.md), whose captured environment is a
+[Function values](../../src/knot/README.md), whose captured environment is a
 scope's closure bindings, rest on `memory`'s
 [knot](../../src/memory/README.md#the-knot) — the shape mutually recursive
 functions and circular values are born in — and
-[module values](../../src/module/README.md) sit beside them, a module being a
+[module values](../../src/knot/module/README.md) sit beside them, a module being a
 knot node of its own whose members are read by slot. The items here complete the
 path to running a program: the top level that turns a koan program into work for
 the drain; dispatch over all of them; module programs and yielding iterators
@@ -57,7 +57,7 @@ as surprises, not scheduled.
   defining frame's activation is a cross-region read that needs a hold on that
   frame's cell, which is the callable layer's to wire.
 - **A function value born outside a binder's root.** The
-  [tie](../../src/function/README.md#the-tie) births a callable only for a
+  [tie](../../src/knot/README.md#the-tie) births a callable only for a
   binder whose right-hand side is a callable form at its root, or a combined
   form; a `FN` inside a list literal, or one called where it is written, has no
   birth path, and which item gives it one is undecided. A `FN` under a data
@@ -65,17 +65,17 @@ as surprises, not scheduled.
   evaluate it and refuses `Eager` until one can.
 - **Union-variant construction in a cycle.** A nominal construction
   `(Ring {next = a})` reads its payload as a constructor slot, so a tagged ring
-  reaches the [tie](../../src/function/README.md#the-tie); a union variant's
+  reaches the [tie](../../src/knot/README.md#the-tie); a union variant's
   construction (`Tree.Node x`) is an attribute form whose parts stay eager, so
   a ring through a union variant is an eager cycle.
 - **Anonymous structural recursion in types.** A data cycle ties only through
   a callable or a tagged nominal value
-  ([the tie](../../src/function/README.md#the-tie)), so `LET a = [1 a]` or a ring of
+  ([the tie](../../src/knot/README.md#the-tie)), so `LET a = [1 a]` or a ring of
   plain records needs a nominal declaration. Structural `μ`-types in the
   [type lattice](../../src/type_lattice/README.md) would admit them without
   breaking a program the nominal cut admits.
 - **Binding a knot's members walks the knot per member.**
-  [`Knotted::of`](../../src/function/birth.rs) resolves member `index` through
+  [`Knotted::of`](../../src/knot/tie.rs) resolves member `index` through
   `knot.members().nth(index)`, O(n) per call, so binding a component's k
   members is O(k²). The knot has no index→member door, since an edge is minted
   only by a `KnotPlan`.
@@ -102,7 +102,7 @@ as surprises, not scheduled.
   dependency, and `values`' suite has no access to the AST strategies they
   generate from.
 - **A cyclic data value cannot cross an opaque view's barrier.** The
-  [coercion walk](../../src/module/README.md#members-are-born-coerced) rebuilds
+  [coercion walk](../../src/knot/module/README.md#members-are-born-coerced) rebuilds
   a container cell by cell, but a container that is a knot's data node is a knot
   member rather than a container word, so the arm has nothing to rebuild and
   refuses `Unsupported`. Rebuilding a cycle through a barrier would have to
@@ -115,7 +115,7 @@ as surprises, not scheduled.
   already read the names a `USING` over one surfaces, since a pin changes no
   name.
 - **A union slot coerces by whichever member the union interned first.** The
-  [coercion walk](../../src/module/README.md#members-are-born-coerced) takes the
+  [coercion walk](../../src/knot/module/README.md#members-are-born-coerced) takes the
   first declared member of a union whose source side admits the value. Where two
   admit it — a slot declared `Carrier | Number` over a source binding `Carrier`
   to `Number` — which one is reached decides whether the member is sealed at the

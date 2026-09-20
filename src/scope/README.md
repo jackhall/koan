@@ -207,7 +207,7 @@ data binder is an ordinary value, and a component of type binders goes through
 [the elaborator's door](../elaborate/README.md#declarations). A component never
 mixes the two channels: a definition names types only, so no mention leaves a
 type binder for a value binder. Tying is
-[`function`](../function/README.md#the-tie)'s, which writes a deferred mention
+[`knot`](../knot/README.md#the-tie)'s, which writes a deferred mention
 below a nested constructor into the knot as an anonymous node.
 
 A declaration's definition part is walked under the constructor state, so every
@@ -287,7 +287,7 @@ Two forms introduce names no shape can see.
   its body's block shape**, so a mention of one resolves through the ordinary
   local read, a callable nested in the block captures it the ordinary way, and
   no coordinate names a member. Only the binding is left to run time, which is
-  [`module`](../module/README.md#entering-a-using--scope-block)'s.
+  [the module layer](../knot/module/README.md#entering-a-using--scope-block)'s.
 
   That works only if the names are readable where the shape is built, so the
   builder walks the operand's spine back to a declaration that states its

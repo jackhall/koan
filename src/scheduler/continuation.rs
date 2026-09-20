@@ -6,7 +6,7 @@
 //! `'scratch`, each at its own brand. One slot per habitat, so the wrong form is unrepresentable
 //! in each.
 
-use crate::function::KValue;
+use crate::knot::KValue;
 use crate::memory::{Dormant, DropFree, StepContext, reattachable};
 use crate::scheduler::action::{Action, Spawns};
 use crate::scheduler::delivery::KDelivery;
@@ -121,7 +121,7 @@ pub enum State<'graph, 'cell> {
     /// A value the previous step left, or the cell was born holding.
     Value(KValue<'graph, 'cell>),
     /// A value at rest in the cell a hop or a spawn came from, to be redeemed and copied in.
-    Parked(Dormant<'graph, crate::function::KValueFamily>),
+    Parked(Dormant<'graph, crate::knot::KValueFamily>),
 }
 
 /// What a cell carries about itself for the drain's use: where it sits, where its result goes, and

@@ -1,6 +1,6 @@
 //! What a koan cell delivers to its consumer, as the substrate's two-family bundle.
 
-use crate::function::KValueFamily;
+use crate::knot::KValueFamily;
 use crate::memory::Delivery;
 
 /// Koan's delivery bundle: a value built through the consumer's own scratch writer, and a value

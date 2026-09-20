@@ -1,13 +1,15 @@
-//! Shared scaffolding for `module`'s suites: programs shaped, brought into being and ascribed
-//! through `function`'s fixture, which is the only thing that can build a module to look at.
+//! Shared scaffolding for the module suites: programs shaped, brought into being and ascribed
+//! through [`knot`'s fixture](crate::knot::tests), which is the only thing that can build a module
+//! to look at.
 
-mod boundary;
+mod birth;
 mod coerce;
+mod coerced;
 mod surface;
 mod view;
 
-use crate::function::tests::{Fixture, bound};
-use crate::function::{KValue, Knotted};
+use crate::knot::tests::{Fixture, bound};
+use crate::knot::{KValue, Knotted};
 use crate::memory::BumpAllocator;
 use crate::scope::Activation;
 use crate::symbols::BinderSymbol;

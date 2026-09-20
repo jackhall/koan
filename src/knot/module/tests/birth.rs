@@ -7,8 +7,10 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::{Incomparable, Knotted as _, Resolved, Value};
 
-use super::super::{KActivation, Knotted, Supplied, Untieable, module_activation, tie};
-use super::{Fixture, bound, callable, declared, pin, read, with_fixture};
+use crate::knot::tests::{Fixture, bound, callable, declared, pin, read, with_fixture};
+use crate::knot::{KActivation, Knotted, Supplied, Untieable, tie};
+
+use super::super::body_activation;
 
 /// The module bound under `name`, and its node.
 fn module<'graph, 'cell>(
@@ -255,7 +257,7 @@ fn a_claimed_slot_in_the_supplied_body_leaves_the_module_pending() {
             let (slot, _) = shape.slot(fixture.name("m")).unwrap();
             let body = crate::memory::resident(
                 writer,
-                module_activation(writer, activation, slot, fixture.scratch())
+                body_activation(writer, activation, slot, fixture.scratch())
                     .expect("the body captures nothing"),
             );
             for index in 0..body.shape().slots() {
@@ -302,7 +304,7 @@ MODULE m = (LET held = later)";
                 read(fixture, activation, "later"),
                 Binding::Pending(_)
             ));
-            let refused = module_activation(context.writer(), activation, slot, fixture.scratch())
+            let refused = body_activation(context.writer(), activation, slot, fixture.scratch())
                 .map(|_| ())
                 .expect_err("the capture is pending");
             assert_eq!(

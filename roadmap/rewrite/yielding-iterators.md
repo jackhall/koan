@@ -34,7 +34,7 @@ elements a consumer takes lazily.
   what delegation covers.
 - *Delegation over continuation-passing — decided.* A closure retains what it
   captures, and a callable copies only by re-tying its whole knot
-  ([src/function/README.md](../../src/function/README.md#weight-and-copy)), so a continuation-passing stream
+  ([src/knot/README.md](../../src/knot/README.md#weight-and-copy)), so a continuation-passing stream
   either pins the producing call's storage into the consumer on every element
   or copies every capture per element, and a tree-cell loop hop cannot carry
   the pin across a tail call at all. Delegation keeps pending tails as data:
@@ -67,7 +67,7 @@ elements a consumer takes lazily.
   calls makes a demand one step and one child, and copies the O(depth) stack
   across each consumer hop.
 - *A bound call's shape — open.* A tagged record over a function value, or a
-  node of the callable parameter [`function`](../../src/function/README.md) closes,
+  node of the callable parameter [`knot`](../../src/knot/README.md) closes,
   beside the function node.
 - *Buffered channels — deferred.* A policy layer for buffering and
   multi-producer merge, designed once streams ship.

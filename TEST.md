@@ -43,7 +43,7 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
 `memory`, `parse`, `scope`, `source`, `type_lattice`, `values`, `elaborate`,
-`function`, `module`, `scheduler` and the embedded crates `cellgraph` and
+`knot`, `scheduler` and the embedded crates `cellgraph` and
 `sexlex` — are
 what a default koan build compiles and a default `cargo test` runs. `workgraph`
 is no longer a koan dependency; it still builds and tests as a workspace member.
@@ -218,7 +218,7 @@ under the bump tier — under Miri's tree-borrows mode, with zero process-exit
 leaks and zero UB required for sign-off. `memory`'s knot adds no layout or
 retype over `thin_run` (cellgraph's slate runs it at every edge its arithmetic
 has, including a fill writing into the same region); what koan's slate pins is
-`function`'s copy of a knot, whose node run is filled while closure runs, data
+`knot`'s copy of a knot, whose node run is filled while closure runs, data
 node residents and deep copies are written into the same region. `src/` carries no `unsafe` at all — koan's only
 `unsafe` is the counting global allocator in
 [`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding

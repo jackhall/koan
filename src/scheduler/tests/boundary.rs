@@ -1,12 +1,12 @@
 //! The import boundary and the storage discipline, as a test over this module's own source.
 //!
-//! `scheduler` may name `function`, `memory` and `values` and nothing else in the crate — no
+//! `scheduler` may name `knot`, `memory` and `values` and nothing else in the crate — no
 //! `scope`, no `parse`, no `elaborate`; outside its tests it holds no owning heap type but its own
 //! runtime state, which is never a value in a region.
 
 /// The path prefixes `scheduler` may name.
 const PREFIXES: &[&str] = &[
-    "crate::function",
+    "crate::knot",
     "crate::memory",
     "crate::scheduler",
     "crate::tests::allocation_count",

@@ -4,7 +4,7 @@
 
 use std::cell::Cell;
 
-use crate::function::KValue;
+use crate::knot::KValue;
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{

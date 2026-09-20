@@ -127,7 +127,7 @@ fn answers<'graph>(
 ) -> Action<'graph> {
     record(String::from("child"));
     Action::deliver_scratch(context, &resume, |_, _| {
-        Active::new(crate::function::KValue::Number(1.0))
+        Active::new(crate::knot::KValue::Number(1.0))
     })
 }
 

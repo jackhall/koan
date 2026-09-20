@@ -1,4 +1,4 @@
-//! Shared scaffolding for `function`'s suites: program storage with a registry and an interner, a
+//! Shared scaffolding for `knot`'s suites: program storage with a registry and an interner, a
 //! builtin table, and a runner that activates a program in a cell and brings every binding it can
 //! into being — each component of type binders through the declaration door, each cyclic component
 //! of value binders and each component of callable binders through the tie, and each lone data
@@ -6,14 +6,12 @@
 //!
 //! A module binder is brought body-first: the runner builds its body's activation, claims and runs
 //! every component of that body, and only then ties the binder with the finished activation. The
-//! layer above reads this fixture, so its doors are `pub(crate)`.
+//! module suites read this fixture too, so its doors are `pub(crate)`.
 
 mod birth;
 mod boundary;
-mod coerced;
 mod copy;
 mod equality;
-mod module;
 mod properties;
 
 use crate::elaborate::type_declarations;
@@ -28,7 +26,7 @@ use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Circular, Knotted as _, Link, TypeValue, Value};
 
-use super::module::module_activation;
+use super::module::body_activation;
 use super::{KActivation, KValue, Knotted, Supplied, tie};
 
 /// A continuation family for a graph whose cells only store.
@@ -246,7 +244,7 @@ impl<'graph> Fixture<'_, 'graph> {
             body_node.body_statements().map(|(node, _)| node).collect();
         let body = resident(
             writer,
-            module_activation(writer, activation, slot, self.scratch)
+            body_activation(writer, activation, slot, self.scratch)
                 .expect("the module body's captures are bound"),
         );
         for index in 0..body.shape().slots() {

@@ -3,7 +3,7 @@
 The deferred-work drain koan runs on, built directly over
 [`cellgraph`](../../cellgraph/README.md)'s cells and liveness matrix, reached
 only through [`memory`](../memory/README.md). It sits above
-[`values`](../values/README.md) and [`function`](../function/README.md), and
+[`values`](../values/README.md) and [`knot`](../knot/README.md), and
 neither of them names it.
 
 A unit of work **is** a cell. Its region, its erased continuation and its holds
@@ -259,7 +259,7 @@ sixty-four slab slots.
 
 ## The import rule
 
-Outside doc comments and `#[cfg(test)]` this module names `crate::function`,
+Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
 `crate::memory` and `crate::values`, and nothing else in the crate. It does not
 name `scope`, `parse` or `elaborate`. `cellgraph` is reached only through
 `memory`, and `cellgraph` itself depends on neither this module nor koan.

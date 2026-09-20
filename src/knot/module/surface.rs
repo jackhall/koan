@@ -10,7 +10,7 @@
 //! rather than after, so the parameters are picked out by declared position — `Position::PARAMETER`
 //! — and not by taking the first `n` slots.
 
-use crate::function::{KActivation, Knotted};
+use crate::knot::{KActivation, Knotted};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::scope::{Position, ShapeKind, Slot};
 use crate::symbols::BinderSymbol;

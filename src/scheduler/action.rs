@@ -4,7 +4,7 @@
 //! step's return type can name none of them: what crosses back out is a handle, an index, a
 //! dormant carrier or a borrow of program storage, and nothing else.
 
-use crate::function::KValueFamily;
+use crate::knot::KValueFamily;
 use crate::memory::{Active, CellHandle, DeliverError, Delivered, Dormant, Writer};
 use crate::scheduler::continuation::{Context, NativeStep, Resume, ScratchState, State, Work};
 

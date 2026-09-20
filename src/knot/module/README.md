@@ -4,17 +4,31 @@ The layer that reads a module by name: the views `:|` and `:!` build, the
 coercion that births a view's members, and the binding a `USING … SCOPE` block
 enters on.
 
-A module is *born* one layer down, in [`function`](../function/README.md), as a
-knot node holding its self-signature and its members. `module` sits on top of
-that — above [`values`](../values/README.md), [`scope`](../scope/README.md),
-[`elaborate`](../elaborate/README.md), the
-[type lattice](../type_lattice/README.md) and `function`, and named by nothing
-below it. It is the top of the rewrite's value stack.
+A module is one kind of [knot](../README.md) node, holding its self-signature
+and its members. This module owns that node — its payload, its doors and
+everything that reads one by name — beside the [function](../function.rs) node
+its sibling owns, which it never names. It reaches the shared node vocabulary
+through [`knot`](../README.md#what-sits-where) and rests on
+[`values`](../../values/README.md), [`scope`](../../scope/README.md),
+[`elaborate`](../../elaborate/README.md) and the
+[type lattice](../../type_lattice/README.md).
 
 What it does *not* do is evaluate anything. `m :| Sig`, `m.f`, a `USING`
 expression and a call through a barrier are
-[module programs](../../roadmap/rewrite/modules.md)'; the doors here are what
+[module programs](../../../roadmap/rewrite/modules.md)'; the doors here are what
 that item will drive, and they are exercised over activations bound by hand.
+
+## Birth
+
+A module binder comes into being body-first ([birth.rs](birth.rs)). The caller
+builds the body's activation with `body_activation`, runs it until every slot is
+bound, and only then ties the binder through `tie_member`: a module's type and
+weight are facts about the members its body binds, and a knot node is written
+once. A module is alone in its component — a mention reached from a module
+binder's root is eager whatever body it sits in, so a module is never in a cycle
+— so it shares nothing with the [tie](../README.md#the-tie)'s staging and ties
+on its own path. `Module::tie` is the one private-field door a body-born module
+and a view both go through, so the two have one representation and one copy.
 
 ## Layout order
 
@@ -27,7 +41,7 @@ place it is spelled:
 Three readers agree on it, and none consults the others:
 
 - a **body shape** lays its value slots out first and its type slots after, each
-  channel symbol-sorted ([two channels](../scope/README.md#two-channels)), so a
+  channel symbol-sorted ([two channels](../../scope/README.md#two-channels)), so a
   body-born module's member run is its finished activation's slots read out in
   slot order, with no remap;
 - a **signature**'s member tables are symbol-sorted by name, so a view's member
@@ -46,8 +60,8 @@ member's index in the schema, then that index into the node's run.
 ## The view door
 
 [`ascribe`](view.rs) is what `m :! Sig` and `m :| Sig` build. A view is a module
-of its own — the same node, through the same constructor `function` uses for a
-body-born one — holding only the members its signature names, at the types that
+of its own — the same node, through the same constructor a body-born one goes
+through — holding only the members its signature names, at the types that
 signature declares. So a view and a body-born module have one representation and
 one copy, and nothing downstream asks which it holds.
 
@@ -96,7 +110,7 @@ Where they differ, the arm is the declared type's:
 
 - a reference to an abstract member, first-order or applied — the value takes
   the mint as its one tagged layer, through
-  [`sealing`](../values/README.md#what-a-value-is), the second checked
+  [`sealing`](../../values/README.md#what-a-value-is), the second checked
   constructor beside `construction`: an abstract type records no representation
   to check a construction against, so what is checked is that the identity is a
   per-application mint and that the payload satisfies the source's own binding;
@@ -108,10 +122,10 @@ Where they differ, the arm is the declared type's:
   union's interned order, then that member's arm; two members that both admit it
   take whichever that order reaches first;
 - a function type — a **barrier node**
-  ([`coerced`](../function/README.md#what-a-knot-member-is)) holding the
+  ([`Coerced`](../README.md#what-a-knot-member-is)) holding the
   function it stands before, the type a caller sees, the declared slot type and
   the two substitutions as signature handles. Teaching a call to go through it
-  is [module programs](../../roadmap/rewrite/modules.md)';
+  is [module programs](../../../roadmap/rewrite/modules.md)';
 - a signature — the member is **re-viewed** through the same `build`. Nothing is
   minted at a nested boundary: the nested signature's slot types name the
   *enclosing* signature's members, so the enclosing substitutions read them and
@@ -125,7 +139,7 @@ took, is a `CoercionRefused` naming what it was.
 
 The surfaced names are the block's **parameters**, read off the operand's
 declaration where the shape is built
-([names that arrive at run time](../scope/README.md#names-that-arrive-at-run-time)),
+([names that arrive at run time](../../scope/README.md#names-that-arrive-at-run-time)),
 so a mention of one resolves through the ordinary local read and a callable
 nested in the block captures it the ordinary way. No coordinate names a member.
 
@@ -142,22 +156,27 @@ disagree. They guard a caller that hands the door the wrong module.
 
 ## The import rule
 
-**Outside doc comments and `#[cfg(test)]`, `module` names `crate::elaborate`,
-`crate::function`, `crate::memory`, `crate::parse`, `crate::scope`,
-`crate::type_lattice` and `crate::values`, and nothing else in the crate** — no
-scheduler, no builtins — and holds no owning heap type.
-[`tests::boundary`](tests/boundary.rs) reads this module's own source and fails
-on any other `crate::` path, on an owning heap type outside the tests, and on a
-retired lifetime name. Nothing below names `module`.
+`knot`'s [boundary test](../tests/boundary.rs) covers this module with the rest
+of the layer: outside doc comments and `#[cfg(test)]` it names no crate path but
+the layers below, and holds no owning heap type. What that scanner cannot read is
+the direction inside `knot`: **this module never names
+[`function`](../function.rs)**, and reaches the node vocabulary through the
+facade.
 
 ## Testing
 
 The suites run a program through
-[`function`'s fixture](../function/README.md#testing) — the only thing that can
+[`knot`'s fixture](../README.md#testing) — the only thing that can
 build a module to look at — which shapes and activates a program in a cell,
 brings each binding into being, and for a module binder runs its body first and
 ties the binder with the finished activation.
 
+- [`tests/birth.rs`](tests/birth.rs) — a module node's signature and its members
+  in layout order, a `GROUP` binder birthing one the same way, a module capturing
+  an outer value and holding a module of its own, a body that ties a knot, two
+  modules incomparable and rendering as their signature, and each refusal.
+- [`tests/coerced.rs`](tests/coerced.rs) — what a barrier holds, and `values`
+  seeing it as the function it stands for.
 - [`tests/view.rs`](tests/view.rs) — a transparent view carries what the
   signature names and drops the rest, an opaque one mints a fresh carrier per
   application and sources it at its own nonce, each refusal, and a view copying
@@ -170,22 +189,20 @@ ties the binder with the finished activation.
 - [`tests/surface.rs`](tests/surface.rs) — a surfaced name reading the member it
   names, the two refusals, and **the layout law** over three programs: the
   block, the body and the signature agree on every member's place.
-- [`tests/boundary.rs`](tests/boundary.rs) — the import boundary above, as a test
-  over this module's own source.
 
 The readings and refusals of the `USING` operand itself are
-[`scope`'s](../scope/README.md#names-that-arrive-at-run-time), in its example
+[`scope`'s](../../scope/README.md#names-that-arrive-at-run-time), in its example
 suite, since they are facts about the shape.
 
 ## Open work
 
-- [Module programs](../../roadmap/rewrite/modules.md) — evaluating `:|`, `:!`
+- [Module programs](../../../roadmap/rewrite/modules.md) — evaluating `:|`, `:!`
   and a member read as expressions, and calling a function member through its
   barrier.
-- [Operator groups](../../roadmap/rewrite/operator-groups.md) — the chaining
+- [Operator groups](../../../roadmap/rewrite/operator-groups.md) — the chaining
   record a `GROUP`'s module carries.
-- [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel of a
+- [Dispatch](../../../roadmap/rewrite/dispatch.md) — the keyworded channel of a
   module's signature, empty until a bodyless definition has a slot.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
+- [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
   data member coerced through a barrier, and `WITH` over a signature in a type
   expression.

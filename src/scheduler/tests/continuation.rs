@@ -1,7 +1,7 @@
 //! The continuation round trip: a cell born at `'graph`, entered, storing a successor at its own
 //! region brand, and entered again to take it back.
 
-use crate::function::KValue;
+use crate::knot::KValue;
 use crate::memory::CellGraph;
 use crate::scheduler::{
     CellPlace, Context, Continuation, ContinuationFamily, KDelivery, Provenance, ScratchFamily,

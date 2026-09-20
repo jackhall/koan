@@ -54,7 +54,7 @@ silence the stale-anchor check; delete a redundant test instead.
   destination's `Writer`, nesting `fill` inside `fill` with `text` between and embedding program
   nodes at `'graph`. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s placement doors
   and reattach seam, whose pin and keep paths its own slate pins.
-- `src/function/copy.rs` — a knot member's copy re-ties its whole knot through the destination's
+- `src/knot/copy.rs` — a knot member's copy re-ties its whole knot through the destination's
   `Writer`: `thin_run` fills the node run while each function's closure run, each data node's
   resident and cell runs, each module's member run, each barrier's resident and every held value's
   deep copy are written into the same region. No `unsafe` of its own; the backing `unsafe` is
@@ -118,7 +118,7 @@ region it came from is released.
   its home released, and redeemed in the destination's next step: every byte reads back and the
   quote is the parsed node.
 
-**Knots in a cell's region** ([src/function/copy.rs](../src/function/copy.rs)) — a knot
+**Knots in a cell's region** ([src/knot/copy.rs](../src/knot/copy.rs)) — a knot
 member copied across a crossing, a function or a data node, re-ties its whole knot through the
 destination's writer, and is read through its edges after the region it came from is released.
 

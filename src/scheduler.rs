@@ -11,9 +11,9 @@
 //! unmet has no cell at all — the drain holds it as a submission with a count — so the only thing a
 //! live cell ever waits on is its receipt run.
 //!
-//! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::function`,
+//! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
 //! `crate::memory` and `crate::values`, and nothing else in the crate; [`tests::boundary`] reads
-//! the source to hold it there. Neither `values` nor `function` names this module, and `cellgraph`
+//! the source to hold it there. Neither `values` nor `knot` names this module, and `cellgraph`
 //! names neither it nor koan.
 //!
 //! See [scheduler/README.md](scheduler/README.md).

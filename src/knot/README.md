@@ -1,13 +1,31 @@
-# Functions
+# Knots
 
-Functions as values, and the knots they are born in: the layer that closes
+Functions, modules and circular data as values: the layer that closes
 [`Value`](../values.rs)'s knot-member parameter with a node that is a function,
 a data node, a module or a barrier over a function, ties a component of value
 binders as one [knot](../memory/README.md#the-knot), and copies a member by
 re-tying its knot.
 It sits above [`values`](../values/README.md), [`scope`](../scope/README.md)
 and [`elaborate`](../elaborate/README.md), and neither `values` nor `scope`
-names it.
+names it. It is the top of the rewrite's value stack.
+
+## What sits where
+
+[`knot.rs`](../knot.rs) is the vocabulary every node kind shares: the member,
+the node, the value and activation spelled at it, and the `Supplied` and
+`Untieable` a birth answers with. Each node kind owns its payload and its doors
+beside it:
+
+- [`function.rs`](function.rs) — a function node, and the staging a tie does for
+  a function member.
+- [`data.rs`](data.rs) — a data node: staging, the memo derivation below, and
+  the lay-down.
+- [`module/`](module/README.md) — a module node and a barrier node, and
+  everything that reads a module by name.
+
+[`tie.rs`](tie.rs) births a component over them, and [`copy.rs`](copy.rs) re-ties
+a whole knot. A node kind reaches the shared vocabulary through the facade and
+never a sibling, so `function` and `module` do not name each other.
 
 ## What a knot member is
 
@@ -17,7 +35,7 @@ arm, `Knotted(X)`, over a parameter it asks two things of
 the same parameter through closure bindings, the builtin table and the
 activation. This module closes it:
 
-- [`Knotted`](../function.rs) is one member of a knot — the `(knot, index)`
+- [`Knotted`](../knot.rs) is one member of a knot — the `(knot, index)`
   pair, sixteen bytes — so a value holding one stays a twenty-four-byte word.
   Its equality is node identity.
 - The knot's payload is a `Node`, of four arms. A `Function` node holds the
@@ -26,11 +44,11 @@ activation. This module closes it:
   node holds a [`Circular`](../values/circular.rs) — a list, dict, record or
   tagged resident whose cells are links — and the same knot weight. A `Module`
   node holds its self-signature, its members in
-  [layout order](../module/README.md#layout-order) and the same knot weight —
+  [layout order](module/README.md#layout-order) and the same knot weight —
   not an activation, since a view has no body to activate and a shape built per
   application would grow program storage without bound. A `Coerced` node is a
   **barrier** over a function member of an opaque view
-  ([members are born coerced](../module/README.md#members-are-born-coerced)):
+  ([members are born coerced](module/README.md#members-are-born-coerced)):
   the function it stands before, the type a caller sees, the slot type the
   view's signature declares, and the two substitutions it coerces between.
   `values::Knotted::resolve` tells a data node from the rest, and
@@ -59,7 +77,7 @@ knot, laid it down.
 
 ## The tie
 
-[`tie`](birth.rs) births one deferred-only component of a body's bindings
+[`tie`](tie.rs) births one deferred-only component of a body's bindings
 ([Visibility](../scope/README.md#visibility)) as one knot in the writer's
 region, and hands the knot back. **The caller binds**: member `i` of the
 component is the knot's node `i`, and the caller binds each member's slot to
@@ -79,18 +97,18 @@ Anything else is `Opaque` and refuses the tie before a member is read. A
 callable form anywhere else — inside a list, or called where it is written — is
 not a binder's and is born by no tie.
 
-**A module member is born body-first, and alone.** Its binder's body has
-already run in an activation the caller built through `module_activation` — a
-module shape's activation, which carries no callable, because a module's
-captures are never edges — and hands to the tie by site, with every slot bound.
-The tie asks [`elaborate`](../elaborate/README.md#a-modules-self-signature) for
-the self-signature over that activation and reads its slots out in slot order,
-which is [layout order](../module/README.md#layout-order), so a module's type
-and weight are facts about the members its body bound and the node is written
-once. A slot the body left claimed refuses `Pending` on that binder; no body
-supplied refuses `Eager` at the body's own site. Because a module is alone in
-its component, it shares nothing with the staging below and ties on its own
-path.
+**A module member is born body-first, and alone**, on the module layer's own
+path ([Birth](module/README.md#birth)): its binder's body has already run in an
+activation the caller built through `body_activation` — a module shape's
+activation, which carries no callable, because a module's captures are never
+edges — and hands to the tie by site, with every slot bound. `tie_member` asks
+[`elaborate`](../elaborate/README.md#a-modules-self-signature) for the
+self-signature over that activation and reads its slots out in slot order, which
+is [layout order](module/README.md#layout-order), so a module's type and weight
+are facts about the members its body bound and the node is written once. A slot
+the body left claimed refuses `Pending` on that binder; no body supplied refuses
+`Eager` at the body's own site. Because a module is alone in its component, it
+shares nothing with the staging below.
 
 **Stage, with no writer in reach.** Everything a member needs is read into
 scratch first.
@@ -222,13 +240,18 @@ renders with `@n` labels where a cycle closes, both in `values`.
 
 ## The import rule
 
-**Outside doc comments and `#[cfg(test)]`, `function` names `crate::elaborate`,
-`crate::memory`, `crate::parse`, `crate::scope`, `crate::type_lattice` and
-`crate::values`, and nothing else in the crate.**
+**Outside doc comments and `#[cfg(test)]`, `knot` names `crate::elaborate`,
+`crate::memory`, `crate::parse`, `crate::scope`, `crate::symbols`,
+`crate::type_lattice` and `crate::values`, and nothing else in the crate** — no
+scheduler, no builtins.
 [`tests::boundary`](tests/boundary.rs) reads this module's own source and fails
 on any other `crate::` path, on an owning heap type outside the tests, and on a
 retired lifetime name. `values`' and `scope`'s own boundary tests hold them
-below this module.
+below this module, and nothing above names it but the scheduler.
+
+The direction *inside* `knot` is spelled in `super`-relative paths, which that
+scanner does not read: a node kind names the facade and never a sibling. It is
+held by review.
 
 ## Testing
 
@@ -239,7 +262,7 @@ of value binders or a component of callable binders through the tie with an
 evaluator that supplies nothing, a module binder body-first (its body's
 activation laid down, every component of that body brought in, then the binder
 tied with the finished activation), and a lone data binder whose right-hand side
-lowers. The layer above reads the same fixture, since it is the only thing that
+lowers. The module suites read the same fixture, since it is the only thing that
 can build a module to look at. A test that constructs a nominal writes its `NEWTYPE` in the program
 source and reads the handle back off the slot the door bound; the builtin table
 carries the scalar types alone.
@@ -250,12 +273,12 @@ carries the scalar types alone.
   container sharing a knot with the function that captures it, an anonymous
   node on a sibling path, a nested construction built through the checked
   door, an eager part supplied by site; and each refusal.
-- [`tests/module.rs`](tests/module.rs) — a module node's signature and its
-  members in layout order, a `GROUP` binder birthing one the same way, a module
+- [`module/tests/birth.rs`](module/tests/birth.rs) — a module node's signature
+  and its members in layout order, a `GROUP` binder birthing one the same way, a module
   capturing an outer value and holding a module of its own, a body that ties a
   knot, two modules incomparable and rendering as their signature, and each
   refusal.
-- [`tests/coerced.rs`](tests/coerced.rs) — what a barrier holds, and `values`
+- [`module/tests/coerced.rs`](module/tests/coerced.rs) — what a barrier holds, and `values`
   seeing it as the function it stands for.
 - [`tests/copy.rs`](tests/copy.rs) — a two-node knot crossed under a copy is the
   same knot rebuilt, and so is a tagged ring beside a function capturing it
@@ -273,7 +296,7 @@ carries the scalar types alone.
   whole with each link's kind kept.
 
 Four tests join the koan [Miri slate](../../observe/miri_slate.md), the paths
-only `function` drives: `a_copied_knot_outlives_its_home` — a knot's node run
+only `knot` drives: `a_copied_knot_outlives_its_home` — a knot's node run
 filled while closure runs and deep copies are written into the same region,
 read through its edges after the region it was copied from is released —
 `a_copied_ring_outlives_its_home`, the same for a tagged ring whose record

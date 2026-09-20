@@ -1,6 +1,6 @@
 //! The view door: what `:!` and `:|` build over a module, and what refuses one.
 
-use crate::function::tests::{declared, pin, with_fixture};
+use crate::knot::tests::{declared, pin, with_fixture};
 use crate::memory::ScopeId;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode, sig_subtype};
@@ -177,7 +177,7 @@ LET f = (FN :{} -> Number = (1))";
             let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
             let wider = declared(fixture, activation, "Wider");
-            let f = crate::function::tests::callable(fixture, activation, "f");
+            let f = crate::knot::tests::callable(fixture, activation, "f");
 
             assert!(matches!(
                 ascribe(writer, f, ord, Ascription::Opaque, types, scratch),
@@ -197,8 +197,8 @@ LET f = (FN :{} -> Number = (1))";
 
 #[test]
 fn a_view_copies_across_a_cell_like_any_module() {
-    use crate::function::KValueFamily;
-    use crate::function::tests::{Step, copy};
+    use crate::knot::KValueFamily;
+    use crate::knot::tests::{Step, copy};
     use crate::memory::{CellGraph, ReleaseAbsorption};
     use crate::values::cross;
 

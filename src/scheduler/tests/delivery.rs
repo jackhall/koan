@@ -1,7 +1,7 @@
 //! A consumer parked on several producers: the count lives in the substrate's receipt run, one
 //! producer's delivery completes it, and the consumer wakes exactly once.
 
-use crate::function::KValue;
+use crate::knot::KValue;
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{

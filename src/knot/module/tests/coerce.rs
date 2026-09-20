@@ -2,7 +2,7 @@
 
 use std::ptr;
 
-use crate::function::tests::{declared, pin, with_fixture};
+use crate::knot::tests::{declared, pin, with_fixture};
 use crate::memory::ScopeId;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Members, TypeNode, specialize_schema};
@@ -197,8 +197,8 @@ fn a_transparent_view_coerces_nothing() {
 /// Whether two values point at the same thing — a stronger claim than equality, and the one a
 /// transparent view makes.
 fn same_referent(
-    left: Value<'_, '_, crate::function::Knotted<'_, '_>>,
-    right: Value<'_, '_, crate::function::Knotted<'_, '_>>,
+    left: Value<'_, '_, crate::knot::Knotted<'_, '_>>,
+    right: Value<'_, '_, crate::knot::Knotted<'_, '_>>,
 ) -> bool {
     match (left, right) {
         (Value::List(left), Value::List(right)) => ptr::eq(left, right),
@@ -351,7 +351,7 @@ LET f = (FN :{} -> Number = (1))";
                 from: Members::from_pairs(scratch, [(carrier, KType::NUMBER)]),
                 to: Members::from_pairs(scratch, [(carrier, mint)]),
             };
-            let f = crate::function::tests::callable(fixture, activation, "f");
+            let f = crate::knot::tests::callable(fixture, activation, "f");
             for value in [Value::Knotted(f), Value::Null] {
                 assert_eq!(
                     coerce(&cx, value, slot).err(),

@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 
-use crate::function::KValue;
+use crate::knot::KValue;
 
 thread_local! {
     static SEEN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };

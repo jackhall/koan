@@ -1,6 +1,6 @@
 //! Entering a `USING … SCOPE` block, and the layout law the whole item rests on.
 
-use crate::function::tests::{pin, with_fixture};
+use crate::knot::tests::{pin, with_fixture};
 use crate::memory::{CellHandle, Writer, resident};
 use crate::scope::{Activation, Binding, BodyShape, Coordinate, ShapeKind, Slot, Target};
 use crate::symbols::BinderSymbol;
@@ -139,7 +139,7 @@ USING m SCOPE (zero)";
         fixture.in_cell(pin, |context, binder| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, binder, &[]);
-            let f = crate::function::tests::callable(fixture, activation, "f");
+            let f = crate::knot::tests::callable(fixture, activation, "f");
             let block = entered(writer, activation, binder);
             assert_eq!(
                 surface(f, block, types, scratch),

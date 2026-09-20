@@ -8,13 +8,13 @@ a function pointer over a state value — and nothing turns a program into those
 The pieces it would compose already ship and have never been wired to each
 other: [shapes](../../src/scope/README.md) resolve a body's names to slot
 indices and condense its bindings into components, [the
-tie](../../src/function/README.md#the-tie) births a deferred-only component as
+tie](../../src/knot/README.md#the-tie) births a deferred-only component as
 one knot, and [values](../../src/values/README.md) prices every crossing. What is
 missing between them is where a top-level binding lives, which cell a statement
 is, how a component's dependencies reach the drain's submission table, and where
 the placement bit for a koan function comes from. Two of those layers record the
 gap as open work of their own: `scope` does not say which habitat each tier of an
-activation is laid down in, and `function` does not say who evaluates the eager
+activation is laid down in, and `knot` does not say who evaluates the eager
 part a refused tie names.
 
 **Acceptance criteria.**
@@ -44,7 +44,7 @@ part a refused tie names.
 - A component's submission carries the count of lower components it reads,
   taken from the shape's reference graph in condensation order, so a refused tie
   naming a pending binder
-  ([src/function/README.md](../../src/function/README.md#the-tie)) is a
+  ([src/knot/README.md](../../src/knot/README.md#the-tie)) is a
   scheduler bug rather than a wait. A statement containing `EVAL`, whose free
   names no shape can enumerate, counts every binder declared before its position.
 - Two units whose counts reach zero in the same round are launched in the order
@@ -74,7 +74,7 @@ part a refused tie names.
   [dispatch](dispatch.md)'s and nothing below it names an expression form.
 - A read of a name goes through one interface the activation of a called body
   and the top level's staged reads both answer, so
-  [the tie](../../src/function/README.md#the-tie) and
+  [the tie](../../src/knot/README.md#the-tie) and
   [elaboration](../../src/elaborate/README.md) name no habitat.
 - The placement bit a spawn carries is derived: a builtin declares it, and a
   user function derives it from its return type, a flat return being one that

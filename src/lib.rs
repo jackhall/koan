@@ -19,15 +19,14 @@ pub mod elaborate;
 #[cfg(feature = "pending_rewrite")]
 #[doc(hidden)]
 pub mod fold_fixture;
-/// Functions as values: the callable a value's parameter closes over, a knot node born by the tie
-/// of its component and copied by re-tying its knot.
-pub mod function;
+/// Functions, modules and circular data as values: the node that closes a value's knot-member
+/// parameter, born by the tie of its component and copied by re-tying its knot.
+pub mod knot;
 #[cfg(feature = "pending_rewrite")]
 pub mod machine;
 /// The shape of things in storage: the cell tier over `cellgraph` — its names under Koan's
 /// spelling and the slot array — and the bump tier outside the graph, where program storage lives.
 pub mod memory;
-pub mod module;
 pub mod parse;
 /// The deferred-work drain koan runs on: a unit of work is a `cellgraph` cell, and the module adds
 /// the submission table, the work queue, the drain protocol and delivery over it.

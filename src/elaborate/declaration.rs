@@ -1,7 +1,7 @@
 //! The door a component of type binders comes into being through: one call per component, every
 //! member read before anything is installed, and a refusal that writes nothing.
 //!
-//! The type channel's analogue of [the tie](../function/README.md#the-tie). The value channel's
+//! The type channel's analogue of [the tie](../knot/README.md#the-tie). The value channel's
 //! tie and this door are the two ways a component of binders becomes values, and the layer above
 //! chooses by the channel its members are declared in. The door hands back handles and takes no
 //! writer: minting each member's [`TypeValue`](crate::values::TypeValue) and naming the region it

@@ -1,7 +1,7 @@
 //! A call subtree deeper than any slab cap. The tree pool takes no cap, so depth costs tree cells
 //! and nothing else — which is why the matrix is one word wide.
 
-use crate::function::KValue;
+use crate::knot::KValue;
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{

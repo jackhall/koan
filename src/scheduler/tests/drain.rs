@@ -1,6 +1,6 @@
 //! The drain's loop over native steps: a queued cell runs, finishes and is reclaimed.
 
-use crate::function::KValue;
+use crate::knot::KValue;
 use crate::scheduler::tests::native::{record, recorded};
 use crate::scheduler::{Action, Context, Resume, Scheduler, Spawns, State, StepError};
 

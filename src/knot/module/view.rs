@@ -15,7 +15,7 @@
 //! identities are the outer mints, arriving through the declared type rather than being made
 //! again. [`build`] is the one body both the outer ascription and the nested case go through.
 
-use crate::function::{KValue, Knotted, module};
+use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, ScopeId, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
@@ -25,7 +25,7 @@ use crate::type_lattice::{
 use crate::values::{TypeValue, Value};
 
 use super::coerce::{Coercion, CoercionRefused, coerce};
-use super::layout;
+use super::{Module, layout};
 
 /// Which operator is ascribing: `:!` keeps the source's types, `:|` mints its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,7 +117,7 @@ pub(super) fn build<'graph, 'cell, 'run, 'x>(
     for (_, handle) in layout::type_members(&view_schema, scratch).iter().copied() {
         members.push(Value::Type(TypeValue::new(writer, handle, types)));
     }
-    Ok(Knotted::of(module(writer, view, &members), 0))
+    Ok(Knotted::of(Module::tie(writer, view, &members), 0))
 }
 
 /// A fresh mint per abstract member of `sig`: a rigid variable carrying this application's nonce,

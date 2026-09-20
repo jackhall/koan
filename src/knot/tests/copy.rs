@@ -3,7 +3,7 @@
 //! `a_copied_knot_outlives_its_home`, `a_copied_ring_outlives_its_home`,
 //! `a_copied_module_outlives_its_home` and `a_copied_barrier_outlives_its_home` are on the Miri
 //! slate:
-//! they are the paths only `function` drives — a knot's run laid down with closure runs, data nodes
+//! they are the paths only `knot` drives — a knot's run laid down with closure runs, data nodes
 //! and deep copies written into the region while the node run is being filled, read through edges
 //! after the region it was copied from is gone.
 
@@ -14,7 +14,7 @@ use crate::scope::{CaptureSlot, Slot};
 use crate::values::{Circular, Link};
 use crate::values::{Knotted as _, Value, cross};
 
-use super::super::{KValue, KValueFamily, Knotted, coerced};
+use super::super::{Coerced, KValue, KValueFamily, Knotted};
 use super::{Fixture, Step, bound, callable, circular, copy, declared, follow, with_fixture};
 
 /// The capture `name` of `callable`'s closure.
@@ -458,7 +458,7 @@ fn a_copied_barrier_outlives_its_home() {
                 // The barrier's types are this item's only fiction: a real view substitutes, which
                 // is the module layer's work. What is pinned here is that the node and the function
                 // behind it both rebuild at the destination.
-                let knot = coerced(writer, f, f.ktype(), f.ktype(), f.ktype(), f.ktype());
+                let knot = Coerced::tie(writer, f, f.ktype(), f.ktype(), f.ktype(), f.ktype());
                 let barrier = Knotted::of(knot, 0);
                 let source = context.lift::<KValueFamily>(Value::Knotted(barrier));
                 let crossed = cross(context, dest, &source).unwrap();

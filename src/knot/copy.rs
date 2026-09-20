@@ -14,7 +14,7 @@
 use crate::memory::{KnotPlan, Writer, resident};
 use crate::values::{self, DeepCopy, Value};
 
-use super::{Function, Knotted, KnottedFamily, Node};
+use super::{Knotted, KnottedFamily, Node};
 
 impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
     type Closed<'cell>
@@ -34,12 +34,9 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
         let source = member.member().knot();
         let knot =
             KnotPlan::new(source.len()).tie(writer, |edge| match source.member(edge).payload() {
-                Node::Function(function) => Node::Function(Function {
-                    ktype: function.ktype,
-                    shape: function.shape,
-                    closure: function.closure.copied(writer, &mut *copy),
-                    knot_weight: function.knot_weight,
-                }),
+                Node::Function(function) => {
+                    Node::Function(function.rebuilt(function.closure().copied(writer, &mut *copy)))
+                }
                 Node::Data {
                     circular,
                     knot_weight,

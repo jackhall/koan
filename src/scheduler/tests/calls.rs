@@ -1,7 +1,7 @@
 //! A call: a cell asks for one child, parks on its result, and reads it back when the child
 //! delivers. Once at each placement, so both spawn doors and both delivery doors are driven.
 
-use crate::function::{KValue, KValueFamily};
+use crate::knot::{KValue, KValueFamily};
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{

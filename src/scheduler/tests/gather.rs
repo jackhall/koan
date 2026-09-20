@@ -7,7 +7,7 @@
 //! last step builds its result straight out of them — no `keep` at either park, no `redeem` at
 //! either wake, and no copy.
 
-use crate::function::{KValue, KValueFamily};
+use crate::knot::{KValue, KValueFamily};
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{

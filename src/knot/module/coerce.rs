@@ -4,7 +4,7 @@
 //! longer has the type it had in the source. The member is therefore not carried but rebuilt at
 //! the view's types: data is re-tagged through the admission barrier, a container is rebuilt cell
 //! by cell and re-stamped, a nested module is re-viewed, and a function is wrapped in a
-//! [barrier node](crate::function::coerced) a call will later go through.
+//! [barrier node](super::Coerced) a call will later go through.
 //!
 //! **The walk recurses on the declared type**, never on the two substituted types in lockstep. A
 //! union interns its members in a canonical order, so the source's substitution and the view's do
@@ -13,9 +13,9 @@
 //! they agree there is nothing to do — which is the whole of `:!`, and every concrete slot of `:|`.
 //!
 //! Going the other way — a value arriving at a barrier from outside — is the call's work, and
-//! [modules](../../roadmap/rewrite/modules.md)'.
+//! [modules](../../../roadmap/rewrite/modules.md)'.
 
-use crate::function::{KValue, Knotted, coerced};
+use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, ScopeId, Writer};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{
@@ -23,7 +23,7 @@ use crate::type_lattice::{
 };
 use crate::values::{Dict, List, Record, SealRefused, Tagged, Value};
 
-use super::view;
+use super::{Coerced, view};
 
 /// Why a member could not take the view's type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,7 +181,7 @@ pub fn coerce<'graph, 'cell>(
             if member.function().is_none() && member.coerced().is_none() {
                 return Err(CoercionRefused::NotAFunction);
             }
-            let knot = coerced(
+            let knot = Coerced::tie(
                 cx.writer,
                 member,
                 dst,

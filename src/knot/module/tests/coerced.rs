@@ -1,20 +1,22 @@
 //! The barrier node: a function member behind an opaque view, and what crossing it does.
 //!
-//! [modules](../../../roadmap/rewrite/modules.md) teaches a call to go through the barrier; this
+//! [modules](../../../../roadmap/rewrite/modules.md) teaches a call to go through the barrier; this
 //! item only lays the node down, so these pin what it holds and what `values` sees through it.
 //! Copying one is `copy::a_copied_barrier_outlives_its_home`, on the Miri slate.
 
 use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::values::{Knotted as _, Resolved, Value, Weight};
 
-use super::super::{Coerced, Knotted, Node, coerced};
-use super::{Step, callable, copy, declared, with_fixture};
+use crate::knot::tests::{Step, callable, copy, declared, with_fixture};
+use crate::knot::{Knotted, Node};
+
+use super::super::Coerced;
 
 const SOURCE: &str = "\
 NEWTYPE Dist = Number
 LET f = (FN :{} -> Number = (1))";
 
-/// What `coerced` prices a barrier over `underlying` at: the knot's run header, its one node, the
+/// What `Coerced::tie` prices a barrier over `underlying` at: the knot's run header, its one node, the
 /// barrier beside it and the whole knot the function behind it brings.
 fn priced(underlying: Knotted<'_, '_>) -> Weight {
     Weight::flat::<usize>()
@@ -35,7 +37,7 @@ fn a_barrier_holds_its_view_and_the_function_behind_it() {
                 let activation = fixture.run(writer, &lines, home.into(), &[]);
                 let f = callable(fixture, activation, "f");
                 let dist = declared(fixture, activation, "Dist");
-                let knot = coerced(writer, f, f.ktype(), dist, dist, f.ktype());
+                let knot = Coerced::tie(writer, f, f.ktype(), dist, dist, f.ktype());
                 let barrier = Knotted::of(knot, 0);
 
                 assert_eq!(knot.len(), 1, "a barrier is a one-node knot of its own");
@@ -65,7 +67,7 @@ fn values_sees_a_barrier_as_the_function_it_stands_for() {
                 let activation = fixture.run(writer, &lines, home.into(), &[]);
                 let f = callable(fixture, activation, "f");
                 let barrier = Knotted::of(
-                    coerced(writer, f, f.ktype(), f.ktype(), f.ktype(), f.ktype()),
+                    Coerced::tie(writer, f, f.ktype(), f.ktype(), f.ktype(), f.ktype()),
                     0,
                 );
                 let value = Value::Knotted(barrier);
@@ -83,7 +85,7 @@ fn values_sees_a_barrier_as_the_function_it_stands_for() {
                 // A view of a view stacks barriers rather than collapsing them: each one holds the
                 // substitution it was built at.
                 let outer = Knotted::of(
-                    coerced(writer, barrier, f.ktype(), f.ktype(), f.ktype(), f.ktype()),
+                    Coerced::tie(writer, barrier, f.ktype(), f.ktype(), f.ktype(), f.ktype()),
                     0,
                 );
                 assert_eq!(outer.coerced().expect("a barrier").underlying(), barrier);

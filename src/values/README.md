@@ -25,7 +25,7 @@ function that captures it — is born together as one
 [knot](../memory/README.md#the-knot), and a function holds the environment it
 captured, which is the [scope layer's](../scope/README.md#three-tiers), which
 `values` may not name. So `Value<'graph, 'cell, X>` has one arm, `Knotted(X)`,
-over a type parameter a layer above closes — [`function`](../function/README.md)
+over a type parameter a layer above closes — [`knot`](../knot/README.md)
 closes it with a sixteen-byte `(knot, index)` member, so the word stays at 24
 bytes. `values` states what it asks of `X` as a trait pair
 ([values.rs](../values.rs)): per value, `Knotted` — a `Copy` type whose
@@ -92,7 +92,7 @@ nothing to keep in agreement.
 
 **A seal is the second checked door.** [`sealing`](admission.rs) is what an
 opaque view's barrier goes through
-([members are born coerced](../module/README.md#members-are-born-coerced)): an
+([members are born coerced](../knot/module/README.md#members-are-born-coerced)): an
 abstract type records no representation for `construction` to check a payload
 against, so what is checked instead is that the identity is a *per-application
 mint* — a nonced abstract type, or an application of one — and that the payload
@@ -144,7 +144,7 @@ of its kind — `list_type`, `dict_type` or `record_type`, which the plain doors
 use too — from its cells, an edge contributing its target's memo, so
 the layer that ties a knot derives it — and refuses a cycle of containers
 alone, which no finite type describes
-([the tie](../function/README.md#the-tie)). `satisfies` over a circular value
+([the tie](../knot/README.md#the-tie)). `satisfies` over a circular value
 is therefore the same one relation against that memo.
 
 A type check against a value — [`satisfies`](admission.rs) — is therefore one
@@ -337,7 +337,7 @@ a name the rest of the stack retired.
 The unit suite ([tests.rs](tests.rs)) runs every door, crossing and relation
 over a fixture that owns program storage with a type registry built in it, and a
 cell graph over that storage to run steps in. Circular values are exercised
-without `function`: the fixture closes the parameter with a test-only member
+without `knot`: the fixture closes the parameter with a test-only member
 whose every node is a data node, tied through `KnotPlan` with memos supplied
 by hand, and the suites cover the `linked` doors, the construction rule and the
 seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings

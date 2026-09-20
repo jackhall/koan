@@ -14,7 +14,7 @@
 //! The sort is by interned symbol, which is a hash — not by the text of the name. Nothing reads
 //! the order as alphabetical, and a test that pins one must read the symbols, not the source.
 
-use crate::function::{KValue, Knotted};
+use crate::knot::{KValue, Knotted};
 use crate::memory::BumpAllocator;
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{KType, Members, SigSchema, TypeNode, TypeRegistry};

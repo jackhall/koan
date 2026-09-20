@@ -3,7 +3,7 @@
 Type expressions and type declarations turned into
 [type lattice](../type_lattice/README.md) handles, read where they are written.
 `elaborate` sits above [`scope`](../scope/README.md) and below
-[`function`](../function/README.md): a function's type is elaborated from its
+[`knot`](../knot/README.md): a function's type is elaborated from its
 signature where the function is born, a component of type binders is declared
 through [one door](#declarations), and nothing below `scope` can read a name.
 
@@ -78,7 +78,7 @@ and [operator groups](../../roadmap/rewrite/operator-groups.md) a `GROUP` its
 chaining record.
 
 Every slot must be bound: the caller runs the body to completion and only then
-ties the binder ([the tie](../function/README.md#the-tie)). A slot still claimed
+ties the binder ([the tie](../knot/README.md#the-tie)). A slot still claimed
 by its binder is `Unsigned`, naming that binder's cell so the caller waits on
 it. The handle is interned like any other, so two modules binding the same
 members in either order are one handle.
@@ -87,7 +87,7 @@ members in either order are one handle.
 
 A component of type binders comes into being through one door,
 [`type_declarations`](declaration.rs) — the type channel's analogue of
-[the tie](../function/README.md#the-tie), and the other of the two ways a
+[the tie](../knot/README.md#the-tie), and the other of the two ways a
 component of binders becomes values. It takes the component and the activation
 its members are declared in, and hands back one handle per member, in member
 order:
@@ -133,7 +133,7 @@ name no fresh identity, so a cycle through one has no finite type: a cyclic
 component holding a `LET` or a `SIG` member is refused at that member. A
 non-nominal member is therefore only ever reached alone, and answers outside any
 window. This is the type channel's restatement of the nominal cut
-[the tie](../function/README.md#the-tie) already makes for values.
+[the tie](../knot/README.md#the-tie) already makes for values.
 
 ### What a signature declares
 
