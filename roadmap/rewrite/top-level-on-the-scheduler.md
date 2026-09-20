@@ -134,7 +134,8 @@ part a refused tie names.
   [scheduler](../../src/scheduler/README.md#the-two-ways-a-cell-waits) needs no
   park on a slot.
 - *Where a body's statements come from — decided.* From the shape that owns
-  them, since [operator groups](operator-groups.md) rewrites an operator run
+  them, since the [shape builder](../../src/scope/README.md#operator-groups)
+  rewrites an operator run
   where the shape is built and every part address a shape records lies inside
   the statements it owns.
 - *Where koan's steps live — decided.* One module above the

@@ -25,7 +25,10 @@ registry's own doors:
 
 - a bare name, `Number`, is the handle its binding holds;
 - `LIST OF Elem` and `MAP Key -> Val` are the list and dict nodes;
-- `Left | Right | …` is the canonical union of its members;
+- `Left | Right` is the canonical union of its two members, and a longer
+  union arrives as `| [Left Right …]` — the
+  [chained form](../scope/README.md#operator-groups) the shape builder
+  already rewrote it into, so nothing here walks a union part by part;
 - `:{x :Elem, …}` is the record type of its fields in written order;
 - `FN :{x :Elem, …} -> Ret` is the function type over the schema's fields and
   the return;
@@ -72,10 +75,13 @@ derived — and nothing reads the source, so a module's type is a fact about wha
 its body bound.
 
 A module's signature therefore declares no abstract member: a body binds every
-name it declares. Its keyworded and operator channels are empty, until
-[dispatch](../../roadmap/rewrite/dispatch.md) gives a bodyless definition a slot
-and [operator groups](../../roadmap/rewrite/operator-groups.md) a `GROUP` its
-operator group.
+name it declares. Its **operator channel** carries the
+[groups its body's shape holds](../scope/README.md#operator-groups) — a `GROUP`
+body's own group, and nothing for a `MODULE` — so how a module's operators chain
+is part of what it is, and a signature stating that chaining is one it satisfies.
+Its keyworded channel is empty until
+[dispatch](../../roadmap/rewrite/dispatch.md) gives a bodyless definition a
+slot.
 
 Every slot must be bound: the caller runs the body to completion and only then
 ties the binder ([the tie](../knot/README.md#the-tie)). A slot still claimed
@@ -158,10 +164,22 @@ no mention of the enclosing shape, so the door resolves them against the members
 it has already read. A member naming a *later* member of the same body is a
 forward reference nothing has filled yet, and is refused.
 
-A bodyless `GROUP` is refused: it declares an operator group, and a signature's
-operator channel — how a run of operators chains — is
-[operator groups](../../roadmap/rewrite/operator-groups.md)'. An operator head
-here declares its bucket and nothing about chaining.
+A bodyless **`GROUP` head** is the signature's **operator channel**: one
+[operator group](../scope/README.md#operator-groups) over the binary operator
+heads its body states, under the mode its own form id names and, for a pairwise
+head, the combiner it quotes. Each of those heads is a keyworded member like any
+other, so a group declares both what its operators are and how a run of them
+chains; two signatures differing only in that chaining are two types. An
+operator head *outside* a `GROUP` declares its bucket alone and says nothing
+about chaining.
+
+A group head is refused when it would give a symbol a second chaining — a member
+an earlier group of the same body holds, or a member of a builtin group the
+declared group is not — and when its body is anything but binary operator heads,
+when a member states a result of its own outside a pairwise group, or when it
+names `==` or `!=`, which belong to no group. A binary head stating a result of
+its own is admitted only where its symbol chains pairwise, read off the groups
+this body declares, the builtin groups, and the frame the `SIG` is written in.
 
 ## Builtin shapes
 
@@ -197,8 +215,11 @@ never a panic and never a guess:
   under a nested group, an application whose arguments are not exactly the
   parameters its constructor declares, and every declaration the door refuses —
   a cyclic component through a non-nominal member, a bare `TYPE` outside a
-  `SIG`, a bodyless `GROUP`, a repeated union tag or family parameter, a union
-  with no variant, and a forward reference inside a `SIG` body.
+  `SIG`, a repeated union tag or family parameter, a union
+  with no variant, and a forward reference inside a `SIG` body. An operator
+  declaration or head naming `!=`, and an `==` whose result is not `Bool`, are
+  `Unsupported` for the same reason a group head that would chain a symbol twice
+  is: [`!=` is rewritten, never declared](../scope/README.md#operator-groups).
 
 Elaboration writes nothing to a region: its transient runs live in the scratch
 arena it is handed, and every node it builds is interned in the registry. A
@@ -226,13 +247,16 @@ program shaped and activated in a cell with every slot bound or claimed as the
 test asks. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
 door over the same harness: each form it elaborates, each group it seals — a
 ring, a union and a newtype in one component, a ring written in either order
-interning equal — and each refusal, asserting the refused component left its
-binders claimed. [`tests/module.rs`](tests/module.rs) runs the self-signature
+interning equal — the chaining record a bodyless `GROUP` head declares and the
+two handles two directions make of one signature, and each refusal, asserting
+the refused component left its binders claimed. [`tests/module.rs`](tests/module.rs) runs the self-signature
 over a module body activated in a cell with its slots bound by hand: a slot per
 value binder and a manifest member per type binder, the empty body as the empty
 signature, two bodies binding the same members in either order interning equal,
 a member carrying the type its value carries rather than one walked from its
-contents, and a claimed slot leaving the module unsigned.
+contents, a `GROUP` body's self-signature carrying the group it declares and
+satisfying the signature stating it, and a claimed slot leaving the module
+unsigned.
 [`tests/builtin.rs`](tests/builtin.rs) holds the door's own laws: each
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names
@@ -240,8 +264,6 @@ interns as the union of its three members.
 
 ## Open work
 
-- [Operator groups](../../roadmap/rewrite/operator-groups.md) — a signature's
-  operator channel, and the operator group a bodyless `GROUP` declares.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
   bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over

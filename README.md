@@ -104,8 +104,8 @@ value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus t
 symbol, AST and form-table vocabulary that output is written in),
 [values/](src/values.rs) (the data values and the per-dispatch expression form,
 laid down in a cell's region — see [src/values/README.md](src/values/README.md)),
-[scope/](src/scope.rs) (lexical environments: the shape a body resolves its names
-through, closure bindings and activations — see
+[scope/](src/scope.rs) (lexical environments: the shape a body owns its
+statements and resolves its names through, closure bindings and activations — see
 [src/scope/README.md](src/scope/README.md)),
 [elaborate/](src/elaborate.rs) (type expressions elaborated into lattice handles
 where they are read — see [src/elaborate/README.md](src/elaborate/README.md)),
@@ -200,7 +200,7 @@ src/
 │   ├── operators.rs        operator registry
 │   ├── ast.rs              the syntax AST: KLiteral / ExpressionPart / KExpression — Copy handles over bumped slices, with a Type part carrying only its TypeSymbol
 │   ├── ast/
-│   │   ├── shape.rs        PartClass / DispatchShape / KeyElement / ExpressionKey + NodeCache, the one structural cache both node families carry (stored key, shape, operator probe, BUILTIN_SHAPES entry, binder plan) and the readers that fill it
+│   │   ├── shape.rs        PartClass / DispatchShape / KeyElement / ExpressionKey + NodeCache, the one structural cache both node families carry (stored key, shape, BUILTIN_SHAPES entry, binder plan) and the readers that fill it
 │   │   └── program.rs      ProgramExpression / ProgramNode — the eternal-tier marker that makes "this node's parts run is hosted in program storage" a type
 │   ├── builtin_shapes.rs   BUILTIN_SHAPES — every builtin bucket as one typed run spelled once, tagged by BuiltinShapeId, carrying each slot's role and its type per overload, one return per overload, its binder facts and its reserved bit; the bucket key and the raw-capture kinds derived off that run, the two build-time laws over it, KEYWORDS, and the single table probe
 │   └── builtin_shapes/
@@ -267,8 +267,10 @@ src/
 │   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the symbol interner
 ├── scope.rs          pub mod scope — koan's lexical environments over values and types, in three tiers: the shape, closure bindings and the activation
 ├── scope/
-│   ├── shape.rs          BodyShape — one body's declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the form a callable body sits in, the body each binder births and each LET binder's right-hand side, in program storage; Position / Coordinate / Site and ShapeError
-│   ├── shape/build.rs    the one shape builder: the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies and arms, and the components pass
+│   ├── shape.rs          BodyShape — one body's own statements rewritten, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the form a callable body sits in, the body each binder births and each LET binder's right-hand side, in program storage; Position / Coordinate / Site and ShapeError
+│   ├── shape/build.rs    the one shape builder: the claims pre-scan and group frames, the rewrite pre-pass, the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies and arms, and the components pass
+│   ├── shape/build/rewrite.rs  the operator-run rewrite — fold left, fold right, unary and pairwise, the pairwise hoist into a synthesized block, and a != b as NOT (a == b), every node built through parse's own constructor
+│   ├── groups.rs         operator groups — the four builtin groups, the position-blind claims pre-scan over all the code being built, the GroupFrame chain deciding where a declared group is visible, and the cover one symbol chains under
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
 │   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types
 │   ├── closure.rs        ClosureBindings — a callable's captures, read from the enclosing activation into scratch then laid down: a Link, a value word or a knot edge, each; the run's copy and weight
@@ -403,8 +405,8 @@ from that module's top-of-file comment. The kept modules carry theirs:
   verb, dict key order, and working expressions.
 - [src/scope/README.md](src/scope/README.md) — lexical environments: the three
   tiers, eager and deferred mentions and the visibility rule over them, the
-  components a knot can tie, the two channels and unshadowable builtins, and
-  pending slots.
+  components a knot can tie, the two channels and unshadowable builtins,
+  pending slots, and the operator groups a body's statements are chained under.
 - [src/type_lattice/README.md](src/type_lattice/README.md) — the closed algebra:
   digest identity, the node vocabulary, the interning registry, the one order
   and the lattice operations over it, and the unifier that solves a quantified

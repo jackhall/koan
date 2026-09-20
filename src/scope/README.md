@@ -13,12 +13,20 @@ extends the resolution described here rather than replacing it.
 A scope is built in three tiers, each at the moment its contents become known.
 
 - **The body shape** — `BodyShape`, one per body, built once in program storage
-  and shared by every scope instance of that body. It records the value names and
+  and shared by every scope instance of that body. It **owns the body's
+  statements**, with every [operator run](#operator-groups) in them already
+  chained, and it records the value names and
   type names the body declares, each with the lexical position its binder writes
   at, the class of every mention and the components its bindings form, and it
   resolves every name the body reads. It walks a builtin node's parts by the
   [roles](../parse/builtin_shapes/role.rs) that node's `BUILTIN_SHAPES` entry
   gives them.
+
+  **A reader takes a body's statements from `BodyShape::body()`, never from the
+  parse.** Every site a shape records — a mention's part, a nested shape's
+  holder, a `LET`'s right-hand side — is an address inside that run, so a reader
+  holding the parsed statements instead would look its own facts up against
+  nodes the shape never saw.
 - **Closure bindings** — one run per callable, held in the callable value and
   built when the callable is born. Each slot is a `values::Link`, the one
   value-or-edge type a knot's data node holds too. Each name the body reads
@@ -51,9 +59,12 @@ every `FOR ALL` type parameter — or `left` and `right` for a binary `OP` and
 a *module* shape: it captures, since its activation outlives the frame that
 births it, but it is not a deferring boundary, because its statements run when
 the statement holding it runs. A `MATCH` or `TRY` arm, a `USING … SCOPE` body,
-and the code an `EVAL`
-runs, is a *block* shape: an arm's one parameter is `it`, a `USING` body's are
-the names its operand surfaces (below), its statements count
+the code an `EVAL`
+runs, and the block a [pairwise rewrite](#operator-groups) synthesizes to hoist
+a shared operand, is a *block* shape: an arm's one parameter is `it`, a `USING`
+body's are
+the names its operand surfaces (below), a synthesized block's are the anonymous
+slots its hoists bind, its statements count
 from `1`, its activation is laid down in the same frame as the enclosing one,
 and instead of captures it holds a pointer to the enclosing activation. A name
 declared in the block shadows the enclosing one from the next statement on and
@@ -293,12 +304,131 @@ Two forms introduce names no shape can see.
   builder walks the operand's spine back to a declaration that states its
   members: a `MODULE` or `GROUP` binder's body, the `SIG` an ascription at the
   site names, a `LET` rooted at either, a value or type alias, and a `WITH` pin,
-  which changes no name. The walk is fuel-bounded, so an alias that names itself
+  which changes no name. The same walk reads the
+  [operator groups](#operator-groups) the operand surfaces — a `GROUP` binder's
+  group, or a `SIG`'s bodyless `GROUP` heads — which the body then holds, so an
+  operator run of their members may be written in it. The walk is fuel-bounded,
+  so an alias that names itself
   terminates, and it records no mention and pushes no capture — the operand
   itself is walked as an ordinary eager argument by the mention pass. An operand
   that says nothing statically — a parameter, which may hold a module wider than
   its signature, a call, a member read — is refused `Unsurfaced`, naming the
   ascription the site needs.
+
+## Operator groups
+
+An **operator run** is a slot-led node whose keywords alternate with slots, two
+or more of them — `1 + 2 - 3`, `a < b <= c`, `A | B | C`. `a + b` is a plain
+call and is never one. An operator run is rewritten **once**, here, where the
+body shape holding it is built, into ordinary nodes built through
+[`parse`](../parse/README.md)'s own node constructor. Nothing past this builder
+ever meets an operator run: dispatch, the scheduler and the elaborator read the
+rewritten nodes and know no operator group.
+
+An **operator group** is a set of operator symbols under one `ReductionMode` —
+fold-left, fold-right, unary, or pairwise with a combiner symbol and the
+direction its pair results fold in. Its identity is its content: two
+declarations of an equal member set under an equal mode are one group, so a
+functor's `GROUP` is one group however often it is instantiated. The record is
+the lattice's [`DeclaredGroup`](../type_lattice/schema.rs), so a signature's
+operator channel and a body's held group are the same type and compare with
+`==`. [groups.rs](groups.rs) holds the model; [shape/build/rewrite.rs](shape/build/rewrite.rs)
+holds the rewrite.
+
+### How a symbol chains, and where a run may say so
+
+Two questions, answered by two different things. **Claims decide *how*; frames
+decide *where*.**
+
+A **claim** is what the program's declarations say about a symbol, collected by
+one position-blind pre-scan of all the code being built, before the first draft.
+A symbol therefore chains one way for the whole program, wherever its
+declarations sit, in this order:
+
+1. a **builtin group** covering it — `{< <= > >=}` pairwise through `AND`
+   folding left, `{+ -}` fold-left, `{* /}` fold-left, `{|}` unary. Nothing
+   overrides one, and they are seen everywhere;
+2. the claim a `GROUP` statement makes over it, or the `Unary` mark a
+   `UNARY OP` makes. A bare `OP` declares an overload and claims nothing;
+3. nothing: the symbol chains fold-left, alone.
+
+A second `GROUP` over a claimed symbol is admitted only when its group is
+*equal*, and is then the same record; a `GROUP` written out equal to a builtin
+group says what the language already says and claims nothing. Any other overlap
+— with a builtin group, with another statement's group, with a unary mark, in
+either order — is `RedeclaresGroup`. The scan never enters a quote: the code
+inside one is data until an `EVAL` builds it.
+
+A **group frame** decides where an operator run may chain under a declared
+group. Only two kinds of body hold a group, both the way a parameter is held, so
+no position is ever compared:
+
+- a **`GROUP`'s own body** holds the group it declares;
+- a **`USING … SCOPE` body** holds the groups its operand surfaces, read off the
+  same declaration [its names are](#names-that-arrive-at-run-time) — a `GROUP`
+  binder's claimed record, or the bodyless `GROUP` heads of the `SIG` an
+  ascription names.
+
+Frames nest outward from the body holding the run. A surfaced group equal to one
+already held, or to a builtin group, changes nothing and is dropped; one that
+would give a member a second chaining is `RedeclaresGroup`. An operator run over
+a *claimed* symbol no enclosing frame holds is `Unchained` — refused, rather
+than quietly folded left, because its group exists and this is not where it was
+surfaced.
+
+Each symbol of a run resolves to a **cover** this way, and every symbol of one
+run must agree, else `MixedGroups`: `a + b * c` has no one shape and must be
+parenthesized. `==` and `!=` are covered by nothing — they take `Any`, belong to
+no group, and are refused as members of one — so they join whichever pairwise
+group the rest of the run chains under, and a run of them alone folds pairwise
+through `AND`, left. Beside symbols that chain any other way they are
+`MixedGroups`.
+
+The frame is also what admits a binary `OP` stating a **result type of its own**:
+only where its symbol chains pairwise, a builtin pairwise group included, since
+a fold hands its own result back as the next operand. Elsewhere it is
+`ResultOutsidePairwise`.
+
+### The four rewrites
+
+Over operands `o0 … on` and operators `k1 … kn`, each operand already rewritten:
+
+- **fold left** — `(((o0 k1 o1) k2 o2) …)`, one nested binary keyworded node per
+  operator; **fold right** — `(o0 k1 (o1 k2 (…)))`;
+- **unary** — `k1 [o0 … on]`, one keyword-first call over a list literal. This
+  is the form a union type takes: `A | B | C` elaborates as that call, and only
+  `A | B` is read as an infix pair;
+- **pairwise** — the adjacent pairs `o(i-1) ki oi`, folded through the group's
+  combiner written infix, in the group's direction.
+
+A pairwise run names each interior operand twice, so an operand that is not a
+name, a type, a literal or a quote would evaluate twice. It is **hoisted**, in
+source order, into an anonymous slot — a name spelled with a space, so no source
+text can reach it — of a **synthesized block**, whose last statement is the
+folded result. That block is an ordinary block shape held by an `Expression`
+part, which is the one rule it asks of the evaluator: *an `Expression` part
+carrying a nested block shape, which is not a form's body or arm, runs as a
+block whose value is its last statement's.* When a whole statement is such a
+run, the statement is the one-part wrapper around its block.
+
+`!=` is never built. Wherever a pair or a bare infix node spells `a != b`, the
+rewrite emits `NOT (a == b)` instead, so `!=` reaches no bucket and is the
+opposite of `==` by construction — which is also why a declaration naming it is
+`Derived`, and why a user's `==` must return `Bool`. Every node the rewrite
+builds, bar the synthesized hoists, must spell no builtin bucket: an operator
+whose chained node a later reader would walk as a form is `SpellsForm`.
+
+A statement holding no operator run is returned unchanged, keeping its own part
+addresses, so the shape of untouched code is the shape of the parse.
+
+### Evaluated code
+
+The code an `EVAL` runs is rewritten where its own block shape is built, when
+the `EVAL` runs. Its claims chain to the program's, so a `GROUP` inside
+evaluated code is held to the program's declarations and chains that code's runs
+only, and its frame is rooted at the frame of the shape the `EVAL` sits in —
+found by a walk over shapes that reads no activation slot. A quoted operator run
+is data and is rewritten by nobody until then.
 
 ## Errors
 
@@ -314,7 +444,22 @@ error in walk order:
 - an **unsupported** form — `CLOSE` and `CLOSE OVER`, whose resolution has no
   rewrite home yet, and the reserved forms that exist only to diagnose a miss;
 - a **malformed** form — a body or a branch list that is not the shape its form
-  declares.
+  declares;
+
+and six more from [operator groups](#operator-groups), each naming the symbol it
+is about:
+
+- **unchained** — an operator run over a symbol whose group no enclosing body
+  holds;
+- **mixed groups** — an operator run whose symbols chain under two different
+  groups;
+- **redeclares group** — a `GROUP`, or a `USING` surfacing one, that would give
+  a symbol a second chaining;
+- **result outside pairwise** — a binary `OP` stating a result of its own whose
+  symbol does not chain pairwise;
+- **spells form** — an operator run whose chained node would spell a builtin
+  bucket;
+- **derived** — a declaration naming `!=`, which is always the opposite of `==`.
 
 Each renders with the names and positions a user needs, spelled through the
 symbol interner.
@@ -342,8 +487,12 @@ components, nested shapes — rest in program storage and are `Copy`. An
 
 ## The import rule
 
-`scope` names `crate::values`, `crate::type_lattice`, `crate::memory` and
-`crate::parse`, and no scheduler type. A pending slot's cell handle is
+`scope` names `crate::values`, `crate::type_lattice`, `crate::symbols`,
+`crate::memory` and
+`crate::parse`, and no scheduler type. From `type_lattice` it names the
+operator-group vocabulary — `DeclaredGroup` and its `ReductionMode` — so a
+signature's operator channel and a body's held group are one record rather than
+two that must be kept in step. A pending slot's cell handle is
 `cellgraph`'s name for a unit of work, spelled through `memory`'s substrate
 re-exports like every other substrate name; the scheduler reaches scopes
 through its embedder, and scopes never reach the scheduler. The compiler

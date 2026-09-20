@@ -102,7 +102,7 @@ The parser's laws are stated as [proptest](https://docs.rs/proptest) properties
 rather than pinned one input at a time, at a quarter of the tier's depth — 64 cases under the
 routine tier, 512 under the total one. A pin that fixes a
 diagnostic message or a surface rule is *not* rewritten as a property and stays
-beside its sibling unit tests. Seven files hold the thirty properties:
+beside its sibling unit tests. Seven files hold the twenty-nine properties:
 
 - [`src/parse/tests/properties.rs`](src/parse/tests/properties.rs) — the ten
   end-to-end laws, over a generated expression tree, a tape of random bytes that
@@ -110,7 +110,7 @@ beside its sibling unit tests. Seven files hold the thirty properties:
   commas, redundant `(…)` wrappers), and an oracle that writes the same tree in
   the harness's `describe` notation: round-trip, the redundant-wrapper peel, token
   classification, spans, container arity, separator insensitivity, symbol minting,
-  the operator-chain probe digest, type-sigil idempotence and compound-atom
+  the operator-chain classification, type-sigil idempotence and compound-atom
   desugaring. Its keyword pool is deliberately disjoint from the keywords
   [`BUILTIN_SHAPES`](src/parse/builtin_shapes.rs) spells, so no generated run matches a builtin
   shape.
@@ -147,6 +147,14 @@ neither is `USING … SCOPE`: a `USING` block's parameters are *derived* — fro
 operand names — so a plan could only state them by carrying modules end to end, which is what
 nothing being re-derived from the source forbids. [`src/scope/tests/examples.rs`](src/scope/tests/examples.rs)
 covers `MODULE` and every `USING` reading and refusal by example.
+[`src/scope/tests/groups.rs`](src/scope/tests/groups.rs) covers the
+[operator-group](src/scope/README.md#operator-groups) model before any rewrite —
+what the builtin groups cover, what a `GROUP` body's member scan reads, and each
+refusal the position-blind claims pre-scan makes — and
+[`src/scope/tests/rewrite.rs`](src/scope/tests/rewrite.rs) covers the rewrite
+itself, asserting on the shape a body owns: the four rewrites, where an operator
+run is reached, equality and the `!=` negation, the groups a `USING` body and an
+`EVAL` see, and each refusal.
 [`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds six laws:
 
 - a planned program shapes back into its plan: kinds, layouts, components and whether each is

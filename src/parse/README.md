@@ -103,8 +103,7 @@ A node fills a [`NodeCache`](ast/shape.rs) at construction from its parts run
 and the builtin shape table. A parts run contributes exactly two things to every
 structural question — the bucket key it spells and the class of the head part —
 and the cache holds all the answers derived from them: the `ExpressionKey`, the
-dispatch shape, the operator probe, the matched builtin shape, and the binder
-plan.
+dispatch shape, the matched builtin shape, and the binder plan.
 
 So every later reader — the dispatch driver, the scheduler's laziness decision,
 the close-inference walk, the miss diagnosis — **reads a cached fact rather than
@@ -113,7 +112,10 @@ these questions the same way, so there is one classifier rather than two.
 
 `DispatchShape` is that classification: bare identifier, bare type leaf, type
 call, function-value call, the two sigil wrappers, literal pass-through, operator
-chain, the two head-deferred forms, and the general keyworded case.
+chain, the two head-deferred forms, and the general keyworded case. The operator
+chain is the one classification no reader past the
+[shape builder](../scope/README.md#operator-groups) sees: the builder chains
+every operator run into ordinary nodes where a body's shape is built.
 
 ## The builtin shape table: one typed entry, every fact
 

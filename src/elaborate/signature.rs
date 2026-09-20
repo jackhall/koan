@@ -101,7 +101,8 @@ pub fn callable_type<'graph, X: Knotted>(
 /// One builder, two callers: a definition reads it off the form its body sits in, and a `SIG`
 /// body's bodyless head off its own parts, so a head and the definition satisfying it can never
 /// spell different shapes. A run of operators chains through the signature's operator channel,
-/// which is [operator groups](../../roadmap/rewrite/operator-groups.md)' and is not written here.
+/// which a bodyless `GROUP` head fills and this builder does not write — see
+/// [operator groups](../scope/README.md#operator-groups).
 pub(super) fn operator_shape<'graph, X: Knotted>(
     elaborator: &Elaborator<'_, '_, 'graph, '_, '_, X>,
     unary: bool,
