@@ -1,5 +1,6 @@
-//! A module as a knot node: its self-signature, its members in layout order, and the activation
-//! its body runs in.
+//! A module as a knot node: its self-signature, its members in layout order, and its knot weight —
+//! never an activation, since a view has no body to activate. Beside it, the activation a module
+//! body runs in, which the caller builds here and hands back to the tie.
 //!
 //! **Layout order** is the one rule this item shares end to end: value members sorted by name,
 //! then type members sorted by name. A body shape lays its slots out exactly that way and a

@@ -163,6 +163,9 @@ pub fn coerce<'graph, 'cell>(
                 built.with_type(cx.writer, dst)
             }))
         }
+        // The first declared member whose source side admits the value, in the union's interned
+        // order. Two members that both admit it — a slot declared `Carrier | Number` over a source
+        // binding `Carrier` to `Number` — take whichever that order reaches first.
         TypeNode::Union { .. } => {
             let carried = value.ktype();
             let member = union_members(cx, declared)

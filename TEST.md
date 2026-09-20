@@ -43,7 +43,8 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
 `memory`, `parse`, `scope`, `source`, `type_lattice`, `values`, `elaborate`,
-`function`, `scheduler` and the embedded crates `cellgraph` and `sexlex` — are
+`function`, `module`, `scheduler` and the embedded crates `cellgraph` and
+`sexlex` — are
 what a default koan build compiles and a default `cargo test` runs. `workgraph`
 is no longer a koan dependency; it still builds and tests as a workspace member.
 Everything above the kept modules — `machine`, `builtins`, the
@@ -141,8 +142,11 @@ stream of choices. A plan says what each scope should come out as: its binders i
 type channels, how they partition into components, each read's class, and the binder each read
 lands on. The plan is rendered to koan source, which is parsed and built. Every plan is valid by
 construction and names are unique across the program, so the expected shape is the plan itself
-and nothing is re-derived from the source. `MODULE` and operator bodies are not generated.
-[`src/scope/tests/examples.rs`](src/scope/tests/examples.rs) covers `MODULE` by example.
+and nothing is re-derived from the source. `MODULE` and operator bodies are not generated, and
+neither is `USING … SCOPE`: a `USING` block's parameters are *derived* — from the declaration its
+operand names — so a plan could only state them by carrying modules end to end, which is what
+nothing being re-derived from the source forbids. [`src/scope/tests/examples.rs`](src/scope/tests/examples.rs)
+covers `MODULE` and every `USING` reading and refusal by example.
 [`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds six laws:
 
 - a planned program shapes back into its plan: kinds, layouts, components and whether each is

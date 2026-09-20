@@ -59,7 +59,29 @@ cached `BUILTIN_SHAPES` entry gives them:
 - a `UNARY OP` is the shape `<symbol> operands`, whose slot is a list of its
   operand, since its body's one parameter `operands` takes the whole run.
 
-A module body has no callable type here.
+A module body has no callable type here, and neither has a `USING` body: its
+type is its signature, below.
+
+## A module's self-signature
+
+[`self_signature`](module.rs) reads a module's own type off the activation its
+body ran in: **a value slot per value binder, at the type its value carries, and
+a manifest member per type binder, at the handle it holds**. Nothing walks a
+value — a slot's type is the memo the value already carries, which the tie
+derived — and nothing reads the source, so a module's type is a fact about what
+its body bound.
+
+A module's signature therefore declares no abstract member: a body binds every
+name it declares. Its keyworded and operator channels are empty, until
+[dispatch](../../roadmap/rewrite/dispatch.md) gives a bodyless definition a slot
+and [operator groups](../../roadmap/rewrite/operator-groups.md) a `GROUP` its
+chaining record.
+
+Every slot must be bound: the caller runs the body to completion and only then
+ties the binder ([the tie](../function/README.md#the-tie)). A slot still claimed
+by its binder is `Unsigned`, naming that binder's cell so the caller waits on
+it. The handle is interned like any other, so two modules binding the same
+members in either order are one handle.
 
 ## Declarations
 
@@ -205,7 +227,13 @@ test asks. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
 door over the same harness: each form it elaborates, each group it seals — a
 ring, a union and a newtype in one component, a ring written in either order
 interning equal — and each refusal, asserting the refused component left its
-binders claimed. [`tests/builtin.rs`](tests/builtin.rs) holds the door's own laws: each
+binders claimed. [`tests/module.rs`](tests/module.rs) runs the self-signature
+over a module body activated in a cell with its slots bound by hand: a slot per
+value binder and a manifest member per type binder, the empty body as the empty
+signature, two bodies binding the same members in either order interning equal,
+a member carrying the type its value carries rather than one walked from its
+contents, and a claimed slot leaving the module unsigned.
+[`tests/builtin.rs`](tests/builtin.rs) holds the door's own laws: each
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names
 interns as the union of its three members.
@@ -214,5 +242,7 @@ interns as the union of its three members.
 
 - [Operator groups](../../roadmap/rewrite/operator-groups.md) — a signature's
   operator channel, and the chaining record a bodyless `GROUP` declares.
-- [Module values](../../roadmap/rewrite/module-values.md) — a module's
-  self-signature, elaborated from the members its activation binds.
+- [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
+  bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
+  a signature, which the lattice specializes but no type expression elaborates.

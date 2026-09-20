@@ -39,9 +39,12 @@ working expression, and every door and relation over them carry the same
 parameter.
 
 **What a member holds** is the one total answer `Knotted::resolve` gives, a
-[`Resolved`](circular.rs): a **function**, opaque to `values`, or a **data
-node**, a [`Circular`](circular.rs). `Value::as_callable` answers only for the
-first and `Value::as_circular` only for the second, so no arm's meaning rests
+[`Resolved`](circular.rs): a **function** or a **module**, both opaque to
+`values` — a module carries no type this module names — or a **data node**, a
+[`Circular`](circular.rs). `Value::as_callable` and `Value::as_module` answer
+only for their own arm, `Value::as_opaque` for either of the two opaque ones —
+which is what equality refuses and rendering writes the type's name for — and
+`Value::as_circular` only for the data node, so no arm's meaning rests
 on an invariant `values` cannot check. A data node is a list, dict, record or
 tagged resident whose cells are [`Link`](link.rs)s instead of value words: a
 link is a value word or an `Edge` naming a sibling node of the same knot, since
@@ -86,6 +89,19 @@ the newtype's representation. `Tagged::construct` is the checked door over it;
 Every construction goes through the rule — an ordinary one through `construct`,
 a knot's tagged node by the tie over the payload type it derived — so there is
 nothing to keep in agreement.
+
+**A seal is the second checked door.** [`sealing`](admission.rs) is what an
+opaque view's barrier goes through
+([members are born coerced](../module/README.md#members-are-born-coerced)): an
+abstract type records no representation for `construction` to check a payload
+against, so what is checked instead is that the identity is a *per-application
+mint* — a nonced abstract type, or an application of one — and that the payload
+satisfies what the source binds that member to. It answers the mint as the
+identity, or a `SealRefused`: `NotAMint` for an identity that is no mint,
+`Misfit` for a payload the source's binding does not admit. `Tagged::seal` is
+the checked door over it, and it `peel`s, so a sealed member takes the mint as
+its one tagged layer rather than a second one. Sealing happens where a view is
+built, never where a koan program writes a construction.
 
 ## Two lifetimes
 
@@ -228,12 +244,12 @@ contents **only when their memoized types are related**, one satisfied by the
 other in either direction — an empty list of strings and an empty list of
 numbers are unequal. That makes `==` intransitive across ascriptions by design.
 
-**A function has no structural equality.** `equals` answers
-`Result<bool, Incomparable>`: a comparison with a function on either side is
-`Incomparable`, which the `==` builtin reports as an error rather than
+**An opaque member has no structural equality.** `equals` answers
+`Result<bool, Incomparable>`: a comparison with a function or a module on either
+side is `Incomparable`, which the `==` builtin reports as an error rather than
 `false`, and so is a pair of related containers whose aligned cells reach one.
-Every aligned pair is compared, so an unequal pair before a function does not
-hide it. A container pair with unrelated types is still unequal without
+Every aligned pair is compared, so an unequal pair before an opaque member does
+not hide it. A container pair with unrelated types is still unequal without
 descending, whatever it holds.
 
 **Circular values compare as a bisimulation.** A data node compares as the
@@ -253,8 +269,9 @@ rendering and the mark pass below are written once over both.
 `Value::render` is the surface `PRINT` writes: a string bare, a dict key quoted
 so `{"1": x}` and `{1: x}` read apart, `[a, b]`, `{k: v}` in key order,
 `{x = 1}` in field-name order, a tagged value as its type's name around its
-payload, a type as its name, a quote as its body's surface, a function as its
-type's name — its closure bindings are program state and never print — and a
+payload, a type as its name, a quote as its body's surface, an opaque member —
+a function, or a module — as its type's name, which is a module's signature; its
+closure bindings or members are program state and never print — and a
 data node as the plain value of its kind.
 
 **A cycle prints with labels.** A mark pass walks depth first from the first
@@ -322,8 +339,8 @@ over a fixture that owns program storage with a type registry built in it, and a
 cell graph over that storage to run steps in. Circular values are exercised
 without `function`: the fixture closes the parameter with a test-only member
 whose every node is a data node, tied through `KnotPlan` with memos supplied
-by hand, and the suites cover the `linked` doors and the construction rule
-([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
+by hand, and the suites cover the `linked` doors, the construction rule and the
+seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
 ([tests/equality.rs](tests/equality.rs)), labelled and shared-inline renders
 ([tests/render.rs](tests/render.rs)), a ring crossed under a copy and a pin
 ([tests/crossing.rs](tests/crossing.rs)), and `satisfies` by a node's memo

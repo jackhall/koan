@@ -99,7 +99,7 @@ The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/READ
 
 ## Source layout
 
-The crate splits into ten top-level modules: [memory/](src/memory) (where a
+The crate splits into eleven top-level modules: [memory/](src/memory) (where a
 value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus the
 symbol, AST and form-table vocabulary that output is written in),
 [values/](src/values.rs) (the data values and the per-dispatch expression form,
@@ -111,6 +111,9 @@ through, closure bindings and activations — see
 where they are read — see [src/elaborate/README.md](src/elaborate/README.md)),
 [function/](src/function.rs) (functions and circular data as values: the knot
 nodes a function or a data node is, their tie and their copy — see [src/function/README.md](src/function/README.md)),
+[module/](src/module.rs) (modules as values: the views `:|` and `:!` build, the
+coercion that births a view's members, and the binding a `USING … SCOPE` block
+enters on — see [src/module/README.md](src/module/README.md)),
 [scheduler/](src/scheduler.rs) (the deferred-work drain, where a unit of work is
 a `cellgraph` cell — see [src/scheduler/README.md](src/scheduler/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per

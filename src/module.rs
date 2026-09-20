@@ -24,6 +24,8 @@
 //! `crate::function`, `crate::memory`, `crate::parse`, `crate::scope`, `crate::type_lattice` and
 //! `crate::values`, and nothing else in the crate; `tests::boundary` reads the source to hold it
 //! there. Nothing below names this module.
+//!
+//! See [module/README.md](module/README.md).
 
 pub mod coerce;
 pub mod layout;

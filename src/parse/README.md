@@ -209,7 +209,12 @@ Four readers hang off the table:
   body that opens a shape of its own, an arm run, a type declaration's definition,
   data, a label. A part's role decides whether a name in it is a mention at all,
   and how the mention's class moves on the way down (see
-  [scope § Visibility](../scope/README.md#visibility)). Role is a `BuiltinShape`
+  [scope § Visibility](../scope/README.md#visibility)). A body slot also says
+  *which kind* of body it opens — a lambda, an operator, a unary operator, a
+  `MODULE` or `GROUP` body, or a `USING` body, whose parameters are the names
+  its operand
+  [surfaces](../scope/README.md#names-that-arrive-at-run-time) rather than
+  anything its own form spells. Role is a `BuiltinShape`
   fact, not an `ExpressionShape` one: a user-defined bucket declares no roles.
 - **Binder discovery** ([builtin_shapes/binder.rs](builtin_shapes/binder.rs)) —
   pure structural readers plus the facts that ride an entry. A shape is a binder

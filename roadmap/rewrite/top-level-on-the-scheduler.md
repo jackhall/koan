@@ -160,10 +160,7 @@ part a refused tie names.
 
 ## Dependencies
 
-**Requires:**
-
-- [Module values](module-values.md) — the placement of a `MODULE` activation is
-  a criterion here, over a value that item builds.
+**Requires:** none — every value a top-level statement places ships.
 
 **Unblocks:**
 

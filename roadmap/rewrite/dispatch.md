@@ -33,8 +33,9 @@ program runs on the rewritten stack.
   [`callable_type`](../../src/elaborate/signature.rs) hands a named callable a
   function type, and only a bucket registration carries an `ExpressionShape`.
 - A bucket-only definition — a bare `EXPR` or `OP` statement — is a bound member
-  of the activation it is declared in, and a module's self-signature
-  ([module values](module-values.md)) carries it in its keyworded channel.
+  of the activation it is declared in, and a module's
+  [self-signature](../../src/elaborate/README.md#a-modules-self-signature)
+  carries it in its keyworded channel.
 - The old runtime's tutorial programs that use no feature beyond values,
   scopes and functions run on the rewritten stack and print the same output,
   and `tools/verify_snippets.py` reads the rewritten binary.

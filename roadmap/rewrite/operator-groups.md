@@ -15,9 +15,9 @@ operator channel of chaining records, and no koan program reaches either: the
 [type-declaration door](../../src/elaborate/README.md#declarations) elaborates a `SIG` body's `OP`
 and `UNARY OP` heads as keyworded members and refuses a bodyless `GROUP`
 [`Unsupported`](../../src/elaborate.rs), so a signature declares an operator's
-bucket and never how a run of it chains. A `GROUP` is a module
-([module values](module-values.md)), so its definition has no value to bind
-until one exists.
+bucket and never how a run of it chains. A `GROUP` binds a
+[module value](../../src/module/README.md), whose signature carries no operator
+record.
 
 **Acceptance criteria.**
 
@@ -45,8 +45,6 @@ until one exists.
 
 ## Dependencies
 
-**Requires:**
-
-- [Module values](module-values.md) — a `GROUP` binds a module value.
+**Requires:** none — the module value a `GROUP` binds ships.
 
 **Unblocks:** none.

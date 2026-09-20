@@ -50,8 +50,10 @@ every `FOR ALL` type parameter — or `left` and `right` for a binary `OP` and
 `operands` for a unary one, all at position `0`. A `MODULE` or `GROUP` body is
 a *module* shape: it captures, since its activation outlives the frame that
 births it, but it is not a deferring boundary, because its statements run when
-the statement holding it runs. A `MATCH` or `TRY` arm, and the code an `EVAL`
-runs, is a *block* shape: an arm's one parameter is `it`, its statements count
+the statement holding it runs. A `MATCH` or `TRY` arm, a `USING … SCOPE` body,
+and the code an `EVAL`
+runs, is a *block* shape: an arm's one parameter is `it`, a `USING` body's are
+the names its operand surfaces (below), its statements count
 from `1`, its activation is laid down in the same frame as the enclosing one,
 and instead of captures it holds a pointer to the enclosing activation. A name
 declared in the block shadows the enclosing one from the next statement on and
@@ -178,20 +180,30 @@ and so is a function outside a module that is mutually recursive with one
 inside it, since a module body is an eager context — the two belong in one
 module.
 
+**A module is therefore never in a cycle, so every module born is a one-node
+knot.** Every mention reached from a module binder's root is eager whatever body
+it sits in, so a component holding a module member and a fellow is an eager
+cycle, refused here. A module naming *itself* is refused one step earlier: an
+eager read at the binder's own position does not see that binder, so it is
+`Unbound` rather than a cycle.
+
 The shape hands the layer above each body's components — each with whether it
 is `deferred_only` and whether it is `cyclic`, holding more than one member or
 a member that reads itself — and the class of every mention, and four facts the
 layer above reads off a binder's slot: the callable body each binder births —
 `BodyShape::births`, set when the binder's right-hand side is a callable shape
-at its root or its shape is a combined one — `BodyShape::form`, the builtin
+at its root, its shape is a combined one, or it is a `MODULE` or `GROUP` binder,
+whose module body carries no `form` — beside it `BodyShape::birth_site`, where
+that body sits in the binder's own node, which a caller that must ask for the
+body by site names it by — `BodyShape::form`, the builtin
 shape node a callable body sits in, where its signature is read,
 `BodyShape::rhs`, each `LET` binder's right-hand side part, where a data member
 is read, and `BodyShape::declarations`, each type binder's whole declaration
 node — a `NEWTYPE`, `UNION`, `SIG`, `TYPE` or a `LET` of a type name — where the
 declaration door reads which declaration it is and where its declared part sits,
 off the node's own builtin shape. A caller ties a component of value binders
-when it is cyclic or every member births a callable; a non-cyclic data binder is
-an ordinary value, and a component of type binders goes through
+when it is cyclic or every member births a callable or a module; a non-cyclic
+data binder is an ordinary value, and a component of type binders goes through
 [the elaborator's door](../elaborate/README.md#declarations). A component never
 mixes the two channels: a definition names types only, so no mention leaves a
 type binder for a value binder. Tying is
@@ -248,9 +260,13 @@ each binder's slot as it submits it, before any of those statements runs.
 Empty is a state a slot has only before its binder is submitted, and a read
 that finds one is a scheduler bug, not a pending read.
 
-A function activation and a module activation are one shape. A module body's
-binders are its exports in flight, and a `USING` over a binder that is still
-pending is the same pending read.
+A function activation and a module activation are one type with two
+constructors. A module's carries no knot member — a module's captures are never
+edges, since it is alone in its component — and the caller runs its body to
+completion and only then ties the binder over the finished activation, reading
+its slots out through `Activation::slots`. A module body's binders are its
+exports in flight, and a `USING` over a binder that is still pending is the same
+pending read.
 
 ## Names that arrive at run time
 
@@ -267,10 +283,22 @@ Two forms introduce names no shape can see.
   exist, so a shape containing `EVAL`, and every shape lexically enclosing
   it, retains its defining scope. Every other shape resolves through
   coordinates alone and keeps no link to its parent.
-- **`USING … SCOPE`** takes the names it surfaces from the module's signature,
-  so a shape resolves them like any other name. The module's signature must be
-  known statically where `USING` appears; a module whose signature is not
-  requires an ascription there.
+- **`USING … SCOPE`** makes the names its operand surfaces the **parameters of
+  its body's block shape**, so a mention of one resolves through the ordinary
+  local read, a callable nested in the block captures it the ordinary way, and
+  no coordinate names a member. Only the binding is left to run time, which is
+  [`module`](../module/README.md#entering-a-using--scope-block)'s.
+
+  That works only if the names are readable where the shape is built, so the
+  builder walks the operand's spine back to a declaration that states its
+  members: a `MODULE` or `GROUP` binder's body, the `SIG` an ascription at the
+  site names, a `LET` rooted at either, a value or type alias, and a `WITH` pin,
+  which changes no name. The walk is fuel-bounded, so an alias that names itself
+  terminates, and it records no mention and pushes no capture — the operand
+  itself is walked as an ordinary eager argument by the mention pass. An operand
+  that says nothing statically — a parameter, which may hold a module wider than
+  its signature, a call, a member read — is refused `Unsurfaced`, naming the
+  ascription the site needs.
 
 ## Errors
 
@@ -281,9 +309,10 @@ error in walk order:
 - a binding that **shadows a builtin**, in either channel;
 - an **unbound** name — no binding of it visible where the mention reads;
 - an **eager cycle** — a component with an eager mention of a fellow member;
-- an **unsupported** form — `USING … SCOPE`, `CLOSE` and `CLOSE OVER`, whose
-  resolution has no rewrite home yet, and the reserved forms that exist only
-  to diagnose a miss;
+- an **unsurfaced** `USING` — an operand that does not say, where the shape is
+  built, which names it surfaces;
+- an **unsupported** form — `CLOSE` and `CLOSE OVER`, whose resolution has no
+  rewrite home yet, and the reserved forms that exist only to diagnose a miss;
 - a **malformed** form — a body or a branch list that is not the shape its form
   declares.
 
@@ -327,8 +356,6 @@ type outside the one error that lists names, and on a retired lifetime name.
 - [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
   — which habitat each tier of an activation is laid down in, and how a body's
   reference graph reaches the drain as submission counts.
-- [Module values](../../roadmap/rewrite/module-values.md) — `USING … SCOPE`
-  resolved through a module's signature.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and an `EVAL` retaining its defining scope across frames.
