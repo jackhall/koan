@@ -1,8 +1,10 @@
 //! The door a component of type binders comes into being through: each declaration it elaborates,
 //! each group it seals, and each refusal.
 
-use crate::symbols::{BinderSymbol, ValueSymbol};
-use crate::type_lattice::{KKind, KType, NodeSchema, TypeNode, member};
+use crate::symbols::{BinderSymbol, KeywordSymbol, ValueSymbol};
+use crate::type_lattice::{
+    FoldDirection, KKind, KType, NodeSchema, ReductionMode, TypeNode, member,
+};
 
 use super::super::{Elaboration, callable_type};
 use super::{Held, Program, scalars, with_program};
@@ -204,7 +206,7 @@ fn a_signatures_bodyless_heads_are_keyworded_members() {
             assert_eq!(schema.keyworded.len(), 2);
             assert!(
                 schema.operators.is_empty(),
-                "the operator channel is operator-groups', not this door's"
+                "a head outside a `GROUP` declares no chaining"
             );
         },
     );
@@ -323,7 +325,7 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
         ),
         // A bare `TYPE` names an abstract member only a signature can bind.
         ("TYPE Loose", "Loose"),
-        // A bodyless `GROUP` declares a chaining record, which operator groups owns.
+        // `{+}` alone is not the builtin additive group, so it would chain `+` a second way.
         (
             "SIG Chained = ((TYPE Carrier) (GROUP FOLD LEFT = ((OP #(+) OVER Carrier))))",
             "Chained",
@@ -367,6 +369,129 @@ fn a_projection_off_a_fellow_union_names_no_tag_yet() {
                 matches!(brought, Err(Elaboration::NoSuchMember { .. })),
                 "the union declares no tag until it seals: {brought:?}"
             );
+        },
+    );
+}
+
+/// The chaining records `name`'s signature declares, as (members, mode) pairs.
+fn operators(
+    program: &Program<'_, '_, '_>,
+    name: &str,
+) -> Vec<(Vec<KeywordSymbol>, ReductionMode)> {
+    let TypeNode::Signature { schema, .. } = program.types.node(program.bound(name)) else {
+        panic!("a SIG binds a signature");
+    };
+    schema
+        .operators
+        .iter()
+        .map(|group| (group.members.to_vec(), group.mode))
+        .collect()
+}
+
+fn operator(text: &str, program: &Program<'_, '_, '_>) -> KeywordSymbol {
+    KeywordSymbol::declared(text, program.symbols).expect("a keyword token")
+}
+
+#[test]
+fn a_bodyless_group_head_declares_a_chaining_record_over_its_heads() {
+    brought(
+        "SIG Ring = ((TYPE Carrier) \
+         (GROUP FOLD RIGHT = ((OP #(@) OVER Carrier) (OP #(&) OVER Carrier))))",
+        |program| {
+            let mut members = vec![operator("@", &program), operator("&", &program)];
+            members.sort_unstable();
+            assert_eq!(
+                operators(&program, "Ring"),
+                [(members, ReductionMode::FoldRight)]
+            );
+            let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Ring"))
+            else {
+                panic!("a SIG binds a signature");
+            };
+            assert_eq!(
+                schema.keyworded.len(),
+                2,
+                "a group's heads are keyworded members like any other"
+            );
+        },
+    );
+    // A pairwise group takes its combiner from the quote, and its members may state a result.
+    brought(
+        "SIG Cmp = ((TYPE Carrier) \
+         (GROUP PAIRWISE FOLD #(AND) LEFT = ((OP #(~) OVER Carrier -> Bool))))",
+        |program| {
+            assert_eq!(
+                operators(&program, "Cmp"),
+                [(
+                    vec![operator("~", &program)],
+                    ReductionMode::Pairwise {
+                        combiner: operator("AND", &program),
+                        direction: FoldDirection::Left,
+                    }
+                )]
+            );
+        },
+    );
+    // A group written out equal to a builtin one says what the language already says, and is one
+    // signature member like any other.
+    brought(
+        "SIG Sum = ((GROUP FOLD LEFT = ((OP #(+) OVER Number) (OP #(-) OVER Number))))",
+        |program| {
+            assert_eq!(operators(&program, "Sum").len(), 1);
+        },
+    );
+}
+
+#[test]
+fn two_signatures_differing_only_in_a_groups_direction_are_two_handles() {
+    let sig = |mode: &str| {
+        brought(
+            &format!("SIG Ring = ((GROUP {mode} = ((OP #(@) OVER Number) (OP #(&) OVER Number))))"),
+            |program| program.bound("Ring"),
+        )
+    };
+    assert_eq!(sig("FOLD LEFT"), sig("FOLD LEFT"), "identity is content");
+    assert_ne!(
+        sig("FOLD LEFT"),
+        sig("FOLD RIGHT"),
+        "how a run reduces is part of what the signature says"
+    );
+}
+
+#[test]
+fn a_group_head_the_door_cannot_read_refuses() {
+    // A group head whose body is not a run of binary operator declarations — a `UNARY OP` among
+    // them, or no operator at all — never reaches the door: the shape's own member scan refuses it.
+    for source in [
+        // One symbol, two chainings.
+        "SIG Bad = ((GROUP FOLD LEFT = ((OP #(@) OVER Number))) \
+         (GROUP FOLD RIGHT = ((OP #(@) OVER Number))))",
+        // A fold carries its operand type forward, so a member of one states no result.
+        "SIG Bad = ((GROUP FOLD LEFT = ((OP #(@) OVER Number -> Bool))))",
+        // `==` and `!=` belong to no group.
+        "SIG Bad = ((GROUP FOLD LEFT = ((OP #(==) OVER Number -> Bool))))",
+        // A result of its own, on a symbol that folds.
+        "SIG Bad = ((OP #(@) OVER Number -> Bool))",
+        // A user's `==` answers `Bool`, since `!=` is its negation by construction.
+        "SIG Bad = ((OP #(==) OVER Number))",
+    ] {
+        declared(source, |program, brought| {
+            assert!(
+                matches!(brought, Err(Elaboration::Unsupported { .. })),
+                "`{source}` refuses: {brought:?}"
+            );
+            assert!(program.unbound("Bad"), "`{source}` leaves `Bad` claimed");
+        });
+    }
+    // The same returning head over a symbol that chains pairwise is admitted.
+    brought(
+        "SIG Cmp = ((OP #(<) OVER Number -> Bool) (OP #(==) OVER Number -> Bool))",
+        |program| {
+            let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Cmp"))
+            else {
+                panic!("a SIG binds a signature");
+            };
+            assert_eq!(schema.keyworded.len(), 2);
         },
     );
 }

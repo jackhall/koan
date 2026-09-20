@@ -45,5 +45,10 @@ pub fn self_signature<X: Knotted>(
             }
         }
     }
+    // A `GROUP` body holds the group it declares, and that chaining is part of what the module is:
+    // a signature stating the same group is what it satisfies. A `MODULE` holds none.
+    for group in activation.shape().held_groups() {
+        draft.push_operator_group(group.members, group.mode);
+    }
     Ok(types.signature(scratch, draft))
 }

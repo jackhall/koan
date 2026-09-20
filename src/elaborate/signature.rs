@@ -6,7 +6,7 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Activation, Site};
+use crate::scope::{Activation, Site, is_equal, is_unequal};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
 use crate::values::Knotted;
 
@@ -117,12 +117,22 @@ pub(super) fn operator_shape<'graph, X: Knotted>(
         return Err(unsupported);
     };
     let symbol = symbol_from_quote_body(quoted.reference()).map_err(|_| unsupported)?;
+    // `!=` is nobody's to declare: every infix `a != b` is rewritten to `NOT (a == b)` before it
+    // reaches a bucket, so a declaration of it would answer no call.
+    if is_unequal(symbol) {
+        return Err(unsupported);
+    }
     let operand = elaborator.part(operand, groups)?;
     let ret = match ret {
         Some(ret) => elaborator.part(ret, groups)?,
         None if !unary => operand,
         None => return Err(unsupported),
     };
+    // A result-less `OP #(==) OVER Foo` defaults its result to `Foo`, and so is refused here too:
+    // the legal spelling states `-> Bool`.
+    if is_equal(symbol) && ret != KType::BOOL {
+        return Err(unsupported);
+    }
     let (binary, run);
     let elements: &[DispatchTokenElement] = if unary {
         run = [

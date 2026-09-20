@@ -95,6 +95,13 @@ pub fn is_equality(symbol: KeywordSymbol) -> bool {
     symbol == OPERATORS.equal.symbol() || symbol == OPERATORS.unequal.symbol()
 }
 
+/// Whether `symbol` is `==`, the one equality symbol a program declares over its own types. Its
+/// result is always `Bool`: `!=` is its negation by construction, so an `==` answering anything
+/// else would leave `!=` nothing to negate.
+pub fn is_equal(symbol: KeywordSymbol) -> bool {
+    symbol == OPERATORS.equal.symbol()
+}
+
 /// Whether `symbol` is `!=`, which no declaration may name: the builder rewrites every infix
 /// `a != b` as `NOT (a == b)`, so it never reaches dispatch and is opposite by construction.
 pub fn is_unequal(symbol: KeywordSymbol) -> bool {

@@ -1,6 +1,7 @@
 //! A module's self-signature, over a module body activated in a cell with its slots bound by hand.
 
-use crate::type_lattice::{KType, SchemaDraft, TypeNode};
+use crate::symbols::KeywordSymbol;
+use crate::type_lattice::{KType, ReductionMode, SchemaDraft, TypeNode, satisfied_by};
 use crate::values::{TypeValue, Value};
 
 use super::{Program, nulls, with_program};
@@ -145,6 +146,53 @@ fn a_module_member_carries_the_type_its_value_carries_not_one_walked_from_its_co
                 handle,
                 signature(&program, &[("xs", program.types.list(KType::ANY))], &[]),
             );
+        },
+    );
+}
+
+#[test]
+fn a_group_bodys_self_signature_carries_the_chaining_it_declares() {
+    let source = "GROUP g FOLD RIGHT = (\
+                  (OP #(@) OVER Number = (left)) (OP #(&) OVER Number = (right)))";
+    with_program(
+        source,
+        |_, _, _| Vec::new(),
+        nulls,
+        |program| {
+            let body = program.module_body("g");
+            let handle = crate::elaborate::self_signature(body, program.types, program.scratch)
+                .expect("every slot is bound");
+            let TypeNode::Signature { schema, .. } = program.types.node(handle) else {
+                panic!("a self-signature is a Signature node");
+            };
+            let operator = |text: &str| {
+                KeywordSymbol::declared(text, program.symbols).expect("a keyword token")
+            };
+            let mut members = vec![operator("@"), operator("&")];
+            members.sort_unstable();
+            assert_eq!(schema.operators.len(), 1);
+            assert_eq!(schema.operators[0].members, members);
+            assert_eq!(schema.operators[0].mode, ReductionMode::FoldRight);
+
+            // A signature stating that chaining is what the module satisfies; one stating another
+            // chaining is not.
+            let declaring = |mode| {
+                let mut draft = SchemaDraft::new(program.scratch);
+                draft.push_operator_group(&members, mode);
+                program.types.signature(program.scratch, draft)
+            };
+            assert!(satisfied_by(
+                program.types,
+                program.scratch,
+                declaring(ReductionMode::FoldRight),
+                handle,
+            ));
+            assert!(!satisfied_by(
+                program.types,
+                program.scratch,
+                declaring(ReductionMode::FoldLeft),
+                handle,
+            ));
         },
     );
 }

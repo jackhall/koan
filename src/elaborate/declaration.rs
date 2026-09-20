@@ -11,12 +11,14 @@
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
 use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::role::Role;
+use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
+use crate::parse::builtin_shapes::role::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Activation, Component, Site};
-use crate::symbols::TypeSymbol;
+use crate::scope::{Activation, BuiltinGroup, Component, Site, is_equality};
+use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
-    KKind, KType, RecursiveGroupWindow, RelativeSchema, SchemaDraft, TypeRegistry,
+    DeclaredGroup, FoldDirection, KKind, KType, RecursiveGroupWindow, ReductionMode,
+    RelativeSchema, SchemaDraft, TypeRegistry,
 };
 use crate::values::Knotted;
 
@@ -353,6 +355,10 @@ fn signature_type<'graph, X: Knotted>(
     // rather than round-tripped through the declaring scope's own id.
     draft.sig_id = Some(ScopeId::SENTINEL);
     let mut locals: BumpVec<'_, (TypeSymbol, KType)> = BumpVec::new_in(scratch);
+    // The groups this signature declares, and the symbols of the heads that state a result of
+    // their own — admitted only where the symbol chains pairwise, which a later group may settle.
+    let mut groups: BumpVec<'_, DeclaredGroup<'_>> = BumpVec::new_in(scratch);
+    let mut returning: BumpVec<'_, (KeywordSymbol, Site)> = BumpVec::new_in(scratch);
 
     for (statement, _) in body.reference().body_statements() {
         let node = statement.statement_spine();
@@ -370,6 +376,8 @@ fn signature_type<'graph, X: Knotted>(
         let mut label = None;
         let mut rhs = None;
         let mut data = None;
+        let mut argument = None;
+        let mut definition = None;
         let mut type_parts = [None; 2];
         let mut type_count = 0;
         for (role, part) in form.roles().zip(node.parts) {
@@ -378,6 +386,8 @@ fn signature_type<'graph, X: Knotted>(
                 Role::Label => label = Some(&part.value),
                 Role::Rhs => rhs = Some(&part.value),
                 Role::Data => data = Some(&part.value),
+                Role::Argument => argument = Some(&part.value),
+                Role::Definition(DefinitionKind::Plain) => definition = Some(&part.value),
                 Role::TypeExpression => {
                     type_parts[type_count] = Some(&part.value);
                     type_count += 1;
@@ -421,19 +431,169 @@ fn signature_type<'graph, X: Knotted>(
             BuiltinShapeId::OperatorHead
             | BuiltinShapeId::OperatorHeadReturning
             | BuiltinShapeId::UnaryOperatorHeadReturning => {
+                let data = data.ok_or(unsupported)?;
                 let shape = operator_shape(
                     &member,
                     form.id == BuiltinShapeId::UnaryOperatorHeadReturning,
-                    data.ok_or(unsupported)?,
+                    data,
                     type_parts[0].ok_or(unsupported)?,
                     type_parts[1],
                     &TOP,
                 )?;
+                if form.id == BuiltinShapeId::OperatorHeadReturning {
+                    returning.push((quoted_operator(data).ok_or(unsupported)?, site));
+                }
                 draft.push_keyworded(shape);
             }
             // A bodyless `GROUP` declares a chaining record, which the operator channel owns.
+            BuiltinShapeId::GroupHeadFoldLeft
+            | BuiltinShapeId::GroupHeadFoldRight
+            | BuiltinShapeId::GroupHeadPairwiseFoldLeft
+            | BuiltinShapeId::GroupHeadPairwiseFoldRight => {
+                let mode = group_mode(form.id, argument).ok_or(unsupported)?;
+                let members = group_members(
+                    &member,
+                    definition.ok_or(unsupported)?,
+                    mode,
+                    &mut draft,
+                    scratch,
+                )?;
+                let declared = DeclaredGroup {
+                    members: &members,
+                    mode,
+                };
+                // A symbol chains one way. A second group of this signature over a member, and a
+                // member of a builtin group this one is not, would each give it a second.
+                for symbol in &members {
+                    if groups
+                        .iter()
+                        .any(|group: &DeclaredGroup<'_>| group.members.contains(symbol))
+                    {
+                        return Err(unsupported);
+                    }
+                    if BuiltinGroup::of(*symbol).is_some_and(|builtin| !builtin.equals(&declared)) {
+                        return Err(unsupported);
+                    }
+                }
+                groups.push(DeclaredGroup {
+                    members: scratch.alloc_slice_copy(&members),
+                    mode,
+                });
+                draft.push_operator_group(&members, mode);
+            }
             _ => return Err(unsupported),
         }
     }
+    // A binary head states a result of its own only where its symbol chains pairwise — a fold
+    // carries its operand type forward, so a result that is not the operand has nowhere to go.
+    for (symbol, site) in &returning {
+        let pairwise = |mode| matches!(mode, ReductionMode::Pairwise { .. });
+        let chains = is_equality(*symbol)
+            || BuiltinGroup::of(*symbol).is_some_and(|group| pairwise(group.mode()))
+            || groups
+                .iter()
+                .any(|group| group.members.contains(symbol) && pairwise(group.mode))
+            || elaborator.reader.shape().group_frame().pairwise(*symbol);
+        if !chains {
+            return Err(Elaboration::Unsupported { site: *site });
+        }
+    }
     Ok(types.signature(scratch, draft))
+}
+
+/// How a run of a `SIG` body's bodyless `GROUP` head reduces, read off its form id and — for a
+/// pairwise head — the combiner it quotes.
+fn group_mode(
+    form: BuiltinShapeId,
+    argument: Option<&ExpressionPart<'_>>,
+) -> Option<ReductionMode> {
+    match form {
+        BuiltinShapeId::GroupHeadFoldLeft => Some(ReductionMode::FoldLeft),
+        BuiltinShapeId::GroupHeadFoldRight => Some(ReductionMode::FoldRight),
+        BuiltinShapeId::GroupHeadPairwiseFoldLeft | BuiltinShapeId::GroupHeadPairwiseFoldRight => {
+            Some(ReductionMode::Pairwise {
+                combiner: quoted_operator(argument?)?,
+                direction: match form {
+                    BuiltinShapeId::GroupHeadPairwiseFoldLeft => FoldDirection::Left,
+                    _ => FoldDirection::Right,
+                },
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The members a bodyless `GROUP` head declares, each head's shape pushed as a keyworded member as
+/// it is read. A group's body is binary operator heads and nothing else, and a head stating a
+/// result of its own belongs only to a pairwise group.
+fn group_members<'graph, 'x, X: Knotted>(
+    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, X>,
+    definition: &'graph ExpressionPart<'graph>,
+    mode: ReductionMode,
+    draft: &mut SchemaDraft<'x>,
+    scratch: BumpAllocator<'x>,
+) -> Result<BumpVec<'x, KeywordSymbol>, Elaboration> {
+    let unsupported = Elaboration::Unsupported {
+        site: Site::of(definition),
+    };
+    let ExpressionPart::Expression(body) = definition else {
+        return Err(unsupported);
+    };
+    let mut members: BumpVec<'x, KeywordSymbol> = BumpVec::new_in(scratch);
+    for (statement, _) in body.reference().body_statements() {
+        let head = statement.statement_spine();
+        let form = head.cache().builtin_shape().ok_or(unsupported)?;
+        let returns = match form.id {
+            BuiltinShapeId::OperatorHead => false,
+            BuiltinShapeId::OperatorHeadReturning => true,
+            _ => return Err(unsupported),
+        };
+        if returns && !matches!(mode, ReductionMode::Pairwise { .. }) {
+            return Err(unsupported);
+        }
+        let mut data = None;
+        let mut type_parts = [None; 2];
+        let mut type_count = 0;
+        for (role, part) in form.roles().zip(head.parts) {
+            match role {
+                Role::Data => data = Some(&part.value),
+                Role::TypeExpression => {
+                    type_parts[type_count] = Some(&part.value);
+                    type_count += 1;
+                }
+                _ => {}
+            }
+        }
+        let data = data.ok_or(unsupported)?;
+        let shape = operator_shape(
+            elaborator,
+            false,
+            data,
+            type_parts[0].ok_or(unsupported)?,
+            type_parts[1],
+            &TOP,
+        )?;
+        draft.push_keyworded(shape);
+        let symbol = quoted_operator(data).ok_or(unsupported)?;
+        if is_equality(symbol) {
+            // `==` and `!=` belong to no group: they join whichever pairwise group the rest of an
+            // operator run chains under.
+            return Err(unsupported);
+        }
+        members.push(symbol);
+    }
+    if members.is_empty() {
+        return Err(unsupported);
+    }
+    members.sort_unstable();
+    members.dedup();
+    Ok(members)
+}
+
+/// The one operator symbol a `#(…)` part quotes.
+fn quoted_operator(part: &ExpressionPart<'_>) -> Option<KeywordSymbol> {
+    let ExpressionPart::QuotedExpression(quoted) = part else {
+        return None;
+    };
+    symbol_from_quote_body(quoted.reference()).ok()
 }
