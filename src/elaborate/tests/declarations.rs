@@ -1,7 +1,7 @@
 //! The door a component of type binders comes into being through: each declaration it elaborates,
 //! each group it seals, and each refusal.
 
-use crate::parse::{BinderSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, ValueSymbol};
 use crate::type_lattice::{KKind, KType, NodeSchema, TypeNode, member};
 
 use super::super::{Elaboration, callable_type};
@@ -91,7 +91,7 @@ fn an_alias_and_a_signature_are_each_their_own_member() {
             else {
                 panic!("a SIG binds a signature");
             };
-            let label = ValueSymbol::declared("label", program.labels).unwrap();
+            let label = ValueSymbol::declared("label", program.symbols).unwrap();
             assert_eq!(member(schema.value_slots, label), Some(KType::STR));
         },
     );
@@ -183,7 +183,7 @@ fn a_signature_declares_its_abstract_and_manifest_members() {
             let slot = |name| {
                 member(
                     schema.value_slots,
-                    ValueSymbol::declared(name, program.labels).unwrap(),
+                    ValueSymbol::declared(name, program.symbols).unwrap(),
                 )
             };
             assert_eq!(slot("x"), Some(KType::NUMBER), "read through the locals");
@@ -292,7 +292,7 @@ fn a_signatures_higher_kinded_member_has_a_use_site() {
             assert_eq!(param_names, &[program.type_name("Held")]);
             let unbox = member(
                 schema.value_slots,
-                ValueSymbol::declared("unbox", program.labels).unwrap(),
+                ValueSymbol::declared("unbox", program.symbols).unwrap(),
             )
             .expect("the signature declares `unbox`");
             let TypeNode::KFunction { params, .. } = program.types.node(unbox) else {

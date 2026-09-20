@@ -16,7 +16,7 @@ fn s(start: u32, end: u32) -> Span {
 }
 
 fn top<'a>(brand: ProgramBrand<'a>, src: &str) -> Vec<KExpression<'a>> {
-    parse(brand, &crate::parse::LabelInterner::new(), src).expect("parse")
+    parse(brand, &crate::symbols::SymbolInterner::new(), src).expect("parse")
 }
 
 #[test]
@@ -86,7 +86,7 @@ fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
     let program = program_storage();
     let exprs = parse_with_path(
         program.brand(),
-        &crate::parse::LabelInterner::new(),
+        &crate::symbols::SymbolInterner::new(),
         src,
         "lib.koan",
     )
@@ -112,7 +112,6 @@ fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
 }
 
 /// The operator-probe symbol for a probe key a test spells out (`"ATTR"`, `":|"`).
-fn probe_symbol(text: &str) -> crate::parse::labels::KeywordSymbol {
-    crate::parse::labels::KeywordSymbol::of(text)
-        .expect("a test fixture operator probe is keyword-class")
+fn probe_symbol(text: &str) -> crate::symbols::KeywordSymbol {
+    crate::symbols::KeywordSymbol::of(text).expect("a test fixture operator probe is keyword-class")
 }

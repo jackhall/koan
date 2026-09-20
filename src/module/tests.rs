@@ -9,8 +9,8 @@ mod view;
 use crate::function::tests::{Fixture, bound};
 use crate::function::{KValue, Knotted};
 use crate::memory::BumpAllocator;
-use crate::parse::BinderSymbol;
 use crate::scope::Activation;
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, SigSchema, TypeRegistry};
 
 use super::layout;

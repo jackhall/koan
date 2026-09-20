@@ -1,8 +1,8 @@
 //! Fixed activation facts: the layout, the `Empty` invariant, and the builtin table.
 
 use crate::memory::SlotConflict;
-use crate::parse::BinderSymbol;
 use crate::scope::{Activation, Binding, BodyShape, Builtins};
+use crate::symbols::BinderSymbol;
 use crate::values::Value;
 
 use super::{BUILTIN_TYPES, BUILTIN_VALUES, builtins, type_name, value_name, with_fixture};
@@ -21,7 +21,7 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
             let activation =
                 Activation::of_program(writer, shape, table);
             let b_reads_a = shape.mentions()[0];
-            let (a, _) = shape.slot(BinderSymbol::Value(value_name("a", fixture.labels))).unwrap();
+            let (a, _) = shape.slot(BinderSymbol::Value(value_name("a", fixture.symbols))).unwrap();
             activation.claim(a, handles[0]).unwrap();
             assert!(matches!(activation.read(b_reads_a.coordinate), Binding::Pending(handle) if handle == handles[0]));
             let copy = activation;
@@ -54,19 +54,19 @@ fn the_builtin_table_sorts_each_channel_and_counts_types_after_values() {
             let table: &Builtins = builtins(fixture, writer);
             assert_eq!(table.len(), BUILTIN_VALUES.len() + BUILTIN_TYPES.len());
             let origin = table
-                .lookup(BinderSymbol::Value(value_name("origin", fixture.labels)))
+                .lookup(BinderSymbol::Value(value_name("origin", fixture.symbols)))
                 .unwrap();
             assert!(matches!(table.get(origin), Value::Number(n) if n == 0.0));
             for name in BUILTIN_TYPES {
                 let index = table
-                    .lookup(BinderSymbol::Type(type_name(name, fixture.labels)))
+                    .lookup(BinderSymbol::Type(type_name(name, fixture.symbols)))
                     .unwrap();
                 assert!(index.index() >= BUILTIN_VALUES.len());
                 assert!(matches!(table.get(index), Value::Type(_)));
             }
             assert!(
                 table
-                    .lookup(BinderSymbol::Value(value_name("nowhere", fixture.labels)))
+                    .lookup(BinderSymbol::Value(value_name("nowhere", fixture.symbols)))
                     .is_none()
             );
         });

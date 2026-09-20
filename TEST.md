@@ -118,7 +118,7 @@ beside its sibling unit tests. Seven files hold the thirty properties:
   shape as a function of the key and the head class, the cache agreeing with a
   recompute and riding a copy and a resplice, a node key matching the signature key
   of the same pattern, the summary rendering, and structural equality.
-- [`src/parse/labels/tests.rs`](src/parse/labels/tests.rs) — interning laws, beside
+- [`src/symbols/tests.rs`](src/symbols/tests.rs) — interning laws, beside
   the four fixed-name pins described under [Symbol mints](#symbol-mints).
 - [`src/parse/builtin_shapes/tests/`](src/parse/builtin_shapes/tests.rs) — the builtin shape
   table, split four ways: static table-shape walks including the
@@ -343,7 +343,7 @@ the allocation column's absolute rows do.
 The names fixed in Rust source — builtin parameter slots and the `Result` / `KError`
 tags ([old_design/label-interning.md § Names fixed in Rust source](old_design/label-interning.md#names-fixed-in-rust-source))
 — are pinned by four unit tests in
-[`labels/tests.rs`](src/parse/labels/tests.rs), over a static and a slot group of
+[`src/symbols/tests.rs`](src/symbols/tests.rs), over a static and a slot group of
 that test module's own so they pin the mechanism rather than whatever spelling a builtin
 happens to declare. Two cover a lone declaration: `a_static_name_mints_what_of_mints` (the
 memo is exactly what the class's `of` would mint, and `text()` is the spelling as written)

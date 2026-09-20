@@ -12,8 +12,9 @@
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::Role;
-use crate::parse::{ExpressionPart, KExpression, TypeSymbol};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{Activation, Component, Site};
+use crate::symbols::TypeSymbol;
 use crate::type_lattice::{
     KKind, KType, RecursiveGroupWindow, RelativeSchema, SchemaDraft, TypeRegistry,
 };

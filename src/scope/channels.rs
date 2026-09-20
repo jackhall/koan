@@ -3,7 +3,7 @@
 //! after.
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
-use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 
 /// Two sorted runs sharing one index space: value entries first, type entries after.
 #[derive(Clone, Copy)]

@@ -2,8 +2,8 @@
 
 use std::ptr;
 
-use crate::parse::BinderSymbol;
 use crate::scope::{Binding, ShapeKind, Slot};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::{Incomparable, Knotted as _, Resolved, Value};
 
@@ -203,11 +203,11 @@ fn two_modules_are_incomparable_and_render_as_their_signature() {
             assert_eq!(m.equals(&n, types, scratch), Err(Incomparable));
             assert_eq!(m.equals(&m, types, scratch), Err(Incomparable));
             let mut rendered = String::new();
-            m.render(&mut rendered, types, fixture.labels, scratch)
+            m.render(&mut rendered, types, fixture.symbols, scratch)
                 .unwrap();
             assert_eq!(
                 rendered,
-                crate::type_lattice::display_name(m.ktype(), types, fixture.labels).to_string(),
+                crate::type_lattice::display_name(m.ktype(), types, fixture.symbols).to_string(),
             );
         })
     });

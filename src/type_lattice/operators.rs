@@ -5,7 +5,7 @@
 //! feeds a record's mode, so two interfaces differing only in how a run chains are two interfaces.
 //! The vocabulary is therefore the lattice's; the operator registry imports it from here.
 
-use crate::parse::KeywordSymbol;
+use crate::symbols::KeywordSymbol;
 
 /// Which way a fold nests a run of more than two operands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

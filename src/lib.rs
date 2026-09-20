@@ -42,6 +42,11 @@ pub mod source;
 #[cfg(feature = "pending_rewrite")]
 #[doc(hidden)]
 pub mod step_fixture;
+/// Symbol identity: the classified newtypes every syntactic name travels as, the interner
+/// that turns one back into text, and the `static_name!` and `slots!` declarations over them. A
+/// leaf — it names nothing else in the crate — so [`parse`] and [`type_lattice`] both rest on it
+/// without naming each other.
+pub mod symbols;
 /// Crate-wide test scaffolding: installs the counting global allocator from
 /// [`audit/counting_alloc.rs`](../audit/counting_alloc.rs) for the lib-test binary and exposes
 /// the thread-local tally an allocation-count bracket reads — the type lattice's heap contract,
@@ -50,8 +55,8 @@ pub mod step_fixture;
 #[cfg(test)]
 mod tests;
 /// The type lattice: the node vocabulary, the interning registry, the identity recipe, the
-/// relations between types and the unifier — a closed algebra over labels and `ScopeId`, with no
-/// value, cell, AST or scope type reachable from it.
+/// relations between types and the unifier — a closed algebra over [`symbols`] and `ScopeId`, with
+/// no value, cell, AST or scope type reachable from it.
 pub mod type_lattice;
 /// Koan's data values and the per-dispatch expression form, laid down in a cell's region over
 /// `memory`'s shapes, typed by memoized `type_lattice` handles.

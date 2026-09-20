@@ -322,7 +322,7 @@ fn a_tagged_ring_of_two_members_is_one_knot() {
             let next = fixture.name("next").symbol();
             fn successor<'graph, 'cell>(
                 member: Knotted<'graph, 'cell>,
-                next: crate::parse::Symbol,
+                next: crate::symbols::Symbol,
             ) -> Knotted<'graph, 'cell> {
                 let (_, Circular::Tagged(tagged)) = circular(Value::Knotted(member)) else {
                     panic!("a ring member is tagged");

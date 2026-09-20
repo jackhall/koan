@@ -79,7 +79,7 @@ Two files serve the lowering:
 
 The output is one [`KExpression`](src/parse/ast.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
 
-`parse` owns what it produces, not just the walk that produces it: [labels.rs](src/parse/labels.rs) mints and interns every symbol, [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [builtin_shapes.rs](src/parse/builtin_shapes.rs) holds `BUILTIN_SHAPES` — the one table spelling every builtin bucket as a typed run, tagged by a `BuiltinShapeId`: keywords in position, and at each slot a role beside one type per overload of the bucket, with one return apiece, plus the binder facts and the reserved bit each entry's readers ask for. The untyped bucket key and the part kinds a slot keeps raw are erasures of that run, not columns of their own. A node probes that table once; the close-inference rules and the miss diagnostics name a shape by its tag rather than respelling its key.
+`parse` owns what it produces, not just the walk that produces it: [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [builtin_shapes.rs](src/parse/builtin_shapes.rs) holds `BUILTIN_SHAPES` — the one table spelling every builtin bucket as a typed run, tagged by a `BuiltinShapeId`: keywords in position, and at each slot a role beside one type per overload of the bucket, with one return apiece, plus the binder facts and the reserved bit each entry's readers ask for. The untyped bucket key and the part kinds a slot keeps raw are erasures of that run, not columns of their own. A node probes that table once; the close-inference rules and the miss diagnostics name a shape by its tag rather than respelling its key.
 
 `KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/values/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [src/parse/README.md](src/parse/README.md).
 
@@ -122,9 +122,7 @@ type nodes — see [src/type_lattice/README.md](src/type_lattice/README.md)),
 and [machine/](src/machine) (the execution engine that consumes a
 `KExpression`). `parse` splits into [ast/](src/parse/ast.rs) (the syntax types,
 the node cache and the eternal-tier program marker),
-[labels.rs](src/parse/labels.rs) (`Symbol`, the content-digest handle every
-syntactic label travels as, beside its interner) and
-[builtin_shapes/](src/parse/builtin_shapes.rs) (`BUILTIN_SHAPES` and the role /
+and [builtin_shapes/](src/parse/builtin_shapes.rs) (`BUILTIN_SHAPES` and the role /
 binder / slot-layout facts riding its entries). `machine` further
 splits into [model/](src/machine/model) (the value/type vocabulary —
 [ast.rs](src/machine/model/ast.rs) for what the machine *does* with a parsed node,
@@ -164,8 +162,8 @@ schema a signature node carries, and the canonical signature-subtyping relation)
 [registry.rs](src/machine/model/types/registry.rs) (`TypeRegistry`, the
 run-frame-owned store that memoizes subtype verdicts by digest pair),
 [registries.rs](src/machine/model/registries.rs) (`RunRegistries`, the run frame's
-owned bundle of that registry beside the label interner — see
-[src/parse/README.md](src/parse/README.md) § Labels),
+owned bundle of that registry beside the symbol interner — see
+[src/symbols/README.md](src/symbols/README.md)),
 [builtins.rs](src/builtins.rs) (registry),
 [constructors.rs](src/machine/execute/decide/constructors.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
@@ -190,13 +188,15 @@ src/
 │   ├── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and a scope's bindings both condense by
 │   ├── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
 │   └── program.rs          ProgramStorage / ProgramBrand — the bump program text and its parsed AST live in, outside the graph
-├── parse.rs             pub mod parse — the parser and what it produces: the label vocabulary, the syntax AST, and the builtin shape table
+├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the run's digest→text side table, read only when rendering), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so parse and type_lattice rest on it rather than on each other
+├── symbols/
+│   └── tests.rs            interning laws and the four fixed-name pins over static_name! / slots!
+├── parse.rs             pub mod parse — the parser and what it produces: the syntax AST and the builtin shape table, written in the symbol vocabulary
 ├── parse/
 │   ├── lower.rs            layout tree → KExpressions: sigils, the redundant-wrapper peel, adjacency, spans
 │   ├── atom.rs             classify one atom — the colon split, compound-operator desugaring
 │   ├── brace.rs            DictFrame state machine for `{k: v}` / `{x = 1}` pairing
 │   ├── operators.rs        operator registry
-│   ├── labels.rs           Symbol — a label's 128-bit content digest — plus LabelInterner (the run's digest→text side table, read only when rendering), the four classified symbol wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses
 │   ├── ast.rs              the syntax AST: KLiteral / ExpressionPart / KExpression — Copy handles over bumped slices, with a Type part carrying only its TypeSymbol
 │   ├── ast/
 │   │   ├── shape.rs        PartClass / DispatchShape / KeyElement / ExpressionKey + NodeCache, the one structural cache both node families carry (stored key, shape, operator probe, BUILTIN_SHAPES entry, binder plan) and the readers that fill it
@@ -243,7 +243,7 @@ src/
 │   ├── using_scope.rs        USING — lexical-scope introduction
 │   ├── test_support.rs
 │   └── eval.rs               # surface form `$(expr)`
-├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over labels, `ScopeId` and the region bump seam and nothing else
+├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over symbols, `ScopeId` and the region bump seam and nothing else
 ├── type_lattice/
 │   ├── node.rs           TypeNode — one interned type's content; every child position is a KType handle, so a node is shallow
 │   ├── handle.rs         KType — the Copy content-digest handle, the pinned builtin constants, and the name/kind readings off one
@@ -263,7 +263,7 @@ src/
 │   ├── substitute.rs     the quantifier and member substitutions, and the three slot_* relations that are each one of them composed with an ordinary relation
 │   ├── sig_relations.rs  sig_subtype and its failure record, keyworded selection, meet_schemas, and shape_specificity
 │   ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
-│   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the label interner
+│   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the symbol interner
 ├── scope.rs          pub mod scope — koan's lexical environments over values and types, in three tiers: the shape, closure bindings and the activation
 ├── scope/
 │   ├── shape.rs          BodyShape — one body's declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the form a callable body sits in, the body each binder births and each LET binder's right-hand side, in program storage; Position / Coordinate / Site and ShapeError
@@ -387,10 +387,12 @@ src/
 A module's design doc is the `README.md` in its own source directory, linked
 from that module's top-of-file comment. The kept modules carry theirs:
 
+- [src/symbols/README.md](src/symbols/README.md) — the symbol vocabulary: why
+  identity is a content digest, why the interner is not a lookup authority, and
+  what a symbol's binding class buys.
 - [src/parse/README.md](src/parse/README.md) — the division of labour with
-  `sexlex`, the label vocabulary and its content-digest identity, the borrowed
-  splice-free AST and its structural cache, and the `BUILTIN_SHAPES` table every node is
-  classified against at construction.
+  `sexlex`, the borrowed splice-free AST and its structural cache, and the
+  `BUILTIN_SHAPES` table every node is classified against at construction.
 - [src/memory/README.md](src/memory/README.md) — the three storage tiers, the
   frame shell that names no Koan value, the one-place substrate alias layer, the
   two table shapes, and the drop-freeness the region discipline rests on.

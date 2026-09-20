@@ -8,8 +8,8 @@
 use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::ExpressionPart;
-use crate::parse::labels::{BinderSymbol, LabelInterner};
 use crate::source::Spanned;
+use crate::symbols::{BinderSymbol, SymbolInterner};
 
 pub(super) struct DictFrame<'a> {
     brand: ProgramBrand<'a>,
@@ -222,7 +222,7 @@ impl<'a> DictFrame<'a> {
     /// separator without a value, or (record mode) a non-identifier field name.
     pub(super) fn finish(
         mut self,
-        labels: &LabelInterner,
+        symbols: &SymbolInterner,
     ) -> Result<BraceContents<'a>, ParseError> {
         // Only an explicit `:` commits the frame to a dict; `Record` and the
         // separator-less `Unknown` (empty `{}`) both finish as a record.
@@ -259,7 +259,7 @@ impl<'a> DictFrame<'a> {
                         return Err(ParseError::new(
                             format!(
                                 "record field name must be a bare identifier or Type token, got `{}`",
-                                other.summary(labels)
+                                other.summary(symbols)
                             ),
                             None,
                         ));
@@ -272,7 +272,7 @@ impl<'a> DictFrame<'a> {
                     return Err(ParseError::new(
                         format!(
                             "duplicate field `{}` in record literal",
-                            labels.render(name.symbol())
+                            symbols.render(name.symbol())
                         ),
                         None,
                     ));

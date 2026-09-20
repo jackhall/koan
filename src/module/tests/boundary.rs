@@ -1,7 +1,8 @@
 //! The import boundary and the storage discipline, as a test over this module's own source.
 //!
 //! `module` is the top of the rewrite's value stack: it may name `elaborate`, `function`,
-//! `memory`, `parse`, `scope`, `type_lattice` and `values`, and nothing else in the crate — no
+//! `memory`, `parse`, `scope`, `symbols`, `type_lattice` and `values`, and nothing else in the
+//! crate — no
 //! scheduler, no builtins. Outside its tests it holds no owning heap type.
 
 /// The path prefixes `module` may name, beside the scanner that reads them and the scope plans its
@@ -13,6 +14,7 @@ const PREFIXES: &[&str] = &[
     "crate::module",
     "crate::parse",
     "crate::scope",
+    "crate::symbols",
     "crate::tests::boundary",
     "crate::tests::case_share",
     "crate::type_lattice",

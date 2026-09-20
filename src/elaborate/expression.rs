@@ -3,10 +3,9 @@
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
-use crate::parse::{
-    BinderSymbol, ExpressionPart, KExpression, KeywordSymbol, StaticName, TypeSymbol,
-};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{Activation, Binding, Coordinate, Site, Slot, Target, pair_name};
+use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry, constructor_param_names};
 use crate::values::{Knotted, Value};
 
@@ -354,7 +353,7 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
         site: Site,
         run: &KExpression<'graph>,
         groups: &Groups<'_>,
-        mut field: impl FnMut(crate::parse::BinderSymbol, KType) -> Result<(), Elaboration>,
+        mut field: impl FnMut(crate::symbols::BinderSymbol, KType) -> Result<(), Elaboration>,
     ) -> Result<(), Elaboration> {
         let mut index = 0;
         while index < run.parts.len() {

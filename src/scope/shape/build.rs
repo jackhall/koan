@@ -19,9 +19,8 @@ use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, strongly_connected_components,
 };
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, KEYWORDS};
-use crate::parse::{
-    BinderSymbol, ExpressionPart, KExpression, StaticName, TypeSymbol, ValueSymbol,
-};
+use crate::parse::{ExpressionPart, KExpression};
+use crate::symbols::{BinderSymbol, StaticName, TypeSymbol, ValueSymbol};
 use crate::values::Knotted;
 
 use super::super::activation::Activation;
@@ -569,7 +568,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
     }
 
-    /// A type declaration's definition, under the constructor state: labels and every name the
+    /// A type declaration's definition, under the constructor state: symbols and every name the
     /// definition itself declares are not mentions, and every other type name is.
     fn walk_definition(
         &mut self,
@@ -599,7 +598,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     /// One statement of a definition, by its own builtin shape's roles — the same authority the
-    /// top-level walk reads a form's parts through. Its name, labels, quoted data and `FOR ALL`
+    /// top-level walk reads a form's parts through. Its name, symbols, quoted data and `FOR ALL`
     /// names are the statement's own; everything else is read under the definition's state, so a
     /// `SIG` body's `VAL` type is as deferred as the definition holding it.
     fn walk_definition_statement(

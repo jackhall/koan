@@ -1,7 +1,7 @@
-//! Label identity: [`Symbol`], the fixed-width handle every syntactic label travels as, and
-//! [`LabelInterner`], the run-scoped side table that turns one back into text.
+//! Symbol identity: [`Symbol`], the fixed-width handle every syntactic name travels as, and
+//! [`SymbolInterner`], the run-scoped side table that turns one back into text.
 //!
-//! A label — a record field name, a struct schema field, an FN parameter name — originates in
+//! A symbol — a record field name, a struct schema field, an FN parameter name — originates in
 //! source text and is fixed at declaration, so its identity is a content digest: the low 128 bits
 //! of BLAKE3 over its UTF-8 bytes, the same width and collision footing as a
 //! [`TypeDigest`](crate::machine::model::types::TypeDigest). [`Symbol::of`] is a pure function:
@@ -9,10 +9,11 @@
 //! equal symbols in every run.
 //!
 //! The interner is therefore *not* a lookup authority. Comparisons and probes go straight through
-//! symbol bits; the table is written only where a syntactic label is constructed and read only
+//! symbol bits; the table is written only where a syntactic name is constructed and read only
 //! where one is rendered. Its growth is bounded by the run's source text.
 //!
-//! See [README.md](README.md) § Labels: identity is a content digest, the interner is not an authority.
+//! See [README.md](symbols/README.md): identity is a content digest, the interner is not an
+//! authority.
 
 use std::borrow::Borrow;
 use std::cell::RefCell;
@@ -21,7 +22,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 
 use smallvec::SmallVec;
 
-/// A label's content identity: the low 128 bits of a BLAKE3 hash of its UTF-8 bytes.
+/// A symbol's content identity: the low 128 bits of a BLAKE3 hash of its UTF-8 bytes.
 ///
 /// `Copy`, lifetime-free, and compared and hashed without touching text. `Ord` is the numeric
 /// order of those bits — the canonical field order for digest feeds and record cell layout.
@@ -29,7 +30,7 @@ use smallvec::SmallVec;
 pub struct Symbol(pub u128);
 
 impl Symbol {
-    /// The label's digest. Pure — no interner, no allocation, no ambient state.
+    /// The symbol's digest. Pure — no interner, no allocation, no ambient state.
     pub fn of(text: &str) -> Symbol {
         Symbol::of_hash(blake3::hash(text.as_bytes()))
     }
@@ -62,22 +63,22 @@ pub fn symbols_minted() -> u64 {
 
 /// What a render path prints for a symbol whose text this run never recorded. Rendering is total,
 /// so a miss is this placeholder rather than a panic.
-const MISSING_LABEL: &str = "<label>";
+const MISSING_SYMBOL: &str = "<symbol>";
 
-/// The run's digest → text side table for labels.
+/// The run's digest → text side table for symbols.
 ///
 /// Interior mutability by `RefCell`, matching the type registry beside it: construction sites hold
 /// a shared `&RunRegistries` and still need to record text. Never borrowed across a call that can
 /// re-enter — [`intern`](Self::intern) and [`resolve`](Self::resolve) each take and release the
 /// borrow within one statement.
 #[derive(Default)]
-pub struct LabelInterner {
+pub struct SymbolInterner {
     texts: RefCell<HashMap<Symbol, Box<str>, IdentityBuildHasher>>,
 }
 
-impl LabelInterner {
+impl SymbolInterner {
     pub fn new() -> Self {
-        LabelInterner::default()
+        SymbolInterner::default()
     }
 
     /// Record `text` under its symbol and hand the symbol back. Insert-if-absent: equal text
@@ -109,16 +110,16 @@ impl LabelInterner {
     /// total form of [`resolve`](Self::resolve) every render path uses.
     pub fn render(&self, symbol: Symbol) -> String {
         self.resolve(symbol)
-            .unwrap_or_else(|| MISSING_LABEL.to_string())
+            .unwrap_or_else(|| MISSING_SYMBOL.to_string())
     }
 
     /// [`render`](Self::render) as a `Display` view rather than a `String`: the recorded text goes
-    /// straight into the caller's formatter. A message that names a label costs the message's own
+    /// straight into the caller's formatter. A message that names a symbol costs the message's own
     /// buffer and nothing else, so a diagnostic built on the path that succeeds is as cheap as one
     /// built from a borrowed name.
-    pub fn display(&self, symbol: Symbol) -> LabelDisplay<'_> {
-        LabelDisplay {
-            labels: self,
+    pub fn display(&self, symbol: Symbol) -> SymbolDisplay<'_> {
+        SymbolDisplay {
+            symbols: self,
             symbol,
         }
     }
@@ -132,12 +133,12 @@ impl LabelInterner {
     /// position rather than a hash-dependent one.
     pub fn compare_texts(&self, a: Symbol, b: Symbol) -> std::cmp::Ordering {
         let texts = self.texts.borrow();
-        let left = texts.get(&a).map_or(MISSING_LABEL, |text| text);
-        let right = texts.get(&b).map_or(MISSING_LABEL, |text| text);
+        let left = texts.get(&a).map_or(MISSING_SYMBOL, |text| text);
+        let right = texts.get(&b).map_or(MISSING_SYMBOL, |text| text);
         left.cmp(right)
     }
 
-    /// How many distinct labels this run has recorded.
+    /// How many distinct symbols this run has recorded.
     pub fn len(&self) -> usize {
         self.texts.borrow().len()
     }
@@ -157,20 +158,20 @@ impl LabelInterner {
     }
 }
 
-/// A [`LabelInterner::display`] view: one symbol plus the interner that may hold its text.
+/// A [`SymbolInterner::display`] view: one symbol plus the interner that may hold its text.
 ///
 /// Holds the interner borrow only for the length of the write, so a `Display` chain that names
-/// several labels never nests the `RefCell` borrow.
-pub struct LabelDisplay<'a> {
-    labels: &'a LabelInterner,
+/// several symbols never nests the `RefCell` borrow.
+pub struct SymbolDisplay<'a> {
+    symbols: &'a SymbolInterner,
     symbol: Symbol,
 }
 
-impl std::fmt::Display for LabelDisplay<'_> {
+impl std::fmt::Display for SymbolDisplay<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.labels.texts.borrow().get(&self.symbol) {
+        match self.symbols.texts.borrow().get(&self.symbol) {
             Some(text) => formatter.write_str(text),
-            None => formatter.write_str(MISSING_LABEL),
+            None => formatter.write_str(MISSING_SYMBOL),
         }
     }
 }
@@ -179,7 +180,7 @@ impl std::fmt::Display for LabelDisplay<'_> {
 /// ASCII-lowercase elsewhere (`IntOrd`, `Ordered`, `Carrier`). The single canonical
 /// predicate for "this name classifies as a Type token" — the parser uses it to tag a
 /// `Type` part, the type-language partition (abstract-type members vs value slots in a SIG
-/// type table) reuses it, and [`TypeSymbol`] mints against it. See [README.md](README.md) § Labels.
+/// type table) reuses it, and [`TypeSymbol`] mints against it. See [README.md](symbols/README.md).
 pub fn is_type_name(tok: &str) -> bool {
     let mut chars = tok.chars();
     let Some(first) = chars.next() else {
@@ -217,12 +218,12 @@ pub fn snake_case_identifier(name: &str) -> String {
 /// memoized symbol rather than by re-classifying the spelling.
 pub static WILDCARD: StaticName<KeywordSymbol> = crate::static_name!(KeywordSymbol, "_");
 
-/// Every classified label newtype below wraps exactly one [`Symbol`] behind a private field and is
+/// Every classified newtype below wraps exactly one [`Symbol`] behind a private field and is
 /// minted only through the hidden `classify` funnel or [`declared`](ValueSymbol::declared), which
 /// run the class predicate on the text. There is no raw-`Symbol` constructor: a `Symbol` alone carries no
 /// evidence of what its text looked like, so admitting one would let a caller assert a class the
 /// digest cannot witness. A seam holding a bare `Symbol` that needs a class classifies where the
-/// text still existed, resolves the text through the run's [`LabelInterner`] and classifies that,
+/// text still existed, resolves the text through the run's [`SymbolInterner`] and classifies that,
 /// or recovers the class from a table already keyed by a classified symbol — the recovery door
 /// the `Borrow<Symbol>` impl below opens.
 ///
@@ -260,9 +261,9 @@ macro_rules! classified_symbol {
             ///
             /// The **declaration** constructor: a name that enters a binding table is interned so a
             /// later diagnostic naming it can resolve the text back.
-            pub fn declared(text: &str, labels: &LabelInterner) -> Option<Self> {
+            pub fn declared(text: &str, symbols: &SymbolInterner) -> Option<Self> {
                 let classified = $name::classify(text)?;
-                labels.record_text(classified.symbol(), text);
+                symbols.record_text(classified.symbol(), text);
                 Some(classified)
             }
 
@@ -339,7 +340,7 @@ impl KeywordSymbol {
     /// by single spaces in the same sorted, deduped order, recorded under the digest so a
     /// diagnostic naming the probe key renders the run it stands for. Registration-time only — a
     /// live probe mints through [`of_run`](Self::of_run) and renders nothing.
-    pub fn declared_run(members: &[KeywordSymbol], labels: &LabelInterner) -> Self {
+    pub fn declared_run(members: &[KeywordSymbol], symbols: &SymbolInterner) -> Self {
         let sorted = sorted_run(members);
         let run = KeywordSymbol::of_run(&sorted);
         let mut rendering = String::new();
@@ -351,10 +352,10 @@ impl KeywordSymbol {
             // than copying it out, so a run renders in a single allocation.
             let _ = std::fmt::Write::write_fmt(
                 &mut rendering,
-                format_args!("{}", labels.display(member.symbol())),
+                format_args!("{}", symbols.display(member.symbol())),
             );
         }
-        labels.record_text(run.symbol(), &rendering);
+        symbols.record_text(run.symbol(), &rendering);
         run
     }
 }
@@ -387,7 +388,7 @@ fn sorted_run(members: &[KeywordSymbol]) -> smallvec::SmallVec<[KeywordSymbol; 8
 ///
 /// Only `TypeSymbol` carries this: `WITH`'s pin walk and the union-variant probes are the sites
 /// where a bare record-field symbol meets a Type-class member table, and nothing probes the other
-/// classes by bits. See [README.md](README.md) § Labels.
+/// classes by bits. See [README.md](symbols/README.md).
 impl Borrow<Symbol> for TypeSymbol {
     fn borrow(&self) -> &Symbol {
         &self.0
@@ -422,9 +423,9 @@ impl BinderSymbol {
 
     /// Classify `text` as bindable **and** record it for rendering — the declaration constructor,
     /// and the only surface way to mint a `BinderSymbol` from text.
-    pub fn declared(text: &str, labels: &LabelInterner) -> Option<Self> {
+    pub fn declared(text: &str, symbols: &SymbolInterner) -> Option<Self> {
         let classified = BinderSymbol::classify(text)?;
-        labels.intern(text);
+        symbols.intern(text);
         Some(classified)
     }
 
@@ -449,7 +450,7 @@ impl BinderSymbol {
 /// binds into: `wanted` is that channel, `name` the text as written. This is the token-class
 /// partition stated **at the text→symbol seam** — past it the classified key types make a crossing
 /// unrepresentable, so this is the one place the rule is a runtime disposition rather than a type.
-/// See [README.md](README.md) § Labels.
+/// See [README.md](symbols/README.md).
 pub fn wrong_binder_class(name: &str, wanted: BindKind) -> String {
     match wanted {
         BindKind::Type => format!(
@@ -464,7 +465,7 @@ pub fn wrong_binder_class(name: &str, wanted: BindKind) -> String {
 }
 
 /// The classified-symbol types as one bound: what [`StaticName`] is parameterized over and what
-/// [`LabelInterner::record`] accepts. Sealed — the three class newtypes plus [`BinderSymbol`] are
+/// [`SymbolInterner::record`] accepts. Sealed — the three class newtypes plus [`BinderSymbol`] are
 /// the vocabulary entire, and a further implementor would be a class the token grammar does not
 /// have.
 pub trait ClassifiedSymbol: Copy + sealed::Sealed {
@@ -483,7 +484,7 @@ pub enum BindKind {
     Type,
 }
 
-/// True iff `s` classifies as a keyword (fixed token) ([README.md](README.md) § Labels):
+/// True iff `s` classifies as a keyword (fixed token) ([README.md](symbols/README.md)):
 /// pure-symbol tokens (no ASCII letters) are always
 /// keywords; alphabetic tokens are keywords iff they have at least two ASCII-uppercase letters and
 /// no ASCII-lowercase letters.
@@ -538,7 +539,7 @@ impl ClassifiedSymbol for BinderSymbol {
     }
 }
 
-/// A label whose spelling is fixed in Rust source — a builtin's parameter name, a tag a builtin
+/// A symbol whose spelling is fixed in Rust source — a builtin's parameter name, a tag a builtin
 /// raises under — declared once and minted once.
 ///
 /// The text is `&'static`, so its symbol is the same bits for the whole process and there is no
@@ -591,7 +592,7 @@ impl<S: Copy> StaticName<S> {
 #[macro_export]
 macro_rules! static_name {
     ($class:ty, $text:literal) => {
-        $crate::parse::labels::StaticName::<$class>::new($text, || {
+        $crate::symbols::StaticName::<$class>::new($text, || {
             <$class>::classify($text).expect(concat!(
                 "`",
                 $text,
@@ -621,14 +622,14 @@ macro_rules! slots {
         /// One builtin's parameter slots, each a name fixed in Rust source.
         struct SlotNames {
             $(
-                $slot: $crate::parse::labels::StaticName<$crate::parse::labels::ValueSymbol>,
+                $slot: $crate::symbols::StaticName<$crate::symbols::ValueSymbol>,
             )+
         }
 
         static $group: SlotNames = SlotNames {
             $(
-                $slot: $crate::parse::labels::StaticName::new(stringify!($slot), || {
-                    <$crate::parse::labels::ValueSymbol>::classify(stringify!($slot)).expect(concat!(
+                $slot: $crate::symbols::StaticName::new(stringify!($slot), || {
+                    <$crate::symbols::ValueSymbol>::classify(stringify!($slot)).expect(concat!(
                         "`",
                         stringify!($slot),
                         "` classifies as a value-class parameter slot"
@@ -649,7 +650,7 @@ macro_rules! slots {
 /// Each key records the rendered join of its members as it is built, so an operator-conflict
 /// diagnostic can name the probe it stands for. One region-hosted record backs every key, so past
 /// that recording the whole install allocates nothing.
-pub fn powerset_probes(members: &[KeywordSymbol], labels: &LabelInterner) -> Vec<KeywordSymbol> {
+pub fn powerset_probes(members: &[KeywordSymbol], symbols: &SymbolInterner) -> Vec<KeywordSymbol> {
     let subset_count = 1usize << members.len();
     // One stack buffer, refilled per mask: the walk visits `2^n - 1` subsets, so materializing each
     // one afresh would allocate once per registry entry.
@@ -664,7 +665,7 @@ pub fn powerset_probes(members: &[KeywordSymbol], labels: &LabelInterner) -> Vec
                     .filter(|(bit, _)| mask & (1 << bit) != 0)
                     .map(|(_, op)| *op),
             );
-            KeywordSymbol::declared_run(&subset, labels)
+            KeywordSymbol::declared_run(&subset, symbols)
         })
         .collect()
 }

@@ -15,7 +15,7 @@
 //! data node.
 
 use crate::memory::{CellHandle, SlotArray, SlotConflict, SlotState, Writer};
-use crate::parse::BinderSymbol;
+use crate::symbols::BinderSymbol;
 use crate::values::{Knotted, Link, Nothing, Value};
 
 use super::builtins::Builtins;

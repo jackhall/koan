@@ -10,7 +10,7 @@
 //! list, the rebuilt children, the context's shadow stack — are built in.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::{BinderSymbol, TypeSymbol};
+use crate::symbols::{BinderSymbol, TypeSymbol};
 
 use super::Variance;
 use crate::type_lattice::handle::KType;

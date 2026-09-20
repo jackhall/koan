@@ -7,7 +7,7 @@
 //! memoized, so the composition costs one intern per changed composite.
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
-use crate::parse::TypeSymbol;
+use crate::symbols::TypeSymbol;
 
 use super::handle::KType;
 use super::node::TypeNode;

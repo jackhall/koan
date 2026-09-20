@@ -38,7 +38,7 @@ use crate::parse::builtin_shapes::binder::{
 };
 use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Role};
-use crate::parse::labels::{KeywordSymbol, StaticName};
+use crate::symbols::{KeywordSymbol, StaticName};
 use crate::type_lattice::KType;
 
 /// The fixed tokens the builtin shapes are spelled with, each declared once and minted once. Every

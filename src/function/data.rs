@@ -19,8 +19,9 @@
 //! rule an ordinary construction goes through too, before anything is written.
 
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected_components};
-use crate::parse::{BinderSymbol, ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{Binding, BodyShape, Component, Coordinate, Site, Target};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{
     Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged, TypeValue, Value,

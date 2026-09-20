@@ -19,8 +19,8 @@ use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
 use crate::parse::builtin_shapes::binder::admit_bare_type_slots;
-use crate::parse::labels::{KeywordSymbol, LabelInterner};
 use crate::source::{FileId, Span, Spanned};
+use crate::symbols::{KeywordSymbol, SymbolInterner};
 
 use super::atom;
 use super::brace::{BraceContents, DictFrame};
@@ -29,14 +29,14 @@ use super::brace::{BraceContents, DictFrame};
 /// caller and stamped on every node this produces.
 pub(super) fn lower_source<'a>(
     program: ProgramBrand<'a>,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     source: &str,
     file: Option<FileId>,
 ) -> Result<Vec<KExpression<'a>>, ParseError> {
     let lines = sexlex::read(source).map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
     let lower = Lower {
         program,
-        labels,
+        symbols,
         file,
         source,
     };
@@ -77,7 +77,7 @@ struct Sigil<'a> {
 
 struct Lower<'a, 'l, 's> {
     program: ProgramBrand<'a>,
-    labels: &'l LabelInterner,
+    symbols: &'l SymbolInterner,
     file: Option<FileId>,
     source: &'s str,
 }
@@ -239,7 +239,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 format!(
                     "`{}` is a keyword, so it cannot be an element of a list, dict, or record \
                      literal",
-                    self.labels.display(symbol.symbol()),
+                    self.symbols.display(symbol.symbol()),
                 ),
                 part.span,
             ));
@@ -281,7 +281,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         {
             return dict.accept_equals();
         }
-        let classified = atom::classify(self.program, self.labels, text, item.span)?;
+        let classified = atom::classify(self.program, self.symbols, text, item.span)?;
         for part in classified.parts {
             self.push_part(context, parts, part)?;
         }
@@ -332,7 +332,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         }
         let mut dict = DictFrame::new(self.program);
         self.lower_run(inner.iter(), &mut Context::Brace(&mut dict), wrappers)?;
-        let part = match dict.finish(self.labels)? {
+        let part = match dict.finish(self.symbols)? {
             BraceContents::Dict(pairs) => {
                 ExpressionPart::DictLiteral(allocator.alloc_slice_fill_iter(pairs))
             }
@@ -470,7 +470,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
     }
 
     fn eval_call(&self, sigil: Sigil<'a>) -> ProgramExpression<'a> {
-        let head = KeywordSymbol::declared("EVAL", self.labels).expect("`EVAL` is keyword-class");
+        let head = KeywordSymbol::declared("EVAL", self.symbols).expect("`EVAL` is keyword-class");
         self.program.build_expression(
             &[
                 Spanned::at(ExpressionPart::Keyword(head), sigil.sigil_span),
@@ -612,7 +612,7 @@ fn peelable<'r, 's>(item: &'r Item<'s>) -> Option<&'r [Item<'s>]> {
 #[cfg(test)]
 pub(super) fn lower_run_for_tests<'a>(
     program: ProgramBrand<'a>,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     source: &str,
 ) -> Result<KExpression<'a>, ParseError> {
     let lines = sexlex::read(source).map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
@@ -630,7 +630,7 @@ pub(super) fn lower_run_for_tests<'a>(
     };
     let lower = Lower {
         program,
-        labels,
+        symbols,
         file: None,
         source,
     };

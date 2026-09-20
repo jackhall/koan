@@ -2,8 +2,8 @@
 
 use crate::function::tests::{pin, with_fixture};
 use crate::memory::{CellHandle, Writer, resident};
-use crate::parse::BinderSymbol;
 use crate::scope::{Activation, Binding, BodyShape, Coordinate, ShapeKind, Slot, Target};
+use crate::symbols::BinderSymbol;
 use crate::values::Value;
 
 use super::super::layout;

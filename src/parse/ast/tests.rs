@@ -21,9 +21,9 @@ use crate::parse::ast::shape::operator_probe_for;
 use crate::parse::builtin_shapes::builtin_shape_for;
 #[cfg(feature = "pending_rewrite")]
 use crate::parse::classify_dispatch_shape;
-use crate::parse::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, PartClass};
 use crate::source::Spanned;
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 /// The string literals a generated run draws from — `&'static str` coerces into any node's region,
 /// so a literal part needs no allocation of its own.
@@ -126,56 +126,56 @@ fn keyword_led_run() -> impl Strategy<Value = Vec<PartShape>> {
 }
 
 /// Build the part `shape` names into `brand`'s program storage, recording every spelling in
-/// `labels` so a rendering resolves it.
+/// `symbols` so a rendering resolves it.
 fn build_part<'a>(
     brand: ProgramBrand<'a>,
     shape: &PartShape,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
 ) -> ExpressionPart<'a> {
     let allocator = brand.allocator();
     match shape {
         PartShape::Keyword(text) => ExpressionPart::Keyword(
-            KeywordSymbol::declared(text, labels).expect("keyword-class by construction"),
+            KeywordSymbol::declared(text, symbols).expect("keyword-class by construction"),
         ),
         PartShape::Identifier(text) => ExpressionPart::Identifier(
-            ValueSymbol::declared(text, labels).expect("a value token by construction"),
+            ValueSymbol::declared(text, symbols).expect("a value token by construction"),
         ),
         PartShape::Type(text) => ExpressionPart::Type(
-            TypeSymbol::declared(text, labels).expect("a Type token by construction"),
+            TypeSymbol::declared(text, symbols).expect("a Type token by construction"),
         ),
         PartShape::Number(n) => ExpressionPart::Literal(KLiteral::Number(f64::from(*n))),
         PartShape::Text(index) => ExpressionPart::Literal(KLiteral::String(TEXTS[*index])),
         PartShape::Boolean(b) => ExpressionPart::Literal(KLiteral::Boolean(*b)),
         PartShape::Null => ExpressionPart::Literal(KLiteral::Null),
-        PartShape::Nested(items) => {
-            ExpressionPart::Expression(brand.nested_node_from_iter(build_run(brand, items, labels)))
-        }
-        PartShape::Sigil(items) => ExpressionPart::SigiledTypeExpr(
-            brand.nested_node_from_iter(build_run(brand, items, labels)),
+        PartShape::Nested(items) => ExpressionPart::Expression(
+            brand.nested_node_from_iter(build_run(brand, items, symbols)),
         ),
-        PartShape::RecordType(items) => {
-            ExpressionPart::RecordType(brand.nested_node_from_iter(build_run(brand, items, labels)))
-        }
+        PartShape::Sigil(items) => ExpressionPart::SigiledTypeExpr(
+            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+        ),
+        PartShape::RecordType(items) => ExpressionPart::RecordType(
+            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+        ),
         PartShape::Quote(items) => ExpressionPart::QuotedExpression(
-            brand.nested_node_from_iter(build_run(brand, items, labels)),
+            brand.nested_node_from_iter(build_run(brand, items, symbols)),
         ),
         PartShape::List(items) => ExpressionPart::ListLiteral(
             allocator
-                .alloc_slice_fill_iter(items.iter().map(|item| build_part(brand, item, labels))),
+                .alloc_slice_fill_iter(items.iter().map(|item| build_part(brand, item, symbols))),
         ),
         PartShape::Dict(pairs) => ExpressionPart::DictLiteral(allocator.alloc_slice_fill_iter(
             pairs.iter().map(|(key, value)| {
                 (
-                    build_part(brand, key, labels),
-                    build_part(brand, value, labels),
+                    build_part(brand, key, symbols),
+                    build_part(brand, value, symbols),
                 )
             }),
         )),
         PartShape::Record(fields) => ExpressionPart::RecordLiteral(
             allocator.alloc_slice_fill_iter(fields.iter().map(|(name, value)| {
                 (
-                    BinderSymbol::declared(name, labels).expect("a value token by construction"),
-                    build_part(brand, value, labels),
+                    BinderSymbol::declared(name, symbols).expect("a value token by construction"),
+                    build_part(brand, value, symbols),
                 )
             })),
         ),
@@ -186,11 +186,11 @@ fn build_part<'a>(
 fn build_run<'a>(
     brand: ProgramBrand<'a>,
     shapes: &[PartShape],
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
 ) -> Vec<Spanned<ExpressionPart<'a>>> {
     shapes
         .iter()
-        .map(|shape| Spanned::bare(build_part(brand, shape, labels)))
+        .map(|shape| Spanned::bare(build_part(brand, shape, symbols)))
         .collect()
 }
 
@@ -198,9 +198,9 @@ fn build_run<'a>(
 fn build<'a>(
     brand: ProgramBrand<'a>,
     shapes: &[PartShape],
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
 ) -> KExpression<'a> {
-    KExpression::new_from_iter(brand.allocator(), build_run(brand, shapes, labels))
+    KExpression::new_from_iter(brand.allocator(), build_run(brand, shapes, symbols))
 }
 
 /// The bucket key a parts run spells, recomputed from the parts rather than read off the cache.
@@ -287,8 +287,8 @@ proptest! {
     fn the_shape_is_a_function_of_the_key_and_the_head_class(shapes in parts_run()) {
         let program = program_storage();
         let brand = program.brand();
-        let labels = LabelInterner::new();
-        let expression = build(brand, &shapes, &labels);
+        let symbols = SymbolInterner::new();
+        let expression = build(brand, &shapes, &symbols);
 
         let key = expression.stored_key();
         let head = expression.parts.first().map(|part| part.value.class());
@@ -304,7 +304,7 @@ proptest! {
             }
             let mut swapped = shapes.clone();
             swapped[index] = other_eager_shape(&shapes[index]);
-            let other = build(brand, &swapped, &labels);
+            let other = build(brand, &swapped, &symbols);
             prop_assert_eq!(other.stored_key(), expression.stored_key());
             prop_assert_eq!(other.shape(), expression.shape());
             prop_assert_eq!(other.operator_probe(), expression.operator_probe());
@@ -321,8 +321,8 @@ proptest! {
         let program = program_storage();
         let brand = program.brand();
         let region = brand.allocator();
-        let labels = LabelInterner::new();
-        let expression = build(brand, &shapes, &labels);
+        let symbols = SymbolInterner::new();
+        let expression = build(brand, &shapes, &symbols);
 
         let head = expression.parts.first().map(|part| part.value.class());
         prop_assert_eq!(expression.stored_key().to_vec(), recomputed_key(expression.parts));
@@ -376,8 +376,8 @@ proptest! {
 
         let program = program_storage();
         let brand = program.brand();
-        let labels = LabelInterner::new();
-        let expression = build(brand, &shapes, &labels);
+        let symbols = SymbolInterner::new();
+        let expression = build(brand, &shapes, &symbols);
 
         let draft = SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
@@ -403,16 +403,16 @@ proptest! {
     fn a_summary_is_the_space_join_of_its_part_summaries(shapes in parts_run()) {
         let program = program_storage();
         let brand = program.brand();
-        let labels = LabelInterner::new();
-        let expression = build(brand, &shapes, &labels);
+        let symbols = SymbolInterner::new();
+        let expression = build(brand, &shapes, &symbols);
 
         let joined = expression
             .parts
             .iter()
-            .map(|part| part.value.summarize(&labels))
+            .map(|part| part.value.summarize(&symbols))
             .collect::<Vec<_>>()
             .join(" ");
-        prop_assert_eq!(expression.summarize(&labels), joined);
+        prop_assert_eq!(expression.summarize(&symbols), joined);
     }
 
     /// Quoted code compares as syntax: two nodes are structurally equal exactly when they spell the
@@ -427,10 +427,10 @@ proptest! {
         let program = program_storage();
         let brand = program.brand();
         let registries = RunRegistries::new();
-        let labels = &registries.labels;
+        let symbols = &registries.labels;
 
         let make = |shapes: &[PartShape]| {
-            KObject::KExpression(brand.new_expression_from_iter(build_run(brand, shapes, labels)))
+            KObject::KExpression(brand.new_expression_from_iter(build_run(brand, shapes, symbols)))
         };
         let a = make(&left);
         let b = make(&left);

@@ -22,7 +22,7 @@
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::ast::KExpression;
-use crate::parse::labels::{BinderSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, ValueSymbol};
 
 /// One layout entry: a value binder's name and the lexical position its binder writes at.
 type Entry = (ValueSymbol, u32);

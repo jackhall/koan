@@ -6,9 +6,8 @@ use proptest::prelude::*;
 use super::SlotLayout;
 use crate::memory::{ProgramBrand, program_storage};
 use crate::parse::KExpression;
-use crate::parse::labels::BinderSymbol;
 use crate::parse::parse;
-use crate::parse::{LabelInterner, TypeSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
 
 /// One statement of a generated body: a value binder, a type binder, or a statement that binds
@@ -64,7 +63,7 @@ fn value(text: &str) -> ValueSymbol {
 
 /// The lone statement `source` parses to — the body a layout is read off.
 fn body<'a>(brand: ProgramBrand<'a>, source: &str) -> KExpression<'a> {
-    parse(brand, &LabelInterner::new(), source)
+    parse(brand, &SymbolInterner::new(), source)
         .expect("the generated body parses")
         .into_iter()
         .next()

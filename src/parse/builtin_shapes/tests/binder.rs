@@ -8,9 +8,9 @@ use crate::parse::builtin_shapes::binder::BinderFacts;
 use crate::parse::builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShape, ShapeElement, builtin_shape_for, render_key,
 };
-use crate::parse::labels::Symbol;
-use crate::parse::{ExpressionPart, KExpression, LabelInterner, parse};
+use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::source::Spanned;
+use crate::symbols::{Symbol, SymbolInterner};
 
 /// Every form the table gives binder facts, with those facts beside it.
 fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
@@ -114,20 +114,20 @@ const GLYPHS: &[&str] = &["⊕", "⊗", "≺", "⊸", "⊛"];
 /// A keyword part for a hand-built AST, classified and minted with nothing recorded.
 fn kw_part<'a>(text: &str) -> ExpressionPart<'a> {
     ExpressionPart::Keyword(
-        crate::parse::KeywordSymbol::of(text).expect("a test fixture keyword is keyword-class"),
+        crate::symbols::KeywordSymbol::of(text).expect("a test fixture keyword is keyword-class"),
     )
 }
 
 /// [`kw_part`]'s value-channel twin: an identifier part for a hand-built AST.
 fn identifier_part<'a>(text: &str) -> ExpressionPart<'a> {
     ExpressionPart::Identifier(
-        crate::parse::ValueSymbol::classify(text)
+        crate::symbols::ValueSymbol::classify(text)
             .expect("a test fixture identifier is a value token"),
     )
 }
 
 fn parse_one<'a>(brand: ProgramBrand<'a>, source: &str) -> KExpression<'a> {
-    parse(brand, &LabelInterner::new(), source)
+    parse(brand, &SymbolInterner::new(), source)
         .expect("the rendered form parses")
         .into_iter()
         .next()

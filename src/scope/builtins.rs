@@ -6,7 +6,7 @@
 //! space serves both channels.
 
 use crate::memory::{BumpAllocator, Writer, resident};
-use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::values::{Knotted, Nothing, Value};
 
 use super::channels::Channels;

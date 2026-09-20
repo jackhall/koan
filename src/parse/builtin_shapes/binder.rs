@@ -16,8 +16,8 @@ use smallvec::SmallVec;
 use crate::memory::BumpAllocator;
 use crate::parse::ast::{ExpressionPart, KExpression, KeyElement};
 use crate::parse::builtin_shapes::{BuiltinShape, KEYWORDS, builtin_shape_for};
-use crate::parse::labels::{BinderSymbol, KeywordSymbol, StaticName, WILDCARD};
 use crate::source::Spanned;
+use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, WILDCARD};
 
 /// Structural name extractor for a binder builtin. Returning `Some(name)` names the placeholder a
 /// forward reference parks on while the binder's body is in flight. Both channels' names are `Copy`
@@ -220,7 +220,7 @@ static RESERVED_SYMBOLS: [&StaticName<KeywordSymbol>; 12] = [
 
 /// Why a quoted operator symbol will not do. The reason travels as data rather than as a rendered
 /// message because the binder hook that reads a symbol runs inside node construction, where the
-/// run's [`LabelInterner`] is out of reach; each surface that *reports* the refusal renders the
+/// run's [`SymbolInterner`] is out of reach; each surface that *reports* the refusal renders the
 /// glyph itself ([`Self::into_error`]).
 pub(crate) enum SymbolError {
     /// The quote body is not exactly one keyword token.

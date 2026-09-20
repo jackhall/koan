@@ -11,7 +11,7 @@
 //! lattice has no join of its own, since two unordered signatures join to their union.
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
-use crate::parse::{KeywordSymbol, TypeSymbol, ValueSymbol};
+use crate::symbols::{KeywordSymbol, TypeSymbol, ValueSymbol};
 
 use super::handle::KType;
 use super::lattice::meet;
@@ -153,7 +153,7 @@ pub fn most_specific_ktype(
 /// Why a [`sig_subtype`] check failed — the per-member rule that rejected, carrying the offending
 /// member's symbol and the handles that disagreed.
 ///
-/// Symbols and handles rather than rendered text: rendering needs the label interner, which is the
+/// Symbols and handles rather than rendered text: rendering needs the symbol interner, which is the
 /// caller's, so [`render_sig_failure`](super::render::render_sig_failure) produces the fragment.
 /// `Copy` and unboxed: the relation's own negative verdicts build one, so a failure that allocated
 /// would put an allocation on the order's path. A run it names is either the super schema's own

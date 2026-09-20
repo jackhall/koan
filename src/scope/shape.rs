@@ -20,7 +20,8 @@ use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
+use crate::parse::{ExpressionPart, KExpression};
+use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::values::Knotted;
 
 use super::activation::Activation;
@@ -437,11 +438,11 @@ pub enum ShapeError {
 }
 
 impl ShapeError {
-    /// The error rendered with its names spelled through `labels`.
-    pub fn display<'x>(&'x self, labels: &'x LabelInterner) -> ShapeErrorDisplay<'x> {
+    /// The error rendered with its names spelled through `symbols`.
+    pub fn display<'x>(&'x self, symbols: &'x SymbolInterner) -> ShapeErrorDisplay<'x> {
         ShapeErrorDisplay {
             error: self,
-            labels,
+            symbols,
         }
     }
 }
@@ -449,12 +450,12 @@ impl ShapeError {
 /// A [`ShapeError`] beside the interner its names render through.
 pub struct ShapeErrorDisplay<'x> {
     error: &'x ShapeError,
-    labels: &'x LabelInterner,
+    symbols: &'x SymbolInterner,
 }
 
 impl fmt::Display for ShapeErrorDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = |name: &BinderSymbol| self.labels.display(name.symbol());
+        let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         match self.error {
             ShapeError::Rebind {
                 name: bound,

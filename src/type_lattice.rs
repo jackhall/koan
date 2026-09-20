@@ -2,8 +2,10 @@
 //!
 //! The node vocabulary, the interning registry, the identity recipe, the structural relations
 //! between types, and the unifier that solves a quantified position. Nothing else. It imports the
-//! label and symbol types from [`parse`](crate::parse) and [`ScopeId`](crate::memory::ScopeId), and
-//! no value, cell, AST, scope, working part or execute-side type reaches it. Everything that
+//! classified symbol types from [`symbols`](crate::symbols) and
+//! [`ScopeId`](crate::memory::ScopeId), and no value, cell, AST, scope, working part or
+//! execute-side type reaches it — the parser included, which is what keeps the two from naming
+//! each other. Everything that
 //! matches a type against something that is *not* a type — a value, a parser part, a declaration —
 //! lives with that thing and calls in here.
 //!
@@ -74,8 +76,8 @@ pub use order::{is_more_specific_than, is_subtype_of, satisfied_by};
 pub use record::Record;
 pub use registry::{ShapeIntern, TypeRegistry};
 pub use render::{
-    TypeNameDisplay, display_label, display_name, render_keyworded_head, render_label,
-    render_sig_failure,
+    TypeNameDisplay, display_name, display_symbol, render_keyworded_head, render_sig_failure,
+    render_symbol,
 };
 pub use schema::{
     DeclaredGroup, Members, SchemaDraft, SigSchema, constructor_param_names,

@@ -5,7 +5,8 @@
 //! shape; only the names are the body's.
 
 use crate::memory::BumpVec;
-use crate::parse::{BinderSymbol, ExpressionPart, KExpression, WILDCARD};
+use crate::parse::{ExpressionPart, KExpression};
+use crate::symbols::{BinderSymbol, WILDCARD};
 
 /// The declared name of the `<name> :<Type>` pair starting at `index`, and whether one starts there:
 /// `Some(None)` for a `_` pair, which declares nothing.

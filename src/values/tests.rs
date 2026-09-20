@@ -14,7 +14,8 @@ use crate::memory::{
     Bump, BumpAllocator, CellGraph, Edge, KnotPlan, Member, Prices, ProgramBrand,
     ReleaseAbsorption, StepContext, Verdict, Writer, program_storage, reattachable,
 };
-use crate::parse::{ExpressionPart, KExpression, LabelInterner, TypeSymbol, parse};
+use crate::parse::{ExpressionPart, KExpression, parse};
+use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry};
 use crate::values::{Circular, DeepCopy, Knotted, KnottedFamily, Resolved, Weight};
 
@@ -45,7 +46,7 @@ reattachable!(Step => ());
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     pub types: &'f TypeRegistry<'graph>,
-    pub labels: &'f LabelInterner,
+    pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
 }
 
@@ -56,7 +57,7 @@ impl<'graph> Fixture<'_, 'graph> {
 
     /// The first top-level expression of `source`, parsed into program storage.
     pub fn parse(&self, source: &str) -> KExpression<'graph> {
-        parse(self.program, self.labels, source)
+        parse(self.program, self.symbols, source)
             .expect("the test source parses")
             .into_iter()
             .next()
@@ -96,12 +97,12 @@ pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
     let storage = program_storage();
     let program = storage.brand();
     let types = TypeRegistry::in_region(program.allocator());
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     let scratch = Bump::new();
     test(&Fixture {
         program,
         types: &types,
-        labels: &labels,
+        symbols: &symbols,
         scratch: &scratch,
     })
 }
@@ -196,11 +197,11 @@ impl<'graph> Fixture<'_, 'graph> {
     /// `NEWTYPE <name> = :{<field> :<name>}`, sealed as a singleton recursive group.
     pub fn ring_type(&self, name: &str, field: &str) -> KType {
         let (types, scratch) = (self.types, self.scratch());
-        let field = crate::parse::BinderSymbol::declared(field, self.labels).unwrap();
+        let field = crate::symbols::BinderSymbol::declared(field, self.symbols).unwrap();
         let representation = types.record(scratch, &[(field, types.sibling(0))]);
         RecursiveGroupWindow::seal_singleton(
             scratch,
-            TypeSymbol::declared(name, self.labels).unwrap(),
+            TypeSymbol::declared(name, self.symbols).unwrap(),
             RelativeSchema::NewType(representation),
             None,
             types,
@@ -212,7 +213,7 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn newtype(&self, name: &str, representation: KType) -> KType {
         RecursiveGroupWindow::seal_singleton(
             self.scratch(),
-            TypeSymbol::declared(name, self.labels).unwrap(),
+            TypeSymbol::declared(name, self.symbols).unwrap(),
             RelativeSchema::NewType(representation),
             None,
             self.types,
@@ -230,9 +231,9 @@ pub(super) fn ring<'graph, 'cell>(
     identity: KType,
     values: &[Option<Holding<'graph, 'cell>>],
 ) -> Vec<Node<'graph, 'cell>> {
-    let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
-    let next = crate::parse::BinderSymbol::declared("next", labels).unwrap();
-    let value = crate::parse::BinderSymbol::declared("value", labels).unwrap();
+    let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+    let next = crate::symbols::BinderSymbol::declared("next", symbols).unwrap();
+    let value = crate::symbols::BinderSymbol::declared("value", symbols).unwrap();
     let count = values.len() as u32;
     let nodes = tie(writer, 2 * count, |index, edges| {
         let member = (index / 2) as usize;

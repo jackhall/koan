@@ -7,7 +7,8 @@
 //! contents. A raw part is checked by shape, since an unevaluated literal has no value yet.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::{BinderSymbol, ExpressionPart, KLiteral};
+use crate::parse::{ExpressionPart, KLiteral};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with, join,
     satisfied_by,

@@ -141,7 +141,7 @@ A row carries two readings of every shape, in the column order its header names:
 - **allocations** — the whole-program total, from a debug build with `--features alloc-count`:
   interpreter startup, parse, and the run.
 - **symbols** — the run's `symbols_minted` total: every `Symbol::of` and `KeywordSymbol::of_run`
-  that reached the BLAKE3 funnel, counted where the two meet (`parse::labels`). It is
+  that reached the BLAKE3 funnel, counted where the two meet (`symbols`). It is
   the second reading of the same run, and it exists because hashing takes no allocation — a mint
   removed from a per-call path moves nothing in the allocations column, so without this one the
   declaration shape's saving would be unmeasurable.
@@ -254,7 +254,7 @@ after, where each seam that read one used to re-classify its text. An `Identifie
 symbol its parse minted and every reader down to the lookup ladder takes it
 ([label-interning.md § Where text becomes a symbol](../old_design/label-interning.md#where-text-becomes-a-symbol));
 a `Keyword` part carries its symbol and nothing else, so the spelling a diagnostic prints is
-resolved out of the run's label table rather than carried beside every token. A record's field list
+resolved out of the run's symbol table rather than carried beside every token. A record's field list
 yields its parse-minted symbols rather than handing names on as text, so a declared field is not
 re-hashed to key the schema.
 

@@ -22,10 +22,11 @@
 
 use crate::elaborate::{Elaboration, Unsigned, callable_type, self_signature};
 use crate::memory::{BumpAllocator, BumpVec, CellHandle, Knot, KnotPlan, Writer};
-use crate::parse::{BinderSymbol, ExpressionPart};
+use crate::parse::ExpressionPart;
 use crate::scope::{
     Binding, BodyShape, ClosureBindings, ClosureRefused, Component, ShapeKind, Site,
 };
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{ConstructionRefused, KeyRejected, Link, Weight};
 

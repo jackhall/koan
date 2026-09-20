@@ -1,6 +1,7 @@
 //! The surface rendering `PRINT` writes.
 
-use crate::parse::{BinderSymbol, ExpressionPart};
+use crate::parse::ExpressionPart;
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{Key, TypeValue};
 
@@ -9,7 +10,7 @@ use super::{Dict, Fixture, List, Record, Tagged, Value, pin, text, with_fixture}
 fn rendered(fixture: &Fixture<'_, '_>, value: Value<'_, '_>) -> String {
     let mut out = String::new();
     value
-        .render(&mut out, fixture.types, fixture.labels, fixture.scratch())
+        .render(&mut out, fixture.types, fixture.symbols, fixture.scratch())
         .unwrap();
     out
 }
@@ -30,9 +31,9 @@ fn scalars_render_bare() {
 #[test]
 fn containers_render_their_cells_in_reading_order() {
     with_fixture(|fixture| {
-        let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
-        let zeta = BinderSymbol::declared("zeta", labels).unwrap();
-        let alpha = BinderSymbol::declared("alpha", labels).unwrap();
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let zeta = BinderSymbol::declared("zeta", symbols).unwrap();
+        let alpha = BinderSymbol::declared("alpha", symbols).unwrap();
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let cells = [Value::Number(1.0), text(writer, "a")];
@@ -73,12 +74,12 @@ fn a_cycle_labels_its_target_and_a_shared_node_prints_inline() {
     use super::{Holding, Link, ring, tie};
     use crate::values::Circular;
     with_fixture(|fixture| {
-        let (types, labels, scratch) = (fixture.types, fixture.labels, fixture.scratch());
+        let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
         let ring_type = fixture.ring_type("Ring", "next");
-        let next = BinderSymbol::declared("next", labels).unwrap();
+        let next = BinderSymbol::declared("next", symbols).unwrap();
         let rendered = |value: Holding<'_, '_>| {
             let mut out = String::new();
-            value.render(&mut out, types, labels, scratch).unwrap();
+            value.render(&mut out, types, symbols, scratch).unwrap();
             out
         };
         fixture.in_cell(pin, |context| {

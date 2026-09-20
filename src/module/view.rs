@@ -17,7 +17,7 @@
 
 use crate::function::{KValue, Knotted, module};
 use crate::memory::{BumpAllocator, BumpVec, ScopeId, Writer};
-use crate::parse::{BinderSymbol, TypeSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     KType, Members, SchemaDraft, SigSchema, SigSubtypeFailure, TypeNode, TypeRegistry,
     constructor_param_names, member as bound_member, sig_subtype, substitute_sig_members,

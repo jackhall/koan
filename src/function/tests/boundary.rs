@@ -1,7 +1,7 @@
 //! The import boundary and the storage discipline, as a test over this module's own source.
 //!
-//! `function` may name `elaborate`, `memory`, `parse`, `scope`, `type_lattice` and `values` and
-//! nothing else in the crate — no scheduler; outside its tests it holds no owning heap type.
+//! `function` may name `elaborate`, `memory`, `parse`, `scope`, `symbols`, `type_lattice` and
+//! `values` and nothing else in the crate — no scheduler; outside its tests it holds no owning heap type.
 
 /// The path prefixes `function` may name, beside the scanner that reads them and the scope plans
 /// its law runs.
@@ -11,6 +11,7 @@ const PREFIXES: &[&str] = &[
     "crate::memory",
     "crate::parse",
     "crate::scope",
+    "crate::symbols",
     "crate::tests::boundary",
     "crate::tests::case_share",
     "crate::type_lattice",

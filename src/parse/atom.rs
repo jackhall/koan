@@ -22,11 +22,11 @@ use smallvec::SmallVec;
 use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::{ExpressionPart, KLiteral};
-use crate::parse::labels::{
-    KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol, is_keyword_token, is_type_name,
-};
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
+use crate::symbols::{
+    KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol, is_keyword_token, is_type_name,
+};
 
 /// One atom's parts, plus whether the atom ended in a bare `:` (`a:`). A trailing colon pairs a
 /// dict key with its value inside a brace and is an error anywhere else, and only the caller knows
@@ -48,13 +48,13 @@ pub(super) struct Classified<'a> {
 /// before the split.
 pub(super) fn classify<'a>(
     brand: ProgramBrand<'a>,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     text: &str,
     span: Span,
 ) -> Result<Classified<'a>, ParseError> {
     let Some(first_colon) = text.find(':') else {
         return Ok(Classified {
-            parts: smallvec::smallvec![classify_token(brand, labels, text, span.start)?],
+            parts: smallvec::smallvec![classify_token(brand, symbols, text, span.start)?],
             trailing_colon: false,
         });
     };
@@ -62,7 +62,8 @@ pub(super) fn classify<'a>(
         return Ok(Classified {
             parts: smallvec::smallvec![Spanned::at(
                 ExpressionPart::Keyword(
-                    KeywordSymbol::declared(text, labels).expect("`:|` and `:!` are keyword-class"),
+                    KeywordSymbol::declared(text, symbols)
+                        .expect("`:|` and `:!` are keyword-class"),
                 ),
                 span,
             )],
@@ -73,7 +74,7 @@ pub(super) fn classify<'a>(
     if first_colon > 0 {
         parts.push(classify_token(
             brand,
-            labels,
+            symbols,
             &text[..first_colon],
             span.start,
         )?);
@@ -100,7 +101,7 @@ pub(super) fn classify<'a>(
         }
         parts.push(classify_token(
             brand,
-            labels,
+            symbols,
             name,
             span.start + name_start as u32,
         )?);
@@ -128,7 +129,7 @@ pub(super) fn not_a_type_name(got: char) -> String {
 /// `tok`.
 pub fn classify_token<'a>(
     brand: ProgramBrand<'a>,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     tok: &str,
     start: u32,
 ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
@@ -140,7 +141,7 @@ pub fn classify_token<'a>(
         return Ok(Spanned::at(part, token_span));
     }
     let mut chars = tok.char_indices().peekable();
-    let part = parse_compound(brand, labels, tok, &mut chars, start, token_span)?;
+    let part = parse_compound(brand, symbols, tok, &mut chars, start, token_span)?;
     if let Some(&(_, c)) = chars.peek() {
         return Err(ParseError::new(
             format!("unexpected {:?} in token {:?}", c, tok),
@@ -208,7 +209,8 @@ fn take_digits(bytes: &[u8], at: &mut usize) -> usize {
     *at - start
 }
 
-/// Classify a sub-token per the token-class rules ([README.md](README.md) § Labels).
+/// Classify a sub-token per the token-class rules
+/// ([symbols/README.md](../symbols/README.md)).
 /// Capital-leading tokens
 /// that match neither the keyword nor the type shape are rejected rather than falling
 /// through to Identifier, so a stray `A` or `K9` can't silently shadow a future
@@ -216,7 +218,7 @@ fn take_digits(bytes: &[u8], at: &mut usize) -> usize {
 /// glue like `Number>` or `a@b` errors instead of sneaking through; Keywords are
 /// exempt because `=` / `->` / `+` are legitimate keyword shapes.
 fn classify_atom<'a>(
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     tok: &str,
     token_span: Span,
 ) -> Result<ExpressionPart<'a>, ParseError> {
@@ -225,7 +227,7 @@ fn classify_atom<'a>(
     }
     if is_keyword_token(tok) {
         return Ok(ExpressionPart::Keyword(
-            KeywordSymbol::declared(tok, labels)
+            KeywordSymbol::declared(tok, symbols)
                 .expect("is_keyword_token just classified this token as keyword-class"),
         ));
     }
@@ -240,7 +242,7 @@ fn classify_atom<'a>(
             ));
         }
         return Ok(ExpressionPart::Type(
-            TypeSymbol::declared(tok, labels)
+            TypeSymbol::declared(tok, symbols)
                 .expect("is_type_name just classified this token as type-class"),
         ));
     }
@@ -267,7 +269,7 @@ fn classify_atom<'a>(
         ));
     }
     Ok(ExpressionPart::Identifier(
-        ValueSymbol::declared(tok, labels)
+        ValueSymbol::declared(tok, symbols)
             .expect("a token that is neither keyword-class nor a type name is a value token"),
     ))
 }
@@ -277,13 +279,13 @@ fn classify_atom<'a>(
 /// 1-codepoint span at their position so error messages can point at the trigger char.
 fn parse_compound<'a>(
     brand: ProgramBrand<'a>,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     tok: &str,
     chars: &mut Peekable<CharIndices>,
     start: u32,
     token_span: Span,
 ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
-    let mut expr = read_atom(labels, tok, chars, start, token_span)?;
+    let mut expr = read_atom(symbols, tok, chars, start, token_span)?;
 
     while let Some(&(ci, c)) = chars.peek() {
         let Some(op) = find_suffix(c) else { break };
@@ -291,10 +293,10 @@ fn parse_compound<'a>(
         let trigger = trigger_span(start, ci, c);
         expr = match op {
             SuffixOp::Infix(build) => {
-                let rhs = read_atom(labels, tok, chars, start, token_span)?;
-                build(brand, labels, expr, rhs, trigger)
+                let rhs = read_atom(symbols, tok, chars, start, token_span)?;
+                build(brand, symbols, expr, rhs, trigger)
             }
-            SuffixOp::Suffix(build) => build(brand, labels, expr, trigger),
+            SuffixOp::Suffix(build) => build(brand, symbols, expr, trigger),
         };
     }
 
@@ -313,7 +315,7 @@ fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
 /// verbatim contiguous run of `tok`, so classification borrows the slice between the
 /// offsets the terminator walk computes; nothing is copied.
 fn read_atom<'a>(
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     tok: &str,
     chars: &mut Peekable<CharIndices>,
     token_start: u32,
@@ -348,7 +350,7 @@ fn read_atom<'a>(
         start: token_start + atom_start_ci as u32,
         end: token_start + end_ci as u32,
     };
-    classify_atom(labels, atom, token_span).map(|part| Spanned::at(part, span))
+    classify_atom(symbols, atom, token_span).map(|part| Spanned::at(part, span))
 }
 
 #[cfg(test)]
@@ -356,31 +358,43 @@ mod tests {
     use super::classify_token;
     use crate::memory::program_storage;
     use crate::parse::ast::{ExpressionPart, KLiteral};
-    use crate::parse::labels::LabelInterner;
+    use crate::symbols::SymbolInterner;
 
-    fn describe(p: &ExpressionPart<'_>, labels: &LabelInterner) -> String {
+    fn describe(p: &ExpressionPart<'_>, symbols: &SymbolInterner) -> String {
         match p {
-            ExpressionPart::Keyword(symbol) => format!("t({})", labels.render(symbol.symbol())),
-            ExpressionPart::Identifier(v) => format!("t({})", labels.render(v.symbol())),
-            ExpressionPart::Type(t) => format!("T({})", labels.render(t.symbol())),
+            ExpressionPart::Keyword(symbol) => format!("t({})", symbols.render(symbol.symbol())),
+            ExpressionPart::Identifier(v) => format!("t({})", symbols.render(v.symbol())),
+            ExpressionPart::Type(t) => format!("T({})", symbols.render(t.symbol())),
             ExpressionPart::Expression(e) => {
-                let inner: Vec<String> =
-                    e.parts.iter().map(|p| describe(&p.value, labels)).collect();
+                let inner: Vec<String> = e
+                    .parts
+                    .iter()
+                    .map(|p| describe(&p.value, symbols))
+                    .collect();
                 format!("[{}]", inner.join(" "))
             }
             ExpressionPart::SigiledTypeExpr(e) => {
-                let inner: Vec<String> =
-                    e.parts.iter().map(|p| describe(&p.value, labels)).collect();
+                let inner: Vec<String> = e
+                    .parts
+                    .iter()
+                    .map(|p| describe(&p.value, symbols))
+                    .collect();
                 format!(":({})", inner.join(" "))
             }
             ExpressionPart::RecordType(e) => {
-                let inner: Vec<String> =
-                    e.parts.iter().map(|p| describe(&p.value, labels)).collect();
+                let inner: Vec<String> = e
+                    .parts
+                    .iter()
+                    .map(|p| describe(&p.value, symbols))
+                    .collect();
                 format!(":{{{}}}", inner.join(" "))
             }
             ExpressionPart::QuotedExpression(e) => {
-                let inner: Vec<String> =
-                    e.parts.iter().map(|p| describe(&p.value, labels)).collect();
+                let inner: Vec<String> = e
+                    .parts
+                    .iter()
+                    .map(|p| describe(&p.value, symbols))
+                    .collect();
                 format!("#({})", inner.join(" "))
             }
             ExpressionPart::Literal(KLiteral::String(s)) => format!("s({})", s),
@@ -388,13 +402,13 @@ mod tests {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
             ExpressionPart::ListLiteral(items) => {
-                let inner: Vec<String> = items.iter().map(|p| describe(p, labels)).collect();
+                let inner: Vec<String> = items.iter().map(|p| describe(p, symbols)).collect();
                 format!("L[{}]", inner.join(" "))
             }
             ExpressionPart::DictLiteral(pairs) => {
                 let inner: Vec<String> = pairs
                     .iter()
-                    .map(|(k, v)| format!("{}: {}", describe(k, labels), describe(v, labels)))
+                    .map(|(k, v)| format!("{}: {}", describe(k, symbols), describe(v, symbols)))
                     .collect();
                 format!("D{{{}}}", inner.join(", "))
             }
@@ -402,7 +416,11 @@ mod tests {
                 let inner: Vec<String> = fields
                     .iter()
                     .map(|(name, v)| {
-                        format!("{} = {}", labels.render(name.symbol()), describe(v, labels))
+                        format!(
+                            "{} = {}",
+                            symbols.render(name.symbol()),
+                            describe(v, symbols)
+                        )
                     })
                     .collect();
                 format!("R{{{}}}", inner.join(", "))
@@ -412,9 +430,9 @@ mod tests {
 
     fn classify(tok: &str) -> Result<String, String> {
         let program = program_storage();
-        let labels = LabelInterner::new();
-        classify_token(program.brand(), &labels, tok, 0)
-            .map(|s| describe(&s.value, &labels))
+        let symbols = SymbolInterner::new();
+        classify_token(program.brand(), &symbols, tok, 0)
+            .map(|s| describe(&s.value, &symbols))
             .map_err(|e| e.to_string())
     }
 

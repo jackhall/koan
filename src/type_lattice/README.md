@@ -10,9 +10,11 @@ a parser part, a declaration — lives with that thing and calls in here.
 ## The boundary, and why it is a test
 
 The lattice imports exactly two things from the rest of koan: the classified
-label and symbol types from [`parse`](../parse/README.md), and `ScopeId`, the
+symbol types from [`symbols`](../symbols/README.md), and `ScopeId`, the
 bump-allocation seam and the component walk from [`memory`](../memory/README.md). No value, cell,
-AST, scope, working part or execute-side type reaches it.
+AST, scope, working part or execute-side type reaches it — the
+[parser](../parse/README.md) included, which is what keeps the two from naming
+each other: both rest on `symbols`, a leaf.
 
 The compiler cannot enforce that — a public module may name anything in its own
 crate — so [`tests::boundary`](tests/boundary.rs) reads this module's own source
@@ -303,8 +305,8 @@ the current position.
 
 [Rendering](render.rs) is exempt, and for a stated reason: it spells syntax
 *between* children and inherits the quantifier binder from above, which neither
-driver expresses. Every entry point takes the registry and the label interner,
-never a bundle — the lattice knows about types and labels and nothing else.
+driver expresses. Every entry point takes the registry and the symbol interner,
+never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Laws, not shapes
 

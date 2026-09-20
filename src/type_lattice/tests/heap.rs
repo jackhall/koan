@@ -8,7 +8,7 @@
 //! and the test names it by failing.
 
 use crate::memory::{Bump, BumpAllocator, BumpVec, ScopeId};
-use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::tests::allocation_count;
 
 use crate::type_lattice::handle::KType;
@@ -39,16 +39,16 @@ fn warm(region: BumpAllocator<'_>) {
 
 #[test]
 fn interning_and_relations_touch_no_heap() {
-    // Every label is declared before the bracket: declaring one interns its text.
-    let labels = LabelInterner::new();
-    let x = BinderSymbol::declared("x", &labels).expect("a bindable token");
-    let y = BinderSymbol::declared("y", &labels).expect("a bindable token");
-    let elt = TypeSymbol::declared("Elt", &labels).expect("a Type token");
-    let item = TypeSymbol::declared("Item", &labels).expect("a Type token");
-    let wrap = TypeSymbol::declared("Wrap", &labels).expect("a Type token");
-    let pure = KeywordSymbol::declared("PURE", &labels).expect("a keyword token");
-    let plus = KeywordSymbol::declared("PLUS", &labels).expect("a keyword token");
-    let a = ValueSymbol::declared("a", &labels).expect("a value token");
+    // Every symbol is declared before the bracket: declaring one interns its text.
+    let symbols = SymbolInterner::new();
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
+    let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let item = TypeSymbol::declared("Item", &symbols).expect("a Type token");
+    let wrap = TypeSymbol::declared("Wrap", &symbols).expect("a Type token");
+    let pure = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
+    let plus = KeywordSymbol::declared("PLUS", &symbols).expect("a keyword token");
+    let a = ValueSymbol::declared("a", &symbols).expect("a value token");
 
     // The registry's region, the relations' scratch, and the declaring frame a window lives in.
     let (registry_bump, scratch_bump, host_bump) = (Bump::new(), Bump::new(), Bump::new());

@@ -4,7 +4,7 @@ use std::ptr;
 
 use crate::function::tests::{declared, pin, with_fixture};
 use crate::memory::ScopeId;
-use crate::parse::BinderSymbol;
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Members, TypeNode, specialize_schema};
 use crate::values::{Knotted as _, Resolved, Value};
 

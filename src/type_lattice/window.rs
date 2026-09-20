@@ -48,7 +48,7 @@
 use std::cell::{Cell, RefCell};
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId, strongly_connected_components};
-use crate::parse::{Symbol, TypeSymbol};
+use crate::symbols::{Symbol, TypeSymbol};
 
 use super::digest::{ComponentMember, TypeDigest, component_digest, member_ref_digest};
 use super::handle::KType;
@@ -66,7 +66,7 @@ pub enum RelativeSchema<'w> {
     /// Fresh nominal over a transparent representation.
     NewType(KType),
     /// Higher-kinded constructor: erased-parameter variant schema plus parameter names, the
-    /// Type-class labels the declaration interned — both symbol-sorted, as a sealed member stores
+    /// Type-class symbols the declaration interned — both symbol-sorted, as a sealed member stores
     /// them. Built through [`RelativeSchema::constructor`].
     TypeConstructor {
         schema: Members<'w, TypeSymbol>,

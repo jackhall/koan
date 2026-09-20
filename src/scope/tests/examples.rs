@@ -2,16 +2,17 @@
 //! the kinds of nested shape, and the forms the builder refuses.
 
 use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::{BinderSymbol, ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     BodyShape, Builtins, CaptureSource, Coordinate, MentionClass, Position, ShapeError, ShapeKind,
     Slot, Target,
 };
+use crate::symbols::BinderSymbol;
 
 use super::{Fixture, builtins, type_name, value_name, with_fixture};
 
 fn value(fixture: &Fixture<'_, '_>, text: &str) -> BinderSymbol {
-    BinderSymbol::Value(value_name(text, fixture.labels))
+    BinderSymbol::Value(value_name(text, fixture.symbols))
 }
 
 /// Build `source` against the suites' builtins and hand the result to `check`.
@@ -252,7 +253,7 @@ fn a_union_may_name_itself_and_types_take_slots_after_values() {
         "UNION Nat = (Zero :Null Succ :Nat)\nLET one = 1",
         |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
-            let nat = BinderSymbol::Type(type_name("Nat", fixture.labels));
+            let nat = BinderSymbol::Type(type_name("Nat", fixture.symbols));
             let (slot, position) = shape.slot(nat).unwrap();
             let values = (0..shape.slots())
                 .filter(|index| {
@@ -299,7 +300,7 @@ fn each_error_names_what_a_user_needs() {
     for (source, message) in cases {
         shaped(source, |fixture, _, shape| {
             let error = shape.err().expect("the program is refused");
-            let rendered = error.display(fixture.labels).to_string();
+            let rendered = error.display(fixture.symbols).to_string();
             assert!(
                 rendered.starts_with(message),
                 "`{source}` rendered `{rendered}`"
@@ -352,7 +353,7 @@ fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
             assert!(matches!(
                 shape,
                 Err(ShapeError::Unbound { name: BinderSymbol::Type(name), at, .. })
-                    if name == type_name("Nat", fixture.labels) && at == Position::statement(0)
+                    if name == type_name("Nat", fixture.symbols) && at == Position::statement(0)
             ));
         },
     );
@@ -363,7 +364,7 @@ fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
             let body = shape
                 .nested(crate::scope::Site::of(&lines[0].parts[8].value))
                 .expect("the body has a shape");
-            let elt = BinderSymbol::Type(type_name("Elt", fixture.labels));
+            let elt = BinderSymbol::Type(type_name("Elt", fixture.symbols));
             assert_eq!(
                 body.slot(elt).map(|(_, position)| position),
                 Some(Position::PARAMETER)
@@ -382,7 +383,7 @@ fn a_quantifier_read_in_its_body_is_a_mention_of_the_body_parameter() {
             let body = shape
                 .nested(crate::scope::Site::of(&lines[0].parts[8].value))
                 .expect("the body has a shape");
-            let elt = BinderSymbol::Type(type_name("Elt", fixture.labels));
+            let elt = BinderSymbol::Type(type_name("Elt", fixture.symbols));
             let (slot, _) = body.slot(elt).expect("the quantifier is a body parameter");
             assert_eq!(
                 mention_of(body, elt).coordinate,
@@ -448,7 +449,7 @@ fn a_nominal_construction_reads_its_head_eagerly_and_its_payload_as_a_constructo
             let shape = shape.expect("a tagged self-reference shapes");
             let a = value(fixture, "a");
             assert_eq!(mention_of(shape, a).class, MentionClass::Deferred);
-            let ring = BinderSymbol::Type(type_name("Ring", fixture.labels));
+            let ring = BinderSymbol::Type(type_name("Ring", fixture.symbols));
             assert_eq!(mention_of(shape, ring).class, MentionClass::Eager);
             let (slot, _) = shape.slot(a).unwrap();
             let component = shape.component_of(slot);
@@ -493,7 +494,7 @@ fn a_let_binder_records_its_right_hand_side() {
             let (a, _) = shape.slot(value(fixture, "a")).unwrap();
             let rhs = shape.rhs(a).expect("a LET has a right-hand side");
             assert!(std::ptr::eq(rhs, &lines[0].parts[3].value));
-            let distance = BinderSymbol::Type(type_name("Distance", fixture.labels));
+            let distance = BinderSymbol::Type(type_name("Distance", fixture.symbols));
             let (declared, _) = shape.slot(distance).unwrap();
             assert!(shape.rhs(declared).is_none(), "a NEWTYPE has none");
         },
@@ -506,7 +507,7 @@ fn a_type_binder_records_its_declaration_node() {
         "LET a = [1 2]\nNEWTYPE Distance = Number",
         |fixture, lines, shape| {
             let shape = shape.expect("the program shapes");
-            let distance = BinderSymbol::Type(type_name("Distance", fixture.labels));
+            let distance = BinderSymbol::Type(type_name("Distance", fixture.symbols));
             let (declared, _) = shape.slot(distance).unwrap();
             let node = shape
                 .declarations(declared)
@@ -542,11 +543,11 @@ fn a_signature_body_declares_its_own_members() {
     ] {
         shaped(source, |fixture, _, shape| {
             let shape = shape.unwrap_or_else(|error| {
-                panic!("`{source}` shapes: {}", error.display(fixture.labels))
+                panic!("`{source}` shapes: {}", error.display(fixture.symbols))
             });
             assert_eq!(shape.slots(), 1, "`{source}` declares the signature alone");
             for name in own {
-                let name = BinderSymbol::Type(type_name(name, fixture.labels));
+                let name = BinderSymbol::Type(type_name(name, fixture.symbols));
                 assert!(
                     !shape.mentions().iter().any(|mention| mention.name == name),
                     "`{source}` declares `{name:?}` in its definition"
@@ -562,7 +563,7 @@ fn a_signature_body_reads_the_types_it_does_not_declare() {
         "NEWTYPE Distance = Number\nSIG Far = (VAL how_far :Distance)",
         |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
-            let distance = BinderSymbol::Type(type_name("Distance", fixture.labels));
+            let distance = BinderSymbol::Type(type_name("Distance", fixture.symbols));
             let mention = mention_of(shape, distance);
             assert_eq!(mention.class, MentionClass::Deferred);
         },
@@ -590,7 +591,7 @@ fn parameters_of(fixture: &Fixture<'_, '_>, block: &BodyShape<'_>) -> Vec<String
     (0..block.slots())
         .map(|slot| {
             let name = block.slot_name(Slot(slot as u32));
-            fixture.labels.display(name.symbol()).to_string()
+            fixture.symbols.display(name.symbol()).to_string()
         })
         .collect()
 }
@@ -672,7 +673,7 @@ fn a_using_body_takes_its_operands_surfaced_names_as_parameters() {
     for (source, expected) in cases {
         shaped(source, |fixture, _, shape| {
             let shape = shape.unwrap_or_else(|error| {
-                panic!("`{source}` shapes: {}", error.display(fixture.labels))
+                panic!("`{source}` shapes: {}", error.display(fixture.symbols))
             });
             let mut names = parameters_of(fixture, only_block(shape));
             let mut want: Vec<String> = expected.iter().map(|name| name.to_string()).collect();

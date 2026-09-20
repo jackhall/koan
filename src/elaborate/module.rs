@@ -8,8 +8,8 @@
 //! [dispatch](../../roadmap/rewrite/dispatch.md) gives a bodyless definition a slot.
 
 use crate::memory::{BumpAllocator, CellHandle};
-use crate::parse::BinderSymbol;
 use crate::scope::{Activation, Binding, ShapeKind};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, SchemaDraft, TypeRegistry};
 use crate::values::{Knotted, Value};
 

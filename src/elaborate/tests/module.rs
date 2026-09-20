@@ -14,7 +14,7 @@ fn signature(
     let mut draft = SchemaDraft::new(program.scratch);
     for (name, handle) in values {
         let name =
-            crate::parse::ValueSymbol::declared(name, program.labels).expect("an identifier");
+            crate::symbols::ValueSymbol::declared(name, program.symbols).expect("an identifier");
         draft.insert_value_slot(name, *handle);
     }
     for (name, handle) in types {
@@ -115,7 +115,7 @@ fn a_slot_still_claimed_by_its_binder_leaves_the_module_unsigned() {
             assert_eq!(refused.binder, program.binder);
             assert_eq!(
                 refused.name,
-                crate::parse::BinderSymbol::classify("s").unwrap()
+                crate::symbols::BinderSymbol::classify("s").unwrap()
             );
         },
     );

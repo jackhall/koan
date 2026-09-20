@@ -31,7 +31,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, ScopeId, bump_table};
-use crate::parse::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
+use crate::symbols::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
 
 use super::digest::{self, TypeDigest, schema_content_digest};
 use super::handle::KType;

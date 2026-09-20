@@ -22,8 +22,9 @@ use crate::memory::{
     StepContext, Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
-use crate::parse::{BinderSymbol, KExpression, LabelInterner, TypeSymbol, ValueSymbol, parse};
+use crate::parse::{KExpression, parse};
 use crate::scope::{Binding, BodyShape, Builtins, Component, Slot};
+use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Circular, Knotted as _, Link, TypeValue, Value};
 
@@ -37,7 +38,7 @@ reattachable!(Step => ());
 pub(crate) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     pub types: &'f TypeRegistry<'graph>,
-    pub labels: &'f LabelInterner,
+    pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
 }
 
@@ -46,12 +47,12 @@ pub(crate) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
     let storage = program_storage();
     let program = storage.brand();
     let types = TypeRegistry::in_region(program.allocator());
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     let scratch = Bump::new();
     test(&Fixture {
         program,
         types: &types,
-        labels: &labels,
+        symbols: &symbols,
         scratch: &scratch,
     })
 }
@@ -63,7 +64,7 @@ impl<'graph> Fixture<'_, 'graph> {
 
     /// Every top-level line of `source`, parsed into program storage.
     pub fn parse(&self, source: &str) -> Vec<KExpression<'graph>> {
-        parse(self.program, self.labels, source)
+        parse(self.program, self.symbols, source)
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"))
     }
 
@@ -92,7 +93,7 @@ impl<'graph> Fixture<'_, 'graph> {
     }
 
     pub fn name(&self, text: &str) -> BinderSymbol {
-        BinderSymbol::declared(text, self.labels).expect("a binder name")
+        BinderSymbol::declared(text, self.symbols).expect("a binder name")
     }
 
     /// `origin = 0` and the scalar types, laid down in `writer`'s region.
@@ -100,7 +101,7 @@ impl<'graph> Fixture<'_, 'graph> {
         &self,
         writer: Writer<'cell>,
     ) -> &'cell Builtins<'graph, 'cell, Knotted<'graph, 'cell>> {
-        let origin = ValueSymbol::declared("origin", self.labels).expect("a value token");
+        let origin = ValueSymbol::declared("origin", self.symbols).expect("a value token");
         let types: Vec<_> = [
             ("Number", KType::NUMBER),
             ("Str", KType::STR),
@@ -110,7 +111,7 @@ impl<'graph> Fixture<'_, 'graph> {
         ]
         .into_iter()
         .map(|(name, handle)| {
-            let name = TypeSymbol::declared(name, self.labels).expect("a Type token");
+            let name = TypeSymbol::declared(name, self.symbols).expect("a Type token");
             (
                 name,
                 Value::Type(TypeValue::new(writer, handle, self.types)),
@@ -137,7 +138,7 @@ impl<'graph> Fixture<'_, 'graph> {
     ) -> &'cell KActivation<'graph, 'cell> {
         let builtins = self.builtins(writer);
         let shape = BodyShape::of_program(self.program, lines, builtins, self.scratch)
-            .unwrap_or_else(|error| panic!("the program shapes: {}", error.display(self.labels)));
+            .unwrap_or_else(|error| panic!("the program shapes: {}", error.display(self.symbols)));
         let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
         for slot in 0..shape.slots() {
             activation

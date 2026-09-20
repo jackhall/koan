@@ -16,7 +16,8 @@
 use crate::memory::BumpVec;
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
-use crate::parse::{BinderSymbol, ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
+use crate::symbols::BinderSymbol;
 
 use super::super::{Position, ShapeError, ShapeKind, Site};
 use super::{Builder, body_of};

@@ -13,7 +13,7 @@
 //! See [README.md](README.md) § The node vocabulary.
 
 use crate::memory::ScopeId;
-use crate::parse::TypeSymbol;
+use crate::symbols::TypeSymbol;
 
 use super::digest::TypeDigest;
 use super::handle::KType;
@@ -192,7 +192,7 @@ pub enum NodeSchema<'run> {
     /// Fresh nominal over a transparent representation.
     NewType(KType),
     /// Higher-kinded constructor: erased-parameter variant schema plus parameter names. Both the
-    /// schema's keys and the parameter names are Type-class labels, interned at the declaration
+    /// schema's keys and the parameter names are Type-class symbols, interned at the declaration
     /// that mints the family, and both are stored symbol-sorted — the schema so it is read in one
     /// order, the parameter names because a constructor's identity is their set.
     TypeConstructor {

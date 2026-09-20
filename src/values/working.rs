@@ -12,10 +12,11 @@ use std::fmt;
 use crate::memory::{BumpAllocator, Writer, collect};
 use crate::parse::ast::RunIter;
 use crate::parse::{
-    BinderSymbol, DispatchShape, ExpressionPart, KExpression, KeyElement, KeywordSymbol,
-    LabelInterner, LazyKinds, NodeCache, PartClass, StoredBinderKey,
+    DispatchShape, ExpressionPart, KExpression, KeyElement, LazyKinds, NodeCache, PartClass,
+    StoredBinderKey,
 };
 use crate::source::{FileId, SourceRef, Span, Spanned};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{TypeRegistry, display_name};
 
 use super::{Knotted, Nothing, Value, part_ktype};
@@ -88,16 +89,16 @@ impl<'graph, 'cell, X: Knotted> WorkingPart<'graph, 'cell, X> {
         &self,
         f: &mut fmt::Formatter<'_>,
         types: &TypeRegistry<'_>,
-        labels: &LabelInterner,
+        symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {
         match self {
             WorkingPart::Ast(part) => match part_ktype(part, types, scratch) {
-                Some(slot) => write!(f, "{}", display_name(slot, types, labels)),
-                None => part.write_summary(f, labels),
+                Some(slot) => write!(f, "{}", display_name(slot, types, symbols)),
+                None => part.write_summary(f, symbols),
             },
             WorkingPart::Spliced { value, .. } => {
-                write!(f, "{}", display_name(value.ktype(), types, labels))
+                write!(f, "{}", display_name(value.ktype(), types, symbols))
             }
             WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => {
                 f.write_str("<staged>")
@@ -106,9 +107,9 @@ impl<'graph, 'cell, X: Knotted> WorkingPart<'graph, 'cell, X> {
     }
 
     /// The part's own spelling, for a position no type was matched on — a binder's name.
-    fn write_spelling(&self, f: &mut fmt::Formatter<'_>, labels: &LabelInterner) -> fmt::Result {
+    fn write_spelling(&self, f: &mut fmt::Formatter<'_>, symbols: &SymbolInterner) -> fmt::Result {
         match self {
-            WorkingPart::Ast(part) => part.write_summary(f, labels),
+            WorkingPart::Ast(part) => part.write_summary(f, symbols),
             WorkingPart::Expression(_)
             | WorkingPart::RecordType(_)
             | WorkingPart::Spliced { .. }
@@ -289,7 +290,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
         &self,
         f: &mut fmt::Formatter<'_>,
         types: &TypeRegistry<'_>,
-        labels: &LabelInterner,
+        symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {
         for (index, part) in self.parts.iter().enumerate() {
@@ -297,9 +298,9 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
                 f.write_str(" ")?;
             }
             if Some(index) == self.binder_name_slot() {
-                part.value.write_spelling(f, labels)?;
+                part.value.write_spelling(f, symbols)?;
             } else {
-                part.value.write_summary(f, types, labels, scratch)?;
+                part.value.write_summary(f, types, symbols, scratch)?;
             }
         }
         Ok(())

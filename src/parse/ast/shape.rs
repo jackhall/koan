@@ -17,7 +17,7 @@ use crate::memory::BumpAllocator;
 use crate::parse::builtin_shapes::binder::StoredBinderKey;
 use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::parse::builtin_shapes::{BuiltinShape, builtin_shape_for};
-use crate::parse::labels::KeywordSymbol;
+use crate::symbols::KeywordSymbol;
 
 /// One position of a bucket key: a fixed token as its [`KeywordSymbol`], or an argument slot.
 /// `Copy` and lifetime-free, so a key run is the same type whether it sits in a `Vec` a caller
@@ -35,7 +35,7 @@ pub enum KeyElement {
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
 /// [`KExpression::stored_key`](super::KExpression::stored_key); they MUST agree for any pair that
 /// should match. The parser classifies source tokens via
-/// [`is_keyword_token`](crate::parse::labels::is_keyword_token) and mints each one's symbol there;
+/// [`is_keyword_token`](crate::symbols::is_keyword_token) and mints each one's symbol there;
 /// `SignatureElement::keyword` uppercases a lowercase Rust-spelled token before minting, so a
 /// registration and a call arrive at the same symbol for the same token.
 pub type ExpressionKey = Vec<KeyElement>;

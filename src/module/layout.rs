@@ -16,7 +16,7 @@
 
 use crate::function::{KValue, Knotted};
 use crate::memory::BumpAllocator;
-use crate::parse::{BinderSymbol, TypeSymbol};
+use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{KType, Members, SigSchema, TypeNode, TypeRegistry};
 
 /// How many members of a module of signature `schema` are values — the index the type channel

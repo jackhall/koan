@@ -8,7 +8,7 @@
 //! is sound because every resident is covariant in `'graph` and `'cell`.
 
 use crate::memory::{Writer, collect};
-use crate::parse::Symbol;
+use crate::symbols::Symbol;
 use crate::type_lattice::KType;
 
 use super::{DeepCopy, Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, Value, Weight};

@@ -1,4 +1,4 @@
-//! Label-vocabulary laws: what a symbol is, what the interner records, and how the three token
+//! Symbol-vocabulary laws: what a symbol is, what the interner records, and how the three token
 //! classes partition a spelling. The hasher-plumbing pins stay instances — they fix a routing
 //! choice (`write_u128` and nothing else), not a statement over inputs.
 
@@ -7,10 +7,10 @@ use std::collections::HashSet;
 use proptest::prelude::*;
 
 use super::*;
-use crate::parse::BindKind;
+use crate::symbols::BindKind;
 
 /// The placeholder every render path writes for a symbol this run never recorded.
-const MISSING: &str = "<label>";
+const MISSING: &str = "<symbol>";
 
 /// A name of this module's own, so the properties pin [`StaticName`] itself rather than whatever
 /// spelling a builtin happens to declare.
@@ -72,7 +72,7 @@ proptest! {
         texts in prop::collection::vec(token_text(), 1..8),
         absent in token_text(),
     ) {
-        let interner = LabelInterner::new();
+        let interner = SymbolInterner::new();
         for text in &texts {
             prop_assert_eq!(interner.intern(text), Symbol::of(text));
         }
@@ -117,7 +117,7 @@ proptest! {
         recorded in prop::collection::vec(token_text(), 1..5),
         missing in prop::collection::vec(token_text(), 1..3),
     ) {
-        let interner = LabelInterner::new();
+        let interner = SymbolInterner::new();
         for text in &recorded {
             interner.intern(text);
         }
@@ -189,7 +189,7 @@ proptest! {
     /// leaves no entry behind for a diagnostic to resolve.
     #[test]
     fn classify_records_nothing_and_declared_interns_iff_it_classifies(text in token_text()) {
-        let interner = LabelInterner::new();
+        let interner = SymbolInterner::new();
         ValueSymbol::classify(&text);
         TypeSymbol::classify(&text);
         KeywordSymbol::of(&text);
@@ -244,14 +244,14 @@ proptest! {
             prop_assert_ne!(KeywordSymbol::of_run(&grown), digest, "a larger set is a new key");
         }
 
-        let labels = LabelInterner::new();
+        let symbols = SymbolInterner::new();
         let declared: Vec<KeywordSymbol> = glyphs
             .iter()
-            .map(|text| KeywordSymbol::declared(text, &labels).expect("keyword-class by construction"))
+            .map(|text| KeywordSymbol::declared(text, &symbols).expect("keyword-class by construction"))
             .collect();
-        let run = KeywordSymbol::declared_run(&declared, &labels);
+        let run = KeywordSymbol::declared_run(&declared, &symbols);
         prop_assert_eq!(run, digest);
-        let rendering = labels.render(run.symbol());
+        let rendering = symbols.render(run.symbol());
         prop_assert_eq!(
             rendering.split(' ').collect::<HashSet<_>>(),
             glyphs.iter().map(String::as_str).collect::<HashSet<_>>(),

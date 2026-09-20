@@ -317,7 +317,7 @@ error in walk order:
   declares.
 
 Each renders with the names and positions a user needs, spelled through the
-label interner.
+symbol interner.
 
 ## Memory
 

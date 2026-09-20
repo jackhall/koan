@@ -14,11 +14,12 @@ use std::ptr;
 use proptest::prelude::*;
 
 use crate::memory::{CellGraph, Edge, ReleaseAbsorption, Writer, resident};
-use crate::parse::{BinderSymbol, ExpressionPart};
+use crate::parse::ExpressionPart;
 use crate::scope::{
     Binding, BodyShape, CaptureSlot, CaptureSource, Component, Coordinate, ShapeKind, Site, Slot,
     Target,
 };
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{Circular, Knotted as _, Link, TypeValue, Value, cross};
 
@@ -326,7 +327,7 @@ proptest! {
                     let writer = context.writer();
                     let builtins = fixture.builtins(writer);
                     let shape = crate::scope::BodyShape::of_program(fixture.program, &lines, builtins, fixture.scratch())
-                        .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(fixture.labels)));
+                        .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(fixture.symbols)));
                     let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
                     let mut tied = Vec::new();
                     run(fixture, writer, activation, &mut 0.0, &mut tied);

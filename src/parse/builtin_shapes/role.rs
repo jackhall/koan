@@ -27,7 +27,7 @@ pub enum Role {
     Body(BodyKind),
     /// `<head> -> <body>` arms, each body a block shape.
     Branches(Heads),
-    /// A type declaration's definition, after the `=`: a constructor context whose own labels and
+    /// A type declaration's definition, after the `=`: a constructor context whose own symbols and
     /// declarations are not mentions.
     Definition(DefinitionKind),
     /// A quoted symbol or quoted code: data, never read.
@@ -62,11 +62,11 @@ pub enum Heads {
     Labels,
 }
 
-/// How a definition lays out its labels.
+/// How a definition lays out its symbols.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DefinitionKind {
     /// `UNION`: tag, type, tag, type.
     Union,
-    /// Everything else: identifiers are labels, `TYPE` declarations are the definition's own.
+    /// Everything else: identifiers are symbols, `TYPE` declarations are the definition's own.
     Plain,
 }

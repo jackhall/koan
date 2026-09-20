@@ -7,7 +7,8 @@
 use std::ptr;
 
 use crate::memory::{CellGraph, Prices, ReleaseAbsorption, Verdict};
-use crate::parse::{BinderSymbol, ExpressionPart, ProgramNode};
+use crate::parse::{ExpressionPart, ProgramNode};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{COPY_RATIO, Key, ValueFamily, cross, cross_here, verdict};
 
@@ -76,8 +77,8 @@ fn a_copied_list_outlives_its_home() {
 #[test]
 fn a_pinned_record_reads_after_its_home_seals() {
     with_fixture(|fixture| {
-        let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
-        let name = BinderSymbol::declared("name", labels).unwrap();
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let name = BinderSymbol::declared("name", symbols).unwrap();
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, pin);
         let home = graph.create(None).unwrap();
         let holder = graph.create(None).unwrap();

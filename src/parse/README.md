@@ -2,8 +2,9 @@
 
 Source text becomes a sequence of `KExpression`s in two passes, and this module
 is the second one plus everything the first one's output is spelled in: the
-label vocabulary every symbol is minted in, the syntax AST, and the builtin shape
-table every node is classified against at construction.
+syntax AST and the builtin shape table every node is classified against at
+construction, written in the [symbol vocabulary](../symbols/README.md) every
+name is minted in.
 
 The [`sexlex`](../../sexlex/README.md) crate reads the text into a layout tree
 of atoms, strings, commas and groups and knows nothing about koan. `lower` gives
@@ -11,11 +12,12 @@ that tree koan's meaning. `parse` and `parse_with_path` are the entire
 text-to-AST surface; `atom`, `brace`, `lower` and `operators` are private.
 
 Outside `#[cfg(test)]` this module reaches [`source`](../source.rs),
-[`memory`](../memory/README.md) and one name from the
-[type lattice](../type_lattice/README.md): `KType`, whose builtin handles are
-`const` content digests, so a builtin shape states its slots' types without a
-registry in hand. That edge closes a cycle with the lattice's import of this
-module's labels, and it is the whole of it — no node, no registry, no relation.
+[`memory`](../memory/README.md), [`symbols`](../symbols/README.md) and one name
+from the [type lattice](../type_lattice/README.md): `KType`, whose builtin
+handles are `const` content digests, so a builtin shape states its slots' types
+without a registry in hand. That is the whole of the lattice edge — no node, no
+registry, no relation — and it runs one way: the lattice rests on
+[`symbols`](../symbols/README.md) too, and on nothing here.
 A failure is this module's own [`ParseError`](error.rs). The runtime operations
 on the types here — lowering a literal, resolving a part to a cell, installing a
 binder — are inherent impls in the runtime, which imports them by name.
@@ -59,38 +61,6 @@ Brace literals get their own sub-state-machine ([brace.rs](brace.rs)) because
 one `{…}` frame serves two containers: a **dict** (`{k: v}`) and a **record**
 (`{x = 1}`). The first pairing operator selects the mode, mixing the two is an
 error, and an empty `{}` is the empty record.
-
-## Labels: identity is a content digest, the interner is not an authority
-
-A label — a record field name, a struct schema field, an FN parameter name —
-originates in source text and is fixed at declaration, so its identity is a
-content digest: a [`Symbol`](labels.rs) is the low 128 bits of BLAKE3 over the
-label's UTF-8 bytes.
-
-`Symbol::of` is a **pure function**. Making a symbol needs no interner, no
-registry and no execution context, and equal text yields equal symbols in every
-run. The `LabelInterner` is therefore *not* a lookup authority: comparisons and
-probes go straight through symbol bits, and the table is written only where a
-syntactic label is constructed and read only where one is rendered. Its growth is
-bounded by the run's source text.
-
-That is also why the [type lattice](../type_lattice/README.md) can key its node
-table on a digest of the same width and footing with no shared interner between
-them, and why the same identity hasher serves both: a digest is already uniformly
-distributed, so re-hashing would only cost cycles.
-
-**A symbol carries its binding class.** `ValueSymbol`, `TypeSymbol`,
-`KeywordSymbol` and the `BinderSymbol` that unifies the two binder classes are
-distinct types over the same bits, so a field name arrives already classified by
-its own parse and no consumer re-derives a class from text. Equality and digests
-read the symbol bits alone, so a class rides past an intern boundary without
-widening what makes two labels the same.
-
-The class itself is a purely lexical rule: a pure-symbol token (no ASCII letters)
-is always a keyword, and an alphabetic token is a keyword iff it has at least two
-ASCII-uppercase letters and no lowercase ones. A single uppercase letter is
-therefore neither a keyword nor a type name — it classifies as neither and is a
-parse error.
 
 ## The AST: borrowed, `Copy`, and splice-free
 

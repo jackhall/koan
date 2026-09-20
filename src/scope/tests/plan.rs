@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 
 use proptest::prelude::*;
 
-use crate::parse::{BinderSymbol, LabelInterner};
+use crate::symbols::{BinderSymbol, SymbolInterner};
 
 use super::{type_name, value_name};
 
@@ -74,12 +74,12 @@ impl Name {
         }
     }
 
-    pub fn symbol(self, labels: &LabelInterner) -> BinderSymbol {
+    pub fn symbol(self, symbols: &SymbolInterner) -> BinderSymbol {
         let text = self.text();
         if self.is_type() {
-            BinderSymbol::Type(type_name(&text, labels))
+            BinderSymbol::Type(type_name(&text, symbols))
         } else {
-            BinderSymbol::Value(value_name(&text, labels))
+            BinderSymbol::Value(value_name(&text, symbols))
         }
     }
 }

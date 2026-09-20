@@ -3,8 +3,9 @@
 
 use std::ptr;
 
-use crate::parse::{BinderSymbol, ExpressionPart, KeyElement, PartClass, classify_dispatch_shape};
+use crate::parse::{ExpressionPart, KeyElement, PartClass, classify_dispatch_shape};
 use crate::source::{Span, Spanned};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KKind, KType};
 use crate::values::{admits, admits_part, part_ktype};
 
@@ -112,7 +113,7 @@ fn admission_reads_each_part_kind() {
             assert!(admits(KType::NUMBER, &number, types, scratch));
             let spliced = WorkingPart::Spliced {
                 value: text(writer, "s"),
-                from_name: BinderSymbol::declared("x", fixture.labels),
+                from_name: BinderSymbol::declared("x", fixture.symbols),
             };
             assert!(admits(KType::STR, &spliced, types, scratch));
             assert!(!admits(KType::IDENTIFIER, &spliced, types, scratch));

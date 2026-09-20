@@ -11,10 +11,11 @@ use crate::memory::{
     Bump, BumpAllocator, CellGraph, CellHandle, ProgramBrand, ReleaseAbsorption, SlabHandle,
     Verdict, Writer, program_storage, reattachable, resident,
 };
-use crate::parse::{BinderSymbol, KExpression, LabelInterner, TypeSymbol, parse};
+use crate::parse::{KExpression, parse};
 use crate::scope::{
     Activation, Binding, BodyShape, Builtins, ClosureBindings, Coordinate, Slot, Target,
 };
+use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{TypeValue, Value};
 
@@ -42,7 +43,7 @@ pub(super) enum Held<'graph, 'cell> {
 /// What a check reads: the fixture's storage and the activated program.
 pub(super) struct Program<'p, 'graph, 'cell> {
     pub types: &'p TypeRegistry<'graph>,
-    pub labels: &'p LabelInterner,
+    pub symbols: &'p SymbolInterner,
     pub scratch: BumpAllocator<'p>,
     pub lines: &'p [KExpression<'graph>],
     pub activation: &'cell Activation<'graph, 'cell>,
@@ -53,7 +54,7 @@ pub(super) struct Program<'p, 'graph, 'cell> {
 
 impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
     pub fn type_name(&self, text: &str) -> TypeSymbol {
-        TypeSymbol::declared(text, self.labels).expect("a Type token")
+        TypeSymbol::declared(text, self.symbols).expect("a Type token")
     }
 
     /// Bring every component of type binders into being through the door, binding each member's
@@ -161,7 +162,7 @@ pub(super) fn with_program<R>(
     extra: impl FnOnce(
         &TypeRegistry<'_>,
         BumpAllocator<'_>,
-        &LabelInterner,
+        &SymbolInterner,
     ) -> Vec<(&'static str, KType)>,
     hold: impl for<'graph, 'cell> Fn(&str, Writer<'cell>, &TypeRegistry<'graph>) -> Held<'graph, 'cell>,
     check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
@@ -169,11 +170,11 @@ pub(super) fn with_program<R>(
     let storage = program_storage();
     let program: ProgramBrand<'_> = storage.brand();
     let types = TypeRegistry::in_region(program.allocator());
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     let scratch = Bump::new();
-    let lines = parse(program, &labels, source)
+    let lines = parse(program, &symbols, source)
         .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
-    let extra = extra(&types, &scratch, &labels);
+    let extra = extra(&types, &scratch, &symbols);
     let mut graph: CellGraph<'_, Step> = CellGraph::new(2, |_| Verdict::Pin);
     let cells: Vec<SlabHandle> = (0..2)
         .map(|_| graph.create(None).expect("the graph has a free slot"))
@@ -193,17 +194,17 @@ pub(super) fn with_program<R>(
                 .iter()
                 .chain(extra.iter())
                 .map(|(name, handle)| {
-                    let name = TypeSymbol::declared(name, &labels).expect("a Type token");
+                    let name = TypeSymbol::declared(name, &symbols).expect("a Type token");
                     (name, Value::Type(TypeValue::new(writer, *handle, &types)))
                 })
                 .collect();
             let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table);
             let shape = BodyShape::of_program(program, &lines, builtins, &scratch)
-                .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(&labels)));
+                .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(&symbols)));
             let activation = resident(writer, Activation::of_program(writer, shape, builtins));
             for slot in 0..shape.slots() {
                 let slot = Slot(slot as u32);
-                let name = labels.display(shape.slot_name(slot).symbol()).to_string();
+                let name = symbols.display(shape.slot_name(slot).symbol()).to_string();
                 activation.claim(slot, binder).expect("a fresh slot claims");
                 if let Held::Bound(value) = hold(&name, writer, &types) {
                     activation.bind(slot, value).expect("a claimed slot binds");
@@ -211,7 +212,7 @@ pub(super) fn with_program<R>(
             }
             check(Program {
                 types: &types,
-                labels: &labels,
+                symbols: &symbols,
                 scratch: &scratch,
                 lines: &lines,
                 activation,
@@ -241,7 +242,7 @@ pub(super) fn nulls<'graph, 'cell>(
 pub(super) fn scalars(
     _: &TypeRegistry<'_>,
     _: BumpAllocator<'_>,
-    _: &LabelInterner,
+    _: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {
     Vec::new()
 }

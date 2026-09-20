@@ -2,7 +2,7 @@
 
 use crate::function::tests::{declared, pin, with_fixture};
 use crate::memory::ScopeId;
-use crate::parse::BinderSymbol;
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode, sig_subtype};
 use crate::values::Value;
 

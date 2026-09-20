@@ -19,7 +19,7 @@ use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::builtin_shapes::binder::{StoredBinderKey, binder_plan_for};
 use crate::parse::builtin_shapes::layout::SlotLayout;
 use crate::parse::builtin_shapes::lazy::LazyKinds;
-use crate::parse::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 pub mod program;
 pub mod shape;
@@ -136,26 +136,26 @@ impl<'a> ExpressionPart<'a> {
     pub fn write_summary(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        labels: &LabelInterner,
+        symbols: &SymbolInterner,
     ) -> std::fmt::Result {
         match self {
-            ExpressionPart::Keyword(symbol) => write!(f, "{}", labels.display(symbol.symbol())),
-            ExpressionPart::Identifier(v) => write!(f, "{}", labels.display(v.symbol())),
-            ExpressionPart::Type(t) => write!(f, "{}", labels.display(t.symbol())),
-            ExpressionPart::Expression(e) => e.write_summary(f, labels),
+            ExpressionPart::Keyword(symbol) => write!(f, "{}", symbols.display(symbol.symbol())),
+            ExpressionPart::Identifier(v) => write!(f, "{}", symbols.display(v.symbol())),
+            ExpressionPart::Type(t) => write!(f, "{}", symbols.display(t.symbol())),
+            ExpressionPart::Expression(e) => e.write_summary(f, symbols),
             ExpressionPart::SigiledTypeExpr(e) => {
                 f.write_str(":(")?;
-                e.write_summary(f, labels)?;
+                e.write_summary(f, symbols)?;
                 f.write_str(")")
             }
             ExpressionPart::RecordType(e) => {
                 f.write_str(":{")?;
-                e.write_summary(f, labels)?;
+                e.write_summary(f, symbols)?;
                 f.write_str("}")
             }
             ExpressionPart::QuotedExpression(e) => {
                 f.write_str("#(")?;
-                e.write_summary(f, labels)?;
+                e.write_summary(f, symbols)?;
                 f.write_str(")")
             }
             ExpressionPart::ListLiteral(items) => {
@@ -164,7 +164,7 @@ impl<'a> ExpressionPart<'a> {
                     if index > 0 {
                         f.write_str(" ")?;
                     }
-                    item.write_summary(f, labels)?;
+                    item.write_summary(f, symbols)?;
                 }
                 f.write_str("]")
             }
@@ -174,9 +174,9 @@ impl<'a> ExpressionPart<'a> {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    k.write_summary(f, labels)?;
+                    k.write_summary(f, symbols)?;
                     f.write_str(": ")?;
-                    v.write_summary(f, labels)?;
+                    v.write_summary(f, symbols)?;
                 }
                 f.write_str("}")
             }
@@ -186,8 +186,8 @@ impl<'a> ExpressionPart<'a> {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{} = ", labels.display(k.symbol()))?;
-                    v.write_summary(f, labels)?;
+                    write!(f, "{} = ", symbols.display(k.symbol()))?;
+                    v.write_summary(f, symbols)?;
                 }
                 f.write_str("}")
             }
@@ -207,13 +207,16 @@ impl<'a> ExpressionPart<'a> {
     /// [`PartSummary`](crate::machine::model::ast::PartSummary), which resolves through the whole run
     /// bundle: parse renders a part here — a record literal's field-name error names the token it
     /// rejected — while still filling the interner a run frame has yet to adopt.
-    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> AstPartSummary<'x, 'a> {
-        AstPartSummary { part: self, labels }
+    pub fn summary<'x>(&'x self, symbols: &'x SymbolInterner) -> AstPartSummary<'x, 'a> {
+        AstPartSummary {
+            part: self,
+            symbols,
+        }
     }
 
     /// The part's surface as an owned `String`.
-    pub fn summarize(&self, labels: &LabelInterner) -> String {
-        self.summary(labels).to_string()
+    pub fn summarize(&self, symbols: &SymbolInterner) -> String {
+        self.summary(symbols).to_string()
     }
 }
 
@@ -473,28 +476,28 @@ impl<'a> KExpression<'a> {
     pub fn write_summary(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        labels: &LabelInterner,
+        symbols: &SymbolInterner,
     ) -> std::fmt::Result {
         for (index, part) in self.parts.iter().enumerate() {
             if index > 0 {
                 f.write_str(" ")?;
             }
-            part.value.write_summary(f, labels)?;
+            part.value.write_summary(f, symbols)?;
         }
         Ok(())
     }
 
     /// [`write_summary`](Self::write_summary) as a `Display` view.
-    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> ExpressionSummary<'x, 'a> {
+    pub fn summary<'x>(&'x self, symbols: &'x SymbolInterner) -> ExpressionSummary<'x, 'a> {
         ExpressionSummary {
             expression: self,
-            labels,
+            symbols,
         }
     }
 
     /// The expression's surface as an owned `String`.
-    pub fn summarize(&self, labels: &LabelInterner) -> String {
-        self.summary(labels).to_string()
+    pub fn summarize(&self, symbols: &SymbolInterner) -> String {
+        self.summary(symbols).to_string()
     }
 }
 
@@ -502,24 +505,24 @@ impl<'a> KExpression<'a> {
 /// through.
 pub struct AstPartSummary<'x, 'a> {
     part: &'x ExpressionPart<'a>,
-    labels: &'x LabelInterner,
+    symbols: &'x SymbolInterner,
 }
 
 impl std::fmt::Display for AstPartSummary<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.part.write_summary(f, self.labels)
+        self.part.write_summary(f, self.symbols)
     }
 }
 
 /// A [`KExpression::summary`] view: one expression plus the interner its symbols resolve through.
 pub struct ExpressionSummary<'x, 'a> {
     expression: &'x KExpression<'a>,
-    labels: &'x LabelInterner,
+    symbols: &'x SymbolInterner,
 }
 
 impl std::fmt::Display for ExpressionSummary<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.expression.write_summary(f, self.labels)
+        self.expression.write_summary(f, self.symbols)
     }
 }
 

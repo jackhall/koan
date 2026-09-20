@@ -42,8 +42,8 @@ pub use module::{Unsigned, self_signature};
 pub use signature::callable_type;
 
 use crate::memory::CellHandle;
-use crate::parse::{Symbol, TypeSymbol};
 use crate::scope::Site;
+use crate::symbols::{Symbol, TypeSymbol};
 use crate::type_lattice::KType;
 
 /// Why a type expression did not elaborate.

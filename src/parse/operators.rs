@@ -8,18 +8,18 @@
 
 use crate::memory::ProgramBrand;
 use crate::parse::ast::ExpressionPart;
-use crate::parse::labels::{KeywordSymbol, LabelInterner};
 use crate::source::{self, Span, Spanned};
+use crate::symbols::{KeywordSymbol, SymbolInterner};
 
 pub type UnaryBuild = for<'a> fn(
     ProgramBrand<'a>,
-    &LabelInterner,
+    &SymbolInterner,
     Spanned<ExpressionPart<'a>>,
     Span,
 ) -> Spanned<ExpressionPart<'a>>;
 pub type BinaryBuild = for<'a> fn(
     ProgramBrand<'a>,
-    &LabelInterner,
+    &SymbolInterner,
     Spanned<ExpressionPart<'a>>,
     Spanned<ExpressionPart<'a>>,
     Span,
@@ -52,7 +52,7 @@ const OPERATORS: &[Operator] = &[
 
 fn build_attr<'a>(
     brand: ProgramBrand<'a>,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     lhs: Spanned<ExpressionPart<'a>>,
     rhs: Spanned<ExpressionPart<'a>>,
     trigger: Span,
@@ -66,7 +66,7 @@ fn build_attr<'a>(
     let type_context = matches!(rhs.value, ExpressionPart::Type(_));
     let kw = Spanned::at(
         ExpressionPart::Keyword(
-            KeywordSymbol::declared("ATTR", labels).expect("`ATTR` is keyword-class"),
+            KeywordSymbol::declared("ATTR", symbols).expect("`ATTR` is keyword-class"),
         ),
         trigger,
     );
@@ -81,7 +81,7 @@ fn build_attr<'a>(
 
 fn build_try<'a>(
     brand: ProgramBrand<'a>,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     lhs: Spanned<ExpressionPart<'a>>,
     trigger: Span,
 ) -> Spanned<ExpressionPart<'a>> {
@@ -92,7 +92,7 @@ fn build_try<'a>(
     };
     let kw = Spanned::at(
         ExpressionPart::Keyword(
-            KeywordSymbol::declared("TRY", labels).expect("`TRY` is keyword-class"),
+            KeywordSymbol::declared("TRY", symbols).expect("`TRY` is keyword-class"),
         ),
         trigger,
     );

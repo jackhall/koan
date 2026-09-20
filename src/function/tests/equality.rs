@@ -37,13 +37,16 @@ fn a_comparison_reaching_a_callable_is_an_error() {
 fn a_callable_renders_as_its_type() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET k = 7\nLET f = (FN :{x :Number} -> Number = (k))");
-        let (types, labels, scratch) = (fixture.types, fixture.labels, fixture.scratch());
+        let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
         fixture.in_cell(pin, |context, binder| {
             let activation = fixture.run(context.writer(), &lines, binder, &[]);
             let f = bound(fixture, activation, "f");
             let mut rendered = String::new();
-            f.render(&mut rendered, types, labels, scratch).unwrap();
-            assert_eq!(rendered, display_name(f.ktype(), types, labels).to_string());
+            f.render(&mut rendered, types, symbols, scratch).unwrap();
+            assert_eq!(
+                rendered,
+                display_name(f.ktype(), types, symbols).to_string()
+            );
             assert_eq!(rendered, ":(FN :{x :Number} -> Number)");
         });
     });
@@ -93,7 +96,7 @@ fn a_list_node_holding_a_function_is_incomparable() {
 #[test]
 fn a_ring_renders_with_a_label_where_it_closes() {
     with_fixture(|fixture| {
-        let (types, labels, scratch) = (fixture.types, fixture.labels, fixture.scratch());
+        let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
         for (source, expected) in [
             (
                 "NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = a})",
@@ -106,7 +109,7 @@ fn a_ring_renders_with_a_label_where_it_closes() {
                 let activation = fixture.run(context.writer(), &lines, binder, &[]);
                 let mut rendered = String::new();
                 bound(fixture, activation, "a")
-                    .render(&mut rendered, types, labels, scratch)
+                    .render(&mut rendered, types, symbols, scratch)
                     .unwrap();
                 assert_eq!(rendered, expected);
             });

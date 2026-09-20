@@ -11,7 +11,8 @@ use crate::memory::{
     Bump, BumpAllocator, CellGraph, CellHandle, Edge, ProgramBrand, ReleaseAbsorption, SlabHandle,
     Verdict, Writer, program_storage, reattachable,
 };
-use crate::parse::{KExpression, LabelInterner, TypeSymbol, ValueSymbol, parse};
+use crate::parse::{KExpression, parse};
+use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Knotted, Resolved, TypeValue, Value, Weight};
 
@@ -50,7 +51,7 @@ const CELLS: u32 = 64;
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     pub types: &'f TypeRegistry<'graph>,
-    pub labels: &'f LabelInterner,
+    pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
 }
 
@@ -61,7 +62,7 @@ impl<'graph> Fixture<'_, 'graph> {
 
     /// Every top-level line of `source`, parsed into program storage.
     pub fn parse(&self, source: &str) -> Vec<KExpression<'graph>> {
-        parse(self.program, self.labels, source)
+        parse(self.program, self.symbols, source)
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"))
     }
 
@@ -90,12 +91,12 @@ pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
     let storage = program_storage();
     let program = storage.brand();
     let types = TypeRegistry::in_region(program.allocator());
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     let scratch = Bump::new();
     test(&Fixture {
         program,
         types: &types,
-        labels: &labels,
+        symbols: &symbols,
         scratch: &scratch,
     })
 }
@@ -106,12 +107,12 @@ pub(super) const BUILTIN_VALUES: &[&str] = &["origin"];
 /// The type builtins every suite's table holds.
 pub(super) const BUILTIN_TYPES: &[&str] = &["Number", "Str", "Bool", "Null", "Any", "Ring"];
 
-pub(super) fn value_name(text: &str, labels: &LabelInterner) -> ValueSymbol {
-    ValueSymbol::declared(text, labels).expect("a value token")
+pub(super) fn value_name(text: &str, symbols: &SymbolInterner) -> ValueSymbol {
+    ValueSymbol::declared(text, symbols).expect("a value token")
 }
 
-pub(super) fn type_name(text: &str, labels: &LabelInterner) -> TypeSymbol {
-    TypeSymbol::declared(text, labels).expect("a Type token")
+pub(super) fn type_name(text: &str, symbols: &SymbolInterner) -> TypeSymbol {
+    TypeSymbol::declared(text, symbols).expect("a Type token")
 }
 
 /// The suites' builtin table: `origin = 0` and the scalar types, laid down in `writer`'s region.
@@ -119,10 +120,10 @@ pub(super) fn builtins<'graph, 'cell, X: Knotted>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
 ) -> &'cell Builtins<'graph, 'cell, X> {
-    let labels = fixture.labels;
+    let symbols = fixture.symbols;
     let values: Vec<_> = BUILTIN_VALUES
         .iter()
-        .map(|name| (value_name(name, labels), Value::Number(0.0)))
+        .map(|name| (value_name(name, symbols), Value::Number(0.0)))
         .collect();
     let handles = [
         KType::NUMBER,
@@ -137,7 +138,7 @@ pub(super) fn builtins<'graph, 'cell, X: Knotted>(
         .zip(handles)
         .map(|(name, handle)| {
             let value = Value::Type(TypeValue::new(writer, handle, fixture.types));
-            (type_name(name, labels), value)
+            (type_name(name, symbols), value)
         })
         .collect();
     Builtins::new(writer, fixture.scratch, &values, &types)

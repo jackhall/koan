@@ -8,7 +8,7 @@
 //! is laid down — so a closure binding is never a placeholder, and a refused birth writes nothing.
 
 use crate::memory::{BumpAllocator, BumpVec, CellHandle, Edge, Writer, collect, resident};
-use crate::parse::BinderSymbol;
+use crate::symbols::BinderSymbol;
 use crate::values::{Knotted, Link, Value, Weight};
 
 use super::activation::{Activation, Binding};

@@ -7,11 +7,12 @@ use std::collections::BTreeSet;
 use proptest::prelude::*;
 
 use crate::memory::{BumpAllocator, CellHandle, KnotPlan, Writer, resident};
-use crate::parse::{BinderSymbol, ExpressionPart, KExpression, LabelInterner};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Activation, Binding, BodyShape, Builtins, CaptureSource, ClosureBindings, ClosureRefused,
     Coordinate, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target,
 };
+use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
 use crate::values::{Link, Value};
 
@@ -197,7 +198,7 @@ fn follow(chain: &[&BodyShape<'_>], level: usize, coordinate: Coordinate) -> Fou
 /// Every binder of scope `index` a planned read in its own statement reads — directly, or from a
 /// scope nested in that statement.
 fn self_reads(
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     rendering: &Rendering<'_>,
     index: usize,
 ) -> BTreeSet<BinderSymbol> {
@@ -222,7 +223,7 @@ fn self_reads(
             scope = parent;
         }
         if scope == index && statements[statement as usize].binder == Some(placed.read.name) {
-            found.insert(placed.read.name.symbol(labels));
+            found.insert(placed.read.name.symbol(symbols));
         }
     }
     found
@@ -231,7 +232,7 @@ fn self_reads(
 /// Check every planned scope's shape against its plan; `prefix` is the chain of shapes the root
 /// scope reads through.
 fn check(
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     rendering: &Rendering<'_>,
     located: &Located<'_>,
     prefix: &[&BodyShape<'_>],
@@ -263,7 +264,7 @@ fn check(
         let mut layout: Vec<_> = planned
             .binders()
             .into_iter()
-            .map(|(name, position)| (name.is_type(), name.symbol(labels), position))
+            .map(|(name, position)| (name.is_type(), name.symbol(symbols), position))
             .collect();
         layout.sort();
         assert_eq!(shape.slots(), layout.len(), "`{source}`");
@@ -276,7 +277,7 @@ fn check(
 
         // The components are the planned partition, each holding only deferred reads, and cyclic
         // exactly when it holds more than one member or a member reads itself.
-        let self_reads = self_reads(labels, rendering, index);
+        let self_reads = self_reads(symbols, rendering, index);
         let components =
             |sets: Vec<BTreeSet<BinderSymbol>>| sets.into_iter().collect::<BTreeSet<_>>();
         let built: Vec<BTreeSet<BinderSymbol>> = shape
@@ -298,7 +299,7 @@ fn check(
         let expected: Vec<BTreeSet<BinderSymbol>> = planned
             .components
             .iter()
-            .map(|members| members.iter().map(|name| name.symbol(labels)).collect())
+            .map(|members| members.iter().map(|name| name.symbol(symbols)).collect())
             .collect();
         assert_eq!(built.len(), expected.len(), "`{source}`");
         assert_eq!(components(built), components(expected), "`{source}`");
@@ -318,7 +319,7 @@ fn check(
                 .iter()
                 .find(|mention| mention.site == located.sites[read])
                 .expect("a mention at the planned read's site");
-            assert_eq!(mention.name, placed.read.name.symbol(labels), "`{source}`");
+            assert_eq!(mention.name, placed.read.name.symbol(symbols), "`{source}`");
             assert_eq!(mention.class, class(placed.read.class), "`{source}`");
             let reads_at = match mention.class {
                 MentionClass::Eager => Position::statement(placed.statement as usize),
@@ -329,7 +330,7 @@ fn check(
                 Lands::Builtin => Found::Builtin,
                 Lands::Binder { up } => Found::Binder {
                     level: level - up,
-                    name: placed.read.name.symbol(labels),
+                    name: placed.read.name.symbol(symbols),
                 },
                 Lands::Nowhere => unreachable!("a valid plan reads nowhere"),
             };
@@ -355,7 +356,7 @@ fn check(
                 .components
                 .iter()
                 .find(|members| binder.is_some_and(|binder| members.contains(&binder)))
-                .map(|members| members.iter().map(|name| name.symbol(labels)).collect())
+                .map(|members| members.iter().map(|name| name.symbol(symbols)).collect())
                 .unwrap_or_default();
             let nested = located.shapes[child].expect("every planned scope has a shape");
             for capture in nested.captures() {
@@ -387,13 +388,13 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
                     panic!(
                         "`{}` shapes: {}",
                         rendering.source,
-                        error.display(fixture.labels)
+                        error.display(fixture.symbols)
                     )
                 });
             let nodes: Vec<_> = lines.iter().collect();
             let located = locate(&rendering, Some(shape), &nodes);
             test(ShapedPlan {
-                labels: fixture.labels,
+                symbols: fixture.symbols,
                 scratch: fixture.scratch(),
                 rendering: &rendering,
                 located,
@@ -407,7 +408,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
 }
 
 struct ShapedPlan<'p, 'g, 'c> {
-    labels: &'p LabelInterner,
+    symbols: &'p SymbolInterner,
     scratch: BumpAllocator<'p>,
     rendering: &'p Rendering<'p>,
     located: Located<'g>,
@@ -550,7 +551,7 @@ proptest! {
     #[test]
     fn a_planned_program_shapes_back_into_its_plan(choices in plan::choices()) {
         let program = Generator::new(&choices).program();
-        shaped_plan(&program, |shaped| check(shaped.labels, shaped.rendering, &shaped.located, &[]));
+        shaped_plan(&program, |shaped| check(shaped.symbols, shaped.rendering, &shaped.located, &[]));
     }
 
     /// A plan with one refusal injected is refused with exactly that refusal.
@@ -570,15 +571,15 @@ proptest! {
                 let error = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
                     .err()
                     .unwrap_or_else(|| panic!("`{source}` is refused with {refusal:?}"));
-                let labels = fixture.labels;
+                let symbols = fixture.symbols;
                 let expected = match &refusal {
                     Refusal::Rebind { name, first, second } => ShapeError::Rebind {
-                        name: name.symbol(labels),
+                        name: name.symbol(symbols),
                         first: Position(*first),
                         second: Position(*second),
                     },
                     Refusal::ShadowsBuiltin { name, at } => ShapeError::ShadowsBuiltin {
-                        name: name.symbol(labels),
+                        name: name.symbol(symbols),
                         at: Position(*at),
                     },
                     Refusal::Unbound { name } => {
@@ -590,7 +591,7 @@ proptest! {
                             .position(|placed| placed.read.lands == Lands::Nowhere)
                             .expect("the refused read is placed");
                         ShapeError::Unbound {
-                            name: name.symbol(labels),
+                            name: name.symbol(symbols),
                             site: located.sites[read],
                             at: Position::statement(rendering.reads[read].statement as usize),
                         }
@@ -600,7 +601,7 @@ proptest! {
                             panic!("`{source}` is refused with {refusal:?}, not {error:?}");
                         };
                         let built: BTreeSet<_> = built.iter().copied().collect();
-                        let members = members.iter().map(|name| name.symbol(labels)).collect();
+                        let members = members.iter().map(|name| name.symbol(symbols)).collect();
                         assert_eq!(built, members, "`{source}`");
                         return;
                     }
@@ -617,7 +618,7 @@ proptest! {
         let mut generator = Generator::new(&choices);
         let mut program = generator.program();
         generator.shadow(&mut program);
-        shaped_plan(&program, |shaped| check(shaped.labels, shaped.rendering, &shaped.located, &[]));
+        shaped_plan(&program, |shaped| check(shaped.symbols, shaped.rendering, &shaped.located, &[]));
     }
 
     /// Over every activation of a planned program, by-name resolution agrees with the
@@ -779,10 +780,10 @@ proptest! {
                         "`{}` over `{}` shapes: {}",
                         quoted.source,
                         rendering.source,
-                        error.display(fixture.labels),
+                        error.display(fixture.symbols),
                     ));
                 let located = locate(&quoted, Some(shape), &[quote]);
-                check(fixture.labels, &quoted, &located, &shapes);
+                check(fixture.symbols, &quoted, &located, &shapes);
 
                 let evaluated = Activation::of_block(writer, shape, site);
                 for mention in shape.mentions() {

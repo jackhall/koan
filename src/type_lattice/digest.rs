@@ -26,7 +26,7 @@
 //! unambiguous, and every child digest / [`ScopeId`] / integer is fed little-endian.
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
-use crate::parse::{BinderSymbol, Symbol, TypeSymbol};
+use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 
 use super::handle::KType;
 use super::kind::KKind;

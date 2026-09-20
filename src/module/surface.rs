@@ -12,8 +12,8 @@
 
 use crate::function::{KActivation, Knotted};
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::BinderSymbol;
 use crate::scope::{Position, ShapeKind, Slot};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::TypeRegistry;
 
 use super::layout;
