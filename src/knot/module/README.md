@@ -199,8 +199,8 @@ suite, since they are facts about the shape.
 - [Module programs](../../../roadmap/rewrite/modules.md) — evaluating `:|`, `:!`
   and a member read as expressions, and calling a function member through its
   barrier.
-- [Operator groups](../../../roadmap/rewrite/operator-groups.md) — the chaining
-  record a `GROUP`'s module carries.
+- [Operator groups](../../../roadmap/rewrite/operator-groups.md) — the operator
+  group a `GROUP` statement declares beside the group module it binds.
 - [Dispatch](../../../roadmap/rewrite/dispatch.md) — the keyworded channel of a
   module's signature, empty until a bodyless definition has a slot.
 - [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic

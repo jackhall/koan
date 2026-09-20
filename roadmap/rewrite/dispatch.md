@@ -24,8 +24,14 @@ program runs on the rewritten stack.
   rather than a bind-time error.
 - An overload is a candidate only where the scopes' visibility predicate admits
   it.
-- A builtin bucket is unshadowable: a user registration whose untyped bucket
-  key collides with a builtin's is rejected.
+- A [`BUILTIN_SHAPES`](../../src/parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
+  entry's bucket is closed: a user registration at its untyped key is rejected.
+- A builtin operator's bucket — arithmetic, comparison, `AND`, the type union
+  `|` — admits user overloads, the builtin's own overloads are selected first,
+  and a user overload whose operand type is known, where the shape is built, to
+  overlap a builtin's is rejected.
+- A shadowable builtin's bucket — equality, whose operands are `Any` — admits a
+  user overload that is selected in the builtin's place.
 - A reference to a visible binder that has not yet bound parks until it binds,
   and a dispatch placeholder keys on the full bucket key.
 - A combined form — `LET f = FN EXPR …`, `LET plus = OP …` — binds a lambda to
@@ -54,11 +60,32 @@ program runs on the rewritten stack.
   `operands`, so `FN :{left :Number, right :Number} -> Number` is the candidate
   for `LET plus = OP #(⊕) OVER Number`; a `FN EXPR FOR ALL (Elem) …` needs a
   function type to carry a quantifier group, which `KFunction` does not.
-- *Keyword reads resolved in the shape — open.* Builtin buckets are
-  unshadowable, so a builtin form resolves when the shape is built; a user
-  bucket is shadowable and overloaded. Recommended: extend the shape's
-  coordinate resolution to bucket keys, as value and type names resolve
+- *Keyword reads resolved in the shape — open.* A `BUILTIN_SHAPES` entry's
+  bucket is closed, so a node matching one resolves when the shape is built;
+  every other bucket is overloaded, and a user bucket shadowable. Recommended:
+  extend the shape's coordinate resolution to bucket keys, as value and type
+  names resolve
   ([src/scope/README.md](../../src/scope/README.md#resolution)).
+- *Builtin buckets a user adds to — decided.* A `BUILTIN_SHAPES` entry is closed
+  at its key because the body-shape builder walks a matching node by the entry's
+  roles. An operator's bucket is open by type because its slots are eager
+  operands whichever overload is selected, so no walk depends on the selection.
+  How an operator's runs chain is [operator groups](operator-groups.md)' and is
+  never a user's to change.
+- *Shadowable builtins — open.* `==` and `!=` take `Any`, so under builtin-first
+  selection no user overload of them is ever selected; the kind exists so a
+  user-defined equality is possible. Which builtins belong to it, and its
+  selection rule, are undecided — "most specific wins, a builtin wins a tie" may
+  serve this kind and the operator kind alike.
+- *An overload that is never selected — open.* A functor is a `FN` or `EXPR`
+  returning a module, so an `OP #(+) OVER Elt` in its body learns its operand
+  type per call: at `Elt = Number` the builtin is selected first, inside the
+  functor's own body too, and nothing reports it. Two user overloads meet the
+  same way when an enclosing scope already holds the instantiated one. Koan has
+  no warning channel; what reports the overload where it is born is undecided.
+- *Visibility shared with operator groups — open.* A run of operators sees an
+  [operator group](operator-groups.md) under the predicate that admits the
+  group's overloads here, so the two are settled together.
 
 ## Dependencies
 

@@ -75,7 +75,7 @@ A module's signature therefore declares no abstract member: a body binds every
 name it declares. Its keyworded and operator channels are empty, until
 [dispatch](../../roadmap/rewrite/dispatch.md) gives a bodyless definition a slot
 and [operator groups](../../roadmap/rewrite/operator-groups.md) a `GROUP` its
-chaining record.
+operator group.
 
 Every slot must be bound: the caller runs the body to completion and only then
 ties the binder ([the tie](../knot/README.md#the-tie)). A slot still claimed
@@ -158,7 +158,7 @@ no mention of the enclosing shape, so the door resolves them against the members
 it has already read. A member naming a *later* member of the same body is a
 forward reference nothing has filled yet, and is refused.
 
-A bodyless `GROUP` is refused: it declares a chaining record, and a signature's
+A bodyless `GROUP` is refused: it declares an operator group, and a signature's
 operator channel — how a run of operators chains — is
 [operator groups](../../roadmap/rewrite/operator-groups.md)'. An operator head
 here declares its bucket and nothing about chaining.
@@ -241,7 +241,7 @@ interns as the union of its three members.
 ## Open work
 
 - [Operator groups](../../roadmap/rewrite/operator-groups.md) — a signature's
-  operator channel, and the chaining record a bodyless `GROUP` declares.
+  operator channel, and the operator group a bodyless `GROUP` declares.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
   bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
