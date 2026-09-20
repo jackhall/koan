@@ -8,10 +8,11 @@
 //! A module's members are rebuilt through that one copy, so a member that is itself a knot member
 //! brings its whole knot with it. Two members of one foreign knot therefore arrive as two copies of
 //! that knot — the price of "a member brings its knot", which a data node holding two such words
-//! already pays.
+//! already pays. A barrier's underlying function goes the same way, as the value word it would be
+//! if a member held it.
 
-use crate::memory::{KnotPlan, Writer};
-use crate::values::{self, DeepCopy};
+use crate::memory::{KnotPlan, Writer, resident};
+use crate::values::{self, DeepCopy, Value};
 
 use super::{Function, Knotted, KnottedFamily, Node};
 
@@ -50,6 +51,13 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                     let source = module.members();
                     let members = writer.fill(source.len(), |at| copy(&source[at]));
                     Node::Module(module.rebuilt(members))
+                }
+                Node::Coerced(coerced) => {
+                    let underlying = match copy(&Value::Knotted(coerced.underlying())) {
+                        Value::Knotted(member) => member,
+                        _ => unreachable!("the copy of a knot member is a knot member"),
+                    };
+                    Node::Coerced(resident(writer, coerced.rebuilt(underlying)))
                 }
             });
         Knotted(knot.member(member.member().index()))

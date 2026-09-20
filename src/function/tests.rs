@@ -10,6 +10,7 @@
 
 mod birth;
 mod boundary;
+mod coerced;
 mod copy;
 mod equality;
 mod module;

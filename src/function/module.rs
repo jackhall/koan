@@ -11,13 +11,18 @@
 //! facts about the members its body binds, and a knot node is written once. The module door here
 //! and the view door one layer above both lay a node down through [`module`], so a body-born
 //! module and a view have one representation and one copy.
+//!
+//! The view door lays down one other node: [`coerced`], a function member behind an opaque view's
+//! barrier. Its six fields sit in a resident struct the node points at rather than in the node
+//! itself, so the arm is one word wide and the module arm keeps setting the node's width — every
+//! node in the program pays for the widest arm, and a coerced member is rare.
 
-use crate::memory::{BumpAllocator, Knot, KnotPlan, Writer, collect};
+use crate::memory::{BumpAllocator, Knot, KnotPlan, Writer, collect, resident};
 use crate::scope::{Activation, ClosureBindings, ClosureRefused, ShapeKind, Slot};
 use crate::type_lattice::KType;
-use crate::values::Weight;
+use crate::values::{Knotted as _, Weight};
 
-use super::{KActivation, KValue, Node, Untieable};
+use super::{KActivation, KValue, Knotted, Node, Untieable};
 
 /// A module: what one knot node holds.
 pub struct Module<'graph, 'cell> {
@@ -77,6 +82,96 @@ pub fn module<'graph, 'cell>(
     })
 }
 
+/// A function member behind an opaque view's barrier: what one knot node points at.
+///
+/// A call goes through the barrier — coercing its arguments inwards and its return outwards —
+/// before `underlying` runs; that is [modules](../../roadmap/rewrite/modules.md)' work, not this
+/// item's, which only gives the barrier somewhere to live.
+pub struct Coerced<'graph, 'cell> {
+    underlying: Knotted<'graph, 'cell>,
+    ktype: KType,
+    declared: KType,
+    from: KType,
+    to: KType,
+    /// What rebuilding the whole knot this node sits in writes, the same on every node.
+    knot_weight: Weight,
+}
+
+impl Clone for Coerced<'_, '_> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Copy for Coerced<'_, '_> {}
+
+impl<'graph, 'cell> Coerced<'graph, 'cell> {
+    /// The function the call runs once it is through the barrier — itself a function or a coerced
+    /// member, since a view of a view stacks barriers.
+    pub fn underlying(&self) -> Knotted<'graph, 'cell> {
+        self.underlying
+    }
+
+    /// The function type at the view's substitution: what a caller sees.
+    pub fn ktype(&self) -> KType {
+        self.ktype
+    }
+
+    /// The slot type the view's signature declares, which the coercion walk recurses on.
+    pub fn declared(&self) -> KType {
+        self.declared
+    }
+
+    /// A `Signature` handle whose manifest members are the source module's bindings.
+    pub fn from(&self) -> KType {
+        self.from
+    }
+
+    /// A `Signature` handle whose manifest members are the view's bindings.
+    pub fn to(&self) -> KType {
+        self.to
+    }
+
+    pub fn knot_weight(&self) -> Weight {
+        self.knot_weight
+    }
+}
+
+/// A function member behind an opaque view's barrier, laid down as a one-node knot in `writer`'s
+/// region; the member is node `0`.
+///
+/// `underlying` carries its whole knot's weight, since a crossing rebuilds that knot whole.
+pub fn coerced<'graph, 'cell>(
+    writer: Writer<'cell>,
+    underlying: Knotted<'graph, 'cell>,
+    ktype: KType,
+    declared: KType,
+    from: KType,
+    to: KType,
+) -> Knot<'cell, Node<'graph, 'cell>> {
+    debug_assert!(
+        underlying.function().is_some() || underlying.coerced().is_some(),
+        "only a function, or a function already behind a barrier, is coerced"
+    );
+    let knot_weight = Weight::flat::<usize>()
+        .plus(Weight::flat::<Node<'graph, 'cell>>())
+        .plus(Weight::flat::<Coerced<'graph, 'cell>>())
+        .plus(underlying.weight());
+    KnotPlan::new(1).tie(writer, |_| {
+        Node::Coerced(resident(
+            writer,
+            Coerced {
+                underlying,
+                ktype,
+                declared,
+                from,
+                to,
+                knot_weight,
+            },
+        ))
+    })
+}
+
 /// The activation `slot`'s module body runs in: its captures read from `enclosing` and laid down,
 /// every slot empty. The caller claims and binds its slots, then ties the binder with the finished
 /// activation. A refusal writes nothing.
@@ -114,6 +209,22 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         Module {
             ktype: self.ktype,
             members,
+            knot_weight: self.knot_weight,
+        }
+    }
+}
+
+impl<'graph, 'cell> Coerced<'graph, 'cell> {
+    /// This barrier over `underlying` rebuilt at another region lifetime — the copy's arm. The
+    /// types and the knot weight are facts about what sits behind the barrier, which the copy
+    /// preserves.
+    pub(super) fn rebuilt<'to>(&self, underlying: Knotted<'graph, 'to>) -> Coerced<'graph, 'to> {
+        Coerced {
+            underlying,
+            ktype: self.ktype,
+            declared: self.declared,
+            from: self.from,
+            to: self.to,
             knot_weight: self.knot_weight,
         }
     }

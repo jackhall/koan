@@ -12,7 +12,9 @@
 //! member an edge into it.
 //!
 //! A module's node is the carrier, not a claim about cycles: `m.f` is not a knot edge but an index
-//! into the run, and the run holds members of knots the module does not own.
+//! into the run, and the run holds members of knots the module does not own. A fourth node holds a
+//! function member of an opaque view: a barrier the module layer lays down over the function it
+//! coerces, and another one-node knot.
 //!
 //! [`Knotted`] is sixteen bytes, so a value holding one stays one twenty-four-byte word. A member
 //! copies at a crossing by re-tying its whole knot at the destination, each held value deep-copied
@@ -35,7 +37,7 @@ mod module;
 pub(crate) mod tests;
 
 pub use birth::{Supplied, Untieable, tie};
-pub use module::{Module, module, module_activation};
+pub use module::{Coerced, Module, coerced, module, module_activation};
 
 use std::fmt;
 
@@ -95,17 +97,25 @@ pub enum Node<'graph, 'cell> {
     },
     /// A module: its self-signature, its members in layout order, and the same weight.
     Module(Module<'graph, 'cell>),
+    /// A function member behind an opaque view's barrier: the barrier sits beside the node in the
+    /// same region and the node points at it, since its six fields would otherwise be the widest
+    /// arm and every node in the program pays for that.
+    Coerced(&'cell Coerced<'graph, 'cell>),
 }
 
 const _: () = assert!(!std::mem::needs_drop::<Node<'static, 'static>>());
 
-/// A knot member: one node of a knot, a function or a data node. Its equality and hash are node identity.
+/// A knot member: one node of a knot — a function, a data node, a module or a barrier over a
+/// function. Its equality and hash are node identity.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Knotted<'graph, 'cell>(Member<'cell, Node<'graph, 'cell>>);
 
 const _: () = assert!(size_of::<Knotted<'static, 'static>>() == 16);
 const _: () = assert!(size_of::<KValue<'static, 'static>>() == 24);
 const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 72);
+/// The module arm sets the node's width; a barrier's six fields would widen every node in the
+/// program, so [`Node::Coerced`] points at them instead.
+const _: () = assert!(size_of::<Node<'static, 'static>>() == 64);
 
 impl<'graph, 'cell> Knotted<'graph, 'cell> {
     /// The knot node this member is.
@@ -132,6 +142,14 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
             _ => None,
         }
     }
+
+    /// The barrier this member sits behind, if it is a coerced function's node.
+    pub fn coerced(self) -> Option<&'cell Coerced<'graph, 'cell>> {
+        match self.node() {
+            Node::Coerced(coerced) => Some(coerced),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Debug for Knotted<'_, '_> {
@@ -149,6 +167,7 @@ impl values::Knotted for Knotted<'_, '_> {
             Node::Function(function) => function.ktype,
             Node::Data { circular, .. } => circular.ktype(),
             Node::Module(module) => module.ktype(),
+            Node::Coerced(coerced) => coerced.ktype(),
         }
     }
 
@@ -157,6 +176,7 @@ impl values::Knotted for Knotted<'_, '_> {
             Node::Function(function) => function.knot_weight,
             Node::Data { knot_weight, .. } => *knot_weight,
             Node::Module(module) => module.knot_weight(),
+            Node::Coerced(coerced) => coerced.knot_weight(),
         }
     }
 
@@ -172,6 +192,8 @@ impl values::Knotted for Knotted<'_, '_> {
             Node::Function(_) => Resolved::Function,
             Node::Data { circular, .. } => Resolved::Circular(*circular),
             Node::Module(_) => Resolved::Module,
+            // A barrier is as opaque to `values` as the function behind it, and calls the same way.
+            Node::Coerced(_) => Resolved::Function,
         }
     }
 }

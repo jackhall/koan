@@ -56,8 +56,9 @@ silence the stale-anchor check; delete a redundant test instead.
   and reattach seam, whose pin and keep paths its own slate pins.
 - `src/function/copy.rs` — a knot member's copy re-ties its whole knot through the destination's
   `Writer`: `thin_run` fills the node run while each function's closure run, each data node's
-  resident and cell runs, and every held value's deep copy are written into the same region. No
-  `unsafe` of its own; the backing `unsafe` is `cellgraph`'s `thin_run`, `fill` and reattach seam.
+  resident and cell runs, each module's member run, each barrier's resident and every held value's
+  deep copy are written into the same region. No `unsafe` of its own; the backing `unsafe` is
+  `cellgraph`'s `thin_run`, `fill` and reattach seam.
 - `src/scheduler/drain.rs` — the drain performs every birth and every death: it creates a tail
   successor, lets it redeem out of its predecessor, and only then releases that predecessor, whose
   region goes back to the pool for the hop after. No `unsafe` of its own; the backing `unsafe` is
@@ -134,6 +135,11 @@ destination's writer, and is read through its edges after the region it came fro
   verdict, is kept, its home released, and redeemed: every member is rebuilt through the one
   crossing, each function member bringing its whole knot with it, and every captured byte reads
   back.
+- `a_copied_barrier_outlives_its_home`
+  an opaque view's barrier over a closure-holding function crosses under a copy verdict, is kept,
+  its home released, and redeemed: the barrier beside the node and the whole knot behind it are
+  written at the destination while the copy's node run is still being filled, and the captured
+  bytes read back.
 
 **Cells the drain creates and releases** ([src/scheduler/drain.rs](../src/scheduler/drain.rs)) — a
 tail hand-off redeeming across a release, and a producer's result filed into a consumer that
