@@ -346,6 +346,16 @@ impl<'graph> BodyShape<'graph> {
         Some(self.births[index].1)
     }
 
+    /// Where the body the binder at `slot` births sits in this shape's own node — what a caller
+    /// that must ask for that body by site names it by.
+    pub fn birth_site(&self, slot: Slot) -> Option<Site> {
+        let body = self.births(slot)?;
+        self.nested
+            .iter()
+            .find(|(_, nested)| std::ptr::eq(*nested, body))
+            .map(|(site, _)| *site)
+    }
+
     /// The right-hand side part of the `LET` binder at `slot`, the part a knot's data member is built
     /// from. `None` for a parameter, a type declaration and a module binder.
     pub fn rhs(&self, slot: Slot) -> Option<&'graph ExpressionPart<'graph>> {

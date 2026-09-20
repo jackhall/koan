@@ -8,12 +8,12 @@
 use std::ptr;
 
 use crate::memory::{CellGraph, ReleaseAbsorption};
-use crate::scope::CaptureSlot;
+use crate::scope::{CaptureSlot, Slot};
 use crate::values::{Circular, Link};
 use crate::values::{Knotted as _, Value, cross};
 
 use super::super::{KValue, KValueFamily, Knotted};
-use super::{Fixture, Step, callable, circular, copy, declared, follow, with_fixture};
+use super::{Fixture, Step, bound, callable, circular, copy, declared, follow, with_fixture};
 
 /// The capture `name` of `callable`'s closure.
 fn capture<'graph, 'cell>(
@@ -291,6 +291,149 @@ fn a_copied_ring_outlives_its_home() {
                     panic!("`items` is an anonymous list node");
                 };
                 assert!(follow(items, list.cells()[0]) == a);
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
+const MODULE: &str = "\
+LET greeting = \"hi\"
+MODULE m = (\
+(LET words = [\"alpha\" \"beta\"]) \
+(LET f = (FN :{} -> Str = (greeting g))) \
+(LET g = (FN :{} -> Str = (f))) \
+(NEWTYPE Dist = Number))";
+
+/// The slot each named member of `m`'s body takes — the body shape lives in program storage, so
+/// one reading serves the source module and its copy in another region alike.
+fn member_slots<const N: usize>(
+    fixture: &Fixture<'_, '_>,
+    activation: &super::super::KActivation<'_, '_>,
+    names: [&str; N],
+) -> [Slot; N] {
+    let shape = activation.shape();
+    let (binder, _) = shape.slot(fixture.name("m")).expect("`m` is declared");
+    let body = shape
+        .births(binder)
+        .expect("a module binder births its body");
+    names.map(|name| body.slot(fixture.name(name)).expect("a declared member").0)
+}
+
+/// The member of `module` at `slot`.
+fn member<'graph, 'cell>(module: Knotted<'graph, 'cell>, slot: Slot) -> KValue<'graph, 'cell> {
+    module.module().expect("a module node").members()[slot.index()]
+}
+
+#[test]
+fn a_copied_module_is_the_same_members_rebuilt() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(MODULE);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        graph
+            .enter(home, |context| {
+                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
+                let slots = member_slots(fixture, activation, ["words", "f", "Dist"]);
+                let m = bound(fixture, activation, "m")
+                    .as_module()
+                    .expect("`m` is a module");
+                let source = context.lift::<KValueFamily>(Value::Knotted(m));
+                let crossed = cross(context, dest, &source).unwrap();
+                let Value::Knotted(copied) = context.read(&crossed).value() else {
+                    panic!("a module crosses as a module");
+                };
+                assert!(!ptr::eq(copied.node(), m.node()), "a copy is a new knot");
+                assert_eq!(copied.member().knot().len(), 1);
+                assert_eq!(copied.ktype(), m.ktype());
+                assert_eq!(copied.weight(), m.weight());
+                assert_eq!(copied.module().expect("a module node").members().len(), 4);
+
+                // Each member is rebuilt: a container deep-copied, a type value carried, and a
+                // member that is itself a knot member bringing its whole knot with it.
+                let (before, after) = (member(m, slots[0]), member(copied, slots[0]));
+                assert!(!ptr::eq(
+                    before.as_list().expect("a list member"),
+                    after.as_list().expect("a list member"),
+                ));
+                assert_eq!(before.equals(&after, types, scratch), Ok(true));
+                assert_eq!(
+                    member(copied, slots[2]).ktype(),
+                    member(m, slots[2]).ktype(),
+                );
+                let f = member(copied, slots[1])
+                    .as_callable()
+                    .expect("a callable member");
+                assert_eq!(
+                    f.member().knot().len(),
+                    2,
+                    "the function knot arrives whole"
+                );
+                assert!(captured_sibling(fixture, f, "g").function().is_some());
+                assert_eq!(captured_value(fixture, f, "greeting").as_str(), Some("hi"));
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
+#[test]
+fn a_copied_module_outlives_its_home() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(MODULE);
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        let (dormant, slots) = graph
+            .enter(home, |context| {
+                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
+                let slots = member_slots(fixture, activation, ["words", "f", "g"]);
+                let m = bound(fixture, activation, "m")
+                    .as_module()
+                    .expect("`m` is a module");
+                let source = context.lift::<KValueFamily>(Value::Knotted(m));
+                let crossed = cross(context, dest, &source).unwrap();
+                (context.keep(crossed), slots)
+            })
+            .unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        graph
+            .enter(dest, |context| {
+                let carrier = context.redeem(dormant).unwrap();
+                let Value::Knotted(m) = context.read(&carrier).value() else {
+                    panic!("the kept module redeems as a module");
+                };
+                let words = member(m, slots[0]).as_list().expect("a list member");
+                assert_eq!(words.get(1).and_then(Value::as_str), Some("beta"));
+                let f = member(m, slots[1])
+                    .as_callable()
+                    .expect("a callable member");
+                let g = member(m, slots[2])
+                    .as_callable()
+                    .expect("a callable member");
+                assert_eq!(captured_value(fixture, f, "greeting").as_str(), Some("hi"));
+                // Each member was rebuilt through the one crossing, bringing its whole knot with
+                // it, so the two members of the body's function knot arrive as two copies of it —
+                // each internally consistent, neither naming the other's nodes.
+                let (fs_g, gs_f) = (
+                    captured_sibling(fixture, f, "g"),
+                    captured_sibling(fixture, g, "f"),
+                );
+                assert!(!ptr::eq(fs_g.node(), g.node()));
+                assert!(!ptr::eq(gs_f.node(), f.node()));
+                assert!(ptr::eq(
+                    captured_sibling(fixture, fs_g, "f").node(),
+                    f.node()
+                ));
+                assert!(ptr::eq(
+                    captured_sibling(fixture, gs_f, "g").node(),
+                    g.node()
+                ));
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();

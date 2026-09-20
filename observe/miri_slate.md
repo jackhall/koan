@@ -129,6 +129,11 @@ destination's writer, and is read through its edges after the region it came fro
   a self-referencing tagged value whose record holds a string cell and an anonymous list node
   naming the ring crosses under a copy verdict, is kept, its home released, and redeemed: every
   edge names a node of the copy and the string reads back.
+- `a_copied_module_outlives_its_home`
+  a module holding a string list, a two-function knot and a newtype handle crosses under a copy
+  verdict, is kept, its home released, and redeemed: every member is rebuilt through the one
+  crossing, each function member bringing its whole knot with it, and every captured byte reads
+  back.
 
 **Cells the drain creates and releases** ([src/scheduler/drain.rs](../src/scheduler/drain.rs)) — a
 tail hand-off redeeming across a release, and a producer's result filed into a consumer that

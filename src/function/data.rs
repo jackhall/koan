@@ -27,7 +27,7 @@ use crate::values::{
     construction, dict_type, kept_entries, list_type, part_ktype, record_type,
 };
 
-use super::{KActivation, KValue, Knotted, Untieable};
+use super::{KActivation, KValue, Knotted, Supplied, Untieable};
 
 /// One part of a data member's right-hand side, read and not yet written.
 pub(super) enum Staged<'graph, 'cell, 'x> {
@@ -104,7 +104,7 @@ pub(super) struct Stager<'stage, 'graph, 'cell> {
     activation: &'stage KActivation<'graph, 'cell>,
     component: &'stage Component<'graph>,
     scratch: BumpAllocator<'stage>,
-    eager: &'stage mut dyn FnMut(Site) -> Option<KValue<'graph, 'cell>>,
+    eager: &'stage mut dyn FnMut(Site) -> Option<Supplied<'graph, 'cell>>,
     nodes: Nodes<'graph, 'cell, 'stage>,
     /// The member whose right-hand side is being walked.
     owner: u32,
@@ -118,7 +118,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         component: &'stage Component<'graph>,
         roots: &[Option<&'graph ExpressionPart<'graph>>],
         scratch: BumpAllocator<'stage>,
-        eager: &'stage mut dyn FnMut(Site) -> Option<KValue<'graph, 'cell>>,
+        eager: &'stage mut dyn FnMut(Site) -> Option<Supplied<'graph, 'cell>>,
     ) -> Result<Nodes<'graph, 'cell, 'stage>, Untieable<'static>> {
         let mut nodes = BumpVec::with_capacity_in(roots.len(), scratch);
         nodes.extend(roots.iter().map(|_| None));
@@ -269,7 +269,8 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
     ) -> Result<Staged<'graph, 'cell, 'stage>, Untieable<'static>> {
         let site = Site::of(part);
         match (self.eager)(site) {
-            Some(value) => Ok(Staged::Value(value)),
+            Some(Supplied::Value(value)) => Ok(Staged::Value(value)),
+            Some(Supplied::Body(_)) => unreachable!("a data member's part is a value"),
             None => Err(Untieable::Eager {
                 name: self.name(),
                 site,
@@ -288,7 +289,8 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
             ExpressionPart::Literal(KLiteral::Number(number)) => Key::number(*number),
             ExpressionPart::Literal(KLiteral::Boolean(flag)) => Ok(Key::bool(*flag)),
             _ => match (self.eager)(site) {
-                Some(value) => Key::of(&value),
+                Some(Supplied::Value(value)) => Key::of(&value),
+                Some(Supplied::Body(_)) => unreachable!("a dict key is a value"),
                 None => {
                     return Err(Untieable::Eager {
                         name: self.name(),

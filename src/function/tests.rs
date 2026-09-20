@@ -3,11 +3,16 @@
 //! into being — each component of type binders through the declaration door, each cyclic component
 //! of value binders and each component of callable binders through the tie, and each lone data
 //! binder whose right-hand side lowers — beside readers for what a slot then holds.
+//!
+//! A module binder is brought body-first: the runner builds its body's activation, claims and runs
+//! every component of that body, and only then ties the binder with the finished activation. The
+//! layer above reads this fixture, so its doors are `pub(crate)`.
 
 mod birth;
 mod boundary;
 mod copy;
 mod equality;
+mod module;
 mod properties;
 
 use crate::elaborate::type_declarations;
@@ -15,18 +20,20 @@ use crate::memory::{
     Bump, BumpAllocator, CellGraph, CellHandle, Prices, ProgramBrand, ReleaseAbsorption,
     StepContext, Verdict, Writer, program_storage, reattachable, resident,
 };
+use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{BinderSymbol, KExpression, LabelInterner, TypeSymbol, ValueSymbol, parse};
 use crate::scope::{Binding, BodyShape, Builtins, Component, Slot};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Circular, Knotted as _, Link, TypeValue, Value};
 
-use super::{KActivation, KValue, Knotted, tie};
+use super::module::module_activation;
+use super::{KActivation, KValue, Knotted, Supplied, tie};
 
 /// A continuation family for a graph whose cells only store.
-pub(super) struct Step;
+pub(crate) struct Step;
 reattachable!(Step => ());
 
-pub(super) struct Fixture<'f, 'graph> {
+pub(crate) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     pub types: &'f TypeRegistry<'graph>,
     pub labels: &'f LabelInterner,
@@ -34,7 +41,7 @@ pub(super) struct Fixture<'f, 'graph> {
 }
 
 /// Run `test` against a fresh fixture.
-pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'graph>) -> R) -> R {
+pub(crate) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'graph>) -> R) -> R {
     let storage = program_storage();
     let program = storage.brand();
     let types = TypeRegistry::in_region(program.allocator());
@@ -137,24 +144,27 @@ impl<'graph> Fixture<'_, 'graph> {
                 .expect("a fresh slot claims");
         }
         let left: Vec<BinderSymbol> = leave.iter().map(|name| self.name(name)).collect();
+        let statements: Vec<&KExpression<'graph>> = lines.iter().collect();
         for component in shape.components() {
             let names = component.members.iter().map(|slot| shape.slot_name(*slot));
             if names.clone().any(|name| left.contains(&name)) {
                 continue;
             }
-            self.bring(writer, activation, lines, component);
+            self.bring_in(writer, activation, &statements, binder, component);
         }
         activation
     }
 
-    /// Bring one component into being, if the runner can: declare a component of type binders
-    /// through the door, tie a component of value binders when it is cyclic or every member births
-    /// a callable, else bind each member whose right-hand side lowers.
-    fn bring<'cell>(
+    /// Bring one component of `activation` into being, if the runner can: declare a component of
+    /// type binders through the door, tie a component of value binders when it is cyclic or every
+    /// member births a callable, run and tie a module binder, else bind each member whose
+    /// right-hand side lowers. `statements` is the body `activation`'s shape was built from.
+    fn bring_in<'cell>(
         &self,
         writer: Writer<'cell>,
         activation: &KActivation<'graph, 'cell>,
-        lines: &[KExpression<'graph>],
+        statements: &[&KExpression<'graph>],
+        binder: CellHandle,
         component: &Component<'graph>,
     ) {
         let shape = activation.shape();
@@ -169,6 +179,14 @@ impl<'graph> Fixture<'_, 'graph> {
                 let value = Value::Type(TypeValue::new(writer, *handle, self.types));
                 activation.bind(*slot, value).expect("a claimed slot binds");
             }
+            return;
+        }
+        if let [slot] = component.members
+            && shape
+                .births(*slot)
+                .is_some_and(|body| body.kind() == crate::scope::ShapeKind::Module)
+        {
+            self.bring_module(writer, activation, statements, binder, component, *slot);
             return;
         }
         let births = component
@@ -193,13 +211,10 @@ impl<'graph> Fixture<'_, 'graph> {
             return;
         }
         for slot in component.members {
-            let (_, position) = shape
-                .slot(shape.slot_name(*slot))
-                .expect("a member is declared");
-            let Some(statement) = position.0.checked_sub(1) else {
+            let Some(statement) = self.statement_of(shape, *slot) else {
                 continue;
             };
-            let spine = lines[statement as usize].statement_spine();
+            let spine = statements[statement].statement_spine();
             let Some(rhs) = spine.parts.get(3) else {
                 continue;
             };
@@ -208,20 +223,89 @@ impl<'graph> Fixture<'_, 'graph> {
             }
         }
     }
+
+    /// Bring a module binder into being, body first: its body's activation laid down with every
+    /// slot claimed, each of the body's own components brought in, then the binder tied.
+    fn bring_module<'cell>(
+        &self,
+        writer: Writer<'cell>,
+        activation: &KActivation<'graph, 'cell>,
+        statements: &[&KExpression<'graph>],
+        binder: CellHandle,
+        component: &Component<'graph>,
+        slot: Slot,
+    ) {
+        let shape = activation.shape();
+        let statement = self
+            .statement_of(shape, slot)
+            .expect("a module binder binds a statement");
+        let body_node = module_body_node(statements[statement].statement_spine());
+        let inner: Vec<&KExpression<'graph>> =
+            body_node.body_statements().map(|(node, _)| node).collect();
+        let body = resident(
+            writer,
+            module_activation(writer, activation, slot, self.scratch)
+                .expect("the module body's captures are bound"),
+        );
+        for index in 0..body.shape().slots() {
+            body.claim(Slot(index as u32), binder)
+                .expect("a fresh slot claims");
+        }
+        for inner_component in body.shape().components() {
+            self.bring_in(writer, body, &inner, binder, inner_component);
+        }
+        let knot = tie(
+            writer,
+            activation,
+            component,
+            self.types,
+            self.scratch,
+            &mut |_| Some(Supplied::Body(body)),
+        )
+        .expect("the module ties");
+        activation
+            .bind(slot, Value::Knotted(Knotted::of(knot, 0)))
+            .expect("a claimed slot binds");
+    }
+
+    /// The statement `slot`'s binder is declared at, if it is not a parameter.
+    fn statement_of(&self, shape: &BodyShape<'graph>, slot: Slot) -> Option<usize> {
+        let (_, position) = shape
+            .slot(shape.slot_name(slot))
+            .expect("a member is declared");
+        position.0.checked_sub(1).map(|at| at as usize)
+    }
+}
+
+/// The body a `MODULE` or `GROUP` node births.
+fn module_body_node<'graph>(node: &KExpression<'graph>) -> &'graph KExpression<'graph> {
+    let form = node
+        .cache()
+        .builtin_shape()
+        .expect("a module binder is a builtin form");
+    let (_, part) = form
+        .roles()
+        .zip(node.parts)
+        .find(|(role, _)| matches!(role, Role::Body(BodyKind::Module)))
+        .expect("a module binder has a module body");
+    match part.value {
+        crate::parse::ExpressionPart::Expression(body) => body.reference(),
+        _ => panic!("a module body is a node"),
+    }
 }
 
 /// Pin every operand.
-pub(super) fn pin(_: Prices) -> Verdict {
+pub(crate) fn pin(_: Prices) -> Verdict {
     Verdict::Pin
 }
 
 /// Copy every operand.
-pub(super) fn copy(_: Prices) -> Verdict {
+pub(crate) fn copy(_: Prices) -> Verdict {
     Verdict::Copy
 }
 
 /// What `activation` holds under `name`.
-pub(super) fn read<'graph, 'cell>(
+pub(crate) fn read<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
@@ -235,7 +319,7 @@ pub(super) fn read<'graph, 'cell>(
 }
 
 /// The value bound under `name`, which must be bound.
-pub(super) fn bound<'graph, 'cell>(
+pub(crate) fn bound<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
@@ -247,7 +331,7 @@ pub(super) fn bound<'graph, 'cell>(
 }
 
 /// The type handle bound under the type name `name`.
-pub(super) fn declared<'graph>(
+pub(crate) fn declared<'graph>(
     fixture: &Fixture<'_, 'graph>,
     activation: &KActivation<'graph, '_>,
     name: &str,
@@ -259,7 +343,7 @@ pub(super) fn declared<'graph>(
 }
 
 /// The callable bound under `name`.
-pub(super) fn callable<'graph, 'cell>(
+pub(crate) fn callable<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
@@ -270,7 +354,7 @@ pub(super) fn callable<'graph, 'cell>(
 }
 
 /// The data node `value` is, which must be one.
-pub(super) fn circular<'graph, 'cell>(
+pub(crate) fn circular<'graph, 'cell>(
     value: KValue<'graph, 'cell>,
 ) -> (
     Knotted<'graph, 'cell>,
@@ -280,7 +364,7 @@ pub(super) fn circular<'graph, 'cell>(
 }
 
 /// The link at the edge `link` names, resolved through `holder` to the data node it is.
-pub(super) fn follow<'graph, 'cell>(
+pub(crate) fn follow<'graph, 'cell>(
     holder: Knotted<'graph, 'cell>,
     link: Link<'_, '_, Knotted<'graph, 'cell>>,
 ) -> Knotted<'graph, 'cell> {

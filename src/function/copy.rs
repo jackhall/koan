@@ -1,9 +1,14 @@
 //! A knot member's copy: its whole knot re-tied at the destination.
 //!
 //! Every node of the source knot is rebuilt in index order, so an edge means the same node in the
-//! copy and is carried verbatim; each closure binding's value and each data node's value cell is
-//! deep-copied through the copy the crossing handed down, and the types, body shapes and knot weight
-//! ride over. The copied member is the one at the source's own index.
+//! copy and is carried verbatim; each closure binding's value, each data node's value cell and each
+//! module member is deep-copied through the copy the crossing handed down, and the types, body
+//! shapes and knot weight ride over. The copied member is the one at the source's own index.
+//!
+//! A module's members are rebuilt through that one copy, so a member that is itself a knot member
+//! brings its whole knot with it. Two members of one foreign knot therefore arrive as two copies of
+//! that knot — the price of "a member brings its knot", which a data node holding two such words
+//! already pays.
 
 use crate::memory::{KnotPlan, Writer};
 use crate::values::{self, DeepCopy};
@@ -41,6 +46,11 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                     circular: circular.copied(writer, copy),
                     knot_weight: *knot_weight,
                 },
+                Node::Module(module) => {
+                    let source = module.members();
+                    let members = writer.fill(source.len(), |at| copy(&source[at]));
+                    Node::Module(module.rebuilt(members))
+                }
             });
         Knotted(knot.member(member.member().index()))
     }

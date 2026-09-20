@@ -22,7 +22,7 @@ use crate::scope::{
 use crate::type_lattice::KType;
 use crate::values::{Circular, Knotted as _, Link, TypeValue, Value, cross};
 
-use super::super::{KActivation, KValue, KValueFamily, Knotted, Untieable, tie};
+use super::super::{KActivation, KValue, KValueFamily, Knotted, Supplied, Untieable, tie};
 use super::{Fixture, Step, copy, with_fixture};
 use crate::scope::tests::plan;
 
@@ -178,7 +178,7 @@ fn run<'graph, 'cell>(
             component,
             fixture.types,
             fixture.scratch(),
-            &mut |_| Some(Value::Null),
+            &mut |_| Some(Supplied::Value(Value::Null)),
         );
         let data: Vec<usize> = (0..component.members.len())
             .filter(|index| shape.births(component.members[*index]).is_none())

@@ -5,13 +5,16 @@ mod boundary;
 mod builtin;
 mod declarations;
 mod examples;
+mod module;
 
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, CellHandle, ProgramBrand, ReleaseAbsorption, SlabHandle,
     Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::{BinderSymbol, KExpression, LabelInterner, TypeSymbol, parse};
-use crate::scope::{Activation, Binding, BodyShape, Builtins, Coordinate, Slot, Target};
+use crate::scope::{
+    Activation, Binding, BodyShape, Builtins, ClosureBindings, Coordinate, Slot, Target,
+};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{TypeValue, Value};
 
@@ -48,7 +51,7 @@ pub(super) struct Program<'p, 'graph, 'cell> {
     pub binder: CellHandle,
 }
 
-impl<'graph> Program<'_, 'graph, '_> {
+impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
     pub fn type_name(&self, text: &str) -> TypeSymbol {
         TypeSymbol::declared(text, self.labels).expect("a Type token")
     }
@@ -102,6 +105,40 @@ impl<'graph> Program<'_, 'graph, '_> {
         matches!(self.activation.read(local(slot)), Binding::Pending(_))
     }
 
+    /// The activation of the module body the binder `name` births, every slot claimed. The body
+    /// must capture nothing: a test binds its slots by hand.
+    pub fn module_body(&self, name: &str) -> &'cell Activation<'graph, 'cell> {
+        let body = self.birth(name);
+        assert!(body.captures().is_empty(), "this body captures nothing");
+        let activation = resident(
+            self.writer,
+            Activation::of_module(
+                self.writer,
+                body,
+                ClosureBindings::empty(),
+                self.activation.builtins(),
+            ),
+        );
+        for slot in 0..body.slots() {
+            activation
+                .claim(Slot(slot as u32), self.binder)
+                .expect("a fresh slot claims");
+        }
+        activation
+    }
+
+    /// Bind `name`'s slot in `body` to `value`.
+    pub fn bind_member(
+        &self,
+        body: &Activation<'graph, 'cell>,
+        name: &str,
+        value: Value<'graph, 'cell>,
+    ) {
+        let name = BinderSymbol::classify(name).expect("a binder name");
+        let (slot, _) = body.shape().slot(name).expect("a declared binder");
+        body.bind(slot, value).expect("a claimed slot binds");
+    }
+
     /// The body shape the binder `name` births.
     pub fn birth(&self, name: &str) -> &'graph BodyShape<'graph> {
         let name = BinderSymbol::classify(name).expect("a binder name");
@@ -113,7 +150,7 @@ impl<'graph> Program<'_, 'graph, '_> {
         self.activation
             .shape()
             .births(slot)
-            .expect("the binder births a callable")
+            .expect("the binder births a body")
     }
 }
 

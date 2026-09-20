@@ -9,7 +9,7 @@ use crate::type_lattice::{KType, NodeSchema, TypeNode};
 use crate::values::{Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
-use super::super::{KActivation, KValue, Knotted, Node, Untieable, tie};
+use super::super::{KActivation, Knotted, Node, Supplied, Untieable, tie};
 use super::{Fixture, bound, callable, circular, declared, follow, pin, read, with_fixture};
 
 /// The component `name` belongs to, tied again with `eager` — a refusal the runner left for the
@@ -19,7 +19,7 @@ fn tie_with<'f, 'graph, 'cell>(
     writer: Writer<'cell>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
-    eager: &mut dyn FnMut(Site) -> Option<KValue<'graph, 'cell>>,
+    eager: &mut dyn FnMut(Site) -> Option<Supplied<'graph, 'cell>>,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'f>> {
     let shape = activation.shape();
     let (slot, _) = shape.slot(fixture.name(name)).unwrap();
@@ -534,7 +534,7 @@ fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
                 })
             );
             let knot = tie_with(fixture, writer, activation, "a", &mut |site| {
-                (site == call).then_some(Value::Number(7.0))
+                (site == call).then_some(Supplied::Value(Value::Number(7.0)))
             })
             .expect("the supplied part ties");
             let shape = activation.shape();
@@ -561,7 +561,9 @@ fn a_dict_key_that_is_no_scalar_refuses() {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, binder, &["a"]);
             let list = bound(fixture, activation, "k");
-            let refused = tie_with(fixture, writer, activation, "a", &mut |_| Some(list));
+            let refused = tie_with(fixture, writer, activation, "a", &mut |_| {
+                Some(Supplied::Value(list))
+            });
             assert!(matches!(
                 refused,
                 Err(Untieable::Key {

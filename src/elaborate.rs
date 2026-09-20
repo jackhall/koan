@@ -9,7 +9,8 @@
 //! overloads — the `static` slot types of a
 //! [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry — as one handle apiece.
 //! [`type_declarations`] takes a whole component of type binders and hands back one handle per
-//! member, sealing a group of mutually recursive declarations in one window.
+//! member, sealing a group of mutually recursive declarations in one window. [`self_signature`]
+//! reads a module's own signature off the activation its body ran in.
 //!
 //! Elaborated: a bare type name, `LIST OF Elem`, `MAP Key -> Val`, `FN :{…} -> Ret`,
 //! `EXPR (head) -> Ret` with and without `FOR ALL`, a union of members, a record type `:{…}`, a
@@ -28,6 +29,7 @@
 mod builtin;
 mod declaration;
 mod expression;
+mod module;
 mod signature;
 
 #[cfg(test)]
@@ -36,6 +38,7 @@ mod tests;
 pub use builtin::builtin_shape_types;
 pub use declaration::type_declarations;
 pub use expression::type_expression;
+pub use module::{Unsigned, self_signature};
 pub use signature::callable_type;
 
 use crate::memory::CellHandle;

@@ -1,25 +1,46 @@
 //! The tie: one component of value binders born together as one knot.
 //!
-//! A member is a callable binder, whose node is a function, or a `LET` of a value name whose
-//! right-hand side is rooted at a constructor, whose node is data (see [`data`](super::data));
-//! anything else refuses the tie before a member is read. Everything a member needs is then read into scratch with no
-//! writer in reach — a function's body, its type elaborated from its signature and its captures; a
-//! data member's cells, with a part only the caller can evaluate asked of its evaluator by site —
+//! A member is a callable binder, whose node is a function; a `MODULE` or `GROUP` binder, whose
+//! node is a module; or a `LET` of a value name whose right-hand side is rooted at a constructor,
+//! whose node is data (see [`data`](super::data)); anything else refuses the tie before a member is
+//! read.
+//!
+//! Everything a member needs is then read into scratch with no writer in reach — a function's
+//! body, its type elaborated from its signature and its captures; a data member's cells, with a
+//! part only the caller can evaluate asked of its evaluator by site —
 //! every mention of a fellow member minted as an edge into the knot about to be tied. Container
 //! memos are derived and every construction checked, and a read still pending, a part the caller
 //! has not evaluated, a cycle of containers or a construction that misfits refuses the tie before a
 //! byte is written. Only then are the closure runs and data nodes laid down, the knot's weight
 //! summed, and the nodes tied: member `i` is node `i`, and the anonymous data nodes follow.
+//!
+//! A module member is born body-first and alone: its binder's body has already run in an activation
+//! the caller supplies through [`Supplied::Body`], and the tie reads that activation's slots out in
+//! slot order — which is layout order — and asks `elaborate` for the self-signature over them. So a
+//! module's type and weight are facts about the members its body bound, and the node is written
+//! once.
 
-use crate::elaborate::{Elaboration, callable_type};
+use crate::elaborate::{Elaboration, Unsigned, callable_type, self_signature};
 use crate::memory::{BumpAllocator, BumpVec, CellHandle, Knot, KnotPlan, Writer};
 use crate::parse::{BinderSymbol, ExpressionPart};
-use crate::scope::{BodyShape, ClosureBindings, ClosureRefused, Component, Site};
+use crate::scope::{
+    Binding, BodyShape, ClosureBindings, ClosureRefused, Component, ShapeKind, Site,
+};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{ConstructionRefused, KeyRejected, Link, Weight};
 
 use super::data::{self, Stager};
+use super::module::module;
 use super::{Function, KActivation, KValue, Knotted, Node};
+
+/// What the caller supplies for a part only it can produce: an evaluated value for a data member's
+/// part, or a module binder's body already run.
+#[derive(Clone, Copy)]
+pub enum Supplied<'graph, 'cell> {
+    Value(KValue<'graph, 'cell>),
+    /// A module binder's body, run: its activation with every slot bound.
+    Body(&'cell KActivation<'graph, 'cell>),
+}
 
 /// Why a component could not be tied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,8 +53,9 @@ pub enum Untieable<'x> {
     },
     /// A member's signature did not elaborate.
     Type(Elaboration),
-    /// A member that is neither a callable binder nor a `LET` of a value name whose right-hand side,
-    /// through one-part groups, is a list, dict or record literal or a nominal construction.
+    /// A member that is neither a callable binder, nor a module binder, nor a `LET` of a value name
+    /// whose right-hand side, through one-part groups, is a list, dict or record literal or a
+    /// nominal construction.
     Opaque { name: BinderSymbol },
     /// Data member `name`'s right-hand side has a part at `site` the caller must evaluate first.
     Eager { name: BinderSymbol, site: Site },
@@ -73,7 +95,7 @@ pub fn tie<'graph, 'cell, 'x>(
     component: &Component<'graph>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
-    eager: &mut dyn FnMut(Site) -> Option<KValue<'graph, 'cell>>,
+    eager: &mut dyn FnMut(Site) -> Option<Supplied<'graph, 'cell>>,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'x>> {
     debug_assert!(
         component.deferred_only,
@@ -84,11 +106,19 @@ pub fn tie<'graph, 'cell, 'x>(
     let mut roots: BumpVec<'x, Option<&'graph ExpressionPart<'graph>>> =
         BumpVec::with_capacity_in(component.members.len(), scratch);
     for slot in component.members {
-        if shape.births(*slot).is_some() {
-            roots.push(None);
-            continue;
+        match shape.births(*slot).map(BodyShape::kind) {
+            // A module is alone in its component and shares nothing with the staging below.
+            Some(ShapeKind::Module) => {
+                return module_member(writer, activation, component, types, scratch, eager);
+            }
+            Some(_) => {
+                roots.push(None);
+                continue;
+            }
+            None => {}
         }
         let value_binder = matches!(shape.slot_name(*slot), BinderSymbol::Value(_));
+
         match shape
             .rhs(*slot)
             .filter(|_| value_binder)
@@ -156,6 +186,47 @@ pub fn tie<'graph, 'cell, 'x>(
             (None, None) => unreachable!("every node is a function or a data node"),
         }
     }))
+}
+
+/// Tie the lone module member of `component`: the caller's supplied body, read out in slot order.
+fn module_member<'graph, 'cell, 'x>(
+    writer: Writer<'cell>,
+    activation: &KActivation<'graph, 'cell>,
+    component: &Component<'graph>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'x>,
+    eager: &mut dyn FnMut(Site) -> Option<Supplied<'graph, 'cell>>,
+) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'x>> {
+    let shape = activation.shape();
+    let [slot] = component.members else {
+        unreachable!("a module binder is alone in its component: the shape refuses a cycle")
+    };
+    debug_assert!(!component.cyclic);
+    let name = shape.slot_name(*slot);
+    let site = shape
+        .birth_site(*slot)
+        .expect("a module binder's body sits at a site of its own");
+    let body = match eager(site) {
+        Some(Supplied::Body(body)) => body,
+        Some(Supplied::Value(_)) => unreachable!("a module member is asked for its run body"),
+        None => return Err(Untieable::Eager { name, site }),
+    };
+    debug_assert!(std::ptr::eq(
+        body.shape(),
+        shape.births(*slot).expect("this binder births its body"),
+    ));
+    let ktype = self_signature(body, types, scratch)
+        .map_err(|Unsigned { name, binder }| Untieable::Pending { name, binder })?;
+    let mut members = BumpVec::with_capacity_in(body.shape().slots(), scratch);
+    for (_, binding) in body.slots() {
+        match binding {
+            Binding::Bound(value) => members.push(value),
+            Binding::Pending(binder) => {
+                unreachable!("the self-signature refused a claimed slot first: {binder:?}")
+            }
+        }
+    }
+    Ok(module(writer, ktype, &members))
 }
 
 /// Read every function member of `component` into `scratch`, by member index; `None` for a data

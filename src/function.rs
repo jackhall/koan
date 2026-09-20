@@ -4,9 +4,15 @@
 //! A knot member is one node of a [`Knot`](crate::memory::Knot) laid down in a cell's region. A
 //! function's node holds its type, the body shape it runs, its closure bindings — the scope layer's
 //! run of links — and the rebuild weight of the whole knot it sits in; a data node holds a
-//! [`Circular`](crate::values::Circular) over links and the same weight. A function that names no
-//! fellow is a one-node knot; a deferred-only component of value binders is born together as one
-//! knot by [`tie`], each mention of a fellow member an edge into it.
+//! [`Circular`](crate::values::Circular) over links and the same weight; a module's node holds its
+//! self-signature, its members in layout order and the same weight. A function that names no
+//! fellow is a one-node knot, and so is every module — a mention reached from a module binder's
+//! root is eager whatever body it sits in, so a module is never in a cycle. A deferred-only
+//! component of value binders is born together as one knot by [`tie`], each mention of a fellow
+//! member an edge into it.
+//!
+//! A module's node is the carrier, not a claim about cycles: `m.f` is not a knot edge but an index
+//! into the run, and the run holds members of knots the module does not own.
 //!
 //! [`Knotted`] is sixteen bytes, so a value holding one stays one twenty-four-byte word. A member
 //! copies at a crossing by re-tying its whole knot at the destination, each held value deep-copied
@@ -23,11 +29,13 @@
 mod birth;
 mod copy;
 mod data;
+mod module;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
-pub use birth::{Untieable, tie};
+pub use birth::{Supplied, Untieable, tie};
+pub use module::{Module, module, module_activation};
 
 use std::fmt;
 
@@ -85,6 +93,8 @@ pub enum Node<'graph, 'cell> {
         /// What rebuilding the whole knot this node sits in writes, the same on every node.
         knot_weight: Weight,
     },
+    /// A module: its self-signature, its members in layout order, and the same weight.
+    Module(Module<'graph, 'cell>),
 }
 
 const _: () = assert!(!std::mem::needs_drop::<Node<'static, 'static>>());
@@ -111,7 +121,15 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
     pub fn function(self) -> Option<&'cell Function<'graph, 'cell, Self>> {
         match self.node() {
             Node::Function(function) => Some(function),
-            Node::Data { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// The module this member is, if it is a module's node.
+    pub fn module(self) -> Option<&'cell Module<'graph, 'cell>> {
+        match self.node() {
+            Node::Module(module) => Some(module),
+            _ => None,
         }
     }
 }
@@ -130,6 +148,7 @@ impl values::Knotted for Knotted<'_, '_> {
         match self.node() {
             Node::Function(function) => function.ktype,
             Node::Data { circular, .. } => circular.ktype(),
+            Node::Module(module) => module.ktype(),
         }
     }
 
@@ -137,6 +156,7 @@ impl values::Knotted for Knotted<'_, '_> {
         match self.node() {
             Node::Function(function) => function.knot_weight,
             Node::Data { knot_weight, .. } => *knot_weight,
+            Node::Module(module) => module.knot_weight(),
         }
     }
 
@@ -151,6 +171,7 @@ impl values::Knotted for Knotted<'_, '_> {
         match self.node() {
             Node::Function(_) => Resolved::Function,
             Node::Data { circular, .. } => Resolved::Circular(*circular),
+            Node::Module(_) => Resolved::Module,
         }
     }
 }
