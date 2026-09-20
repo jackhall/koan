@@ -201,22 +201,28 @@ pub(super) enum Dropped {
 
 /// One flag per member: `false` where the member lies on the `dropped` side of some *other*
 /// member, so the survivors form an antichain — the subsumption rule a union and an overload set
-/// canonicalize by, each from its own side. Two mutually ordered members are one handle, so a
-/// caller dedups first and no pair drops both sides.
+/// canonicalize by, each from its own side.
+///
+/// Two distinct handles can subsume each other — a union spelled two ways, two shapes whose slots
+/// admit each other — and they stand for one promise, so the run's **first** of them survives for
+/// both. Dropping each because of the other would drop the promise itself, leaving the canonical
+/// set admitting less than the run it came from.
 pub(super) fn unsubsumed<'s>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'s>,
     members: &[KType],
     dropped: Dropped,
 ) -> BumpVec<'s, bool> {
+    let subsumes = |member: KType, peer: KType| match dropped {
+        Dropped::Below => is_subtype_of(types, scratch, member, peer),
+        Dropped::Above => is_subtype_of(types, scratch, peer, member),
+    };
     let mut keep = BumpVec::with_capacity_in(members.len(), scratch);
-    keep.extend(members.iter().map(|member| {
-        !members.iter().any(|peer| {
-            peer != member
-                && match dropped {
-                    Dropped::Below => is_subtype_of(types, scratch, *member, *peer),
-                    Dropped::Above => is_subtype_of(types, scratch, *peer, *member),
-                }
+    keep.extend(members.iter().enumerate().map(|(index, member)| {
+        !members.iter().enumerate().any(|(other, peer)| {
+            other != index
+                && subsumes(*member, *peer)
+                && (other < index || !subsumes(*peer, *member))
         })
     }));
     keep
