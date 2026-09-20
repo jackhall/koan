@@ -3,6 +3,7 @@
 
 mod boundary;
 mod builtin;
+mod declarations;
 mod examples;
 
 use crate::memory::{
@@ -10,9 +11,19 @@ use crate::memory::{
     Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::{BinderSymbol, KExpression, LabelInterner, TypeSymbol, parse};
-use crate::scope::{Activation, BodyShape, Builtins, Slot};
+use crate::scope::{Activation, Binding, BodyShape, Builtins, Coordinate, Slot, Target};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{TypeValue, Value};
+
+use super::{Elaboration, type_declarations};
+
+/// This activation's own `slot`.
+fn local(slot: Slot) -> Coordinate {
+    Coordinate::Activation {
+        hops: 0,
+        target: Target::Local(slot),
+    }
+}
 
 /// A continuation family for a graph whose cells only store.
 struct Step;
@@ -32,6 +43,7 @@ pub(super) struct Program<'p, 'graph, 'cell> {
     pub scratch: BumpAllocator<'p>,
     pub lines: &'p [KExpression<'graph>],
     pub activation: &'cell Activation<'graph, 'cell>,
+    pub writer: Writer<'cell>,
     /// The cell a pending slot is claimed by.
     pub binder: CellHandle,
 }
@@ -39,6 +51,56 @@ pub(super) struct Program<'p, 'graph, 'cell> {
 impl<'graph> Program<'_, 'graph, '_> {
     pub fn type_name(&self, text: &str) -> TypeSymbol {
         TypeSymbol::declared(text, self.labels).expect("a Type token")
+    }
+
+    /// Bring every component of type binders into being through the door, binding each member's
+    /// slot as a type value. The first refusal comes back whole, having bound nothing of its own
+    /// component.
+    pub fn declare(&self) -> Result<(), Elaboration> {
+        let shape = self.activation.shape();
+        for component in shape.components() {
+            let types_only = component
+                .members
+                .iter()
+                .all(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Type(_)));
+            if !types_only {
+                continue;
+            }
+            let handles =
+                type_declarations(component, self.activation, self.types, self.scratch)?;
+            for (slot, handle) in component.members.iter().zip(handles) {
+                let value = Value::Type(TypeValue::new(self.writer, *handle, self.types));
+                self.activation
+                    .bind(*slot, value)
+                    .expect("a claimed slot binds");
+            }
+        }
+        Ok(())
+    }
+
+    /// The handle the type name `name` is bound to.
+    pub fn bound(&self, name: &str) -> KType {
+        let name = BinderSymbol::Type(self.type_name(name));
+        let (slot, _) = self
+            .activation
+            .shape()
+            .slot(name)
+            .expect("a declared type binder");
+        match self.activation.read(local(slot)) {
+            Binding::Bound(Value::Type(value)) => value.handle(),
+            _ => panic!("`{name:?}` is bound to a type"),
+        }
+    }
+
+    /// Whether the type name `name` is still claimed by its binder.
+    pub fn unbound(&self, name: &str) -> bool {
+        let name = BinderSymbol::Type(self.type_name(name));
+        let (slot, _) = self
+            .activation
+            .shape()
+            .slot(name)
+            .expect("a declared type binder");
+        matches!(self.activation.read(local(slot)), Binding::Pending(_))
     }
 
     /// The body shape the binder `name` births.
@@ -117,6 +179,7 @@ pub(super) fn with_program<R>(
                 scratch: &scratch,
                 lines: &lines,
                 activation,
+                writer,
                 binder,
             })
         })

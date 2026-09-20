@@ -35,6 +35,8 @@ pub fn callable_type<'graph, X: Knotted>(
         reader,
         types,
         scratch,
+        fellows: &[],
+        locals: &[],
     };
     let top = Groups {
         names: &[],
@@ -79,39 +81,65 @@ pub fn callable_type<'graph, X: Knotted>(
             let (Some(symbol), Some(operand)) = (symbol, type_parts[0]) else {
                 return Err(unsupported);
             };
-            let ExpressionPart::QuotedExpression(quoted) = symbol else {
-                return Err(Elaboration::Unsupported {
-                    site: Site::of(symbol),
-                });
-            };
-            let symbol = symbol_from_quote_body(quoted.reference()).map_err(|_| {
-                Elaboration::Unsupported {
-                    site: Site::of(symbol),
-                }
-            })?;
-            let operand = elaborator.part(operand, &top)?;
-            let ret = match type_parts[1] {
-                Some(ret) => elaborator.part(ret, &top)?,
-                None if kind == BodyKind::Operator => operand,
-                None => return Err(unsupported),
-            };
-            let (binary, unary);
-            let elements: &[DispatchTokenElement] = if kind == BodyKind::Operator {
-                binary = [
-                    DispatchTokenElement::Slot(operand),
-                    DispatchTokenElement::Keyword(symbol),
-                    DispatchTokenElement::Slot(operand),
-                ];
-                &binary
-            } else {
-                unary = [
-                    DispatchTokenElement::Keyword(symbol),
-                    DispatchTokenElement::Slot(types.list(operand)),
-                ];
-                &unary
-            };
-            Ok(types.shape_type(scratch, &[], elements, ret).handle)
+            operator_shape(
+                &elaborator,
+                kind == BodyKind::UnaryOperator,
+                symbol,
+                operand,
+                type_parts[1],
+                &top,
+            )
         }
         BodyKind::Module => Err(unsupported),
     }
+}
+
+/// The expression shape an operator head declares: `operand <symbol> operand` for a binary `OP`,
+/// returning its declared result or else its operand since a chain of it folds, and `<symbol>
+/// operands` over a list of its operand for a `UNARY OP`, since its body takes the whole run.
+///
+/// One builder, two callers: a definition reads it off the form its body sits in, and a `SIG`
+/// body's bodyless head off its own parts, so a head and the definition satisfying it can never
+/// spell different shapes. A run of operators chains through the signature's operator channel,
+/// which is [operator groups](../../roadmap/rewrite/operator-groups.md)' and is not written here.
+pub(super) fn operator_shape<'graph, X: Knotted>(
+    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, X>,
+    unary: bool,
+    symbol: &ExpressionPart<'graph>,
+    operand: &ExpressionPart<'graph>,
+    ret: Option<&ExpressionPart<'graph>>,
+    groups: &Groups<'_>,
+) -> Result<KType, Elaboration> {
+    let unsupported = Elaboration::Unsupported {
+        site: Site::of(symbol),
+    };
+    let ExpressionPart::QuotedExpression(quoted) = symbol else {
+        return Err(unsupported);
+    };
+    let symbol = symbol_from_quote_body(quoted.reference()).map_err(|_| unsupported)?;
+    let operand = elaborator.part(operand, groups)?;
+    let ret = match ret {
+        Some(ret) => elaborator.part(ret, groups)?,
+        None if !unary => operand,
+        None => return Err(unsupported),
+    };
+    let (binary, run);
+    let elements: &[DispatchTokenElement] = if unary {
+        run = [
+            DispatchTokenElement::Keyword(symbol),
+            DispatchTokenElement::Slot(elaborator.types.list(operand)),
+        ];
+        &run
+    } else {
+        binary = [
+            DispatchTokenElement::Slot(operand),
+            DispatchTokenElement::Keyword(symbol),
+            DispatchTokenElement::Slot(operand),
+        ];
+        &binary
+    };
+    Ok(elaborator
+        .types
+        .shape_type(elaborator.scratch, &[], elements, ret)
+        .handle)
 }
