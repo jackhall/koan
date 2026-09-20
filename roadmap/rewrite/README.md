@@ -114,6 +114,19 @@ as surprises, not scheduled.
   pinned signature. [Scopes](../../src/scope/README.md#names-that-arrive-at-run-time)
   already read the names a `USING` over one surfaces, since a pin changes no
   name.
+- **A union slot coerces by whichever member the union interned first.** The
+  [coercion walk](../../src/module/README.md#members-are-born-coerced) takes the
+  first declared member of a union whose source side admits the value. Where two
+  admit it — a slot declared `Carrier | Number` over a source binding `Carrier`
+  to `Number` — which one is reached decides whether the member is sealed at the
+  view's mint or carried as a plain number. Union identity is order-blind
+  ([the type lattice](../../src/type_lattice/README.md#the-node-vocabulary)), so
+  the stored member order is whichever spelling interned first anywhere in the
+  program, and an unrelated `:(Number | Carrier)` elsewhere can change what this
+  slot builds. A rule that does not depend on interning order — the abstract
+  member winning, or a refusal where two members admit — is a
+  [modules](modules.md) decision, since that item is where a coerced value is
+  first read back.
 - **`CATCH`'s declared return is `Any`.** The first runtime declared
   `Result {Ok = Any, Error = KError}`. The rewrite declares neither type, and a
   [builtin shape](../../src/parse/builtin_shapes.rs)'s return rests in a
