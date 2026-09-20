@@ -632,6 +632,12 @@ fn a_using_body_takes_its_operands_surfaced_names_as_parameters() {
     let cases: &[(String, &[&str])] = &[
         // A `MODULE` binder read directly, and the same read from a body that precedes it.
         (format!("{module}\nUSING m SCOPE (x)"), &["x", "Dist"]),
+        // A `GROUP` binder births the same body, so it reads the same way.
+        (
+            "GROUP g FOLD LEFT = ((LET x = 1) (NEWTYPE Dist = Number))\nUSING g SCOPE (x)"
+                .to_string(),
+            &["x", "Dist"],
+        ),
         (
             "LET f = (FN :{} -> Number = ((USING m SCOPE (x))))\nMODULE m = (LET x = 1)"
                 .to_string(),

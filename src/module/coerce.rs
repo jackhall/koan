@@ -23,6 +23,8 @@ use crate::type_lattice::{
 };
 use crate::values::{Dict, List, Record, SealRefused, Tagged, Value};
 
+use super::view;
+
 /// Why a member could not take the view's type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoercionRefused {
@@ -30,6 +32,10 @@ pub enum CoercionRefused {
     Seal(SealRefused),
     /// A slot declared a function type and the member is no function.
     NotAFunction,
+    /// A slot declared a signature and the member is no module.
+    NotAModule,
+    /// A nested module could not take the view its slot declares.
+    Nested,
     /// A union slot: no declared member's source side admits the value.
     NoUnionMember,
     /// A declared type this walk has no arm for, or a value whose shape does not match the arm
@@ -181,12 +187,24 @@ pub fn coerce<'graph, 'cell>(
             );
             Ok(Value::Knotted(Knotted::of(knot, 0)))
         }
-        // A signature-typed slot needs no arm. A `SIG` canonicalizes its own abstract members
-        // to one binder, so a signature standing in another's slot never references the enclosing
-        // signature's members: its two sides always agree and the early comparison above carried
-        // the nested module already. The day a slot can reference them — an inline signature type
-        // — the member here is re-viewed at `dst` rather than minted afresh, since its abstract
-        // identities *are* the outer view's mints, arriving substituted.
+        // A nested module is re-viewed, and nothing is minted at the boundary: the nested
+        // signature's own members were substituted when its slot was declared, so its slot types
+        // name the *enclosing* signature's members and the enclosing substitutions read them. A
+        // signature that names none of them never reaches here — its two sides agree and the
+        // comparison above carried the module already.
+        TypeNode::Signature { schema, .. } => {
+            let Value::Knotted(member) = value else {
+                return Err(CoercionRefused::NotAModule);
+            };
+            if member.module().is_none() {
+                return Err(CoercionRefused::NotAModule);
+            }
+            view::build(
+                cx.writer, member, schema, dst, cx.from, cx.to, cx.types, cx.scratch,
+            )
+            .map(Value::Knotted)
+            .map_err(|_| CoercionRefused::Nested)
+        }
         _ => Err(CoercionRefused::Unsupported(declared)),
     }
 }

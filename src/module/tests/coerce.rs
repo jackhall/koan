@@ -3,12 +3,14 @@
 use std::ptr;
 
 use crate::function::tests::{declared, pin, with_fixture};
-use crate::type_lattice::{KType, TypeNode};
+use crate::memory::ScopeId;
+use crate::parse::BinderSymbol;
+use crate::type_lattice::{KType, Members, TypeNode, specialize_schema};
 use crate::values::{Knotted as _, Resolved, Value};
 
-use super::super::coerce::CoercionRefused;
+use super::super::coerce::{Coercion, CoercionRefused, coerce};
 use super::super::view::{Ascription, Unascribable, ascribe};
-use super::{member, module};
+use super::{member, module, schema};
 
 const BAG: &str = "\
 SIG Bag = ((TYPE Carrier) \
@@ -209,10 +211,10 @@ fn same_referent(
 }
 
 #[test]
-fn a_signature_typed_slot_is_carried_whichever_operator_ascribes() {
-    // A `SIG` canonicalizes its own abstract members to one binder, so a signature standing in a
-    // slot of another never references the enclosing signature's members: its two sides always
-    // agree and the nested module is carried, not re-viewed.
+fn a_signature_typed_slot_naming_no_member_is_carried() {
+    // A `SIG` canonicalizes its own abstract members to one binder, so a signature standing in
+    // another's slot names none of the enclosing signature's members unless the declaration
+    // specializes it to one. Where it does not, both sides agree and the module is carried.
     let source = "\
 SIG Inner = ((TYPE Elem) (VAL v :Elem))
 SIG Outer = ((TYPE Carrier) (VAL one :Carrier) (VAL inner :Inner))
@@ -237,13 +239,125 @@ MODULE m = ((LET Carrier = Number) (LET one = 1) \
             };
             assert!(
                 ptr::eq(before.node(), after.node()),
-                "a signature-typed slot names no mint, so its member is carried"
+                "a signature naming no mint carries its module"
             );
-            // The carrier still mints, so the view is genuinely opaque; only this slot is untouched.
+            // The carrier still mints, so the view is opaque; only this slot is untouched.
             assert_ne!(
                 member(fixture, view, "one", types, scratch).ktype(),
                 KType::NUMBER
             );
+        })
+    });
+}
+
+#[test]
+fn a_nested_module_is_re_viewed_at_the_outer_mint() {
+    // A nested signature reaches an enclosing member only through specialization — `VAL inner
+    // :(Inner WITH {Elem = Carrier})` — which the lattice has and the type-expression elaborator
+    // does not yet spell. So the declared type is built here the way that elaboration will, and
+    // the coercion door is driven directly: what is pinned is that the nested view's `Elem` *is*
+    // the outer mint, arriving through the declaration rather than minted again at the boundary.
+    let source = "\
+SIG Inner = ((TYPE Elem) (VAL v :Elem))
+MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context, binder| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, binder, &[]);
+            let m = module(fixture, activation, "m");
+            let inner_schema = schema(declared(fixture, activation, "Inner"), types);
+
+            let BinderSymbol::Type(carrier) = fixture.name("Carrier") else {
+                panic!("`Carrier` is a Type token");
+            };
+            let BinderSymbol::Type(elem) = fixture.name("Elem") else {
+                panic!("`Elem` is a Type token");
+            };
+            // What `Inner WITH {Elem = Carrier}` elaborates to: `Elem` fixed to a reference to the
+            // enclosing signature's own `Carrier`.
+            let reference =
+                types.abstract_type(scratch, ScopeId::SENTINEL, carrier, &[], None, KType::ANY);
+            let slot = specialize_schema(types, scratch, inner_schema, &[(elem, reference)]);
+
+            let nonce = ScopeId::next();
+            let mint = types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), KType::ANY);
+            let cx = Coercion {
+                writer,
+                types,
+                scratch,
+                from: Members::from_pairs(scratch, [(carrier, KType::NUMBER)]),
+                to: Members::from_pairs(scratch, [(carrier, mint)]),
+            };
+
+            let held = member(fixture, m, "inner", types, scratch);
+            let Value::Knotted(view) = coerce(&cx, held, slot).expect("the nested module re-views")
+            else {
+                panic!("a signature slot stays a module");
+            };
+            let Value::Knotted(before) = held else {
+                panic!("`m.inner` is a module member");
+            };
+            assert!(
+                !ptr::eq(view.node(), before.node()),
+                "a nested module naming the mint is re-viewed, not carried"
+            );
+
+            let Value::Type(nested_elem) = member(fixture, view, "Elem", types, scratch) else {
+                panic!("`Elem` is a type member");
+            };
+            assert_eq!(
+                nested_elem.handle(),
+                mint,
+                "nothing is minted at a nested boundary"
+            );
+            assert_eq!(
+                member(fixture, view, "v", types, scratch).ktype(),
+                mint,
+                "and the nested member is sealed at it"
+            );
+        })
+    });
+}
+
+#[test]
+fn a_signature_slot_over_something_that_is_no_module_is_refused() {
+    let source = "\
+SIG Inner = ((TYPE Elem) (VAL v :Elem))
+LET f = (FN :{} -> Number = (1))";
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context, binder| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, binder, &[]);
+            let inner_schema = schema(declared(fixture, activation, "Inner"), types);
+            let BinderSymbol::Type(carrier) = fixture.name("Carrier") else {
+                panic!("`Carrier` is a Type token");
+            };
+            let BinderSymbol::Type(elem) = fixture.name("Elem") else {
+                panic!("`Elem` is a Type token");
+            };
+            let reference =
+                types.abstract_type(scratch, ScopeId::SENTINEL, carrier, &[], None, KType::ANY);
+            let slot = specialize_schema(types, scratch, inner_schema, &[(elem, reference)]);
+            let nonce = ScopeId::next();
+            let mint = types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), KType::ANY);
+            let cx = Coercion {
+                writer,
+                types,
+                scratch,
+                from: Members::from_pairs(scratch, [(carrier, KType::NUMBER)]),
+                to: Members::from_pairs(scratch, [(carrier, mint)]),
+            };
+            let f = crate::function::tests::callable(fixture, activation, "f");
+            for value in [Value::Knotted(f), Value::Null] {
+                assert_eq!(
+                    coerce(&cx, value, slot).err(),
+                    Some(CoercionRefused::NotAModule)
+                );
+            }
         })
     });
 }

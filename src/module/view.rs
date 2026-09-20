@@ -78,8 +78,12 @@ pub fn ascribe<'graph, 'cell, 'run, 'x>(
 
 /// Build the view's member run in layout order and lay the node down. `from` and `to` are what the
 /// source and the view bind the signature's abstract members to.
+///
+/// Two callers: an ascription, and a nested signature slot inside one
+/// ([`coerce`](super::coerce::coerce)), which passes the enclosing substitutions unchanged —
+/// a nested boundary mints nothing of its own.
 #[allow(clippy::too_many_arguments)]
-fn build<'graph, 'cell, 'run, 'x>(
+pub(super) fn build<'graph, 'cell, 'run, 'x>(
     writer: Writer<'cell>,
     source: Knotted<'graph, 'cell>,
     sig: SigSchema<'run>,
