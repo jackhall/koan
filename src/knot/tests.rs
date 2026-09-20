@@ -144,7 +144,9 @@ impl<'graph> Fixture<'_, 'graph> {
                 .expect("a fresh slot claims");
         }
         let left: Vec<BinderSymbol> = leave.iter().map(|name| self.name(name)).collect();
-        let statements: Vec<&KExpression<'graph>> = lines.iter().collect();
+        // A reader takes a body's statements from its shape, never from the parse: the shape owns
+        // them rewritten, and every site it records is an address inside them.
+        let statements: Vec<&KExpression<'graph>> = shape.body().iter().collect();
         for component in shape.components() {
             let names = component.members.iter().map(|slot| shape.slot_name(*slot));
             if names.clone().any(|name| left.contains(&name)) {

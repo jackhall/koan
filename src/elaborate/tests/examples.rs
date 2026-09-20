@@ -185,7 +185,7 @@ LET twice = FN EXPR (TWICE x :Number) -> Number = (x)
 LET id = FN EXPR FOR ALL (Elt) (ID x :Elt) -> Elt = (x)
 LET plus = OP #(+) OVER Number = (left)
 LET less = OP #(<) OVER Number -> Bool = (left)
-LET negate = UNARY OP #(-) OVER Number -> Number = (operands)";
+LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
     with_program(source, scalars, nulls, |program| {
         let (types, scratch, symbols) = (program.types, program.scratch, program.symbols);
         let typed = |name| {
@@ -245,7 +245,7 @@ LET negate = UNARY OP #(-) OVER Number -> Number = (operands)";
             typed("negate"),
             Ok(shape(
                 &[
-                    keyword("-", symbols),
+                    keyword("~", symbols),
                     DispatchTokenElement::Slot(types.list(KType::NUMBER))
                 ],
                 KType::NUMBER

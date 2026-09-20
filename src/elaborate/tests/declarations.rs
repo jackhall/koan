@@ -195,7 +195,7 @@ fn a_signature_declares_its_abstract_and_manifest_members() {
 #[test]
 fn a_signatures_bodyless_heads_are_keyworded_members() {
     brought(
-        "SIG Ring = ((TYPE Carrier) (OP #(+) OVER Carrier) (UNARY OP #(-) OVER Carrier -> Carrier))",
+        "SIG Ring = ((TYPE Carrier) (OP #(+) OVER Carrier) (UNARY OP #(~) OVER Carrier -> Carrier))",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Ring"))
             else {
@@ -215,10 +215,10 @@ fn a_bodyless_head_spells_the_shape_its_definition_spells() {
     // One builder reads both, so a head and the definition satisfying it can never disagree.
     brought(
         "SIG Arith = ((EXPR (TWICE x :Number) -> Number) (OP #(+) OVER Number) \
-                      (UNARY OP #(-) OVER Number -> Number))\n\
+                      (UNARY OP #(~) OVER Number -> Number))\n\
          LET twice = FN EXPR (TWICE x :Number) -> Number = (x)\n\
          LET plus = OP #(+) OVER Number = (left)\n\
-         LET negate = UNARY OP #(-) OVER Number -> Number = (operands)",
+         LET negate = UNARY OP #(~) OVER Number -> Number = (operands)",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Arith"))
             else {

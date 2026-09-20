@@ -26,6 +26,7 @@ mod activation;
 mod builtins;
 mod channels;
 mod closure;
+mod groups;
 mod shape;
 mod signature;
 
@@ -37,6 +38,7 @@ pub(crate) use signature::pair_name;
 pub use activation::{Activation, Binding};
 pub use builtins::Builtins;
 pub use closure::{ClosureBindings, ClosureRefused};
+pub use groups::{BuiltinGroup, GroupFrame, is_equality, is_unequal};
 pub use shape::{
     BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex,
     Coordinate, Mention, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target,

@@ -21,12 +21,14 @@ use std::fmt;
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::symbols::{BinderSymbol, SymbolInterner};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
+use crate::type_lattice::DeclaredGroup;
 use crate::values::Knotted;
 
 use super::activation::Activation;
 use super::builtins::Builtins;
 use super::channels::Channels;
+use super::groups::GroupFrame;
 
 mod build;
 
@@ -204,7 +206,14 @@ pub struct BodyShape<'graph> {
     kind: ShapeKind,
     /// Each declared name at its slot, beside the position it writes at.
     names: Channels<'graph, Position>,
-    statements: u32,
+    /// This body's own statements, rewritten — the run every reader takes them from, and the one
+    /// every part address this shape records lies inside.
+    body: &'graph [KExpression<'graph>],
+    /// The operator groups the shapes enclosing this body hold, this body's own included.
+    group_frame: &'graph GroupFrame<'graph>,
+    /// The groups this body itself holds: a `GROUP`'s own group, or the groups a `USING … SCOPE`
+    /// operand surfaces. Empty for every other body.
+    held: &'graph [&'graph DeclaredGroup<'graph>],
     /// The position in the enclosing shape this one is entered at: the statement's for an eager
     /// boundary, the enclosing body's end for a deferred one, and `EVAL`'s own for an `EVAL` body.
     entered_at: Position,
@@ -259,12 +268,30 @@ impl<'graph> BodyShape<'graph> {
     }
 
     pub fn statements(&self) -> u32 {
-        self.statements
+        self.body.len() as u32
+    }
+
+    /// This body's statements, **rewritten**: every operator run in them is already chained, and
+    /// every site this shape records is an address inside this run. A reader takes a body's
+    /// statements from here and never from the parse.
+    pub fn body(&self) -> &'graph [KExpression<'graph>] {
+        self.body
+    }
+
+    /// The operator-group frame this body was built under — what an `EVAL` written here roots its
+    /// own frame at, and what decides which groups an operator run here may chain under.
+    pub fn group_frame(&self) -> &'graph GroupFrame<'graph> {
+        self.group_frame
+    }
+
+    /// The groups this body itself holds. A `GROUP` module's self-signature carries them.
+    pub fn held_groups(&self) -> &'graph [&'graph DeclaredGroup<'graph>] {
+        self.held
     }
 
     /// One past the last statement — where a deferred mention reads.
     pub fn end(&self) -> Position {
-        Position(self.statements + 1)
+        Position(self.body.len() as u32 + 1)
     }
 
     pub fn entered_at(&self) -> Position {
@@ -435,6 +462,23 @@ pub enum ShapeError {
     Malformed { form: BuiltinShapeId, at: Position },
     /// A `USING` whose operand does not say, where the shape is built, which names it surfaces.
     Unsurfaced { at: Position, site: Site },
+    /// An operator run naming a symbol whose group no enclosing body holds.
+    Unchained { symbol: KeywordSymbol, at: Position },
+    /// An operator run whose symbols chain under two different groups.
+    MixedGroups {
+        first: KeywordSymbol,
+        second: KeywordSymbol,
+        at: Position,
+    },
+    /// A `GROUP` — or a `USING` surfacing one — over a symbol another group already covers, or
+    /// over one a `UNARY OP` has marked unary.
+    RedeclaresGroup { symbol: KeywordSymbol, at: Position },
+    /// A binary `OP` declaring a result type of its own whose symbol does not chain pairwise.
+    ResultOutsidePairwise { symbol: KeywordSymbol, at: Position },
+    /// An operator run whose chained node would spell a builtin form.
+    SpellsForm { symbol: KeywordSymbol, at: Position },
+    /// A declaration naming `!=`, which is always the opposite of `==` and is declared by nobody.
+    Derived { symbol: KeywordSymbol, at: Position },
 }
 
 impl ShapeError {
@@ -456,6 +500,7 @@ pub struct ShapeErrorDisplay<'x> {
 impl fmt::Display for ShapeErrorDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
+        let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
         match self.error {
             ShapeError::Rebind {
                 name: bound,
@@ -491,6 +536,39 @@ impl fmt::Display for ShapeErrorDisplay<'_> {
                 f,
                 "`USING` in {at} cannot tell which names this module surfaces; \
                  ascribe it here: `USING (m :! Sig) SCOPE (…)`"
+            ),
+            ShapeError::Unchained { symbol, at } => write!(
+                f,
+                "`{}` in {at} chains under a group no body around it holds; \
+                 surface it here: `USING <group> SCOPE (…)`",
+                operator(symbol)
+            ),
+            ShapeError::MixedGroups { first, second, at } => write!(
+                f,
+                "`{}` and `{}` in {at} chain under different groups, so this run has no one \
+                 shape; parenthesize it",
+                operator(first),
+                operator(second)
+            ),
+            ShapeError::RedeclaresGroup { symbol, at } => write!(
+                f,
+                "`{}` in {at} already chains another way; a symbol chains one way in one program",
+                operator(symbol)
+            ),
+            ShapeError::ResultOutsidePairwise { symbol, at } => write!(
+                f,
+                "`{}` in {at} declares a result of its own, which only a pairwise operator may do",
+                operator(symbol)
+            ),
+            ShapeError::SpellsForm { symbol, at } => write!(
+                f,
+                "a run of `{}` in {at} chains into a node spelling a builtin form",
+                operator(symbol)
+            ),
+            ShapeError::Derived { symbol, at } => write!(
+                f,
+                "`{}` in {at} is always the opposite of `==` and is declared by nobody",
+                operator(symbol)
             ),
         }
     }

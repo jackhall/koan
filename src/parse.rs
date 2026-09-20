@@ -46,6 +46,9 @@ use crate::symbols::SymbolInterner;
 
 pub use error::ParseError;
 
+/// The span wrapper a node's parts run carries — the type every construction door here takes, so a
+/// caller building a node names it through `parse` rather than reaching past it.
+pub use crate::source::Spanned;
 pub use ast::{
     DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KeyElement, NodeCache,
     PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,

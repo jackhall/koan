@@ -4,6 +4,7 @@
 mod activation;
 mod boundary;
 mod examples;
+mod groups;
 pub(crate) mod plan;
 mod properties;
 

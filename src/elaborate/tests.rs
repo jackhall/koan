@@ -214,7 +214,9 @@ pub(super) fn with_program<R>(
                 types: &types,
                 symbols: &symbols,
                 scratch: &scratch,
-                lines: &lines,
+                // A reader takes a body's statements from its shape, never from the parse: the
+                // shape owns them rewritten, and every site it records is an address inside them.
+                lines: shape.body(),
                 activation,
                 writer,
                 binder,

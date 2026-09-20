@@ -153,7 +153,7 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = (greeting
 
 #[test]
 fn a_group_binder_births_a_module_the_same_way() {
-    let source = "GROUP g FOLD LEFT = (LET step = 1)";
+    let source = "GROUP g FOLD LEFT = ((LET step = 1) (OP #(@) OVER Number = (left)))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context, binder| {

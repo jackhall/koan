@@ -635,7 +635,7 @@ fn a_using_body_takes_its_operands_surfaced_names_as_parameters() {
         (format!("{module}\nUSING m SCOPE (x)"), &["x", "Dist"]),
         // A `GROUP` binder births the same body, so it reads the same way.
         (
-            "GROUP g FOLD LEFT = ((LET x = 1) (NEWTYPE Dist = Number))\nUSING g SCOPE (x)"
+            "GROUP g FOLD LEFT = ((LET x = 1) (NEWTYPE Dist = Number) (OP #(@) OVER Number = (left)))\nUSING g SCOPE (x)"
                 .to_string(),
             &["x", "Dist"],
         ),

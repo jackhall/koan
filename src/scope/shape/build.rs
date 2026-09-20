@@ -23,9 +23,12 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, StaticName, TypeSymbol, ValueSymbol};
 use crate::values::Knotted;
 
+use crate::type_lattice::DeclaredGroup;
+
 use super::super::activation::Activation;
 use super::super::builtins::Builtins;
 use super::super::channels::Channels;
+use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::signature::{
     body_of, declare_parameters, declare_quantifiers, pair_name, signature_run,
 };
@@ -36,6 +39,7 @@ use super::{
 };
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Role};
 
+mod rewrite;
 mod surface;
 
 /// The names a body declares without a binder statement.
@@ -64,12 +68,22 @@ pub(super) fn program<'graph, X: Knotted>(
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
     let lookup = |name| builtins.lookup(name);
-    let mut builder = Builder::new(brand, scratch, &lookup, None);
+    // Every claim the program makes over an operator symbol is collected before the first draft, so
+    // how a symbol chains never depends on where its declarations sit.
+    let claims = groups::claims(brand, scratch, statements.iter(), None)?;
+    let frame = brand.allocator().alloc(GroupFrame::new(&[], None, claims));
+    let mut builder = Builder::new(brand, scratch, &lookup, None, claims, frame);
     let statements = statements
         .iter()
         .enumerate()
         .map(|(index, statement)| (statement, index + 1));
-    let draft = builder.draft(ShapeKind::Program, Position::PARAMETER, &[], statements)?;
+    let draft = builder.draft(
+        ShapeKind::Program,
+        Position::PARAMETER,
+        &[],
+        &[],
+        statements,
+    )?;
     Ok(builder.seal(draft, None))
 }
 
@@ -83,8 +97,21 @@ pub(super) fn eval<'graph, X: Knotted>(
 ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
     let lookup = |name| site.builtins().lookup(name);
     let outer = |name, position| site.through_chain(name, position);
-    let mut builder = Builder::new(brand, scratch, &lookup, Some((&outer, at)));
-    let draft = builder.draft(ShapeKind::Block, at, &[], body.body_statements())?;
+    // Evaluated code is held to the program's declarations, and its operator runs chain under the
+    // groups the shapes enclosing the `EVAL` hold — found by this walk, which reads no activation
+    // slot.
+    let enclosing = site.shape().group_frame();
+    let claims = groups::claims(
+        brand,
+        scratch,
+        body.body_statements().map(|(statement, _)| statement),
+        Some(enclosing.claims()),
+    )?;
+    let frame = brand
+        .allocator()
+        .alloc(GroupFrame::new(&[], Some(enclosing), claims));
+    let mut builder = Builder::new(brand, scratch, &lookup, Some((&outer, at)), claims, frame);
+    let draft = builder.draft(ShapeKind::Block, at, &[], &[], body.body_statements())?;
     Ok(builder.seal(draft, None))
 }
 
@@ -139,9 +166,13 @@ struct Draft<'graph, 'x> {
     types: BumpVec<'x, (TypeSymbol, Position)>,
     /// The slot each statement binds, if it binds one.
     statement_binder: BumpVec<'x, Option<Slot>>,
-    /// This body's statement spines, copied into scratch so the surfaced-name reader can reach a
-    /// binder's own statement. Each spine's parts run stays where it is in program storage.
+    /// This body's statement spines, **rewritten**, copied into scratch so the surfaced-name reader
+    /// can reach a binder's own statement. Each spine's parts run stays where it is in program
+    /// storage.
     nodes: BumpVec<'x, KExpression<'graph>>,
+    /// The group frame this body was built under, and the groups it holds itself.
+    frame: &'graph GroupFrame<'graph>,
+    held: &'graph [&'graph DeclaredGroup<'graph>],
     mentions: BumpVec<'x, Mention>,
     captures: BumpVec<'x, CaptureSpec>,
     /// `(binder, bound, class)`: the binder's statement reads the bound slot.
@@ -217,6 +248,13 @@ struct Builder<'graph, 'x, 'e> {
     builtins: Lookup<'e>,
     /// For an `EVAL` body: the by-name resolver over the site's chain, and `EVAL`'s position.
     outer: Option<(Outer<'e>, Position)>,
+    /// Every claim the code being built makes over an operator symbol, collected once up front.
+    claims: &'graph Claims<'graph>,
+    /// The frame of the draft being built: which groups an operator run written there sees.
+    frame: &'graph GroupFrame<'graph>,
+    /// The address of every parts run the pairwise rewrite synthesized as a statement block, so
+    /// the mention pass enters it as a block rather than walking it as a call.
+    blocks: BumpBackedMap<'x, usize, ()>,
     chain: BumpVec<'x, Draft<'graph, 'x>>,
     /// Each callable body's site beside the form node holding it, in program storage.
     forms: BumpBackedMap<'x, Site, &'graph KExpression<'graph>>,
@@ -235,12 +273,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         scratch: BumpAllocator<'x>,
         builtins: Lookup<'e>,
         outer: Option<(Outer<'e>, Position)>,
+        claims: &'graph Claims<'graph>,
+        frame: &'graph GroupFrame<'graph>,
     ) -> Self {
         Builder {
             brand,
             scratch,
             builtins,
             outer,
+            claims,
+            frame,
+            blocks: bump_table(scratch),
             chain: BumpVec::new_in(scratch),
             forms: bump_table(scratch),
             parts: bump_table(scratch),
@@ -257,18 +300,53 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         kind: ShapeKind,
         entered_at: Position,
         parameters: &[BinderSymbol],
+        held: &[&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
     ) -> Result<Draft<'graph, 'x>, ShapeError>
     where
         'graph: 'n,
     {
+        // A body holding a group is built under a frame of its own, which every operator run inside
+        // it — and every body nested in it — chains against.
+        let storage = self.brand.allocator();
+        let held: &'graph [&'graph DeclaredGroup<'graph>] = storage.alloc_slice_copy(held);
+        let outer = self.frame;
+        if !held.is_empty() {
+            self.frame = storage.alloc(GroupFrame::new(held, Some(outer), self.claims));
+        }
+        let built = self.body(kind, entered_at, parameters, held, statements);
+        self.frame = outer;
+        built
+    }
+
+    /// [`draft`](Self::draft) with this body's frame already standing: rewrite each statement's
+    /// operator runs, lay out the binders over the rewritten statements, walk them, and condense.
+    fn body<'n>(
+        &mut self,
+        kind: ShapeKind,
+        entered_at: Position,
+        parameters: &[BinderSymbol],
+        held: &'graph [&'graph DeclaredGroup<'graph>],
+        statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
+    ) -> Result<Draft<'graph, 'x>, ShapeError>
+    where
+        'graph: 'n,
+    {
+        let storage = self.brand.allocator();
         let mut nodes: BumpVec<'x, &'n KExpression<'graph>> = BumpVec::new_in(self.scratch);
         nodes.extend(statements.map(|(node, _)| node));
+        for index in 0..nodes.len() {
+            if let Some(rewritten) = self.rewrite_statement(index, nodes[index])? {
+                nodes[index] = storage.alloc(rewritten);
+            }
+        }
         let parent_statement = self
             .chain
             .last()
             .map_or(u32::MAX, |parent| parent.current.0);
         let mut draft = self.binders(kind, entered_at, parent_statement, parameters, &nodes)?;
+        draft.frame = self.frame;
+        draft.held = held;
         draft.nodes.extend(nodes.iter().map(|node| **node));
         self.chain.push(draft);
         let level = self.chain.len() - 1;
@@ -351,6 +429,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             rhs: BumpVec::new_in(scratch),
             declarations: BumpVec::new_in(scratch),
             nodes: BumpVec::new_in(scratch),
+            frame: self.frame,
+            held: &[],
             component_of: BumpVec::new_in(scratch),
             members: BumpVec::new_in(scratch),
             components: BumpVec::new_in(scratch),
@@ -398,6 +478,19 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             node.parts.len(),
             "a builtin shape's parts match its run"
         );
+        // A binary operator declaring a result type of its own is admitted only where its symbol
+        // chains pairwise: a fold hands its own result back as the next operand.
+        if matches!(
+            form.id,
+            BuiltinShapeId::OperatorDefinitionReturning | BuiltinShapeId::CombinedOperatorReturning
+        ) && let Ok(symbol) = groups::declaration_symbol(node)
+            && !self.frame.pairwise(symbol)
+        {
+            return Err(ShapeError::ResultOutsidePairwise {
+                symbol,
+                at: Position::statement(statement as usize),
+            });
+        }
         if form.id == BuiltinShapeId::Eval {
             for draft in self.chain.iter_mut() {
                 draft.keeps_defining_scope = true;
@@ -500,6 +593,23 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 self.mention(level, statement, part, BinderSymbol::Type(*name), state)
             }
             ExpressionPart::Expression(node) => {
+                // A block the pairwise rewrite synthesized runs as a block: its hoists are its
+                // binders, and its value is its last statement's.
+                if self
+                    .blocks
+                    .contains_key(&(node.reference().parts.as_ptr() as usize))
+                {
+                    return self.enter_child(
+                        level,
+                        statement,
+                        MentionClass::Eager,
+                        Site::of(part),
+                        ShapeKind::Block,
+                        &[],
+                        &[],
+                        node.reference().body_statements(),
+                    );
+                }
                 self.walk_node(level, statement, node.reference(), state)
             }
             ExpressionPart::SigiledTypeExpr(node) => {
@@ -770,6 +880,35 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         if kind == BodyKind::Surfaced {
             self.surfaced(level, statement, node, &mut surfaced)?;
         }
+        // A `GROUP`'s own body holds its group — the one record every equal declaration shares —
+        // so an operator run of its members may be written inside it and nowhere else.
+        let own;
+        let mut held: &[&'graph DeclaredGroup<'graph>] = &[];
+        if kind == BodyKind::Module
+            && let Some(declared) =
+                groups::declared_group(node, self.scratch).map_err(|()| ShapeError::Malformed {
+                    form: node
+                        .cache()
+                        .builtin_shape()
+                        .expect("a body role is a form's")
+                        .id,
+                    at: Position::statement(statement as usize),
+                })?
+            && let Some(Claim::Group(record)) = self.claims.get(declared.members[0])
+        {
+            for member in record.members {
+                if let Some(visible) = self.frame.visible(*member)
+                    && !groups::groups_equal(visible, record)
+                {
+                    return Err(ShapeError::RedeclaresGroup {
+                        symbol: *member,
+                        at: Position::statement(statement as usize),
+                    });
+                }
+            }
+            own = [record];
+            held = &own;
+        }
         let parameters: &[BinderSymbol] = match kind {
             BodyKind::Lambda => signature,
             BodyKind::Operator => &operator,
@@ -784,6 +923,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             Site::of(part),
             shape_kind,
             parameters,
+            held,
             body.body_statements(),
         )
     }
@@ -828,6 +968,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Site::of(body_part),
                 ShapeKind::Block,
                 &it,
+                &[],
                 body.body_statements(),
             )?;
         }
@@ -845,6 +986,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         site: Site,
         kind: ShapeKind,
         parameters: &[BinderSymbol],
+        held: &[&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
     ) -> Result<(), ShapeError>
     where
@@ -854,7 +996,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         parent.current = (statement, class);
         let entered_at = parent.boundary();
         let floor = std::mem::replace(&mut self.skip_floor, self.skip.len());
-        let child = self.draft(kind, entered_at, parameters, statements);
+        let child = self.draft(kind, entered_at, parameters, held, statements);
         self.skip_floor = floor;
         self.chain[level].children.push((site, child?));
         Ok(())
@@ -1112,7 +1254,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 storage.alloc_slice_copy(&draft.values),
                 storage.alloc_slice_copy(&draft.types),
             ),
-            statements: draft.statements,
+            body: storage.alloc_slice_copy(&draft.nodes),
+            group_frame: draft.frame,
+            held: draft.held,
             entered_at: draft.entered_at,
             component_of: storage.alloc_slice_copy(&draft.component_of),
             components: storage.alloc_slice_copy(&components),

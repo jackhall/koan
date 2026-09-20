@@ -236,14 +236,23 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
                 let value = self.part(&parts[3].value, groups)?;
                 Ok(self.types.dict(key, value))
             }
-            len if len % 2 == 1
-                && (1..len)
-                    .step_by(2)
-                    .all(|index| keyword(index, &CONNECTORS.union)) =>
-            {
-                let mut members = BumpVec::with_capacity_in(len / 2 + 1, self.scratch);
-                for member in parts.iter().step_by(2) {
-                    members.push(self.part(&member.value, groups)?);
+            // `A | B`. A longer run is an operator run, which the shape builder already chained
+            // into the unary call below, so nothing here walks a union part by part.
+            3 if keyword(1, &CONNECTORS.union) => {
+                let members = [
+                    self.part(&parts[0].value, groups)?,
+                    self.part(&parts[2].value, groups)?,
+                ];
+                Ok(self.types.union_of(self.scratch, &members))
+            }
+            // `| [A B C]` — the chained form of `A | B | C`, under the builtin unary union group.
+            2 if keyword(0, &CONNECTORS.union) => {
+                let ExpressionPart::ListLiteral(operands) = parts[1].value else {
+                    return Err(unsupported);
+                };
+                let mut members = BumpVec::with_capacity_in(operands.len(), self.scratch);
+                for member in operands.iter() {
+                    members.push(self.part(member, groups)?);
                 }
                 Ok(self.types.union_of(self.scratch, &members))
             }

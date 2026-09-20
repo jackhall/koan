@@ -426,7 +426,6 @@ pub(crate) fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpressio
 /// statement that merely spells the `OP` token (a call to a user `FN` whose signature names it as a
 /// keyword) is not an operator declaration, and neither is an `OP` nested inside some other
 /// statement's slot. `GROUP` reads its members' symbols off exactly the statements this admits.
-#[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
 pub(crate) fn op_declaration_arity(expression: &KExpression<'_>) -> Option<OpArity> {
     let binder = expression.cache().builtin_shape()?.binder?;
     if binder.surface != BinderSurface::OperatorDef {
