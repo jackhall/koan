@@ -505,3 +505,31 @@ USING g SCOPE (1)",
         ));
     });
 }
+
+#[test]
+fn a_result_typed_operator_is_admitted_wherever_its_group_chains_pairwise() {
+    // A signature's bodyless `GROUP` claims nothing — it reaches a body only as a group a `USING`
+    // surfaces — so the frame is the only place this declaration's admission can be read off.
+    let sig = "SIG Cmp = ((GROUP PAIRWISE FOLD #(AND) LEFT = ((OP #(~) OVER Ring -> Bool))))";
+    let module = "MODULE m = ((LET x = 1))";
+    let declaration = "(OP #(~) OVER Number -> Bool = (left))";
+    shaped(
+        &format!("{sig}\n{module}\nUSING (m :! Cmp) SCOPE ({declaration})"),
+        |_, shape| {
+            shape.expect("the surfaced group chains `~` pairwise, so the result type is admitted");
+        },
+    );
+    // Outside that body nothing holds the group, so the same declaration has no pairwise chaining.
+    shaped(
+        &format!("{sig}\n{module}\n{declaration}"),
+        |fixture, shape| {
+            assert_eq!(
+                shape.err(),
+                Some(ShapeError::ResultOutsidePairwise {
+                    symbol: keyword("~", fixture.symbols),
+                    at: Position::statement(2),
+                })
+            );
+        },
+    );
+}

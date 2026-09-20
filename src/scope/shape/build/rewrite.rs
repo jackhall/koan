@@ -341,7 +341,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             // Equality alone folds its pairs through `AND`, left.
             return Ok(equality_mode());
         };
-        let mode = cover.mode().expect("a symbol outside equality has a mode");
+        let mode = cover.mode();
         if let Some(second) = equality
             && !matches!(mode, ReductionMode::Pairwise { .. })
         {

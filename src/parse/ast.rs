@@ -226,8 +226,9 @@ impl<'a> ExpressionPart<'a> {
 /// `span` and `file` are `None` for hand-built ASTs.
 ///
 /// [`cache`](Self::cache) is the structural cache the construction doors fill once the parts run is
-/// complete — the bucket key, the dispatch shape, the matched builtin shape and the binder plan — so the dispatch driver reads it rather than re-deriving on every call of the
-/// enclosing function. The binder plan is per-node only: what this node installs when it is
+/// complete — the bucket key, the dispatch shape, the matched builtin shape and the binder plan —
+/// so the dispatch driver reads it rather than re-deriving on every call of the enclosing
+/// function. The binder plan is per-node only: what this node installs when it is
 /// submitted as a statement, and `None` when it is not itself a binder. A statement's namespace is
 /// legible from its own spine, never from what its slots contain.
 ///

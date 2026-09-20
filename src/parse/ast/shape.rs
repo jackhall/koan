@@ -207,8 +207,9 @@ pub fn stored_untyped_key<'a>(
 /// shape table, computed once, shared by the AST node and the scheduler's working node.
 ///
 /// Every field but the binder plan is settled the moment the key is: a splice substitutes slots one
-/// for one and writes no keyword position, so the key and the table entry are invariant under it. The plan is filled by the AST node's seal alone — a binder is always parsed AST — and
-/// rides a working copy unchanged.
+/// for one and writes no keyword position, so the key and the table entry are invariant under it.
+/// The plan is filled by the AST node's seal alone — a binder is always parsed AST — and rides a
+/// working copy unchanged.
 #[derive(Clone, Copy)]
 pub struct NodeCache<'a> {
     key: &'a [KeyElement],

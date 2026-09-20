@@ -226,11 +226,10 @@ pub struct GroupFrame<'graph> {
 
 const _: () = assert!(!std::mem::needs_drop::<GroupFrame<'static>>());
 
-/// How one symbol of an operator run chains.
+/// How one symbol of an operator run chains. `==` and `!=` never reach here: they belong to no
+/// group, so the caller takes them out of the operator run before asking.
 #[derive(Clone, Copy)]
 pub(crate) enum Cover<'graph> {
-    /// `==` / `!=`: no group of its own, so it takes the rest of the operator run's.
-    Equality,
     Builtin(BuiltinGroup),
     Declared(&'graph DeclaredGroup<'graph>),
     /// A `UNARY OP`'d symbol no group claims.
@@ -240,23 +239,20 @@ pub(crate) enum Cover<'graph> {
 }
 
 impl Cover<'_> {
-    /// How an operator run under this cover reduces. `None` for [`Cover::Equality`], which has no
-    /// mode of its own — a caller that meets it alone supplies the bare-equality one.
-    pub(crate) fn mode(self) -> Option<ReductionMode> {
+    /// How an operator run under this cover reduces.
+    pub(crate) fn mode(self) -> ReductionMode {
         match self {
-            Cover::Equality => None,
-            Cover::Builtin(group) => Some(group.mode()),
-            Cover::Declared(group) => Some(group.mode),
-            Cover::Unary(_) => Some(ReductionMode::Unary),
-            Cover::Alone(_) => Some(ReductionMode::FoldLeft),
+            Cover::Builtin(group) => group.mode(),
+            Cover::Declared(group) => group.mode,
+            Cover::Unary(_) => ReductionMode::Unary,
+            Cover::Alone(_) => ReductionMode::FoldLeft,
         }
     }
 
-    /// Whether two symbols of one operator run agree. Equality agrees with everything; a declared
-    /// group compares by content, so two instantiations of one functor's `GROUP` agree.
+    /// Whether two symbols of one operator run agree. A declared group compares by content, so two
+    /// instantiations of one functor's `GROUP` agree.
     pub(crate) fn agrees(self, other: Cover<'_>) -> bool {
         match (self, other) {
-            (Cover::Equality, _) | (_, Cover::Equality) => true,
             (Cover::Builtin(left), Cover::Builtin(right)) => left == right,
             (Cover::Declared(left), Cover::Declared(right)) => left == right,
             (Cover::Unary(left), Cover::Unary(right)) => left == right,
@@ -312,9 +308,10 @@ impl<'graph> GroupFrame<'graph> {
     /// How `symbol` chains where this frame is. `Err` when the symbol's group exists but no
     /// enclosing body holds it — an operator run of it is unchained here.
     pub(crate) fn cover(&self, symbol: KeywordSymbol) -> Result<Cover<'graph>, ()> {
-        if is_equality(symbol) {
-            return Ok(Cover::Equality);
-        }
+        debug_assert!(
+            !is_equality(symbol),
+            "equality belongs to no group and is taken out of the operator run first"
+        );
         if let Some(group) = BuiltinGroup::of(symbol) {
             return Ok(Cover::Builtin(group));
         }
@@ -329,17 +326,25 @@ impl<'graph> GroupFrame<'graph> {
     }
 
     /// Whether `symbol` chains pairwise — the condition a binary `OP` declaring a result type of
-    /// its own is admitted under. Read off the symbol's chaining wherever its group is declared,
-    /// since a declaration sits outside the body holding its group as often as inside it.
+    /// its own is admitted under.
+    ///
+    /// Read off the symbol's chaining wherever its group is declared, since a declaration sits
+    /// outside the body holding its group as often as inside it: a `GROUP` statement's claim covers
+    /// its members program-wide, and a group held by an enclosing frame covers its members here. A
+    /// signature's bodyless `GROUP` claims nothing and reaches a body only as a held group, so a
+    /// declaration under a `USING` that surfaces one is admitted by the frame alone.
     pub fn pairwise(&self, symbol: KeywordSymbol) -> bool {
         if is_equality(symbol) {
             return true;
         }
         let mode = match BuiltinGroup::of(symbol) {
             Some(group) => group.mode(),
-            None => match self.claims.get(symbol) {
-                Some(Claim::Group(group)) => group.mode,
-                Some(Claim::Unary) | None => return false,
+            None => match self.visible(symbol) {
+                Some(group) => group.mode,
+                None => match self.claims.get(symbol) {
+                    Some(Claim::Group(group)) => group.mode,
+                    Some(Claim::Unary) | None => return false,
+                },
             },
         };
         matches!(mode, ReductionMode::Pairwise { .. })

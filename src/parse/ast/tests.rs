@@ -16,7 +16,6 @@ use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
 use crate::memory::{ProgramBrand, program_storage};
 #[cfg(feature = "pending_rewrite")]
-#[cfg(feature = "pending_rewrite")]
 use crate::parse::builtin_shapes::builtin_shape_for;
 #[cfg(feature = "pending_rewrite")]
 use crate::parse::classify_dispatch_shape;
