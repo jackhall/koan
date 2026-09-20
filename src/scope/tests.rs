@@ -7,6 +7,7 @@ mod examples;
 mod groups;
 pub(crate) mod plan;
 mod properties;
+mod rewrite;
 
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, CellHandle, Edge, ProgramBrand, ReleaseAbsorption, SlabHandle,

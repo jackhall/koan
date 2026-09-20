@@ -16,9 +16,11 @@
 //! [`BodyShape::for_eval`], which resolves each free name through [`Activation::coordinate_of`] and lands
 //! where the coordinate would.
 //!
-//! **Imports.** This module may name `crate::memory`, `crate::parse`, `crate::type_lattice` and
-//! `crate::values`, and no scheduler type; outside `#[cfg(test)]` it names no `type_lattice` item.
-//! `tests::boundary` reads the source to hold it there.
+//! **Imports.** This module may name `crate::memory`, `crate::parse`, `crate::symbols`,
+//! `crate::type_lattice` and `crate::values`, and no scheduler type. From `type_lattice` it names
+//! the operator-group vocabulary — [`DeclaredGroup`](crate::type_lattice::DeclaredGroup) and its
+//! [`ReductionMode`](crate::type_lattice::ReductionMode) — so a signature's operator channel and a
+//! body's held group are one record. `tests::boundary` reads the source to hold it there.
 //!
 //! See [scope/README.md](scope/README.md).
 
