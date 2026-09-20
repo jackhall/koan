@@ -4,7 +4,7 @@
 use crate::parse::{BinderSymbol, ValueSymbol};
 use crate::type_lattice::{KKind, KType, NodeSchema, TypeNode, member};
 
-use super::super::Elaboration;
+use super::super::{Elaboration, callable_type};
 use super::{Held, Program, scalars, with_program};
 
 /// Shape and activate `source` with every slot claimed, run the door over every component of type
@@ -183,7 +183,7 @@ fn a_signature_declares_its_abstract_and_manifest_members() {
 }
 
 #[test]
-fn a_signatures_operator_heads_are_keyworded_members() {
+fn a_signatures_bodyless_heads_are_keyworded_members() {
     brought(
         "SIG Ring = ((TYPE Carrier) (OP #(+) OVER Carrier) (UNARY OP #(-) OVER Carrier -> Carrier))",
         |program| {
@@ -196,6 +196,37 @@ fn a_signatures_operator_heads_are_keyworded_members() {
                 schema.operators.is_empty(),
                 "the operator channel is operator-groups', not this door's"
             );
+        },
+    );
+}
+
+#[test]
+fn a_bodyless_head_spells_the_shape_its_definition_spells() {
+    // One builder reads both, so a head and the definition satisfying it can never disagree.
+    brought(
+        "SIG Arith = ((EXPR (TWICE x :Number) -> Number) (OP #(+) OVER Number) \
+                      (UNARY OP #(-) OVER Number -> Number))\n\
+         LET twice = FN EXPR (TWICE x :Number) -> Number = (x)\n\
+         LET plus = OP #(+) OVER Number = (left)\n\
+         LET negate = UNARY OP #(-) OVER Number -> Number = (operands)",
+        |program| {
+            let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Arith"))
+            else {
+                panic!("a SIG binds a signature");
+            };
+            let defined = |name| {
+                let form = program
+                    .birth(name)
+                    .form()
+                    .expect("a callable body sits in a form");
+                callable_type(form, program.activation, program.types, program.scratch)
+                    .expect("the definition elaborates")
+            };
+            let mut declared: Vec<KType> = schema.keyworded.to_vec();
+            let mut satisfiers = vec![defined("twice"), defined("plus"), defined("negate")];
+            declared.sort_unstable();
+            satisfiers.sort_unstable();
+            assert_eq!(declared, satisfiers);
         },
     );
 }

@@ -183,12 +183,13 @@ below this module.
 ## Testing
 
 The suites run programs through a fixture that activates a program in a cell
-and brings each binding into being — a lone data binder whose right-hand side
-lowers, a type binder whose right-hand side elaborates, a cyclic component of
-value binders or a component of callable binders through the tie with an
-evaluator that supplies nothing. `elaborate` handles no `NEWTYPE`, so a test
-that constructs one seals it as a singleton recursive group and hands it in as
-a builtin type.
+and brings each binding into being — a component of type binders through
+[the declaration door](../elaborate/README.md#declarations), a cyclic component
+of value binders or a component of callable binders through the tie with an
+evaluator that supplies nothing, and a lone data binder whose right-hand side
+lowers. A test that constructs a nominal writes its `NEWTYPE` in the program
+source and reads the handle back off the slot the door bound; the builtin table
+carries the scalar types alone.
 
 - [`tests/birth.rs`](tests/birth.rs) — a lone function, a captured value word,
   mutual and self recursion read back through their edges, a nested capture of

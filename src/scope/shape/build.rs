@@ -188,9 +188,9 @@ impl Draft<'_, '_> {
         Position(self.statements + 1)
     }
 
-    /// Whether `slot` is in the type channel — the channels share one index space, values first.
+    /// Whether `slot` is in the type channel, read through the one owner of the index split.
     fn is_type_slot(&self, slot: Slot) -> bool {
-        slot.index() >= self.values.len()
+        matches!(self.channels().name(slot.index()), BinderSymbol::Type(_))
     }
 
     /// The declared names, once the binders pass has sorted them.

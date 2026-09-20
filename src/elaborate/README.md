@@ -1,10 +1,11 @@
 # Elaborate
 
-Type expressions turned into [type lattice](../type_lattice/README.md) handles,
-read where they are written. `elaborate` sits above
-[`scope`](../scope/README.md) and below [`function`](../function/README.md):
-a function's type is elaborated from its signature where the function is born,
-and nothing below `scope` can read a name.
+Type expressions and type declarations turned into
+[type lattice](../type_lattice/README.md) handles, read where they are written.
+`elaborate` sits above [`scope`](../scope/README.md) and below
+[`function`](../function/README.md): a function's type is elaborated from its
+signature where the function is born, a component of type binders is declared
+through [one door](#declarations), and nothing below `scope` can read a name.
 
 ## What a type expression is
 
@@ -23,14 +24,18 @@ Every composite is built from the handles its parts elaborate to, through the
 registry's own doors:
 
 - a bare name, `Number`, is the handle its binding holds;
-- `LIST OF T` and `MAP K -> V` are the list and dict nodes;
-- `A | B | …` is the canonical union of its members;
-- `:{x :T, …}` is the record type of its fields in written order;
-- `FN :{x :T, …} -> R` is the function type over the schema's fields and the
-  return;
-- `EXPR (head) -> R`, with or without `FOR ALL (names)`, is the expression
+- `LIST OF Elem` and `MAP Key -> Val` are the list and dict nodes;
+- `Left | Right | …` is the canonical union of its members;
+- `:{x :Elem, …}` is the record type of its fields in written order;
+- `FN :{x :Elem, …} -> Ret` is the function type over the schema's fields and
+  the return;
+- `EXPR (head) -> Ret`, with or without `FOR ALL (names)`, is the expression
   shape over the head's keywords and typed slots and the return;
-- `Union.Tag` is the member of the union whose tag it names.
+- `Union.Tag` is the member of the union whose tag it names;
+- `Pair {Key = Number}` is a declared type constructor applied to its arguments
+  by the parameter names the family declares — every parameter named once and no
+  name it does not declare — and `Number AS Wrap` is the same application spelled
+  as arity-one sugar, reading the family's sole parameter name off the family.
 
 **Quantifiers are positions, not mentions.** A name a `FOR ALL` group declares
 is that group's quantifier at its written position, elaborated as
@@ -55,6 +60,86 @@ cached `BUILTIN_SHAPES` entry gives them:
   operand, since its body's one parameter `operands` takes the whole run.
 
 A module body has no callable type here.
+
+## Declarations
+
+A component of type binders comes into being through one door,
+[`type_declarations`](declaration.rs) — the type channel's analogue of
+[the tie](../function/README.md#the-tie), and the other of the two ways a
+component of binders becomes values. It takes the component and the activation
+its members are declared in, and hands back one handle per member, in member
+order:
+
+- `NEWTYPE Distance = Number` — a newtype over its representation;
+- `NEWTYPE (Key Val AS Pair)` — a constructor family: an empty-schema
+  `TypeConstructor` member over its declared parameter names, the identity
+  wrapper over its argument, so an application has a declared referent a koan
+  program can write;
+- `UNION Maybe = (Some :Number None :Null)` — the canonical union of one member
+  per variant, the binder owning them all;
+- `SIG HasLabel = (VAL label :Str)` — a signature;
+- `LET Alias = Number` in the type channel — its right-hand side's type.
+
+Which declaration a member is, and where its declared part sits, is read off the
+node the shape recorded for it — [`BodyShape::declarations`](../scope/README.md#visibility),
+by slot — and off that node's own
+[builtin shape](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
+roles, so the table stays the one authority on what a form's parts are and a
+`NEWTYPE (… AS …)`, which has no definition part, needs no case of its own.
+
+**The caller binds.** The door takes no writer: it hands back `Copy` handles, and
+minting each member's type value and naming the region it lives in are the layer
+above's, exactly as they are for the tie.
+
+### One window per component
+
+Every member is read, and the whole member and binder list fixed, before any
+schema elaborates — a schema naming a fellow must already have an index to name
+it by. The component then opens one
+[`RecursiveGroupWindow`](../type_lattice/README.md#recursive-groups-identity-is-the-scc-not-the-declaration):
+one member per standalone declaration and one per union variant, each variant
+owned by its `UNION` binder. A mention of a fellow elaborates to the relative
+handle the still-open window minted — a member's own sibling, or a binder's
+union of its variants' siblings — so `NEWTYPE Ring = :{next :Ring}` and a ring
+of mutually recursive declarations seal with no placeholder, and identity is the
+sealed SCC rather than the written group: two declarations of the same shape in
+different programs are one handle. A projection off a fellow union is
+`NoSuchMember` — until the group seals, the union declares no tag.
+
+**Only a nominal member can close a cycle.** A transparent alias and a signature
+name no fresh identity, so a cycle through one has no finite type: a cyclic
+component holding a `LET` or a `SIG` member is refused at that member. A
+non-nominal member is therefore only ever reached alone, and answers outside any
+window. This is the type channel's restatement of the nominal cut
+[the tie](../function/README.md#the-tie) already makes for values.
+
+### What a signature declares
+
+A `SIG` body's statements are its members, read in source order by their own
+builtin shapes' roles:
+
+- `TYPE Carrier`, `TYPE (Held AS Boxed)` — an abstract member, bare or
+  higher-kinded, and the only place a bare `TYPE` binds: outside a `SIG` it is
+  refused;
+- `LET Elem = Number` — a manifest member, fixed to its type;
+- `VAL x :Elem` — a value slot;
+- a bodyless `EXPR`, `OP` or `UNARY OP` head — a keyworded member, an operator
+  head through the same builder [`callable_type`](signature.rs) reads a
+  definition's operator shape through, so a head and the definition satisfying it
+  cannot spell different shapes.
+
+A signature's scope id is the sentinel, stamped here rather than round-tripped
+through the declaring scope, which is what makes two textually identical `SIG`
+declarations one type. A body's own names — its abstract and manifest members,
+and a higher-kinded member's parameters — are declared by the definition and are
+no mention of the enclosing shape, so the door resolves them against the members
+it has already read. A member naming a *later* member of the same body is a
+forward reference nothing has filled yet, and is refused.
+
+A bodyless `GROUP` is refused: it declares a chaining record, and a signature's
+operator channel — how a run of operators chains — is
+[operator groups](../../roadmap/rewrite/operator-groups.md)'. An operator head
+here declares its bucket and nothing about chaining.
 
 ## Builtin shapes
 
@@ -86,12 +171,18 @@ never a panic and never a guess:
   handle, so the caller turns it into a dependency on that binder;
 - `NotAType` — a type name bound to something other than a type value;
 - `NoSuchMember` — a union projection naming a tag the union does not declare;
-- `Unsupported` — any other spelling: constructor application
-  (`Pair {Key = Number}`, `Number AS Wrap`), a `_` field, and an outer
-  quantifier read under a nested group.
+- `Unsupported` — any other spelling: a `_` field, an outer quantifier read
+  under a nested group, an application whose arguments are not exactly the
+  parameters its constructor declares, and every declaration the door refuses —
+  a cyclic component through a non-nominal member, a bare `TYPE` outside a
+  `SIG`, a bodyless `GROUP`, a repeated union tag or family parameter, a union
+  with no variant, and a forward reference inside a `SIG` body.
 
 Elaboration writes nothing to a region: its transient runs live in the scratch
-arena it is handed, and every node it builds is interned in the registry.
+arena it is handed, and every node it builds is interned in the registry. A
+refusal from the door binds no slot for the same reason: its window and staged
+runs are scratch, and the registry it interns into is content-addressed, so a
+handle minted before the refusal is content no name reaches.
 
 ## The import rule
 
@@ -110,15 +201,18 @@ retired lifetime name.
 [`tests/examples.rs`](tests/examples.rs) elaborates each production, each
 refusal, and a callable's type off each builtin shape that births one, over a
 program shaped and activated in a cell with every slot bound or claimed as the
-test asks. [`tests/builtin.rs`](tests/builtin.rs) holds the door's own laws: each
+test asks. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
+door over the same harness: each form it elaborates, each group it seals — a
+ring, a union and a newtype in one component, a ring written in either order
+interning equal — and each refusal, asserting the refused component left its
+binders claimed. [`tests/builtin.rs`](tests/builtin.rs) holds the door's own laws: each
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names
 interns as the union of its three members.
 
 ## Open work
 
-- [Type declarations](../../roadmap/rewrite/type-declarations.md) — the door
-  that takes a component of type binders, and constructor-application type
-  expressions.
+- [Operator groups](../../roadmap/rewrite/operator-groups.md) — a signature's
+  operator channel, and the chaining record a bodyless `GROUP` declares.
 - [Module values](../../roadmap/rewrite/module-values.md) — a module's
   self-signature, elaborated from the members its activation binds.

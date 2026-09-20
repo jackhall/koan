@@ -180,19 +180,34 @@ module.
 
 The shape hands the layer above each body's components — each with whether it
 is `deferred_only` and whether it is `cyclic`, holding more than one member or
-a member that reads itself — and the class of every mention, and three facts a
-tie reads: the callable body each binder births — `BodyShape::births`, set when
-the binder's right-hand side is a callable shape at its root or its shape is a
-combined one — `BodyShape::form`, the builtin shape node a callable body sits in,
-where its signature is read, and `BodyShape::rhs`, each `LET` binder's right-hand
-side part,
-where a data member is read. A caller ties a component of value binders when
-it is cyclic or every member births a callable; a non-cyclic data binder is an
-ordinary value, and a component of type binders is the elaborator's. A
-component never mixes the two channels: a definition names types only, so no
-mention leaves a type binder for a value binder. Tying is
+a member that reads itself — and the class of every mention, and four facts the
+layer above reads off a binder's slot: the callable body each binder births —
+`BodyShape::births`, set when the binder's right-hand side is a callable shape
+at its root or its shape is a combined one — `BodyShape::form`, the builtin
+shape node a callable body sits in, where its signature is read,
+`BodyShape::rhs`, each `LET` binder's right-hand side part, where a data member
+is read, and `BodyShape::declarations`, each type binder's whole declaration
+node — a `NEWTYPE`, `UNION`, `SIG`, `TYPE` or a `LET` of a type name — where the
+declaration door reads which declaration it is and where its declared part sits,
+off the node's own builtin shape. A caller ties a component of value binders
+when it is cyclic or every member births a callable; a non-cyclic data binder is
+an ordinary value, and a component of type binders goes through
+[the elaborator's door](../elaborate/README.md#declarations). A component never
+mixes the two channels: a definition names types only, so no mention leaves a
+type binder for a value binder. Tying is
 [`function`](../function/README.md#the-tie)'s, which writes a deferred mention
 below a nested constructor into the knot as an anonymous node.
+
+A declaration's definition part is walked under the constructor state, so every
+type name it reads is a deferred mention — but a definition's own statements are
+declarators with builtin shapes of their own, and a type expression written
+inside one is a node with a shape of its own too: each is walked by *their*
+roles rather than by structure. A `SIG` body's `TYPE (Key Val AS Pair)`
+therefore declares `Pair`, and `Key` and `Val` sit in its `Name` part, which no
+walk reads; a `FOR ALL` group inside one of its heads declares its quantifiers;
+and a manifest `LET` member declares its name, so a later `VAL` naming it is no
+mention either. Every name a definition declares is the definition's own, and
+the declaration door resolves it against the definition it is elaborating.
 
 ## Two channels
 

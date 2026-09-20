@@ -239,6 +239,15 @@ Inside the window, a reference to a co-declared member is a `Sibling` handle: a
 bare relative index, ordinary interned content, meaningful only against the
 window that minted it.
 
+A window is opened over a whole component: its members in announcement order,
+each carrying the binder that owns it — a `UNION`'s variants — or none for a
+standalone declaration, beside the indices each declaring binder owns. A binder
+is not itself a member; it denotes the union of the members it owns. So a
+`NEWTYPE` and a `UNION` declared in one component seal on one digest. The
+standalone group and the one-binder group are that constructor's two special
+cases, and the binder list is fixed when the window opens — only the member
+list fills.
+
 At the last fill the window seals, and **identity is not the declared group**: it
 is each member's strongly-connected component under the sibling-reference
 relation, presented canonically in name-symbol order. `seal_group` extracts the

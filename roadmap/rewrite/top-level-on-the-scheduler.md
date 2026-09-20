@@ -162,8 +162,8 @@ part a refused tie names.
 
 **Requires:**
 
-- [Type declarations](type-declarations.md) — a top-level task whose members are
-  type binders has no other way to bind them.
+- [Module values](module-values.md) — the placement of a `MODULE` activation is
+  a criterion here, over a value that item builds.
 
 **Unblocks:**
 
