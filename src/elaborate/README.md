@@ -117,5 +117,8 @@ interns as the union of its three members.
 
 ## Open work
 
-- [Modules](../../roadmap/rewrite/modules.md) — constructor-application type
+- [Type declarations](../../roadmap/rewrite/type-declarations.md) — the door
+  that takes a component of type binders, and constructor-application type
   expressions.
+- [Module values](../../roadmap/rewrite/module-values.md) — a module's
+  self-signature, elaborated from the members its activation binds.

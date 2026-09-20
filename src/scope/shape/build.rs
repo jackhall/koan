@@ -128,7 +128,7 @@ type Lookup<'e> = &'e dyn Fn(BinderSymbol) -> Option<BuiltinIndex>;
 type Outer<'e> = &'e dyn Fn(BinderSymbol, Position) -> Option<Coordinate>;
 
 /// One body under construction, in scratch.
-struct Draft<'x> {
+struct Draft<'graph, 'x> {
     kind: ShapeKind,
     entered_at: Position,
     /// The statement of the enclosing draft this body sits in.
@@ -143,11 +143,13 @@ struct Draft<'x> {
     /// `(binder, bound, class)`: the binder's statement reads the bound slot.
     edges: BumpVec<'x, (Slot, Slot, MentionClass)>,
     /// Finished nested drafts, waiting on this draft's components to settle their captures.
-    children: BumpVec<'x, (Site, Draft<'x>)>,
+    children: BumpVec<'x, (Site, Draft<'graph, 'x>)>,
     /// `(binder, body)`: the binder's right-hand side births the callable whose body sits at `body`.
     births: BumpVec<'x, (Slot, Site)>,
     /// `(binder, rhs)`: a `LET` value binder's right-hand side part sits at `rhs`.
     rhs: BumpVec<'x, (Slot, Site)>,
+    /// `(binder, node)`: a type binder's whole declaration node, in program storage.
+    declarations: BumpVec<'x, (Slot, &'graph KExpression<'graph>)>,
     component_of: BumpVec<'x, ComponentIndex>,
     /// Every component's members, one run after another, each run sorted.
     members: BumpVec<'x, Slot>,
@@ -177,13 +179,18 @@ impl DraftComponent {
     }
 }
 
-impl Draft<'_> {
+impl Draft<'_, '_> {
     fn members_of(&self, component: ComponentIndex) -> &[Slot] {
         self.components[component.index()].run(&self.members)
     }
 
     fn end(&self) -> Position {
         Position(self.statements + 1)
+    }
+
+    /// Whether `slot` is in the type channel — the channels share one index space, values first.
+    fn is_type_slot(&self, slot: Slot) -> bool {
+        slot.index() >= self.values.len()
     }
 
     /// The declared names, once the binders pass has sorted them.
@@ -206,7 +213,7 @@ struct Builder<'graph, 'x, 'e> {
     builtins: Lookup<'e>,
     /// For an `EVAL` body: the by-name resolver over the site's chain, and `EVAL`'s position.
     outer: Option<(Outer<'e>, Position)>,
-    chain: BumpVec<'x, Draft<'x>>,
+    chain: BumpVec<'x, Draft<'graph, 'x>>,
     /// Each callable body's site beside the form node holding it, in program storage.
     forms: BumpBackedMap<'x, Site, &'graph KExpression<'graph>>,
     /// Each recorded right-hand side's site beside the part, in program storage.
@@ -247,7 +254,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         entered_at: Position,
         parameters: &[BinderSymbol],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
-    ) -> Result<Draft<'x>, ShapeError>
+    ) -> Result<Draft<'graph, 'x>, ShapeError>
     where
         'graph: 'n,
     {
@@ -280,7 +287,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         parent_statement: u32,
         parameters: &[BinderSymbol],
         nodes: &[&KExpression<'graph>],
-    ) -> Result<Draft<'x>, ShapeError> {
+    ) -> Result<Draft<'graph, 'x>, ShapeError> {
         let scratch = self.scratch;
         let declared = parameters
             .iter()
@@ -337,6 +344,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             children: BumpVec::new_in(scratch),
             births: BumpVec::new_in(scratch),
             rhs: BumpVec::new_in(scratch),
+            declarations: BumpVec::new_in(scratch),
             component_of: BumpVec::new_in(scratch),
             members: BumpVec::new_in(scratch),
             components: BumpVec::new_in(scratch),
@@ -388,6 +396,19 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             for draft in self.chain.iter_mut() {
                 draft.keeps_defining_scope = true;
             }
+        }
+        // A type binder records its whole declaration node: the door reads which declaration it
+        // is, and where its declared part sits, off the node's own builtin shape. The statement's
+        // own spine is reached first, so a declarator nested under it records nothing.
+        let draft = &mut self.chain[level];
+        if state == State::Root
+            && let Some(binder) = draft.statement_binder[statement as usize]
+            && draft.is_type_slot(binder)
+            && !draft.declarations.iter().any(|(held, _)| *held == binder)
+        {
+            draft
+                .declarations
+                .push((binder, self.brand.allocator().alloc(*node)));
         }
 
         // A callable's parameters are declared before any part is read, so a type parameter a
@@ -541,8 +562,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
     }
 
-    /// A type declaration's definition, under the constructor state: labels and the definition's
-    /// own `TYPE` declarations are not mentions, and every other type name is.
+    /// A type declaration's definition, under the constructor state: labels and every name the
+    /// definition itself declares are not mentions, and every other type name is.
     fn walk_definition(
         &mut self,
         level: usize,
@@ -551,17 +572,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         kind: DefinitionKind,
         state: State,
     ) -> Result<(), ShapeError> {
+        // A definition declares its own names — a `SIG` body's abstract `TYPE` members and its
+        // manifest `LET` members alike — so a later statement naming one is no mention of the
+        // enclosing shape. The door resolves them against the definition it is elaborating.
         let mut own = BumpVec::new_in(self.scratch);
         if let ExpressionPart::Expression(run) = part {
             own.extend(run.body_statements().filter_map(|(node, _)| {
-                let form = node.statement_spine().cache().builtin_shape()?;
-                (form.id == BuiltinShapeId::TypeDeclaration)
-                    .then(|| node.statement_binder_plan()?.name)
-                    .flatten()
-                    .and_then(|name| match name {
-                        BinderSymbol::Type(name) => Some(name),
-                        BinderSymbol::Value(_) => None,
-                    })
+                match node.statement_binder_plan()?.name? {
+                    BinderSymbol::Type(name) => Some(name),
+                    BinderSymbol::Value(_) => None,
+                }
             }));
         }
         let mark = self.skip.len();
@@ -569,6 +589,81 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let walked = self.walk_definition_part(level, statement, part, kind, state);
         self.skip.truncate(mark);
         walked
+    }
+
+    /// One statement of a definition, by its own builtin shape's roles — the same authority the
+    /// top-level walk reads a form's parts through. Its name, labels, quoted data and `FOR ALL`
+    /// names are the statement's own; everything else is read under the definition's state, so a
+    /// `SIG` body's `VAL` type is as deferred as the definition holding it.
+    fn walk_definition_statement(
+        &mut self,
+        level: usize,
+        statement: u32,
+        node: &KExpression<'graph>,
+        form: &'static BuiltinShape,
+        state: State,
+    ) -> Result<(), ShapeError> {
+        if !form.supported() {
+            return Err(ShapeError::Unsupported {
+                form: form.id,
+                at: Position::statement(statement as usize),
+            });
+        }
+        let mut parameters = BumpVec::new_in(self.scratch);
+        for (role, part) in form.roles().zip(node.parts) {
+            match role {
+                Role::Signature => declare_parameters(&part.value, &mut parameters),
+                Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
+                _ => {}
+            }
+        }
+        let mark = self.skip.len();
+        self.skip
+            .extend(parameters.iter().filter_map(|name| match name {
+                BinderSymbol::Type(name) => Some(*name),
+                BinderSymbol::Value(_) => None,
+            }));
+        let walked = self.walk_definition_roles(level, statement, node, form, state);
+        self.skip.truncate(mark);
+        walked
+    }
+
+    fn walk_definition_roles(
+        &mut self,
+        level: usize,
+        statement: u32,
+        node: &KExpression<'graph>,
+        form: &'static BuiltinShape,
+        state: State,
+    ) -> Result<(), ShapeError> {
+        for (role, part) in form.roles().zip(node.parts) {
+            let part = &part.value;
+            match role {
+                Role::Keyword | Role::Name | Role::Data | Role::Label | Role::Quantifiers => {}
+                Role::Definition(inner) => {
+                    self.walk_definition(level, statement, part, inner, state)?
+                }
+                Role::Body(_) | Role::Branches(_) | Role::Unsupported => {
+                    return Err(ShapeError::Unsupported {
+                        form: form.id,
+                        at: Position::statement(statement as usize),
+                    });
+                }
+                Role::Rhs
+                | Role::Argument
+                | Role::TypeExpression
+                | Role::Signature => {
+                    self.walk_definition_part(
+                        level,
+                        statement,
+                        part,
+                        DefinitionKind::Plain,
+                        state,
+                    )?
+                }
+            }
+        }
+        Ok(())
     }
 
     fn walk_definition_part(
@@ -582,6 +677,20 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let run = match part {
             ExpressionPart::Type(name) if !self.skips(name) => {
                 return self.mention(level, statement, part, BinderSymbol::Type(*name), state);
+            }
+            // A statement of the definition, and a type expression written inside one, are nodes
+            // with builtin shapes of their own: read their parts by their roles rather than
+            // descending into them blind.
+            ExpressionPart::Expression(run) | ExpressionPart::SigiledTypeExpr(run)
+                if let Some(form) = run.statement_spine().cache().builtin_shape() =>
+            {
+                return self.walk_definition_statement(
+                    level,
+                    statement,
+                    run.statement_spine(),
+                    form,
+                    state,
+                );
             }
             ExpressionPart::Expression(run)
             | ExpressionPart::SigiledTypeExpr(run)
@@ -848,7 +957,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// The components pass: condense, refuse an eager cycle, settle each nested draft's captures
     /// of a fellow member as edges, and seal the nested drafts.
-    fn components(&mut self, draft: &mut Draft<'x>) -> Result<(), ShapeError> {
+    fn components(&mut self, draft: &mut Draft<'graph, 'x>) -> Result<(), ShapeError> {
         let scratch = self.scratch;
         let count = draft.channels().len();
         // Compressed rows: `offsets[i]..offsets[i + 1]` of `targets` are the slots binder `i` reads.
@@ -951,7 +1060,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// holding a callable draft's body.
     fn seal(
         &self,
-        draft: Draft<'x>,
+        draft: Draft<'graph, 'x>,
         form: Option<&'graph KExpression<'graph>>,
     ) -> &'graph BodyShape<'graph> {
         let storage = self.brand.allocator();
@@ -979,6 +1088,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             (*binder, part)
         }));
         rhs.sort_unstable_by_key(|(binder, _)| *binder);
+        let mut declarations = draft.declarations;
+        declarations.sort_unstable_by_key(|(binder, _)| *binder);
         let mut mentions = draft.mentions;
         mentions.sort_unstable_by_key(|mention| mention.site);
         let members = storage.alloc_slice_copy(&draft.members);
@@ -1004,6 +1115,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             form,
             births: storage.alloc_slice_copy(&births),
             rhs: storage.alloc_slice_copy(&rhs),
+            declarations: storage.alloc_slice_copy(&declarations),
             keeps_defining_scope: draft.keeps_defining_scope,
         })
     }

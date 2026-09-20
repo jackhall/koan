@@ -6,8 +6,8 @@
 //! and coordinate,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
 //! components of the body's bindings, the shapes nested in it by site, the form node a callable's
-//! body sits in, the callable body each binder births, and each `LET` binder's right-hand side. [`build`] is the one builder every kind
-//! goes through.
+//! body sits in, the callable body each binder births, each `LET` binder's right-hand side, and
+//! each type binder's declaration node. [`build`] is the one builder every kind goes through.
 //!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
 //! position is strictly greater than the binding's own. A parameter writes at `0`, statement `i` at
@@ -218,6 +218,8 @@ pub struct BodyShape<'graph> {
     births: &'graph [(Slot, &'graph BodyShape<'graph>)],
     /// Each `LET` binder beside its right-hand side part, by slot.
     rhs: &'graph [(Slot, &'graph ExpressionPart<'graph>)],
+    /// Each type binder beside the declaration node that binds it, by slot.
+    declarations: &'graph [(Slot, &'graph KExpression<'graph>)],
     keeps_defining_scope: bool,
 }
 
@@ -351,6 +353,18 @@ impl<'graph> BodyShape<'graph> {
             .binary_search_by_key(&slot, |(binder, _)| *binder)
             .ok()?;
         Some(self.rhs[index].1)
+    }
+
+    /// The declaration node of the type binder at `slot` — a `NEWTYPE`, `UNION`, `SIG`, `TYPE` or
+    /// a `LET` of a type name, whole, so the door reads which declaration it is and where its
+    /// declared part sits off the node's builtin shape, as [`form`](Self::form) is where a
+    /// callable's signature is read. `None` for a value binder and for a parameter.
+    pub fn declarations(&self, slot: Slot) -> Option<&'graph KExpression<'graph>> {
+        let index = self
+            .declarations
+            .binary_search_by_key(&slot, |(binder, _)| *binder)
+            .ok()?;
+        Some(self.declarations[index].1)
     }
 
     /// Whether this shape holds an `EVAL` or encloses a shape that does, so its activation must

@@ -219,8 +219,8 @@ holds a string cell and an anonymous list node.
 
 ## Open work
 
-- [Modules](../../roadmap/rewrite/modules.md) — a module node beside the
-  function node.
+- [Module values](../../roadmap/rewrite/module-values.md) — a module node beside
+  the function node, and the tie that births one.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — calling a function, and
   builtins as function values with native bodies.
 - [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)

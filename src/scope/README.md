@@ -312,8 +312,8 @@ type outside the one error that lists names, and on a retired lifetime name.
 - [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
   — which habitat each tier of an activation is laid down in, and how a body's
   reference graph reaches the drain as submission counts.
-- [Modules](../../roadmap/rewrite/modules.md) — `USING … SCOPE` resolved
-  through a module's signature.
+- [Module values](../../roadmap/rewrite/module-values.md) — `USING … SCOPE`
+  resolved through a module's signature.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and an `EVAL` retaining its defining scope across frames.

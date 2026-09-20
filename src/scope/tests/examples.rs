@@ -500,3 +500,69 @@ fn a_let_binder_records_its_right_hand_side() {
         },
     );
 }
+
+#[test]
+fn a_type_binder_records_its_declaration_node() {
+    shaped(
+        "LET a = [1 2]\nNEWTYPE Distance = Number",
+        |fixture, lines, shape| {
+            let shape = shape.expect("the program shapes");
+            let distance = BinderSymbol::Type(type_name("Distance", fixture.labels));
+            let (declared, _) = shape.slot(distance).unwrap();
+            let node = shape
+                .declarations(declared)
+                .expect("a type binder records its declaration");
+            assert_eq!(
+                node.cache().builtin_shape().map(|form| form.id),
+                Some(BuiltinShapeId::NewTypeDefinition)
+            );
+            assert!(std::ptr::eq(node.parts, lines[1].parts));
+            let (a, _) = shape.slot(value(fixture, "a")).unwrap();
+            assert!(
+                shape.declarations(a).is_none(),
+                "a value binder records none"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_signature_body_declares_its_own_members() {
+    // A `SIG` body's `TYPE` members, its higher-kinded parameters, its `FOR ALL` names and its
+    // manifest `LET` members are the definition's own: none is a mention of the enclosing shape.
+    for (source, own) in [
+        ("SIG Pairish = (TYPE (Key Val AS Pair))", &["Key", "Val", "Pair"][..]),
+        (
+            "SIG Boxy = ((TYPE Elem) (VAL unbox :(EXPR FOR ALL (Held) (TAKE it :Held) -> Elem)))",
+            &["Elem", "Held"],
+        ),
+        ("SIG Fixed = ((LET Elem = Number) (VAL x :Elem))", &["Elem"]),
+    ] {
+        shaped(source, |fixture, _, shape| {
+            let shape = shape.unwrap_or_else(|error| {
+                panic!("`{source}` shapes: {}", error.display(fixture.labels))
+            });
+            assert_eq!(shape.slots(), 1, "`{source}` declares the signature alone");
+            for name in own {
+                let name = BinderSymbol::Type(type_name(name, fixture.labels));
+                assert!(
+                    !shape.mentions().iter().any(|mention| mention.name == name),
+                    "`{source}` declares `{name:?}` in its definition"
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn a_signature_body_reads_the_types_it_does_not_declare() {
+    shaped(
+        "NEWTYPE Distance = Number\nSIG Far = (VAL how_far :Distance)",
+        |fixture, _, shape| {
+            let shape = shape.expect("the program shapes");
+            let distance = BinderSymbol::Type(type_name("Distance", fixture.labels));
+            let mention = mention_of(shape, distance);
+            assert_eq!(mention.class, MentionClass::Deferred);
+        },
+    );
+}

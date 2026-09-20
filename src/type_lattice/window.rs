@@ -200,7 +200,8 @@ pub struct RecursiveGroupWindow<'w> {
     members: RefCell<BumpVec<'w, PendingMember<'w>>>,
     /// Each declaring binder and the indices of the members it owns — a `UNION`'s name over its
     /// variants. The binder is not itself a member: it denotes the union of the members it owns.
-    binders: RefCell<BumpVec<'w, (TypeSymbol, &'w [usize])>>,
+    /// Fixed at construction: only the member list grows, by threaded discovery.
+    binders: &'w [(TypeSymbol, &'w [usize])],
     /// Set when opaque ascription mints this window, so its per-application nonce folds into the
     /// minted member's component digest and two applications never unify. A generative window
     /// always has exactly one member, so the nonce belongs unambiguously to its one component.
@@ -253,42 +254,56 @@ impl<'w> SealedGroup<'w> {
 }
 
 impl<'w> RecursiveGroupWindow<'w> {
-    /// A window in `host` over `members` in announcement order, every one of them a standalone type
-    /// owned by no binder — a `NEWTYPE`'s singleton, a type constructor's mint.
-    pub fn new(host: BumpAllocator<'w>, members: &[(TypeSymbol, KKind)]) -> Self {
+    /// A window in `host` over one component's members: `members` in announcement order, each with
+    /// the binder that owns it — a `UNION`'s variants — or `None` for a standalone declaration,
+    /// and `binders` pairing each declaring binder with the indices of the members it owns. The
+    /// general constructor a component of co-declared type binders opens, and the one the two
+    /// special cases below are spelled through.
+    pub fn for_component(
+        host: BumpAllocator<'w>,
+        members: &[(TypeSymbol, Option<TypeSymbol>, KKind)],
+        binders: &[(TypeSymbol, &[usize])],
+    ) -> Self {
         let mut pending = BumpVec::with_capacity_in(members.len(), host);
         pending.extend(
             members
                 .iter()
-                .map(|(name, kind)| PendingMember::new(*name, None, *kind)),
+                .map(|(name, owner, kind)| PendingMember::new(*name, *owner, *kind)),
+        );
+        let mut owned = BumpVec::with_capacity_in(binders.len(), host);
+        owned.extend(
+            binders
+                .iter()
+                .map(|(binder, indices)| (*binder, &*host.alloc_slice_copy(indices))),
         );
         Self {
             host,
             members: RefCell::new(pending),
-            binders: RefCell::new(BumpVec::new_in(host)),
+            binders: owned.leak(),
             generative_nonce: None,
             sealed: Cell::new(None),
         }
+    }
+
+    /// A window in `host` over `members` in announcement order, every one of them a standalone type
+    /// owned by no binder — a `NEWTYPE`'s singleton, a type constructor's mint.
+    pub fn new(host: BumpAllocator<'w>, members: &[(TypeSymbol, KKind)]) -> Self {
+        let mut standalone = BumpVec::with_capacity_in(members.len(), host);
+        standalone.extend(members.iter().map(|(name, kind)| (*name, None, *kind)));
+        Self::for_component(host, &standalone, &[])
     }
 
     /// A standalone `UNION`'s window in `host`: `binder` owns every one of `tags`, so no tag is
     /// bare-name-resolvable and the binder itself denotes their union. The one-binder special case
     /// of the same machinery a module-announced group runs.
     pub fn for_binder(host: BumpAllocator<'w>, binder: TypeSymbol, tags: &[TypeSymbol]) -> Self {
-        let mut pending = BumpVec::with_capacity_in(tags.len(), host);
-        pending.extend(
+        let mut members = BumpVec::with_capacity_in(tags.len(), host);
+        members.extend(
             tags.iter()
-                .map(|tag| PendingMember::new(*tag, Some(binder), KKind::NewType)),
+                .map(|tag| (*tag, Some(binder), KKind::NewType)),
         );
-        let mut binders = BumpVec::with_capacity_in(1, host);
-        binders.push((binder, &*host.alloc_slice_fill_iter(0..tags.len())));
-        Self {
-            host,
-            members: RefCell::new(pending),
-            binders: RefCell::new(binders),
-            generative_nonce: None,
-            sealed: Cell::new(None),
-        }
+        let owned: &[usize] = host.alloc_slice_fill_iter(0..tags.len());
+        Self::for_component(host, &members, &[(binder, owned)])
     }
 
     /// A generative window in `host`: opaque ascription's per-application mint, always one member.
@@ -332,16 +347,12 @@ impl<'w> RecursiveGroupWindow<'w> {
 
     /// Whether `name` is a declaring binder of this window.
     pub fn binds(&self, name: TypeSymbol) -> bool {
-        self.binders
-            .borrow()
-            .iter()
-            .any(|(binder, _)| *binder == name)
+        self.binders.iter().any(|(binder, _)| *binder == name)
     }
 
     /// The member indices `binder` owns, in announcement order.
     fn binder_members(&self, binder: TypeSymbol) -> Option<&'w [usize]> {
         self.binders
-            .borrow()
             .iter()
             .find(|(name, _)| *name == binder)
             .map(|(_, owned)| *owned)
@@ -358,14 +369,13 @@ impl<'w> RecursiveGroupWindow<'w> {
     /// binder or by member projection off it.
     pub fn bare_reachable_names<'s>(&self, scratch: BumpAllocator<'s>) -> BumpVec<'s, TypeSymbol> {
         let members = self.members.borrow();
-        let binders = self.binders.borrow();
-        let mut names = BumpVec::with_capacity_in(members.len() + binders.len(), scratch);
+        let mut names = BumpVec::with_capacity_in(members.len() + self.binders.len(), scratch);
         names.extend(
             members
                 .iter()
                 .filter(|m| m.owner.is_none())
                 .map(|m| m.name)
-                .chain(binders.iter().map(|(name, _)| *name)),
+                .chain(self.binders.iter().map(|(name, _)| *name)),
         );
         names
     }
@@ -465,11 +475,10 @@ impl<'w> RecursiveGroupWindow<'w> {
                     .expect("the window seals only once every member is filled"),
             }
         }));
-        let binders = self.binders.borrow();
         let sealed = seal_group(
             self.host,
             &inputs,
-            &binders,
+            self.binders,
             self.generative_nonce,
             types,
             scratch,
