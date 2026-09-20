@@ -9,9 +9,9 @@
 //! into a knot edge, and seals the nested drafts into program storage.
 //!
 //! A callable body records the form node holding it, a binder whose right-hand side is a callable
-//! form at its root — or a combined form that is one — records the body it births, and a `LET` value
-//! binder records its right-hand side, so a component's tie reads each member's signature, body or
-//! data off the shape.
+//! form at its root — or a combined form that is one, or a `MODULE`/`GROUP` binder — records the
+//! body it births, and a `LET` value binder records its right-hand side, so a component's tie reads
+//! each member's signature, body or data off the shape.
 //!
 //! See [README.md § Visibility](../README.md#visibility).
 
@@ -36,6 +36,8 @@ use super::{
     resolve_here,
 };
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Role};
+
+mod surface;
 
 /// The names a body declares without a binder statement.
 struct ImplicitNames {
@@ -138,6 +140,9 @@ struct Draft<'graph, 'x> {
     types: BumpVec<'x, (TypeSymbol, Position)>,
     /// The slot each statement binds, if it binds one.
     statement_binder: BumpVec<'x, Option<Slot>>,
+    /// This body's statement spines, copied into scratch so the surfaced-name reader can reach a
+    /// binder's own statement. Each spine's parts run stays where it is in program storage.
+    nodes: BumpVec<'x, KExpression<'graph>>,
     mentions: BumpVec<'x, Mention>,
     captures: BumpVec<'x, CaptureSpec>,
     /// `(binder, bound, class)`: the binder's statement reads the bound slot.
@@ -264,7 +269,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             .chain
             .last()
             .map_or(u32::MAX, |parent| parent.current.0);
-        let draft = self.binders(kind, entered_at, parent_statement, parameters, &nodes)?;
+        let mut draft = self.binders(kind, entered_at, parent_statement, parameters, &nodes)?;
+        draft.nodes.extend(nodes.iter().map(|node| **node));
         self.chain.push(draft);
         let level = self.chain.len() - 1;
         for (statement, node) in nodes.iter().enumerate() {
@@ -345,6 +351,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             births: BumpVec::new_in(scratch),
             rhs: BumpVec::new_in(scratch),
             declarations: BumpVec::new_in(scratch),
+            nodes: BumpVec::new_in(scratch),
             component_of: BumpVec::new_in(scratch),
             members: BumpVec::new_in(scratch),
             components: BumpVec::new_in(scratch),
@@ -649,17 +656,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         at: Position::statement(statement as usize),
                     });
                 }
-                Role::Rhs
-                | Role::Argument
-                | Role::TypeExpression
-                | Role::Signature => {
-                    self.walk_definition_part(
-                        level,
-                        statement,
-                        part,
-                        DefinitionKind::Plain,
-                        state,
-                    )?
+                Role::Rhs | Role::Argument | Role::TypeExpression | Role::Signature => {
+                    self.walk_definition_part(level, statement, part, DefinitionKind::Plain, state)?
                 }
             }
         }
@@ -743,9 +741,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 at: Position::statement(statement as usize),
             });
         };
-        if kind != BodyKind::Module {
-            let site = Site::of(part);
-            self.forms.insert(site, self.brand.allocator().alloc(*node));
+        // A module body has no callable type, so it records no form; it is still what its binder
+        // births. A `USING` body is a block of the enclosing shape and births nothing.
+        let site = Site::of(part);
+        if kind != BodyKind::Surfaced {
+            if kind != BodyKind::Module {
+                self.forms.insert(site, self.brand.allocator().alloc(*node));
+            }
             let draft = &mut self.chain[level];
             if state == State::Root
                 && let Some(binder) = draft.statement_binder[statement as usize]
@@ -758,17 +760,23 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 (ShapeKind::Callable, state.constructor().class())
             }
             BodyKind::Module => (ShapeKind::Module, MentionClass::Eager),
+            BodyKind::Surfaced => (ShapeKind::Block, MentionClass::Eager),
         };
         let operator = [
             BinderSymbol::Value(IMPLICIT.left.symbol()),
             BinderSymbol::Value(IMPLICIT.right.symbol()),
         ];
         let unary = [BinderSymbol::Value(IMPLICIT.operands.symbol())];
+        let mut surfaced = BumpVec::new_in(self.scratch);
+        if kind == BodyKind::Surfaced {
+            self.surfaced(level, statement, node, &mut surfaced)?;
+        }
         let parameters: &[BinderSymbol] = match kind {
             BodyKind::Lambda => signature,
             BodyKind::Operator => &operator,
             BodyKind::UnaryOperator => &unary,
             BodyKind::Module => &[],
+            BodyKind::Surfaced => &surfaced,
         };
         self.enter_child(
             level,

@@ -298,10 +298,7 @@ impl<'w> RecursiveGroupWindow<'w> {
     /// of the same machinery a module-announced group runs.
     pub fn for_binder(host: BumpAllocator<'w>, binder: TypeSymbol, tags: &[TypeSymbol]) -> Self {
         let mut members = BumpVec::with_capacity_in(tags.len(), host);
-        members.extend(
-            tags.iter()
-                .map(|tag| (*tag, Some(binder), KKind::NewType)),
-        );
+        members.extend(tags.iter().map(|tag| (*tag, Some(binder), KKind::NewType)));
         let owned: &[usize] = host.alloc_slice_fill_iter(0..tags.len());
         Self::for_component(host, &members, &[(binder, owned)])
     }

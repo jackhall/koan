@@ -6,7 +6,10 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::{ConstructionRefused, Knotted, Link, Nothing, TypeValue, Value, Weight, construction};
+use super::{
+    ConstructionRefused, Knotted, Link, Nothing, SealRefused, TypeValue, Value, Weight,
+    construction, sealing,
+};
 
 /// A tagged value. The identity is its type, so no tag symbol rides beside the payload. Its payload
 /// is a value word, or a [`Link`] when the tagged value is a knot's data node.
@@ -42,6 +45,21 @@ impl<'graph, 'cell, X: Knotted> Tagged<'graph, 'cell, X> {
     ) -> &'cell Tagged<'graph, 'cell, X> {
         let weight = Weight::flat::<Self>().plus(payload.referent_weight());
         Self::from_payload(writer, payload, identity, weight)
+    }
+
+    /// A member sealed behind an opaque view's barrier: [`sealing`] checks the identity is a mint
+    /// of that view and the payload satisfies what the source binds the member to, and the payload
+    /// takes the mint as its one tagged layer.
+    pub fn seal(
+        writer: Writer<'cell>,
+        value: Value<'graph, 'cell, X>,
+        mint: KType,
+        witness: KType,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+    ) -> Result<&'cell Tagged<'graph, 'cell, X>, SealRefused> {
+        let identity = sealing(types, scratch, mint, witness, value.ktype())?;
+        Ok(Self::peel(writer, value, identity))
     }
 
     /// A re-tag: a tagged value's own layer is replaced rather than wrapped, so the payload is never

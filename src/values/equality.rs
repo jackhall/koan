@@ -49,7 +49,7 @@ impl<X: Knotted> Value<'_, '_, X> {
         scratch: BumpAllocator<'_>,
         seen: &mut BumpBackedSet<'_, (X, Y)>,
     ) -> Result<bool, Incomparable> {
-        if self.as_callable().is_some() || other.as_callable().is_some() {
+        if self.as_opaque().is_some() || other.as_opaque().is_some() {
             return Err(Incomparable);
         }
         Ok(match (self.composite(), other.composite()) {

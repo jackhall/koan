@@ -20,6 +20,10 @@ is the last of the language surface `machine` still owns.
   the module's activation where the reader runs, and a member that is itself a
   knot member crosses to the reader priced as its knot
   ([module-values.md](module-values.md)).
+- A coerced function member runs: calling the wrapper an opaque view holds
+  ([module-values.md](module-values.md)) rewrites each argument from the view's
+  types to the source's, runs the underlying function, and rewrites the result
+  to the view's types where the call returns.
 - The old runtime's tutorial programs that use modules run on the rewritten
   stack and print the same output.
 

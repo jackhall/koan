@@ -25,7 +25,10 @@ fn declared<R>(
 }
 
 /// `source` declares its types, or the test fails with the refusal.
-fn brought<R>(source: &str, check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R) -> R {
+fn brought<R>(
+    source: &str,
+    check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
+) -> R {
     declared(source, |program, brought| {
         brought.unwrap_or_else(|refusal| panic!("`{source}` declares: {refusal:?}"));
         check(program)
@@ -80,15 +83,18 @@ fn a_union_binds_the_canonical_union_of_its_variants() {
 
 #[test]
 fn an_alias_and_a_signature_are_each_their_own_member() {
-    brought("LET Alias = Number\nSIG HasLabel = (VAL label :Str)", |program| {
-        assert_eq!(program.bound("Alias"), KType::NUMBER);
-        let TypeNode::Signature { schema, .. } = program.types.node(program.bound("HasLabel"))
-        else {
-            panic!("a SIG binds a signature");
-        };
-        let label = ValueSymbol::declared("label", program.labels).unwrap();
-        assert_eq!(member(schema.value_slots, label), Some(KType::STR));
-    });
+    brought(
+        "LET Alias = Number\nSIG HasLabel = (VAL label :Str)",
+        |program| {
+            assert_eq!(program.bound("Alias"), KType::NUMBER);
+            let TypeNode::Signature { schema, .. } = program.types.node(program.bound("HasLabel"))
+            else {
+                panic!("a SIG binds a signature");
+            };
+            let label = ValueSymbol::declared("label", program.labels).unwrap();
+            assert_eq!(member(schema.value_slots, label), Some(KType::STR));
+        },
+    );
 }
 
 #[test]
@@ -116,7 +122,11 @@ fn a_member_of_a_sealed_group_reads_its_fellows() {
             panic!("the representation is a record");
         };
         let next = BinderSymbol::classify("next").unwrap();
-        assert_eq!(fields.get(next.symbol()), Some(ring), "the field names the member");
+        assert_eq!(
+            fields.get(next.symbol()),
+            Some(ring),
+            "the field names the member"
+        );
     });
     brought("UNION Tree = (Node :Tree Leaf :Null)", |program| {
         let tree = program.bound("Tree");
@@ -159,8 +169,8 @@ fn a_signature_declares_its_abstract_and_manifest_members() {
                 panic!("a SIG binds a signature");
             };
             let carrier = program.type_name("Carrier");
-            let rigid = member(schema.abstract_members, carrier)
-                .expect("the signature declares `Carrier`");
+            let rigid =
+                member(schema.abstract_members, carrier).expect("the signature declares `Carrier`");
             assert!(matches!(
                 program.types.node(rigid),
                 TypeNode::AbstractType { .. }
@@ -289,8 +299,9 @@ fn a_signatures_higher_kinded_member_has_a_use_site() {
                 panic!("the slot is a function type");
             };
             let x = BinderSymbol::classify("x").unwrap();
-            let TypeNode::ConstructorApply { constructor, .. } =
-                program.types.node(params.get(x.symbol()).expect("the parameter `x`"))
+            let TypeNode::ConstructorApply { constructor, .. } = program
+                .types
+                .node(params.get(x.symbol()).expect("the parameter `x`"))
             else {
                 panic!("the parameter applies the abstract member");
             };
@@ -306,7 +317,10 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
         // A cycle through a signature names no fresh identity, so it has no finite type. A
         // cycle through a transparent alias does not reach the door at all: a `LET`'s right-hand
         // side is eager, so the shape refuses it as an eager cycle first.
-        ("SIG Holder = (VAL n :Nat)\nNEWTYPE Nat = :{s :Holder}", "Nat"),
+        (
+            "SIG Holder = (VAL n :Nat)\nNEWTYPE Nat = :{s :Holder}",
+            "Nat",
+        ),
         // A bare `TYPE` names an abstract member only a signature can bind.
         ("TYPE Loose", "Loose"),
         // A bodyless `GROUP` declares a chaining record, which operator groups owns.
@@ -356,4 +370,3 @@ fn a_projection_off_a_fellow_union_names_no_tag_yet() {
         },
     );
 }
-

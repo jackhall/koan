@@ -6,7 +6,7 @@ use crate::parse::{BinderSymbol, ExpressionPart};
 use crate::type_lattice::{KKind, KType, TypeNode};
 use crate::values::{Key, KeyRejected, TypeValue, Weight};
 
-use super::{Dict, List, Record, Tagged, Value, pin, text, with_fixture};
+use super::{Dict, List, Record, Tagged, TypeSymbol, Value, pin, text, with_fixture};
 
 const WORD: Weight = Weight::flat::<Value<'static, 'static>>();
 
@@ -341,6 +341,59 @@ fn a_newtype_construction_is_checked_against_its_representation() {
                 construction(types, scratch, distance, KType::STR),
                 Err(ConstructionRefused::Misfit { .. })
             ));
+        })
+    });
+}
+
+#[test]
+fn a_member_seals_under_a_mint_its_source_binding_admits() {
+    use crate::memory::ScopeId;
+    use crate::values::{SealRefused, sealing};
+    with_fixture(|fixture| {
+        let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
+        let distance = fixture.newtype("Distance", KType::NUMBER);
+        let carrier = TypeSymbol::declared("Carrier", labels).unwrap();
+        let nonce = ScopeId::next();
+        let declared = types.abstract_type(scratch, nonce, carrier, &[], None, KType::ANY);
+        let mint = types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), KType::ANY);
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let sealed = Tagged::seal(
+                writer,
+                Value::Number(1.0),
+                mint,
+                KType::NUMBER,
+                types,
+                scratch,
+            );
+            assert_eq!(sealed.map(|tagged| tagged.ktype()), Ok(mint));
+
+            // A tagged payload takes the mint as its one layer, not a second one.
+            let tagged = Value::Tagged(Tagged::hold(writer, Value::Number(2.0), distance));
+            let sealed = Tagged::seal(writer, tagged, mint, distance, types, scratch).unwrap();
+            assert_eq!(sealed.ktype(), mint);
+            assert!(matches!(sealed.payload(), Value::Number(2.0)));
+
+            assert_eq!(
+                Tagged::seal(
+                    writer,
+                    Value::Number(1.0),
+                    declared,
+                    KType::NUMBER,
+                    types,
+                    scratch
+                )
+                .err(),
+                Some(SealRefused::NotAMint(declared)),
+                "a SIG-body declaration is no per-application mint",
+            );
+            assert_eq!(
+                sealing(types, scratch, mint, KType::STR, KType::NUMBER),
+                Err(SealRefused::Misfit {
+                    mint,
+                    witness: KType::STR
+                }),
+            );
         })
     });
 }

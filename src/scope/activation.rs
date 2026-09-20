@@ -25,17 +25,18 @@ use super::shape::{BodyShape, Coordinate, Position, ShapeKind, Slot, Target};
 /// One body's bindings for one call or one block entry.
 ///
 /// Each kind has its own constructor: a program has neither closure bindings nor an enclosing
-/// activation, a callable or module has closure bindings, and a block has an enclosing activation
-/// whose builtin table it shares.
+/// activation, a callable and a module each have closure bindings, and a block has an enclosing
+/// activation whose builtin table it shares.
 #[derive(Clone, Copy)]
 pub struct Activation<'graph, 'cell, X = Nothing> {
     shape: &'graph BodyShape<'graph>,
     closure: &'cell ClosureBindings<'graph, 'cell, X>,
     builtins: &'cell Builtins<'graph, 'cell, X>,
     enclosing: Option<&'cell Activation<'graph, 'cell, X>>,
-    /// The knot member this activation runs: `Some` for a callable's or module's activation and
-    /// every block inside one, `None` for the program's and every block inside it. An edge capture
-    /// resolves through it.
+    /// The knot member this activation runs: `Some` for a callable's activation and every block
+    /// inside one, `None` for the program's, a module's, and every block inside those. An edge
+    /// capture resolves through it, and a module's captures are never edges — a module is alone in
+    /// its component, so it runs no member of its own.
     callable: Option<X>,
     slots: SlotArray<'cell, Value<'graph, 'cell, X>, CellHandle>,
 }
@@ -69,8 +70,8 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
         }
     }
 
-    /// A fresh activation of the callable or module shape `shape`, run by `callable` over its
-    /// closure bindings, every slot `Empty`.
+    /// A fresh activation of the callable shape `shape`, run by `callable` over its closure
+    /// bindings, every slot `Empty`.
     pub fn of_callable(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
@@ -78,10 +79,7 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
         closure: &'cell ClosureBindings<'graph, 'cell, X>,
         builtins: &'cell Builtins<'graph, 'cell, X>,
     ) -> Self {
-        debug_assert!(matches!(
-            shape.kind(),
-            ShapeKind::Callable | ShapeKind::Module
-        ));
+        debug_assert_eq!(shape.kind(), ShapeKind::Callable);
         debug_assert_eq!(
             closure.len(),
             shape.captures().len(),
@@ -93,6 +91,31 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
             builtins,
             enclosing: None,
             callable: Some(callable),
+            slots: SlotArray::new(writer, shape.slots()),
+        }
+    }
+
+    /// A fresh activation of the module shape `shape` over its closure bindings, every slot
+    /// `Empty`. It runs no knot member: a module's captures are never edges, and the caller ties
+    /// the binder once this activation's every slot is bound.
+    pub fn of_module(
+        writer: Writer<'cell>,
+        shape: &'graph BodyShape<'graph>,
+        closure: &'cell ClosureBindings<'graph, 'cell, X>,
+        builtins: &'cell Builtins<'graph, 'cell, X>,
+    ) -> Self {
+        debug_assert_eq!(shape.kind(), ShapeKind::Module);
+        debug_assert_eq!(
+            closure.len(),
+            shape.captures().len(),
+            "the closure bindings follow the shape's capture layout",
+        );
+        Activation {
+            shape,
+            closure,
+            builtins,
+            enclosing: None,
+            callable: None,
             slots: SlotArray::new(writer, shape.slots()),
         }
     }
@@ -139,6 +162,22 @@ impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
         value: Value<'graph, 'cell, X>,
     ) -> Result<(), SlotConflict<CellHandle>> {
         self.slots.bind(slot.index(), value)
+    }
+
+    /// Every slot in order: what it holds, or the cell its binder is running in. A slot no binder
+    /// has claimed panics, exactly as [`read`](Self::read) does.
+    pub fn slots(&self) -> impl ExactSizeIterator<Item = (Slot, Binding<'graph, 'cell, X>)> + '_ {
+        (0..self.shape.slots()).map(|index| {
+            let binding = match self.slots.get(index) {
+                SlotState::Bound(value) => Binding::Bound(value),
+                SlotState::Claimed(binder) => Binding::Pending(binder),
+                SlotState::Empty => panic!(
+                    "a slot read out of an activation is never empty: its binder is claimed when it \
+                     is submitted"
+                ),
+            };
+            (Slot(index as u32), binding)
+        })
     }
 
     /// The read every resolved name makes: a builtin through the header, or `hops` enclosing loads

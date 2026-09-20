@@ -214,8 +214,8 @@ static RESERVED_SYMBOLS: [&StaticName<KeywordSymbol>; 12] = [
     &KEYWORDS.right,
     &KEYWORDS.equals,
     &KEYWORDS.arrow,
-    &KEYWORDS.guard,
-    &KEYWORDS.otherwise,
+    &KEYWORDS.opaque,
+    &KEYWORDS.transparent,
 ];
 
 /// Why a quoted operator symbol will not do. The reason travels as data rather than as a rendered

@@ -100,12 +100,8 @@ struct Render<'o, 'env, 'run, 'x, O, X> {
 impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, O, X> {
     fn value(&mut self, value: &Value<'_, '_, X>) -> fmt::Result {
         let (types, labels) = (self.types, self.labels);
-        if let Some(function) = value.as_callable() {
-            return write!(
-                self.out,
-                "{}",
-                display_name(function.ktype(), types, labels)
-            );
+        if let Some(opaque) = value.as_opaque() {
+            return write!(self.out, "{}", display_name(opaque.ktype(), types, labels));
         }
         if let Some((node, composite)) = value.composite() {
             if let Some(node) = node {
@@ -135,7 +131,7 @@ impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, O, X> {
             | Value::Dict(_)
             | Value::Record(_)
             | Value::Tagged(_)
-            | Value::Knotted(_) => unreachable!("a composite or a function wrote above"),
+            | Value::Knotted(_) => unreachable!("a composite or an opaque member wrote above"),
         }
     }
 

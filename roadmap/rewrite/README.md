@@ -98,6 +98,13 @@ as surprises, not scheduled.
   `parse` sits below `values`, so a parse test naming `values` inverts the
   dependency, and `values`' suite has no access to the AST strategies they
   generate from.
+- **`WITH` over a signature does not elaborate.** The lattice specializes a
+  schema (`specialize_schema`), but `Ordered WITH {Carrier = Number}` has no
+  [builtin shape](../../src/parse/builtin_shapes.rs) and no arm in
+  [`elaborate`](../../src/elaborate/README.md), so no koan program writes a
+  pinned signature. [Scopes](../../src/scope/README.md#names-that-arrive-at-run-time)
+  already read the names a `USING` over one surfaces, since a pin changes no
+  name.
 - **`CATCH`'s declared return is `Any`.** The first runtime declared
   `Result {Ok = Any, Error = KError}`. The rewrite declares neither type, and a
   [builtin shape](../../src/parse/builtin_shapes.rs)'s return rests in a

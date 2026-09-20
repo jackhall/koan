@@ -126,6 +126,8 @@ const RECORDED_RAW_SLOTS: &[(BuiltinShapeId, &[(usize, LazyKinds)])] = &[
     (BuiltinShapeId::Try, &[(1, CODE), (5, CODE)]),
     (BuiltinShapeId::Catch, &[(1, CODE)]),
     (BuiltinShapeId::UsingScope, &[(3, CODE)]),
+    (BuiltinShapeId::AscribeOpaque, &[]),
+    (BuiltinShapeId::AscribeTransparent, &[]),
     (BuiltinShapeId::CloseOver, &[(2, CODE), (3, CODE)]),
     (BuiltinShapeId::Close, &[(1, CODE)]),
     (BuiltinShapeId::Projection, &[(0, CODE)]),

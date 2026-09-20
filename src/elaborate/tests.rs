@@ -66,8 +66,7 @@ impl<'graph> Program<'_, 'graph, '_> {
             if !types_only {
                 continue;
             }
-            let handles =
-                type_declarations(component, self.activation, self.types, self.scratch)?;
+            let handles = type_declarations(component, self.activation, self.types, self.scratch)?;
             for (slot, handle) in component.members.iter().zip(handles) {
                 let value = Value::Type(TypeValue::new(self.writer, *handle, self.types));
                 self.activation

@@ -190,8 +190,8 @@ pub struct Component<'graph> {
     /// Whether every mention between members is deferred — the component a knot can tie.
     pub deferred_only: bool,
     /// Whether the component holds more than one member or a member reads itself. A caller ties a
-    /// component of value binders when it is cyclic or when every member births a callable; a
-    /// non-cyclic data binder is an ordinary value, and a component of type binders is the
+    /// component of value binders when it is cyclic or when every member births a callable or a
+    /// module; a non-cyclic data binder is an ordinary value, and a component of type binders is the
     /// elaborator's. A component never mixes the two channels: a schema names types only, so no
     /// mention leaves a type binder for a value binder.
     pub cyclic: bool,
@@ -214,7 +214,7 @@ pub struct BodyShape<'graph> {
     nested: &'graph [(Site, &'graph BodyShape<'graph>)],
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
-    /// Each binder whose right-hand side births a callable, beside that callable's body, by slot.
+    /// Each binder whose right-hand side births a callable or a module, beside that body, by slot.
     births: &'graph [(Slot, &'graph BodyShape<'graph>)],
     /// Each `LET` binder beside its right-hand side part, by slot.
     rhs: &'graph [(Slot, &'graph ExpressionPart<'graph>)],
@@ -333,10 +333,11 @@ impl<'graph> BodyShape<'graph> {
         self.form
     }
 
-    /// The callable body the binder at `slot` births: `Some` for a binder whose right-hand side is a
-    /// callable form at its root (`LET f = FN …`) and for a combined form (`LET f = FN EXPR …`,
-    /// `LET f = OP …`); `None` for a data binder, a parameter, and a callable nested under anything
-    /// else.
+    /// The body the binder at `slot` births: `Some` for a binder whose right-hand side is a
+    /// callable form at its root (`LET f = FN …`), for a combined form (`LET f = FN EXPR …`,
+    /// `LET f = OP …`), and for a `MODULE` or `GROUP` binder, whose body shape is
+    /// [`ShapeKind::Module`] and carries no [`form`](Self::form); `None` for a data binder, a
+    /// parameter, and a body nested under anything else.
     pub fn births(&self, slot: Slot) -> Option<&'graph BodyShape<'graph>> {
         let index = self
             .births
@@ -421,6 +422,8 @@ pub enum ShapeError {
     Unsupported { form: BuiltinShapeId, at: Position },
     /// A form whose body or branches are not the shape it declares.
     Malformed { form: BuiltinShapeId, at: Position },
+    /// A `USING` whose operand does not say, where the shape is built, which names it surfaces.
+    Unsurfaced { at: Position, site: Site },
 }
 
 impl ShapeError {
@@ -473,6 +476,11 @@ impl fmt::Display for ShapeErrorDisplay<'_> {
             ShapeError::Malformed { form, at } => {
                 write!(f, "`{form:?}` in {at} is not the shape it declares")
             }
+            ShapeError::Unsurfaced { at, .. } => write!(
+                f,
+                "`USING` in {at} cannot tell which names this module surfaces; \
+                 ascribe it here: `USING (m :! Sig) SCOPE (…)`"
+            ),
         }
     }
 }

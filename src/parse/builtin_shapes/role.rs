@@ -49,6 +49,8 @@ pub enum BodyKind {
     UnaryOperator,
     /// A `MODULE` or `GROUP` body: no parameters, an eager context.
     Module,
+    /// A `USING` body: a block whose parameters are the names its operand surfaces.
+    Surfaced,
 }
 
 /// What an arm's head is.

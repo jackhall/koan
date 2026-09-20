@@ -80,10 +80,10 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) eval: StaticName<KeywordSymbol>,
     /// The head of the parse of `<record>.<field>`.
     pub(crate) attr: StaticName<KeywordSymbol>,
-    /// The pattern-guard sigil `:|`.
-    pub(crate) guard: StaticName<KeywordSymbol>,
-    /// The otherwise-guard sigil `:!`.
-    pub(crate) otherwise: StaticName<KeywordSymbol>,
+    /// The opaque ascription operator `:|`.
+    pub(crate) opaque: StaticName<KeywordSymbol>,
+    /// The transparent ascription operator `:!`.
+    pub(crate) transparent: StaticName<KeywordSymbol>,
 }
 
 pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
@@ -118,8 +118,8 @@ pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
     from: crate::static_name!(KeywordSymbol, "FROM"),
     eval: crate::static_name!(KeywordSymbol, "EVAL"),
     attr: crate::static_name!(KeywordSymbol, "ATTR"),
-    guard: crate::static_name!(KeywordSymbol, ":|"),
-    otherwise: crate::static_name!(KeywordSymbol, ":!"),
+    opaque: crate::static_name!(KeywordSymbol, ":|"),
+    transparent: crate::static_name!(KeywordSymbol, ":!"),
 };
 
 /// A slot's declared type, as it rests in a `static`.
@@ -385,6 +385,8 @@ pub enum BuiltinShapeId {
     Try,
     Catch,
     UsingScope,
+    AscribeOpaque,
+    AscribeTransparent,
     CloseOver,
     Close,
     Projection,
@@ -1277,16 +1279,41 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // USING <module> SCOPE <body>.
+    // USING <module> SCOPE <body> — the body is a block whose parameters are the names the
+    // operand surfaces, read where the shape is built.
     BuiltinShape {
         id: BuiltinShapeId::UsingScope,
         elements: &[
             Kw(&KEYWORDS.using),
-            slot(Unsupported, &[MODULE]),
+            slot(Argument, &[MODULE]),
             Kw(&KEYWORDS.scope),
-            slot(Unsupported, &[CODE]),
+            slot(Body(BodyKind::Surfaced), &[CODE]),
         ],
         returns: &[ANY],
+        binder: None,
+        reserved: false,
+    },
+    // <module> :| <Sig> — the opaque ascription: a view whose abstract members are minted afresh.
+    BuiltinShape {
+        id: BuiltinShapeId::AscribeOpaque,
+        elements: &[
+            slot(Argument, &[MODULE]),
+            Kw(&KEYWORDS.opaque),
+            slot(Te, &[SIGNATURE_KIND]),
+        ],
+        returns: &[MODULE],
+        binder: None,
+        reserved: false,
+    },
+    // <module> :! <Sig> — the transparent ascription: a view at the source's own bindings.
+    BuiltinShape {
+        id: BuiltinShapeId::AscribeTransparent,
+        elements: &[
+            slot(Argument, &[MODULE]),
+            Kw(&KEYWORDS.transparent),
+            slot(Te, &[SIGNATURE_KIND]),
+        ],
+        returns: &[MODULE],
         binder: None,
         reserved: false,
     },

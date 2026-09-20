@@ -288,8 +288,8 @@ fn each_error_names_what_a_user_needs() {
             "these bindings need each other's values before any of them exists:",
         ),
         (
-            "USING m SCOPE (x)",
-            "`UsingScope` in statement 1 is not supported here yet",
+            "LET v = 1\nUSING v SCOPE (x)",
+            "`USING` in statement 2 cannot tell which names this module surfaces;",
         ),
         (
             "MATCH 1 -> :Number WITH (Number (1))",
@@ -309,9 +309,8 @@ fn each_error_names_what_a_user_needs() {
 }
 
 #[test]
-fn every_capture_limiting_or_module_importing_form_is_unsupported() {
+fn every_capture_limiting_form_is_unsupported() {
     let cases: &[(&str, BuiltinShapeId)] = &[
-        ("USING m SCOPE (x)", BuiltinShapeId::UsingScope),
         ("CLOSE OVER (x) (x)", BuiltinShapeId::CloseOver),
         ("CLOSE (x)", BuiltinShapeId::Close),
     ];
@@ -531,7 +530,10 @@ fn a_signature_body_declares_its_own_members() {
     // A `SIG` body's `TYPE` members, its higher-kinded parameters, its `FOR ALL` names and its
     // manifest `LET` members are the definition's own: none is a mention of the enclosing shape.
     for (source, own) in [
-        ("SIG Pairish = (TYPE (Key Val AS Pair))", &["Key", "Val", "Pair"][..]),
+        (
+            "SIG Pairish = (TYPE (Key Val AS Pair))",
+            &["Key", "Val", "Pair"][..],
+        ),
         (
             "SIG Boxy = ((TYPE Elem) (VAL unbox :(EXPR FOR ALL (Held) (TAKE it :Held) -> Elem)))",
             &["Elem", "Held"],
@@ -565,4 +567,174 @@ fn a_signature_body_reads_the_types_it_does_not_declare() {
             assert_eq!(mention.class, MentionClass::Deferred);
         },
     );
+}
+
+/// The one block shape in `shape`'s tree — each program below holds a single `USING` body.
+fn only_block<'graph>(shape: &BodyShape<'graph>) -> &'graph BodyShape<'graph> {
+    fn collect<'graph>(shape: &BodyShape<'graph>, found: &mut Vec<&'graph BodyShape<'graph>>) {
+        for (_, child) in shape.nested_shapes() {
+            if child.kind() == ShapeKind::Block {
+                found.push(child);
+            }
+            collect(child, found);
+        }
+    }
+    let mut found = Vec::new();
+    collect(shape, &mut found);
+    assert_eq!(found.len(), 1, "the program holds one block");
+    found[0]
+}
+
+/// The names `block` declares, spelled out.
+fn parameters_of(fixture: &Fixture<'_, '_>, block: &BodyShape<'_>) -> Vec<String> {
+    (0..block.slots())
+        .map(|slot| {
+            let name = block.slot_name(Slot(slot as u32));
+            fixture.labels.display(name.symbol()).to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn a_module_binder_births_a_module_body() {
+    let source = "MODULE m = ((LET x = 1) (NEWTYPE Dist = Number))";
+    shaped(source, |fixture, _, shape| {
+        let shape = shape.expect("the program shapes");
+        let (slot, _) = shape.slot(value(fixture, "m")).expect("`m` is bound");
+        let body = shape.births(slot).expect("a module binder births its body");
+        assert_eq!(body.kind(), ShapeKind::Module);
+        assert!(body.form().is_none(), "a module body has no callable form");
+        let component = &shape.components()[shape.component_index(slot).index()];
+        assert_eq!(component.members, &[slot]);
+        assert!(!component.cyclic, "a module is alone in its component");
+    });
+}
+
+#[test]
+fn a_module_naming_itself_from_a_body_of_its_own_is_refused() {
+    // A function outside a module mutually recursive with one inside it is the eager cycle pinned
+    // above. A module naming *itself* is refused a step earlier: every mention reached from a
+    // module binder's root is eager whatever body it sits in, and an eager read at the binder's own
+    // position does not see that binder. So a module is never in a cycle with itself, and every
+    // module born is a one-node knot.
+    shaped(
+        "MODULE m = (LET f = (FN :{} -> Number = (m)))",
+        |_, _, shape| {
+            assert!(matches!(shape.err(), Some(ShapeError::Unbound { .. })));
+        },
+    );
+}
+
+#[test]
+fn a_using_body_takes_its_operands_surfaced_names_as_parameters() {
+    let module = "MODULE m = ((LET x = 1) (NEWTYPE Dist = Number))";
+    let shown = "SIG Shown = ((TYPE Carrier) (VAL zero :Carrier))";
+    let cases: &[(String, &[&str])] = &[
+        // A `MODULE` binder read directly, and the same read from a body that precedes it.
+        (format!("{module}\nUSING m SCOPE (x)"), &["x", "Dist"]),
+        (
+            "LET f = (FN :{} -> Number = ((USING m SCOPE (x))))\nMODULE m = (LET x = 1)"
+                .to_string(),
+            &["x"],
+        ),
+        // The `SIG` an ascription at the site names, opaque and transparent.
+        (
+            format!("{module}\n{shown}\nUSING (m :| Shown) SCOPE (zero)"),
+            &["zero", "Carrier"],
+        ),
+        // A `LET` rooted at an ascription, and a `LET` rooted at that `LET`.
+        (
+            format!("{module}\n{shown}\nLET v = (m :! Shown)\nUSING v SCOPE (zero)"),
+            &["zero", "Carrier"],
+        ),
+        (
+            format!("{module}\n{shown}\nLET v = (m :! Shown)\nLET w = v\nUSING w SCOPE (zero)"),
+            &["zero", "Carrier"],
+        ),
+        // A type alias, and a `WITH` pin — neither changes a name.
+        (
+            format!("{module}\n{shown}\nLET Alias = Shown\nUSING (m :| Alias) SCOPE (zero)"),
+            &["zero", "Carrier"],
+        ),
+        (
+            format!(
+                "{module}\n{shown}\nUSING (m :| (Shown WITH {{Carrier = Number}})) SCOPE (zero)"
+            ),
+            &["zero", "Carrier"],
+        ),
+    ];
+    for (source, expected) in cases {
+        shaped(source, |fixture, _, shape| {
+            let shape = shape.unwrap_or_else(|error| {
+                panic!("`{source}` shapes: {}", error.display(fixture.labels))
+            });
+            let mut names = parameters_of(fixture, only_block(shape));
+            let mut want: Vec<String> = expected.iter().map(|name| name.to_string()).collect();
+            names.sort();
+            want.sort();
+            assert_eq!(names, want, "`{source}` surfaces the wrong names");
+        });
+    }
+}
+
+#[test]
+fn a_surfaced_name_resolves_like_any_other_local() {
+    let source = "MODULE m = ((LET x = 1) (NEWTYPE Dist = Number))\nUSING m SCOPE (x)";
+    shaped(source, |fixture, _, shape| {
+        let shape = shape.expect("the program shapes");
+        let block = only_block(shape);
+        let mention = mention_of(block, value(fixture, "x"));
+        let (slot, _) = block.slot(value(fixture, "x")).expect("`x` is a parameter");
+        assert_eq!(
+            mention.coordinate,
+            Coordinate::Activation {
+                hops: 0,
+                target: Target::Local(slot),
+            },
+        );
+        assert_eq!(mention.class, MentionClass::Eager);
+    });
+}
+
+#[test]
+fn a_callable_in_a_using_body_captures_a_surfaced_name_by_reading_it() {
+    let source = "MODULE m = (LET x = 1)\nUSING m SCOPE ((LET f = (FN :{} -> Number = (x))))";
+    shaped(source, |fixture, _, shape| {
+        let shape = shape.expect("the program shapes");
+        let block = only_block(shape);
+        let (slot, _) = block.slot(value(fixture, "x")).expect("`x` is a parameter");
+        let (_, callable) = block.nested_shapes()[0];
+        let capture = &callable.captures()[0];
+        assert_eq!(capture.name, value(fixture, "x"));
+        assert_eq!(
+            capture.source,
+            CaptureSource::Read(Coordinate::Activation {
+                hops: 0,
+                target: Target::Local(slot),
+            }),
+        );
+    });
+}
+
+#[test]
+fn an_operand_whose_names_cannot_be_read_is_refused() {
+    let module = "MODULE m = (LET x = 1)";
+    let shown = "SIG Shown = ((TYPE Carrier) (VAL zero :Carrier))";
+    let cases = [
+        // A parameter typed by a signature may hold a wider module, so it is never readable.
+        format!("{shown}\nLET f = (FN :{{m :Shown}} -> Number = ((USING m SCOPE (zero))))"),
+        // A call says nothing statically.
+        format!("{module}\nLET f = (FN :{{}} -> Number = (1))\nUSING (f {{}}) SCOPE (x)"),
+        // A member read is not a module the reader can follow.
+        format!("{module}\nUSING m.x SCOPE (x)"),
+    ];
+    for source in &cases {
+        shaped(source, |_, _, shape| {
+            let error = shape.err();
+            assert!(
+                matches!(error, Some(ShapeError::Unsurfaced { .. })),
+                "`{source}` is refused as unsurfaced, not {error:?}",
+            );
+        });
+    }
 }

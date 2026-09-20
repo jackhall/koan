@@ -28,6 +28,13 @@ program runs on the rewritten stack.
   key collides with a builtin's is rejected.
 - A reference to a visible binder that has not yet bound parks until it binds,
   and a dispatch placeholder keys on the full bucket key.
+- A combined form — `LET f = FN EXPR …`, `LET plus = OP …` — binds a lambda to
+  its name and registers its expression shape under its bucket:
+  [`callable_type`](../../src/elaborate/signature.rs) hands a named callable a
+  function type, and only a bucket registration carries an `ExpressionShape`.
+- A bucket-only definition — a bare `EXPR` or `OP` statement — is a bound member
+  of the activation it is declared in, and a module's self-signature
+  ([module values](module-values.md)) carries it in its keyworded channel.
 - The old runtime's tutorial programs that use no feature beyond values,
   scopes and functions run on the rewritten stack and print the same output,
   and `tools/verify_snippets.py` reads the rewritten binary.
@@ -41,6 +48,11 @@ program runs on the rewritten stack.
 - *Newtype construction — decided.* An ordinary construction `(Head payload)`
   is `Tagged::construct`, the one construction rule the tie checks a knot's
   tagged nodes by too ([src/values/README.md](../../src/values/README.md#what-a-value-is)).
+- *The lambda a combined operator or a quantified combined form binds — open.*
+  A binary `OP` body's parameters are `left` and `right` and a unary one's is
+  `operands`, so `FN :{left :Number, right :Number} -> Number` is the candidate
+  for `LET plus = OP #(⊕) OVER Number`; a `FN EXPR FOR ALL (Elem) …` needs a
+  function type to carry a quantifier group, which `KFunction` does not.
 - *Keyword reads resolved in the shape — open.* Builtin buckets are
   unshadowable, so a builtin form resolves when the shape is built; a user
   bucket is shadowable and overloaded. Recommended: extend the shape's

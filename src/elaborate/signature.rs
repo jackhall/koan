@@ -90,7 +90,7 @@ pub fn callable_type<'graph, X: Knotted>(
                 &top,
             )
         }
-        BodyKind::Module => Err(unsupported),
+        BodyKind::Module | BodyKind::Surfaced => Err(unsupported),
     }
 }
 

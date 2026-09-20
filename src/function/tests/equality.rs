@@ -6,7 +6,8 @@ use crate::values::{Incomparable, List, Value};
 
 use super::{bound, pin, with_fixture};
 
-const RING: &str = "NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = b})\nLET b = (Ring {next = a})";
+const RING: &str =
+    "NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = b})\nLET b = (Ring {next = a})";
 
 #[test]
 fn a_comparison_reaching_a_callable_is_an_error() {

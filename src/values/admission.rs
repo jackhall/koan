@@ -1,6 +1,7 @@
 //! Slot admission: whether a type slot takes a value, a raw AST part, or a working part — the type
-//! dispatch reads off a raw part — the one rule a newtype construction is checked by, and the one
-//! rule each container kind's memo is derived by.
+//! dispatch reads off a raw part — the one rule a newtype construction is checked by, the one rule
+//! a member sealed behind an opaque view's barrier is checked by, and the one rule each container
+//! kind's memo is derived by.
 //!
 //! A value is checked by the one lattice relation over its memoized type, never by walking its
 //! contents. A raw part is checked by shape, since an unevaluated literal has no value yet.
@@ -68,6 +69,47 @@ pub fn construction(
             identity: head,
             representation,
         })
+    }
+}
+
+/// What sealing a payload under an opaque mint refuses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SealRefused {
+    /// The identity is no per-application mint: not a nonced abstract type, nor an application of
+    /// one.
+    NotAMint(KType),
+    /// The payload's type does not satisfy what the source binds the member to.
+    Misfit { mint: KType, witness: KType },
+}
+
+/// The identity a payload of type `payload` takes when sealed under `mint`, the per-application
+/// abstract type an opaque ascription minted for a member the source binds to `witness`.
+///
+/// The barrier's rule, beside [`construction`]: an abstract type records no representation for a
+/// construction to check against, so what is checked is the source's own binding. Sealing happens
+/// where a view is built, never where a koan program writes a construction.
+pub fn sealing(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    mint: KType,
+    witness: KType,
+    payload: KType,
+) -> Result<KType, SealRefused> {
+    let minted = match types.node(mint) {
+        TypeNode::AbstractType { nonce, .. } => nonce.is_some(),
+        TypeNode::ConstructorApply { constructor, .. } => matches!(
+            types.node(constructor),
+            TypeNode::AbstractType { nonce: Some(_), .. }
+        ),
+        _ => false,
+    };
+    if !minted {
+        return Err(SealRefused::NotAMint(mint));
+    }
+    if satisfied_by(types, scratch, witness, payload) {
+        Ok(mint)
+    } else {
+        Err(SealRefused::Misfit { mint, witness })
     }
 }
 

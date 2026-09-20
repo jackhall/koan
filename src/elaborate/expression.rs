@@ -224,7 +224,8 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
             // `Type AS Ctor` — the arity-one sugar for the application above.
             3 if keyword(1, &CONNECTORS.as_) => {
                 let constructor = self.part(&parts[2].value, groups)?;
-                let [param] = constructor_param_names(constructor, self.types).ok_or(unsupported)?
+                let [param] =
+                    constructor_param_names(constructor, self.types).ok_or(unsupported)?
                 else {
                     return Err(unsupported);
                 };
@@ -262,9 +263,9 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
         let unsupported = Elaboration::Unsupported { site };
         let declared = constructor_param_names(constructor, self.types).ok_or(unsupported)?;
         if arguments.len() != declared.len()
-            || !arguments.iter().all(|(name, _)| {
-                matches!(name, BinderSymbol::Type(name) if declared.contains(name))
-            })
+            || !arguments.iter().all(
+                |(name, _)| matches!(name, BinderSymbol::Type(name) if declared.contains(name)),
+            )
             || arguments
                 .iter()
                 .enumerate()
