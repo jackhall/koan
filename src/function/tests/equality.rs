@@ -6,7 +6,7 @@ use crate::values::{Incomparable, List, Value};
 
 use super::{bound, pin, with_fixture};
 
-const RING: &str = "LET a = (Ring {next = b})\nLET b = (Ring {next = a})";
+const RING: &str = "NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = b})\nLET b = (Ring {next = a})";
 
 #[test]
 fn a_comparison_reaching_a_callable_is_an_error() {
@@ -51,18 +51,16 @@ fn a_callable_renders_as_its_type() {
 #[test]
 fn two_rings_from_two_programs_are_equal() {
     with_fixture(|fixture| {
-        let ring = fixture.ring_type("Ring", "next");
         let (types, scratch) = (fixture.types, fixture.scratch());
         let (pair, single) = (
             fixture.parse(RING),
-            fixture.parse("LET a = (Ring {next = a})"),
+            fixture.parse("NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = a})"),
         );
         fixture.in_cell(pin, |context, binder| {
             let writer = context.writer();
-            let nominals = [("Ring", ring)];
-            let first = fixture.run_with(writer, &pair, binder, &[], &nominals);
-            let second = fixture.run_with(writer, &pair, binder, &[], &nominals);
-            let lone = fixture.run_with(writer, &single, binder, &[], &nominals);
+            let first = fixture.run(writer, &pair, binder, &[]);
+            let second = fixture.run(writer, &pair, binder, &[]);
+            let lone = fixture.run(writer, &single, binder, &[]);
             let (a, other) = (bound(fixture, first, "a"), bound(fixture, second, "a"));
             assert!(
                 a.as_circular().unwrap().0.member().knot()
@@ -94,16 +92,17 @@ fn a_list_node_holding_a_function_is_incomparable() {
 #[test]
 fn a_ring_renders_with_a_label_where_it_closes() {
     with_fixture(|fixture| {
-        let ring = fixture.ring_type("Ring", "next");
         let (types, labels, scratch) = (fixture.types, fixture.labels, fixture.scratch());
         for (source, expected) in [
-            ("LET a = (Ring {next = a})", "@0 = Ring({next = @0})"),
+            (
+                "NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = a})",
+                "@0 = Ring({next = @0})",
+            ),
             (RING, "@0 = Ring({next = Ring({next = @0})})"),
         ] {
             let lines = fixture.parse(source);
             fixture.in_cell(pin, |context, binder| {
-                let activation =
-                    fixture.run_with(context.writer(), &lines, binder, &[], &[("Ring", ring)]);
+                let activation = fixture.run(context.writer(), &lines, binder, &[]);
                 let mut rendered = String::new();
                 bound(fixture, activation, "a")
                     .render(&mut rendered, types, labels, scratch)

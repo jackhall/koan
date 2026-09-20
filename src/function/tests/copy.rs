@@ -9,12 +9,11 @@ use std::ptr;
 
 use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::scope::CaptureSlot;
-use crate::type_lattice::KType;
 use crate::values::{Circular, Link};
 use crate::values::{Knotted as _, Value, cross};
 
 use super::super::{KValue, KValueFamily, Knotted};
-use super::{Fixture, Step, callable, circular, copy, follow, with_fixture};
+use super::{Fixture, Step, callable, circular, copy, declared, follow, with_fixture};
 
 /// The capture `name` of `callable`'s closure.
 fn capture<'graph, 'cell>(
@@ -167,6 +166,7 @@ fn a_copied_knot_outlives_its_home() {
 }
 
 const RING: &str = "\
+NEWTYPE Ring = :{next :Ring}
 LET a = (Ring {next = b})
 LET b = (Ring {next = a})
 LET f = (FN :{} -> Any = (a))";
@@ -193,7 +193,6 @@ fn successor<'graph, 'cell>(
 #[test]
 fn a_copied_ring_is_the_same_graph_rebuilt() {
     with_fixture(|fixture| {
-        let ring = fixture.ring_type("Ring", "next");
         let lines = fixture.parse(RING);
         let (types, scratch) = (fixture.types, fixture.scratch());
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
@@ -201,13 +200,8 @@ fn a_copied_ring_is_the_same_graph_rebuilt() {
         let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
-                let activation = fixture.run_with(
-                    context.writer(),
-                    &lines,
-                    dest.into(),
-                    &[],
-                    &[("Ring", ring)],
-                );
+                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
+                let ring = declared(fixture, activation, "Ring");
                 let f = callable(fixture, activation, "f");
                 let source = context.lift::<KValueFamily>(Value::Knotted(f));
                 let crossed = cross(context, dest, &source).unwrap();
@@ -258,26 +252,16 @@ fn a_copied_ring_is_the_same_graph_rebuilt() {
 #[test]
 fn a_copied_ring_outlives_its_home() {
     with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
-        let tag = fixture.newtype(
-            "Tag",
-            types.record(
-                scratch,
-                &[
-                    (fixture.name("next"), types.sibling(0)),
-                    (fixture.name("name"), KType::STR),
-                    (fixture.name("items"), types.list(types.sibling(0))),
-                ],
-            ),
+        let lines = fixture.parse(
+            "NEWTYPE Tag = :{next :Tag, name :Str, items :(LIST OF Tag)}\n\
+             LET a = (Tag {next = a name = \"ring\" items = [a]})",
         );
-        let lines = fixture.parse("LET a = (Tag {next = a name = \"ring\" items = [a]})");
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
-                let activation =
-                    fixture.run_with(context.writer(), &lines, dest.into(), &[], &[("Tag", tag)]);
+                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
                 let a = super::bound(fixture, activation, "a");
                 let source = context.lift::<KValueFamily>(a);
                 let crossed = cross(context, dest, &source).unwrap();

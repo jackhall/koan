@@ -5,12 +5,12 @@ use crate::elaborate::Elaboration;
 use crate::memory::{Knot, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{Binding, CaptureSlot, Coordinate, Site, Target};
-use crate::type_lattice::KType;
+use crate::type_lattice::{KType, NodeSchema, TypeNode};
 use crate::values::{Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
 use super::super::{KActivation, KValue, Knotted, Node, Untieable, tie};
-use super::{Fixture, bound, callable, circular, follow, pin, read, with_fixture};
+use super::{Fixture, bound, callable, circular, declared, follow, pin, read, with_fixture};
 
 /// The component `name` belongs to, tied again with `eager` — a refusal the runner left for the
 /// test to see.
@@ -285,11 +285,10 @@ fn an_unsupported_signature_is_a_type_refusal() {
 #[test]
 fn a_tagged_self_reference_is_a_two_node_knot() {
     with_fixture(|fixture| {
-        let ring = fixture.ring_type("Ring", "next");
-        let lines = fixture.parse("LET a = (Ring {next = a})");
+        let lines = fixture.parse("NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = a})");
         fixture.in_cell(pin, |context, binder| {
-            let activation =
-                fixture.run_with(context.writer(), &lines, binder, &[], &[("Ring", ring)]);
+            let activation = fixture.run(context.writer(), &lines, binder, &[]);
+            let ring = declared(fixture, activation, "Ring");
             let (a, Circular::Tagged(tagged)) = circular(bound(fixture, activation, "a")) else {
                 panic!("`a` is a tagged node");
             };
@@ -315,11 +314,11 @@ fn a_tagged_self_reference_is_a_two_node_knot() {
 #[test]
 fn a_tagged_ring_of_two_members_is_one_knot() {
     with_fixture(|fixture| {
-        let ring = fixture.ring_type("Ring", "next");
-        let lines = fixture.parse("LET a = (Ring {next = b})\nLET b = (Ring {next = a})");
+        let lines = fixture.parse(
+            "NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = b})\nLET b = (Ring {next = a})",
+        );
         fixture.in_cell(pin, |context, binder| {
-            let activation =
-                fixture.run_with(context.writer(), &lines, binder, &[], &[("Ring", ring)]);
+            let activation = fixture.run(context.writer(), &lines, binder, &[]);
             let next = fixture.name("next").symbol();
             fn successor<'graph, 'cell>(
                 member: Knotted<'graph, 'cell>,
@@ -440,12 +439,13 @@ fn a_cycle_of_containers_refuses_naming_it() {
 #[test]
 fn a_construction_the_rule_refuses_refuses_the_tie() {
     with_fixture(|fixture| {
-        let ring = fixture.ring_type("Ring", "next");
-        let nominals = [("Ring", ring)];
-        let lines = fixture.parse("LET a = (Ring {other = a})\nLET b = (Number {next = b})");
+        let lines = fixture.parse(
+            "NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {other = a})\nLET b = (Number {next = b})",
+        );
         fixture.in_cell(pin, |context, binder| {
             let writer = context.writer();
-            let activation = fixture.run_with(writer, &lines, binder, &["a", "b"], &nominals);
+            let activation = fixture.run(writer, &lines, binder, &["a", "b"]);
+            let ring = declared(fixture, activation, "Ring");
             assert!(matches!(
                 tie_of(fixture, writer, activation, "a"),
                 Err(Untieable::Construction {
@@ -467,15 +467,15 @@ fn a_construction_the_rule_refuses_refuses_the_tie() {
 #[test]
 fn a_nested_construction_is_built_through_the_checked_door() {
     with_fixture(|fixture| {
-        let distance = fixture.newtype("Distance", KType::NUMBER);
-        let nominals = [("Distance", distance)];
         let lines = fixture.parse(
-            "LET a = [(Distance 3) f]\nLET f = (FN :{} -> Any = (a))\n\
+            "NEWTYPE Distance = Number\n\
+             LET a = [(Distance 3) f]\nLET f = (FN :{} -> Any = (a))\n\
              LET b = [(Distance \"x\") g]\nLET g = (FN :{} -> Any = (b))",
         );
         fixture.in_cell(pin, |context, binder| {
             let writer = context.writer();
-            let activation = fixture.run_with(writer, &lines, binder, &["b"], &nominals);
+            let activation = fixture.run(writer, &lines, binder, &["b"]);
+            let distance = declared(fixture, activation, "Distance");
             let (_, Circular::List(list)) = circular(bound(fixture, activation, "a")) else {
                 panic!("`a` is a list node");
             };
@@ -574,17 +574,25 @@ fn a_dict_key_that_is_no_scalar_refuses() {
 }
 
 #[test]
-fn a_type_declaration_member_is_opaque() {
+fn a_type_declaration_is_declared_rather_than_tied() {
     with_fixture(|fixture| {
         let lines = fixture.parse("NEWTYPE Ring = :{next :Ring}");
         fixture.in_cell(pin, |context, binder| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &["Ring"]);
+            let activation = fixture.run(writer, &lines, binder, &[]);
+            let ring = declared(fixture, activation, "Ring");
+            let next = fixture.name("next");
+            let TypeNode::SetMember {
+                schema: NodeSchema::NewType(representation),
+                ..
+            } = fixture.types.node(ring)
+            else {
+                panic!("a NEWTYPE binds a newtype member");
+            };
             assert_eq!(
-                tie_of(fixture, writer, activation, "Ring").err(),
-                Some(Untieable::Opaque {
-                    name: fixture.name("Ring"),
-                })
+                representation,
+                fixture.types.record(fixture.scratch(), &[(next, ring)]),
+                "the door sealed the group, so the field reads its own binder"
             );
         });
     });
