@@ -12,8 +12,8 @@
 
 use cellgraph::{
     Active, CellGraph, CellHandle, CrossedOperand, Delivery, Dormant, DropFree, NoScratch, Operand,
-    Prices, Ready, Reattachable, Receipt, ReleaseAbsorption, SlabHandle, StepContext, TreeHandle,
-    Verdict, Writer, reattachable,
+    Prices, Ready, Reattachable, ReattachableOverBoth, Receipt, ReleaseAbsorption, SlabHandle,
+    StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
 
 use crate::counting_alloc::thread_live_bytes;
@@ -80,8 +80,10 @@ fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 
 /// A value homed in the executing cell: the own-region write, then the bridge that makes it a
 /// carrier. What every shape's `Verb::Alloc` row measures.
-fn number_here<'step, D: Delivery<'static>>(
-    context: &StepContext<'static, 'step, '_, '_, Work, Work, D>,
+/// Generic over the scratch and delivery a caller's context carries: the shapes here park no
+/// scratch and deliver nothing, but the write this measures is the same whatever a step declares.
+fn number_here<'step, S: ReattachableOverBoth<'static>, D: Delivery<'static>>(
+    context: &StepContext<'static, 'step, '_, '_, Work, S, D>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))
