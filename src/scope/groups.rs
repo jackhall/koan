@@ -167,6 +167,14 @@ impl BuiltinGroup {
     }
 }
 
+/// Whether some builtin group is `group` written out, which under content identity makes the two
+/// one group: the declaration says nothing the language does not already say.
+pub(crate) fn builtin_equal(group: &DeclaredGroup<'_>) -> bool {
+    BuiltinGroup::ALL
+        .into_iter()
+        .any(|builtin| builtin.equals(group))
+}
+
 /// What the program's declarations say about one symbol, whatever position they sit at.
 #[derive(Clone, Copy)]
 pub(crate) enum Claim<'graph> {
@@ -590,10 +598,7 @@ impl<'graph> Scan<'graph, '_> {
             return Err(refused(*symbol));
         }
         // A `GROUP` written out equal to a builtin group is that group, and claims nothing new.
-        if BuiltinGroup::ALL
-            .into_iter()
-            .any(|builtin| builtin.equals(group))
-        {
+        if builtin_equal(group) {
             return Ok(());
         }
         let mut record = None;

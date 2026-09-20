@@ -42,6 +42,8 @@ use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Role};
 mod rewrite;
 mod surface;
 
+use surface::Surfaced;
+
 /// The names a body declares without a binder statement.
 struct ImplicitNames {
     /// An arm's matched value.
@@ -876,14 +878,18 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             BinderSymbol::Value(IMPLICIT.right.symbol()),
         ];
         let unary = [BinderSymbol::Value(IMPLICIT.operands.symbol())];
-        let mut surfaced = BumpVec::new_in(self.scratch);
+        let at = Position::statement(statement as usize);
+        let mut surfaced = Surfaced::new(self.scratch);
+        let kept;
+        let mut held: &[&'graph DeclaredGroup<'graph>] = &[];
         if kind == BodyKind::Surfaced {
             self.surfaced(level, statement, node, &mut surfaced)?;
+            kept = self.surfaced_groups(at, &surfaced)?;
+            held = &kept;
         }
         // A `GROUP`'s own body holds its group — the one record every equal declaration shares —
         // so an operator run of its members may be written inside it and nowhere else.
         let own;
-        let mut held: &[&'graph DeclaredGroup<'graph>] = &[];
         if kind == BodyKind::Module
             && let Some(declared) =
                 groups::declared_group(node, self.scratch).map_err(|()| ShapeError::Malformed {
@@ -892,7 +898,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         .builtin_shape()
                         .expect("a body role is a form's")
                         .id,
-                    at: Position::statement(statement as usize),
+                    at,
                 })?
             && let Some(Claim::Group(record)) = self.claims.get(declared.members[0])
         {
@@ -902,7 +908,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 {
                     return Err(ShapeError::RedeclaresGroup {
                         symbol: *member,
-                        at: Position::statement(statement as usize),
+                        at,
                     });
                 }
             }
@@ -914,7 +920,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             BodyKind::Operator => &operator,
             BodyKind::UnaryOperator => &unary,
             BodyKind::Module => &[],
-            BodyKind::Surfaced => &surfaced,
+            BodyKind::Surfaced => &surfaced.names,
         };
         self.enter_child(
             level,

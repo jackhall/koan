@@ -1,11 +1,13 @@
 //! The operator-run rewrite: what each of the four chainings builds, where a nested operator run is
-//! reached, and which operator runs the builder refuses rather than chains.
+//! reached, which bodies a declared group reaches through `USING` and `EVAL`, and which operator
+//! runs the builder refuses rather than chains.
 
+use crate::memory::resident;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BodyShape, Builtins, Position, ShapeError, ShapeKind, Site};
+use crate::scope::{Activation, BodyShape, Builtins, Position, ShapeError, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 
-use super::{Fixture, builtins, value_name, with_fixture};
+use super::{Fixture, Probe, builtins, value_name, with_fixture};
 
 /// Build `source` against the suites' builtins and hand the result to `check`.
 fn shaped<R>(
@@ -325,5 +327,181 @@ LET x = (1 @ 2 @ 3)";
                 at: Position::PARAMETER,
             })
         );
+    });
+}
+
+/// Shape `quoted` as the body of an `EVAL`, at the program of `source` or — when `inside_using` —
+/// in the `USING` body its last statement opens.
+fn evaluated<R>(
+    source: &str,
+    quoted: &str,
+    inside_using: bool,
+    check: impl for<'f, 'graph> FnOnce(
+        &Fixture<'f, 'graph>,
+        Result<&'graph BodyShape<'graph>, ShapeError>,
+    ) -> R,
+) -> R {
+    with_fixture(|fixture| {
+        for name in ["AND", "NOT", "=="] {
+            KeywordSymbol::declared(name, fixture.symbols).expect("a keyword token");
+        }
+        let lines = fixture.parse(source);
+        let quoting = fixture.parse(quoted);
+        let ExpressionPart::QuotedExpression(quote) = quoting[0].parts[0].value else {
+            panic!("`{quoted}` is a quote");
+        };
+        let quote = quote.reference();
+        fixture.in_cell(|writer, _| {
+            let table: &Builtins<'_, '_, Probe> = builtins(fixture, writer);
+            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
+                .expect("the program shapes");
+            let program = resident(writer, Activation::of_program(writer, shape, table));
+            let (site, at) = if inside_using {
+                let using = &shape.body()[shape.body().len() - 1];
+                let block = nested(shape, using, 3);
+                let site = resident(writer, Activation::of_block(writer, block, program));
+                (site, Position::statement(0))
+            } else {
+                (program, shape.end())
+            };
+            check(
+                fixture,
+                BodyShape::for_eval(fixture.program, quote, site, at, fixture.scratch()),
+            )
+        })
+    })
+}
+
+/// A `GROUP` whose members are `@` and `&`, under `mode`, named `name`.
+fn group(name: &str, mode: &str) -> String {
+    format!("GROUP {name} {mode} = ((OP #(@) OVER Ring = (left)) (OP #(&) OVER Ring = (right)))")
+}
+
+/// A `SIG` named `name` whose body is one bodyless `GROUP` head over `members`, under `mode`.
+fn signature(name: &str, mode: &str, members: &[&str]) -> String {
+    let heads: Vec<String> = members
+        .iter()
+        .map(|symbol| format!("(OP #({symbol}) OVER Ring)"))
+        .collect();
+    format!("SIG {name} = ((GROUP {mode} = ({})))", heads.join(" "))
+}
+
+#[test]
+fn a_using_body_chains_the_group_its_operand_surfaces() {
+    let source = format!(
+        "{}
+USING g SCOPE (1 @ 2 & 3)",
+        group("g", "FOLD RIGHT")
+    );
+    shaped(&source, |fixture, shape| {
+        let shape = shape.expect("the program shapes");
+        let block = nested(shape, &shape.body()[1], 3);
+        assert_eq!(block.kind(), ShapeKind::Block);
+        assert_eq!(tree(&block.body()[0], fixture.symbols), "(1 @ (2 & 3))");
+    });
+
+    // A signature's bodyless `GROUP` head is a group too, reached through an ascription.
+    let module = "MODULE m = ((OP #(@) OVER Ring = (left)) (OP #(&) OVER Ring = (right)))";
+    let source = format!(
+        "{}
+{module}
+USING (m :! Ops) SCOPE (1 @ 2 & 3)",
+        signature("Ops", "FOLD LEFT", &["@", "&"])
+    );
+    shaped(&source, |fixture, shape| {
+        let shape = shape.expect("the program shapes");
+        let block = nested(shape, &shape.body()[2], 3);
+        assert_eq!(tree(&block.body()[0], fixture.symbols), "((1 @ 2) & 3)");
+    });
+}
+
+#[test]
+fn a_group_surfaced_twice_is_held_once_and_a_second_chaining_is_refused() {
+    let module = "MODULE m = ((OP #(@) OVER Ring = (left)) (OP #(&) OVER Ring = (right)))";
+    let nest = |first: &str, second: &str| {
+        format!(
+            "{first}
+{second}
+{module}
+USING (m :! Ops) SCOPE ((USING (m :! Peer) SCOPE (1 @ 2 & 3)))"
+        )
+    };
+    let equal = nest(
+        &signature("Ops", "FOLD LEFT", &["@", "&"]),
+        &signature("Peer", "FOLD LEFT", &["@", "&"]),
+    );
+    shaped(&equal, |fixture, shape| {
+        let shape = shape.expect("two equal groups are one group");
+        let outer = nested(shape, &shape.body()[3], 3);
+        let inner = nested(outer, &outer.body()[0], 3);
+        assert!(
+            inner.held_groups().is_empty(),
+            "the group the outer body holds is not held twice"
+        );
+        assert_eq!(tree(&inner.body()[0], fixture.symbols), "((1 @ 2) & 3)");
+    });
+
+    let unequal = nest(
+        &signature("Ops", "FOLD LEFT", &["@", "&"]),
+        &signature("Peer", "FOLD RIGHT", &["@", "&"]),
+    );
+    shaped(&unequal, |fixture, shape| {
+        let members = [keyword("@", fixture.symbols), keyword("&", fixture.symbols)];
+        assert!(
+            matches!(
+                shape.err(),
+                Some(ShapeError::RedeclaresGroup { symbol, at })
+                    if members.contains(&symbol) && at == Position::statement(0)
+            ),
+            "a group over one member's other chaining is refused where it is surfaced"
+        );
+    });
+
+    // Nothing surfaces a second chaining over a builtin group's member.
+    let over_builtin = format!(
+        "{}
+{module}
+USING (m :! Ops) SCOPE (1)",
+        signature("Ops", "FOLD LEFT", &["+"])
+    );
+    shaped(&over_builtin, |fixture, shape| {
+        assert_eq!(
+            shape.err(),
+            Some(ShapeError::RedeclaresGroup {
+                symbol: keyword("+", fixture.symbols),
+                at: Position::statement(2),
+            })
+        );
+    });
+}
+
+#[test]
+fn evaluated_code_chains_under_its_site_and_is_held_to_the_programs_claims() {
+    let source = format!(
+        "{}
+USING g SCOPE (1)",
+        group("g", "FOLD RIGHT")
+    );
+    evaluated(&source, "#(1 @ 2 & 3)", true, |fixture, shape| {
+        let shape = shape.expect("the quoted operator run shapes at its site");
+        assert_eq!(tree(&shape.body()[0], fixture.symbols), "(1 @ (2 & 3))");
+    });
+    // The same operator run outside that body has no group to chain under.
+    evaluated(&source, "#(1 @ 2 & 3)", false, |fixture, shape| {
+        assert_eq!(
+            shape.err(),
+            Some(ShapeError::Unchained {
+                symbol: keyword("@", fixture.symbols),
+                at: Position::statement(0),
+            })
+        );
+    });
+    // Evaluated code declares against the program's claims, so it may not re-chain a symbol.
+    let redeclared = format!("#({})", group("h", "FOLD RIGHT"));
+    evaluated(&group("g", "FOLD LEFT"), &redeclared, false, |_, shape| {
+        assert!(matches!(
+            shape.err(),
+            Some(ShapeError::RedeclaresGroup { .. })
+        ));
     });
 }
