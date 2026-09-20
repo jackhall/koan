@@ -1,0 +1,6 @@
+# Build with one core held back, so a slate — which runs for minutes and saturates
+# everything it is given — leaves the machine usable. Cargo reads a negative `jobs`
+# as "all cores but this many". The test *harness* has its own thread count, which
+# `tools/verify.sh` sets alongside this.
+[build]
+jobs = -1
