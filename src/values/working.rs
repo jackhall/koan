@@ -16,7 +16,7 @@ use crate::parse::{
     StoredBinderKey,
 };
 use crate::source::{FileId, SourceRef, Span, Spanned};
-use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
+use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{TypeRegistry, display_name};
 
 use super::{Knotted, Nothing, Value, part_ktype};
@@ -253,10 +253,6 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
 
     pub fn shape(&self) -> DispatchShape {
         self.cache.shape()
-    }
-
-    pub fn operator_probe(&self) -> Option<KeywordSymbol> {
-        self.cache.operator_probe()
     }
 
     /// What the parsed node this copy was made from installs; `None` for a node the scheduler built.

@@ -25,9 +25,7 @@ use super::{top, tree};
 use crate::memory::program_storage;
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, parse};
 use crate::source::Span;
-use crate::symbols::{
-    KeywordSymbol, Symbol, SymbolInterner, is_keyword_token, is_type_name, powerset_probes,
-};
+use crate::symbols::{Symbol, SymbolInterner, is_keyword_token, is_type_name};
 
 // --- The generated tree ---
 
@@ -547,7 +545,6 @@ struct StatementFacts {
     shape_string: String,
     key: Vec<KeyElement>,
     shape: DispatchShape,
-    operator_probe: Option<KeywordSymbol>,
     span: Option<Span>,
 }
 
@@ -563,7 +560,6 @@ fn statement_facts(source: &str) -> StatementFacts {
         shape_string: super::describe(statement, &symbols),
         key: statement.stored_key().to_vec(),
         shape: statement.shape(),
-        operator_probe: statement.operator_probe(),
         span: statement.span,
     }
 }
@@ -900,7 +896,6 @@ proptest! {
             prop_assert_eq!(&facts.shape_string, &bare.shape_string, "source: {}", wrapped);
             prop_assert_eq!(&facts.key, &bare.key);
             prop_assert_eq!(facts.shape, bare.shape);
-            prop_assert_eq!(facts.operator_probe, bare.operator_probe);
             prop_assert_eq!(
                 facts.span,
                 Some(Span { start: 0, end: wrapped.len() as u32 }),
@@ -1059,14 +1054,13 @@ proptest! {
         prop_assert_eq!(symbols.len(), spellings.len(), "one entry per distinct spelling");
     }
 
-    /// **Law 8.** A chain's probe is the digest of the operator set it names — order-free and
-    /// repeat-free — and a group over any superset of those operators registers that very key,
-    /// so a live chain finds its group by construction.
+    /// **Law 8.** A slot-led run whose keywords alternate with slots, two or more of them, is an
+    /// `OperatorChain` whatever operators it names — the classification the chaining rewrite keys
+    /// on. One keyword is a plain call and is left alone.
     #[test]
-    fn a_chains_probe_is_the_digest_of_its_operator_set(
-        operands in prop::collection::vec(identifier(), 3..6),
+    fn an_alternating_run_of_two_or_more_operators_is_a_chain(
+        operands in prop::collection::vec(identifier(), 2..6),
         choices in prop::collection::vec(0usize..4, 5),
-        extra in prop::sample::select(&["+", "*", "<", ">"][..]),
     ) {
         let pool = ["+", "*", "<", ">"];
         let operators: Vec<&str> =
@@ -1081,28 +1075,11 @@ proptest! {
         let parsed = parse(program.brand(), &symbols, &source)
             .unwrap_or_else(|error| panic!("{source:?}: {error}"));
         let statement = &parsed[0];
-        prop_assert_eq!(statement.shape(), DispatchShape::OperatorChain, "source: {}", source);
-
-        let mut distinct: Vec<KeywordSymbol> = Vec::new();
-        for operator in &operators {
-            let symbol = KeywordSymbol::declared(operator, &symbols)
-                .expect("an operator glyph is keyword-class");
-            if !distinct.contains(&symbol) {
-                distinct.push(symbol);
-            }
+        if operators.len() > 1 {
+            prop_assert_eq!(statement.shape(), DispatchShape::OperatorChain, "source: {}", source);
+        } else {
+            prop_assert_ne!(statement.shape(), DispatchShape::OperatorChain, "source: {}", source);
         }
-        prop_assert_eq!(statement.operator_probe(), Some(KeywordSymbol::of_run(&distinct)));
-
-        let mut members = distinct.clone();
-        let extra = KeywordSymbol::declared(extra, &symbols).expect("keyword-class");
-        if !members.contains(&extra) {
-            members.push(extra);
-        }
-        let installed = powerset_probes(&members, &symbols);
-        prop_assert!(
-            installed.contains(&statement.operator_probe().expect("a chain carries a probe")),
-            "a group over a superset registers the key {source:?} probes",
-        );
     }
 
     /// **Law 9.** The type sigil is idempotent: a body wrapped `k` layers deep names what one

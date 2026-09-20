@@ -11,8 +11,6 @@
 //! scheduler's per-call parts, but both answer these questions the same way, so both carry this
 //! one cache.
 
-use smallvec::SmallVec;
-
 use crate::memory::BumpAllocator;
 use crate::parse::builtin_shapes::binder::StoredBinderKey;
 use crate::parse::builtin_shapes::lazy::LazyKinds;
@@ -195,31 +193,6 @@ fn is_operator_chain_shape(key: &[KeyElement]) -> bool {
     })
 }
 
-/// The probe key an `OperatorChain` looks the per-scope operator registry up by: the digest of the
-/// run of its operator keywords, minted by [`KeywordSymbol::of_run`]. `None` for any other shape.
-///
-/// The group registration mints its powerset keys through the same constructor, so a registered key
-/// and this probe agree by construction and neither side touches text. The node carries `u128`
-/// bits, and a registry probe compares them.
-pub fn operator_probe_for(key: &[KeyElement], shape: DispatchShape) -> Option<KeywordSymbol> {
-    if shape != DispatchShape::OperatorChain {
-        return None;
-    }
-    // Distinct operators, in a stack buffer. `of_run` reads its members as a set, so dropping a
-    // repeat here mints the same digest — what it buys is the bound. A chain holds one entry per
-    // operator it names, not one per term, so the buffer is sized by the member count of the group
-    // the chain must resolve against rather than by the length of an arbitrarily long run.
-    let mut operators: SmallVec<[KeywordSymbol; 8]> = SmallVec::new();
-    for element in key {
-        if let KeyElement::Keyword(symbol) = element
-            && !operators.contains(symbol)
-        {
-            operators.push(*symbol);
-        }
-    }
-    Some(KeywordSymbol::of_run(&operators))
-}
-
 /// The stored bucket key: a run of the key elements the parts spell, bumped once at construction,
 /// so reading it is a slice borrow and nothing is hashed — the parse already minted every symbol in
 /// the run.
@@ -234,14 +207,12 @@ pub fn stored_untyped_key<'a>(
 /// shape table, computed once, shared by the AST node and the scheduler's working node.
 ///
 /// Every field but the binder plan is settled the moment the key is: a splice substitutes slots one
-/// for one and writes no keyword position, so the key, the probe and the table entry are invariant
-/// under it. The plan is filled by the AST node's seal alone — a binder is always parsed AST — and
+/// for one and writes no keyword position, so the key and the table entry are invariant under it. The plan is filled by the AST node's seal alone — a binder is always parsed AST — and
 /// rides a working copy unchanged.
 #[derive(Clone, Copy)]
 pub struct NodeCache<'a> {
     key: &'a [KeyElement],
     shape: DispatchShape,
-    operator_probe: Option<KeywordSymbol>,
     builtin_shape: Option<&'static BuiltinShape>,
     /// The builtin shape this node declares under — `Some` only once the AST seal has run, so the binder
     /// facts of a coincidental key match on a synthesized run are never read. See [`declaring`].
@@ -259,7 +230,6 @@ impl<'a> NodeCache<'a> {
         NodeCache {
             key,
             shape,
-            operator_probe: operator_probe_for(key, shape),
             builtin_shape: builtin_shape_for(key.iter().copied()),
             declared: None,
             binder_plan: None,
@@ -300,12 +270,6 @@ impl<'a> NodeCache<'a> {
     /// Cached dispatch shape (see [`classify_dispatch_shape`]).
     pub fn shape(&self) -> DispatchShape {
         self.shape
-    }
-
-    /// Cached operator-registry probe key: `Some` only for an `OperatorChain`, holding the symbol
-    /// of its distinct operator keywords.
-    pub fn operator_probe(&self) -> Option<KeywordSymbol> {
-        self.operator_probe
     }
 
     /// The [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry this node's

@@ -16,7 +16,6 @@ use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
 use crate::memory::{ProgramBrand, program_storage};
 #[cfg(feature = "pending_rewrite")]
-use crate::parse::ast::shape::operator_probe_for;
 #[cfg(feature = "pending_rewrite")]
 use crate::parse::builtin_shapes::builtin_shape_for;
 #[cfg(feature = "pending_rewrite")]
@@ -307,7 +306,6 @@ proptest! {
             let other = build(brand, &swapped, &symbols);
             prop_assert_eq!(other.stored_key(), expression.stored_key());
             prop_assert_eq!(other.shape(), expression.shape());
-            prop_assert_eq!(other.operator_probe(), expression.operator_probe());
         }
     }
 
@@ -331,10 +329,6 @@ proptest! {
             classify_dispatch_shape(expression.stored_key(), head),
         );
         prop_assert_eq!(
-            expression.operator_probe(),
-            operator_probe_for(expression.stored_key(), expression.shape()),
-        );
-        prop_assert_eq!(
             expression.cache().builtin_shape().map(|form| form.id),
             builtin_shape_for(expression.stored_key().iter().copied()).map(|form| form.id),
         );
@@ -342,7 +336,6 @@ proptest! {
         let copy = expression;
         prop_assert!(std::ptr::eq(copy.stored_key(), expression.stored_key()));
         prop_assert_eq!(copy.shape(), expression.shape());
-        prop_assert_eq!(copy.operator_probe(), expression.operator_probe());
         prop_assert_eq!(copy.binder_name_slot(), expression.binder_name_slot());
 
         // The splice shape: every eager slot gives way to a staging hole, every keyword stands.
@@ -358,7 +351,6 @@ proptest! {
             }),
         );
         prop_assert!(std::ptr::eq(working.stored_key(), respliced.stored_key()));
-        prop_assert_eq!(working.operator_probe(), respliced.operator_probe());
         prop_assert_eq!(
             working.cache().builtin_shape().map(|form| form.id),
             respliced.cache().builtin_shape().map(|form| form.id),

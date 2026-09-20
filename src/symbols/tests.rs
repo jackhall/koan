@@ -31,11 +31,6 @@ fn token_text() -> impl Strategy<Value = String> {
     ]
 }
 
-/// Keyword-class text only, with no space in it, so a run's rendering splits back into its members.
-fn keyword_text() -> impl Strategy<Value = String> {
-    prop_oneof!["[A-Z]{2,5}", "[-+*/<>=~^!?|]{1,3}"]
-}
-
 /// The distinct entries of `texts`, in first-seen order.
 fn distinct(texts: &[String]) -> Vec<&String> {
     let mut seen = HashSet::new();
@@ -214,49 +209,6 @@ proptest! {
         prop_assert_eq!(resolved.as_deref(), Some(text.as_str()));
     }
 
-    /// A run digest reads its members as a set: order does not matter, repeats collapse, a
-    /// singleton is not its own member, and a strictly larger set mints a different key. This is
-    /// what lets a chain's probe hit the key its group's powerset registered. `declared_run` mints
-    /// the same digest and records the set's spellings under it.
-    #[test]
-    fn a_run_digest_is_a_set_digest_disjoint_from_its_members(
-        glyphs in prop::collection::vec(keyword_text(), 1..5),
-        extra in keyword_text(),
-    ) {
-        let symbol = |text: &String| KeywordSymbol::of(text).expect("keyword-class by construction");
-        let members: Vec<KeywordSymbol> = glyphs.iter().map(symbol).collect();
-        let digest = KeywordSymbol::of_run(&members);
-
-        let mut reversed = members.clone();
-        reversed.reverse();
-        prop_assert_eq!(KeywordSymbol::of_run(&reversed), digest, "order does not matter");
-
-        let mut doubled = members.clone();
-        doubled.extend(members.iter().copied());
-        prop_assert_eq!(KeywordSymbol::of_run(&doubled), digest, "repeats collapse");
-
-        if let [only] = members[..] {
-            prop_assert_ne!(digest, only, "a singleton run is not its member");
-        }
-        if !glyphs.contains(&extra) {
-            let mut grown = members.clone();
-            grown.push(symbol(&extra));
-            prop_assert_ne!(KeywordSymbol::of_run(&grown), digest, "a larger set is a new key");
-        }
-
-        let symbols = SymbolInterner::new();
-        let declared: Vec<KeywordSymbol> = glyphs
-            .iter()
-            .map(|text| KeywordSymbol::declared(text, &symbols).expect("keyword-class by construction"))
-            .collect();
-        let run = KeywordSymbol::declared_run(&declared, &symbols);
-        prop_assert_eq!(run, digest);
-        let rendering = symbols.render(run.symbol());
-        prop_assert_eq!(
-            rendering.split(' ').collect::<HashSet<_>>(),
-            glyphs.iter().map(String::as_str).collect::<HashSet<_>>(),
-        );
-    }
 }
 
 /// The identity hasher accepts only `write_u128`; `Symbol`'s derived `Hash` must route through it,

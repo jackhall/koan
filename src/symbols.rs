@@ -20,8 +20,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
-use smallvec::SmallVec;
-
 /// A symbol's content identity: the low 128 bits of a BLAKE3 hash of its UTF-8 bytes.
 ///
 /// `Copy`, lifetime-free, and compared and hashed without touching text. `Ord` is the numeric
@@ -35,8 +33,8 @@ impl Symbol {
         Symbol::of_hash(blake3::hash(text.as_bytes()))
     }
 
-    /// The low 128 bits of a finished BLAKE3 hash — the single funnel [`of`](Self::of) and
-    /// [`KeywordSymbol::of_run`] end in, and so the one site the mint tally counts.
+    /// The low 128 bits of a finished BLAKE3 hash — the single funnel [`of`](Self::of) ends in, and
+    /// so the one site the mint tally counts.
     fn of_hash(hash: blake3::Hash) -> Symbol {
         #[cfg(feature = "alloc-count")]
         MINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -301,11 +299,8 @@ classified_symbol!(
 );
 
 classified_symbol!(
-    /// A **keyword-class** token: fixed syntax, per
-    /// [`is_keyword_token`] — `FN`, `+`, `<=`, and the
-    /// run digests built out of them by [`of_run`](KeywordSymbol::of_run), which stand for the
-    /// operator sets the chain lane probes by. Nothing *binds* to one; the class exists because the
-    /// operator table and the dispatch lane key by fixed tokens.
+    /// A **keyword-class** token: fixed syntax, per [`is_keyword_token`] — `FN`, `+`, `<=`. Nothing
+    /// *binds* to one; the class exists because the dispatch lane keys by fixed tokens.
     KeywordSymbol,
     is_keyword_token,
     "a keyword-class token"
@@ -317,63 +312,6 @@ impl KeywordSymbol {
     pub fn of(text: &str) -> Option<Self> {
         KeywordSymbol::classify(text)
     }
-
-    /// The probe key a *run* of keyword symbols stands for: the members sorted by symbol bits and
-    /// deduped, their 16-byte little-endian digests streamed through one hasher. The fragments are
-    /// fixed-width, so no separator is needed to keep the feed unambiguous. An operator chain and
-    /// the group registration whose powerset keys it must hit
-    /// ([`powerset_probes`]) both mint here, so a registered key
-    /// and a live probe agree by construction and no probe path touches text.
-    ///
-    /// Keyword-class inputs witness the class of the product: a run of keyword-class tokens names
-    /// fixed syntax and binds to nothing, exactly what the class stands for.
-    pub fn of_run(members: &[KeywordSymbol]) -> Self {
-        let sorted = sorted_run(members);
-        let mut hasher = blake3::Hasher::new();
-        for member in &sorted {
-            hasher.update(&member.symbol().0.to_le_bytes());
-        }
-        KeywordSymbol(Symbol::of_hash(hasher.finalize()))
-    }
-
-    /// [`of_run`](Self::of_run) plus a recorded rendering: the members' interned spellings joined
-    /// by single spaces in the same sorted, deduped order, recorded under the digest so a
-    /// diagnostic naming the probe key renders the run it stands for. Registration-time only — a
-    /// live probe mints through [`of_run`](Self::of_run) and renders nothing.
-    pub fn declared_run(members: &[KeywordSymbol], symbols: &SymbolInterner) -> Self {
-        let sorted = sorted_run(members);
-        let run = KeywordSymbol::of_run(&sorted);
-        let mut rendering = String::new();
-        for (index, member) in sorted.iter().enumerate() {
-            if index > 0 {
-                rendering.push(' ');
-            }
-            // Written straight into the one buffer — `display` borrows the recorded text rather
-            // than copying it out, so a run renders in a single allocation.
-            let _ = std::fmt::Write::write_fmt(
-                &mut rendering,
-                format_args!("{}", symbols.display(member.symbol())),
-            );
-        }
-        symbols.record_text(run.symbol(), &rendering);
-        run
-    }
-}
-
-/// A run of keyword symbols as the set it denotes: sorted by symbol bits and deduped, in a stack
-/// buffer.
-///
-/// Both feeds hand over distinct members, so the buffer is sized by an operator group's member
-/// count — and that count is bounded by the group's own powerset install, which writes `2^n`
-/// registry entries. A run that spills to the heap is one no declaration would write. The bound
-/// matters because the chain probe this feeds mints once per node at parse, where a per-node heap
-/// allocation would show up in the recorded baselines.
-fn sorted_run(members: &[KeywordSymbol]) -> smallvec::SmallVec<[KeywordSymbol; 8]> {
-    let mut sorted: smallvec::SmallVec<[KeywordSymbol; 8]> =
-        smallvec::SmallVec::from_slice(members);
-    sorted.sort_unstable();
-    sorted.dedup();
-    sorted
 }
 
 /// The **recovery door**: a table keyed by [`TypeSymbol`] admits a probe by bare symbol bits, and a
@@ -638,36 +576,6 @@ macro_rules! slots {
             )+
         };
     };
-}
-
-/// The probe key of every nonempty subset of `members` — the powerset-key story
-/// [`crate::machine::model::operators`] describes, shared by the builtin seeds, the `GROUP` binder
-/// and the `OP` declaration. `members.len()` stays small, so the `2^n - 1` bitmask walk is cheap;
-/// each subset's key is minted through [`KeywordSymbol::declared_run`], the same run-digest
-/// constructor a live chain's probe (`operator_probe_for`) mints through, so a registration key and
-/// a real chain's probe agree by construction and neither side touches text.
-///
-/// Each key records the rendered join of its members as it is built, so an operator-conflict
-/// diagnostic can name the probe it stands for. One region-hosted record backs every key, so past
-/// that recording the whole install allocates nothing.
-pub fn powerset_probes(members: &[KeywordSymbol], symbols: &SymbolInterner) -> Vec<KeywordSymbol> {
-    let subset_count = 1usize << members.len();
-    // One stack buffer, refilled per mask: the walk visits `2^n - 1` subsets, so materializing each
-    // one afresh would allocate once per registry entry.
-    let mut subset: SmallVec<[KeywordSymbol; 8]> = SmallVec::new();
-    (1..subset_count)
-        .map(|mask| {
-            subset.clear();
-            subset.extend(
-                members
-                    .iter()
-                    .enumerate()
-                    .filter(|(bit, _)| mask & (1 << bit) != 0)
-                    .map(|(_, op)| *op),
-            );
-            KeywordSymbol::declared_run(&subset, symbols)
-        })
-        .collect()
 }
 
 #[cfg(test)]

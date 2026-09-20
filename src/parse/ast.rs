@@ -27,7 +27,7 @@ pub mod shape;
 pub use program::{ProgramExpression, ProgramNode};
 pub use shape::{
     DispatchShape, ExpressionKey, KeyElement, NodeCache, PartClass, classify_dispatch_shape,
-    operator_probe_for, stored_untyped_key,
+    stored_untyped_key,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -226,8 +226,7 @@ impl<'a> ExpressionPart<'a> {
 /// `span` and `file` are `None` for hand-built ASTs.
 ///
 /// [`cache`](Self::cache) is the structural cache the construction doors fill once the parts run is
-/// complete — the bucket key, the dispatch shape, the operator probe, the matched builtin shape and
-/// the binder plan — so the dispatch driver reads it rather than re-deriving on every call of the
+/// complete — the bucket key, the dispatch shape, the matched builtin shape and the binder plan — so the dispatch driver reads it rather than re-deriving on every call of the
 /// enclosing function. The binder plan is per-node only: what this node installs when it is
 /// submitted as a statement, and `None` when it is not itself a binder. A statement's namespace is
 /// legible from its own spine, never from what its slots contain.
@@ -446,12 +445,6 @@ impl<'a> KExpression<'a> {
     /// Cached dispatch shape (see [`classify_dispatch_shape`]).
     pub fn shape(&self) -> DispatchShape {
         self.cache.shape()
-    }
-
-    /// Cached operator-registry probe key: `Some` only for an `OperatorChain`, holding the symbol
-    /// of its sorted-joined unique operator keywords.
-    pub fn operator_probe(&self) -> Option<KeywordSymbol> {
-        self.cache.operator_probe()
     }
 
     /// The stored bucket key, as a borrow of the run bumped at construction: `Keyword` parts
