@@ -8,8 +8,8 @@ use crate::knot::{KValue, KValueFamily};
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, DrainStalled, NativeStep, Placement, Request, Resume, Scheduler, Spawns,
-    State, StepError, Work,
+    Action, Context, DrainStalled, Graph, NativeStep, Placement, Request, Resume, Scheduler,
+    Spawns, State, StepError, Work,
 };
 
 /// Enough hops that a per-hop cost would be unmissable in the allocation count.
@@ -161,7 +161,8 @@ struct Run {
 fn run(hops: usize, start: NativeStep<'static>) -> Run {
     reset();
     REMAINING.with(|remaining| remaining.set(hops));
-    let mut scheduler: Scheduler<'static> = Scheduler::new(1);
+    let mut graph: Graph<'static> = Scheduler::graph(1);
+    let mut scheduler = Scheduler::over(&mut graph);
     scheduler
         .admit(start, State::Empty)
         .expect("the slab admits");
@@ -254,7 +255,8 @@ fn hop_from_the_slab<'graph>(
 
 #[test]
 fn a_slab_cell_has_no_sibling_to_hop_to() {
-    let mut scheduler: Scheduler<'static> = Scheduler::new(1);
+    let mut graph: Graph<'static> = Scheduler::graph(1);
+    let mut scheduler = Scheduler::over(&mut graph);
     scheduler
         .admit(hop_from_the_slab, State::Empty)
         .expect("the slab admits");

@@ -1,4 +1,5 @@
-//! The drain: the loop that runs queued cells, and the graph state it runs them over.
+//! The drain: the loop that runs queued cells, and the scheduling state it keeps over a borrowed
+//! graph.
 //!
 //! Every field here is one scheduler's own. There is no static, no thread-local and no lazily
 //! minted cell, so a second scheduler runs beside the first with nothing shared but the program
@@ -15,9 +16,16 @@ use crate::scheduler::continuation::{
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::submit::{Birth, Submissions, Unit, UnitId};
 
-/// The drain and the graph of cells it runs.
-pub struct Scheduler<'graph> {
-    graph: CellGraph<'graph, ContinuationFamily, ScratchFamily, KDelivery>,
+/// The graph of cells a drain runs over: `cellgraph`'s graph closed over koan's three families.
+pub type Graph<'graph> = CellGraph<'graph, ContinuationFamily, ScratchFamily, KDelivery>;
+
+/// The drain: scheduling state made per call over a graph it borrows.
+///
+/// A view dropped with cells still queued or units still pending abandons them: the graph keeps
+/// the live cells, and the next drain over it reports [`DrainStalled::CellsLive`]. After a
+/// successful [`run`](Scheduler::run) the view holds nothing.
+pub struct Scheduler<'a, 'graph> {
+    graph: &'a mut Graph<'graph>,
     queue: Queue,
     spawns: Spawns<'graph>,
     /// Units of work with no cell yet, each waiting on a count of dependencies.
@@ -29,11 +37,16 @@ pub struct Scheduler<'graph> {
     census: Census,
 }
 
-impl<'graph> Scheduler<'graph> {
-    /// A scheduler over a slab of `cap` cells, under koan's own crossing verdict.
-    pub fn new(cap: u32) -> Self {
+impl<'a, 'graph> Scheduler<'a, 'graph> {
+    /// A graph over a slab of `cap` cells, under koan's own crossing verdict.
+    pub fn graph(cap: u32) -> Graph<'graph> {
+        CellGraph::new(cap, crate::values::verdict)
+    }
+
+    /// A drain over `graph`.
+    pub fn over(graph: &'a mut Graph<'graph>) -> Self {
         Scheduler {
-            graph: CellGraph::new(cap, crate::values::verdict),
+            graph,
             queue: Queue::new(),
             spawns: Spawns::new(),
             pending: Submissions::new(),

@@ -33,5 +33,5 @@ pub use continuation::{
     Resume, ScratchFamily, ScratchState, State, Work,
 };
 pub use delivery::KDelivery;
-pub use drain::{DrainStalled, Scheduler};
+pub use drain::{DrainStalled, Graph, Scheduler};
 pub use submit::{Birth, Submissions, Unit, UnitId};

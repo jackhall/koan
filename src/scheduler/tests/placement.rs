@@ -8,8 +8,8 @@ use crate::knot::KValue;
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, NativeStep, Placement, Request, Resume, Scheduler, Spawns, State, StepError,
-    Work,
+    Action, Context, Graph, NativeStep, Placement, Request, Resume, Scheduler, Spawns, State,
+    StepError, Work,
 };
 
 /// Enough turns that a region which only ever grows parts company with one that is recycled.
@@ -136,7 +136,8 @@ struct Run {
 fn run(hops: usize, start: NativeStep<'static>) -> Run {
     reset();
     REMAINING.with(|remaining| remaining.set(hops));
-    let mut scheduler: Scheduler<'static> = Scheduler::new(1);
+    let mut graph: Graph<'static> = Scheduler::graph(1);
+    let mut scheduler = Scheduler::over(&mut graph);
     scheduler
         .admit(start, State::Empty)
         .expect("the slab admits");

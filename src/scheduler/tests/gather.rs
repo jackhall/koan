@@ -11,8 +11,8 @@ use crate::knot::{KValue, KValueFamily};
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, Placement, Request, Resume, Scheduler, ScratchState, Spawns, State, StepError,
-    Work,
+    Action, Context, Graph, Placement, Request, Resume, Scheduler, ScratchState, Spawns, State,
+    StepError, Work,
 };
 
 /// The three texts the producers write, one per spawn, in the order the consumer asks for them.
@@ -160,7 +160,8 @@ fn where_text(value: KValue<'_, '_>) -> String {
 #[test]
 fn a_cell_gathers_here_values_across_two_parks_and_builds_from_them_in_storage() {
     reset();
-    let mut scheduler: Scheduler<'static> = Scheduler::new(8);
+    let mut graph: Graph<'static> = Scheduler::graph(8);
+    let mut scheduler = Scheduler::over(&mut graph);
     scheduler
         .admit(ask_for_two, State::Empty)
         .expect("the slab admits");

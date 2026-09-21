@@ -5,8 +5,8 @@ use crate::knot::{KValue, KValueFamily};
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, NativeStep, Placement, Request, Resume, Scheduler, Spawns, State, StepError,
-    Work,
+    Action, Context, Graph, NativeStep, Placement, Request, Resume, Scheduler, Spawns, State,
+    StepError, Work,
 };
 
 /// Ask for one child at `placement`, park on its single slot, and read it back in [`read_one`].
@@ -106,7 +106,8 @@ fn read_one<'graph>(
 #[test]
 fn a_fresh_call_returns_its_result_through_the_callers_scratch() {
     reset();
-    let mut scheduler: Scheduler<'static> = Scheduler::new(4);
+    let mut graph: Graph<'static> = Scheduler::graph(4);
+    let mut scheduler = Scheduler::over(&mut graph);
     scheduler
         .admit(call_fresh, State::Empty)
         .expect("the slab admits");
@@ -118,7 +119,8 @@ fn a_fresh_call_returns_its_result_through_the_callers_scratch() {
 #[test]
 fn a_shares_call_returns_its_result_through_the_callers_storage() {
     reset();
-    let mut scheduler: Scheduler<'static> = Scheduler::new(4);
+    let mut graph: Graph<'static> = Scheduler::graph(4);
+    let mut scheduler = Scheduler::over(&mut graph);
     scheduler
         .admit(call_shares, State::Empty)
         .expect("the slab admits");
@@ -130,7 +132,8 @@ fn a_shares_call_returns_its_result_through_the_callers_storage() {
 #[test]
 fn both_placements_compute_the_same_value() {
     reset();
-    let mut fresh: Scheduler<'static> = Scheduler::new(4);
+    let mut fresh_graph: Graph<'static> = Scheduler::graph(4);
+    let mut fresh = Scheduler::over(&mut fresh_graph);
     fresh
         .admit(call_fresh, State::Empty)
         .expect("the slab admits");
@@ -138,7 +141,8 @@ fn both_placements_compute_the_same_value() {
     let from_fresh = recorded();
 
     reset();
-    let mut shares: Scheduler<'static> = Scheduler::new(4);
+    let mut shares_graph: Graph<'static> = Scheduler::graph(4);
+    let mut shares = Scheduler::over(&mut shares_graph);
     shares
         .admit(call_shares, State::Empty)
         .expect("the slab admits");

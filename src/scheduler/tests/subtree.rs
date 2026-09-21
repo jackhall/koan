@@ -5,7 +5,7 @@ use crate::knot::KValue;
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, Placement, Request, Resume, Scheduler, Spawns, State, StepError, Work,
+    Action, Context, Graph, Placement, Request, Resume, Scheduler, Spawns, State, StepError, Work,
 };
 
 /// Deeper than the sixty-four slots a one-word matrix has, several times over.
@@ -90,7 +90,8 @@ fn a_subtree_two_hundred_deep_takes_no_slab_slot_but_its_root() {
     reset();
     // A slab of one. Every level of the descent is a tree child, so a level that reached for a
     // slab slot would be refused and the drain would stall before the bottom.
-    let mut scheduler: Scheduler<'static> = Scheduler::new(1);
+    let mut graph: Graph<'static> = Scheduler::graph(1);
+    let mut scheduler = Scheduler::over(&mut graph);
     scheduler
         .admit(start, State::Empty)
         .expect("the slab admits");

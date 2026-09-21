@@ -5,8 +5,8 @@
 use crate::memory::Active;
 use crate::scheduler::tests::native::{record, recorded, reset};
 use crate::scheduler::{
-    Action, Birth, Context, DrainStalled, Placement, Request, Resume, Scheduler, Spawns, State,
-    Unit, Work,
+    Action, Birth, Context, DrainStalled, Graph, Placement, Request, Resume, Scheduler, Spawns,
+    State, Unit, Work,
 };
 
 /// A unit of the diamond, born in the slab: what the table decides is *when* it runs, never where.
@@ -59,7 +59,8 @@ fn join<'graph>(
 #[test]
 fn a_join_runs_once_and_only_after_both_arms() {
     reset();
-    let mut scheduler: Scheduler<'static> = Scheduler::new(4);
+    let mut graph: Graph<'static> = Scheduler::graph(4);
+    let mut scheduler = Scheduler::over(&mut graph);
     let source = scheduler.submit(unit(source), 0);
     let left = scheduler.submit(unit(left), 1);
     let right = scheduler.submit(unit(right), 1);
@@ -92,7 +93,8 @@ fn a_join_runs_once_and_only_after_both_arms() {
 #[test]
 fn units_that_wait_on_each_other_stall_the_drain() {
     reset();
-    let mut scheduler: Scheduler<'static> = Scheduler::new(4);
+    let mut graph: Graph<'static> = Scheduler::graph(4);
+    let mut scheduler = Scheduler::over(&mut graph);
     let first = scheduler.submit(unit(left), 1);
     let second = scheduler.submit(unit(right), 1);
     scheduler.edge(first, second);
@@ -143,7 +145,8 @@ fn wakes<'graph>(
 #[test]
 fn a_dependent_waits_for_its_producers_whole_subtree() {
     reset();
-    let mut scheduler: Scheduler<'static> = Scheduler::new(4);
+    let mut graph: Graph<'static> = Scheduler::graph(4);
+    let mut scheduler = Scheduler::over(&mut graph);
     let producer = scheduler.submit(unit(spawns_and_parks), 0);
     let dependent = scheduler.submit(unit(join), 1);
     scheduler.edge(producer, dependent);

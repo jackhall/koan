@@ -5,7 +5,7 @@ use crate::knot::KValue;
 use crate::memory::{Active, Receipt};
 use crate::scheduler::tests::native::{describe, record, recorded, reset};
 use crate::scheduler::{
-    Action, Context, Placement, Request, Resume, Scheduler, Spawns, State, StepError, Work,
+    Action, Context, Graph, Placement, Request, Resume, Scheduler, Spawns, State, StepError, Work,
 };
 
 /// How many producers the consumer parks on. Three, so a delivery that is neither the first nor the
@@ -82,7 +82,8 @@ fn drain_the_run<'graph>(
 #[test]
 fn a_consumer_parked_on_three_producers_wakes_once_when_the_last_slot_fills() {
     reset();
-    let mut scheduler: Scheduler<'static> = Scheduler::new(4);
+    let mut graph: Graph<'static> = Scheduler::graph(4);
+    let mut scheduler = Scheduler::over(&mut graph);
     scheduler
         .admit(park_on_three, State::Empty)
         .expect("the slab admits");
