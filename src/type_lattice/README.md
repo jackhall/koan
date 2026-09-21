@@ -114,7 +114,7 @@ Kinds form one subsumption lattice —
 proper-type slot names what can type an ordinary value, which a signature is not.
 `AnyType` is a *slot* expectation only, never a classification `kind_of` produces.
 
-## Storage: one region, one heap table
+## Storage: one region
 
 A [`TypeRegistry`](registry.rs) is built over the run region's bump allocator,
 and every node it interns — with every slice a node holds — lives in that region.
@@ -128,12 +128,17 @@ twice in a run yields one node and two equal handles. Beside each node the entry
 stores two flags computed off its children at intern — whether a free quantifier,
 and whether any rigid variable, is reachable — so both probes are one table read.
 
-The **verdict table** is the one heap-owned part, keyed by
-`(subject, candidate, relation)`. It is on the heap because a bound on verdict
-storage is a permissible knob, and a table that may shrink cannot live in a region
-that releases nothing before the run ends. A verdict over a digest pair is a pure
-function — once computed it never changes — so **verdicts are never
-load-bearing**: a cold registry costs a re-walk, never a wrong answer.
+The **verdict table** is keyed by `(subject, candidate, relation)`. It is a
+fixed run of two-slot buckets, laid in the same region the first time a verdict
+is recorded and never resized, so it strands nothing in a bump that releases
+nothing before the run ends. A key's two digests fold into its bucket, and a
+slot compares the whole key, so a collision costs a slot and never a wrong
+answer. A full bucket evicts the slot not touched last. The table is lossy by
+design: a verdict over a digest pair is a pure function — once computed it never
+changes — so **verdicts are never load-bearing**, and a forgotten one costs a
+re-walk, never a wrong answer. The registry therefore owns nothing on the global
+heap, and itself rests in a bump — [program storage](../program/README.md), in a
+loaded program.
 
 Every door that sorts, flattens or canonicalizes takes a **scratch allocator**
 from its caller and builds its transient buffers there, and every door computes

@@ -86,6 +86,13 @@ part a refused tie names.
   cannot share. A `MODULE` or `GROUP` activation takes no cell of its own — it
   is data like any other value, placed by the ordinary crossing verdict in the
   region of whatever keeps it.
+- [`CellSubstrate`](../../src/program/README.md)'s load builds the builtin table, the
+  program's shape, the root and the `Program` record in its builder, keeps the
+  record beside the graph, and returns a `Result` carrying the parse error or
+  `ShapeError` that stopped it.
+- A test loads two programs through a helper function that returns each
+  `CellSubstrate`, moves both into a `Vec`, runs each, and reads a top-level
+  binding after the drain in a separate call from the one that ran it.
 - A whole koan program — top-level bindings, calls, a recursive call deeper than
   the slab cap, and a deferred-only component with a pending sibling and an eager
   part — runs to completion under the drain, and the run's Miri slate is clean.
@@ -182,7 +189,7 @@ part a refused tie names.
 
 ## Dependencies
 
-**Requires:** none — every value a top-level statement places ships.
+**Requires:** none — every value a top-level statement places ships, and so does the substrate it loads into.
 
 **Unblocks:**
 

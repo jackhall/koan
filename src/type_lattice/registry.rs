@@ -112,6 +112,7 @@ pub(super) enum Relation {
 
 /// Slots in the verdict table. A power of two, two slots to a bucket.
 const VERDICT_SLOTS: usize = 1024;
+const _: () = assert!(VERDICT_SLOTS.is_power_of_two() && VERDICT_SLOTS >= 2);
 
 /// One slot of the verdict table: a whole key, its verdict, and the bucket's recency bit.
 #[derive(Clone, Copy)]

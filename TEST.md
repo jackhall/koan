@@ -43,7 +43,7 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
 `memory`, `parse`, `scope`, `source`, `type_lattice`, `values`, `elaborate`,
-`knot`, `scheduler` and the embedded crates `cellgraph` and
+`knot`, `scheduler`, `program` and the embedded crates `cellgraph` and
 `sexlex` — are
 what a default koan build compiles and a default `cargo test` runs. `workgraph`
 is no longer a koan dependency; it still builds and tests as a workspace member.

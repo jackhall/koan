@@ -9,6 +9,8 @@
 //! **Imports.** Outside `#[cfg(test)]` this module names `crate::memory`, `crate::parse`,
 //! `crate::scheduler`, `crate::symbols` and `crate::type_lattice`; [`tests::boundary`] reads the
 //! source to hold it there.
+//!
+//! See [program/README.md](program/README.md).
 
 mod substrate;
 

@@ -117,6 +117,9 @@ re-ties it — see [src/knot/README.md](src/knot/README.md), and
 `USING … SCOPE` block enters on),
 [scheduler/](src/scheduler.rs) (the deferred-work drain, where a unit of work is
 a `cellgraph` cell — see [src/scheduler/README.md](src/scheduler/README.md)),
+[program/](src/program.rs) (a loaded program as one owning value: program
+storage, the interner, the type registry and the cell graph over them — see
+[src/program/README.md](src/program/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
 type nodes — see [src/type_lattice/README.md](src/type_lattice/README.md)),
@@ -249,7 +252,7 @@ src/
 │   ├── node.rs           TypeNode — one interned type's content; every child position is a KType handle, so a node is shallow
 │   ├── handle.rs         KType — the Copy content-digest handle, the pinned builtin constants, and the name/kind readings off one
 │   ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the heap verdict cache, the composite doors, canonical `union_of`, the canonicalizing `shape_type` and `signature`
+│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the fixed two-way verdict cache laid in the same region, the composite doors, canonical `union_of`, the canonicalizing `shape_type` and `signature`
 │   ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
 │   ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
 │   ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity — the non-type payloads a node carries
@@ -302,11 +305,14 @@ src/
 │   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
 ├── scheduler.rs      pub mod scheduler — the deferred-work drain over cellgraph's cells and liveness matrix: a unit of work is a cell, and this module adds the submission table, the work queue, the drain protocol and delivery
 ├── scheduler/
-│   ├── drain.rs          Scheduler — the loop, the two queues (in_flight ahead of fresh), the deferred release a tail hand-off needs, and DrainStalled; every birth and every death is the drain's
+│   ├── drain.rs          Graph — the CellGraph over koan's three families; Scheduler — a per-call view over a borrowed Graph: the loop, the two queues (in_flight ahead of fresh), the deferred release a tail hand-off needs, and DrainStalled; every birth and every death is the drain's
 │   ├── action.rs         Action (opaque, with its done / failed / tail / park / deliver_scratch / deliver_carrier constructors) over the drain-only Kind, Placement, Request, Slot, Spawns, StepError — what a step hands back, all of it brand-free
 │   ├── continuation.rs   ContinuationFamily / ScratchFamily, the reattachable family of each slot a cell parks in — the second over both step brands; NativeStep, Continuation, Resume, State, ScratchState, Provenance, CellPlace, Destination, Context
 │   ├── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
 │   └── submit.rs         Submissions / Unit / UnitId — units with no cell yet, and the dependency counts that decide when each gets one
+├── program.rs        pub mod program — a loaded program as one owning value, over memory, parse, scheduler, symbols and type_lattice
+├── program/
+│   └── substrate.rs      CellSubstrate — program storage and the interner as self_cell's owner, and Running — the graph, the type registry and the parsed statements borrowing them at 'graph, reached through a closure per call
 ├── machine.rs           pub mod core / model / execute
 └── machine/
     ├── model.rs            re-exports from model::types and model::values

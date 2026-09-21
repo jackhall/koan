@@ -14,11 +14,21 @@ the instant no hold names it.
 
 ## The drain
 
-`Scheduler` holds a `CellGraph` over three koan types — the continuation family,
-the scratch-state family, and the delivery bundle — beside two queues and a buffer of
-requests. Every field is that scheduler's own: no static, no thread-local and no
-lazily minted cell, so a second scheduler runs beside the first with nothing
-shared but the program text and the shapes in it.
+The graph a drain runs over is `Graph`: a `CellGraph` over three koan types —
+the continuation family, the scratch-state family, and the delivery bundle.
+`Scheduler` owns no graph. It is a view made per call: `Scheduler::over`
+borrows a `Graph` mutably and keeps the scheduling state beside it — two queues,
+a buffer of requests and the submission table. Whatever owns the graph keeps it
+across calls, a loaded [program](../program/README.md) or a test's plain local,
+and a later view over the same graph finds every cell an earlier one left
+there. Every field is that view's own: no static, no thread-local and no lazily
+minted cell, so a second scheduler over a second graph runs beside the first
+with nothing shared but the program text and the shapes in it.
+
+A view dropped with cells still queued or units still pending abandons them:
+the graph keeps the live cells, and every later drain over it reports
+`DrainStalled::CellsLive`. After a successful run the view holds nothing, so
+dropping it loses nothing.
 
 The loop pops a cell, enters it, runs the step its continuation names, and acts
 on the `Kind` the returned `Action` opens into:
@@ -275,7 +285,8 @@ present: a call, a tail loop, a subtree deeper than any slab cap, a diamond of
 submissions, and a consumer parked on several producers. `tests/continuation.rs`
 holds the round trip a continuation makes between `'graph` and a step's `'here`;
 `tests/drain.rs` holds the loop itself, including two schedulers running beside
-each other and sharing nothing; `tests/calls.rs` holds a call at each placement
+each other and sharing nothing, two views over one graph in turn, and a view
+dropped with a queued cell stalling the next; `tests/calls.rs` holds a call at each placement
 and `tests/delivery.rs` a consumer parked on three producers.
 `tests/gather.rs` holds a cell that gathers its children's results into a run in
 its scratch habitat across two parks and builds from them in storage, which is

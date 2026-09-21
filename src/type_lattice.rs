@@ -25,10 +25,11 @@
 //! # Storage
 //!
 //! A [`TypeRegistry`] is built over the run region's bump allocator, and every node it interns —
-//! with every slice a node holds — lives in that region: nothing the lattice owns carries drop
-//! glue, and the region releases it whole. The verdict table is the one heap-owned part. Every door
-//! and relation that needs a transient buffer takes a scratch allocator from its caller and builds
-//! the buffer there, so interning a type or running a relation touches the global heap nowhere.
+//! with every slice a node holds — lives in that region, as does the verdict table, a fixed cache
+//! laid there once: nothing the lattice owns carries drop glue, and the region releases it whole.
+//! Every door and relation that needs a transient buffer takes a scratch allocator from its caller
+//! and builds the buffer there, so interning a type or running a relation touches the global heap
+//! nowhere.
 //!
 //! # Writing a new walk
 //!
