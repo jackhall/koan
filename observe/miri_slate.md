@@ -63,6 +63,10 @@ silence the stale-anchor check; delete a redundant test instead.
   successor, lets it redeem out of its predecessor, and only then releases that predecessor, whose
   region goes back to the pool for the hop after. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s creation and release doors, its delivery doors and its reattach seam.
+- `src/program/substrate.rs` — the substrate owns program storage beside the graph and registry
+  that borrow it, and moves, runs across separate calls and drops as one value. No `unsafe` of its
+  own; the backing `unsafe` is `self_cell`'s joined allocation, which lends the dependent a
+  borrow of the boxed owner.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -86,6 +90,9 @@ buffers live in a scratch region the caller hands it.
 - `a_record_is_order_blind_in_identity_and_ordered_in_presentation`
   a registry whose own region
   doubles as its scratch: the relation's buffer and the nodes it reads share one bump.
+- `the_table_is_laid_once_and_never_grows`
+  the verdict table laid in the registry's bump on its first record, and a hundred keys through
+  one two-slot bucket, every slot written back in place.
 
 **Program-region AST** ([src/parse/ast/program.rs](../src/parse/ast/program.rs)) — every name
 and every parts run the parser produces is bumped into program storage through the doors here, and
@@ -164,14 +171,24 @@ two.
   through a run that is retyped at a fresh pair of brands each wake and whose own bytes are handed
   back under the result built from it.
 
+**Self-contained substrate** ([src/program/substrate.rs](../src/program/substrate.rs)) — program
+storage and the interner in `self_cell`'s owner, the graph, the registry and the parsed program in
+its dependent at `'graph`.
+
+- `two_substrates_load_move_and_run_in_separate_calls`
+  two substrates returned from a helper, moved through a `Vec` into a `Box`, each running a cell
+  and interning a type in one call and reading it back and running another in a second, then
+  dropped: the owner's box, the registry and AST in program storage, and the graph beside them
+  all released.
+
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-21: 82s — 18 tests, 0 leaks, 0 UB
 - 2026-09-19: 24s — 14 tests, 0 leaks, 0 UB
 - 2026-09-18: 23s — 13 tests, 0 leaks, 0 UB
 - 2026-09-15: 38s — 10 tests, 0 leaks, 0 UB
 - 2026-09-15: 49s — 9 tests, 0 leaks, 0 UB
-- 2026-09-13: 18s — 8 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
