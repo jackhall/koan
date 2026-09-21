@@ -7,3 +7,4 @@ mod golden;
 mod heap;
 mod properties;
 mod residue;
+mod verdicts;

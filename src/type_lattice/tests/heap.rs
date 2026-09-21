@@ -3,9 +3,9 @@
 //! No law: whether a door reaches the global heap is a fact about where it builds its buffers, not
 //! about the algebra, so it is pinned by a bracket around a battery. The lib-test binary's counting
 //! allocator ([`allocation_count`]) tallies this thread's heap allocations. Every region the
-//! battery touches is first grown to a chunk it fits in, and the verdict table — the one heap-owned
-//! part of the registry — is pre-sized, so any allocation inside the bracket is the lattice's own,
-//! and the test names it by failing.
+//! battery touches is first grown to a chunk it fits in — the verdict table is laid in the registry's
+//! region, too — so any allocation inside the bracket is the lattice's own, and the test names it by
+//! failing.
 
 use crate::memory::{Bump, BumpAllocator, BumpVec, ScopeId};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
@@ -59,7 +59,6 @@ fn interning_and_relations_touch_no_heap() {
         warm(bump);
     }
     let types = TypeRegistry::in_region(region);
-    types.reserve_verdicts(1 << 16);
 
     let before = allocation_count();
 

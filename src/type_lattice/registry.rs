@@ -15,20 +15,21 @@
 //! computed off its children at intern — whether a free quantifier, and whether any rigid variable,
 //! is reachable — so both probes are one table read.
 //!
-//! Verdicts are a separate map keyed by `(subject digest, candidate digest, relation)`, and the one
-//! part of the registry on the global heap: a bound on verdict storage is a permissible knob, and a
-//! table that may shrink cannot live in a region that releases nothing before the run ends. A
-//! verdict over a digest pair is a pure function — once computed it never changes — so verdicts
-//! are never load-bearing: a cold registry costs a re-walk of the relation, never a wrong answer.
+//! Verdicts are a separate table keyed by `(subject digest, candidate digest, relation)`: a fixed
+//! run of two-slot buckets laid in the region the first time a verdict is recorded, and never
+//! resized, so it strands nothing in a bump that releases nothing before the run ends. A full
+//! bucket evicts the slot not touched last. A verdict over a digest pair is a pure function — once
+//! computed it never changes — so verdicts are never load-bearing: a forgotten one costs a re-walk
+//! of the relation, never a wrong answer. The registry therefore owns nothing on the global heap,
+//! and can itself rest in a bump.
 //!
 //! Every door that sorts, flattens or canonicalizes takes a scratch [`BumpAllocator`] for its
 //! transient buffers, and every door computes its digest off the caller's own slices first, so
 //! content is bumped into the region only on a miss.
 //!
-//! See [README.md](README.md) § Storage: one region, one heap table.
+//! See [README.md](README.md) § Storage: one region.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, ScopeId, bump_table};
 use crate::symbols::{BinderSymbol, IdentityBuildHasher, Symbol, TypeSymbol};
@@ -100,8 +101,8 @@ impl<'run> Entry<'run> {
 type NodeTable<'run> = BumpBackedMap<'run, TypeDigest, Entry<'run>, IdentityBuildHasher>;
 
 /// Which question a recorded verdict answers. The two never alias — each digest domain is disjoint
-/// by construction — but the enum still keys the map explicitly.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// by construction — but the enum still keys the table explicitly.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Relation {
     /// [`is_subtype_of`](super::order::is_subtype_of), the one order.
     Subtype,
@@ -109,35 +110,38 @@ pub(super) enum Relation {
     SigSatisfies,
 }
 
-/// A verdict's key: the subject, the candidate, and which question was asked.
-type VerdictKey = (TypeDigest, TypeDigest, Relation);
+/// Slots in the verdict table. A power of two, two slots to a bucket.
+const VERDICT_SLOTS: usize = 1024;
 
-/// The verdict table's hasher. A key is two content digests and a relation tag, and a digest is
-/// already a uniformly distributed hash, so the table folds the two digests' low words together —
-/// rotated apart, so `(a, b)` and `(b, a)` land in different buckets — rather than re-hashing
-/// thirty-three bytes through SipHash on every relation probe. Equality still compares the whole
-/// key, so a fold collision costs a probe and never a wrong verdict.
-#[derive(Default)]
-struct VerdictHasher(u64);
-
-impl std::hash::Hasher for VerdictHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    /// The relation tag: a derived `Hash` feeds its discriminant here as native-endian bytes.
-    fn write(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 = self.0.rotate_left(8) ^ u64::from(*byte);
-        }
-    }
-
-    fn write_u128(&mut self, digest: u128) {
-        self.0 = self.0.rotate_left(32) ^ (digest as u64);
-    }
+/// One slot of the verdict table: a whole key, its verdict, and the bucket's recency bit.
+#[derive(Clone, Copy)]
+struct VerdictSlot {
+    subject: TypeDigest,
+    candidate: TypeDigest,
+    relation: Relation,
+    verdict: bool,
+    occupied: bool,
+    /// Set on the slot of its bucket touched last; the other slot is the one an insert evicts.
+    recent: bool,
 }
 
-type VerdictBuildHasher = std::hash::BuildHasherDefault<VerdictHasher>;
+impl VerdictSlot {
+    const EMPTY: Self = Self {
+        subject: TypeDigest(0),
+        candidate: TypeDigest(0),
+        relation: Relation::Subtype,
+        verdict: false,
+        occupied: false,
+        recent: false,
+    };
+
+    fn holds(self, subject: TypeDigest, candidate: TypeDigest, relation: Relation) -> bool {
+        self.occupied
+            && self.subject == subject
+            && self.candidate == candidate
+            && self.relation == relation
+    }
+}
 
 /// What interning a shape produced: the canonical handle, and how the caller's declaration-order
 /// quantifier indices map onto the canonical group.
@@ -149,15 +153,21 @@ pub struct ShapeIntern<'s> {
     pub quantifier_map: &'s [Option<usize>],
 }
 
-/// The store of type content and relation verdicts. Interior mutability via `RefCell`, in
-/// independent cells: a read of `nodes` copies its entry out and releases the cell before the
-/// reader runs, so reads nest freely and a reader may intern, while `verdicts` is written under its
-/// own borrow.
+/// The store of type content and relation verdicts. Interior mutability in independent cells: a
+/// read of `nodes` copies its entry out and releases the cell before the reader runs, so reads
+/// nest freely and a reader may intern, while a verdict slot is copied in and out whole.
 pub struct TypeRegistry<'run> {
     /// The run region's bump: every node slice an intern miss keeps is copied in here.
     bump: BumpAllocator<'run>,
     nodes: RefCell<NodeTable<'run>>,
-    verdicts: RefCell<HashMap<VerdictKey, bool, VerdictBuildHasher>>,
+    /// The verdict table: empty until the first verdict is recorded, then `verdict_slots` long for
+    /// good.
+    verdicts: Cell<&'run [Cell<VerdictSlot>]>,
+    verdict_slots: usize,
+    #[cfg(test)]
+    verdict_evictions: Cell<u64>,
+    #[cfg(test)]
+    verdict_inserts: Cell<u64>,
 }
 
 impl<'run> TypeRegistry<'run> {
@@ -166,10 +176,27 @@ impl<'run> TypeRegistry<'run> {
     /// signature — so the constants those names lower to are dereferenceable in a registry that has
     /// interned nothing else.
     pub fn in_region(bump: BumpAllocator<'run>) -> Self {
+        Self::with_verdict_slots(bump, VERDICT_SLOTS)
+    }
+
+    /// `test`-only: a registry whose verdict table holds `slots` slots, so a test can fill a
+    /// bucket.
+    #[cfg(test)]
+    pub(super) fn in_region_with_verdict_slots(bump: BumpAllocator<'run>, slots: usize) -> Self {
+        assert!(slots.is_power_of_two() && slots >= 2);
+        Self::with_verdict_slots(bump, slots)
+    }
+
+    fn with_verdict_slots(bump: BumpAllocator<'run>, verdict_slots: usize) -> Self {
         let registry = Self {
             bump,
             nodes: RefCell::new(bump_table(bump)),
-            verdicts: RefCell::new(HashMap::default()),
+            verdicts: Cell::new(&[]),
+            verdict_slots,
+            #[cfg(test)]
+            verdict_evictions: Cell::new(0),
+            #[cfg(test)]
+            verdict_inserts: Cell::new(0),
         };
         registry.seed_constants();
         registry
@@ -208,11 +235,10 @@ impl<'run> TypeRegistry<'run> {
         self.intern_schema(SigSchema::EMPTY);
     }
 
-    /// `test`-only: size the verdict table for `additional` more verdicts, so an allocation count
-    /// bracketing a battery of relations measures the lattice and not the table's growth.
+    /// `test`-only: how many verdicts were recorded, and how many of those evicted another.
     #[cfg(test)]
-    pub(super) fn reserve_verdicts(&self, additional: usize) {
-        self.verdicts.borrow_mut().reserve(additional);
+    pub(super) fn verdict_tally(&self) -> (u64, u64) {
+        (self.verdict_inserts.get(), self.verdict_evictions.get())
     }
 
     // --- Content: interning and node reads ---
@@ -808,20 +834,37 @@ impl<'run> TypeRegistry<'run> {
 
     // --- Verdicts ---
 
-    /// Consult the registry for a recorded verdict.
+    /// The first slot of the bucket a key lands in. A digest is already a uniformly distributed
+    /// hash, so the two digests' low words fold together — rotated apart, so `(a, b)` and `(b, a)`
+    /// land in different buckets — with the relation mixed in. A slot compares the whole key, so a
+    /// fold collision costs a slot and never a wrong verdict.
+    fn bucket(&self, subject: TypeDigest, candidate: TypeDigest, relation: Relation) -> usize {
+        let fold = (subject.0 as u64).rotate_left(32) ^ (candidate.0 as u64) ^ (relation as u64);
+        2 * ((fold as usize) & (self.verdict_slots / 2 - 1))
+    }
+
+    /// Consult the registry for a recorded verdict. A hit marks its slot the one touched last.
     pub(super) fn verdict(
         &self,
         subject: TypeDigest,
         candidate: TypeDigest,
         relation: Relation,
     ) -> Option<bool> {
-        self.verdicts
-            .borrow()
-            .get(&(subject, candidate, relation))
-            .copied()
+        let table = self.verdicts.get();
+        if table.is_empty() {
+            return None;
+        }
+        let first = self.bucket(subject, candidate, relation);
+        let pair = &table[first..first + 2];
+        let hit = pair
+            .iter()
+            .position(|slot| slot.get().holds(subject, candidate, relation))?;
+        let verdict = touch(pair, hit);
+        Some(verdict)
     }
 
-    /// Record `verdict` for the key. Negative verdicts are recorded exactly as positive ones.
+    /// Record `verdict` for the key. Negative verdicts are recorded exactly as positive ones. The
+    /// table is laid on the first record; after that a full bucket evicts the slot not touched last.
     pub(super) fn record_verdict(
         &self,
         subject: TypeDigest,
@@ -829,10 +872,46 @@ impl<'run> TypeRegistry<'run> {
         relation: Relation,
         verdict: bool,
     ) {
-        self.verdicts
-            .borrow_mut()
-            .insert((subject, candidate, relation), verdict);
+        let mut table = self.verdicts.get();
+        if table.is_empty() {
+            table = self
+                .bump
+                .alloc_slice_fill_with(self.verdict_slots, |_| Cell::new(VerdictSlot::EMPTY));
+            self.verdicts.set(table);
+        }
+        let first = self.bucket(subject, candidate, relation);
+        let pair = &table[first..first + 2];
+        let held = pair
+            .iter()
+            .position(|slot| slot.get().holds(subject, candidate, relation));
+        let free = || pair.iter().position(|slot| !slot.get().occupied);
+        let slot = held.or_else(free).unwrap_or_else(|| {
+            #[cfg(test)]
+            self.verdict_evictions.set(self.verdict_evictions.get() + 1);
+            usize::from(pair[0].get().recent)
+        });
+        #[cfg(test)]
+        self.verdict_inserts.set(self.verdict_inserts.get() + 1);
+        pair[slot].set(VerdictSlot {
+            subject,
+            candidate,
+            relation,
+            verdict,
+            occupied: true,
+            recent: false,
+        });
+        touch(pair, slot);
     }
+}
+
+/// Mark slot `hit` of a bucket the one touched last, and return its verdict.
+fn touch(pair: &[Cell<VerdictSlot>], hit: usize) -> bool {
+    let (mut this, mut other) = (pair[hit].get(), pair[1 - hit].get());
+    this.recent = true;
+    other.recent = false;
+    pair[hit].set(this);
+    pair[1 - hit].set(other);
+    this.verdict
 }
 
 /// One variable's census entry while a shape is being canonicalized.
