@@ -28,6 +28,9 @@ pub mod machine;
 /// spelling and the slot array — and the bump tier outside the graph, where program storage lives.
 pub mod memory;
 pub mod parse;
+/// A loaded program as one owning value: program storage, the symbol interner, the type registry
+/// and the cell graph over them, reached through a closure per call.
+pub mod program;
 /// The deferred-work drain koan runs on: a unit of work is a `cellgraph` cell, and the module adds
 /// the submission table, the work queue, the drain protocol and delivery over it.
 pub mod scheduler;
