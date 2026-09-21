@@ -11,8 +11,9 @@ indices and condense its bindings into components, [the
 tie](../../src/knot/README.md#the-tie) births a deferred-only component as
 one knot, and [values](../../src/values/README.md) prices every crossing. What is
 missing between them is where a top-level binding lives, which cell a statement
-is, how a component's dependencies reach the drain's submission table, and where
-the placement bit for a koan function comes from. Two of those layers record the
+is, how a component's dependencies reach the drain's submission table, where the
+builtin table a shape resolves its names against rests once a program runs, and
+where the placement bit for a koan function comes from. Two of those layers record the
 gap as open work of their own: `scope` does not say which habitat each tier of an
 activation is laid down in, and `knot` does not say who evaluates the eager
 part a refused tie names.
@@ -24,6 +25,10 @@ part a refused tie names.
   entered. The top level's slot array lives in program storage at `'graph` and a
   bound slot holds a dormant carrier homed in the root, so a statement cell
   claims, binds and reads a slot with no door.
+- The builtin table rests in program storage at `'graph`, laid down by the
+  constructor a region's table is, through the writer of a store `cellgraph`
+  owns outside the graph. An activation at any brand names it with no door,
+  so a call pays nothing to reach a builtin.
 - The top level's statements are tree cells under the root, so a binder builds
   its value in the root's region by an upward crossing the verdict prices, a
   reader redeems it entitled by root identity with no hold of its own, and the
@@ -66,7 +71,7 @@ part a refused tie names.
 - The [scheduler](../../src/scheduler/README.md) names no step of koan's: it
   takes the step state as one bundle parameter, as it takes delivery, and its
   continuation is one shape with no arm to add. Koan's steps and the state they
-  run over are one module above it, whose design doc is the `README.md` in its
+  run over are one module above it, `program`, whose design doc is the `README.md` in its
   source directory and whose top-of-file comment links it.
 - The program record carries one `evaluate` function that turns a node and the
   environment it is read in into a child the drain can create, and the component
@@ -99,6 +104,18 @@ part a refused tie names.
   carrier, which carries no brand. A `SlotArray` is invariant in its brand, so
   it is instantiated at two habitats — `'graph` at the top level holding
   carriers, `'here` in a frame holding values — and they are distinct types.
+- *Where the builtin table lives — decided.* In program storage, in a store
+  `cellgraph` owns outside the graph and hands a `Writer` over, so the embedder
+  never names the bump underneath. Program storage holds it beside the bump
+  the AST is parsed into. A shape resolves a builtin name to an index into the table, so the
+  table has to exist before the program's shape does and before any cell. A
+  `'graph` borrow is nameable from every step and embeds in any region at no
+  price, and the table is covariant in its cell brand, so it shortens to any
+  activation's. The store is sound for the reason a `'graph` borrow is no
+  operand: the storage outlives the graph, which prices, pins and reclaims none
+  of it. The alternative, a table in the root's region written by the root's
+  first tree child, costs a redeem and a pinned placement in every cell that
+  owns an environment — one per call in a region of its own.
 - *Statements are tree children of the root, not slab cells — decided.* The tree
   pool takes no cap, which is what lets every statement of a body have its slot
   claimed before any of them runs; and a tree cell's redeem entitlement is root
@@ -171,3 +188,4 @@ part a refused tie names.
 
 - [Dispatch](dispatch.md) — running a program needs the scheduler that drives it.
 - [Yielding iterators](yielding-iterators.md) — a flat consumer loop is its tail call.
+- [The AST in `cellgraph` storage](ast-in-graph-storage.md) — it moves the AST into the store this item adds.
