@@ -12,10 +12,11 @@ use std::marker::PhantomData;
 
 use cellgraph::{
     Active, CellGraph, CellHandle, Config, Covariant, CreateError, CrossedOperand, DeliverError,
-    Delivered, Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, NoScratch, Operand,
-    Prices, Prose, Ready, Reattachable, Receipt, ReceiptError, RedeemError, RegisterError,
-    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale,
-    StepContext, TenantHandle, ThinRun, TreeHandle, Verdict, Writer, covariant, reattachable,
+    Delivered, Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, NoScratch, OnceRun,
+    OnceView, Operand, Prices, Prose, Ready, Reattachable, Receipt, ReceiptError, RedeemError,
+    RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run,
+    SlabHandle, Stale, StepContext, Storage, TenantHandle, ThinRun, TreeHandle, Verdict, Writer,
+    Written, covariant, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -87,6 +88,18 @@ fn build_thin_run<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
     let run: ThinRun<'cell, u32> = writer.thin_run(4, |index| index as u32 * 2);
     assert!(!run.is_empty() && run.len() == 4);
     run.as_slice()
+}
+
+/// The once-written run: a slot set once, refused a second time, and read through the view — the
+/// read half, which has no door that sets.
+fn build_once_run<'cell>(writer: Writer<'cell>) -> &'cell u32 {
+    let run: OnceRun<'static, 'cell, Number> = writer.once_run(2);
+    assert!(!run.is_empty() && run.len() == 2);
+    run.set(1, one(writer, 5)).unwrap();
+    assert_eq!(run.set(1, one(writer, 6)), Err(Written));
+    let view: OnceView<'static, 'cell, Number> = run.view();
+    assert!(view.get(0).is_none() && view.len() == 2 && !view.is_empty());
+    view.get(1).expect("slot one was set")
 }
 
 fn build_text<'cell>(writer: Writer<'cell>) -> &'cell str {
@@ -408,6 +421,8 @@ fn every_public_door_answers_from_outside_the_crate() {
             let text = context.lift::<Text>(build_text(context.writer()));
             let thin = context.lift::<Numbers>(build_thin_run(context.writer()));
             assert_eq!(read_first(context, &thin), &[0, 2, 4, 6]);
+            let once = context.lift::<Number>(build_once_run(context.writer()));
+            assert_eq!(*read_first(context, &once), 5);
             let filtered = context.lift::<Numbers>(build_run(context.writer()));
             let rendered = context.lift::<Text>(build_prose(context.writer()));
             assert_eq!(read_first(context, &filtered), &[3, 6, 99]);
@@ -721,7 +736,8 @@ fn the_tree_pool_answers_from_outside_the_crate() {
 #[test]
 fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
     // Storage the embedder owns outside the graph, which the graph may borrow but not outlive.
-    let program = String::from("program text");
+    let storage = Storage::new();
+    let program: &str = storage.writer().text("program text");
     let mut graph: CellGraph<'_, Work> = CellGraph::new(1, weigh);
     let root = graph.create(None).unwrap();
     let left = graph.create_tree(root, None).unwrap();
@@ -729,13 +745,7 @@ fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
     graph
         .enter(left, |context| {
             let count = one(context.writer(), 41);
-            let entry = one(
-                context.writer(),
-                Entry {
-                    program: &program,
-                    count,
-                },
-            );
+            let entry = one(context.writer(), Entry { program, count });
             let source = context.lift::<Listing>(entry);
             // A sibling is neither on the home's chain nor under it: the crossing is a forced copy.
             let copied = context
@@ -758,7 +768,7 @@ fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
                 )
                 .unwrap();
             let read = read_first(context, &copied);
-            assert!(std::ptr::eq(read.program, program.as_str()));
+            assert!(std::ptr::eq(read.program, program));
             assert!(!std::ptr::eq(read.count, count));
             assert_eq!(*read.count, 41);
         })

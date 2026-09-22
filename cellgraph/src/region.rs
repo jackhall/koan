@@ -544,6 +544,26 @@ impl<'cell> Writer<'cell> {
     }
 }
 
+/// Storage the embedder keeps alive outside the graph, written through the same [`Writer`] a
+/// region is — what a graph built over it borrows as `'graph`.
+///
+/// Sound for the reason a `'graph` borrow is no operand: the storage outlives the graph, which
+/// prices, pins and reclaims none of it. The bump stays private, so an embedder writes it only
+/// through the writer's verbs.
+#[derive(Default)]
+pub struct Storage(Bump);
+
+impl Storage {
+    pub fn new() -> Self {
+        Storage(Bump::new())
+    }
+
+    /// A writer at this storage's borrow — `'graph`, for a graph built over it.
+    pub fn writer(&self) -> Writer<'_> {
+        Writer(&self.0)
+    }
+}
+
 /// What sits at the front of a [`ThinRun`]'s allocation: its length. The elements follow at
 /// `ThinRun::<T>::OFFSET`.
 #[repr(C)]

@@ -24,7 +24,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-40 tests, grouped by the unsafe site each pins down. Names below are the exact
+42 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -110,6 +110,16 @@ readable after the region claims a new chunk.
 - `region::tests::a_thin_run_of_over_aligned_payloads_lands_them_aligned`
 - `region::tests::a_thin_run_whose_fill_writes_into_the_same_region`
 - `region::tests::a_thin_run_survives_the_region_growing_under_it`
+
+**Once-written runs** ([src/once.rs](../src/once.rs)) — the same `retype` primitive at the read
+of a once-written slot: `OnceRun::set` erases a value at the run's own brand and `OnceView::get`
+reattaches it at the view's, which covariance may have shortened into a cell that outlives none of
+the run's region. A root sets a slot, keeps the view at rest, and a tree child and a tenant each
+redeem it, park it in their continuation, and read the slot a step later: what Miri checks is that
+a reattach at a brand shorter than the one the value was set at reads live chunks.
+
+- `once::tests::a_tree_child_reads_a_run_set_in_its_root_across_a_step`
+- `once::tests::a_tenant_reads_a_run_set_in_its_host_across_a_step`
 
 **The at-rest carrier and the crossing's two brands** ([src/dormant.rs](../src/dormant.rs),
 [src/graph.rs](../src/graph.rs)) — the same `retype` primitive at the doors a value crosses steps

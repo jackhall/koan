@@ -18,6 +18,7 @@ mod dormant;
 mod graph;
 mod handle;
 mod matrix;
+mod once;
 mod reach;
 mod reattach;
 mod receipt;
@@ -36,6 +37,7 @@ pub use graph::{
     ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
 };
 pub use handle::{CellHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
+pub use once::{OnceRun, OnceView, Written};
 pub use reattach::{Covariant, DropFree, Erased, NoScratch, Reattachable, ReattachableOverBoth};
 pub use receipt::{Delivered, Delivery, NoDelivery};
-pub use region::{Prose, Run, ThinRun, Writer};
+pub use region::{Prose, Run, Storage, ThinRun, Writer};
