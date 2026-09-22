@@ -23,7 +23,7 @@
 //!
 //! See [README.md § Operator groups](README.md#operator-groups).
 
-use crate::memory::{BumpAllocator, BumpVec, ProgramBrand};
+use crate::memory::{BumpAllocator, BumpVec, ProgramBrand, collect, resident};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::{OpArity, op_declaration_arity, symbol_from_quote_body};
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Role};
@@ -194,6 +194,7 @@ pub(crate) enum Claim<'graph> {
 /// Every claim the code being built makes, collected once before the first draft and read by
 /// symbol. A `Claims` of an `EVAL`'s code chains to the program's, so evaluated code is held to the
 /// program's declarations.
+#[derive(Clone, Copy)]
 pub(crate) struct Claims<'graph> {
     /// Sorted by symbol.
     entries: &'graph [(KeywordSymbol, Claim<'graph>)],
@@ -218,6 +219,7 @@ impl<'graph> Claims<'graph> {
 ///
 /// Only two kinds of body hold a group: a `GROUP`'s own body, and a `USING … SCOPE` body over an
 /// operand that surfaces one. Both hold it as a parameter is held, so no position is ever compared.
+#[derive(Clone, Copy)]
 pub struct GroupFrame<'graph> {
     held: &'graph [&'graph DeclaredGroup<'graph>],
     outer: Option<&'graph GroupFrame<'graph>>,
@@ -359,7 +361,7 @@ impl<'graph> GroupFrame<'graph> {
 /// symbol will not read.
 pub(crate) fn declared_group<'x>(
     node: &KExpression<'_>,
-    storage: BumpAllocator<'x>,
+    scratch: BumpAllocator<'x>,
 ) -> Result<Option<DeclaredGroup<'x>>, ()> {
     let Some(form) = node.cache().builtin_shape() else {
         return Ok(None);
@@ -414,7 +416,7 @@ pub(crate) fn declared_group<'x>(
     let ExpressionPart::Expression(body) = body.ok_or(())? else {
         return Err(());
     };
-    let members = scan_members(body.reference(), storage)?;
+    let members = scan_members(body.reference(), scratch)?;
     Ok(Some(DeclaredGroup {
         members: members.leak(),
         mode,
@@ -425,9 +427,9 @@ pub(crate) fn declared_group<'x>(
 /// sorted and deduped. A `UNARY OP` among them, or a body declaring no operator at all, is refused.
 pub(crate) fn scan_members<'x>(
     body: &KExpression<'_>,
-    storage: BumpAllocator<'x>,
+    scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, KeywordSymbol>, ()> {
-    let mut members: BumpVec<'x, KeywordSymbol> = BumpVec::new_in(storage);
+    let mut members: BumpVec<'x, KeywordSymbol> = BumpVec::new_in(scratch);
     for (statement, _) in body.body_statements() {
         let node = statement.statement_spine();
         match op_declaration_arity(node) {
@@ -507,10 +509,14 @@ where
     }
     let mut entries = scan.entries;
     entries.sort_unstable_by_key(|(symbol, _)| *symbol);
-    Ok(brand.allocator().alloc(Claims {
-        entries: brand.allocator().alloc_slice_copy(&entries),
-        outer,
-    }))
+    let writer = brand.writer();
+    Ok(resident(
+        writer,
+        Claims {
+            entries: collect(writer, entries.iter().copied()),
+            outer,
+        },
+    ))
 }
 
 /// The pre-scan's own state: the claims made so far, beside the storage a new group record lands in.
@@ -625,12 +631,15 @@ impl<'graph> Scan<'graph, '_> {
                 None => {}
             }
         }
-        let storage = self.brand.allocator();
+        let writer = self.brand.writer();
         let record = record.unwrap_or_else(|| {
-            storage.alloc(DeclaredGroup {
-                members: storage.alloc_slice_copy(group.members),
-                mode: group.mode,
-            })
+            resident(
+                writer,
+                DeclaredGroup {
+                    members: collect(writer, group.members.iter().copied()),
+                    mode: group.mode,
+                },
+            )
         });
         for symbol in group.members {
             if self.claimed(*symbol).is_none() {

@@ -47,9 +47,9 @@ silence the stale-anchor check; delete a redundant test instead.
 - `src/memory/slots.rs` — the slot array is a safe façade over `cellgraph`'s `Writer::once_run`:
   each slot holds its value erased and is read through a covariant view at a shorter brand. No
   `unsafe` of its own; the backing `unsafe` is `cellgraph`'s `once_run` read, the reattach seam.
-- `src/parse/ast/program.rs` — the program-region storage doors: plain bump allocations whose
-  destination brand discharges residence at compile time, over `bumpalo`'s `unsafe`. No `unsafe`
-  of its own.
+- `src/parse/ast/program.rs` — the program-storage doors: plain writes whose destination brand
+  discharges residence at compile time. No `unsafe` of its own; the backing `unsafe` is
+  `cellgraph`'s `fill`.
 - `src/values/crossing.rs` — the crossing verb's deep copy lays a value down through the
   destination's `Writer`, nesting `fill` inside `fill` with `text` between and embedding program
   nodes at `'graph`. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s placement doors
@@ -63,8 +63,8 @@ silence the stale-anchor check; delete a redundant test instead.
   successor, wakes its state out of its predecessor, and only then releases that predecessor, whose
   region goes back to the pool for the hop after. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s creation and release doors, its delivery doors and its reattach seam.
-- `src/program/substrate.rs` — the substrate owns program storage beside the graph and registry
-  that borrow it, and moves, runs across separate calls and drops as one value. No `unsafe` of its
+- `src/program/substrate.rs` — the substrate owns program storage and the registry's bump beside
+  the graph and the borrows of them, and moves, runs across separate calls and drops as one value. No `unsafe` of its
   own; the backing `unsafe` is `self_cell`'s joined allocation, which lends the dependent a
   borrow of the boxed owner.
 - `src/program/body.rs` — the body runner parks holding an activation at `'here` and wakes it at
@@ -100,12 +100,13 @@ buffers live in a scratch region the caller hands it.
   one two-slot bucket, every slot written back in place.
 
 **Program-region AST** ([src/parse/ast/program.rs](../src/parse/ast/program.rs)) — every name
-and every parts run the parser produces is bumped into program storage through the doors here, and
-the storage releases the whole tree.
+and every parts run the parser produces is written into program storage through the doors here, and
+the storage releases the whole tree. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s
+`fill`, which every door lands on.
 
 - `the_flip_reaches_quote_and_eval_bodies`
   a quoted binder form with sigil-nested sub-expressions, parsed twice into the program region
-  and compared shape for shape — nested runs, cached form entries and the quote wrapper all bumped.
+  and compared shape for shape — nested runs, cached form entries and the quote wrapper all written.
 - `a_binder_forms_type_slot_admits_the_bare_parenthesized_spelling`
   the same form unquoted, so the top-level statement peel and the type-slot flip run over
   region-hosted parts.
@@ -183,8 +184,9 @@ cell's region; what this pins is the ordering between two.
   released.
 
 **Self-contained substrate** ([src/program/substrate.rs](../src/program/substrate.rs)) — program
-storage and the interner in `self_cell`'s owner, and in its dependent at `'graph` the graph and
-borrows of the registry, the builtin table and the program record laid down in program storage.
+storage, the registry's bump and the interner in `self_cell`'s owner, and in its dependent at
+`'graph` the graph, a borrow of the registry, and the builtin table and the program record laid
+down in program storage.
 
 - `two_programs_run_and_are_read_back_in_a_separate_call`
   two substrates returned from a helper, moved through a `Vec` into a `Box`, each running its

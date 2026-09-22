@@ -15,8 +15,13 @@ use super::record::{Language, LoadError, Program};
 
 /// What the substrate owns outright. It borrows nothing, and `self_cell` boxes it and only ever
 /// lends it shared, so everything that borrows it lives in [`Running`].
+///
+/// `registry` is the bump the [type lattice](crate::type_lattice)'s registry is built over — the
+/// one tier that still needs a collections arena rather than program storage's write surface. It
+/// is released whole with the rest, and the registry's destructor never runs.
 struct Owner {
     storage: ProgramStorage,
+    registry: Bump,
     symbols: SymbolInterner,
 }
 
@@ -110,17 +115,18 @@ impl CellSubstrate {
     pub fn load<L: Language>(source: &str, path: &str, cap: u32) -> Result<Self, LoadError> {
         let owner = Owner {
             storage: program_storage(),
+            registry: Bump::new(),
             symbols: SymbolInterner::new(),
         };
         Joined::try_new(owner, |owner| {
             let brand = owner.storage.brand();
             let parsed =
                 parse_with_path(brand, &owner.symbols, source, path).map_err(LoadError::Parse)?;
-            // The registry's destructor never runs: everything it owns is bumped into program
-            // storage, which releases it whole.
-            let types = &*brand
-                .allocator()
-                .alloc(TypeRegistry::in_region(brand.allocator()));
+            // The registry's destructor never runs: everything it owns is bumped into the owner's
+            // registry arena, which releases it whole.
+            let types = &*owner
+                .registry
+                .alloc(TypeRegistry::in_region(&owner.registry));
             let scratch = Bump::new();
             let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
             let shape = BodyShape::of_program(brand, &parsed, builtins, &scratch)

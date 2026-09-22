@@ -5,7 +5,9 @@
 //! and binds its width; [`SlotArray`](crate::memory::SlotArray) and [`Knot`](crate::memory::Knot) are the shapes here built in a cell's region.
 //!
 //! The **bump tier** is storage outside the graph — [`Bump`](crate::memory::Bump), [`BumpAllocator`](crate::memory::BumpAllocator), [`BumpVec`](crate::memory::BumpVec) and
-//! [`BumpBackedMap`](crate::memory::BumpBackedMap) — for the AST ([`program`](crate::memory::program)) and the type lattice's registry and scratch.
+//! [`BumpBackedMap`](crate::memory::BumpBackedMap) — for the type lattice's registry and for the
+//! scratch a caller passes. [`program`](crate::memory::program) is not of it: program storage is
+//! one `cellgraph` store, written through a [`Writer`](crate::memory::Writer) like a region.
 //!
 //! [`strongly_connected_components`](crate::memory::strongly_connected_components) is the index-graph
 //! walk a recursive group and a scope's bindings both condense by.

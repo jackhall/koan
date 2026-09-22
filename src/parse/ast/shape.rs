@@ -11,7 +11,7 @@
 //! scheduler's per-call parts, but both answer these questions the same way, so both carry this
 //! one cache.
 
-use crate::memory::BumpAllocator;
+use crate::memory::{Writer, collect};
 use crate::parse::builtin_shapes::binder::StoredBinderKey;
 use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::parse::builtin_shapes::{BuiltinShape, builtin_shape_for};
@@ -19,7 +19,7 @@ use crate::symbols::KeywordSymbol;
 
 /// One position of a bucket key: a fixed token as its [`KeywordSymbol`], or an argument slot.
 /// `Copy` and lifetime-free, so a key run is the same type whether it sits in a `Vec` a caller
-/// hands around or in a slice bumped into a region — one type, one derived `Hash`, and equality is
+/// hands around or in a slice written into a region — one type, one derived `Hash`, and equality is
 /// a tag plus a `u128` compare with no text to walk.
 /// `Ord` is the canonical order a schema's keyworded members sort by — a slot before any keyword,
 /// keywords by their symbol's digest bits. Arbitrary as an order over call shapes, stable across
@@ -193,14 +193,14 @@ fn is_operator_chain_shape(key: &[KeyElement]) -> bool {
     })
 }
 
-/// The stored bucket key: a run of the key elements the parts spell, bumped once at construction,
+/// The stored bucket key: a run of the key elements the parts spell, written once at construction,
 /// so reading it is a slice borrow and nothing is hashed — the parse already minted every symbol in
 /// the run.
 pub fn stored_untyped_key<'a>(
-    brand: BumpAllocator<'a>,
+    writer: Writer<'a>,
     elements: impl ExactSizeIterator<Item = KeyElement>,
 ) -> &'a [KeyElement] {
-    brand.alloc_slice_fill_iter(elements)
+    collect(writer, elements)
 }
 
 /// The structural facts a node caches at construction: a function of its parts run and the builtin
@@ -263,7 +263,7 @@ impl<'a> NodeCache<'a> {
         }
     }
 
-    /// The stored bucket key, as a borrow of the run bumped at construction.
+    /// The stored bucket key, as a borrow of the run written at construction.
     pub fn stored_key(&self) -> &'a [KeyElement] {
         self.key
     }
@@ -284,7 +284,7 @@ impl<'a> NodeCache<'a> {
         self.binder_plan.copied()
     }
 
-    /// The plan as the bumped borrow it is stored as, for the working copy that carries it through
+    /// The plan as the written borrow it is stored as, for the working copy that carries it through
     /// a splice unchanged.
     pub fn binder_plan_ref(&self) -> Option<&'a StoredBinderKey<'a>> {
         self.binder_plan

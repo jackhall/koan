@@ -13,7 +13,7 @@
 
 use smallvec::SmallVec;
 
-use crate::memory::BumpAllocator;
+use crate::memory::{Writer, collect};
 use crate::parse::ast::{ExpressionPart, KExpression, KeyElement};
 use crate::parse::builtin_shapes::{BuiltinShape, KEYWORDS, builtin_shape_for};
 use crate::source::Spanned;
@@ -41,12 +41,12 @@ pub type BinderNameFn = fn(&KExpression<'_>) -> Option<BinderSymbol>;
 /// (`MAKESET _` vs `MAKESET _ USING _`) from colliding on the park edge.
 ///
 /// A bucket key is synthesized rather than read straight out of the parts run, so the extractor
-/// takes the brand that bumps each key into the node's own region.
-pub type BinderBucketFn = for<'a> fn(BumpAllocator<'a>, &KExpression<'a>) -> Option<BucketKeys<'a>>;
+/// takes the writer that lays each key down in the node's own store.
+pub type BinderBucketFn = for<'a> fn(Writer<'a>, &KExpression<'a>) -> Option<BucketKeys<'a>>;
 
 /// The bucket keys one binder's body registers overloads under: one for `FN` and binary `OP`, two
 /// for `UNARY OP` (the keyword-first list key plus the binary bridge key). Two is the maximum any
-/// declaration form reaches, so the pair is inline and `Copy` — each key is a run bumped into the
+/// declaration form reaches, so the pair is inline and `Copy` — each key is a run written into the
 /// node's own region.
 #[derive(Clone, Copy, Debug)]
 pub struct BucketKeys<'a> {
@@ -127,7 +127,7 @@ pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<BinderSymb
 /// registers exactly one overload, so the result names one key. Returns `None` only when the
 /// signature slot itself is missing.
 pub(crate) fn fn_def_binder_bucket<'a>(
-    brand: BumpAllocator<'a>,
+    writer: Writer<'a>,
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
     let signature_expr = signature_expr_part(expr)?;
@@ -164,7 +164,7 @@ pub(crate) fn fn_def_binder_bucket<'a>(
             }
         }
     }
-    Some(BucketKeys::one(brand.alloc_slice_fill_iter(key)))
+    Some(BucketKeys::one(collect(writer, key.into_iter())))
 }
 
 /// True iff the part at `index` is a type ascription — the second half of a `<name> :<Type>` pair,
@@ -281,36 +281,43 @@ fn is_unary_form(expr: &KExpression<'_>) -> bool {
 /// statement using the operator parks on the `OP` slot instead of failing dispatch while the
 /// declaration is still finalizing. A `UNARY OP` registers two bodies, so it names two keys.
 pub(crate) fn op_def_binder_bucket<'a>(
-    brand: BumpAllocator<'a>,
+    writer: Writer<'a>,
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
     // The glyph's symbol is already minted on the quoted part, so the park keys are read off it.
     let sym = symbol_from_parts(expr).ok()?;
     if is_unary_form(expr) {
         Some(BucketKeys {
-            first: stored_unary_key(brand, sym),
-            second: Some(stored_binary_key(brand, sym)),
+            first: stored_unary_key(writer, sym),
+            second: Some(stored_binary_key(writer, sym)),
         })
     } else {
-        Some(BucketKeys::one(stored_binary_key(brand, sym)))
+        Some(BucketKeys::one(stored_binary_key(writer, sym)))
     }
 }
 
-/// Region-bumped twin of [`binary_key`](crate::machine::model::binary_key): the `[Slot,
+/// Region-resident twin of [`binary_key`](crate::machine::model::binary_key): the `[Slot,
 /// Keyword(sym), Slot]` run a reduced binary call computes. Agreeing with the owned builder on the
 /// symbol is what lets a park edge installed here be found by a later call's key.
-fn stored_binary_key<'a>(brand: BumpAllocator<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
-    brand.alloc_slice_copy(&[
-        KeyElement::Slot,
-        KeyElement::Keyword(symbol),
-        KeyElement::Slot,
-    ])
+fn stored_binary_key<'a>(writer: Writer<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
+    collect(
+        writer,
+        [
+            KeyElement::Slot,
+            KeyElement::Keyword(symbol),
+            KeyElement::Slot,
+        ]
+        .into_iter(),
+    )
 }
 
-/// Region-bumped twin of [`unary_key`](crate::machine::model::unary_key): the `[Keyword(sym),
+/// Region-resident twin of [`unary_key`](crate::machine::model::unary_key): the `[Keyword(sym),
 /// Slot]` run a reduced unary run computes.
-fn stored_unary_key<'a>(brand: BumpAllocator<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
-    brand.alloc_slice_copy(&[KeyElement::Keyword(symbol), KeyElement::Slot])
+fn stored_unary_key<'a>(writer: Writer<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
+    collect(
+        writer,
+        [KeyElement::Keyword(symbol), KeyElement::Slot].into_iter(),
+    )
 }
 
 /// this; it exists so a consumer outside binder discovery can recognize a surface by *full bucket
@@ -394,7 +401,7 @@ impl BinderFacts {
 /// left alone, and a run matching no builtin shape is untouched. Idempotent.
 ///
 /// Called from the parse frames, on a run that is still an unfrozen `Vec`: a node's parts and its
-/// structural cache are bumped together and never touched again, so this must run before the
+/// structural cache are written together and never touched again, so this must run before the
 /// freeze. The run has no stored key yet, so it feeds the matcher the key elements its parts spell.
 pub(crate) fn admit_bare_type_slots(parts: &mut [Spanned<ExpressionPart<'_>>]) {
     let Some(binder) = builtin_shape_for(parts.iter().map(|part| part.value.key_element()))
@@ -446,18 +453,20 @@ pub enum OpArity {
 }
 
 /// What `expression` installs under `shape`. Both channels are read — a combined shape fills them
-/// together. The key is read off the node's own stored run, and a synthesized bucket key is bumped
-/// into `brand`'s region — the node's, since this runs from the construction door. Returns `None`
-/// for a shape with no binder facts, and for one whose extractors install nothing (`VAL`, and the
-/// anonymous `FN :{…}` whose signature part names no bucket).
+/// together. The key is read off the node's own stored run, and a synthesized bucket key is written
+/// through `writer` — the node's own store, since this runs from the construction door. Returns
+/// `None` for a shape with no binder facts, and for one whose extractors install nothing (`VAL`,
+/// and the anonymous `FN :{…}` whose signature part names no bucket).
 pub(crate) fn binder_plan_for<'a>(
-    brand: BumpAllocator<'a>,
+    writer: Writer<'a>,
     shape: Option<&'static BuiltinShape>,
     expression: &KExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {
     let binder = shape?.binder?;
     let name = binder.names.iter().find_map(|extract| extract(expression));
-    let buckets = binder.bucket.and_then(|extract| extract(brand, expression));
+    let buckets = binder
+        .bucket
+        .and_then(|extract| extract(writer, expression));
     if name.is_none() && buckets.is_none() {
         return None;
     }

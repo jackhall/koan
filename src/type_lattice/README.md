@@ -116,8 +116,8 @@ proper-type slot names what can type an ordinary value, which a signature is not
 
 ## Storage: one region
 
-A [`TypeRegistry`](registry.rs) is built over the run region's bump allocator,
-and every node it interns — with every slice a node holds — lives in that region.
+A [`TypeRegistry`](registry.rs) is built over a bump its owner keeps for it,
+and every node it interns — with every slice a node holds — lives in that bump.
 Nothing the lattice owns carries drop glue, so the region releases the table and
 every node with it, whole.
 
@@ -137,8 +137,8 @@ answer. A full bucket evicts the slot not touched last. The table is lossy by
 design: a verdict over a digest pair is a pure function — once computed it never
 changes — so **verdicts are never load-bearing**, and a forgotten one costs a
 re-walk, never a wrong answer. The registry therefore owns nothing on the global
-heap, and itself rests in a bump — [program storage](../program/README.md), in a
-loaded program.
+heap, and itself rests in a bump its owner keeps for it — in a loaded program,
+the [substrate's own](../program/README.md), released whole with the rest.
 
 Every door that sorts, flattens or canonicalizes takes a **scratch allocator**
 from its caller and builds its transient buffers there, and every door computes

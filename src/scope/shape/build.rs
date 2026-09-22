@@ -18,7 +18,8 @@
 //! See [README.md § Visibility](../README.md#visibility).
 
 use crate::memory::{
-    BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, strongly_connected_components,
+    BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, collect, resident,
+    strongly_connected_components,
 };
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
@@ -75,7 +76,7 @@ pub(super) fn program<'graph, X: Knotted>(
     // Every claim the program makes over an operator symbol is collected before the first draft, so
     // how a symbol chains never depends on where its declarations sit.
     let claims = groups::claims(brand, scratch, statements.iter(), None)?;
-    let frame = brand.allocator().alloc(GroupFrame::new(&[], None, claims));
+    let frame = resident(brand.writer(), GroupFrame::new(&[], None, claims));
     let mut builder = Builder::new(brand, scratch, &lookup, None, claims, frame);
     let statements = statements
         .iter()
@@ -111,9 +112,10 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
         body.body_statements().map(|(statement, _)| statement),
         Some(enclosing.claims()),
     )?;
-    let frame = brand
-        .allocator()
-        .alloc(GroupFrame::new(&[], Some(enclosing), claims));
+    let frame = resident(
+        brand.writer(),
+        GroupFrame::new(&[], Some(enclosing), claims),
+    );
     let mut builder = Builder::new(brand, scratch, &lookup, Some((&outer, at)), claims, frame);
     let draft = builder.draft(ShapeKind::Block, at, &[], &[], body.body_statements())?;
     Ok(builder.seal(draft, None))
@@ -353,11 +355,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     {
         // A body holding a group is built under a frame of its own, which every operator run inside
         // it — and every body nested in it — chains against.
-        let storage = self.brand.allocator();
-        let held: &'graph [&'graph DeclaredGroup<'graph>] = storage.alloc_slice_copy(held);
+        let writer = self.brand.writer();
+        let held: &'graph [&'graph DeclaredGroup<'graph>] = collect(writer, held.iter().copied());
         let outer = self.frame;
         if !held.is_empty() {
-            self.frame = storage.alloc(GroupFrame::new(held, Some(outer), self.claims));
+            self.frame = resident(writer, GroupFrame::new(held, Some(outer), self.claims));
         }
         let built = self.body(kind, entered_at, parameters, held, statements);
         self.frame = outer;
@@ -377,12 +379,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     where
         'graph: 'n,
     {
-        let storage = self.brand.allocator();
+        let writer = self.brand.writer();
         let mut nodes: BumpVec<'x, &'n KExpression<'graph>> = BumpVec::new_in(self.scratch);
         nodes.extend(statements.map(|(node, _)| node));
         for index in 0..nodes.len() {
             if let Some(rewritten) = self.rewrite_statement(index, nodes[index])? {
-                nodes[index] = storage.alloc(rewritten);
+                nodes[index] = resident(writer, rewritten);
             }
         }
         let parent_statement = self
@@ -562,7 +564,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         {
             draft
                 .declarations
-                .push((binder, self.brand.allocator().alloc(*node)));
+                .push((binder, resident(self.brand.writer(), *node)));
         }
 
         // A callable's parameters are declared before any part is read, so a type parameter a
@@ -910,7 +912,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let site = Site::of(part);
         if kind != BodyKind::Surfaced {
             if kind != BodyKind::Module {
-                self.forms.insert(site, self.brand.allocator().alloc(*node));
+                self.forms
+                    .insert(site, resident(self.brand.writer(), *node));
             }
             let draft = &mut self.chain[level];
             if state == State::Root
@@ -1401,7 +1404,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         draft: Draft<'graph, 'x>,
         form: Option<&'graph KExpression<'graph>>,
     ) -> &'graph BodyShape<'graph> {
-        let storage = self.brand.allocator();
+        let writer = self.brand.writer();
         let mut nested = BumpVec::with_capacity_in(draft.children.len(), self.scratch);
         for (site, child) in draft.children {
             let form = self.forms.get(&site).copied();
@@ -1430,34 +1433,37 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         declarations.sort_unstable_by_key(|(binder, _)| *binder);
         let mut mentions = draft.mentions;
         mentions.sort_unstable_by_key(|mention| mention.site);
-        let members = storage.alloc_slice_copy(&draft.members);
+        let members = collect(writer, draft.members.iter().copied());
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
         components.extend(draft.components.iter().map(|component| Component {
             members: component.run(members),
             deferred_only: component.deferred_only,
             cyclic: component.cyclic,
         }));
-        storage.alloc(BodyShape {
-            kind: draft.kind,
-            names: Channels::new(
-                storage.alloc_slice_copy(&draft.values),
-                storage.alloc_slice_copy(&draft.types),
-            ),
-            body: storage.alloc_slice_copy(&draft.nodes),
-            group_frame: draft.frame,
-            held: draft.held,
-            entered_at: draft.entered_at,
-            component_of: storage.alloc_slice_copy(&draft.component_of),
-            components: storage.alloc_slice_copy(&components),
-            mentions: storage.alloc_slice_copy(&mentions),
-            captures: storage.alloc_slice_copy(&draft.captures),
-            nested: storage.alloc_slice_copy(&nested),
-            form,
-            births: storage.alloc_slice_copy(&births),
-            rhs: storage.alloc_slice_copy(&rhs),
-            declarations: storage.alloc_slice_copy(&declarations),
-            units: storage.alloc_slice_copy(&draft.units),
-            keeps_defining_scope: draft.keeps_defining_scope,
-        })
+        resident(
+            writer,
+            BodyShape {
+                kind: draft.kind,
+                names: Channels::new(
+                    collect(writer, draft.values.iter().copied()),
+                    collect(writer, draft.types.iter().copied()),
+                ),
+                body: collect(writer, draft.nodes.iter().copied()),
+                group_frame: draft.frame,
+                held: draft.held,
+                entered_at: draft.entered_at,
+                component_of: collect(writer, draft.component_of.iter().copied()),
+                components: collect(writer, components.iter().copied()),
+                mentions: collect(writer, mentions.iter().copied()),
+                captures: collect(writer, draft.captures.iter().copied()),
+                nested: collect(writer, nested.iter().copied()),
+                form,
+                births: collect(writer, births.iter().copied()),
+                rhs: collect(writer, rhs.iter().copied()),
+                declarations: collect(writer, declarations.iter().copied()),
+                units: collect(writer, draft.units.iter().copied()),
+                keeps_defining_scope: draft.keeps_defining_scope,
+            },
+        )
     }
 }

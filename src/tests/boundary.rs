@@ -108,7 +108,7 @@ fn crate_paths(text: &str) -> Vec<String> {
 
 /// The text with every `//` comment and every string literal blanked, so prose and messages never
 /// read as code.
-fn strip_comments_and_strings(text: &str) -> String {
+pub(crate) fn strip_comments_and_strings(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         let mut in_string = false;
@@ -137,7 +137,7 @@ fn strip_comments_and_strings(text: &str) -> String {
     out
 }
 
-fn contains_word(code: &str, word: &str) -> bool {
+pub(crate) fn contains_word(code: &str, word: &str) -> bool {
     code.match_indices(word).any(|(at, _)| {
         let before = code[..at].chars().next_back();
         let after = code[at + word.len()..].chars().next();

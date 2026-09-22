@@ -16,7 +16,7 @@
 use sexlex::{Item, Kind, Node};
 
 use super::error::ParseError;
-use crate::memory::ProgramBrand;
+use crate::memory::{ProgramBrand, collect};
 use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
 use crate::parse::builtin_shapes::binder::admit_bare_type_slots;
 use crate::source::{FileId, Span, Spanned};
@@ -190,7 +190,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
                     self.lower_atom(text, item, context, &mut parts)?;
                 }
                 Node::Str { body, .. } => {
-                    let text = self.program.allocator().alloc_str(body);
+                    let text = self.program.writer().text(body);
                     let part =
                         Spanned::at(ExpressionPart::Literal(KLiteral::String(text)), item.span);
                     self.push_part(context, &mut parts, part)?;
@@ -324,20 +324,20 @@ impl<'a, 's> Lower<'a, '_, 's> {
         kind: Kind,
         wrappers: Wrappers,
     ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
-        let allocator = self.program.allocator();
+        let writer = self.program.writer();
         if kind == Kind::Bracket {
             let parts = self.lower_run(inner.iter(), &mut Context::List, wrappers)?;
-            let items = allocator.alloc_slice_fill_iter(parts.into_iter().map(|part| part.value));
+            let items = collect(writer, parts.into_iter().map(|part| part.value));
             return Ok(Spanned::at(ExpressionPart::ListLiteral(items), item.span));
         }
         let mut dict = DictFrame::new(self.program);
         self.lower_run(inner.iter(), &mut Context::Brace(&mut dict), wrappers)?;
         let part = match dict.finish(self.symbols)? {
             BraceContents::Dict(pairs) => {
-                ExpressionPart::DictLiteral(allocator.alloc_slice_fill_iter(pairs))
+                ExpressionPart::DictLiteral(collect(writer, pairs.into_iter()))
             }
             BraceContents::Record(fields) => {
-                ExpressionPart::RecordLiteral(allocator.alloc_slice_fill_iter(fields))
+                ExpressionPart::RecordLiteral(collect(writer, fields.into_iter()))
             }
         };
         Ok(Spanned::at(part, item.span))

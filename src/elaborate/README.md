@@ -264,5 +264,8 @@ interns as the union of its three members.
 
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
   bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
+- [Quantified lambdas](../../roadmap/rewrite/quantified-lambdas.md) — the
+  quantified function type `callable_type` hands a `FN EXPR FOR ALL` combined
+  form, and the `FN FOR ALL` lambda that elaborates to one.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates.

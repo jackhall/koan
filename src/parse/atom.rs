@@ -125,7 +125,7 @@ pub(super) fn not_a_type_name(got: char) -> String {
 /// Whole-token literal match runs first so e.g. `3.14` stays a number rather than
 /// being desugared as `(attr 3 14)`. `start` is the token's original-source byte
 /// offset, used to compute absolute spans for atoms and operator triggers. Every name the
-/// classification keeps is bumped into `brand`'s program storage, so the part borrows nothing from
+/// classification keeps is written into `brand`'s program storage, so the part borrows nothing from
 /// `tok`.
 pub fn classify_token<'a>(
     brand: ProgramBrand<'a>,

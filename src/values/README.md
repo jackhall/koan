@@ -352,7 +352,7 @@ a name the rest of the stack retired.
 ## Testing
 
 The unit suite ([tests.rs](tests.rs)) runs every door, crossing and relation
-over a fixture that owns program storage with a type registry built in it, and a
+over a fixture that owns program storage, a bump for the type registry, and a
 cell graph over that storage to run steps in. Circular values are exercised
 without `knot`: the fixture closes the parameter with a test-only member
 whose every node is a data node, tied through `KnotPlan` with memos supplied

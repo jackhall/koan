@@ -25,7 +25,7 @@
 //!
 //! See [README.md § Operator groups](../../README.md#operator-groups).
 
-use crate::memory::BumpVec;
+use crate::memory::{BumpVec, collect};
 use crate::parse::builtin_shapes::KEYWORDS;
 use crate::parse::builtin_shapes::role::Role;
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, ProgramNode, Spanned};
@@ -153,7 +153,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     run.push(rewritten.unwrap_or(*item));
                 }
                 Ok(changed.then(|| {
-                    ExpressionPart::ListLiteral(self.brand.allocator().alloc_slice_copy(&run))
+                    ExpressionPart::ListLiteral(collect(self.brand.writer(), run.iter().copied()))
                 }))
             }
             ExpressionPart::DictLiteral(pairs) => {
@@ -165,7 +165,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     run.push((rewritten.0.unwrap_or(*key), rewritten.1.unwrap_or(*value)));
                 }
                 Ok(changed.then(|| {
-                    ExpressionPart::DictLiteral(self.brand.allocator().alloc_slice_copy(&run))
+                    ExpressionPart::DictLiteral(collect(self.brand.writer(), run.iter().copied()))
                 }))
             }
             ExpressionPart::RecordLiteral(pairs) => {
@@ -177,7 +177,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     run.push((*name, rewritten.unwrap_or(*value)));
                 }
                 Ok(changed.then(|| {
-                    ExpressionPart::RecordLiteral(self.brand.allocator().alloc_slice_copy(&run))
+                    ExpressionPart::RecordLiteral(collect(self.brand.writer(), run.iter().copied()))
                 }))
             }
             ExpressionPart::Type(_)
@@ -287,10 +287,10 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 self.fold(at, &operands, &operators, mode)
             }
             ReductionMode::Unary => {
-                let items = self
-                    .brand
-                    .allocator()
-                    .alloc_slice_fill_iter(operands.iter().map(|operand| operand.value));
+                let items = collect(
+                    self.brand.writer(),
+                    operands.iter().map(|operand| operand.value),
+                );
                 let run = [
                     Spanned::bare(ExpressionPart::Keyword(operators[0])),
                     Spanned::bare(ExpressionPart::ListLiteral(items)),

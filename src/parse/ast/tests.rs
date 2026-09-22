@@ -14,7 +14,7 @@ use crate::machine::model::ast::working::{WorkingExpression, WorkingPart};
 use crate::machine::model::types::KType;
 #[cfg(feature = "pending_rewrite")]
 use crate::machine::model::values::KObject;
-use crate::memory::{ProgramBrand, program_storage};
+use crate::memory::{ProgramBrand, collect, program_storage};
 #[cfg(feature = "pending_rewrite")]
 use crate::parse::builtin_shapes::builtin_shape_for;
 #[cfg(feature = "pending_rewrite")]
@@ -130,7 +130,7 @@ fn build_part<'a>(
     shape: &PartShape,
     symbols: &SymbolInterner,
 ) -> ExpressionPart<'a> {
-    let allocator = brand.allocator();
+    let writer = brand.writer();
     match shape {
         PartShape::Keyword(text) => ExpressionPart::Keyword(
             KeywordSymbol::declared(text, symbols).expect("keyword-class by construction"),
@@ -157,11 +157,12 @@ fn build_part<'a>(
         PartShape::Quote(items) => ExpressionPart::QuotedExpression(
             brand.nested_node_from_iter(build_run(brand, items, symbols)),
         ),
-        PartShape::List(items) => ExpressionPart::ListLiteral(
-            allocator
-                .alloc_slice_fill_iter(items.iter().map(|item| build_part(brand, item, symbols))),
-        ),
-        PartShape::Dict(pairs) => ExpressionPart::DictLiteral(allocator.alloc_slice_fill_iter(
+        PartShape::List(items) => ExpressionPart::ListLiteral(collect(
+            writer,
+            items.iter().map(|item| build_part(brand, item, symbols)),
+        )),
+        PartShape::Dict(pairs) => ExpressionPart::DictLiteral(collect(
+            writer,
             pairs.iter().map(|(key, value)| {
                 (
                     build_part(brand, key, symbols),
@@ -169,14 +170,15 @@ fn build_part<'a>(
                 )
             }),
         )),
-        PartShape::Record(fields) => ExpressionPart::RecordLiteral(
-            allocator.alloc_slice_fill_iter(fields.iter().map(|(name, value)| {
+        PartShape::Record(fields) => ExpressionPart::RecordLiteral(collect(
+            writer,
+            fields.iter().map(|(name, value)| {
                 (
                     BinderSymbol::declared(name, symbols).expect("a value token by construction"),
                     build_part(brand, value, symbols),
                 )
-            })),
-        ),
+            }),
+        )),
     }
 }
 
@@ -198,7 +200,7 @@ fn build<'a>(
     shapes: &[PartShape],
     symbols: &SymbolInterner,
 ) -> KExpression<'a> {
-    KExpression::new_from_iter(brand.allocator(), build_run(brand, shapes, symbols))
+    KExpression::new_from_iter(brand.writer(), build_run(brand, shapes, symbols))
 }
 
 /// The bucket key a parts run spells, recomputed from the parts rather than read off the cache.
@@ -317,7 +319,7 @@ proptest! {
     fn the_cache_agrees_with_a_recompute_and_rides_a_copy_and_a_resplice(shapes in parts_run()) {
         let program = program_storage();
         let brand = program.brand();
-        let region = brand.allocator();
+        let region = brand.writer();
         let symbols = SymbolInterner::new();
         let expression = build(brand, &shapes, &symbols);
 

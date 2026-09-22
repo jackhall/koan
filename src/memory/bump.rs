@@ -1,5 +1,7 @@
-//! The **bump tier**: storage outside the graph, for the AST and the type lattice's registry and
-//! scratch. A bump here has no reach and no cell; it is released whole when its owner drops.
+//! The **bump tier**: storage outside the graph, for the type lattice's registry and for the
+//! scratch a caller passes. A bump here has no reach and no cell; it is released whole when its
+//! owner drops. Program storage is not of it — it is one `cellgraph` store
+//! ([`program`](super::program)), written through a [`Writer`](super::substrate::Writer).
 //!
 //! The tier is a collections arena — growable vectors and a hash table and hash set over `&Bump` as an
 //! [`Allocator`](allocator_api2::alloc::Allocator) — which a cell's

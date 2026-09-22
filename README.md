@@ -81,7 +81,7 @@ The output is one [`KExpression`](src/parse/ast.rs) per top-level line: an order
 
 `parse` owns what it produces, not just the walk that produces it: [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [builtin_shapes.rs](src/parse/builtin_shapes.rs) holds `BUILTIN_SHAPES` — the one table spelling every builtin bucket as a typed run, tagged by a `BuiltinShapeId`: keywords in position, and at each slot a role beside one type per overload of the bucket, with one return apiece, plus the binder facts and the reserved bit each entry's readers ask for. The untyped bucket key and the part kinds a slot keeps raw are erasures of that run, not columns of their own. A node probes that table once; the close-inference rules and the miss diagnostics name a shape by its tag rather than respelling its key.
 
-`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/values/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [src/parse/README.md](src/parse/README.md).
+`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse wrote them into. The scheduler dispatches a separate [`WorkingExpression`](src/values/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [src/parse/README.md](src/parse/README.md).
 
 ### dispatch — `KExpression` → `DispatchOutcome` against a `Scope`
 
@@ -192,7 +192,7 @@ src/
 │   ├── slots.rs            SlotArray / SlotView — a fixed run of two-state write-once binding slots in a cell's region, safe code over cellgraph's once-written run: the invariant array binds, the covariant view reads
 │   ├── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and a scope's bindings both condense by
 │   ├── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
-│   └── program.rs          ProgramStorage / ProgramBrand — outside the graph, the bump program text and its parsed AST live in beside cellgraph's Storage, whose Writer lays the builtin table and the program record down at 'graph
+│   └── program.rs          ProgramStorage / ProgramBrand — outside the graph, the one cellgraph Storage program text, the parsed AST, the builtin table and the program record are all written into at 'graph, through the brand's Writer
 ├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the run's digest→text side table, read only when rendering), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so parse and type_lattice rest on it rather than on each other
 ├── symbols/
 │   └── tests.rs            interning laws and the four fixed-name pins over static_name! / slots!
@@ -202,7 +202,7 @@ src/
 │   ├── atom.rs             classify one atom — the colon split, compound-operator desugaring
 │   ├── brace.rs            DictFrame state machine for `{k: v}` / `{x = 1}` pairing
 │   ├── operators.rs        operator registry
-│   ├── ast.rs              the syntax AST: KLiteral / ExpressionPart / KExpression — Copy handles over bumped slices, with a Type part carrying only its TypeSymbol
+│   ├── ast.rs              the syntax AST: KLiteral / ExpressionPart / KExpression — Copy handles over written slices, with a Type part carrying only its TypeSymbol
 │   ├── ast/
 │   │   ├── shape.rs        PartClass / DispatchShape / KeyElement / ExpressionKey + NodeCache, the one structural cache both node families carry (stored key, shape, BUILTIN_SHAPES entry, binder plan) and the readers that fill it
 │   │   └── program.rs      ProgramExpression / ProgramNode — the eternal-tier marker that makes "this node's parts run is hosted in program storage" a type
@@ -323,7 +323,7 @@ src/
 │   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the one door every evaluation is asked through; Language — the builtin table and evaluator the layer above supplies; Evaluated, LoadError
 │   ├── bundle.rs         KBundle — koan's step bundle: the covariant KBirth (Program / Call / Evaluate / Inspect), the parked KState, and the sites a parked runner keeps in scratch
 │   ├── body.rs           run — the body runner, the one step that performs a body's units at the top level and in every frame; call and placement_of, the derived placement bit
-│   └── substrate.rs      CellSubstrate — program storage and the interner as self_cell's owner, and Running — the graph, its root, the registry and the Program record at 'graph, with run and inspect, reached through a closure per call
+│   └── substrate.rs      CellSubstrate — program storage, the registry's bump and the interner as self_cell's owner, and Running — the graph, its root, the registry and the Program record at 'graph, with run and inspect, reached through a closure per call
 ├── machine.rs           pub mod core / model / execute
 └── machine/
     ├── model.rs            re-exports from model::types and model::values

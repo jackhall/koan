@@ -90,7 +90,7 @@ pub fn parse_with_path<'a>(
 
 /// Parse against a pre-registered `SourceFile`. Installs `id` as the active `CURRENT_FILE` via
 /// [`CurrentFileGuard`] so [`ParseError::new`] sees the right file. Every name and every parts run the
-/// products hold is bumped into `program`'s region, so the caller owns the storage the whole AST
+/// products hold is written into `program`'s store, so the caller owns the storage the whole AST
 /// lives in.
 pub fn parse_with_source<'a>(
     program: ProgramBrand<'a>,

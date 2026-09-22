@@ -15,7 +15,7 @@
 
 use crate::source::{FileId, Span, Spanned};
 
-use crate::memory::{BumpAllocator, ProgramBrand};
+use crate::memory::{ProgramBrand, Writer, collect, resident};
 use crate::parse::builtin_shapes::binder::{StoredBinderKey, binder_plan_for};
 use crate::parse::builtin_shapes::layout::SlotLayout;
 use crate::parse::builtin_shapes::lazy::LazyKinds;
@@ -41,7 +41,7 @@ pub enum KLiteral<'a> {
 /// One element of a parsed expression. A keyword and a name — value-side or type-side — are each a
 /// symbol the parse minted when it classified the token, so they carry no borrow at all. The arms
 /// that do borrow do so at `'a`: a nested node is a pointer to a sibling node in the same storage,
-/// and a literal run is a bumped slice.
+/// and a literal run is a written slice.
 #[derive(Debug, Clone, Copy)]
 pub enum ExpressionPart<'a> {
     Keyword(KeywordSymbol),
@@ -113,7 +113,7 @@ impl<'a> ExpressionPart<'a> {
         }
     }
 
-    /// Wrap a run of parts as a nested `Expression` part, bumping both the run and the node into
+    /// Wrap a run of parts as a nested `Expression` part, writing both the run and the node into
     /// the program storage `brand` names. Takes a [`ProgramBrand`] because the arm it builds is a
     /// value-channel conduit: the marker on its payload is the proof the cell doors cite.
     pub fn expression(
@@ -246,33 +246,33 @@ pub struct KExpression<'a> {
 
 impl<'a> KExpression<'a> {
     /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.
-    pub fn new(brand: BumpAllocator<'a>, parts: &[Spanned<ExpressionPart<'a>>]) -> Self {
-        Self::build(brand, parts, None, None)
+    pub fn new(writer: Writer<'a>, parts: &[Spanned<ExpressionPart<'a>>]) -> Self {
+        Self::build(writer, parts, None, None)
     }
 
     /// [`new`](Self::new)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn new_from_iter<I>(brand: BumpAllocator<'a>, parts: I) -> Self
+    pub fn new_from_iter<I>(writer: Writer<'a>, parts: I) -> Self
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        Self::build_from_iter(brand, parts, None, None)
+        Self::build_from_iter(writer, parts, None, None)
     }
 
-    /// Construction door for a borrowed run: copy it into `brand`'s region, then fill the
+    /// Construction door for a borrowed run: copy it into `writer`'s store, then fill the
     /// structural cache.
     pub fn build(
-        brand: BumpAllocator<'a>,
+        writer: Writer<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
-        Self::from_run(brand, brand.alloc_slice_copy(parts), span, file)
+        Self::from_run(writer, collect(writer, parts.iter().copied()), span, file)
     }
 
     /// [`build`](Self::build)'s peer for a run whose slots are computed — see [`RunIter`].
     pub fn build_from_iter<I>(
-        brand: BumpAllocator<'a>,
+        writer: Writer<'a>,
         parts: I,
         span: Option<Span>,
         file: Option<FileId>,
@@ -281,22 +281,22 @@ impl<'a> KExpression<'a> {
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        Self::from_run(brand, brand.alloc_slice_fill_iter(parts), span, file)
+        Self::from_run(writer, collect(writer, parts.into_iter()), span, file)
     }
 
-    /// Construction chokepoint, over a parts run **already resident** in `brand`'s region: fills the
+    /// Construction chokepoint, over a parts run **already resident** in `writer`'s store: fills the
     /// structural cache from it and does nothing else. Every door above lands here, differing only
-    /// in how the run reached the region — so none ships with a stale or unfilled cache and no part
+    /// in how the run reached the store — so none ships with a stale or unfilled cache and no part
     /// run is mutated after it is frozen.
     fn from_run(
-        brand: BumpAllocator<'a>,
+        writer: Writer<'a>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
-        let key = stored_untyped_key(brand, parts.iter().map(|part| part.value.key_element()));
+        let key = stored_untyped_key(writer, parts.iter().map(|part| part.value.key_element()));
         Self::seal(
-            brand,
+            writer,
             parts,
             span,
             file,
@@ -308,7 +308,7 @@ impl<'a> KExpression<'a> {
     /// and freezes. The one place a `KExpression` is written, so neither door above can ship a node
     /// whose plan disagrees with its parts.
     fn seal(
-        brand: BumpAllocator<'a>,
+        writer: Writer<'a>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
@@ -321,36 +321,36 @@ impl<'a> KExpression<'a> {
             cache,
             body_layout: SlotLayout::EMPTY,
         };
-        // The extractors read the node, so the plan is filled once it stands. It is bumped behind a
-        // reference rather than stored inline: it is the widest thing a node would carry, and
+        // The extractors read the node, so the plan is filled once it stands. It is written behind
+        // a reference rather than stored inline: it is the widest thing a node would carry, and
         // `KExpression` is copied on every part walk.
-        let plan = binder_plan_for(brand, cache.builtin_shape(), &expression)
-            .map(|key| &*brand.alloc(key));
+        let plan = binder_plan_for(writer, cache.builtin_shape(), &expression)
+            .map(|key| resident(writer, key));
         expression.cache = cache.declaring(plan);
         // The value binders this node would open a frame over, read off the same statement plans
         // the claim stamp and the `CLOSE` capture walk read. Filled for every node — a node is a
         // body only where a callable names it as one, and the read is a walk of plans already
         // cached on the statements it wraps.
-        expression.body_layout = SlotLayout::of_body(brand, &expression);
+        expression.body_layout = SlotLayout::of_body(writer, &expression);
         expression
     }
 
-    /// Build a node and bump it, for a part arm that nests one ([`ExpressionPart::Expression`] and
+    /// Build a node and write it, for a part arm that nests one ([`ExpressionPart::Expression`] and
     /// its sigil siblings hold `&'a KExpression<'a>`).
     pub fn nested(
-        brand: BumpAllocator<'a>,
+        writer: Writer<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
     ) -> &'a KExpression<'a> {
-        brand.alloc(Self::new(brand, parts))
+        resident(writer, Self::new(writer, parts))
     }
 
     /// [`nested`](Self::nested)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn nested_from_iter<I>(brand: BumpAllocator<'a>, parts: I) -> &'a KExpression<'a>
+    pub fn nested_from_iter<I>(writer: Writer<'a>, parts: I) -> &'a KExpression<'a>
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        brand.alloc(Self::new_from_iter(brand, parts))
+        resident(writer, Self::new_from_iter(writer, parts))
     }
 
     /// The [`SlotLayout`] of this node **as a body**: the value binders its statements declare,
@@ -448,7 +448,7 @@ impl<'a> KExpression<'a> {
         self.cache.shape()
     }
 
-    /// The stored bucket key, as a borrow of the run bumped at construction: `Keyword` parts
+    /// The stored bucket key, as a borrow of the run written at construction: `Keyword` parts
     /// contribute `Keyword(symbol)`, every other variant a `Slot`. Must agree with
     /// `ExpressionSignature::untyped_key` for any signature that should match.
     pub fn stored_key(&self) -> &'a [KeyElement] {

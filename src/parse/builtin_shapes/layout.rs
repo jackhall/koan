@@ -16,16 +16,27 @@
 //! for the body's statement `i` — and it is what the `idx < cutoff` visibility rule reads, so
 //! slotting changes the addressing and not the positional rule.
 //!
-//! The run is bumped into the region of whatever names it (the body node's own at parse, the
+//! The run is written into the store of whatever names it (the body node's own at parse, the
 //! callable's captured region at birth) and is plain `Copy` data with no drop glue, so a layout
 //! costs the holder a thin pointer and its region nothing at teardown.
+//!
+//! Entries are staged on the stack rather than in the store they end up in: the run must be sorted
+//! and deduped before it is frozen, and a written run is a shared borrow. The same reason
+//! [`fn_def_binder_bucket`](super::binder) stages its key in a `SmallVec` — a body binding more
+//! than the inline capacity spills, which is the one case that allocates.
 
-use crate::memory::{BumpAllocator, BumpVec};
+use smallvec::SmallVec;
+
+use crate::memory::{Writer, collect, resident};
 use crate::parse::ast::KExpression;
 use crate::symbols::{BinderSymbol, ValueSymbol};
 
 /// One layout entry: a value binder's name and the lexical position its binder writes at.
 type Entry = (ValueSymbol, u32);
+
+/// A layout's entries while they are still being ordered — on the stack, since sorting needs a
+/// mutable run and a written one is shared. Eight entries is the body most bodies are.
+type Staged = SmallVec<[Entry; 8]>;
 
 /// The value binders one frame can hold, sorted by symbol. A slot **is** an index into `entries`.
 ///
@@ -38,7 +49,7 @@ pub struct SlotLayout<'a> {
 
 impl<'a> SlotLayout<'a> {
     /// The layout of a body that binds no value — the shared empty run, so a bodyless or
-    /// binder-free frame bumps nothing at all.
+    /// binder-free frame writes nothing at all.
     pub const EMPTY: &'static SlotLayout<'static> = &SlotLayout { entries: &[] };
 
     /// How many slots a frame over this layout allocates.
@@ -87,24 +98,16 @@ impl<'a> SlotLayout<'a> {
     /// which slotting does not touch. A repeated name keeps its first (lowest) position, matching
     /// the bind-once table a second binder of the name would `Rebind` against.
     ///
-    /// Bumped into `brand`'s region — the node's own, since this runs from the construction door.
-    /// A body that binds no value takes [`EMPTY`](Self::EMPTY) and bumps nothing.
-    pub(crate) fn of_body(brand: BumpAllocator<'a>, body: &KExpression<'a>) -> &'a SlotLayout<'a> {
-        // Counted before anything is staged: a body binding no value — every node that is not a
-        // block of binders, which is nearly all of them — leaves this door having touched no
-        // allocator at all.
-        let binders = body
+    /// Written through `writer` — the node's own store, since this runs from the construction
+    /// door. A body that binds no value takes [`EMPTY`](Self::EMPTY) and writes nothing.
+    pub(crate) fn of_body(writer: Writer<'a>, body: &KExpression<'a>) -> &'a SlotLayout<'a> {
+        let mut entries: Staged = body
             .body_statements()
-            .filter(|(statement, _)| binder_of(statement).is_some())
-            .count();
-        if binders == 0 {
-            return SlotLayout::EMPTY;
-        }
-        let mut entries = BumpVec::with_capacity_in(binders, brand);
-        entries.extend(body.body_statements().filter_map(|(statement, position)| {
-            binder_of(statement).map(|name| (name, position as u32))
-        }));
-        Self::seal(brand, &mut entries)
+            .filter_map(|(statement, position)| {
+                binder_of(statement).map(|name| (name, position as u32))
+            })
+            .collect();
+        Self::seal(writer, &mut entries)
     }
 
     /// A callable's whole layout: its parameters at position `0` merged with the body layout above.
@@ -120,53 +123,57 @@ impl<'a> SlotLayout<'a> {
     /// hands its own pairs through without restating their type half.
     #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn for_function<T>(
-        brand: BumpAllocator<'a>,
+        writer: Writer<'a>,
         params: &[(BinderSymbol, T)],
         body: &SlotLayout<'_>,
     ) -> &'a SlotLayout<'a> {
-        let values = params
+        let mut entries: Staged = params
             .iter()
-            .filter(|(binder, _)| matches!(binder, BinderSymbol::Value(_)));
-        let mut entries =
-            BumpVec::with_capacity_in(values.clone().count() + body.entries.len(), brand);
-        entries.extend(values.filter_map(|(binder, _)| match binder {
-            BinderSymbol::Value(name) => Some((*name, 0)),
-            BinderSymbol::Type(_) => None,
-        }));
+            .filter_map(|(binder, _)| match binder {
+                BinderSymbol::Value(name) => Some((*name, 0)),
+                BinderSymbol::Type(_) => None,
+            })
+            .collect();
         entries.extend(body.entries.iter().copied());
-        Self::seal(brand, &mut entries)
+        Self::seal(writer, &mut entries)
     }
 
     /// One binder at one position — the layout of a frame whose whole body is a single statement
     /// submitted at a position the call site fixes rather than the body's own shape (`EVAL`).
     #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
     pub(crate) fn single(
-        brand: BumpAllocator<'a>,
+        writer: Writer<'a>,
         name: ValueSymbol,
         position: usize,
     ) -> &'a SlotLayout<'a> {
-        brand.alloc(SlotLayout {
-            entries: brand.alloc_slice_copy(&[(name, position as u32)]),
-        })
+        resident(
+            writer,
+            SlotLayout {
+                entries: collect(writer, std::iter::once((name, position as u32))),
+            },
+        )
     }
 
-    /// Re-home this layout into `brand`'s region — what a copied environment's scope takes, minted
+    /// Re-home this layout into `writer`'s region — what a copied environment's scope takes, minted
     /// at the destination the way the copied callable's signature is.
     #[cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))]
-    pub(crate) fn rehomed<'b>(&self, brand: BumpAllocator<'b>) -> &'b SlotLayout<'b> {
+    pub(crate) fn rehomed<'b>(&self, writer: Writer<'b>) -> &'b SlotLayout<'b> {
         if self.entries.is_empty() {
             return SlotLayout::EMPTY;
         }
-        brand.alloc(SlotLayout {
-            entries: brand.alloc_slice_copy(self.entries),
-        })
+        resident(
+            writer,
+            SlotLayout {
+                entries: collect(writer, self.entries.iter().copied()),
+            },
+        )
     }
 
     /// Sort, dedupe first-wins, and freeze — the one place a layout is written, so every door above
-    /// ships the same sorted, position-carrying invariant. `entries` is staged in `brand`'s own
-    /// bump, so the run is sorted where it sits and the frozen copy costs one more bump rather than
-    /// a heap round trip.
-    fn seal(brand: BumpAllocator<'a>, entries: &mut BumpVec<'a, Entry>) -> &'a SlotLayout<'a> {
+    /// ships the same sorted, position-carrying invariant. `entries` is the caller's stack staging,
+    /// so the run is ordered where it sits and reaches the store once, at the length the dedupe
+    /// settled.
+    fn seal(writer: Writer<'a>, entries: &mut Staged) -> &'a SlotLayout<'a> {
         if entries.is_empty() {
             return SlotLayout::EMPTY;
         }
@@ -174,9 +181,12 @@ impl<'a> SlotLayout<'a> {
         // lexically earliest binder of the name — the one the bind-once table would keep.
         entries.sort_unstable();
         entries.dedup_by_key(|(name, _)| *name);
-        brand.alloc(SlotLayout {
-            entries: brand.alloc_slice_copy(entries),
-        })
+        resident(
+            writer,
+            SlotLayout {
+                entries: collect(writer, entries.iter().copied()),
+            },
+        )
     }
 }
 

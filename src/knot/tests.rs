@@ -44,7 +44,10 @@ pub(crate) struct Fixture<'f, 'graph> {
 pub(crate) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'graph>) -> R) -> R {
     let storage = program_storage();
     let program = storage.brand();
-    let types = TypeRegistry::in_region(program.allocator());
+    // The lattice's registry is a collections arena, so it keeps a bump of its own; program
+    // storage is the one `cellgraph` store everything else here is written into.
+    let registry = Bump::new();
+    let types = TypeRegistry::in_region(&registry);
     let symbols = SymbolInterner::new();
     let scratch = Bump::new();
     test(&Fixture {

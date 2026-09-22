@@ -11,16 +11,16 @@ captured by the cell's continuation at the cell's own brand.
 [`slots`](slots.rs) the layout-addressed table shape, [`knot`](knot.rs) the
 index-edged group of values that refer to each other, [`bump`](bump.rs) the
 arena tier outside the graph, [`program`](program.rs) the program-text owner
-over it, [`components`](components.rs) the strongly-connected-component walk
+beside it, [`components`](components.rs) the strongly-connected-component walk
 over an index graph, and [`scope_id`](scope_id.rs) the position-independent
 identity a resident carries.
 
 ## Two tiers, and why the boundary falls where it does
 
 - **The bump tier** ([bump.rs](bump.rs)) — storage outside the graph, with no
-  reach and no cell, released whole when its owner drops. It holds the AST and
-  the [type lattice](../type_lattice/README.md)'s registry and scratch. It is a
-  *collections* arena: `BumpAllocator` is `&Bump`, both bumpalo's verb receiver
+  reach and no cell, released whole when its owner drops. It holds the
+  [type lattice](../type_lattice/README.md)'s registry and the scratch a caller
+  passes. It is a *collections* arena: `BumpAllocator` is `&Bump`, both bumpalo's verb receiver
   and the `Allocator` its growable `BumpVec` and its hashbrown `BumpBackedMap`
   and `BumpBackedSet` are built over. A cell's `Writer` has no verb that grows a buffer, so the
   tier does not pretend to be a region, and it carries no door of its own:
@@ -28,20 +28,26 @@ identity a resident carries.
   and `alloc_str`. Bumpalo runs no destructor, so nothing with drop glue goes
   in; `bump_table` and `bump_set` assert that for their entries at compile time, and a
   slice or a single value is the caller's to keep `Copy`.
-- **Program storage** ([program.rs](program.rs)) — program text, the raw
-  AST, and what a loaded program lays down at `'graph`, in two stores the
-  storage owns: a bump the parser writes the AST into, because an AST needs no
-  reach, and `cellgraph`'s `Storage` beside it, written through the same
-  `Writer` a region is (`ProgramBrand::writer`), where the builtin table and
-  the [program record](../program/README.md#the-program-record) rest. The
-  `Storage` keeps its bump private, so what goes there passes the `Writer`'s
-  drop-freeness checks, and it is sound for the reason a `'graph` borrow is no
-  operand: the storage outlives the graph, which prices, pins and reclaims none
-  of it. Program storage is its own module because the parser depends on it
-  and on nothing else here, so [`parse`](../parse/README.md) names
-  `ProgramBrand` and never a cell. Keeping the tiers apart is what lets an AST
-  node or a builtin be shared by every activation without any of them being
-  able to outlive it.
+- **Program storage** ([program.rs](program.rs)) — program text, the raw AST,
+  and what a loaded program lays down at `'graph`, in the one store it owns:
+  `cellgraph`'s `Storage`, written through the same `Writer` a region is.
+  `ProgramBrand::writer` is the only capability the brand exposes, so the AST,
+  the builtin table and the
+  [program record](../program/README.md#the-program-record) all reach storage
+  by one vocabulary. The `Storage` keeps its bump private, so what goes there
+  passes the `Writer`'s drop-freeness checks, and it is sound for the reason a
+  `'graph` borrow is no operand: the storage outlives the graph, which prices,
+  pins and reclaims none of it. Program storage is its own module because the
+  parser depends on it and on nothing else here, so
+  [`parse`](../parse/README.md) names `ProgramBrand` and never a cell. Keeping
+  it apart from a cell's region is what lets an AST node or a builtin be shared
+  by every activation without any of them being able to outlive it.
+
+  Nothing in program storage grows in place: a `Writer` has no growable buffer,
+  so a run whose length is not known up front — the
+  [slot layout](../parse/builtin_shapes/layout.rs)'s entries, a group's members
+  — is staged on the stack or in caller-passed scratch, ordered there, and laid
+  down once at its settled length.
 - **Cell storage** — everything else, laid down through cellgraph's `Writer`
   at the executing cell's own brand, `'here`. There is no run root and no
   per-call frame: what a frame shell would carry, a cell already is.

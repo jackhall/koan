@@ -104,7 +104,7 @@ proptest! {
             .chain(std::iter::once(")".to_string()))
             .collect::<Vec<_>>()
             .join("");
-        let layout = SlotLayout::of_body(brand.allocator(), &body(brand, &source));
+        let layout = SlotLayout::of_body(brand.writer(), &body(brand, &source));
 
         let slots = expected(
             statements
@@ -131,7 +131,7 @@ proptest! {
     fn redundant_paren_wrapping_is_transparent(name in "[a-z]{2,3}") {
         let program = program_storage();
         let brand = program.brand();
-        let bare = SlotLayout::of_body(brand.allocator(), &body(brand, &format!("(LET {name} = 1)")));
+        let bare = SlotLayout::of_body(brand.writer(), &body(brand, &format!("(LET {name} = 1)")));
         prop_assert_eq!(pairs(bare), vec![(value(&name), 1)]);
         for depth in 1..3 {
             let source = format!(
@@ -139,7 +139,7 @@ proptest! {
                 "(".repeat(depth),
                 ")".repeat(depth),
             );
-            let wrapped = SlotLayout::of_body(brand.allocator(), &body(brand, &source));
+            let wrapped = SlotLayout::of_body(brand.writer(), &body(brand, &source));
             prop_assert_eq!(pairs(wrapped), pairs(bare), "{}", source);
         }
     }
@@ -160,13 +160,13 @@ proptest! {
             .chain(std::iter::once(")".to_string()))
             .collect::<Vec<_>>()
             .join("");
-        let inner = SlotLayout::of_body(brand.allocator(), &body(brand, &source));
+        let inner = SlotLayout::of_body(brand.writer(), &body(brand, &source));
 
         let typed: Vec<(BinderSymbol, KType)> = parameters
             .iter()
             .map(|binder| (*binder, KType::ANY))
             .collect();
-        let merged = SlotLayout::for_function(brand.allocator(), &typed, inner);
+        let merged = SlotLayout::for_function(brand.writer(), &typed, inner);
 
         let mut entries: Vec<(ValueSymbol, usize)> = parameters
             .iter()
@@ -179,7 +179,7 @@ proptest! {
         prop_assert_eq!(pairs(merged), expected(entries));
 
         let other = program_storage();
-        let copy = merged.rehomed(other.brand().allocator());
+        let copy = merged.rehomed(other.brand().writer());
         prop_assert_eq!(pairs(copy), pairs(merged));
         if !merged.is_empty() {
             prop_assert!(!std::ptr::eq(merged, copy));
@@ -187,13 +187,13 @@ proptest! {
     }
 }
 
-/// A body binding no value takes the shared empty layout and bumps nothing.
+/// A body binding no value takes the shared empty layout and writes nothing.
 #[test]
 fn binderless_body_is_empty() {
     let program = program_storage();
     let brand = program.brand();
     let plain = body(brand, "(a b)");
-    let layout = SlotLayout::of_body(brand.allocator(), &plain);
+    let layout = SlotLayout::of_body(brand.writer(), &plain);
     assert!(layout.is_empty());
     assert!(std::ptr::eq(layout, SlotLayout::EMPTY));
 }

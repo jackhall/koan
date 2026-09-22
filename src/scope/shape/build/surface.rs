@@ -18,7 +18,7 @@
 //!
 //! See [README.md § Names that arrive at run time](../../README.md#names-that-arrive-at-run-time).
 
-use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec, collect, resident};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
@@ -272,9 +272,17 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     | BuiltinShapeId::GroupHeadPairwiseFoldLeft
                     | BuiltinShapeId::GroupHeadPairwiseFoldRight,
                 ) => {
-                    let storage = self.brand.allocator();
-                    let group = declared_group(line, storage)?.ok_or(())?;
-                    out.groups.push(storage.alloc(group));
+                    // Scanned into scratch, then re-homed: the record a held group names is read
+                    // by every activation, so it rests in program storage.
+                    let group = declared_group(line, self.scratch)?.ok_or(())?;
+                    let writer = self.brand.writer();
+                    out.groups.push(resident(
+                        writer,
+                        DeclaredGroup {
+                            members: collect(writer, group.members.iter().copied()),
+                            mode: group.mode,
+                        },
+                    ));
                 }
                 Some(
                     BuiltinShapeId::ExpressionHead

@@ -16,7 +16,7 @@
 
 use std::ops::Deref;
 
-use crate::memory::{BumpAllocator, ProgramBrand};
+use crate::memory::{ProgramBrand, Writer, resident};
 use crate::source::{FileId, Span, Spanned};
 
 use super::{ExpressionPart, KExpression, RunIter};
@@ -33,7 +33,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
 /// // A bare `KExpression`, whatever brand built it, is not a `ProgramExpression`.
-/// let node = koan::parse::KExpression::new(program.allocator(), &[]);
+/// let node = koan::parse::KExpression::new(program.writer(), &[]);
 /// let _cell = koan::machine::model::KObject::KExpression(node);
 /// ```
 ///
@@ -42,7 +42,7 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// ```compile_fail
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
-/// let node = koan::parse::KExpression::new(program.allocator(), &[]);
+/// let node = koan::parse::KExpression::new(program.writer(), &[]);
 /// let _marked = koan::parse::ProgramExpression(node);
 /// ```
 ///
@@ -84,19 +84,19 @@ impl<'a> Deref for ProgramNode<'a> {
 }
 
 impl<'a> ProgramExpression<'a> {
-    /// Widening exit to the bare node, mirroring [`ProgramBrand::region`]: widens, never narrows.
+    /// Widening exit to the bare node, mirroring [`ProgramBrand::writer`]: widens, never narrows.
     pub fn node(self) -> KExpression<'a> {
         self.0
     }
 
-    /// Re-home the node **struct** into `brand`'s region and hand back the marked reference.
+    /// Re-home the node **struct** into `writer`'s region and hand back the marked reference.
     ///
-    /// Sound at any brand because the marker's claim is about the parts run, which this does not
-    /// touch: the bump copies the `Copy` struct (its `parts`, structural cache and binder cache all
-    /// stay the program-storage borrows they were) into wherever `brand` allocates. What the
+    /// Sound at any writer because the marker's claim is about the parts run, which this does not
+    /// touch: the write copies the `Copy` struct (its `parts`, structural cache and binder cache
+    /// all stay the program-storage borrows they were) into wherever `writer` writes. What the
     /// resulting `ProgramNode` promises is unchanged — only the address of the node header moves.
-    pub fn rehost(self, brand: BumpAllocator<'a>) -> ProgramNode<'a> {
-        ProgramNode(brand.alloc(self.0))
+    pub fn rehost(self, writer: Writer<'a>) -> ProgramNode<'a> {
+        ProgramNode(resident(writer, self.0))
     }
 }
 
@@ -140,7 +140,7 @@ impl<'a> Deref for ProgramExpression<'a> {
 impl<'a> ProgramBrand<'a> {
     /// Spanless mint — [`KExpression::new`] with the tier proof attached.
     pub fn new_expression(self, parts: &[Spanned<ExpressionPart<'a>>]) -> ProgramExpression<'a> {
-        ProgramExpression(KExpression::new(self.allocator(), parts))
+        ProgramExpression(KExpression::new(self.writer(), parts))
     }
 
     /// [`new_expression`](Self::new_expression)'s peer for a computed run —
@@ -150,7 +150,7 @@ impl<'a> ProgramBrand<'a> {
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        ProgramExpression(KExpression::new_from_iter(self.allocator(), parts))
+        ProgramExpression(KExpression::new_from_iter(self.writer(), parts))
     }
 
     /// Full mint — [`KExpression::build`] with the tier proof attached.
@@ -160,7 +160,7 @@ impl<'a> ProgramBrand<'a> {
         span: Option<Span>,
         file: Option<FileId>,
     ) -> ProgramExpression<'a> {
-        ProgramExpression(KExpression::build(self.allocator(), parts, span, file))
+        ProgramExpression(KExpression::build(self.writer(), parts, span, file))
     }
 
     /// [`build_expression`](Self::build_expression)'s peer for a computed run —
@@ -176,22 +176,22 @@ impl<'a> ProgramBrand<'a> {
         RunIter<I>: ExactSizeIterator,
     {
         ProgramExpression(KExpression::build_from_iter(
-            self.allocator(),
+            self.writer(),
             parts,
             span,
             file,
         ))
     }
 
-    /// Bump a marked node into program storage, yielding the reference an arm payload holds.
+    /// Write a marked node into program storage, yielding the reference an arm payload holds.
     pub fn alloc_node(self, expression: ProgramExpression<'a>) -> ProgramNode<'a> {
-        ProgramNode(self.allocator().alloc(expression.0))
+        ProgramNode(resident(self.writer(), expression.0))
     }
 
-    /// Build and bump in one step — the [`ExpressionPart::Expression`] analogue of
+    /// Build and write in one step — the [`ExpressionPart::Expression`] analogue of
     /// [`KExpression::nested`], for the arm constructions that mint a fresh child node.
     pub fn nested_node(self, parts: &[Spanned<ExpressionPart<'a>>]) -> ProgramNode<'a> {
-        ProgramNode(KExpression::nested(self.allocator(), parts))
+        ProgramNode(KExpression::nested(self.writer(), parts))
     }
 
     /// [`nested_node`](Self::nested_node)'s peer for a computed run —
@@ -201,6 +201,6 @@ impl<'a> ProgramBrand<'a> {
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        ProgramNode(KExpression::nested_from_iter(self.allocator(), parts))
+        ProgramNode(KExpression::nested_from_iter(self.writer(), parts))
     }
 }

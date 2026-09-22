@@ -1,7 +1,7 @@
 //! The builtin-shape door: what an entry's overloads intern to, and that each one still erases to
 //! the bucket key a node probes with.
 
-use crate::memory::program_storage;
+use crate::memory::Bump;
 use crate::parse::KeyElement;
 use crate::parse::builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShapeId, ShapeElement, builtin_shape_for,
@@ -35,8 +35,8 @@ fn entry_of(key: &[KeyElement]) -> &'static crate::parse::builtin_shapes::Builti
 /// carries — so the typed shape and the untyped bucket cannot drift apart.
 #[test]
 fn every_builtin_shape_erases_to_its_key() {
-    let storage = program_storage();
-    let bump = storage.brand().allocator();
+    let arena = Bump::new();
+    let bump = &arena;
     let types = &TypeRegistry::in_region(bump);
 
     for shape in BUILTIN_SHAPES {
@@ -60,8 +60,8 @@ fn every_builtin_shape_erases_to_its_key() {
 /// shapes a builtin key stands for.
 #[test]
 fn a_bucket_interns_one_handle_per_overload() {
-    let storage = program_storage();
-    let bump = storage.brand().allocator();
+    let arena = Bump::new();
+    let bump = &arena;
     let types = &TypeRegistry::in_region(bump);
 
     for shape in BUILTIN_SHAPES {
@@ -95,8 +95,8 @@ fn a_bucket_interns_one_handle_per_overload() {
 /// static spec exists for, since no `const` computes a union's digest.
 #[test]
 fn the_type_carrier_interns_as_the_three_member_union() {
-    let storage = program_storage();
-    let bump = storage.brand().allocator();
+    let arena = Bump::new();
+    let bump = &arena;
     let types = &TypeRegistry::in_region(bump);
 
     let shape = &BUILTIN_SHAPES[BuiltinShapeId::ExpressionDefinition as usize];
