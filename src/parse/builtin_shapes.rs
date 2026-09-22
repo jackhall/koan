@@ -358,6 +358,9 @@ pub enum BuiltinShapeId {
     Lambda,
     LambdaType,
     CombinedLambda,
+    QuantifiedLambda,
+    QuantifiedLambdaType,
+    CombinedQuantifiedLambda,
     ExpressionDefinition,
     ExpressionHead,
     QuantifiedExpressionDefinition,
@@ -745,6 +748,75 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.equals),
             Kw(&KEYWORDS.fn_),
             slot(Unsupported, &[CODE]),
+            Kw(&KEYWORDS.arrow),
+            slot(Unsupported, &[TYPE_CARRIER]),
+            Kw(&KEYWORDS.equals),
+            slot(Unsupported, &[CODE]),
+        ],
+        returns: &[NEVER],
+        binder: None,
+        reserved: true,
+    },
+    // FN FOR ALL <names> <record schema> -> <return type> = <body> — the quantified lambda.
+    //
+    // The schema captures raw where the unquantified `Lambda`'s resolves: its field types name the
+    // group's quantifiers, so it must reach its reader unevaluated — the reason the names group
+    // and the return stage on every quantified entry.
+    BuiltinShape {
+        id: BuiltinShapeId::QuantifiedLambda,
+        elements: &[
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            slot(Quantifiers, &[CODE]),
+            slot(Signature, &[RECORD_TYPE]),
+            Kw(&KEYWORDS.arrow),
+            slot(Te, &[TYPE_CARRIER]),
+            Kw(&KEYWORDS.equals),
+            slot(Body(BodyKind::Lambda), &[CODE]),
+        ],
+        returns: &[ANY],
+        binder: Some(BinderFacts {
+            names: &[],
+            bucket: None,
+            surface: BinderSurface::Other,
+            name_slot: None,
+            type_slots: &[6],
+        }),
+        reserved: false,
+    },
+    // FN FOR ALL <names> <record schema> -> <return type> — the quantified lambda type expression,
+    // no body.
+    BuiltinShape {
+        id: BuiltinShapeId::QuantifiedLambdaType,
+        elements: &[
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            slot(Quantifiers, &[CODE]),
+            slot(Signature, &[RECORD_TYPE]),
+            Kw(&KEYWORDS.arrow),
+            slot(Te, &[TYPE_CARRIER]),
+        ],
+        returns: &[ANY_TYPE],
+        binder: None,
+        reserved: false,
+    },
+    // LET <name> = FN FOR ALL <names> <signature> -> <return type> = <body> — reserved for the
+    // same reason `CombinedLambda` is: a combined statement installs a dispatch bucket, and no
+    // `FN` signature has a head to key one on. The lazy stamp holds the body raw so the miss is
+    // diagnosable.
+    BuiltinShape {
+        id: BuiltinShapeId::CombinedQuantifiedLambda,
+        elements: &[
+            Kw(&KEYWORDS.let_),
+            slot(Unsupported, &[IDENTIFIER]),
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
+            Kw(&KEYWORDS.for_),
+            Kw(&KEYWORDS.all),
+            slot(Unsupported, &[CODE]),
+            slot(Unsupported, &[RECORD_TYPE]),
             Kw(&KEYWORDS.arrow),
             slot(Unsupported, &[TYPE_CARRIER]),
             Kw(&KEYWORDS.equals),

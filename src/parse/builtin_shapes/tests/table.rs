@@ -55,6 +55,18 @@ const RECORDED_RAW_SLOTS: &[(BuiltinShapeId, &[(usize, LazyKinds)])] = &[
         &[(4, CODE), (6, RAW_TYPE), (8, CODE)],
     ),
     (
+        BuiltinShapeId::QuantifiedLambda,
+        &[(3, CODE), (4, RECORD_TYPE), (6, RAW_TYPE), (8, CODE)],
+    ),
+    (
+        BuiltinShapeId::QuantifiedLambdaType,
+        &[(3, CODE), (4, RECORD_TYPE), (6, RAW_TYPE)],
+    ),
+    (
+        BuiltinShapeId::CombinedQuantifiedLambda,
+        &[(6, CODE), (7, RECORD_TYPE), (9, RAW_TYPE), (11, CODE)],
+    ),
+    (
         BuiltinShapeId::ExpressionDefinition,
         &[(1, CODE), (3, RAW_TYPE), (5, CODE)],
     ),
@@ -136,6 +148,7 @@ const RECORDED_RAW_SLOTS: &[(BuiltinShapeId, &[(usize, LazyKinds)])] = &[
 ];
 
 const CODE: LazyKinds = LazyKinds::CODE;
+const RECORD_TYPE: LazyKinds = LazyKinds::RECORD_TYPE;
 /// What a type-position slot captures raw: a `:(…)` type expression or a `:{…}` record type.
 const RAW_TYPE: LazyKinds = LazyKinds::TYPE_EXPR.with(LazyKinds::RECORD_TYPE);
 
