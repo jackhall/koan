@@ -1,4 +1,4 @@
-//! Shape plans: what a program's shapes are to be, generated as data and rendered to koan source for
+//! Body-shape plans: what a program's shapes are to be, generated as data and rendered to koan source for
 //! the builder to shape back.
 //!
 //! A plan is valid by construction. Names are unique across the program. Each scope partitions its
@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 
 use proptest::prelude::*;
 
-use crate::parse::{BinderSymbol, LabelInterner};
+use crate::symbols::{BinderSymbol, SymbolInterner};
 
 use super::{type_name, value_name};
 
@@ -74,12 +74,12 @@ impl Name {
         }
     }
 
-    pub fn symbol(self, labels: &LabelInterner) -> BinderSymbol {
+    pub fn symbol(self, symbols: &SymbolInterner) -> BinderSymbol {
         let text = self.text();
         if self.is_type() {
-            BinderSymbol::Type(type_name(&text, labels))
+            BinderSymbol::Type(type_name(&text, symbols))
         } else {
-            BinderSymbol::Value(value_name(&text, labels))
+            BinderSymbol::Value(value_name(&text, symbols))
         }
     }
 }
@@ -158,11 +158,88 @@ pub(super) struct Scope {
 #[derive(Clone, Debug)]
 pub(super) struct Statement {
     pub binder: Option<Name>,
-    pub form: Form,
+    pub form: BuiltinShape,
+}
+
+impl Statement {
+    /// The scopes nested in this statement, in source order.
+    fn children(&self) -> Vec<&Scope> {
+        let mut out = Vec::new();
+        match &self.form {
+            BuiltinShape::Function(callable) => out.push(&callable.body),
+            BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => {
+                for carrier in carriers {
+                    match carrier {
+                        Carrier::Read(_) => {}
+                        Carrier::Lambda(_, callable) => out.push(&callable.body),
+                        Carrier::Arm { arms, .. } => out.extend(arms.iter().map(|(_, body)| body)),
+                    }
+                }
+            }
+            BuiltinShape::Union(_) => {}
+        }
+        out
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut Scope> {
+        let mut out = Vec::new();
+        match &mut self.form {
+            BuiltinShape::Function(callable) => out.push(&mut callable.body),
+            BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => {
+                for carrier in carriers {
+                    match carrier {
+                        Carrier::Read(_) => {}
+                        Carrier::Lambda(_, callable) => out.push(&mut callable.body),
+                        Carrier::Arm { arms, .. } => {
+                            out.extend(arms.iter_mut().map(|(_, body)| body))
+                        }
+                    }
+                }
+            }
+            BuiltinShape::Union(_) => {}
+        }
+        out
+    }
+
+    /// The carriers an `EVAL` may wrap a read of.
+    fn carriers_mut(&mut self) -> &mut [Carrier] {
+        match &mut self.form {
+            BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => carriers,
+            BuiltinShape::Function(_) | BuiltinShape::Union(_) => &mut [],
+        }
+    }
+
+    /// Whether an `EVAL` sits in this statement or any scope nested in it.
+    fn holds_eval(&self) -> bool {
+        let here = match &self.form {
+            BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => carriers
+                .iter()
+                .any(|carrier| matches!(carrier, Carrier::Read(read) if read.eval)),
+            BuiltinShape::Function(_) | BuiltinShape::Union(_) => false,
+        };
+        here || self
+            .children()
+            .iter()
+            .any(|child| child.keeps_defining_scope())
+    }
+
+    /// Unwrap every `EVAL` in this statement and the scopes nested in it.
+    fn clear_evals(&mut self) {
+        for carrier in self.carriers_mut() {
+            if let Carrier::Read(read) = carrier {
+                read.eval = false;
+            }
+        }
+        for child in self.children_mut() {
+            for statement in &mut child.statements {
+                statement.clear_evals();
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum Form {
+pub(super) enum BuiltinShape {
     /// `LET x = <carriers>`.
     Let(Vec<Carrier>),
     /// `LET x = FN EXPR (ZZ <signature>) -> <returns> = <body>`.
@@ -210,47 +287,17 @@ impl Scope {
 
     /// The nested scopes, in source order.
     pub fn children(&self) -> Vec<&Scope> {
-        let mut out = Vec::new();
-        for statement in &self.statements {
-            match &statement.form {
-                Form::Function(callable) => out.push(&callable.body),
-                Form::Let(carriers) | Form::Bare(carriers) => {
-                    for carrier in carriers {
-                        match carrier {
-                            Carrier::Read(_) => {}
-                            Carrier::Lambda(_, callable) => out.push(&callable.body),
-                            Carrier::Arm { arms, .. } => {
-                                out.extend(arms.iter().map(|(_, body)| body))
-                            }
-                        }
-                    }
-                }
-                Form::Union(_) => {}
-            }
-        }
-        out
+        self.statements
+            .iter()
+            .flat_map(Statement::children)
+            .collect()
     }
 
     fn children_mut(&mut self) -> Vec<&mut Scope> {
-        let mut out = Vec::new();
-        for statement in &mut self.statements {
-            match &mut statement.form {
-                Form::Function(callable) => out.push(&mut callable.body),
-                Form::Let(carriers) | Form::Bare(carriers) => {
-                    for carrier in carriers {
-                        match carrier {
-                            Carrier::Read(_) => {}
-                            Carrier::Lambda(_, callable) => out.push(&mut callable.body),
-                            Carrier::Arm { arms, .. } => {
-                                out.extend(arms.iter_mut().map(|(_, body)| body))
-                            }
-                        }
-                    }
-                }
-                Form::Union(_) => {}
-            }
-        }
-        out
+        self.statements
+            .iter_mut()
+            .flat_map(Statement::children_mut)
+            .collect()
     }
 
     /// Every read this scope's own statements make.
@@ -258,12 +305,12 @@ impl Scope {
         let mut out = Vec::new();
         for statement in &mut self.statements {
             match &mut statement.form {
-                Form::Function(callable) => {
+                BuiltinShape::Function(callable) => {
                     out.extend(callable.types.iter_mut());
                     out.push(&mut callable.returns);
                 }
-                Form::Union(reads) => out.extend(reads.iter_mut()),
-                Form::Let(carriers) | Form::Bare(carriers) => {
+                BuiltinShape::Union(reads) => out.extend(reads.iter_mut()),
+                BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => {
                     for carrier in carriers {
                         match carrier {
                             Carrier::Read(read) => out.push(read),
@@ -290,19 +337,7 @@ impl Scope {
 
     /// Whether an `EVAL` sits in this scope or any scope nested in it.
     pub fn keeps_defining_scope(&self) -> bool {
-        let here = self
-            .statements
-            .iter()
-            .any(|statement| match &statement.form {
-                Form::Let(carriers) | Form::Bare(carriers) => carriers
-                    .iter()
-                    .any(|carrier| matches!(carrier, Carrier::Read(read) if read.eval)),
-                Form::Function(_) | Form::Union(_) => false,
-            });
-        here || self
-            .children()
-            .iter()
-            .any(|child| child.keeps_defining_scope())
+        self.statements.iter().any(Statement::holds_eval)
     }
 
     /// The scope at `path` of child indices below this one.
@@ -722,6 +757,16 @@ impl<'c> Generator<'c> {
             }
         }
 
+        // The binders of this scope each statement reads, wherever the read ends up nested.
+        let local_reads: Vec<Vec<Name>> = reads
+            .iter()
+            .map(|own| {
+                own.iter()
+                    .filter(|read| read.lands == Lands::Binder { up: 0 })
+                    .map(|read| read.name)
+                    .collect()
+            })
+            .collect();
         // What the scopes nested here may read wherever they like.
         let enclosing: Vec<(Name, usize)> = visible
             .iter()
@@ -732,20 +777,23 @@ impl<'c> Generator<'c> {
         for (index, draft) in drafts.into_iter().enumerate() {
             let own = std::mem::take(&mut reads[index]);
             let form = match draft {
-                Draft::Union => Form::Union(own),
+                Draft::Union => BuiltinShape::Union(own),
                 Draft::Function(parameters) => {
                     let (signature, routed) =
                         own.into_iter().partition(|read| read.class == Class::Eager);
-                    Form::Function(self.callable(depth, parameters, signature, routed, &enclosing))
+                    BuiltinShape::Function(
+                        self.callable(depth, parameters, signature, routed, &enclosing),
+                    )
                 }
-                Draft::Let => Form::Let(self.carriers(depth, own, &enclosing)),
-                Draft::Bare => Form::Bare(self.carriers(depth, own, &enclosing)),
+                Draft::Let => BuiltinShape::Let(self.carriers(depth, own, &enclosing)),
+                Draft::Bare => BuiltinShape::Bare(self.carriers(depth, own, &enclosing)),
             };
             statements.push(Statement {
                 binder: binders[index],
                 form,
             });
         }
+        break_eval_cycles(&mut statements, &group_of, &local_reads);
         let components = parameters
             .iter()
             .map(|name| BTreeSet::from([*name]))
@@ -920,6 +968,60 @@ impl<'c> Generator<'c> {
             scrutinee,
             ty,
             arms,
+        }
+    }
+}
+
+/// Unwrap the `EVAL`s of each statement, in order, whose waits would close a cycle: an `EVAL`
+/// waits on every binder declared before it, and a body where one of those waits on the `EVAL`'s
+/// statement is refused. A unit is a component, or a statement that binds nothing.
+fn break_eval_cycles(statements: &mut [Statement], group_of: &[usize], local_reads: &[Vec<Name>]) {
+    let unit = |statement: usize| match statements[statement].binder {
+        Some(_) => group_of[statement],
+        None => group_of.len() + statement,
+    };
+    let units: Vec<usize> = (0..statements.len()).map(unit).collect();
+    // `(waiter, waited on)`.
+    let mut waits: Vec<(usize, usize)> = Vec::new();
+    for (reader, names) in local_reads.iter().enumerate() {
+        for name in names {
+            if let Some(bound) = statements.iter().position(|s| s.binder == Some(*name))
+                && units[bound] != units[reader]
+            {
+                waits.push((units[reader], units[bound]));
+            }
+        }
+    }
+    let reaches = |waits: &[(usize, usize)], from: usize, to: usize| {
+        let mut seen = BTreeSet::from([from]);
+        let mut stack = vec![from];
+        while let Some(at) = stack.pop() {
+            if at == to {
+                return true;
+            }
+            for (waiter, bound) in waits {
+                if *waiter == at && seen.insert(*bound) {
+                    stack.push(*bound);
+                }
+            }
+        }
+        false
+    };
+    for reader in 0..statements.len() {
+        if !statements[reader].holds_eval() {
+            continue;
+        }
+        let earlier: Vec<usize> = (0..reader)
+            .filter(|bound| statements[*bound].binder.is_some() && units[*bound] != units[reader])
+            .map(|bound| units[bound])
+            .collect();
+        if earlier
+            .iter()
+            .any(|bound| reaches(&waits, *bound, units[reader]))
+        {
+            statements[reader].clear_evals();
+        } else {
+            waits.extend(earlier.iter().map(|bound| (units[reader], *bound)));
         }
     }
 }
@@ -1189,7 +1291,7 @@ impl Generator<'_> {
             let inner = self.fresh(false);
             program.statements.push(Statement {
                 binder: Some(outer),
-                form: Form::Let(Vec::new()),
+                form: BuiltinShape::Let(Vec::new()),
             });
             program.components.push(BTreeSet::from([outer]));
             let body = Scope {
@@ -1197,7 +1299,7 @@ impl Generator<'_> {
                 parameters: vec![inner],
                 statements: vec![Statement {
                     binder: None,
-                    form: Form::Bare(Vec::new()),
+                    form: BuiltinShape::Bare(Vec::new()),
                 }],
                 components: vec![BTreeSet::from([inner])],
             };
@@ -1209,7 +1311,7 @@ impl Generator<'_> {
             };
             program.statements.push(Statement {
                 binder: None,
-                form: Form::Bare(vec![Carrier::Lambda(Class::Deferred, callable)]),
+                form: BuiltinShape::Bare(vec![Carrier::Lambda(Class::Deferred, callable)]),
             });
             candidates = Self::shadow_candidates(program);
         }
@@ -1219,14 +1321,14 @@ impl Generator<'_> {
         nested.rename_binder(renamed, name);
         nested.statements.push(Statement {
             binder: None,
-            form: Form::Bare(vec![Carrier::Read(Read::local(name, Class::Deferred))]),
+            form: BuiltinShape::Bare(vec![Carrier::Read(Read::local(name, Class::Deferred))]),
         });
         program
             .at_path(&path[..declaring])
             .statements
             .push(Statement {
                 binder: None,
-                form: Form::Bare(vec![Carrier::Read(Read::local(name, Class::Deferred))]),
+                form: BuiltinShape::Bare(vec![Carrier::Read(Read::local(name, Class::Deferred))]),
             });
     }
 
@@ -1401,13 +1503,13 @@ impl<'p> Renderer<'p> {
     fn statement(&mut self, index: usize, statement: &'p Statement) {
         self.statement = index as u32;
         match &statement.form {
-            Form::Let(carriers) => {
+            BuiltinShape::Let(carriers) => {
                 self.text("LET ");
                 self.other(statement.binder.expect("a LET binds"));
                 self.text(" = ");
                 self.carriers(carriers);
             }
-            Form::Function(callable) => {
+            BuiltinShape::Function(callable) => {
                 self.text("LET ");
                 self.other(statement.binder.expect("a function binds"));
                 self.text(" = FN EXPR (ZZ");
@@ -1422,7 +1524,7 @@ impl<'p> Renderer<'p> {
                 self.text(" = ");
                 self.body(&callable.body);
             }
-            Form::Union(reads) => {
+            BuiltinShape::Union(reads) => {
                 self.text("UNION ");
                 self.other(statement.binder.expect("a UNION binds"));
                 self.text(" = (");
@@ -1434,7 +1536,7 @@ impl<'p> Renderer<'p> {
                 }
                 self.text(")");
             }
-            Form::Bare(carriers) => {
+            BuiltinShape::Bare(carriers) => {
                 self.text("(");
                 self.carriers(carriers);
                 self.text(")");

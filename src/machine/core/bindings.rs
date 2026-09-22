@@ -81,9 +81,9 @@ use crate::memory::Sealed;
 use crate::memory::{BumpVec, bump_table, reattachable};
 #[cfg(test)]
 use crate::parse::BindKind;
+use crate::parse::ExpressionKey;
 use crate::parse::KeyElement;
 use crate::parse::SlotLayout;
-use crate::parse::UntypedKey;
 use crate::parse::{BinderSymbol, IdentityBuildHasher, KeywordSymbol, TypeSymbol, ValueSymbol};
 
 use super::kerror::{KError, KErrorKind};
@@ -350,7 +350,7 @@ struct Keyed<'a> {
     /// union bundle, and a read hands out a bit-copy the caller re-anchors under a pin. A bucket
     /// holds sealed overloads and nothing else — the sibling binders still finalizing under the same
     /// key are claims in the store, read through the same key.
-    /// Keyed on a run bumped into the region rather than an owned [`UntypedKey`], so a node
+    /// Keyed on a run bumped into the region rather than an owned [`ExpressionKey`], so a node
     /// dispatching through its own bumped key probes without materializing one. A [`KeyElement`] is
     /// `Copy` and lifetime-free, so the owned and bumped forms are runs of the same type and either
     /// probes through the standard `Borrow` blanket.
@@ -771,11 +771,11 @@ impl<'a> Bindings<'a> {
             .collect()
     }
 
-    /// Snapshot every `(UntypedKey, Vec<SealedFunction>)` pair in `functions`, ignoring per-overload
+    /// Snapshot every `(ExpressionKey, Vec<SealedFunction>)` pair in `functions`, ignoring per-overload
     /// visibility. Each seal is a bit-copy; the caller re-anchors what it needs under its own pin.
     /// An empty bucket is skipped — a shape whose overloads all retired publishes no dispatch
     /// surface to snapshot. For chain-gated picks use [`Self::lookup_function_stored`].
-    pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<SealedFunction<'a>>)> {
+    pub fn iter_functions(&self) -> Vec<(ExpressionKey, Vec<SealedFunction<'a>>)> {
         self.keyed
             .borrow()
             .functions
@@ -928,7 +928,7 @@ impl<'a> Bindings<'a> {
     /// True iff `functions[key]` holds a sealed overload registered at
     /// [`BindingIndex::BUILTIN`] — a genuine builtin dispatch bucket, distinct from a
     /// user bucket the no-shadow consult must not gate.
-    pub fn has_builtin_function(&self, key: &UntypedKey) -> bool {
+    pub fn has_builtin_function(&self, key: &ExpressionKey) -> bool {
         self.has_builtin_function_probe(key.as_slice())
     }
 
@@ -1027,7 +1027,7 @@ impl<'a> Bindings<'a> {
 
     /// Every standing claim on one dispatch bucket, in install order.
     #[cfg(test)]
-    pub fn pending_overload_entries(&self, bucket: &UntypedKey) -> Vec<Claim> {
+    pub fn pending_overload_entries(&self, bucket: &ExpressionKey) -> Vec<Claim> {
         self.keyed.borrow().claims.bucket_claims(bucket)
     }
 
@@ -1240,7 +1240,7 @@ impl<'a> Bindings<'a> {
     /// its type re-enters the source's own doors.
     pub(crate) fn iter_function_entries(
         &self,
-    ) -> Vec<(UntypedKey, Vec<(BindingIndex, SealedFunction<'a>)>)> {
+    ) -> Vec<(ExpressionKey, Vec<(BindingIndex, SealedFunction<'a>)>)> {
         self.keyed
             .borrow()
             .functions

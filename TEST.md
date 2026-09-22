@@ -43,13 +43,17 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
 `memory`, `parse`, `scope`, `source`, `type_lattice`, `values`, `elaborate`,
-`function` and the embedded crates `cellgraph` and `sexlex` — are what a default
-koan build compiles and a default `cargo test` runs. `workgraph` is no longer a koan dependency; it still builds and tests as a
-workspace member. Everything above the kept modules — `machine`, `builtins`, the
+`knot`, `scheduler`, `program` and the embedded crates `cellgraph` and
+`sexlex` — are
+what a default koan build compiles and a default `cargo test` runs. `workgraph`
+is no longer a koan dependency; it still builds and tests as a workspace member.
+Everything above the kept modules — `machine`, `builtins`, the
 interpreter binary, the guard fixtures and every `tests/*.rs` integration binary —
 sits behind the `pending_rewrite` cargo feature, and **that build no longer
-compiles**: `memory` is narrowed onto `cellgraph`, and the old runtime names the
-items it deleted. It is re-implemented layer by layer rather than kept building;
+compiles**: `memory` is narrowed onto `cellgraph`, the old runtime names the
+items it deleted, and the `pub use workgraph::scheduler` re-export
+[src/lib.rs](src/lib.rs) keeps behind that feature collides with koan's own
+`scheduler` module. It is re-implemented layer by layer rather than kept building;
 [old_design/](old_design/) and
 [observe/miri_slate_pending_rewrite.md](observe/miri_slate_pending_rewrite.md) are
 its requirements record. Every other koan feature (`alloc-count`, `dhat`,
@@ -98,7 +102,7 @@ The parser's laws are stated as [proptest](https://docs.rs/proptest) properties
 rather than pinned one input at a time, at a quarter of the tier's depth — 64 cases under the
 routine tier, 512 under the total one. A pin that fixes a
 diagnostic message or a surface rule is *not* rewritten as a property and stays
-beside its sibling unit tests. Seven files hold the thirty properties:
+beside its sibling unit tests. Seven files hold the twenty-nine properties:
 
 - [`src/parse/tests/properties.rs`](src/parse/tests/properties.rs) — the ten
   end-to-end laws, over a generated expression tree, a tape of random bytes that
@@ -106,23 +110,27 @@ beside its sibling unit tests. Seven files hold the thirty properties:
   commas, redundant `(…)` wrappers), and an oracle that writes the same tree in
   the harness's `describe` notation: round-trip, the redundant-wrapper peel, token
   classification, spans, container arity, separator insensitivity, symbol minting,
-  the operator-chain probe digest, type-sigil idempotence and compound-atom
+  the operator-chain classification, type-sigil idempotence and compound-atom
   desugaring. Its keyword pool is deliberately disjoint from the keywords
-  [`FORMS`](src/parse/forms.rs) spells, so no generated run matches a builtin form.
+  [`BUILTIN_SHAPES`](src/parse/builtin_shapes.rs) spells, so no generated run matches a builtin
+  shape.
 - [`src/parse/ast/tests.rs`](src/parse/ast/tests.rs) — node laws: the dispatch
   shape as a function of the key and the head class, the cache agreeing with a
   recompute and riding a copy and a resplice, a node key matching the signature key
   of the same pattern, the summary rendering, and structural equality.
-- [`src/parse/labels/tests.rs`](src/parse/labels/tests.rs) — interning laws, beside
+- [`src/symbols/tests.rs`](src/symbols/tests.rs) — interning laws, beside
   the four fixed-name pins described under [Symbol mints](#symbol-mints).
-- [`src/parse/forms/tests/`](src/parse/forms/tests.rs) — the form table, split four
-  ways: static table-shape walks including the `FormId`-equals-index pin
-  (`table.rs`), the caching and binder-plan laws (`binder.rs`), the lazy-kind
-  derivation law (`lazy.rs`), and the table⟺registration law pinning every `FORMS`
-  key against the live builtin registration set, which is derived once, here
-  (`registration.rs`).
-- [`src/parse/forms/layout/tests.rs`](src/parse/forms/layout/tests.rs) — slot-layout
-  laws: symbol order, the lexical position beside each entry, parameter merge.
+- [`src/parse/builtin_shapes/tests/`](src/parse/builtin_shapes/tests.rs) — the builtin shape
+  table, split four ways: static table-shape walks including the
+  `BuiltinShapeId`-equals-index pin and the pin holding the derived raw-capture
+  kinds to the column they replaced (`table.rs`), the caching and binder-plan laws
+  (`binder.rs`), the raw-kind derivation's distribution over union members
+  (`lazy.rs`), and the table⟺registration law pinning every `BUILTIN_SHAPES` key
+  against the live builtin registration set, which is derived once, here
+  (`registration.rs`). The two laws relating a slot's role to its type are build-time
+  `const` assertions in `builtin_shapes.rs`, not tests.
+- [`src/parse/builtin_shapes/layout/tests.rs`](src/parse/builtin_shapes/layout/tests.rs) —
+  slot-layout laws: symbol order, the lexical position beside each entry, parameter merge.
 - [`src/machine/model/close_inference/tests.rs`](src/machine/model/close_inference/tests.rs)
   — the capture-inference laws, per close rule.
 
@@ -134,20 +142,31 @@ stream of choices. A plan says what each scope should come out as: its binders i
 type channels, how they partition into components, each read's class, and the binder each read
 lands on. The plan is rendered to koan source, which is parsed and built. Every plan is valid by
 construction and names are unique across the program, so the expected shape is the plan itself
-and nothing is re-derived from the source. `MODULE` and operator bodies are not generated.
-[`src/scope/tests/examples.rs`](src/scope/tests/examples.rs) covers `MODULE` by example.
-[`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds six laws:
+and nothing is re-derived from the source. `MODULE` and operator bodies are not generated, and
+neither is `USING … SCOPE`: a `USING` block's parameters are *derived* — from the declaration its
+operand names — so a plan could only state them by carrying modules end to end, which is what
+nothing being re-derived from the source forbids. [`src/scope/tests/examples.rs`](src/scope/tests/examples.rs)
+covers `MODULE` and every `USING` reading and refusal by example.
+[`src/scope/tests/groups.rs`](src/scope/tests/groups.rs) covers the
+[operator-group](src/scope/README.md#operator-groups) model before any rewrite —
+what the builtin groups cover, what a `GROUP` body's member scan reads, and each
+refusal the position-blind claims pre-scan makes — and
+[`src/scope/tests/rewrite.rs`](src/scope/tests/rewrite.rs) covers the rewrite
+itself, asserting on the shape a body owns: the four rewrites, where an operator
+run is reached, equality and the `!=` negation, the groups a `USING` body and an
+`EVAL` see, and each refusal.
+[`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds five laws:
 
-- a planned program shapes back into its plan: kinds, layouts, components and whether each is
-  cyclic, one mention per planned read with its class, statement and landing, nested scopes, and
-  which captures are knot edges;
+- a planned program — the planner unwraps any `EVAL` whose waits would close a cycle, which the
+  shape refuses — shapes back into its plan: kinds, layouts, components and whether each is
+  cyclic, one mention per planned read with its class, statement and landing, nested scopes,
+  which captures are knot edges, and a unit order in which a unit runs after every unit it reads
+  and every statement is in exactly one unit;
 - a plan with exactly one refusal injected (an eager cycle, an eager read ahead, an undeclared
   name, a rebind, a shadowed builtin) is refused with that refusal;
 - a name re-declared inside a nested scope takes the reads nearest it;
 - every activation of a planned program reads by name what its coordinates name, and closure
   bindings copy the enclosing words or hold knot edges;
-- a claimed slot reads as pending until bound, and a callable is not created while a slot it reads
-  is pending;
 - an `EVAL` body planned over what a program or arm statement sees shapes back into its plan over
   that chain, and its enclosing reads agree with the site's by-name reads.
 
@@ -207,7 +226,7 @@ under the bump tier — under Miri's tree-borrows mode, with zero process-exit
 leaks and zero UB required for sign-off. `memory`'s knot adds no layout or
 retype over `thin_run` (cellgraph's slate runs it at every edge its arithmetic
 has, including a fill writing into the same region); what koan's slate pins is
-`function`'s copy of a knot, whose node run is filled while closure runs, data
+`knot`'s copy of a knot, whose node run is filled while closure runs, data
 node residents and deep copies are written into the same region. `src/` carries no `unsafe` at all — koan's only
 `unsafe` is the counting global allocator in
 [`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding
@@ -332,7 +351,7 @@ the allocation column's absolute rows do.
 The names fixed in Rust source — builtin parameter slots and the `Result` / `KError`
 tags ([old_design/label-interning.md § Names fixed in Rust source](old_design/label-interning.md#names-fixed-in-rust-source))
 — are pinned by four unit tests in
-[`labels/tests.rs`](src/parse/labels/tests.rs), over a static and a slot group of
+[`src/symbols/tests.rs`](src/symbols/tests.rs), over a static and a slot group of
 that test module's own so they pin the mechanism rather than whatever spelling a builtin
 happens to declare. Two cover a lone declaration: `a_static_name_mints_what_of_mints` (the
 memo is exactly what the class's `of` would mint, and `text()` is the spelling as written)

@@ -2,7 +2,7 @@
 //!
 //! `BumpRun` is the crate's second use of the argument `Dormant` and `redeem` already stand on — a
 //! bump allocates in pointer-stable chunks, a `Bump` moves without moving a chunk byte, and a
-//! region never resets and frees its chunks only at its own drop. These run under Miri, where a
+//! region's chunks are reset or freed only once the region itself is gone. These run under Miri, where a
 //! stale pointer or a leaked chunk is a failure rather than a coincidence.
 //!
 //! `Run` and `Prose` are measured rather than only exercised: the pair of growth tests reads the
@@ -40,7 +40,10 @@ fn a_memo_survives_its_region_moving_and_absorbing() {
     let other = Region::new();
     other.writer().fill(16, |_| 7u64);
     let before = region.allocated_bytes();
-    region.absorb(other);
+    assert!(
+        region.absorb(other).is_none(),
+        "a written bump joins the bundle"
+    );
     assert!(region.allocated_bytes() > before);
     assert_eq!(region.memo(), Some(&recorded[..]));
 
@@ -266,4 +269,17 @@ fn a_thin_run_survives_the_region_growing_under_it() {
     assert!(rounds > 0);
     assert_eq!(run.len(), 8);
     assert_eq!(run.as_slice(), &[0, 1, 2, 3, 4, 5, 6, 7]);
+}
+
+#[test]
+fn a_reset_bump_reads_unwritten() {
+    let mut region = Region::new();
+    assert!(region.is_unwritten(), "a cold bump has handed nothing out");
+    region.writer().fill(16, |_| 7u64);
+    assert!(!region.is_unwritten());
+    region.bump.reset();
+    assert!(region.bump.allocated_bytes() > 0, "a reset keeps the chunk");
+    assert!(region.is_unwritten(), "and hands back every byte of it");
+    region.writer().fill(1, |_| 7u8);
+    assert!(!region.is_unwritten());
 }

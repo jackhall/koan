@@ -2,11 +2,12 @@
 
 use std::ptr;
 
-use crate::parse::{BinderSymbol, ExpressionPart};
+use crate::parse::ExpressionPart;
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KKind, KType, TypeNode};
 use crate::values::{Key, KeyRejected, TypeValue, Weight};
 
-use super::{Dict, List, Record, Tagged, Value, pin, text, with_fixture};
+use super::{Dict, List, Record, Tagged, TypeSymbol, Value, pin, text, with_fixture};
 
 const WORD: Weight = Weight::flat::<Value<'static, 'static>>();
 
@@ -45,9 +46,9 @@ fn a_record_sorts_its_fields_and_memoizes_the_record_of_their_types() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
-            let y = BinderSymbol::declared("y", labels).unwrap();
-            let x = BinderSymbol::declared("x", labels).unwrap();
+            let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+            let y = BinderSymbol::declared("y", symbols).unwrap();
+            let x = BinderSymbol::declared("x", symbols).unwrap();
             let fields = [(y, text(writer, "b")), (x, Value::Number(1.0))];
             let record = Record::new(writer, &fields, types, scratch);
             assert!(record.names().is_sorted());
@@ -60,8 +61,8 @@ fn a_record_sorts_its_fields_and_memoizes_the_record_of_their_types() {
             assert_eq!(
                 record.weight(),
                 Weight::flat::<Record<'static, 'static>>()
-                    .plus(Weight::flat::<crate::parse::Symbol>())
-                    .plus(Weight::flat::<crate::parse::Symbol>())
+                    .plus(Weight::flat::<crate::symbols::Symbol>())
+                    .plus(Weight::flat::<crate::symbols::Symbol>())
                     .plus(WORD)
                     .plus(WORD)
                     .plus(Weight::text(1))
@@ -259,7 +260,7 @@ fn each_linked_door_stores_its_memo_and_weighs_its_links() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
+            let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
             let edge = Link::Edge(KnotPlan::new(1).edge(0).unwrap());
             let link = Weight::flat::<Link<'static, 'static>>();
             let word = Link::Value(crate::values::text(writer, "abc"));
@@ -284,8 +285,8 @@ fn each_linked_door_stores_its_memo_and_weighs_its_links() {
             );
 
             let (y, x) = (
-                BinderSymbol::declared("y", labels).unwrap(),
-                BinderSymbol::declared("x", labels).unwrap(),
+                BinderSymbol::declared("y", symbols).unwrap(),
+                BinderSymbol::declared("x", symbols).unwrap(),
             );
             let record =
                 crate::values::Record::linked(writer, &[(y, edge), (x, word)], memo, scratch);
@@ -306,11 +307,11 @@ fn each_linked_door_stores_its_memo_and_weighs_its_links() {
 fn a_newtype_construction_is_checked_against_its_representation() {
     use crate::values::{ConstructionRefused, construction};
     with_fixture(|fixture| {
-        let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
         let ring = fixture.ring_type("Ring", "next");
         let distance = fixture.newtype("Distance", KType::NUMBER);
-        let next = BinderSymbol::declared("next", labels).unwrap();
-        let other = BinderSymbol::declared("other", labels).unwrap();
+        let next = BinderSymbol::declared("next", symbols).unwrap();
+        let other = BinderSymbol::declared("other", symbols).unwrap();
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let head = |handle| TypeValue::new(writer, handle, types);
@@ -341,6 +342,59 @@ fn a_newtype_construction_is_checked_against_its_representation() {
                 construction(types, scratch, distance, KType::STR),
                 Err(ConstructionRefused::Misfit { .. })
             ));
+        })
+    });
+}
+
+#[test]
+fn a_member_seals_under_a_mint_its_source_binding_admits() {
+    use crate::memory::ScopeId;
+    use crate::values::{SealRefused, sealing};
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let distance = fixture.newtype("Distance", KType::NUMBER);
+        let carrier = TypeSymbol::declared("Carrier", symbols).unwrap();
+        let nonce = ScopeId::next();
+        let declared = types.abstract_type(scratch, nonce, carrier, &[], None, KType::ANY);
+        let mint = types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), KType::ANY);
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let sealed = Tagged::seal(
+                writer,
+                Value::Number(1.0),
+                mint,
+                KType::NUMBER,
+                types,
+                scratch,
+            );
+            assert_eq!(sealed.map(|tagged| tagged.ktype()), Ok(mint));
+
+            // A tagged payload takes the mint as its one layer, not a second one.
+            let tagged = Value::Tagged(Tagged::hold(writer, Value::Number(2.0), distance));
+            let sealed = Tagged::seal(writer, tagged, mint, distance, types, scratch).unwrap();
+            assert_eq!(sealed.ktype(), mint);
+            assert!(matches!(sealed.payload(), Value::Number(2.0)));
+
+            assert_eq!(
+                Tagged::seal(
+                    writer,
+                    Value::Number(1.0),
+                    declared,
+                    KType::NUMBER,
+                    types,
+                    scratch
+                )
+                .err(),
+                Some(SealRefused::NotAMint(declared)),
+                "a SIG-body declaration is no per-application mint",
+            );
+            assert_eq!(
+                sealing(types, scratch, mint, KType::STR, KType::NUMBER),
+                Err(SealRefused::Misfit {
+                    mint,
+                    witness: KType::STR
+                }),
+            );
         })
     });
 }

@@ -8,7 +8,7 @@
 //! is sound because every resident is covariant in `'graph` and `'cell`.
 
 use crate::memory::{Writer, collect};
-use crate::parse::Symbol;
+use crate::symbols::Symbol;
 use crate::type_lattice::KType;
 
 use super::{DeepCopy, Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, Value, Weight};
@@ -18,6 +18,8 @@ use super::{DeepCopy, Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, V
 pub enum Resolved<'a, X> {
     /// A function: opaque to `values`, incomparable, rendered as its type's name.
     Function,
+    /// A module: opaque in the same way, and carrying no type `values` names.
+    Module,
     /// A data node.
     Circular(Circular<'a, 'a, X>),
 }

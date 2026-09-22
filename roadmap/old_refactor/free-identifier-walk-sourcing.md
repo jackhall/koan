@@ -19,7 +19,7 @@ interpreter:
   names, a module body's announcements, a nominal declaration's own binder window), whose *inputs*
   are sourced but whose "ignores the gate" status is restated. A change to the interpreter's
   cutoff does not break the walk's copy at compile time.
-- **Label positions.** Which slots of a builtin form the body name-resolves and which it reads as a
+- **Label positions.** Which slots of a builtin shape the body name-resolves and which it reads as a
   label is per-builtin body semantics with no table behind it: `identifier_sig`
   ([attr.rs](../../src/builtins/attr.rs)) types both `ATTR` slots `:Identifier`, and only the body
   says the lhs is a use and the field is a label. So `CLOSE_RULES` in the walk
@@ -38,7 +38,7 @@ interpreter:
   binder) are expressed as a position value that predicate admits unconditionally, not as a
   separate branch in the walk.
 - A builtin's registration declares, per slot, whether the body name-resolves the token, alongside
-  the slot's type and its laziness ([forms.rs](../../src/parse/forms.rs)); the
+  the slot's type and its laziness ([forms.rs](../../src/parse/builtin_shapes.rs)); the
   walk reads label-ness through that declaration and `CLOSE_RULES` carries no `Attribute` or
   `Projection` rule.
 - A builtin whose body stops resolving a slot it still accepts, or starts resolving one it read as a
@@ -54,13 +54,13 @@ interpreter:
   runtime table and the walk's scope stack store. Recommended: the type — it is the "shared
   representation to key both off" the walk currently lacks, and it lets the block-wide window be a
   distinguished position rather than an `Option` branch.
-- *How a slot declares resolution — open.* Candidates: a static keyed by `FormId` beside
-  `CLOSE_RULES`, or a third field on a `FORMS` entry beside `lazy_slots` so one table answers
-  "raw / label / use" per slot. Recommended: widen the `FORMS` entry — one table, one probe, one
+- *How a slot declares resolution — open.* Candidates: a static keyed by `BuiltinShapeId` beside
+  `CLOSE_RULES`, or a further fact on a `BUILTIN_SHAPES` slot beside its role and its types, so one
+  table answers "raw / label / use" per slot. Recommended: widen the entry — one table, one probe, one
   consistency test.
 - *Structural label positions — decided.* Record-literal keys, a pair run's name half and a union
   schema's tag half are syntax shapes, not builtin slots, so they stay read structurally in the walk;
-  only the keyed builtin forms move to the registration axis.
+  only the keyed builtin shapes move to the registration axis.
 
 ## Dependencies
 

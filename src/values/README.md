@@ -25,7 +25,7 @@ function that captures it — is born together as one
 [knot](../memory/README.md#the-knot), and a function holds the environment it
 captured, which is the [scope layer's](../scope/README.md#three-tiers), which
 `values` may not name. So `Value<'graph, 'cell, X>` has one arm, `Knotted(X)`,
-over a type parameter a layer above closes — [`function`](../function/README.md)
+over a type parameter a layer above closes — [`knot`](../knot/README.md)
 closes it with a sixteen-byte `(knot, index)` member, so the word stays at 24
 bytes. `values` states what it asks of `X` as a trait pair
 ([values.rs](../values.rs)): per value, `Knotted` — a `Copy` type whose
@@ -39,9 +39,12 @@ working expression, and every door and relation over them carry the same
 parameter.
 
 **What a member holds** is the one total answer `Knotted::resolve` gives, a
-[`Resolved`](circular.rs): a **function**, opaque to `values`, or a **data
-node**, a [`Circular`](circular.rs). `Value::as_callable` answers only for the
-first and `Value::as_circular` only for the second, so no arm's meaning rests
+[`Resolved`](circular.rs): a **function** or a **module**, both opaque to
+`values` — a module carries no type this module names — or a **data node**, a
+[`Circular`](circular.rs). `Value::as_callable` and `Value::as_module` answer
+only for their own arm, `Value::as_opaque` for either of the two opaque ones —
+which is what equality refuses and rendering writes the type's name for — and
+`Value::as_circular` only for the data node, so no arm's meaning rests
 on an invariant `values` cannot check. A data node is a list, dict, record or
 tagged resident whose cells are [`Link`](link.rs)s instead of value words: a
 link is a value word or an `Edge` naming a sibling node of the same knot, since
@@ -87,6 +90,19 @@ Every construction goes through the rule — an ordinary one through `construct`
 a knot's tagged node by the tie over the payload type it derived — so there is
 nothing to keep in agreement.
 
+**A seal is the second checked door.** [`sealing`](admission.rs) is what an
+opaque view's barrier goes through
+([members are born coerced](../knot/module/README.md#members-are-born-coerced)): an
+abstract type records no representation for `construction` to check a payload
+against, so what is checked instead is that the identity is a *per-application
+mint* — a nonced abstract type, or an application of one — and that the payload
+satisfies what the source binds that member to. It answers the mint as the
+identity, or a `SealRefused`: `NotAMint` for an identity that is no mint,
+`Misfit` for a payload the source's binding does not admit. `Tagged::seal` is
+the checked door over it, and it `peel`s, so a sealed member takes the mint as
+its one tagged layer rather than a second one. Sealing happens where a view is
+built, never where a koan program writes a construction.
+
 ## Two lifetimes
 
 A value borrows at two lifetimes, `Value<'graph, 'cell>`, following
@@ -128,7 +144,7 @@ of its kind — `list_type`, `dict_type` or `record_type`, which the plain doors
 use too — from its cells, an edge contributing its target's memo, so
 the layer that ties a knot derives it — and refuses a cycle of containers
 alone, which no finite type describes
-([the tie](../function/README.md#the-tie)). `satisfies` over a circular value
+([the tie](../knot/README.md#the-tie)). `satisfies` over a circular value
 is therefore the same one relation against that memo.
 
 A type check against a value — [`satisfies`](admission.rs) — is therefore one
@@ -176,21 +192,43 @@ doors ([crossing.rs](crossing.rs)): `cross` builds a carrier's value into
 another cell's region and hands back the carrier resting there, and
 `cross_here` builds it into the executing cell, where it is a plain `'here`
 value the step may embed or its continuation capture. Both price the operand at
-its weight, and both build the same way: a **pinned** operand arrives at the
-destination's brand and embeds as it is, and a **copied** one is rebuilt through
+its weight, and both build through `cross_view`, which turns one crossed operand
+into a value at the destination's brand: a **pinned** operand arrives there and
+embeds as it is, and a **copied** one is rebuilt through
 `copy_into` — region parts written again through the destination's writer,
 program nodes embedded verbatim, memoized types and weights carried over
 unchanged, and a knot member handed to its family's copy together with
 `copy_into` itself, so every value its knot holds is rebuilt by the same
 copy. A data node rebuilds through `Circular::copied`: each value link through
 that copy, each edge verbatim — an edge names a node by index, so it means the
-same node in the copy — and its memo and weight carried over. `copy_into` is private to the crossing: the two doors are the only way
-to a deep copy, so every copy is one the graph priced.
+same node in the copy — and its memo and weight carried over.
+
+`copy_into` is private to the crossing, and its callers are two public doors,
+because a placement a layer above builds over values hands them the views.
+`cross_view` rebuilds a value that is itself the crossed operand — a
+scheduler's result built in its home. `copy_severed` rebuilds a value held
+inside a *copied* operand of another family — a birth that carries values, such
+as a call's callee and arguments woken into its frame — at the operand's
+severed brand. Each takes a `CrossedOperand`, which only a priced placement
+mints — its arms are
+[non-exhaustive](../../cellgraph/README.md#the-crossing-verdict), so nothing
+outside `cellgraph` can build one — so every copy is one the graph priced.
+
+A crossing door requires its family to be
+[`Covariant`](../../cellgraph/src/reattach.rs), which a generic `ValueFamily<XF>`
+cannot show, so `cross` and `cross_here` state it as a where-clause and each
+concrete family — `ValueFamily<NoKnot>` here, `KValueFamily` in
+[knot](../knot/README.md) — says `covariant!` once.
 
 The graph consults an embedder closure for each operand's verdict, and this
 module owns it: [`verdict`](crossing.rs) copies when the copy costs less than a
 `COPY_RATIO`th of the bytes a pin would newly retain, and pins otherwise. The
 comparison saturates, and the occupancy the prices also carry does not move it.
+The [scheduler](../scheduler/README.md) builds its graph with this closure, so
+every crossing a running program makes is priced by it; how a value reaches
+another cell at all is [its delivery](../scheduler/README.md#delivery). Both
+doors are generic in the graph's delivery bundle, so a step at any bundle —
+`NoDelivery` in a fixture, `KDelivery` under the drain — reaches them.
 
 ## Dict key order
 
@@ -223,12 +261,12 @@ contents **only when their memoized types are related**, one satisfied by the
 other in either direction — an empty list of strings and an empty list of
 numbers are unequal. That makes `==` intransitive across ascriptions by design.
 
-**A function has no structural equality.** `equals` answers
-`Result<bool, Incomparable>`: a comparison with a function on either side is
-`Incomparable`, which the `==` builtin reports as an error rather than
+**An opaque member has no structural equality.** `equals` answers
+`Result<bool, Incomparable>`: a comparison with a function or a module on either
+side is `Incomparable`, which the `==` builtin reports as an error rather than
 `false`, and so is a pair of related containers whose aligned cells reach one.
-Every aligned pair is compared, so an unequal pair before a function does not
-hide it. A container pair with unrelated types is still unequal without
+Every aligned pair is compared, so an unequal pair before an opaque member does
+not hide it. A container pair with unrelated types is still unequal without
 descending, whatever it holds.
 
 **Circular values compare as a bisimulation.** A data node compares as the
@@ -248,8 +286,9 @@ rendering and the mark pass below are written once over both.
 `Value::render` is the surface `PRINT` writes: a string bare, a dict key quoted
 so `{"1": x}` and `{1: x}` read apart, `[a, b]`, `{k: v}` in key order,
 `{x = 1}` in field-name order, a tagged value as its type's name around its
-payload, a type as its name, a quote as its body's surface, a function as its
-type's name — its closure bindings are program state and never print — and a
+payload, a type as its name, a quote as its body's surface, an opaque member —
+a function, or a module — as its type's name, which is a module's signature; its
+closure bindings or members are program state and never print — and a
 data node as the plain value of its kind.
 
 **A cycle prints with labels.** A mark pass walks depth first from the first
@@ -315,10 +354,10 @@ a name the rest of the stack retired.
 The unit suite ([tests.rs](tests.rs)) runs every door, crossing and relation
 over a fixture that owns program storage with a type registry built in it, and a
 cell graph over that storage to run steps in. Circular values are exercised
-without `function`: the fixture closes the parameter with a test-only member
+without `knot`: the fixture closes the parameter with a test-only member
 whose every node is a data node, tied through `KnotPlan` with memos supplied
-by hand, and the suites cover the `linked` doors and the construction rule
-([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
+by hand, and the suites cover the `linked` doors, the construction rule and the
+seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
 ([tests/equality.rs](tests/equality.rs)), labelled and shared-inline renders
 ([tests/render.rs](tests/render.rs)), a ring crossed under a copy and a pin
 ([tests/crossing.rs](tests/crossing.rs)), and `satisfies` by a node's memo
@@ -328,9 +367,3 @@ the one path only `values` drives — a deep copy nesting `fill` inside `fill`
 with string writes between and a program node embedded, read after the region
 it was copied from is released. The pinned and kept paths it would otherwise
 pair with are `cellgraph`'s own slate.
-
-## Open work
-
-- [Scheduler on cellgraph](../../roadmap/rewrite/scheduler-on-cellgraph.md) —
-  the scheduler that builds its graph with `verdict` and delivers values
-  between cells.

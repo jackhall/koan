@@ -6,7 +6,7 @@
 //! *inside* one, plus the specificity verdict [`shape_specificity`](super::sig_relations)
 //! produces.
 
-use crate::parse::{KeywordSymbol, LabelInterner, TypeSymbol};
+use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use super::handle::KType;
 
@@ -38,10 +38,10 @@ impl DeferredReturnSurface<'_> {
     pub fn write_surface(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        labels: &LabelInterner,
+        symbols: &SymbolInterner,
     ) -> std::fmt::Result {
         match self {
-            Self::Type(name) => write!(f, "{}", labels.display(name.symbol())),
+            Self::Type(name) => write!(f, "{}", symbols.display(name.symbol())),
             Self::Expression(text) => f.write_str(text),
         }
     }

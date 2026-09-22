@@ -17,7 +17,7 @@ use std::rc::Rc;
 use proptest::prelude::*;
 
 use crate::memory::{Bump, BumpAllocator, ScopeId};
-use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
@@ -41,7 +41,7 @@ pub fn with_scratch<R>(build: impl FnOnce(BumpAllocator<'_>) -> R) -> R {
 #[derive(Clone)]
 pub struct World {
     pub types: Rc<TypeRegistry<'static>>,
-    pub labels: Rc<LabelInterner>,
+    pub symbols: Rc<SymbolInterner>,
     pub binders: Rc<Vec<BinderSymbol>>,
     pub type_names: Rc<Vec<TypeSymbol>>,
     pub keywords: Rc<Vec<KeywordSymbol>>,
@@ -50,14 +50,14 @@ pub struct World {
 
 impl World {
     pub fn new() -> World {
-        let labels = Rc::new(LabelInterner::new());
+        let symbols = Rc::new(SymbolInterner::new());
         let declare_binder =
-            |text: &str| BinderSymbol::declared(text, &labels).expect("a bindable token");
-        let declare_type = |text: &str| TypeSymbol::declared(text, &labels).expect("a Type token");
+            |text: &str| BinderSymbol::declared(text, &symbols).expect("a bindable token");
+        let declare_type = |text: &str| TypeSymbol::declared(text, &symbols).expect("a Type token");
         let declare_keyword =
-            |text: &str| KeywordSymbol::declared(text, &labels).expect("a keyword token");
+            |text: &str| KeywordSymbol::declared(text, &symbols).expect("a keyword token");
         let declare_value =
-            |text: &str| ValueSymbol::declared(text, &labels).expect("a value token");
+            |text: &str| ValueSymbol::declared(text, &symbols).expect("a value token");
         World {
             types: Rc::new(TypeRegistry::in_region(leaked_arena())),
             binders: Rc::new(vec![
@@ -72,7 +72,7 @@ impl World {
             ]),
             keywords: Rc::new(vec![declare_keyword("PURE"), declare_keyword("WRAP")]),
             values: Rc::new(vec![declare_value("a"), declare_value("b")]),
-            labels,
+            symbols,
         }
     }
 

@@ -11,10 +11,12 @@
 use std::marker::PhantomData;
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
-    Erased, Operand, Prices, Prose, Ready, Reattachable, RedeemError, ReleaseAbsorption,
-    ReleaseError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext, ThinRun, TreeHandle,
-    Verdict, Writer, reattachable,
+    Active, CellGraph, CellHandle, Config, Covariant, CreateError, CrossedOperand, DeliverError,
+    Delivered, Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, NoScratch, OnceRun,
+    OnceView, Operand, Prices, Prose, Ready, Reattachable, Receipt, ReceiptError, RedeemError,
+    RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run,
+    SlabHandle, Stale, StepContext, Storage, TenantHandle, ThinRun, TreeHandle, Verdict, Writer,
+    Written, covariant, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -56,6 +58,10 @@ reattachable!(
     Listing => &'cell Entry<'graph, 'cell>,
 );
 
+// The value families cross between cells, so each carries the covariance witness the crossing
+// doors ask for.
+covariant!(Number, Numbers, Text, Listing);
+
 impl DropFree for Number {}
 impl DropFree for Numbers {}
 impl DropFree for Text {}
@@ -82,6 +88,18 @@ fn build_thin_run<'cell>(writer: Writer<'cell>) -> &'cell [u32] {
     let run: ThinRun<'cell, u32> = writer.thin_run(4, |index| index as u32 * 2);
     assert!(!run.is_empty() && run.len() == 4);
     run.as_slice()
+}
+
+/// The once-written run: a slot set once, refused a second time, and read through the view — the
+/// read half, which has no door that sets.
+fn build_once_run<'cell>(writer: Writer<'cell>) -> &'cell u32 {
+    let run: OnceRun<'static, 'cell, Number> = writer.once_run(2);
+    assert!(!run.is_empty() && run.len() == 2);
+    run.set(1, one(writer, 5)).unwrap();
+    assert_eq!(run.set(1, one(writer, 6)), Err(Written));
+    let view: OnceView<'static, 'cell, Number> = run.view();
+    assert!(view.get(0).is_none() && view.len() == 2 && !view.is_empty());
+    view.get(1).expect("slot one was set")
 }
 
 fn build_text<'cell>(writer: Writer<'cell>) -> &'cell str {
@@ -112,13 +130,14 @@ fn build_prose<'cell>(writer: Writer<'cell>) -> &'cell str {
 
 /// An embedder's own helper over carriers, which is the one reason [`Erased`] is nameable from
 /// outside: the read door's `Copy` bound is on the erased form, so a caller that wants to be
-/// generic over the value family has to write that bound too.
+/// generic over the value family has to write that bound too — and the [`Covariant`] one, which is
+/// what a read view of a longer-lived home at a short borrow rests on.
 fn read_first<'graph, 'cell, 'step, V>(
-    context: &'cell StepContext<'graph, 'step, '_, Work>,
+    context: &'cell StepContext<'graph, 'step, '_, '_, Work>,
     carrier: &'cell Ready<'graph, 'step, V>,
-) -> V::At<'cell>
+) -> <V as Reattachable<'graph>>::At<'cell>
 where
-    V: Reattachable<'graph> + DropFree,
+    V: Reattachable<'graph> + Covariant<'graph> + DropFree,
     Erased<'graph, V>: Copy,
 {
     context.read(carrier).into_value()
@@ -144,7 +163,7 @@ fn weigh(prices: Prices) -> Verdict {
 
 /// An operand the embedder is unwilling to copy: at a cost above anything a pin can price, the
 /// verdict above always pins it.
-fn pinned_operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree>(
+fn pinned_operand<'graph, 'a, 'step, V: Reattachable<'graph> + Covariant<'graph> + DropFree>(
     carrier: &'a Ready<'graph, 'step, V>,
 ) -> Operand<'graph, 'a, 'step, V> {
     Operand {
@@ -188,14 +207,199 @@ fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
     }
 }
 
+/// Every refusal `release_tenant` can give, matched by name for the same reason.
+fn name_release_tenant_error(error: ReleaseTenantError) -> &'static str {
+    match error {
+        ReleaseTenantError::Stale(_) => "stale",
+        ReleaseTenantError::Executing => "executing",
+    }
+}
+
+/// The scratch state's family, named apart from the continuation's so the second parameter of the
+/// graph's type is spelled from outside the crate. It is of the two-lifetime contract, and this
+/// form holds scratch alone.
+struct Worklist;
+reattachable!(both Worklist => &'scratch [&'scratch u32]);
+
+/// The bundle of the two families a graph's cells deliver: a note built in the consumer's own
+/// scratch habitat, and a `Number` carrier filed at rest.
+struct Push;
+
+impl<'graph> Delivery<'graph> for Push {
+    type Scratch = Number;
+    type Carrier = Number;
+}
+
+/// Which arm a receipt came back on — a `Receipt` holds a family's form, so nothing bounds it
+/// `Debug`.
+fn name_receipt<'graph, D: Delivery<'graph>>(
+    receipt: &Receipt<'graph, '_, '_, D, 1>,
+) -> &'static str {
+    match receipt {
+        Receipt::Empty => "empty",
+        Receipt::Value(_) => "value",
+        Receipt::Carrier(Ok(_)) => "carrier",
+        Receipt::Carrier(Err(_)) => "refused",
+    }
+}
+
+#[test]
+fn the_delivery_doors_answer_from_outside_the_crate() {
+    // The default bundle is one an embedder can name, and a graph over it delivers nothing.
+    let mut plain: CellGraph<'static, Work, NoScratch, NoDelivery> = CellGraph::new(1, weigh);
+    let alone = plain.create(None).unwrap();
+    plain
+        .enter(alone, |context| assert_eq!(context.receipt_count(), None))
+        .unwrap();
+    plain.release(alone, ReleaseAbsorption::IntoHolder).unwrap();
+
+    let mut graph: CellGraph<'static, Work, NoScratch, Push> = CellGraph::new(2, weigh);
+    let consumer = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
+
+    // The consumer parks on a two-slot run.
+    graph
+        .enter(consumer, |context| {
+            assert!(matches!(context.receipt(0), Err(ReceiptError::NoRun)));
+            context.register_receipts(2).unwrap();
+        })
+        .unwrap();
+
+    // One slot takes a note built in the consumer's scratch habitat, the other a carrier the
+    // producer placed into the consumer's region and put to rest.
+    graph
+        .enter(producer, |context| {
+            assert_eq!(
+                context
+                    .deliver_scratch(consumer, 0, |writer, _| Active::new(build_number(writer)))
+                    .unwrap(),
+                Delivered::Outstanding
+            );
+            let value: Ready<'static, '_, Number> = context.lift(one(context.writer(), 7u32));
+            let placed = context
+                .alloc_into::<Number, Number>(
+                    consumer,
+                    &[pinned_operand(&value)],
+                    |writer, views| {
+                        Active::new(match &views[0] {
+                            CrossedOperand::Pinned { view: value, .. } => *value,
+                            CrossedOperand::Copied { view: value, .. } => one(writer, **value),
+                        })
+                    },
+                )
+                .unwrap();
+            let carrier: Dormant<'static, Number> = context.keep(placed);
+            assert_eq!(
+                context.deliver_carrier(consumer, 1, carrier).unwrap(),
+                Delivered::Complete
+            );
+            // Both refusals of a filled run, from outside the crate.
+            let refused = context
+                .deliver_scratch(consumer, 1, |writer, _| Active::new(build_number(writer)))
+                .unwrap_err();
+            assert_eq!(refused, DeliverError::Filled);
+            assert_eq!(
+                context
+                    .deliver_scratch(consumer, 2, |writer, _| Active::new(build_number(writer)))
+                    .unwrap_err(),
+                DeliverError::OutOfRange
+            );
+        })
+        .unwrap();
+
+    let read = graph
+        .enter(consumer, |context| {
+            assert_eq!(context.receipt_count(), Some(2));
+            assert_eq!(
+                context.register_receipts(1),
+                Err(RegisterError::Undrained),
+                "a registration over an undrained run is refused"
+            );
+            let note = context.receipt(0).unwrap();
+            assert_eq!(name_receipt(&note), "value");
+            let Receipt::Value(note) = note else {
+                panic!("the producer filed a note");
+            };
+            let filed = context.receipt(1).unwrap();
+            assert_eq!(name_receipt(&filed), "carrier");
+            let Receipt::Carrier(Ok(carrier)) = filed else {
+                panic!("the producer filed a carrier the consumer keeps");
+            };
+            assert!(matches!(context.receipt(1).unwrap(), Receipt::Empty));
+            *note + *context.read(&carrier).value()
+        })
+        .unwrap();
+    assert_eq!(read, 14);
+
+    graph.release(producer, ReleaseAbsorption::Refused).unwrap();
+    graph
+        .release(consumer, ReleaseAbsorption::IntoHolder)
+        .unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn a_tenant_and_the_scratch_habitat_answer_from_outside_the_crate() {
+    let mut graph: CellGraph<'static, Resumed, Worklist> = CellGraph::new(1, weigh);
+    let host: SlabHandle = graph.create(None).unwrap();
+    let tenant: TenantHandle = graph.create_tenant(host, None).unwrap();
+    assert_eq!((tenant.index(), tenant.generation()), (0, 0));
+    assert!(graph.is_live(tenant));
+
+    // A tenant step writes its host's region at `'here` and its host's scratch at `'scratch`,
+    // and parks something in each slot.
+    let ran_in = graph
+        .enter(tenant, |context| {
+            let kept = one(context.writer(), 41u32);
+            let worklist: &[&u32] = context.scratch_writer().fill(2, |_| kept);
+            context.store_successor(kept);
+            context.store_scratch_state(worklist);
+            context.cell()
+        })
+        .unwrap();
+    assert_eq!(ran_in, CellHandle::Tenant(tenant));
+    assert_eq!(CellHandle::from(tenant), ran_in);
+
+    let read = graph
+        .enter(tenant, |context| {
+            let kept = context.continuation().expect("the continuation was stored");
+            let worklist = context
+                .scratch_state()
+                .expect("the scratch state was stored");
+            *kept + *worklist[1]
+        })
+        .unwrap();
+    assert_eq!(read, 82);
+
+    // A tenant named as a host means its host, and a released host waits on its tenants.
+    let second = graph.create_tenant(tenant, None).unwrap();
+    graph.release(host, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(!graph.is_empty());
+    graph.release_tenant(tenant).unwrap();
+    let Err(error) = graph.release_tenant(tenant) else {
+        panic!("a second release names a death already declared");
+    };
+    assert_eq!(name_release_tenant_error(error), "stale");
+    let ReleaseTenantError::Stale(stale) = error else {
+        panic!("a stale release names the handle it refused");
+    };
+    let stale: Stale<TenantHandle> = stale;
+    assert_eq!(stale.name(), tenant);
+    let widened: Stale<CellHandle> = stale.into();
+    assert_eq!(widened.name(), CellHandle::Tenant(tenant));
+
+    graph.release_tenant(second).unwrap();
+    assert!(graph.is_empty());
+}
+
 #[test]
 fn every_public_door_answers_from_outside_the_crate() {
     let mut graph: CellGraph<'static, Work> = CellGraph::new(4, weigh);
 
-    // Creation, with and without a parent, and with or without a continuation at birth.
-    let root: SlabHandle = graph.create(None, Some(String::from("root"))).unwrap();
-    let child = graph.create(Some(root), None).unwrap();
-    let doomed = graph.create(Some(root), None).unwrap();
+    // Creation, with and without a continuation at birth.
+    let root: SlabHandle = graph.create(Some(String::from("root"))).unwrap();
+    let child = graph.create(None).unwrap();
+    let doomed = graph.create(None).unwrap();
     assert_eq!(root.slot(), 0);
     assert_eq!(child.generation(), 0);
     assert!(graph.is_live(child));
@@ -217,6 +421,8 @@ fn every_public_door_answers_from_outside_the_crate() {
             let text = context.lift::<Text>(build_text(context.writer()));
             let thin = context.lift::<Numbers>(build_thin_run(context.writer()));
             assert_eq!(read_first(context, &thin), &[0, 2, 4, 6]);
+            let once = context.lift::<Number>(build_once_run(context.writer()));
+            assert_eq!(*read_first(context, &once), 5);
             let filtered = context.lift::<Numbers>(build_run(context.writer()));
             let rendered = context.lift::<Text>(build_prose(context.writer()));
             assert_eq!(read_first(context, &filtered), &[3, 6, 99]);
@@ -224,8 +430,8 @@ fn every_public_door_answers_from_outside_the_crate() {
             let pushed = context
                 .alloc_into::<Number, Number>(root, &[pinned_operand(&number)], |writer, views| {
                     Active::new(match views[0] {
-                        CrossedOperand::Pinned(value) => one(writer, *value + 1),
-                        CrossedOperand::Copied(value) => one(writer, *value + 1),
+                        CrossedOperand::Pinned { view: value, .. } => one(writer, *value + 1),
+                        CrossedOperand::Copied { view: value, .. } => one(writer, *value + 1),
                     })
                 })
                 .unwrap();
@@ -240,8 +446,12 @@ fn every_public_door_answers_from_outside_the_crate() {
                     }],
                     |writer, views| {
                         Active::new(match views[0] {
-                            CrossedOperand::Copied(value) => writer.fill(2, |_| *value),
-                            CrossedOperand::Pinned(value) => writer.fill(2, |_| *value),
+                            CrossedOperand::Copied { view: value, .. } => {
+                                writer.fill(2, |_| *value)
+                            }
+                            CrossedOperand::Pinned { view: value, .. } => {
+                                writer.fill(2, |_| *value)
+                            }
                         })
                     },
                 )
@@ -266,11 +476,12 @@ fn every_public_door_answers_from_outside_the_crate() {
                 ],
                 |writer, views| {
                     let here = match views[0] {
-                        CrossedOperand::Pinned(value) => value,
-                        CrossedOperand::Copied(value) => one(writer, *value),
+                        CrossedOperand::Pinned { view: value, .. } => value,
+                        CrossedOperand::Copied { view: value, .. } => one(writer, *value),
                     };
                     let severed = match views[1] {
-                        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => *value,
+                        CrossedOperand::Pinned { view: value, .. }
+                        | CrossedOperand::Copied { view: value, .. } => *value,
                     };
                     (here, severed)
                 },
@@ -301,8 +512,8 @@ fn every_public_door_answers_from_outside_the_crate() {
         .unwrap();
     assert_eq!(carried, "done");
 
-    // The value kept in the last step redeems in this one: the child holds root, whose region the
-    // value lives in, so the door hands it back with reach derived from the reach table.
+    // The value kept in the last step redeems in this one: the child's pin row names root, whose
+    // region the value lives in, so the door hands it back with reach derived from the reach table.
     let kept = kept.unwrap();
     let redeemed = graph
         .enter(child, |context| {
@@ -319,7 +530,7 @@ fn every_public_door_answers_from_outside_the_crate() {
         refused.is_ok(),
         "the home cell redeems its own dormant carrier"
     );
-    let bystander = graph.create(None, None).unwrap();
+    let bystander = graph.create(None).unwrap();
     let error = graph
         .enter(bystander, |context| match context.redeem(kept) {
             Err(error) => error,
@@ -350,8 +561,8 @@ fn every_public_door_answers_from_outside_the_crate() {
 #[test]
 fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
     let mut graph: CellGraph<'static, Resumed> = CellGraph::new(2, weigh);
-    let cell = graph.create(None, None).unwrap();
-    let other = graph.create(None, None).unwrap();
+    let cell = graph.create(None).unwrap();
+    let other = graph.create(None).unwrap();
 
     // A capture out of the cell's own region: written through the cell's writer, stored through
     // the one successor door, and handed back at the next step's `'here`.
@@ -376,8 +587,8 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
             let held = context.alloc_here(&[pinned_operand(&foreign)], |writer, views| match views
                 [0]
             {
-                CrossedOperand::Pinned(value) => value,
-                CrossedOperand::Copied(value) => one(writer, *value),
+                CrossedOperand::Pinned { view: value, .. } => value,
+                CrossedOperand::Copied { view: value, .. } => one(writer, *value),
             });
             context.store_successor(held);
         })
@@ -392,21 +603,31 @@ fn a_successor_captures_the_cell_brand_and_comes_back_re_anchored() {
 }
 
 #[test]
+fn a_graph_is_built_with_the_spare_lists_bound_chosen() {
+    // The default is what `new` builds with, and every field is the embedder's to set.
+    let defaults = Config::new(2);
+    assert_eq!((defaults.cap, defaults.spare_proportion), (2, 2));
+    let config = Config {
+        spare_proportion: 0,
+        spare_window_shift: 3,
+        ..defaults
+    };
+    let mut graph: CellGraph<'static, Work> = CellGraph::with_config(config, weigh);
+    let cell = graph.create(None).unwrap();
+    graph.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+#[test]
 fn the_refusals_hand_back_the_handle_that_went_stale() {
     let mut full: CellGraph<'static, Work> = CellGraph::new(1, weigh);
-    let taken = full.create(None, None).unwrap();
-    assert_eq!(full.create(None, None), Err(CreateError::SlabFull));
+    let taken = full.create(None).unwrap();
+    assert_eq!(full.create(None), Err(CreateError::SlabFull));
 
     // Every door refuses a handle kept past the death the embedder declared itself, and every
     // refusal hands the handle back rather than swallowing it.
     full.release(taken, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(full.is_empty());
-
-    let Err(CreateError::StaleParent(stale)) = full.create(Some(taken), None) else {
-        panic!("a dead parent must refuse");
-    };
-    let stale: Stale<SlabHandle> = stale;
-    assert_eq!(stale.name(), taken);
 
     let Err(error) = full.enter(taken, |_| ()) else {
         panic!("a dead cell must refuse the step");
@@ -417,13 +638,18 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
         panic!("a second release names a death already declared");
     };
     assert_eq!(name_release_error(error), "stale");
+    let ReleaseError::Stale(stale) = error else {
+        panic!("a stale release names the handle it refused");
+    };
+    let stale: Stale<SlabHandle> = stale;
+    assert_eq!(stale.name(), taken);
 }
 
 #[test]
 fn the_tree_pool_answers_from_outside_the_crate() {
     let mut graph: CellGraph<'static, Work> = CellGraph::new(1, weigh);
-    let root: SlabHandle = graph.create(None, None).unwrap();
-    assert_eq!(graph.create(None, None), Err(CreateError::SlabFull));
+    let root: SlabHandle = graph.create(None).unwrap();
+    assert_eq!(graph.create(None), Err(CreateError::SlabFull));
 
     // The pool takes no cap: a chain deeper than the slab is ordinary, and none of it is a slot.
     let outer: TreeHandle = graph.create_tree(root, None).unwrap();
@@ -445,8 +671,8 @@ fn the_tree_pool_answers_from_outside_the_crate() {
             let up = context
                 .alloc_into::<Number, Number>(outer, &[pinned_operand(&value)], |writer, views| {
                     Active::new(match views[0] {
-                        CrossedOperand::Pinned(value) => one(writer, *value + 1),
-                        CrossedOperand::Copied(value) => one(writer, *value + 1),
+                        CrossedOperand::Pinned { view: value, .. } => one(writer, *value + 1),
+                        CrossedOperand::Copied { view: value, .. } => one(writer, *value + 1),
                     })
                 })
                 .unwrap();
@@ -510,21 +736,16 @@ fn the_tree_pool_answers_from_outside_the_crate() {
 #[test]
 fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
     // Storage the embedder owns outside the graph, which the graph may borrow but not outlive.
-    let program = String::from("program text");
+    let storage = Storage::new();
+    let program: &str = storage.writer().text("program text");
     let mut graph: CellGraph<'_, Work> = CellGraph::new(1, weigh);
-    let root = graph.create(None, None).unwrap();
+    let root = graph.create(None).unwrap();
     let left = graph.create_tree(root, None).unwrap();
     let right = graph.create_tree(root, None).unwrap();
     graph
         .enter(left, |context| {
             let count = one(context.writer(), 41);
-            let entry = one(
-                context.writer(),
-                Entry {
-                    program: &program,
-                    count,
-                },
-            );
+            let entry = one(context.writer(), Entry { program, count });
             let source = context.lift::<Listing>(entry);
             // A sibling is neither on the home's chain nor under it: the crossing is a forced copy.
             let copied = context
@@ -532,7 +753,7 @@ fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
                     right,
                     &[pinned_operand(&source)],
                     |writer, views| {
-                        let CrossedOperand::Copied(entry) = views[0] else {
+                        let CrossedOperand::Copied { view: entry, .. } = views[0] else {
                             panic!("a sibling crossing is a forced copy");
                         };
                         // The `'graph` borrow embeds as it is; only the region part is written again.
@@ -547,7 +768,7 @@ fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
                 )
                 .unwrap();
             let read = read_first(context, &copied);
-            assert!(std::ptr::eq(read.program, program.as_str()));
+            assert!(std::ptr::eq(read.program, program));
             assert!(!std::ptr::eq(read.count, count));
             assert_eq!(*read.count, 41);
         })
@@ -562,8 +783,8 @@ fn a_graph_borrow_crosses_a_forced_copy_verbatim() {
 fn a_graph_borrow_is_captured_kept_and_redeemed_after_its_home_is_released() {
     let program = String::from("program text");
     let mut graph: CellGraph<'_, Script<'_>> = CellGraph::new(2, weigh);
-    let producer = graph.create(None, None).unwrap();
-    let consumer = graph.create(None, None).unwrap();
+    let producer = graph.create(None).unwrap();
+    let consumer = graph.create(None).unwrap();
     let dormant: Dormant<'_, Listing> = graph
         .enter(producer, |context| {
             let count = one(context.writer(), 41);

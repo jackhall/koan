@@ -2,11 +2,12 @@
 //! the handles its parts elaborate to.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::forms::{FormId, KEYWORDS};
-use crate::parse::{ExpressionPart, KExpression, KeywordSymbol, StaticName, TypeSymbol};
-use crate::scope::{Activation, Binding, Site, pair_name};
-use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
-use crate::values::{Knotted, Value};
+use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
+use crate::parse::{ExpressionPart, KExpression};
+use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_name};
+use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol};
+use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry, constructor_param_names};
+use crate::values::{KnottedFamily, Value};
 
 use super::Elaboration;
 
@@ -16,6 +17,9 @@ struct Connectors {
     of: StaticName<KeywordSymbol>,
     map: StaticName<KeywordSymbol>,
     union: StaticName<KeywordSymbol>,
+    /// Arity-one constructor application. A connector of the type language, not a table keyword:
+    /// the surrounding `:(…)` is what puts it in type context.
+    as_: StaticName<KeywordSymbol>,
 }
 
 static CONNECTORS: Connectors = Connectors {
@@ -23,14 +27,15 @@ static CONNECTORS: Connectors = Connectors {
     of: crate::static_name!(KeywordSymbol, "OF"),
     map: crate::static_name!(KeywordSymbol, "MAP"),
     union: crate::static_name!(KeywordSymbol, "|"),
+    as_: crate::static_name!(KeywordSymbol, "AS"),
 };
 
 /// `part` as a type, its names read through `reader`: a name in `quantifiers` is that group's
 /// quantifier at its position, and every other name is the mention `reader`'s shape recorded at its
 /// site, which must read as a type.
-pub fn type_expression<'graph, X: Knotted>(
+pub fn type_expression<'graph, XF: KnottedFamily<'graph>>(
     part: &ExpressionPart<'graph>,
-    reader: &Activation<'graph, '_, X>,
+    reader: &ActivationView<'graph, '_, XF>,
     quantifiers: &[TypeSymbol],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -43,6 +48,8 @@ pub fn type_expression<'graph, X: Knotted>(
         reader,
         types,
         scratch,
+        fellows: &[],
+        locals: &[],
     }
     .part(part, &groups)
 }
@@ -81,13 +88,21 @@ impl Groups<'_> {
 }
 
 /// What elaborating one expression reads through.
-pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, X> {
-    pub(super) reader: &'e Activation<'graph, 'cell, X>,
+pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, XF: KnottedFamily<'graph>> {
+    pub(super) reader: &'e ActivationView<'graph, 'cell, XF>,
     pub(super) types: &'e TypeRegistry<'run>,
     pub(super) scratch: BumpAllocator<'x>,
+    /// Fellow members of the component being declared, each at the relative handle it is named by
+    /// until the group seals: a member's own sibling, or a `UNION` binder's union of its variants'
+    /// siblings. Empty for an ordinary type expression.
+    pub(super) fellows: &'e [(Slot, KType)],
+    /// Names declared inside the definition being elaborated and holding no slot of the enclosing
+    /// shape — a `SIG` body's abstract and manifest members, and a higher-kinded declarator's
+    /// parameters. Empty outside a definition.
+    pub(super) locals: &'e [(TypeSymbol, KType)],
 }
 
-impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
+impl<'graph, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, '_, XF> {
     pub(super) fn part(
         &self,
         part: &ExpressionPart<'graph>,
@@ -123,20 +138,36 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
             Quantifier::Shadowed => return Err(Elaboration::Unsupported { site }),
             Quantifier::Free => {}
         }
-        let mention = self
-            .reader
-            .shape()
-            .mention(site)
-            .expect("the shape builder records every type name a type expression reads");
+        // A name the definition declares records no mention, so it is answered before the mention
+        // lookup, which would otherwise find nothing to read.
+        if let Some((_, handle)) = self.locals.iter().find(|(declared, _)| *declared == name) {
+            return Ok(*handle);
+        }
+        // A definition declares its own names, so the shape records no mention for one. Every
+        // other name a type expression reads has one; a definition-local name reaching here has
+        // not been declared yet — a forward reference the local table cannot answer.
+        let Some(mention) = self.reader.shape().mention(site) else {
+            return Err(Elaboration::Unsupported { site });
+        };
+        // A fellow member of the component being declared is not bound yet: it is named by the
+        // relative handle its still-open window minted. A definition part opens no nested shape,
+        // so every fellow mention is local to the declaring shape.
+        if let Coordinate::Activation {
+            hops: 0,
+            target: Target::Local(slot),
+        } = mention.coordinate
+            && let Some((_, handle)) = self.fellows.iter().find(|(fellow, _)| *fellow == slot)
+        {
+            return Ok(*handle);
+        }
         match self.reader.read(mention.coordinate) {
-            Binding::Bound(Value::Type(value)) => Ok(value.handle()),
-            Binding::Bound(_) => Err(Elaboration::NotAType { name, site }),
-            Binding::Pending(binder) => Err(Elaboration::Pending { name, binder }),
+            Value::Type(value) => Ok(value.handle()),
+            _ => Err(Elaboration::NotAType { name, site }),
         }
     }
 
     /// A parenthesized or sigiled type expression.
-    fn node(
+    pub(super) fn node(
         &self,
         site: Site,
         node: &KExpression<'graph>,
@@ -147,16 +178,29 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
         if let [only] = parts {
             return self.part(&only.value, groups);
         }
-        if let Some(form) = node.cache().form() {
+        // `Ctor {Param = Type, …}` — a declared type constructor applied to its arguments by
+        // member name. It resolves no builtin shape: the head is a type name and the payload a
+        // record literal, so the arm is keyed structurally, ahead of the table lookup.
+        if let [head, payload] = parts
+            && let ExpressionPart::RecordLiteral(arguments) = &payload.value
+        {
+            let constructor = self.part(&head.value, groups)?;
+            let mut applied = BumpVec::with_capacity_in(arguments.len(), self.scratch);
+            for (name, argument) in arguments.iter() {
+                applied.push((*name, self.part(argument, groups)?));
+            }
+            return self.apply(site, constructor, &applied);
+        }
+        if let Some(form) = node.cache().builtin_shape() {
             let part = |index: usize| &parts[index].value;
             return match form.id {
-                FormId::LambdaType => self.function(part(1), part(3), groups),
-                FormId::ExpressionHead => self.shape(&[], part(1), part(3), groups),
-                FormId::QuantifiedExpressionHead => {
+                BuiltinShapeId::LambdaType => self.function(part(1), part(3), groups),
+                BuiltinShapeId::ExpressionHead => self.shape(&[], part(1), part(3), groups),
+                BuiltinShapeId::QuantifiedExpressionHead => {
                     let names = quantifiers(part(3), self.scratch);
                     self.shape(&names, part(4), part(6), groups)
                 }
-                FormId::Attribute => {
+                BuiltinShapeId::Attribute => {
                     let union = self.part(part(1), groups)?;
                     let tag = match part(2) {
                         ExpressionPart::Type(name) => name.symbol(),
@@ -175,24 +219,70 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
             3 if keyword(0, &CONNECTORS.list) && keyword(1, &CONNECTORS.of) => {
                 Ok(self.types.list(self.part(&parts[2].value, groups)?))
             }
+            // `Type AS Ctor` — the arity-one sugar for the application above.
+            3 if keyword(1, &CONNECTORS.as_) => {
+                let constructor = self.part(&parts[2].value, groups)?;
+                let [param] =
+                    constructor_param_names(constructor, self.types).ok_or(unsupported)?
+                else {
+                    return Err(unsupported);
+                };
+                let argument = self.part(&parts[0].value, groups)?;
+                self.apply(site, constructor, &[(BinderSymbol::Type(*param), argument)])
+            }
             4 if keyword(0, &CONNECTORS.map) && keyword(2, &KEYWORDS.arrow) => {
                 let key = self.part(&parts[1].value, groups)?;
                 let value = self.part(&parts[3].value, groups)?;
                 Ok(self.types.dict(key, value))
             }
-            len if len % 2 == 1
-                && (1..len)
-                    .step_by(2)
-                    .all(|index| keyword(index, &CONNECTORS.union)) =>
-            {
-                let mut members = BumpVec::with_capacity_in(len / 2 + 1, self.scratch);
-                for member in parts.iter().step_by(2) {
-                    members.push(self.part(&member.value, groups)?);
+            // `A | B`. A longer run is an operator run, which the shape builder already chained
+            // into the unary call below, so nothing here walks a union part by part.
+            3 if keyword(1, &CONNECTORS.union) => {
+                let members = [
+                    self.part(&parts[0].value, groups)?,
+                    self.part(&parts[2].value, groups)?,
+                ];
+                Ok(self.types.union_of(self.scratch, &members))
+            }
+            // `| [A B C]` — the chained form of `A | B | C`, under the builtin unary union group.
+            2 if keyword(0, &CONNECTORS.union) => {
+                let ExpressionPart::ListLiteral(operands) = parts[1].value else {
+                    return Err(unsupported);
+                };
+                let mut members = BumpVec::with_capacity_in(operands.len(), self.scratch);
+                for member in operands.iter() {
+                    members.push(self.part(member, groups)?);
                 }
                 Ok(self.types.union_of(self.scratch, &members))
             }
             _ => Err(unsupported),
         }
+    }
+
+    /// A declared type constructor applied to `arguments`, keyed by the parameter names the
+    /// family declares: every parameter named once, and no name the family does not declare.
+    fn apply(
+        &self,
+        site: Site,
+        constructor: KType,
+        arguments: &[(BinderSymbol, KType)],
+    ) -> Result<KType, Elaboration> {
+        let unsupported = Elaboration::Unsupported { site };
+        let declared = constructor_param_names(constructor, self.types).ok_or(unsupported)?;
+        if arguments.len() != declared.len()
+            || !arguments.iter().all(
+                |(name, _)| matches!(name, BinderSymbol::Type(name) if declared.contains(name)),
+            )
+            || arguments
+                .iter()
+                .enumerate()
+                .any(|(index, (name, _))| arguments[..index].iter().any(|(seen, _)| seen == name))
+        {
+            return Err(unsupported);
+        }
+        Ok(self
+            .types
+            .constructor_apply(self.scratch, constructor, arguments))
     }
 
     /// `FN <schema> -> <return>`.
@@ -271,7 +361,7 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
         site: Site,
         run: &KExpression<'graph>,
         groups: &Groups<'_>,
-        mut field: impl FnMut(crate::parse::BinderSymbol, KType) -> Result<(), Elaboration>,
+        mut field: impl FnMut(crate::symbols::BinderSymbol, KType) -> Result<(), Elaboration>,
     ) -> Result<(), Elaboration> {
         let mut index = 0;
         while index < run.parts.len() {

@@ -1,111 +1,104 @@
-//! Slot-array tests: the three-state transitions, the live-claim counter, and the region-resident
-//! shape.
+//! Slot-array tests: bind-once, the read half, and a slot bound in a root's region read through a
+//! view a tree child holds across a step — the erased read Miri checks.
 
-use std::cell::Cell;
-
-use super::{SlotArray, SlotConflict, SlotState};
+use super::{SlotArray, SlotConflict, SlotView};
+use crate::memory::substrate::{
+    CellGraph, CrossedOperand, DropFree, Operand, ReleaseAbsorption, Verdict, Writer, covariant,
+    reattachable,
+};
 use crate::memory::tests::in_cell;
 
-/// A stand-in payload and producer — both `Copy` and drop-free, the tier a region-resident slot
-/// admits.
-type Cells<'cell> = SlotArray<'cell, u32, u8>;
+/// A stand-in payload family borrowing its region — `Copy` and drop-free, the tier a slot admits.
+struct Number;
+reattachable!(Number => &'cell u32);
+covariant!(Number);
+impl DropFree for Number {}
 
-#[test]
-fn cells_start_empty_and_unclaimed() {
-    in_cell(|writer| {
-        let cells: Cells<'_> = SlotArray::new(writer, 3);
-        assert_eq!(cells.len(), 3);
-        assert_eq!(cells.claimed_count(), 0);
-        assert!(cells.iter().all(|(_, cell)| cell.bound().is_none()));
-    });
+fn one(writer: Writer<'_>, value: u32) -> &u32 {
+    &writer.fill(1, |_| value)[0]
 }
 
-/// The ordinary life of a slot: claimed by a binder, then bound by that binder's commit — which
-/// retires the claim by replacing it, so the count returns to zero with nothing removed.
 #[test]
-fn a_commit_retires_its_own_claim() {
+fn slots_start_empty_and_bind_once() {
     in_cell(|writer| {
-        let cells: Cells<'_> = SlotArray::new(writer, 2);
-
-        cells.claim(1, 7).expect("an empty slot admits a claim");
-        assert_eq!(cells.claimed_count(), 1);
-        assert_eq!(cells.get(1).claimed_by(), Some(7));
-
-        cells.bind(1, 42).expect("a claimed slot admits its bind");
-        assert_eq!(cells.claimed_count(), 0);
-        assert_eq!(cells.get(1).bound(), Some(42));
-        assert_eq!(cells.get(1).claimed_by(), None);
-    });
-}
-
-/// A binder that terminalizes without committing drops its claim, and the slot is writable again.
-#[test]
-fn an_unsatisfied_claim_retires_to_empty() {
-    in_cell(|writer| {
-        let cells: Cells<'_> = SlotArray::new(writer, 1);
-        cells.claim(0, 7).expect("an empty slot admits a claim");
-        cells.retire_claim(0);
-        assert_eq!(cells.claimed_count(), 0);
-        assert!(cells.get(0).claimed_by().is_none());
-        cells
-            .claim(0, 8)
-            .expect("a retired slot is claimable again");
-        assert_eq!(cells.claimed_count(), 1);
-    });
-}
-
-/// Retiring a *bound* slot is a no-op: its commit already retired the claim it satisfied, and the
-/// binding stands.
-#[test]
-fn retiring_a_bound_slot_keeps_the_binding() {
-    in_cell(|writer| {
-        let cells: Cells<'_> = SlotArray::new(writer, 1);
-        cells.bind(0, 42).expect("an empty slot admits a bind");
-        cells.retire_claim(0);
-        assert_eq!(cells.get(0).bound(), Some(42));
-        assert_eq!(cells.claimed_count(), 0);
-    });
-}
-
-/// Both conflicts, each carrying what a caller rules on: a standing claim hands back its producer
-/// (so a same-binder re-entry is distinguishable from a collision), and a bound slot is bind-once.
-#[test]
-fn conflicts_name_what_stands() {
-    in_cell(|writer| {
-        let cells: Cells<'_> = SlotArray::new(writer, 2);
-
-        cells.claim(0, 7).expect("an empty slot admits a claim");
-        assert_eq!(cells.claim(0, 9), Err(SlotConflict::Claimed(7)));
-        assert_eq!(cells.claimed_count(), 1, "a refused claim adds none");
-
-        cells.bind(1, 42).expect("an empty slot admits a bind");
-        assert_eq!(cells.bind(1, 43), Err(SlotConflict::Bound));
-        assert_eq!(cells.claim(1, 7), Err(SlotConflict::Bound));
+        let slots: SlotArray<'static, '_, Number> = SlotArray::new(writer, 3);
+        assert_eq!(slots.len(), 3);
+        assert!(slots.view().get(0).is_none());
+        slots.bind(1, one(writer, 42)).expect("an empty slot binds");
+        assert_eq!(slots.bind(1, one(writer, 43)), Err(SlotConflict));
         assert_eq!(
-            cells.get(1).bound(),
+            slots.view().get(1).copied(),
             Some(42),
-            "a refused write changes nothing"
+            "a refused bind changes nothing"
         );
+        assert_eq!(slots.view().get(1).copied(), Some(42));
+        assert!(slots.view().get(2).is_none());
     });
 }
 
-/// A slot is drop-free whatever it holds — the fact the region-resident array rests on, stated
-/// against the slot type the way the array's own constructor asserts it.
+/// The array is `Copy` and its slots live in the region, so a bind through one copy is seen through
+/// every other — what lets a continuation capture the array by value.
 #[test]
-fn cells_carry_no_drop_glue() {
-    assert!(!std::mem::needs_drop::<Cell<SlotState<u32, u8>>>());
-    assert!(!std::mem::needs_drop::<Cells<'static>>());
-}
-
-/// The array is `Copy` and its counter lives in the region, so a write through one copy is seen
-/// through every other — what lets a continuation capture the array by value.
-#[test]
-fn copies_share_slots_and_counter() {
+fn copies_share_slots() {
     in_cell(|writer| {
-        let cells: Cells<'_> = SlotArray::new(writer, 1);
-        let captured = cells;
-        captured.claim(0, 7).expect("an empty slot admits a claim");
-        assert_eq!(cells.claimed_count(), 1);
-        assert_eq!(cells.get(0).claimed_by(), Some(7));
+        let slots: SlotArray<'static, '_, Number> = SlotArray::new(writer, 1);
+        let captured = slots;
+        captured
+            .bind(0, one(writer, 7))
+            .expect("an empty slot binds");
+        assert_eq!(slots.view().get(0).copied(), Some(7));
     });
+}
+
+/// A view as a value that crosses into a child: its covariance witness is the check that a slot
+/// view is covariant in its brand.
+struct Views;
+reattachable!(Views => SlotView<'graph, 'cell, Number>);
+covariant!(Views);
+impl DropFree for Views {}
+
+/// A continuation holding a view at the executing cell's brand.
+struct Viewing;
+reattachable!(Viewing => Option<SlotView<'graph, 'cell, Number>>);
+
+#[test]
+fn a_tree_child_reads_a_slot_bound_in_its_root_through_a_view() {
+    let mut graph: CellGraph<'static, Viewing> = CellGraph::new(1, |_| Verdict::Pin);
+    let root = graph.create(None).unwrap();
+    let kept = graph
+        .enter(root, |context| {
+            let writer = context.writer();
+            let slots: SlotArray<'static, '_, Number> = SlotArray::new(writer, 2);
+            slots.bind(0, one(writer, 12)).unwrap();
+            let carrier = context.lift::<Views>(slots.view());
+            context.keep(carrier)
+        })
+        .unwrap();
+    let child = graph.create_tree(root, None).unwrap();
+    graph
+        .enter(child, |context| {
+            let carrier = context.redeem(kept).unwrap();
+            let view = context.alloc_here(
+                &[Operand {
+                    carrier: &carrier,
+                    copy_bytes: usize::MAX,
+                }],
+                |_, views| match views[0] {
+                    CrossedOperand::Pinned { view, .. } => view,
+                    CrossedOperand::Copied { .. } => unreachable!("the verdict always pins"),
+                },
+            );
+            context.store_successor(Some(view));
+        })
+        .unwrap();
+    let read = graph
+        .enter(child, |context| {
+            let view = context.continuation().flatten().expect("the view was kept");
+            (view.get(0).copied(), view.get(1).copied())
+        })
+        .unwrap();
+    assert_eq!(read, (Some(12), None));
+    graph.release_tree(child).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
 }

@@ -40,9 +40,9 @@ use crate::memory::Allocator;
 use crate::machine::ProducerId;
 use crate::memory::RegionBrand;
 use crate::memory::{BumpBackedMap, BumpVec};
-use crate::parse::KeyElement;
 #[cfg(test)]
-use crate::parse::UntypedKey;
+use crate::parse::ExpressionKey;
+use crate::parse::KeyElement;
 use crate::parse::{IdentityBuildHasher, TypeSymbol, ValueSymbol};
 
 use super::{BindingIndex, Bindings};
@@ -369,7 +369,7 @@ impl<'a> ClaimStore<'a> {
 
     /// Every standing claim on one bucket key, in install order.
     #[cfg(test)]
-    pub(super) fn bucket_claims(&self, bucket: &UntypedKey) -> Vec<Claim> {
+    pub(super) fn bucket_claims(&self, bucket: &ExpressionKey) -> Vec<Claim> {
         self.by_bucket
             .get(bucket.as_slice())
             .map(|claims| claims.to_vec())

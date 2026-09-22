@@ -1,30 +1,31 @@
 //! The import boundary, as a test over this module's own source.
 //!
-//! The lattice's only `crate::` edges are the label and symbol types from `parse`, and `ScopeId`,
-//! the bump-allocation seam the registry and every scratch buffer are built over, and the
-//! component walk from `memory` — with, in its own suite, the lib-test binary's allocation
+//! The lattice's only `crate::` edges are the classified symbol types from `symbols`, and
+//! `ScopeId`, the bump-allocation seam the registry and every scratch buffer are built over, and
+//! the component walk from `memory`. `parse` is not among them: both rest on `symbols`, so neither
+//! names the other — with, in its own suite, the lib-test binary's allocation
 //! counter. The compiler cannot enforce that — a public module may name anything in its own crate
 //! — so the rule is checked here, by reading the files.
 
 use std::path::{Path, PathBuf};
 
-/// The `crate::parse` items the lattice may name: the classified symbol types, the interner and its
-/// display view, the static-name memo, and the identity hashers the registry's tables key with.
-const PARSE_ITEMS: &[&str] = &[
+/// The `crate::symbols` items the lattice may name: the classified symbol types, the interner and
+/// its display view, the static-name memo, and the identity hashers the registry's tables key with.
+const SYMBOL_ITEMS: &[&str] = &[
     "BinderSymbol",
     "ClassifiedSymbol",
     "IdentityBuildHasher",
     "IdentityHasher",
     "KeywordSymbol",
-    "LabelDisplay",
-    "LabelInterner",
+    "SymbolDisplay",
+    "SymbolInterner",
     "StaticName",
     "Symbol",
     "TypeSymbol",
     "ValueSymbol",
 ];
 
-/// The path prefixes the lattice may name outside `parse`: `ScopeId` and its associated items, the
+/// The path prefixes the lattice may name outside `symbols`: `ScopeId` and its associated items, the
 /// bump tier's arena and allocator with the vector and table shapes built over it and the door a
 /// writable table is built through, the component walk a recursive group condenses by, the macro
 /// that mints a static name, the lib-test allocation counter and the tier's property-case share
@@ -46,10 +47,10 @@ const PREFIXES: &[&str] = &[
 /// The two module names the lattice may write bare — in a doc link naming the module itself, and in
 /// this file's own allowlist. Naming a module is not an edge to anything inside it: an item under
 /// one still has to clear [`permitted`].
-const MODULES: &[&str] = &["crate", "crate::parse", "crate::memory"];
+const MODULES: &[&str] = &["crate", "crate::symbols", "crate::memory"];
 
 #[test]
-fn the_core_names_only_labels_and_scope_ids() {
+fn the_core_names_only_symbols_and_scope_ids() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/type_lattice");
     let mut sources = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/type_lattice.rs")];
     collect_sources(&root, &mut sources);
@@ -70,7 +71,7 @@ fn the_core_names_only_labels_and_scope_ids() {
     }
     assert!(
         offenders.is_empty(),
-        "the type lattice may name only the label types, `ScopeId` and the bump seam, but found:\n{}",
+        "the type lattice may name only the symbol types, `ScopeId` and the bump seam, but found:\n{}",
         offenders.join("\n")
     );
 }
@@ -84,8 +85,8 @@ fn permitted(path: &str) -> bool {
     if PREFIXES.iter().any(|allowed| path.starts_with(allowed)) {
         return true;
     }
-    match path.strip_prefix("crate::parse::") {
-        Some(rest) => PARSE_ITEMS.contains(&rest.split("::").next().unwrap_or(rest)),
+    match path.strip_prefix("crate::symbols::") {
+        Some(rest) => SYMBOL_ITEMS.contains(&rest.split("::").next().unwrap_or(rest)),
         None => false,
     }
 }

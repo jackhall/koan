@@ -5,8 +5,10 @@ Open work on the `cellgraph` computation-cell substrate (working name —
 atomically, prices what that retention costs, and carries values across steps.
 The substrate's own build-out is complete, as are the representation changes
 its measurement harness gates, the doors koan's `memory` module needs, and the
-graph lifetime koan's values borrow program storage through; what is open is
-the gaps recorded below, which nothing is scheduled against. `workgraph`'s
+graph lifetime koan's values borrow program storage through, and the receipt
+run and delivery doors a producer files its consumer's result through. What is
+open is the gaps recorded below, which nothing is scheduled against.
+`workgraph`'s
 adoption of the crate is on the scheduler's own roadmap
 ([workgraph/old_roadmap/](../../workgraph/old_roadmap/README.md)), and koan's is
 [roadmap/](../../roadmap/README.md).

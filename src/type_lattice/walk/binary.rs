@@ -11,7 +11,7 @@
 //! Every pairing's buffers are built in the scratch allocator the walk is handed.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::BinderSymbol;
+use crate::symbols::BinderSymbol;
 
 use super::Variance;
 use crate::type_lattice::handle::KType;

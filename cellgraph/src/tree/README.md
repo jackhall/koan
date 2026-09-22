@@ -26,7 +26,7 @@ count.
 | | slab cell | sealed cell | tree cell |
 |---|---|---|---|
 | identity | `SlabHandle` (slot + generation) | `SealedId` | `TreeHandle` (pool index + generation) |
-| liveness | pin column, birth column | holder count | structural: a parent outlives its children |
+| liveness | pin column, plus its counts of undisposed tree children and tenants | holder count | structural: a parent outlives its children, and a host its tenants |
 | holds it takes | its own pin row + sealed set | none (frozen aggregate) | none — mints go to its **root's** row and set |
 | named by a mask | slab bit | id | **never** |
 | can be entered | yes | no | yes |
@@ -96,29 +96,42 @@ at the placement door that pinned the terminal upward, and the pledge that door
 left is what disposal reads.
 
 A released cell is `Dead` at once: stale to every door, not a destination, not a
-parent, not enterable, not releasable again. Its region stays put, because a live
-child may still borrow it, and its pledge stays writable, because a descendant's
-later upward pin may still walk through it.
+parent, not enterable, not releasable again. That holds for the cell's *handle*.
+A live [tenant](../../README.md#the-cell) of the cell still names its region: a
+tenant named as a destination, a parent or a host means its host, whatever has
+been declared about the host, because the host cannot have disposed while the
+tenant is counted on it. The region stays put, because a live child or a tenant
+may still borrow it, and its pledge stays writable, because a descendant's later
+upward pin may still walk through it. Its scratch state is cleared, since a dead
+cell is never entered.
 
-If it has undisposed children it stops there — **dead but undisposed**, exactly
-as a slab cell whose birth column is still named. That is what lets an embedder
+If it has undisposed children or tenants it stops there — **dead but undisposed**, exactly
+as a slab root one of them is still counted under. That is what lets an embedder
 tear a subtree down in any order: a parent failed by one branch's error is
 released at once, and the sibling branches cascade into it as they die.
 
 Otherwise it **disposes**, and the disposal walks up: each parent's child count
-falls, a parent that is dead and childless disposes too, and at the top the
-root's tree-child count falls and the slab's own disposal walk runs. The two
-cascades are one walk.
+falls, a parent that is dead, childless and hosting no tenant disposes too, and at the top the
+root's tree-child count falls — and the root disposes there if this was the last
+child a declared death was waiting on. The walk ends at the root, because a slab
+cell is under nothing; it is the crate's one walk.
 
 Disposing one cell is O(1):
 
-- **No pledge** — reclaim: the region drops, bundle and all.
+- **No pledge** — reclaim: the region is retired, bundle and all, onto the
+  graph's [spare list](../../README.md#recycled-regions).
 - **A pledge** — splice: the whole bump moves into the destination's bundle. A
   `Bump` moves without moving a chunk byte, and the destination is an ancestor,
   which disposes after its descendants, so it is always still there.
 
 No hold arithmetic and no seal transition runs. The one count that moves is the
-parent's, which is the birth tally's analogue rather than a hold count.
+parent's, which is a structural tally rather than a hold count — the matrix
+never sees it. The cell's scratch bump is handed back in the same step: a splice
+moves the region alone, so an ancestor that holds named scratch of its own keeps
+it untouched, and the departing cell's scratch goes nowhere.
+
+A tenant's release starts this same walk at its tree host, after dropping the
+host's tenant count; the walk returns at once for a host that is still live.
 
 ### The splice price
 
@@ -173,7 +186,7 @@ executing cell, and read "root of `E`" as `E` itself when `E` is a slab cell.
 | where the key's home resolves | entitled when | reach handed back |
 |---|---|---|
 | a live or dead-but-undisposed tree cell `T` | `root(T)` is `E`'s root | `{root(T)}`, homed in `T` |
-| a live slab slot `S` | `S` is `E`'s root, or `E`'s root's pin row or birth row names it | the mask stored in that cell's reach table |
+| a live slab slot `S` | `S` is `E`'s root, or `E`'s root's pin row names it | the mask stored in that cell's reach table |
 | a sealed cell `id` | `E`'s root holds `id` | `{id}` |
 | nowhere — a recycled slot, or a chain ending in a reclaim | — | `Gone` |
 
@@ -188,9 +201,10 @@ chain ends at: its value reached the root alone.
 ## Roots
 
 A slab slot counts the tree cells whose chain tops out at it. It is not
-disposable while that count is above zero, so a released root with a subtree under
-it waits dead-but-undisposed exactly as one with a live slab descendant does, and
-the last tree child's disposal is what sets its cascade off. Sealing or absorbing
+disposable while that count is above zero — that count and the slot's tenant
+count are the only things that can hold a slot past its death — so a released root with a subtree under it
+waits dead-but-undisposed and the last tree child's disposal is what disposes of
+it. A root with no subtree disposes inside its own `release`. Sealing or absorbing
 a root moves its whole bundle, spliced tree bumps included — already what a region
 does.
 
@@ -204,6 +218,12 @@ for choosing between them. Which cell a creation takes is an admission decision,
 made from the source edge's destination, and it belongs to the layer that knows
 the destination. A producer that delivers mid-life to an outside consumer is a
 slab cell, because an outside consumer can pin it while it lives.
+
+**Tenant election is the embedder's too.** Whether a unit of work gets a tree
+cell with a region of its own or runs as a tenant of an existing cell is decided
+by whether what it builds shares structure with what its host holds, which only
+the embedder knows. The substrate ships the tenant kind and no rule for when to
+use it.
 
 ## Open work
 

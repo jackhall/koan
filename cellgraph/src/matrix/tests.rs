@@ -23,34 +23,41 @@ fn agrees(matrix: &Matrix<1>, cap: u32) {
     }
 }
 
+/// A reach mask over the given slots — the only shape a mint folds in, and so the only way a bit
+/// is set at all.
+fn reaching(slots: &[u32]) -> GraphReach<1> {
+    let mut reach = GraphReach::empty();
+    for slot in slots {
+        reach.add(*slot);
+    }
+    reach
+}
+
 #[test]
 fn the_tally_follows_every_write() {
     let cap = 6;
     let mut matrix = Matrix::<1>::new();
     agrees(&matrix, cap);
 
-    // A set counts once, and a set that changes nothing counts nothing.
-    matrix.set(0, 3);
-    matrix.set(1, 3);
-    matrix.set(1, 3);
+    // A mint counts once per bit it newly sets, and a mint that changes nothing counts nothing.
+    matrix.hold(0, &reaching(&[3]));
+    matrix.hold(1, &reaching(&[3]));
+    matrix.hold(1, &reaching(&[3]));
     assert_eq!(matrix.holders(3), 2);
     agrees(&matrix, cap);
 
-    // Inheriting a row counts only the bits the union newly sets: row 2 already names 3, so the
-    // parent's naming of 3 adds nothing, while its naming of 4 adds one.
-    matrix.set(2, 3);
-    matrix.set(0, 4);
-    matrix.inherit_row(2, 0);
+    // The union counts only the bits it newly sets: row 2 already names 3, so a second mint naming
+    // 3 and 4 adds nothing for 3 and one for 4.
+    matrix.hold(2, &reaching(&[3]));
+    matrix.hold(2, &reaching(&[3, 4]));
     assert_eq!(matrix.holders(3), 3);
-    assert_eq!(matrix.holders(4), 2);
+    assert_eq!(matrix.holders(4), 1);
     agrees(&matrix, cap);
 
-    // A mint folds a reach mask in the same way, and drops the destination's own bit rather than
-    // counting it: a cell that held itself would never reach a zero count.
-    let mut reach = GraphReach::empty();
-    reach.add(4);
-    reach.add(5);
-    matrix.hold(5, &reach);
+    // A mint drops the destination's own bit rather than counting it: a cell that held itself
+    // would never reach a zero count.
+    matrix.hold(0, &reaching(&[4]));
+    matrix.hold(5, &reaching(&[4, 5]));
     assert!(!matrix.test(5, 5));
     assert_eq!(matrix.holders(4), 3);
     assert_eq!(matrix.holders(5), 0);

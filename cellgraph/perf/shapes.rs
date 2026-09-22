@@ -1,4 +1,4 @@
-//! The benchmark shapes: eight traversals of the substrate, each sized to the smallest `n` that
+//! The benchmark shapes: nine traversals of the substrate, each sized to the smallest `n` that
 //! shows its trend.
 //!
 //! Every shape builds its own graph, drives public doors only, and ends with an `is_empty` assert —
@@ -11,12 +11,14 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, CrossedOperand, Dormant, DropFree, Operand, Prices, Ready,
-    Reattachable, ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict, Writer,
+    Active, CellGraph, CellHandle, Covariant, CrossedOperand, Delivery, Dormant, DropFree,
+    NoScratch, Operand, Prices, Ready, Reattachable, ReattachableOverBoth, Receipt,
+    ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict, Writer, covariant,
     reattachable,
 };
 
-use crate::meter::{Verb, measure};
+use crate::counting_alloc::thread_live_bytes;
+use crate::meter::{Verb, measure, record};
 
 /// The cap every shape builds at: the full width of a one-word graph, which is the width the crate
 /// ships at. One cap for the whole set, so a row's `cap` column is a constant across the record.
@@ -38,6 +40,18 @@ reattachable!(
 impl DropFree for Number {}
 impl DropFree for Numbers {}
 
+covariant!(Number, Numbers);
+
+/// The delivery bundle the receipt shape crosses through: a note a producer builds in the
+/// consumer's scratch habitat, and a carrier it files there at rest. Every other shape's graph
+/// takes the default bundle and delivers nothing.
+struct Push;
+
+impl<'graph> Delivery<'graph> for Push {
+    type Scratch = Number;
+    type Carrier = Number;
+}
+
 /// The always-pin embedder the roadmap names: every operand crosses pinned, so every placement
 /// over operands pays the pricing walk. This is the shape that makes `pin_price` a per-verb cost.
 fn always_pin(_: Prices) -> Verdict {
@@ -50,7 +64,7 @@ fn graph() -> CellGraph<'static, Work> {
 
 /// An operand priced above anything a pin can cost, so [`always_pin`] pins it whatever the slab is
 /// doing.
-fn pinned<'a, 'step, V: Reattachable<'static> + DropFree>(
+fn pinned<'a, 'step, V: Reattachable<'static> + Covariant<'static> + DropFree>(
     carrier: &'a Ready<'static, 'step, V>,
 ) -> Operand<'static, 'a, 'step, V> {
     Operand {
@@ -69,8 +83,10 @@ fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 
 /// A value homed in the executing cell: the own-region write, then the bridge that makes it a
 /// carrier. What every shape's `Verb::Alloc` row measures.
-fn number_here<'step>(
-    context: &StepContext<'static, 'step, '_, Work>,
+/// Generic over the scratch and delivery a caller's context carries: the shapes here park no
+/// scratch and deliver nothing, but the write this measures is the same whatever a step declares.
+fn number_here<'step, S: ReattachableOverBoth<'static>, D: Delivery<'static>>(
+    context: &StepContext<'static, 'step, '_, '_, Work, S, D>,
     value: u32,
 ) -> Ready<'static, 'step, Number> {
     context.lift::<Number>(one(context.writer(), value))
@@ -81,7 +97,9 @@ fn build_number<'cell, 'severed>(
     views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
 ) -> Active<'static, 'cell, Number> {
     Active::new(match views[0] {
-        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => one(writer, *value),
+        CrossedOperand::Pinned { view: value, .. } | CrossedOperand::Copied { view: value, .. } => {
+            one(writer, *value)
+        }
     })
 }
 
@@ -92,7 +110,9 @@ fn build_slice<'cell, 'severed>(
     views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
 ) -> Active<'static, 'cell, Numbers> {
     Active::new(writer.fill(views.len(), |index| match views[index] {
-        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => *value,
+        CrossedOperand::Pinned { view: value, .. } | CrossedOperand::Copied { view: value, .. } => {
+            *value
+        }
     }))
 }
 
@@ -100,7 +120,7 @@ fn build_slice<'cell, 'severed>(
 /// of the next, `n` times over, with nothing else in the graph.
 fn keep_redeem(n: u32) {
     let mut graph = graph();
-    let cell = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let cell = measure(Verb::Create, || graph.create(None)).unwrap();
 
     let first = measure(Verb::Enter, || {
         graph.enter(cell, |context| {
@@ -138,12 +158,12 @@ fn keep_redeem(n: u32) {
 /// keep scans the entries before it, which is the linear term interning is priced at.
 fn keep_shapes(n: u32) {
     let mut graph = graph();
-    let dest = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let dest = measure(Verb::Create, || graph.create(None)).unwrap();
     let mut sources: Vec<SlabHandle> = Vec::with_capacity(n as usize);
     let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
-        let source = measure(Verb::Create, || graph.create(None, None)).unwrap();
+        let source = measure(Verb::Create, || graph.create(None)).unwrap();
         sources.push(source);
         let resting = measure(Verb::Enter, || {
             graph.enter(source, |context| {
@@ -188,11 +208,11 @@ fn keep_shapes(n: u32) {
 /// and then dying, so every release finds a unique holder and folds into it.
 fn push_chain(n: u32) {
     let mut graph = graph();
-    let consumer = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let consumer = measure(Verb::Create, || graph.create(None)).unwrap();
     let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
-        let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
+        let producer = measure(Verb::Create, || graph.create(None)).unwrap();
         let resting = measure(Verb::Enter, || {
             graph.enter(producer, |context| {
                 let value = measure(Verb::Alloc, || number_here(context, i));
@@ -230,16 +250,82 @@ fn push_chain(n: u32) {
     assert!(graph.is_empty());
 }
 
+/// The push completed through the consumer's receipt run rather than through a dormant carrier the
+/// embedder parks: the consumer registers a run of `n` slots, `n` producers each build a note in
+/// the consumer's own scratch habitat and file it in one slot before dying, and the consumer drains
+/// the run and registers the next.
+///
+/// [`push_chain`] is the row this is read against — the same crossing, through `alloc_into` and a
+/// carrier the embedder holds between steps, instead.
+fn delivery(n: u32) {
+    let mut graph: CellGraph<'static, Work, NoScratch, Push> = CellGraph::new(CAP, always_pin);
+    let consumer = measure(Verb::Create, || graph.create(None)).unwrap();
+    measure(Verb::Enter, || {
+        graph.enter(consumer, |context| {
+            measure(Verb::Register, || {
+                context.register_receipts(n as usize).unwrap()
+            });
+        })
+    })
+    .unwrap();
+
+    for i in 0..n {
+        let producer = measure(Verb::Create, || graph.create(None)).unwrap();
+        measure(Verb::Enter, || {
+            graph.enter(producer, |context| {
+                measure(Verb::Deliver, || {
+                    context
+                        .deliver_scratch(consumer, i as usize, |writer, _| {
+                            Active::new(one(writer, i))
+                        })
+                        .unwrap()
+                });
+            })
+        })
+        .unwrap();
+        measure(Verb::Release, || {
+            graph.release(producer, ReleaseAbsorption::IntoHolder)
+        })
+        .unwrap();
+    }
+
+    measure(Verb::Enter, || {
+        graph.enter(consumer, |context| {
+            for i in 0..n {
+                let read = measure(Verb::Receipt, || {
+                    match context.receipt(i as usize).unwrap() {
+                        Receipt::Value(value) => *value,
+                        _ => unreachable!("every slot took a note"),
+                    }
+                });
+                assert_eq!(read, i);
+            }
+            // Drained, so the registration replaces the run and the step's end hands the bump back
+            // before it lays the next one down.
+            measure(Verb::Register, || {
+                context.register_receipts(n as usize).unwrap()
+            });
+        })
+    })
+    .unwrap();
+
+    measure(Verb::Release, || {
+        graph.release(consumer, ReleaseAbsorption::IntoHolder)
+    })
+    .unwrap();
+    assert!(graph.is_empty());
+}
+
 /// The seal transition and sealed-cell retirement: `n` producers the consumer holds bare, each
 /// refusing the merge on death so it seals, then read out of their sealed cells and wound down
 /// together.
 fn pull_chain(n: u32) {
     let mut graph = graph();
-    let consumer = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let consumer = measure(Verb::Create, || graph.create(None)).unwrap();
     let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
-        let producer = measure(Verb::Create, || graph.create(None, None)).unwrap();
+        let producer = measure(Verb::Create, || graph.create(None)).unwrap();
         let resting = measure(Verb::Enter, || {
             graph.enter(producer, |context| {
                 let value = measure(Verb::Alloc, || number_here(context, i));
@@ -279,32 +365,6 @@ fn pull_chain(n: u32) {
     assert!(graph.is_empty());
 }
 
-/// Dead ancestors waiting on a descendant: a chain of `n` cells each born under the last, released
-/// outermost-first so every one of them stays dead-but-undisposed under the leaf's birth row, and
-/// then the leaf — the single release that frees the whole chain in one walk up it.
-fn birth_chain(n: u32) {
-    let mut graph = graph();
-    let mut handles: Vec<SlabHandle> = Vec::with_capacity(n as usize);
-
-    let root = measure(Verb::Create, || graph.create(None, None)).unwrap();
-    handles.push(root);
-    for depth in 1..n {
-        let parent = handles[depth as usize - 1];
-        let child = measure(Verb::Create, || graph.create(Some(parent), None)).unwrap();
-        handles.push(child);
-    }
-
-    // Every release but the last leaves its cell dead-but-undisposed: the leaf is still live, and
-    // its birth row names the whole chain above it.
-    for handle in &handles {
-        measure(Verb::Release, || {
-            graph.release(*handle, ReleaseAbsorption::IntoHolder)
-        })
-        .unwrap();
-    }
-    assert!(graph.is_empty());
-}
-
 /// One round of the fan-out: `m` values built in `source` and placed as one slice into `dest`.
 fn fan_out_round(
     graph: &mut CellGraph<'static, Work>,
@@ -337,8 +397,8 @@ fn fan_out_round(
 /// already holds the home is, and the one an always-pin embedder pays per operand.
 fn fan_out(m: u32) {
     let mut graph = graph();
-    let source = measure(Verb::Create, || graph.create(None, None)).unwrap();
-    let dest = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let source = measure(Verb::Create, || graph.create(None)).unwrap();
+    let dest = measure(Verb::Create, || graph.create(None)).unwrap();
 
     let first = fan_out_round(&mut graph, source, dest, m);
     let second = fan_out_round(&mut graph, source, dest, m);
@@ -373,12 +433,12 @@ fn fan_out(m: u32) {
 /// cell's holder count falls to zero at once.
 fn shared_subtier(n: u32) {
     let mut graph = graph();
-    let left = measure(Verb::Create, || graph.create(None, None)).unwrap();
-    let right = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let left = measure(Verb::Create, || graph.create(None)).unwrap();
+    let right = measure(Verb::Create, || graph.create(None)).unwrap();
 
     let mut bases: Vec<SlabHandle> = Vec::with_capacity(n as usize);
     for _ in 0..n {
-        bases.push(measure(Verb::Create, || graph.create(None, None)).unwrap());
+        bases.push(measure(Verb::Create, || graph.create(None)).unwrap());
     }
 
     let mut dormant: Vec<Dormant<'static, Number>> = Vec::with_capacity(n as usize);
@@ -459,7 +519,7 @@ pub struct Shape {
 /// its death is a bump splice into the ancestor it pledged.
 fn tree_chain(n: u32) {
     let mut graph = graph();
-    let root = measure(Verb::Create, || graph.create(None, None)).unwrap();
+    let root = measure(Verb::Create, || graph.create(None)).unwrap();
 
     let mut chain: Vec<TreeHandle> = Vec::with_capacity(n as usize);
     let mut parent = CellHandle::Slab(root);
@@ -524,9 +584,47 @@ fn tree_chain(n: u32) {
     assert!(graph.is_empty());
 }
 
+/// The tail loop: `n` hops, each writing into a fresh cell, creating its successor, and dying.
+///
+/// The trend this reads is recycling's. A released cell's chunk waits on the spare list and the
+/// next birth draws it, so past the first hop no verb reaches the allocator and the rows are equal
+/// at both sizes; and the `resident` row, read before the last cell is torn down, is equal at both
+/// too — a loop holds what one hop holds, however long it runs.
+fn tail_hop(n: u32) {
+    let live_at_start = thread_live_bytes();
+    let mut graph = graph();
+    let mut current = measure(Verb::Create, || graph.create(None)).unwrap();
+    for _ in 0..n {
+        measure(Verb::Enter, || {
+            graph.enter(current, |context| {
+                measure(Verb::Alloc, || {
+                    context.writer().fill(64, |index| index as u32);
+                })
+            })
+        })
+        .unwrap();
+        // The successor first, then the predecessor's death: the order a tail call runs in.
+        let next = measure(Verb::Create, || graph.create(None)).unwrap();
+        measure(Verb::Release, || {
+            graph.release(current, ReleaseAbsorption::IntoHolder)
+        })
+        .unwrap();
+        current = next;
+    }
+    record(
+        Verb::Resident,
+        (thread_live_bytes() - live_at_start).max(0) as u64,
+    );
+    measure(Verb::Release, || {
+        graph.release(current, ReleaseAbsorption::IntoHolder)
+    })
+    .unwrap();
+    assert!(graph.is_empty());
+}
+
 /// Every shape. Each is swept at both its sizes, so the per-unit trend is the difference over the
 /// difference in `n` — a term needs both readings.
-pub const SHAPES: [Shape; 8] = [
+pub const SHAPES: [Shape; 9] = [
     Shape {
         name: "keep_redeem",
         run: keep_redeem,
@@ -540,14 +638,14 @@ pub const SHAPES: [Shape; 8] = [
         large: 32,
     },
     Shape {
-        name: "pull_chain",
-        run: pull_chain,
+        name: "delivery",
+        run: delivery,
         small: 8,
         large: 32,
     },
     Shape {
-        name: "birth_chain",
-        run: birth_chain,
+        name: "pull_chain",
+        run: pull_chain,
         small: 8,
         large: 32,
     },
@@ -574,5 +672,11 @@ pub const SHAPES: [Shape; 8] = [
         run: tree_chain,
         small: 64,
         large: 256,
+    },
+    Shape {
+        name: "tail_hop",
+        run: tail_hop,
+        small: 16,
+        large: 64,
     },
 ];

@@ -6,7 +6,7 @@
 //!
 //! See [README.md](README.md) § The node vocabulary.
 
-use crate::parse::{LabelInterner, StaticName, TypeSymbol};
+use crate::symbols::{StaticName, SymbolInterner, TypeSymbol};
 
 /// Shallow kind of a type, used to admit a type value into a type-accepting slot. The kinds
 /// form one subsumption lattice:
@@ -82,8 +82,8 @@ impl KKind {
     }
 
     /// The surface keyword as its classified [`TypeSymbol`], minted once per process off the
-    /// memo and recorded under `labels` so a diagnostic naming it can render the text.
-    pub fn surface_symbol(self, labels: &LabelInterner) -> TypeSymbol {
-        labels.record(self.surface_name())
+    /// memo and recorded under `symbols` so a diagnostic naming it can render the text.
+    pub fn surface_symbol(self, symbols: &SymbolInterner) -> TypeSymbol {
+        symbols.record(self.surface_name())
     }
 }

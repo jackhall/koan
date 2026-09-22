@@ -379,7 +379,7 @@ fn window_member_projection<'a, 'p>(
                 value: ExpressionPart::Type(tag),
                 ..
             },
-        ] if *kw == crate::parse::forms::KEYWORDS.attr.symbol() => Some((head, tag)),
+        ] if *kw == crate::parse::builtin_shapes::KEYWORDS.attr.symbol() => Some((head, tag)),
         _ => None,
     }
 }

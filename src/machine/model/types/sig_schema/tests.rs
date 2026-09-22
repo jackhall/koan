@@ -7,7 +7,7 @@ use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{type_name, value_name};
 use crate::machine::model::types::{Record, RecursiveGroupWindow, RelativeSchema};
 use crate::memory::ScopeId;
-use crate::parse::UntypedKey;
+use crate::parse::ExpressionKey;
 
 // --- region-free builders -------------------------------------------------------------
 
@@ -1261,7 +1261,7 @@ fn join_meets_an_ungeneralizable_function_parameter() {
 // --- keyworded members ----------------------------------------------------------------
 
 /// A bucket key spelled out: `_` is an argument slot, anything else a fixed token.
-fn key(spelling: &[&str]) -> UntypedKey {
+fn key(spelling: &[&str]) -> ExpressionKey {
     spelling
         .iter()
         .map(|part| match *part {

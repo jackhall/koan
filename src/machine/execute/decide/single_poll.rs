@@ -14,7 +14,7 @@ use crate::machine::model::type_name_miss;
 use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::memory::{KoanRegion, KoanRegionExt};
-use crate::parse::forms::KEYWORDS;
+use crate::parse::builtin_shapes::KEYWORDS;
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::parse::{TypeSymbol, ValueSymbol};
 use crate::source::Spanned;

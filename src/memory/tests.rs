@@ -10,7 +10,7 @@ reattachable!(Step => ());
 pub(crate) fn in_cell<R>(step: impl for<'cell> FnOnce(Writer<'cell>) -> R) -> R {
     let mut graph: CellGraph<'static, Step> = CellGraph::new(1, |_| Verdict::Pin);
     let cell = graph
-        .create(None, None)
+        .create(None)
         .expect("a one-slot graph has a free slot");
     let out = graph
         .enter(cell, |context| step(context.writer()))

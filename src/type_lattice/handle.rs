@@ -12,7 +12,7 @@
 //! Container types are always parameterized: bare `List` / `Dict` lower to `List<Any>` /
 //! `Dict<Any, Any>` at [`KType::from_symbol`] time.
 
-use crate::parse::{StaticName, TypeSymbol};
+use crate::symbols::{StaticName, TypeSymbol};
 
 use super::digest::TypeDigest;
 use super::kind::KKind;
@@ -118,6 +118,13 @@ impl KType {
         self.0
     }
 
+    /// Handle equality in `const` context — the one digest word compared. Derived `PartialEq` is
+    /// not `const`, and a `static` table of slot types is checked against the raw-capture leaves
+    /// where it is built.
+    pub const fn same_as(self, other: KType) -> bool {
+        self.0.0 == other.0.0
+    }
+
     /// Look up a `KType` by the name a user can write in source (e.g. `Number`, `List`). Every
     /// name here lowers to a fixed handle, so the lookup needs no registry: the content each one
     /// names is pre-seeded into every registry at construction.
@@ -134,14 +141,14 @@ impl KType {
     /// No text is hashed on any arm: a node that carries its declared name answers the symbol
     /// stored in it, and a builtin leaf answers its fixed spelling's [`StaticName`] memo — the same
     /// statics rendering reads, so the two doors agree by construction. Static spellings are
-    /// recorded in the run's label interner here, matching what declaring the name from text would
+    /// recorded in the run's symbol interner here, matching what declaring the name from text would
     /// have recorded, so rendering resolves either way.
     pub fn name_symbol(
         self,
         types: &TypeRegistry<'_>,
-        labels: &crate::parse::LabelInterner,
+        symbols: &crate::symbols::SymbolInterner,
     ) -> Option<TypeSymbol> {
-        let fixed = |name: &StaticName<TypeSymbol>| Some(labels.record(name));
+        let fixed = |name: &StaticName<TypeSymbol>| Some(symbols.record(name));
         types.with_node(self, |node| match node {
             TypeNode::Number => fixed(&NUMBER_NAME),
             TypeNode::Str => fixed(&STR_NAME),
@@ -155,12 +162,12 @@ impl KType {
             TypeNode::RecordType => fixed(&RECORD_TYPE_NAME),
             TypeNode::Any => fixed(&ANY_NAME),
             TypeNode::Never => fixed(&NEVER_NAME),
-            TypeNode::OfKind(kind) => Some(kind.surface_symbol(labels)),
+            TypeNode::OfKind(kind) => Some(kind.surface_symbol(symbols)),
             TypeNode::AbstractType { name, .. } => Some(*name),
             TypeNode::SetMember { name, .. } => Some(*name),
             TypeNode::Signature { schema_digest, .. } => (*schema_digest
                 == super::digest::empty_schema_digest())
-            .then(|| labels.record(&MODULE_NAME)),
+            .then(|| symbols.record(&MODULE_NAME)),
             TypeNode::List { .. }
             | TypeNode::Dict { .. }
             | TypeNode::Record { .. }

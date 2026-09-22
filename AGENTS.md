@@ -1,0 +1,36 @@
+## Workflow
+- Prefer minimal, focused edits. Do not start bulk or exploratory edits without explicit confirmation; if a change looks overly complex, say so and suggest an alternative before continuing.
+- Match the process to the size of the change: for a substantial or multi-step change, propose a plan and wait for approval before editing; for a small, well-understood edit, just make it.
+- After smoke testing features or bug fixes, try to create a verifiable unit test based on the smoke test.
+- Top-level structs and free functions come with comments explaining their purpose. The README contains an overview of the architecture. When modifying code, make sure these docs stay up-to-date and brief.
+- When using subagents:
+  - prefer Sonnet for purely mechanical tasks and searches
+  - prefer Opus if there may be ambiguity in the task or search
+
+## Project Context
+- Koan is a pre-release language with NO users; do not invent backward-compatibility concerns or migration paths in design proposals.
+- Write documentation (tutorial/, README.md) from the user's perspective, not the implementer's.
+- The runtime is being rewritten from the ground up. The kept modules are listed in [TEST.md § The pending rewrite](TEST.md#the-pending-rewrite); `src/machine`, `src/builtins`, the binary and `tests/` are the old runtime behind the `pending_rewrite` feature. The default build, test and lint slate excludes it; do not spend effort improving it.
+
+# Rust Conventions
+- When refactoring types/lifetimes, verify with `cargo build` after each step rather than batching multiple type changes.
+- Prefer the simplest design; avoid OnceLock or complex synchronization unless explicitly needed.
+- Find joy in deleting unused or unnecessary code.
+
+## Design Discussions
+- When the user asks a conceptual or 'should we?' question, answer it first — do NOT immediately start implementing.
+- For pattern-dispatch / signature work, confirm the user's syntax intent before proposing new KType variants.
+
+## Documentation
+- Keep documentation updated and as concise as possible. Do not sacrifice grammar for brevity.
+- For work touching `README.md`, `tutorial/`, a module's `README.md` design doc, `old_design/*.md`, or `roadmap/*.md` (including the `roadmap/README.md` index), invoke the **documentation skill** — it owns the doc-tree partition rules, deletion-vs-edit semantics for shipped roadmap items, and the `doclinks check` gating workflow.
+- Source-file comments stay here because they're maintained during implementation, not at the doc-update phase:
+  - Top-of-file comments: explain the code in the file, assumptions it makes, and how it's related to the code in other files. Link to design docs where needed. Update these as you go.
+  - Inline comments: keep these to 3-4 lines. Extra content should go in the top-of-file comments or in design docs; link when needed. Update these as you go.
+
+## Repo Conventions
+- Tests live as `mod tests;` inside the source module's own subdirectory — `foo/tests.rs`, split to `foo/tests/<topic>.rs` only once the single file is genuinely hard to navigate (~500+ lines). Never a sibling `foo_tests.rs`.
+- Scratch notes, drafts and plan files belong in `scratch/` at the repo root (gitignored). Plan mode writes to `.claude/plans/`, which is tracked — keep the canonical plan in `scratch/` and delete the `.claude/plans/` copy when planning ends.
+- Spell words out in koan identifiers, variants and tags: `error`, not `err`.
+- Local state files that record HEAD's SHA on each run (trend logs, complexity baselines) are gitignored, not tracked — tracking one doubles every commit.
+- Run `cargo fmt --all` before wrapping up and keep the whole-tree result; do not revert fmt-only hunks in unrelated files to keep a diff scoped. `cargo fmt` is not part of the verify slate.

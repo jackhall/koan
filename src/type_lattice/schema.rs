@@ -26,7 +26,7 @@ use std::cmp::Ordering;
 use std::ops::Deref;
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
-use crate::parse::{KeywordSymbol, TypeSymbol, ValueSymbol};
+use crate::symbols::{KeywordSymbol, TypeSymbol, ValueSymbol};
 
 use super::handle::KType;
 use super::kind::KKind;

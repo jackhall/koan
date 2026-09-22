@@ -1,176 +1,290 @@
 //! The **activation**: one per call or block entry, laid down in the frame's region.
 //!
-//! Its header is four pointers — the shape in program storage, the callable's closure bindings, the
-//! builtin table, and the enclosing activation of a block — beside the callable the activation runs,
-//! and its body is one [`SlotArray`] over the shape's slots. Nothing points into the activation
-//! itself, it carries no drop glue, and it is `Copy`: a copy is its bytes.
+//! Its read half, the [`ActivationView`], is four pointers — the shape in program storage, the
+//! callable's closure bindings, the builtin table, and the enclosing block's view — beside the
+//! callable the activation runs and a covariant view of one [`SlotArray`] over the shape's slots.
+//! The [`Activation`] is that view beside the array itself, which is the door that binds. Nothing
+//! points into either, neither carries drop glue, and both are `Copy`: a copy is their bytes.
 //!
-//! A slot is `Empty` until its binder is submitted, `Claimed` by the binder's cell while it runs,
-//! and `Bound` once. A deferred mention reads at the body's end and so sees later siblings, so the
-//! scheduler claims every binder of a body, in position order, before any of its statements runs:
-//! a slot visible to a running reader is never `Empty`, and [`Activation::read`] panics if it is.
+//! The view is covariant in `'cell`, so it may ride a state into a shorter-lived cell — an
+//! evaluation reads names through it — while the activation, which binds, is invariant and stays
+//! where it was laid down. Both are generic over the member's family, `XF`, because a slot holds its
+//! value erased and names its payload through the family.
+//!
+//! A slot is empty until its unit's turn and bound once. A body's units run in its shape's order,
+//! each after every unit it reads, so a slot visible to a running reader is never empty, and
+//! [`ActivationView::read`] panics if it is: that is a scheduler bug, never a wait.
 //!
 //! A closure binding that is an edge into the callable's own knot never reaches a reader: the read
 //! resolves it through the knot member the activation runs to the sibling it names, a function or a
 //! data node.
 
-use crate::memory::{CellHandle, SlotArray, SlotConflict, SlotState, Writer};
-use crate::parse::BinderSymbol;
-use crate::values::{Knotted, Link, Nothing, Value};
+use std::ops::Deref;
+
+use crate::memory::{Covariant, SlotArray, SlotConflict, SlotView, Writer};
+use crate::symbols::BinderSymbol;
+use crate::values::{Knotted, KnottedFamily, Link, NoKnot, Value, ValueFamily};
 
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
-use super::shape::{Coordinate, Position, Shape, ShapeKind, Slot, Target};
+use super::shape::{BodyShape, Coordinate, Position, ShapeKind, Slot, Target};
 
-/// One body's bindings for one call or one block entry.
+/// The read half of one body's bindings for one call or one block entry: what an evaluation is
+/// handed. Covariant in `'cell`, and without a door that binds a slot.
 ///
-/// Each kind has its own constructor: a program has neither closure bindings nor an enclosing
-/// activation, a callable or module has closure bindings, and a block has an enclosing activation
-/// whose builtin table it shares.
-#[derive(Clone, Copy)]
-pub struct Activation<'graph, 'cell, X = Nothing> {
-    shape: &'graph Shape<'graph>,
+/// ```compile_fail,E0599
+/// use koan::scope::{ActivationView, Slot};
+/// use koan::values::Value;
+///
+/// fn bind(view: ActivationView<'_, '_>, slot: Slot) {
+///     let _ = view.bind(slot, Value::Null);
+/// }
+/// ```
+///
+/// Reading is what it is for:
+///
+/// ```
+/// use koan::scope::{ActivationView, Coordinate};
+/// use koan::values::Value;
+///
+/// fn read<'graph, 'cell>(view: ActivationView<'graph, 'cell>, at: Coordinate) -> Value<'graph, 'cell> {
+///     view.read(at)
+/// }
+/// ```
+///
+/// The member type `X` is the family's member at `'cell`, and nothing but its default is ever
+/// meant: it is a parameter of its own so no field names `'cell` through a projection, which would
+/// make the view invariant in it. The impl is over the default alone.
+pub struct ActivationView<
+    'graph,
+    'cell,
+    XF: KnottedFamily<'graph> = NoKnot,
+    X = <XF as KnottedFamily<'graph>>::Closed<'cell>,
+> where
+    'graph: 'cell,
+{
+    shape: &'graph BodyShape<'graph>,
     closure: &'cell ClosureBindings<'graph, 'cell, X>,
     builtins: &'cell Builtins<'graph, 'cell, X>,
-    enclosing: Option<&'cell Activation<'graph, 'cell, X>>,
-    /// The knot member this activation runs: `Some` for a callable's or module's activation and
-    /// every block inside one, `None` for the program's and every block inside it. An edge capture
-    /// resolves through it.
+    enclosing: Option<&'cell ActivationView<'graph, 'cell, XF, X>>,
+    /// The knot member this activation runs: `Some` for a callable's activation and every block
+    /// inside one, `None` for the program's, a module's, and every block inside those. An edge
+    /// capture resolves through it, and a module's captures are never edges — a module is alone in
+    /// its component, so it runs no member of its own.
     callable: Option<X>,
-    slots: SlotArray<'cell, Value<'graph, 'cell, X>, CellHandle>,
+    slots: SlotView<'graph, 'cell, ValueFamily<XF>>,
 }
 
-const _: () = assert!(size_of::<Activation<'static, 'static>>() == 56);
+impl<'graph, XF: KnottedFamily<'graph>, X: Copy> Clone for ActivationView<'graph, '_, XF, X> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'graph, XF: KnottedFamily<'graph>, X: Copy> Copy for ActivationView<'graph, '_, XF, X> {}
+
+/// One body's bindings for one call or one block entry: the view, and the door that binds a slot.
+/// Invariant in `'cell`, since it binds; it reads as its view through `Deref`.
+///
+/// Each kind has its own constructor: a program has neither closure bindings nor an enclosing
+/// activation, a callable and a module each have closure bindings, and a block has an enclosing
+/// activation whose builtin table it shares.
+pub struct Activation<'graph, 'cell, XF: KnottedFamily<'graph> = NoKnot>
+where
+    'graph: 'cell,
+{
+    view: ActivationView<'graph, 'cell, XF>,
+    slots: SlotArray<'graph, 'cell, ValueFamily<XF>>,
+}
+
+impl<'graph, XF: KnottedFamily<'graph>> Clone for Activation<'graph, '_, XF> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'graph, XF: KnottedFamily<'graph>> Copy for Activation<'graph, '_, XF> {}
+
+const _: () = assert!(size_of::<Activation<'static, 'static>>() == 64);
 const _: () = assert!(!std::mem::needs_drop::<Activation<'static, 'static>>());
 
-/// What a read finds.
-#[derive(Clone, Copy, Debug)]
-pub enum Binding<'graph, 'cell, X = Nothing> {
-    Bound(Value<'graph, 'cell, X>),
-    /// The slot's binder is still running, in this cell.
-    Pending(CellHandle),
+impl<'graph, 'cell, XF: KnottedFamily<'graph>> Deref for Activation<'graph, 'cell, XF> {
+    type Target = ActivationView<'graph, 'cell, XF>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.view
+    }
 }
 
-impl<'graph, 'cell, X: Knotted> Activation<'graph, 'cell, X> {
-    /// A fresh activation of the program shape `shape`, every slot `Empty`.
-    pub fn of_program(
+impl<'graph, 'cell, XF: KnottedFamily<'graph>> Activation<'graph, 'cell, XF>
+where
+    ValueFamily<XF>: Covariant<'graph>,
+{
+    /// The one constructor every kind goes through: `len` empty slots and the view over them.
+    fn laid_down(
         writer: Writer<'cell>,
-        shape: &'graph Shape<'graph>,
-        builtins: &'cell Builtins<'graph, 'cell, X>,
+        shape: &'graph BodyShape<'graph>,
+        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        enclosing: Option<&'cell ActivationView<'graph, 'cell, XF>>,
+        callable: Option<XF::Closed<'cell>>,
     ) -> Self {
-        debug_assert_eq!(shape.kind(), ShapeKind::Program);
+        let slots = SlotArray::new(writer, shape.slots());
         Activation {
-            shape,
-            closure: ClosureBindings::empty(),
-            builtins,
-            enclosing: None,
-            callable: None,
-            slots: SlotArray::new(writer, shape.slots()),
+            view: ActivationView {
+                shape,
+                closure,
+                builtins,
+                enclosing,
+                callable,
+                slots: slots.view(),
+            },
+            slots,
         }
     }
 
-    /// A fresh activation of the callable or module shape `shape`, run by `callable` over its
-    /// closure bindings, every slot `Empty`.
+    /// A fresh activation of the program shape `shape`, every slot empty.
+    pub fn of_program(
+        writer: Writer<'cell>,
+        shape: &'graph BodyShape<'graph>,
+        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+    ) -> Self {
+        debug_assert_eq!(shape.kind(), ShapeKind::Program);
+        Self::laid_down(
+            writer,
+            shape,
+            ClosureBindings::empty(),
+            builtins,
+            None,
+            None,
+        )
+    }
+
+    /// A fresh activation of the callable shape `shape`, run by `callable` over its closure
+    /// bindings, every slot empty.
     pub fn of_callable(
         writer: Writer<'cell>,
-        shape: &'graph Shape<'graph>,
-        callable: X,
-        closure: &'cell ClosureBindings<'graph, 'cell, X>,
-        builtins: &'cell Builtins<'graph, 'cell, X>,
+        shape: &'graph BodyShape<'graph>,
+        callable: XF::Closed<'cell>,
+        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
     ) -> Self {
-        debug_assert!(matches!(
-            shape.kind(),
-            ShapeKind::Callable | ShapeKind::Module
-        ));
+        debug_assert_eq!(shape.kind(), ShapeKind::Callable);
         debug_assert_eq!(
             closure.len(),
             shape.captures().len(),
             "the closure bindings follow the shape's capture layout",
         );
-        Activation {
-            shape,
-            closure,
-            builtins,
-            enclosing: None,
-            callable: Some(callable),
-            slots: SlotArray::new(writer, shape.slots()),
-        }
+        Self::laid_down(writer, shape, closure, builtins, None, Some(callable))
     }
 
-    /// A fresh activation of the block shape `shape` beside `enclosing`, every slot `Empty`.
+    /// A fresh activation of the module shape `shape` over its closure bindings, every slot
+    /// empty. It runs no knot member: a module's captures are never edges, and the caller ties
+    /// the binder once this activation's every slot is bound.
+    pub fn of_module(
+        writer: Writer<'cell>,
+        shape: &'graph BodyShape<'graph>,
+        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+    ) -> Self {
+        debug_assert_eq!(shape.kind(), ShapeKind::Module);
+        debug_assert_eq!(
+            closure.len(),
+            shape.captures().len(),
+            "the closure bindings follow the shape's capture layout",
+        );
+        Self::laid_down(writer, shape, closure, builtins, None, None)
+    }
+
+    /// A fresh activation of the block shape `shape` beside `enclosing`, every slot empty.
     pub fn of_block(
         writer: Writer<'cell>,
-        shape: &'graph Shape<'graph>,
-        enclosing: &'cell Activation<'graph, 'cell, X>,
+        shape: &'graph BodyShape<'graph>,
+        enclosing: &'cell Activation<'graph, 'cell, XF>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Block);
-        Activation {
+        Self::laid_down(
+            writer,
             shape,
-            closure: ClosureBindings::empty(),
-            builtins: enclosing.builtins,
-            enclosing: Some(enclosing),
-            callable: enclosing.callable,
-            slots: SlotArray::new(writer, shape.slots()),
-        }
+            ClosureBindings::empty(),
+            enclosing.builtins,
+            Some(&enclosing.view),
+            enclosing.callable,
+        )
     }
+}
 
-    pub fn shape(&self) -> &'graph Shape<'graph> {
-        self.shape
-    }
-
-    pub fn builtins(&self) -> &'cell Builtins<'graph, 'cell, X> {
-        self.builtins
-    }
-
-    /// The callable this activation runs, if it runs one.
-    pub fn callable(&self) -> Option<X> {
-        self.callable
-    }
-
-    /// Mark `slot` as bound by the running cell `binder`.
-    pub fn claim(&self, slot: Slot, binder: CellHandle) -> Result<(), SlotConflict<CellHandle>> {
-        self.slots.claim(slot.index(), binder)
+impl<'graph, 'cell, XF: KnottedFamily<'graph>> Activation<'graph, 'cell, XF> {
+    /// The read half, by value: what an evaluation is handed.
+    pub fn view(&self) -> ActivationView<'graph, 'cell, XF> {
+        self.view
     }
 
     /// Bind `slot`, once.
     pub fn bind(
         &self,
         slot: Slot,
-        value: Value<'graph, 'cell, X>,
-    ) -> Result<(), SlotConflict<CellHandle>> {
+        value: Value<'graph, 'cell, XF::Closed<'cell>>,
+    ) -> Result<(), SlotConflict> {
         self.slots.bind(slot.index(), value)
+    }
+}
+
+impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF> {
+    pub fn shape(&self) -> &'graph BodyShape<'graph> {
+        self.shape
+    }
+
+    pub fn builtins(&self) -> &'cell Builtins<'graph, 'cell, XF::Closed<'cell>> {
+        self.builtins
+    }
+
+    /// The callable this activation runs, if it runs one.
+    pub fn callable(&self) -> Option<XF::Closed<'cell>> {
+        self.callable
+    }
+
+    /// Every slot in order and what it is bound to. An empty slot panics, exactly as
+    /// [`read`](ActivationView::read) does: a body is read whole only once its every unit has run.
+    pub fn slots(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (Slot, Value<'graph, 'cell, XF::Closed<'cell>>)> + '_ {
+        (0..self.shape.slots()).map(|index| {
+            let value = self.slots.get(index).expect(
+                "a slot read out of an activation is never empty: every unit of the body has run",
+            );
+            (Slot(index as u32), value)
+        })
     }
 
     /// The read every resolved name makes: a builtin through the header, or `hops` enclosing loads
     /// then one slot or capture. A capture that is an edge reads as the sibling member it names.
-    pub fn read(&self, at: Coordinate) -> Binding<'graph, 'cell, X> {
+    ///
+    /// Panics on an empty slot: the shape orders a body's units so every binder runs before its
+    /// readers and before every `EVAL` that sees it, so an empty slot here is a scheduler bug.
+    pub fn read(&self, at: Coordinate) -> Value<'graph, 'cell, XF::Closed<'cell>> {
         let (hops, target) = match at {
-            Coordinate::Builtin(index) => return Binding::Bound(self.builtins.get(index)),
+            Coordinate::Builtin(index) => return self.builtins.get(index),
             Coordinate::Activation { hops, target } => (hops, target),
         };
-        let mut activation = self;
+        let mut view = self;
         for _ in 0..hops {
-            activation = activation
+            view = view
                 .enclosing
                 .expect("a coordinate steps out only through enclosing block activations");
         }
         match target {
-            Target::Local(slot) => match activation.slots.get(slot.index()) {
-                SlotState::Bound(value) => Binding::Bound(value),
-                SlotState::Claimed(binder) => Binding::Pending(binder),
-                SlotState::Empty => panic!(
-                    "a slot visible to a running reader is never empty: its binder is claimed when it \
-                     is submitted"
-                ),
-            },
-            Target::Capture(slot) => match activation.closure.get(slot) {
-                Link::Value(value) => Binding::Bound(value),
-                Link::Edge(edge) => Binding::Bound(Value::Knotted(
-                    activation
-                        .callable
+            Target::Local(slot) => view.slots.get(slot.index()).expect(
+                "a slot visible to a running reader is never empty: the shape orders its units so \
+                 every binder runs first",
+            ),
+            Target::Capture(slot) => match view.closure.get(slot) {
+                Link::Value(value) => value,
+                Link::Edge(edge) => Value::Knotted(
+                    view.callable
                         .expect("an edge capture is a callable's, read in its own activation")
                         .sibling(edge),
-                )),
+                ),
             },
         }
     }

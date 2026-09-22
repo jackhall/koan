@@ -39,16 +39,16 @@ fn an_empty_graph_is_quiescent_and_a_surviving_ring_is_not() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
     assert!(graph.is_empty());
 
-    let cell = graph.create(None, None).unwrap();
+    let cell = graph.create(None).unwrap();
     assert!(!graph.is_empty());
     graph.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
 
     // A ring an outside holder kept above every merge's count survives the wind-down, and that is
     // exactly what a non-empty graph after the last release means.
-    let first = graph.create(None, None).unwrap();
-    let second = graph.create(None, None).unwrap();
-    let bystander = graph.create(None, None).unwrap();
+    let first = graph.create(None).unwrap();
+    let second = graph.create(None).unwrap();
+    let bystander = graph.create(None).unwrap();
     graph
         .enter(first, |context| context.hold(second))
         .unwrap()
@@ -79,8 +79,8 @@ fn an_empty_graph_is_quiescent_and_a_surviving_ring_is_not() {
 #[test]
 fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
     let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
-    let consumer = graph.create(None, None).unwrap();
-    let producer = graph.create(None, None).unwrap();
+    let consumer = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
 
     // The consumer pins a value living in the producer's region into its own holds and keeps it
     // as its continuation's capture, so it is the producer's one holder. It bundles the same value
@@ -139,11 +139,11 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
 #[test]
 fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(6, pin);
-    let consumer = graph.create(None, None).unwrap();
-    let producer = graph.create(None, None).unwrap();
-    let reached = graph.create(None, None).unwrap();
-    let shared = graph.create(None, None).unwrap();
-    let alone = graph.create(None, None).unwrap();
+    let consumer = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
+    let reached = graph.create(None).unwrap();
+    let shared = graph.create(None).unwrap();
+    let alone = graph.create(None).unwrap();
 
     graph
         .enter(consumer, |context| {
@@ -189,8 +189,8 @@ fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
 #[test]
 fn a_refused_release_seals_as_before() {
     let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
-    let consumer = graph.create(None, None).unwrap();
-    let producer = graph.create(None, None).unwrap();
+    let consumer = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
 
     let kept = graph
         .enter(consumer, |context| {
@@ -228,18 +228,18 @@ fn a_refused_release_seals_as_before() {
 #[test]
 fn an_undisposed_dead_holder_absorbs_too() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let holder = graph.create(None, None).unwrap();
-    let child = graph.create(Some(holder), None).unwrap();
-    let held = graph.create(None, None).unwrap();
+    let holder = graph.create(None).unwrap();
+    let child = graph.create_tree(holder, None).unwrap();
+    let held = graph.create(None).unwrap();
 
     graph
         .enter(holder, |context| context.hold(held))
         .unwrap()
         .unwrap();
 
-    // The holder's death is declared, but its child's birth row keeps it in the slab. Its pin row
-    // is still a maintained row, so it is still a merge target: "live holder" means the slab tier,
-    // not a cell that may still execute.
+    // The holder's death is declared, but the undisposed tree child under it keeps its slot in the
+    // slab. Its pin row is still a maintained row, so it is still a merge target: "live holder"
+    // means the slab tier, not a cell that may still execute.
     graph
         .release(holder, ReleaseAbsorption::IntoHolder)
         .unwrap();
@@ -251,15 +251,15 @@ fn an_undisposed_dead_holder_absorbs_too() {
 
     // Absorbing into a dead-but-undisposed cell only brings forward the fold its own disposal would
     // have performed: when the child goes, the whole bundle goes with the holder.
-    graph.release(child, ReleaseAbsorption::IntoHolder).unwrap();
+    graph.release_tree(child).unwrap();
     assert!(graph.is_empty());
 }
 
 #[test]
 fn a_two_cell_ring_dissolves_when_one_side_dies() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let first = graph.create(None, None).unwrap();
-    let second = graph.create(None, None).unwrap();
+    let first = graph.create(None).unwrap();
+    let second = graph.create(None).unwrap();
 
     graph
         .enter(first, |context| context.hold(second))
@@ -287,11 +287,11 @@ fn a_two_cell_ring_dissolves_when_one_side_dies() {
 #[test]
 fn a_seal_absorbs_its_count_one_sealed_holds() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(6, pin);
-    let top = graph.create(None, None).unwrap();
-    let other = graph.create(None, None).unwrap();
-    let middle = graph.create(None, None).unwrap();
-    let base = graph.create(None, None).unwrap();
-    let reached = graph.create(None, None).unwrap();
+    let top = graph.create(None).unwrap();
+    let other = graph.create(None).unwrap();
+    let middle = graph.create(None).unwrap();
+    let base = graph.create(None).unwrap();
+    let reached = graph.create(None).unwrap();
 
     graph
         .enter(base, |context| {
@@ -350,12 +350,12 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
 #[test]
 fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(6, pin);
-    let first_keeper = graph.create(None, None).unwrap();
-    let second_keeper = graph.create(None, None).unwrap();
-    let top = graph.create(None, None).unwrap();
-    let middle = graph.create(None, None).unwrap();
-    let base = graph.create(None, None).unwrap();
-    let extra = graph.create(None, None).unwrap();
+    let first_keeper = graph.create(None).unwrap();
+    let second_keeper = graph.create(None).unwrap();
+    let top = graph.create(None).unwrap();
+    let middle = graph.create(None).unwrap();
+    let base = graph.create(None).unwrap();
+    let extra = graph.create(None).unwrap();
 
     graph
         .enter(middle, |context| context.hold(base))
@@ -405,9 +405,9 @@ fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
 #[test]
 fn a_count_one_sealed_cell_held_by_a_live_cell_stays_sealed() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let holder = graph.create(None, None).unwrap();
-    let extra = graph.create(None, None).unwrap();
-    let held = graph.create(None, None).unwrap();
+    let holder = graph.create(None).unwrap();
+    let extra = graph.create(None).unwrap();
+    let held = graph.create(None).unwrap();
 
     graph
         .enter(holder, |context| {
@@ -460,10 +460,10 @@ fn a_count_one_sealed_cell_held_by_a_live_cell_stays_sealed() {
 #[test]
 fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
-    let keeper = graph.create(None, None).unwrap();
-    let namer = graph.create(None, None).unwrap();
-    let dying = graph.create(None, None).unwrap();
-    let reached = graph.create(None, None).unwrap();
+    let keeper = graph.create(None).unwrap();
+    let namer = graph.create(None).unwrap();
+    let dying = graph.create(None).unwrap();
+    let reached = graph.create(None).unwrap();
 
     // The keeper's continuation lives over the namer's storage, and the namer holds the dying cell
     // — so once the namer seals, the dying cell's only name is that sealed cell's aggregate.
@@ -539,13 +539,9 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
 /// each sealed id transfers or duplicates, while `dormant` varies what the region stores.
 fn absorb_work_for(dormant: usize, reached: u32, shared: u32, alone: u32) -> u64 {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(2 + reached + shared + alone, pin);
-    let consumer = graph.create(None, None).unwrap();
-    let producer = graph.create(None, None).unwrap();
-    let mut make = |count| {
-        (0..count)
-            .map(|_| graph.create(None, None).unwrap())
-            .collect()
-    };
+    let consumer = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
+    let mut make = |count| (0..count).map(|_| graph.create(None).unwrap()).collect();
     let reached_cells: Vec<SlabHandle> = make(reached);
     let shared_cells: Vec<SlabHandle> = make(shared);
     let alone_cells: Vec<SlabHandle> = make(alone);
@@ -622,9 +618,9 @@ proptest! {
 #[test]
 fn a_sealed_ring_dissolves_through_its_last_namer() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let first = graph.create(None, None).unwrap();
-    let second = graph.create(None, None).unwrap();
-    let bystander = graph.create(None, None).unwrap();
+    let first = graph.create(None).unwrap();
+    let second = graph.create(None).unwrap();
+    let bystander = graph.create(None).unwrap();
 
     graph
         .enter(first, |context| context.hold(second))
@@ -671,9 +667,9 @@ fn a_sealed_ring_dissolves_through_its_last_namer() {
 #[test]
 fn a_seal_that_absorbs_every_holder_it_had_reclaims_itself() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let held = graph.create(None, None).unwrap();
-    let first = graph.create(None, None).unwrap();
-    let second = graph.create(None, None).unwrap();
+    let held = graph.create(None).unwrap();
+    let first = graph.create(None).unwrap();
+    let second = graph.create(None).unwrap();
 
     graph
         .enter(held, |context| {

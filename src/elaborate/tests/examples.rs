@@ -2,8 +2,9 @@
 //! form that births one.
 
 use crate::memory::BumpAllocator;
-use crate::parse::{BinderSymbol, ExpressionPart, KExpression, KeywordSymbol, LabelInterner};
+use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::Site;
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{
     DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
 };
@@ -28,8 +29,8 @@ fn elaborated(program: &Program<'_, '_, '_>, line: usize) -> Result<KType, Elabo
     )
 }
 
-fn keyword(text: &str, labels: &LabelInterner) -> DispatchTokenElement {
-    DispatchTokenElement::Keyword(KeywordSymbol::declared(text, labels).expect("a keyword"))
+fn keyword(text: &str, symbols: &SymbolInterner) -> DispatchTokenElement {
+    DispatchTokenElement::Keyword(KeywordSymbol::declared(text, symbols).expect("a keyword"))
 }
 
 #[test]
@@ -76,7 +77,7 @@ LET Bare = Alias";
                 Ok(types.function_type(scratch, &[(x, KType::NUMBER)], KType::BOOL))
             );
             let twice = [
-                keyword("TWICE", program.labels),
+                keyword("TWICE", program.symbols),
                 DispatchTokenElement::Slot(KType::NUMBER),
             ];
             assert_eq!(
@@ -105,12 +106,12 @@ LET Fixed = :(EXPR (ID x :Number) -> Number)";
 fn shapes(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
 ) -> Vec<(&'static str, KType)> {
     let member = |name| {
         RecursiveGroupWindow::seal_singleton(
             scratch,
-            crate::parse::TypeSymbol::declared(name, labels).unwrap(),
+            crate::symbols::TypeSymbol::declared(name, symbols).unwrap(),
             RelativeSchema::NewType(KType::NUMBER),
             None,
             types,
@@ -140,36 +141,24 @@ LET Missing = :(Shape.Triangle)";
 }
 
 #[test]
-fn a_name_reads_pending_or_not_a_type_and_application_is_unsupported() {
+fn a_name_reads_not_a_type_and_application_is_unsupported() {
     let source = "\
-LET Running = Str
 LET Data = Str
-LET Waits = :(LIST OF Running)
 LET Wrong = :(LIST OF Data)
 LET Applied = :(Number AS Wrap)";
     with_program(
         source,
         shapes,
-        |name, _, _| match name {
-            "Running" => Held::Pending,
-            _ => Held::Bound(Value::Number(1.0)),
-        },
+        |_, _, _| Held::Bound(Value::Number(1.0)),
         |program| {
-            assert_eq!(
-                elaborated(&program, 2),
-                Err(Elaboration::Pending {
-                    name: program.type_name("Running"),
-                    binder: program.binder,
-                })
-            );
             assert!(matches!(
-                elaborated(&program, 3),
+                elaborated(&program, 1),
                 Err(Elaboration::NotAType { name, .. }) if name == program.type_name("Data")
             ));
             assert_eq!(
-                elaborated(&program, 4),
+                elaborated(&program, 2),
                 Err(Elaboration::Unsupported {
-                    site: Site::of(rhs(&program.lines[4])),
+                    site: Site::of(rhs(&program.lines[2])),
                 })
             );
         },
@@ -184,9 +173,9 @@ LET twice = FN EXPR (TWICE x :Number) -> Number = (x)
 LET id = FN EXPR FOR ALL (Elt) (ID x :Elt) -> Elt = (x)
 LET plus = OP #(+) OVER Number = (left)
 LET less = OP #(<) OVER Number -> Bool = (left)
-LET negate = UNARY OP #(-) OVER Number -> Number = (operands)";
+LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
     with_program(source, scalars, nulls, |program| {
-        let (types, scratch, labels) = (program.types, program.scratch, program.labels);
+        let (types, scratch, symbols) = (program.types, program.scratch, program.symbols);
         let typed = |name| {
             let form = program
                 .birth(name)
@@ -210,7 +199,7 @@ LET negate = UNARY OP #(-) OVER Number -> Number = (operands)";
         let number = DispatchTokenElement::Slot(KType::NUMBER);
         assert_eq!(
             typed("twice"),
-            Ok(shape(&[keyword("TWICE", labels), number], KType::NUMBER))
+            Ok(shape(&[keyword("TWICE", symbols), number], KType::NUMBER))
         );
         let elt = program.type_name("Elt");
         let quantified = types.quantified(0, KType::ANY);
@@ -221,7 +210,7 @@ LET negate = UNARY OP #(-) OVER Number -> Number = (operands)";
                     scratch,
                     &[elt],
                     &[
-                        keyword("ID", labels),
+                        keyword("ID", symbols),
                         DispatchTokenElement::Slot(quantified)
                     ],
                     quantified
@@ -231,20 +220,20 @@ LET negate = UNARY OP #(-) OVER Number -> Number = (operands)";
         assert_eq!(
             typed("plus"),
             Ok(shape(
-                &[number, keyword("+", labels), number],
+                &[number, keyword("+", symbols), number],
                 KType::NUMBER
             )),
             "a binary operator with no result folds to its operand"
         );
         assert_eq!(
             typed("less"),
-            Ok(shape(&[number, keyword("<", labels), number], KType::BOOL))
+            Ok(shape(&[number, keyword("<", symbols), number], KType::BOOL))
         );
         assert_eq!(
             typed("negate"),
             Ok(shape(
                 &[
-                    keyword("-", labels),
+                    keyword("~", symbols),
                     DispatchTokenElement::Slot(types.list(KType::NUMBER))
                 ],
                 KType::NUMBER

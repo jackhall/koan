@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc d289a09e8b6c3407588685aba7c045ff7c25848d975c59c5fc8f9bdf821db674 # shrinks to overloads = [KType(0xfb91a3929ddc586645253662b3118edb), KType(0xe42050ed450219b8d8b261209604156b)]
+cc 8fcf14913bf039e97dd95e7a6355f5fc2451944f3da750d74c634132d71cc105 # shrinks to overloads = [KType(0x7608cc318b765c1d335cb2a0ee90ddeb), KType(0x8b8a86109401a2adf9b83fcc2ac446d1)]

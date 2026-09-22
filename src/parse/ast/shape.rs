@@ -3,7 +3,7 @@
 //!
 //! A node's parts contribute exactly two things to every structural question: the bucket key they
 //! spell and the class of the head part. [`NodeCache`] holds the answers — the key, the dispatch
-//! shape, the operator probe, the matched builtin form and the binder plan — computed once at
+//! shape, the operator probe, the matched builtin shape and the binder plan — computed once at
 //! construction, so the dispatch driver reads the cache rather than re-deriving per call.
 //!
 //! [`KExpression`](super::KExpression) holds raw AST parts and
@@ -11,13 +11,11 @@
 //! scheduler's per-call parts, but both answer these questions the same way, so both carry this
 //! one cache.
 
-use smallvec::SmallVec;
-
 use crate::memory::BumpAllocator;
-use crate::parse::forms::binder::StoredBinderKey;
-use crate::parse::forms::lazy::LazyKinds;
-use crate::parse::forms::{Form, form_for};
-use crate::parse::labels::KeywordSymbol;
+use crate::parse::builtin_shapes::binder::StoredBinderKey;
+use crate::parse::builtin_shapes::lazy::LazyKinds;
+use crate::parse::builtin_shapes::{BuiltinShape, builtin_shape_for};
+use crate::symbols::KeywordSymbol;
 
 /// One position of a bucket key: a fixed token as its [`KeywordSymbol`], or an argument slot.
 /// `Copy` and lifetime-free, so a key run is the same type whether it sits in a `Vec` a caller
@@ -35,10 +33,10 @@ pub enum KeyElement {
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
 /// [`KExpression::stored_key`](super::KExpression::stored_key); they MUST agree for any pair that
 /// should match. The parser classifies source tokens via
-/// [`is_keyword_token`](crate::parse::labels::is_keyword_token) and mints each one's symbol there;
+/// [`is_keyword_token`](crate::symbols::is_keyword_token) and mints each one's symbol there;
 /// `SignatureElement::keyword` uppercases a lowercase Rust-spelled token before minting, so a
 /// registration and a call arrive at the same symbol for the same token.
-pub type UntypedKey = Vec<KeyElement>;
+pub type ExpressionKey = Vec<KeyElement>;
 
 /// The structural family a part belongs to — the axis shape classification, the bucket key and the
 /// operator probe read. A keyword carries the symbol its parse minted, which is what all three
@@ -195,31 +193,6 @@ fn is_operator_chain_shape(key: &[KeyElement]) -> bool {
     })
 }
 
-/// The probe key an `OperatorChain` looks the per-scope operator registry up by: the digest of the
-/// run of its operator keywords, minted by [`KeywordSymbol::of_run`]. `None` for any other shape.
-///
-/// The group registration mints its powerset keys through the same constructor, so a registered key
-/// and this probe agree by construction and neither side touches text. The node carries `u128`
-/// bits, and a registry probe compares them.
-pub fn operator_probe_for(key: &[KeyElement], shape: DispatchShape) -> Option<KeywordSymbol> {
-    if shape != DispatchShape::OperatorChain {
-        return None;
-    }
-    // Distinct operators, in a stack buffer. `of_run` reads its members as a set, so dropping a
-    // repeat here mints the same digest — what it buys is the bound. A chain holds one entry per
-    // operator it names, not one per term, so the buffer is sized by the member count of the group
-    // the chain must resolve against rather than by the length of an arbitrarily long run.
-    let mut operators: SmallVec<[KeywordSymbol; 8]> = SmallVec::new();
-    for element in key {
-        if let KeyElement::Keyword(symbol) = element
-            && !operators.contains(symbol)
-        {
-            operators.push(*symbol);
-        }
-    }
-    Some(KeywordSymbol::of_run(&operators))
-}
-
 /// The stored bucket key: a run of the key elements the parts spell, bumped once at construction,
 /// so reading it is a slice borrow and nothing is hashed — the parse already minted every symbol in
 /// the run.
@@ -230,24 +203,23 @@ pub fn stored_untyped_key<'a>(
     brand.alloc_slice_fill_iter(elements)
 }
 
-/// The structural facts a node caches at construction: a function of its parts run and the form
-/// table, computed once, shared by the AST node and the scheduler's working node.
+/// The structural facts a node caches at construction: a function of its parts run and the builtin
+/// shape table, computed once, shared by the AST node and the scheduler's working node.
 ///
 /// Every field but the binder plan is settled the moment the key is: a splice substitutes slots one
-/// for one and writes no keyword position, so the key, the probe and the form entry are invariant
-/// under it. The plan is filled by the AST node's seal alone — a binder is always parsed AST — and
-/// rides a working copy unchanged.
+/// for one and writes no keyword position, so the key and the table entry are invariant under it.
+/// The plan is filled by the AST node's seal alone — a binder is always parsed AST — and rides a
+/// working copy unchanged.
 #[derive(Clone, Copy)]
 pub struct NodeCache<'a> {
     key: &'a [KeyElement],
     shape: DispatchShape,
-    operator_probe: Option<KeywordSymbol>,
-    form: Option<&'static Form>,
-    /// The form this node declares under — `Some` only once the AST seal has run, so the binder
+    builtin_shape: Option<&'static BuiltinShape>,
+    /// The builtin shape this node declares under — `Some` only once the AST seal has run, so the binder
     /// facts of a coincidental key match on a synthesized run are never read. See [`declaring`].
     ///
     /// [`declaring`]: Self::declaring
-    declared: Option<&'static Form>,
+    declared: Option<&'static BuiltinShape>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
 }
 
@@ -259,25 +231,24 @@ impl<'a> NodeCache<'a> {
         NodeCache {
             key,
             shape,
-            operator_probe: operator_probe_for(key, shape),
-            form: form_for(key.iter().copied()),
+            builtin_shape: builtin_shape_for(key.iter().copied()),
             declared: None,
             binder_plan: None,
         }
     }
 
     /// This cache read as a declaration — the second half of the AST node's seal, once the node the
-    /// extractors read is standing: the matched form's binder facts and the plan they produced.
+    /// extractors read is standing: the matched shape's binder facts and the plan they produced.
     ///
     /// Only a parsed node passes through here, which is what keeps a *synthesized* run from
     /// declaring anything. A synthesis writes its own keyword spine — a unary chain reduction emits
     /// `<operator> <operands>`, the shape `TYPE _` and `NEWTYPE _` also spell — so its key can match
-    /// a binder form by coincidence. Such a node is not that declaration, so it reports no declared
-    /// name and installs nothing, while still reading the form for its lazy slots, which are a fact
-    /// about the key alone.
+    /// a binder shape by coincidence. Such a node is not that declaration, so it reports no
+    /// declared name and installs nothing, while still reading the shape for its raw-capture kinds,
+    /// which are a fact about the key alone.
     pub fn declaring(self, binder_plan: Option<&'a StoredBinderKey<'a>>) -> Self {
         NodeCache {
-            declared: self.form,
+            declared: self.builtin_shape,
             binder_plan,
             ..self
         }
@@ -302,16 +273,10 @@ impl<'a> NodeCache<'a> {
         self.shape
     }
 
-    /// Cached operator-registry probe key: `Some` only for an `OperatorChain`, holding the symbol
-    /// of its distinct operator keywords.
-    pub fn operator_probe(&self) -> Option<KeywordSymbol> {
-        self.operator_probe
-    }
-
-    /// The [`FORMS`](crate::parse::forms::FORMS) entry this node's bucket key matches,
-    /// `None` for every user-defined bucket.
-    pub fn form(&self) -> Option<&'static Form> {
-        self.form
+    /// The [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry this node's
+    /// bucket key matches, `None` for every user-defined bucket.
+    pub fn builtin_shape(&self) -> Option<&'static BuiltinShape> {
+        self.builtin_shape
     }
 
     /// This node's own binder plan — `Some` iff this node is itself a binder.
@@ -325,17 +290,17 @@ impl<'a> NodeCache<'a> {
         self.binder_plan
     }
 
-    /// The declared-name position of the binder form this node's bucket key matches
-    /// ([`BinderFacts::name_slot`](crate::parse::forms::binder::BinderFacts::name_slot)); `None`
-    /// when the node matches no form, the form installs no binder, or its spine carries no declared
-    /// name (`FN`, `OP`).
+    /// The declared-name position of the binder shape this node's bucket key matches
+    /// ([`BinderFacts::name_slot`](crate::parse::builtin_shapes::binder::BinderFacts::name_slot));
+    /// `None` when the node matches no shape, the shape installs no binder, or its spine carries no
+    /// declared name (`FN`, `OP`).
     pub fn binder_name_slot(&self) -> Option<usize> {
         self.declared?.binder?.name_slot
     }
 
     /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates.
     pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
-        self.form
-            .map_or(LazyKinds::EMPTY, |form| form.lazy_kinds_at(index))
+        self.builtin_shape
+            .map_or(LazyKinds::EMPTY, |shape| shape.lazy_kinds_at(index))
     }
 }

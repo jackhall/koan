@@ -9,7 +9,7 @@ use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 
 use crate::memory::{Bump, BumpAllocator, BumpVec, ScopeId};
-use crate::parse::TypeSymbol;
+use crate::symbols::TypeSymbol;
 use crate::type_lattice::handle::KType;
 use crate::type_lattice::kind::KKind;
 use crate::type_lattice::lattice::{join, meet};
@@ -733,8 +733,8 @@ proptest! {
     #[test]
     fn rendering_is_total_and_deterministic(a in one()) {
         let world = world();
-        let once = crate::type_lattice::display_name(a, &world.types, &world.labels).to_string();
-        let twice = crate::type_lattice::display_name(a, &world.types, &world.labels).to_string();
+        let once = crate::type_lattice::display_name(a, &world.types, &world.symbols).to_string();
+        let twice = crate::type_lattice::display_name(a, &world.types, &world.symbols).to_string();
         prop_assert!(!once.is_empty());
         prop_assert_eq!(once, twice);
     }

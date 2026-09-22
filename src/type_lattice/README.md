@@ -10,9 +10,11 @@ a parser part, a declaration — lives with that thing and calls in here.
 ## The boundary, and why it is a test
 
 The lattice imports exactly two things from the rest of koan: the classified
-label and symbol types from [`parse`](../parse/README.md), and `ScopeId`, the
+symbol types from [`symbols`](../symbols/README.md), and `ScopeId`, the
 bump-allocation seam and the component walk from [`memory`](../memory/README.md). No value, cell,
-AST, scope, working part or execute-side type reaches it.
+AST, scope, working part or execute-side type reaches it — the
+[parser](../parse/README.md) included, which is what keeps the two from naming
+each other: both rest on `symbols`, a leaf.
 
 The compiler cannot enforce that — a public module may name anything in its own
 crate — so [`tests::boundary`](tests/boundary.rs) reads this module's own source
@@ -22,6 +24,13 @@ each of the two permitted edges may name.
 The rule is what keeps the algebra closed. A relation that needed a value would
 be a relation the lattice could not state as a law over generated types, and the
 property suite below is only possible because nothing here has a runtime.
+
+The edge runs the other way too, for constants alone: `parse`'s builtin shape
+table types each slot by a `KType`, and since a builtin leaf's handle is a `const`
+content digest the table states a type with no registry in hand. `KType::same_as`
+is the equality that comparison uses, handle against handle in `const` context,
+where the derived `PartialEq` cannot go. Nothing but the handles and that
+comparison crosses back.
 
 ## Identity: a handle *is* a content digest
 
@@ -105,7 +114,7 @@ Kinds form one subsumption lattice —
 proper-type slot names what can type an ordinary value, which a signature is not.
 `AnyType` is a *slot* expectation only, never a classification `kind_of` produces.
 
-## Storage: one region, one heap table
+## Storage: one region
 
 A [`TypeRegistry`](registry.rs) is built over the run region's bump allocator,
 and every node it interns — with every slice a node holds — lives in that region.
@@ -119,12 +128,17 @@ twice in a run yields one node and two equal handles. Beside each node the entry
 stores two flags computed off its children at intern — whether a free quantifier,
 and whether any rigid variable, is reachable — so both probes are one table read.
 
-The **verdict table** is the one heap-owned part, keyed by
-`(subject, candidate, relation)`. It is on the heap because a bound on verdict
-storage is a permissible knob, and a table that may shrink cannot live in a region
-that releases nothing before the run ends. A verdict over a digest pair is a pure
-function — once computed it never changes — so **verdicts are never
-load-bearing**: a cold registry costs a re-walk, never a wrong answer.
+The **verdict table** is keyed by `(subject, candidate, relation)`. It is a
+fixed run of two-slot buckets, laid in the same region the first time a verdict
+is recorded and never resized, so it strands nothing in a bump that releases
+nothing before the run ends. A key's two digests fold into its bucket, and a
+slot compares the whole key, so a collision costs a slot and never a wrong
+answer. A full bucket evicts the slot not touched last. The table is lossy by
+design: a verdict over a digest pair is a pure function — once computed it never
+changes — so **verdicts are never load-bearing**, and a forgotten one costs a
+re-walk, never a wrong answer. The registry therefore owns nothing on the global
+heap, and itself rests in a bump — [program storage](../program/README.md), in a
+loaded program.
 
 Every door that sorts, flattens or canonicalizes takes a **scratch allocator**
 from its caller and builds its transient buffers there, and every door computes
@@ -232,6 +246,15 @@ Inside the window, a reference to a co-declared member is a `Sibling` handle: a
 bare relative index, ordinary interned content, meaningful only against the
 window that minted it.
 
+A window is opened over a whole component: its members in announcement order,
+each carrying the binder that owns it — a `UNION`'s variants — or none for a
+standalone declaration, beside the indices each declaring binder owns. A binder
+is not itself a member; it denotes the union of the members it owns. So a
+`NEWTYPE` and a `UNION` declared in one component seal on one digest. The
+standalone group and the one-binder group are that constructor's two special
+cases, and the binder list is fixed when the window opens — only the member
+list fills.
+
 At the last fill the window seals, and **identity is not the declared group**: it
 is each member's strongly-connected component under the sibling-reference
 relation, presented canonically in name-symbol order. `seal_group` extracts the
@@ -287,8 +310,8 @@ the current position.
 
 [Rendering](render.rs) is exempt, and for a stated reason: it spells syntax
 *between* children and inherits the quantifier binder from above, which neither
-driver expresses. Every entry point takes the registry and the label interner,
-never a bundle — the lattice knows about types and labels and nothing else.
+driver expresses. Every entry point takes the registry and the symbol interner,
+never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Laws, not shapes
 

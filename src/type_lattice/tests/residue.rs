@@ -6,7 +6,7 @@
 //! region of its own, which doubles as its scratch.
 
 use crate::memory::Bump;
-use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::digest::{TypeDigest, empty_schema_digest};
 use crate::type_lattice::handle::KType;
@@ -67,13 +67,13 @@ fn the_empty_schema_digest_is_the_module_top() {
 /// fix which side of "no maximum" each falls on.
 #[test]
 fn a_twice_used_variable_takes_the_maximum_or_fails() {
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let keyword = KeywordSymbol::declared("PURE", &labels).expect("a keyword token");
+    let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
     let element = types.quantified(0, KType::ANY);
-    let name = TypeSymbol::declared("Elt", &labels).expect("a Type token");
+    let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let shape = types
         .shape_type(
             region,
@@ -130,12 +130,12 @@ fn a_twice_used_variable_takes_the_maximum_or_fails() {
 /// settled on.
 #[test]
 fn a_single_occurrence_takes_its_bound_or_never() {
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let keyword = KeywordSymbol::declared("PURE", &labels).expect("a keyword token");
-    let name = TypeSymbol::declared("Elt", &labels).expect("a Type token");
+    let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
+    let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     let variable = types.quantified(0, KType::NUMBER);
     let head = |slot: KType, ret: KType| {
         types
@@ -162,12 +162,12 @@ fn a_single_occurrence_takes_its_bound_or_never() {
 /// container, and the generated types never build two records differing only in field order.
 #[test]
 fn a_record_is_order_blind_in_identity_and_ordered_in_presentation() {
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let x = BinderSymbol::declared("x", &labels).expect("a bindable token");
-    let y = BinderSymbol::declared("y", &labels).expect("a bindable token");
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let forwards = [(x, KType::NUMBER), (y, KType::STR)];
     let backwards = [(y, KType::STR), (x, KType::NUMBER)];
     assert_eq!(Record::over(&forwards), Record::over(&backwards));
@@ -187,12 +187,12 @@ fn a_record_is_order_blind_in_identity_and_ordered_in_presentation() {
 /// statement beyond the order itself, so the four arms are pinned by example.
 #[test]
 fn width_runs_the_way_each_arm_declares() {
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
-    let x = BinderSymbol::declared("x", &labels).expect("a bindable token");
-    let y = BinderSymbol::declared("y", &labels).expect("a bindable token");
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
     let wide = types.record(region, &[(x, KType::NUMBER), (y, KType::STR)]);
     let narrow = types.record(region, &[(x, KType::NUMBER)]);
     assert!(

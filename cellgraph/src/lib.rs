@@ -4,7 +4,7 @@
 //! family enters as a type parameter and is stored erased.
 //!
 //! The cell model — the slot-plus-generation handle, the `create` / `enter` / `release` verbs,
-//! the parent birth relation — is [../README.md](../README.md). The matrix that
+//! the three region habitats, the tenant that owns none — is [../README.md](../README.md). The matrix that
 //! decides when a cell may be reclaimed, the mint OR that is the only write into it, and the
 //! sealed tier a still-held cell falls into on release, are
 //! [graph/README.md](graph/README.md).
@@ -18,19 +18,26 @@ mod dormant;
 mod graph;
 mod handle;
 mod matrix;
+mod once;
 mod reach;
 mod reattach;
+mod receipt;
 mod region;
 mod scratch;
 mod sealed;
+mod slots;
+mod tenant;
 mod tree;
 
 pub use carrier::{Active, Ready};
 pub use dormant::Dormant;
 pub use graph::{
-    CellGraph, CreateError, CrossedOperand, EnterError, Operand, Prices, RedeemError,
-    ReleaseAbsorption, ReleaseError, ReleaseTreeError, StepContext, Verdict,
+    CellGraph, Config, CreateError, CrossedOperand, DeliverError, EnterError, Operand, Prices,
+    Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption, ReleaseError,
+    ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
 };
-pub use handle::{CellHandle, SlabHandle, Stale, TreeHandle};
-pub use reattach::{DropFree, Erased, Reattachable};
-pub use region::{Prose, Run, ThinRun, Writer};
+pub use handle::{CellHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
+pub use once::{OnceRun, OnceView, Written};
+pub use reattach::{Covariant, DropFree, Erased, NoScratch, Reattachable, ReattachableOverBoth};
+pub use receipt::{Delivered, Delivery, NoDelivery};
+pub use region::{Prose, Run, Storage, ThinRun, Writer};

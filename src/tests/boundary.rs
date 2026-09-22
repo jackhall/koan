@@ -42,7 +42,7 @@ pub(crate) fn holds(module: &str, prefixes: &[&str], owning_allowed: &[(&str, &s
                 code = code.replace(allowed, "");
             }
         }
-        let is_test = source == &root.join("tests.rs") || source.starts_with(root.join("tests"));
+        let is_test = is_test_source(source, &root);
         if !is_test {
             for word in OWNING {
                 if contains_word(&code, word) {
@@ -61,6 +61,17 @@ pub(crate) fn holds(module: &str, prefixes: &[&str], owning_allowed: &[(&str, &s
         "boundary violations:\n{}",
         offenders.join("\n")
     );
+}
+
+/// Whether `source` is one of the module's test files: its own `tests.rs`, or anything under a
+/// `tests` directory of it or of one of its submodules.
+fn is_test_source(source: &Path, root: &Path) -> bool {
+    let Ok(relative) = source.strip_prefix(root) else {
+        return false;
+    };
+    relative
+        .components()
+        .any(|part| part.as_os_str() == "tests" || part.as_os_str() == "tests.rs")
 }
 
 /// Every `crate::…` path the text names, brace groups expanded. Doc comments count: an intra-doc

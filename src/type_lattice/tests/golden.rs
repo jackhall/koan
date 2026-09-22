@@ -5,7 +5,7 @@
 //! would silently re-identify a builtin leaf; the second catches a new variant added without one.
 
 use crate::memory::{Bump, ScopeId};
-use crate::parse::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::digest::node_digest;
 use crate::type_lattice::handle::KType;
@@ -102,10 +102,10 @@ fn constants_match_freshly_interned_nodes() {
 
 #[test]
 fn every_node_kind_has_its_own_tag() {
-    let labels = LabelInterner::new();
-    let name = TypeSymbol::declared("Elt", &labels).expect("a Type token");
-    let field = BinderSymbol::declared("x", &labels).expect("a bindable token");
-    let keyword = KeywordSymbol::declared("PURE", &labels).expect("a keyword token");
+    let symbols = SymbolInterner::new();
+    let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let field = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
     // The representatives' runs, declared ahead of the registry so they outlive every node that is
     // interned over them.
     let fields = [(field, KType::NUMBER)];

@@ -125,7 +125,8 @@ pub(in crate::machine::execute) fn is_eager_working_part(part: &WorkingPart<'_>)
 /// raw unquoted group. A quote is data already and never stages, but reads as raw here too, so the
 /// two spellings of a builtin lazy body stay one.
 ///
-/// See [`lazy_slots`](crate::machine::model::lazy_slots) for where the stamp comes from.
+/// See [`BuiltinShape::lazy_kinds_at`](crate::parse::builtin_shapes::BuiltinShape::lazy_kinds_at)
+/// for where the fact comes from.
 pub(in crate::machine::execute) fn stays_raw(
     origin: &WorkingExpression<'_>,
     index: usize,

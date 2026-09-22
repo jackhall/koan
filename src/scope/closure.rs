@@ -4,27 +4,19 @@
 //! A slot is a [`Link`]: the captured binding's value word, or an [`Edge`] into the knot the callable
 //! is born in when what it captures is a fellow member of its own component — a function or a data
 //! node. Birth is two steps: every
-//! source is read into scratch first, refusing while one is still pending, and only a finished read
-//! is laid down — so a closure binding is never a placeholder, and a refused birth writes nothing.
+//! source is read into scratch first, and only a finished read is laid down — so a closure binding
+//! is never a placeholder.
 
-use crate::memory::{BumpAllocator, BumpVec, CellHandle, Edge, Writer, collect, resident};
-use crate::parse::BinderSymbol;
-use crate::values::{Knotted, Link, Value, Weight};
+use crate::memory::{BumpAllocator, BumpVec, Edge, Writer, collect, resident};
+use crate::values::{Knotted, KnottedFamily, Link, Value, Weight};
 
-use super::activation::{Activation, Binding};
-use super::shape::{CaptureSlot, CaptureSource, Shape};
+use super::activation::ActivationView;
+use super::shape::{BodyShape, CaptureSlot, CaptureSource};
 
 /// A callable's closure bindings, in capture-slot order.
 #[derive(Clone, Copy)]
 pub struct ClosureBindings<'graph, 'cell, X = crate::values::Nothing> {
     slots: &'cell [Link<'graph, 'cell, X>],
-}
-
-/// Why a callable cannot be born yet: the capture `name` reads a slot whose binder is `pending`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ClosureRefused {
-    pub name: BinderSymbol,
-    pub pending: CellHandle,
 }
 
 impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
@@ -36,32 +28,22 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
     /// Every closure binding of a callable of `shape`, read from `enclosing` into `scratch`.
     ///
     /// A `Read` source is what `enclosing` reads there — a capture of the enclosing callable's own
-    /// knot arrives as the sibling member it names — and one still pending refuses the birth with
-    /// its binder's handle. A `Member` source is `edge(index)`, the edge the caller minted for
-    /// member `index` of the component the callable is born in. Nothing is written to a region.
-    pub fn read_captures<'x>(
-        shape: &Shape<'_>,
-        enclosing: &Activation<'graph, 'cell, X>,
+    /// knot arrives as the sibling member it names. A `Member` source is `edge(index)`, the edge the
+    /// caller minted for member `index` of the component the callable is born in. Nothing is written
+    /// to a region.
+    pub fn read_captures<'x, XF: KnottedFamily<'graph, Closed<'cell> = X>>(
+        shape: &BodyShape<'_>,
+        enclosing: &ActivationView<'graph, 'cell, XF>,
         scratch: BumpAllocator<'x>,
         mut edge: impl FnMut(u32) -> Edge,
-    ) -> Result<BumpVec<'x, Link<'graph, 'cell, X>>, ClosureRefused> {
+    ) -> BumpVec<'x, Link<'graph, 'cell, X>> {
         let captures = shape.captures();
         let mut read = BumpVec::with_capacity_in(captures.len(), scratch);
-        for capture in captures {
-            read.push(match capture.source {
-                CaptureSource::Read(coordinate) => match enclosing.read(coordinate) {
-                    Binding::Bound(value) => Link::Value(value),
-                    Binding::Pending(pending) => {
-                        return Err(ClosureRefused {
-                            name: capture.name,
-                            pending,
-                        });
-                    }
-                },
-                CaptureSource::Member { index, .. } => Link::Edge(edge(index)),
-            });
-        }
-        Ok(read)
+        read.extend(captures.iter().map(|capture| match capture.source {
+            CaptureSource::Read(coordinate) => Link::Value(enclosing.read(coordinate)),
+            CaptureSource::Member { index, .. } => Link::Edge(edge(index)),
+        }));
+        read
     }
 
     /// A finished read laid down in `writer`'s region.

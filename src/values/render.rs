@@ -8,7 +8,7 @@
 use std::fmt;
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, bump_set, bump_table};
-use crate::parse::LabelInterner;
+use crate::symbols::SymbolInterner;
 use crate::type_lattice::{TypeRegistry, display_name};
 
 use super::circular::{Cells, Composite};
@@ -19,19 +19,19 @@ impl<X: Knotted> Value<'_, '_, X> {
     /// `[a, b]`, a dict `{k: v}` in key order, a record `{x = 1}` in field-name order; a tagged value
     /// reads as its type's name around its payload, a type as its name, a quote as its body's
     /// surface, a function as its type's name, and a knot's data node as the plain value of its
-    /// kind, labelled where a cycle returns to it. The marks, labels and record field orders are
+    /// kind, labelled where a cycle returns to it. The marks, symbols and record field orders are
     /// staged over `scratch`.
     pub fn render(
         &self,
         out: &mut impl fmt::Write,
         types: &TypeRegistry<'_>,
-        labels: &LabelInterner,
+        symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {
         Render {
             out,
             types,
-            labels,
+            symbols,
             scratch,
             marks: Marks {
                 entering: bump_set(scratch),
@@ -90,7 +90,7 @@ struct Marks<'x, X> {
 struct Render<'o, 'env, 'run, 'x, O, X> {
     out: &'o mut O,
     types: &'env TypeRegistry<'run>,
-    labels: &'env LabelInterner,
+    symbols: &'env SymbolInterner,
     scratch: BumpAllocator<'x>,
     marks: Marks<'x, X>,
     /// Each target already written, under its label.
@@ -99,13 +99,9 @@ struct Render<'o, 'env, 'run, 'x, O, X> {
 
 impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, O, X> {
     fn value(&mut self, value: &Value<'_, '_, X>) -> fmt::Result {
-        let (types, labels) = (self.types, self.labels);
-        if let Some(function) = value.as_callable() {
-            return write!(
-                self.out,
-                "{}",
-                display_name(function.ktype(), types, labels)
-            );
+        let (types, symbols) = (self.types, self.symbols);
+        if let Some(opaque) = value.as_opaque() {
+            return write!(self.out, "{}", display_name(opaque.ktype(), types, symbols));
         }
         if let Some((node, composite)) = value.composite() {
             if let Some(node) = node {
@@ -127,20 +123,20 @@ impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, O, X> {
             Value::Bool(flag) => write!(self.out, "{flag}"),
             Value::Null => self.out.write_str("null"),
             Value::Str(text) => self.out.write_str(text),
-            Value::Expression(node) => write!(self.out, "{}", node.summary(labels)),
+            Value::Expression(node) => write!(self.out, "{}", node.summary(symbols)),
             Value::Type(value) => {
-                write!(self.out, "{}", display_name(value.handle(), types, labels))
+                write!(self.out, "{}", display_name(value.handle(), types, symbols))
             }
             Value::List(_)
             | Value::Dict(_)
             | Value::Record(_)
             | Value::Tagged(_)
-            | Value::Knotted(_) => unreachable!("a composite or a function wrote above"),
+            | Value::Knotted(_) => unreachable!("a composite or an opaque member wrote above"),
         }
     }
 
     fn composite(&mut self, composite: Composite<'_, X>) -> fmt::Result {
-        let (types, labels) = (self.types, self.labels);
+        let (types, symbols) = (self.types, self.symbols);
         match composite {
             Composite::List { cells, .. } => {
                 self.out.write_str("[")?;
@@ -165,7 +161,7 @@ impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, O, X> {
             }
             Composite::Record { names, cells, .. } => self.record(names, cells),
             Composite::Tagged { ktype, payload } => {
-                write!(self.out, "{}(", display_name(ktype, types, labels))?;
+                write!(self.out, "{}(", display_name(ktype, types, symbols))?;
                 self.value(&payload)?;
                 self.out.write_str(")")
             }
@@ -174,17 +170,17 @@ impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, O, X> {
 
     /// The layout is symbol order, which means nothing to a reader: the fields print in the order
     /// of their names' text.
-    fn record(&mut self, names: &[crate::parse::Symbol], cells: Cells<'_, X>) -> fmt::Result {
-        let labels = self.labels;
+    fn record(&mut self, names: &[crate::symbols::Symbol], cells: Cells<'_, X>) -> fmt::Result {
+        let symbols = self.symbols;
         let mut order = BumpVec::with_capacity_in(names.len(), self.scratch);
         order.extend(0..names.len());
-        order.sort_unstable_by(|left, right| labels.compare_texts(names[*left], names[*right]));
+        order.sort_unstable_by(|left, right| symbols.compare_texts(names[*left], names[*right]));
         self.out.write_str("{")?;
         for (index, at) in order.iter().enumerate() {
             if index > 0 {
                 self.out.write_str(", ")?;
             }
-            write!(self.out, "{} = ", labels.display(names[*at]))?;
+            write!(self.out, "{} = ", symbols.display(names[*at]))?;
             self.value(&cells.get(*at))?;
         }
         self.out.write_str("}")

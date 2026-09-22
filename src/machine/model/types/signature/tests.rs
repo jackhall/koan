@@ -308,11 +308,11 @@ fn an_owned_key_probes_a_bumped_run_keyed_table() {
     let brand = program.brand().region();
     let mut table: BumpBackedMap<'_, &[KeyElement], u32> = bump_table(brand.allocator());
 
-    let take: UntypedKey = vec![
+    let take: ExpressionKey = vec![
         crate::builtins::test_support::key_keyword("TAKE"),
         KeyElement::Slot,
     ];
-    let drop_key: UntypedKey = vec![
+    let drop_key: ExpressionKey = vec![
         crate::builtins::test_support::key_keyword("DROP"),
         KeyElement::Slot,
     ];

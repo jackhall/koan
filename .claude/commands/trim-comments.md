@@ -1,5 +1,5 @@
 ---
-description: Audit src/**/*.rs for excessive or stale comments and slim them down per Claude.md / documentation-skill rules.
+description: Audit src/**/*.rs for excessive or stale comments and slim them down per AGENTS.md / documentation-skill rules.
 argument-hint: <empty | "all" | path-prefix>
 ---
 
@@ -52,7 +52,7 @@ For files containing `unsafe` blocks (e.g. `arena.rs`, `scheduler.rs`, `kfunctio
 ```
 You're auditing one Rust source file in the koan repo (a pre-release programming language interpreter at /var/home/jack/Code/koan) for excessive and out-of-date comments. Single file scope. No design-doc edits.
 
-# Comment rules (from the project's Claude.md and documentation skill)
+# Comment rules (from the project's AGENTS.md and documentation skill)
 
 **Top-of-file comments (`//!` module docs or leading `//`)**: keep them. They explain the file's purpose, key assumptions, and how it relates to other files. Trim if rambly. Verify any `[text](path)` design-doc links resolve to a real file under /var/home/jack/Code/koan/design/ or /var/home/jack/Code/koan/roadmap/. If a link is broken, flag it.
 
@@ -128,7 +128,7 @@ Per the step-2 commit choice. Single-commit form:
 slim source comments, link to design docs
 
 Audited <N> source files for excessive and out-of-date comments per
-Claude.md / documentation skill rules. Trimmed <total> lines.
+AGENTS.md / documentation skill rules. Trimmed <total> lines.
 
 Where source duplicated design-doc content, replaced with brief
 pointers (<list>). SAFETY blocks at unsafe sites kept inline for

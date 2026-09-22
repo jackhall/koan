@@ -28,7 +28,7 @@
 
 use crate::memory::RegionBrand;
 
-use crate::parse::ast::{KeyElement, UntypedKey};
+use crate::parse::ast::{ExpressionKey, KeyElement};
 use crate::parse::labels::KeywordSymbol;
 
 /// Which way a fold nests a run of more than two operands.
@@ -194,13 +194,13 @@ fn symbol_key(symbol: KeywordSymbol) -> String {
 /// key every declaration of `sym` registers its binary overload under. The two must agree on the
 /// symbol: an overload registered under any other key sits in a bucket no koan expression ever
 /// computes, so the operator silently never dispatches.
-pub fn binary_key(sym: KeywordSymbol) -> UntypedKey {
+pub fn binary_key(sym: KeywordSymbol) -> ExpressionKey {
     vec![KeyElement::Slot, KeyElement::Keyword(sym), KeyElement::Slot]
 }
 
 /// The function-bucket key a reduced unary run of `sym` computes — `[Keyword(sym), Slot]`, the same
 /// shape as the prefix form `sym [a b c]` — and the key every declaration of `sym` registers its
 /// list-form overload under. Same symbol-agreement contract as [`binary_key`].
-pub fn unary_key(sym: KeywordSymbol) -> UntypedKey {
+pub fn unary_key(sym: KeywordSymbol) -> ExpressionKey {
     vec![KeyElement::Keyword(sym), KeyElement::Slot]
 }

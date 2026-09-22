@@ -8,8 +8,8 @@
 //! value the knot holds.
 
 use crate::memory::{
-    Active, CellHandle, CrossedOperand, Operand, Prices, Reattachable, Stale, StepContext, Verdict,
-    Writer, collect,
+    Active, CellHandle, Covariant, CrossedOperand, Delivery, Operand, Prices, Reattachable,
+    ReattachableOverBoth, Stale, StepContext, Verdict, Writer, collect,
 };
 
 use super::{Dict, KnottedFamily, List, Record, Tagged, Value, ValueCarrier, ValueFamily, text};
@@ -30,11 +30,21 @@ pub fn verdict(prices: Prices) -> Verdict {
 
 /// Build `carrier`'s value into `dest`'s region and hand back the carrier resting there: the value
 /// as it is under a pin, rebuilt deep under a copy.
-pub fn cross<'graph, 'step, 'here, C: Reattachable<'graph>, XF: KnottedFamily<'graph>>(
-    context: &mut StepContext<'graph, 'step, 'here, C>,
+pub fn cross<
+    'graph,
+    'step,
+    C: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
+    D: Delivery<'graph>,
+    XF: KnottedFamily<'graph>,
+>(
+    context: &mut StepContext<'graph, 'step, '_, '_, C, S, D>,
     dest: impl Into<CellHandle>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
-) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>> {
+) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>>
+where
+    ValueFamily<XF>: Covariant<'graph>,
+{
     let weight = context.read(carrier).value().weight();
     context.alloc_into::<ValueFamily<XF>, ValueFamily<XF>>(
         dest,
@@ -42,37 +52,70 @@ pub fn cross<'graph, 'step, 'here, C: Reattachable<'graph>, XF: KnottedFamily<'g
             carrier,
             copy_bytes: weight.bytes(),
         }],
-        |writer, views| {
-            Active::new(match views[0] {
-                CrossedOperand::Pinned(value) => value,
-                CrossedOperand::Copied(value) => copy_into::<XF>(writer, &value),
-            })
-        },
+        |writer, views| Active::new(cross_view(writer, &views[0])),
     )
 }
 
 /// The own-cell crossing: `carrier`'s value made reachable at the executing cell's `'here`, where it
 /// may be embedded in what the step builds or captured by its continuation.
-pub fn cross_here<'graph, 'step, 'here, C: Reattachable<'graph>, XF: KnottedFamily<'graph>>(
-    context: &mut StepContext<'graph, 'step, 'here, C>,
+pub fn cross_here<
+    'graph,
+    'step,
+    'here,
+    C: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
+    D: Delivery<'graph>,
+    XF: KnottedFamily<'graph>,
+>(
+    context: &mut StepContext<'graph, 'step, 'here, '_, C, S, D>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
-) -> Value<'graph, 'here, XF::Closed<'here>> {
+) -> Value<'graph, 'here, XF::Closed<'here>>
+where
+    ValueFamily<XF>: Covariant<'graph>,
+{
     let weight = context.read(carrier).value().weight();
     context.alloc_here(
         &[Operand {
             carrier,
             copy_bytes: weight.bytes(),
         }],
-        |writer, views| match views[0] {
-            CrossedOperand::Pinned(value) => value,
-            CrossedOperand::Copied(value) => copy_into::<XF>(writer, &value),
-        },
+        |writer, views| cross_view(writer, &views[0]),
     )
+}
+
+/// One crossed operand as a value at the destination's brand: the pinned view as it is, a copied
+/// view rebuilt through `writer`. The one door a copy of a value comes through, and it takes a
+/// [`CrossedOperand`], which only a priced placement hands out — so every copy is one the graph
+/// priced. See [README.md § Crossing](README.md#crossing).
+pub fn cross_view<'graph, 'cell, XF: KnottedFamily<'graph>>(
+    writer: Writer<'cell>,
+    view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>>,
+) -> Value<'graph, 'cell, XF::Closed<'cell>> {
+    match *view {
+        CrossedOperand::Pinned { view: value, .. } => value,
+        CrossedOperand::Copied { view: value, .. } => copy_into::<XF>(writer, &value),
+    }
+}
+
+/// A value held inside a copied operand of another family — a birth that carries values — rebuilt
+/// through `writer`. The operand is the proof: only a priced placement hands one out, and its
+/// severed brand is the one `value` is read at, so this is still a copy the graph priced.
+pub fn copy_severed<'graph, 'cell, 'severed, F: Reattachable<'graph>, XF: KnottedFamily<'graph>>(
+    writer: Writer<'cell>,
+    operand: &CrossedOperand<'graph, 'cell, 'severed, F>,
+    value: &Value<'graph, 'severed, XF::Closed<'severed>>,
+) -> Value<'graph, 'cell, XF::Closed<'cell>> {
+    debug_assert!(
+        matches!(operand, CrossedOperand::Copied { .. }),
+        "a pinned operand's values embed as they are"
+    );
+    copy_into::<XF>(writer, value)
 }
 
 /// The deep copy: every region part of `value` rebuilt through `writer`, every program node
 /// embedded as the same node, every memoized type and weight carried over, a knot member rebuilt by
-/// its family. Total. Reached only through the two doors above, so every copy is one the graph priced.
+/// its family. Total. Reached only through [`cross_view`] and [`copy_severed`], so every copy is one
+/// the graph priced.
 fn copy_into<'graph, 'from, 'to, XF: KnottedFamily<'graph>>(
     writer: Writer<'to>,
     value: &Value<'graph, 'from, XF::Closed<'from>>,

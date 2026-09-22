@@ -12,6 +12,7 @@
 
 use std::cell::Cell;
 
+use bumpalo::Bump;
 use smallvec::SmallVec;
 
 use crate::handle::SlabHandle;
@@ -354,10 +355,18 @@ impl<const W: usize> SealedTier<W> {
 
     /// Splice storage into a sealed cell, keeping the running total in step. The one write into a
     /// sealed cell's storage after its construction, so the total needs no other maintenance point.
-    pub(crate) fn splice_storage(&mut self, id: SealedId, from: Region) {
-        self.bytes.set(self.bytes.get() + from.allocated_bytes());
+    ///
+    /// Hands back the bump the splice left out of the bundle, for the caller to retire. The total
+    /// is re-read around the splice rather than summed from the source: a bump left out takes its
+    /// chunk's bytes with it.
+    #[must_use = "a bump left out of the bundle may own a chunk, which its caller retires"]
+    pub(crate) fn splice_storage(&mut self, id: SealedId, from: Region) -> Option<Bump> {
         let sealed_cell = self.get_mut(id).expect("the fold target is present");
-        sealed_cell.storage.absorb(from);
+        let before = sealed_cell.storage.allocated_bytes();
+        let displaced = sealed_cell.storage.absorb(from);
+        let after = sealed_cell.storage.allocated_bytes();
+        self.bytes.set(self.bytes.get() - before + after);
+        displaced
     }
 
     /// Write `ids` into `id`'s own region as its frozen closure, once, and count the bytes that

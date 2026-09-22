@@ -1,0 +1,196 @@
+//! The live builtin registration set, derived once, and the law that pins [`BUILTIN_SHAPES`] against it.
+//!
+//! Recognizing a builtin shape by its full bucket key is sound only because a matched key can
+//! resolve to nothing but that builtin's overloads. That soundness is a claim about the *live*
+//! registration table, not about the shape table, so it is checked by walking the seeded root and
+//! comparing — never by reading the table against itself. This module holds the one walk; every
+//! table⟺registration question in the test tree is answered from it.
+
+use std::collections::BTreeMap;
+
+use crate::builtins::test_support::TestRun;
+use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry};
+use crate::memory::{program_storage, run_root_storage};
+use crate::parse::ExpressionKey;
+use crate::parse::builtin_shapes::binder::BinderFacts;
+use crate::parse::builtin_shapes::lazy::LazyKinds;
+use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShape, render_key};
+
+/// One live builtin bucket: the key it registers under, and per argument index the slot type each
+/// of its overloads declares there.
+struct LiveBucket {
+    key: ExpressionKey,
+    slot_types: BTreeMap<usize, Vec<KType>>,
+}
+
+/// The **one** derivation of the live registration set in the test tree: a single walk of the
+/// seeded root's scope chain, giving every registered bucket key beside the slot types its
+/// overloads declare. Everything the table is pinned against is read off this.
+fn live_registrations(run: &TestRun<'_>) -> Vec<LiveBucket> {
+    let mut live = Vec::new();
+    for scope in run.scope.ancestors() {
+        for (key, bucket) in scope.bindings().functions().iter() {
+            let mut slot_types: BTreeMap<usize, Vec<KType>> = BTreeMap::new();
+            for entry in bucket.iter() {
+                let opened = entry.sealed.open_at();
+                for (index, element) in opened.value().signature.elements().iter().enumerate() {
+                    if let SignatureElement::Argument(argument) = element {
+                        slot_types.entry(index).or_default().push(argument.ktype);
+                    }
+                }
+            }
+            live.push(LiveBucket {
+                key: key.to_vec(),
+                slot_types,
+            });
+        }
+    }
+    live
+}
+
+/// The kind an exact raw-capture slot type stands for; `None` for a slot type that captures
+/// nothing raw. The runtime's own type handle, so this is `lazy.rs`'s derivation restated over it.
+fn exact_kind_of(ktype: KType) -> Option<LazyKinds> {
+    match ktype {
+        KType::KEXPRESSION => Some(LazyKinds::CODE),
+        KType::SIGILED_TYPE_EXPR => Some(LazyKinds::TYPE_EXPR),
+        KType::RECORD_TYPE => Some(LazyKinds::RECORD_TYPE),
+        _ => None,
+    }
+}
+
+/// The kinds a slot type stands for, distributed over union members.
+fn kind_of(ktype: KType, types: &TypeRegistry) -> Option<LazyKinds> {
+    if let Some(kind) = exact_kind_of(ktype) {
+        return Some(kind);
+    }
+    let kinds = types.with_node(ktype, |node| match node {
+        TypeNode::Union { members } => members
+            .iter()
+            .filter_map(|member| exact_kind_of(*member))
+            .fold(LazyKinds::EMPTY, LazyKinds::with),
+        _ => LazyKinds::EMPTY,
+    });
+    (!kinds.is_empty()).then_some(kinds)
+}
+
+/// The lazy slots a live bucket actually declares: per slot index, the union over its overloads of
+/// each raw-capture slot's kind. A bucket declaring none is absent from the map.
+fn declared_lazy_slots(bucket: &LiveBucket, types: &TypeRegistry) -> BTreeMap<usize, LazyKinds> {
+    let mut slots: BTreeMap<usize, LazyKinds> = BTreeMap::new();
+    for (index, ktypes) in &bucket.slot_types {
+        for ktype in ktypes {
+            if let Some(kind) = kind_of(*ktype, types) {
+                let slot = slots.entry(*index).or_default();
+                *slot = slot.with(kind);
+            }
+        }
+    }
+    slots
+}
+
+/// Every builtin shape the table gives binder facts, with those facts beside it.
+fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
+    BUILTIN_SHAPES
+        .iter()
+        .filter_map(|form| form.binder.map(|binder| (form, binder)))
+}
+
+/// The builtin shape table says the same thing about the builtins as the builtins do.
+///
+/// Four readings of one walk, in both directions:
+///
+/// - a non-reserved key names a live bucket — a builtin renamed, re-shaped or dropped leaves the
+///   entry recognizing a shape nothing reaches;
+/// - a reserved key names none — a registration there would mean the shape has a success reading
+///   after all, and its diagnosis would be describing a form that works;
+/// - a live bucket with a raw-capture slot has an entry declaring exactly those slots and kinds,
+///   so a builtin that grows, loses or re-indexes one fails here;
+/// - a masked type slot is a slot the bucket's live overloads really read as a raw type expression
+///   — some overload takes `:(…)` there and **none** types it `:KExpression`. The second half is
+///   what matters: flipping a code slot's `(…)` to `SigiledTypeExpr` would silently retype a body.
+///   One-directional on purpose — the mask is opt-in, not derived, so a slot may satisfy the
+///   predicate and stay unmasked (`NEWTYPE <name> = <repr>` does).
+#[test]
+fn the_form_table_matches_the_live_registrations() {
+    let program = program_storage();
+    let storage = run_root_storage();
+    let run = TestRun::silent(&program, &storage);
+    let live = live_registrations(&run);
+    let types = run.types();
+
+    let matching = |form: &'static BuiltinShape| {
+        live.iter()
+            .filter(move |bucket| form.matches(bucket.key.iter().copied()))
+    };
+
+    for form in BUILTIN_SHAPES {
+        let registered = matching(form).count();
+        if form.reserved {
+            assert_eq!(
+                registered,
+                0,
+                "reserved builtin shape {:?} has a registered bucket",
+                render_key(form.elements)
+            );
+        } else {
+            assert!(
+                registered > 0,
+                "builtin shape {:?} has no registered bucket",
+                render_key(form.elements)
+            );
+        }
+    }
+
+    for bucket in &live {
+        let expected = declared_lazy_slots(bucket, types);
+        if expected.is_empty() {
+            continue;
+        }
+        let form = crate::parse::builtin_shapes::builtin_shape_for(bucket.key.iter().copied())
+            .unwrap_or_else(|| {
+                panic!("live bucket with lazy slots {expected:?} has no BUILTIN_SHAPES entry")
+            });
+        let derived: BTreeMap<usize, LazyKinds> = (0..form.elements.len())
+            .map(|index| (index, form.lazy_kinds_at(index)))
+            .filter(|(_, kinds)| !kinds.is_empty())
+            .collect();
+        assert_eq!(
+            derived,
+            expected,
+            "builtin shape {:?} derives the wrong raw-capture kinds",
+            render_key(form.elements)
+        );
+    }
+
+    let admits_sigiled = |ktype: &KType| {
+        ktype.union_has_member(KType::SIGILED_TYPE_EXPR, types)
+            || matches!(types.node(*ktype), TypeNode::OfKind(_))
+    };
+    for (form, binder) in binder_forms() {
+        for &index in binder.type_slots {
+            let slot_types: Vec<KType> = matching(form)
+                .filter_map(|bucket| bucket.slot_types.get(&index))
+                .flatten()
+                .copied()
+                .collect();
+            assert!(
+                !slot_types.is_empty(),
+                "form key {:?} masks slot {index}, which no live registration types",
+                render_key(form.elements)
+            );
+            assert!(
+                slot_types.iter().any(admits_sigiled),
+                "form key {:?} masks slot {index}, which no registration admits a `:(…)` at",
+                render_key(form.elements)
+            );
+            assert!(
+                !slot_types
+                    .iter()
+                    .any(|ktype| ktype.union_has_member(KType::KEXPRESSION, types)),
+                "form key {:?} masks slot {index}, which some registration reads as code",
+                render_key(form.elements)
+            );
+        }
+    }
+}

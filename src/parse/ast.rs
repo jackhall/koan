@@ -4,8 +4,8 @@
 //! rebuild.
 //!
 //! A node's structural cache ([`NodeCache`]) is filled at construction from the parts run and the
-//! form table, so a reader answers "which dispatch shape, which bucket key, which builtin form,
-//! what does this install" without walking the run again.
+//! builtin shape table, so a reader answers "which dispatch shape, which bucket key, which
+//! builtin shape, what does this install" without walking the run again.
 //!
 //! The scheduler's own per-dispatch form is `WorkingExpression`, a distinct type in
 //! [`values::working`](crate::values::working). A resolved sub-result and a staging hole live only
@@ -16,18 +16,18 @@
 use crate::source::{FileId, Span, Spanned};
 
 use crate::memory::{BumpAllocator, ProgramBrand};
-use crate::parse::forms::binder::{StoredBinderKey, binder_plan_for};
-use crate::parse::forms::layout::SlotLayout;
-use crate::parse::forms::lazy::LazyKinds;
-use crate::parse::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
+use crate::parse::builtin_shapes::binder::{StoredBinderKey, binder_plan_for};
+use crate::parse::builtin_shapes::layout::SlotLayout;
+use crate::parse::builtin_shapes::lazy::LazyKinds;
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 pub mod program;
 pub mod shape;
 
 pub use program::{ProgramExpression, ProgramNode};
 pub use shape::{
-    DispatchShape, KeyElement, NodeCache, PartClass, UntypedKey, classify_dispatch_shape,
-    operator_probe_for, stored_untyped_key,
+    DispatchShape, ExpressionKey, KeyElement, NodeCache, PartClass, classify_dispatch_shape,
+    stored_untyped_key,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -136,26 +136,26 @@ impl<'a> ExpressionPart<'a> {
     pub fn write_summary(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        labels: &LabelInterner,
+        symbols: &SymbolInterner,
     ) -> std::fmt::Result {
         match self {
-            ExpressionPart::Keyword(symbol) => write!(f, "{}", labels.display(symbol.symbol())),
-            ExpressionPart::Identifier(v) => write!(f, "{}", labels.display(v.symbol())),
-            ExpressionPart::Type(t) => write!(f, "{}", labels.display(t.symbol())),
-            ExpressionPart::Expression(e) => e.write_summary(f, labels),
+            ExpressionPart::Keyword(symbol) => write!(f, "{}", symbols.display(symbol.symbol())),
+            ExpressionPart::Identifier(v) => write!(f, "{}", symbols.display(v.symbol())),
+            ExpressionPart::Type(t) => write!(f, "{}", symbols.display(t.symbol())),
+            ExpressionPart::Expression(e) => e.write_summary(f, symbols),
             ExpressionPart::SigiledTypeExpr(e) => {
                 f.write_str(":(")?;
-                e.write_summary(f, labels)?;
+                e.write_summary(f, symbols)?;
                 f.write_str(")")
             }
             ExpressionPart::RecordType(e) => {
                 f.write_str(":{")?;
-                e.write_summary(f, labels)?;
+                e.write_summary(f, symbols)?;
                 f.write_str("}")
             }
             ExpressionPart::QuotedExpression(e) => {
                 f.write_str("#(")?;
-                e.write_summary(f, labels)?;
+                e.write_summary(f, symbols)?;
                 f.write_str(")")
             }
             ExpressionPart::ListLiteral(items) => {
@@ -164,7 +164,7 @@ impl<'a> ExpressionPart<'a> {
                     if index > 0 {
                         f.write_str(" ")?;
                     }
-                    item.write_summary(f, labels)?;
+                    item.write_summary(f, symbols)?;
                 }
                 f.write_str("]")
             }
@@ -174,9 +174,9 @@ impl<'a> ExpressionPart<'a> {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    k.write_summary(f, labels)?;
+                    k.write_summary(f, symbols)?;
                     f.write_str(": ")?;
-                    v.write_summary(f, labels)?;
+                    v.write_summary(f, symbols)?;
                 }
                 f.write_str("}")
             }
@@ -186,8 +186,8 @@ impl<'a> ExpressionPart<'a> {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{} = ", labels.display(k.symbol()))?;
-                    v.write_summary(f, labels)?;
+                    write!(f, "{} = ", symbols.display(k.symbol()))?;
+                    v.write_summary(f, symbols)?;
                 }
                 f.write_str("}")
             }
@@ -207,13 +207,16 @@ impl<'a> ExpressionPart<'a> {
     /// [`PartSummary`](crate::machine::model::ast::PartSummary), which resolves through the whole run
     /// bundle: parse renders a part here — a record literal's field-name error names the token it
     /// rejected — while still filling the interner a run frame has yet to adopt.
-    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> AstPartSummary<'x, 'a> {
-        AstPartSummary { part: self, labels }
+    pub fn summary<'x>(&'x self, symbols: &'x SymbolInterner) -> AstPartSummary<'x, 'a> {
+        AstPartSummary {
+            part: self,
+            symbols,
+        }
     }
 
     /// The part's surface as an owned `String`.
-    pub fn summarize(&self, labels: &LabelInterner) -> String {
-        self.summary(labels).to_string()
+    pub fn summarize(&self, symbols: &SymbolInterner) -> String {
+        self.summary(symbols).to_string()
     }
 }
 
@@ -223,9 +226,9 @@ impl<'a> ExpressionPart<'a> {
 /// `span` and `file` are `None` for hand-built ASTs.
 ///
 /// [`cache`](Self::cache) is the structural cache the construction doors fill once the parts run is
-/// complete — the bucket key, the dispatch shape, the operator probe, the matched builtin form and
-/// the binder plan — so the dispatch driver reads it rather than re-deriving on every call of the
-/// enclosing function. The binder plan is per-node only: what this node installs when it is
+/// complete — the bucket key, the dispatch shape, the matched builtin shape and the binder plan —
+/// so the dispatch driver reads it rather than re-deriving on every call of the enclosing
+/// function. The binder plan is per-node only: what this node installs when it is
 /// submitted as a statement, and `None` when it is not itself a binder. A statement's namespace is
 /// legible from its own spine, never from what its slots contain.
 ///
@@ -321,7 +324,8 @@ impl<'a> KExpression<'a> {
         // The extractors read the node, so the plan is filled once it stands. It is bumped behind a
         // reference rather than stored inline: it is the widest thing a node would carry, and
         // `KExpression` is copied on every part walk.
-        let plan = binder_plan_for(brand, cache.form(), &expression).map(|key| &*brand.alloc(key));
+        let plan = binder_plan_for(brand, cache.builtin_shape(), &expression)
+            .map(|key| &*brand.alloc(key));
         expression.cache = cache.declaring(plan);
         // The value binders this node would open a frame over, read off the same statement plans
         // the claim stamp and the `CLOSE` capture walk read. Filled for every node — a node is a
@@ -418,7 +422,7 @@ impl<'a> KExpression<'a> {
     }
 
     /// The declared-name position of the binder form this node's bucket key matches
-    /// ([`BinderFacts::name_slot`](crate::parse::forms::binder::BinderFacts::name_slot)); `None`
+    /// ([`BinderFacts::name_slot`](crate::parse::builtin_shapes::binder::BinderFacts::name_slot)); `None`
     /// when the node is not a binder form, or the form's spine carries no declared name (`FN`,
     /// `OP`).
     pub fn binder_name_slot(&self) -> Option<usize> {
@@ -444,12 +448,6 @@ impl<'a> KExpression<'a> {
         self.cache.shape()
     }
 
-    /// Cached operator-registry probe key: `Some` only for an `OperatorChain`, holding the symbol
-    /// of its sorted-joined unique operator keywords.
-    pub fn operator_probe(&self) -> Option<KeywordSymbol> {
-        self.cache.operator_probe()
-    }
-
     /// The stored bucket key, as a borrow of the run bumped at construction: `Keyword` parts
     /// contribute `Keyword(symbol)`, every other variant a `Slot`. Must agree with
     /// `ExpressionSignature::untyped_key` for any signature that should match.
@@ -472,28 +470,28 @@ impl<'a> KExpression<'a> {
     pub fn write_summary(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        labels: &LabelInterner,
+        symbols: &SymbolInterner,
     ) -> std::fmt::Result {
         for (index, part) in self.parts.iter().enumerate() {
             if index > 0 {
                 f.write_str(" ")?;
             }
-            part.value.write_summary(f, labels)?;
+            part.value.write_summary(f, symbols)?;
         }
         Ok(())
     }
 
     /// [`write_summary`](Self::write_summary) as a `Display` view.
-    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> ExpressionSummary<'x, 'a> {
+    pub fn summary<'x>(&'x self, symbols: &'x SymbolInterner) -> ExpressionSummary<'x, 'a> {
         ExpressionSummary {
             expression: self,
-            labels,
+            symbols,
         }
     }
 
     /// The expression's surface as an owned `String`.
-    pub fn summarize(&self, labels: &LabelInterner) -> String {
-        self.summary(labels).to_string()
+    pub fn summarize(&self, symbols: &SymbolInterner) -> String {
+        self.summary(symbols).to_string()
     }
 }
 
@@ -501,24 +499,24 @@ impl<'a> KExpression<'a> {
 /// through.
 pub struct AstPartSummary<'x, 'a> {
     part: &'x ExpressionPart<'a>,
-    labels: &'x LabelInterner,
+    symbols: &'x SymbolInterner,
 }
 
 impl std::fmt::Display for AstPartSummary<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.part.write_summary(f, self.labels)
+        self.part.write_summary(f, self.symbols)
     }
 }
 
 /// A [`KExpression::summary`] view: one expression plus the interner its symbols resolve through.
 pub struct ExpressionSummary<'x, 'a> {
     expression: &'x KExpression<'a>,
-    labels: &'x LabelInterner,
+    symbols: &'x SymbolInterner,
 }
 
 impl std::fmt::Display for ExpressionSummary<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.expression.write_summary(f, self.labels)
+        self.expression.write_summary(f, self.symbols)
     }
 }
 

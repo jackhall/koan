@@ -26,8 +26,8 @@ const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
 fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) -> u64 {
     let cap = 4 + kept_by_holder as u32;
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(cap, pin);
-    let holder = graph.create(None, None).unwrap();
-    let producer = graph.create(None, None).unwrap();
+    let holder = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
 
     graph
         .enter(producer, |context| {
@@ -42,7 +42,7 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
         .unwrap();
 
     for value in 0..kept_by_holder {
-        let source = graph.create(None, None).unwrap();
+        let source = graph.create(None).unwrap();
         graph
             .enter(source, |context| {
                 let local = number_here(context, value as u32);
@@ -101,8 +101,8 @@ fn the_seal_transition_is_bounded_by_the_holders_dormant_carriers_not_the_storag
 #[test]
 fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
-    let holder = graph.create(None, None).unwrap();
-    let held = graph.create(None, None).unwrap();
+    let holder = graph.create(None).unwrap();
+    let held = graph.create(None).unwrap();
 
     graph
         .enter(holder, |context| context.hold(held))
@@ -116,7 +116,7 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
         Err(EnterError::Stale(Stale(CellHandle::Slab(held))))
     );
 
-    let reused = graph.create(None, None).unwrap();
+    let reused = graph.create(None).unwrap();
     assert_eq!(reused.slot(), held.slot());
     assert_eq!(reused.generation(), held.generation() + 1);
     // The sealed cell outlives the slot: sealed ids come from their own space and are never reused,
@@ -127,9 +127,9 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
 #[test]
 fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
     let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
-    let consumer = graph.create(None, None).unwrap();
-    let producer = graph.create(None, None).unwrap();
-    let reached = graph.create(None, None).unwrap();
+    let consumer = graph.create(None).unwrap();
+    let producer = graph.create(None).unwrap();
+    let reached = graph.create(None).unwrap();
 
     // The producer's own hold set names `reached`, so that bit is in the aggregate it freezes.
     graph
@@ -190,9 +190,9 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
 #[test]
 fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
     let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(4, pin);
-    let consumer = graph.create(None, None).unwrap();
-    let first = graph.create(None, None).unwrap();
-    let second = graph.create(None, None).unwrap();
+    let consumer = graph.create(None).unwrap();
+    let first = graph.create(None).unwrap();
+    let second = graph.create(None).unwrap();
 
     let kept = graph
         .enter(consumer, |context| {
@@ -237,9 +237,9 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
 #[test]
 fn reclaiming_a_sealed_cells_last_holder_cascades_through_its_aggregate() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let top = graph.create(None, None).unwrap();
-    let middle = graph.create(None, None).unwrap();
-    let base = graph.create(None, None).unwrap();
+    let top = graph.create(None).unwrap();
+    let middle = graph.create(None).unwrap();
+    let base = graph.create(None).unwrap();
 
     graph
         .enter(middle, |context| context.hold(base))
@@ -272,9 +272,9 @@ fn reclaiming_a_sealed_cells_last_holder_cascades_through_its_aggregate() {
 #[test]
 fn a_sealed_cell_survives_every_holder_but_the_last() {
     let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let first = graph.create(None, None).unwrap();
-    let second = graph.create(None, None).unwrap();
-    let held = graph.create(None, None).unwrap();
+    let first = graph.create(None).unwrap();
+    let second = graph.create(None).unwrap();
+    let held = graph.create(None).unwrap();
 
     for holder in [first, second] {
         graph
@@ -291,25 +291,6 @@ fn a_sealed_cell_survives_every_holder_but_the_last() {
     graph
         .release(second, ReleaseAbsorption::IntoHolder)
         .unwrap();
-    assert_eq!(graph.cells.sealed.len(), 0);
-    assert_eq!(graph.cells.free.len(), 4);
-}
-
-#[test]
-fn a_cell_that_only_a_birth_row_names_waits_in_the_slab_rather_than_sealing() {
-    let mut graph: CellGraph<'static, Owned> = CellGraph::new(4, pin);
-    let parent = graph.create(None, None).unwrap();
-    let child = graph.create(Some(parent), None).unwrap();
-
-    // Birth holds are the one relation with no sealed half: a descendant that can still walk to
-    // its parent keeps the parent in place, so nothing seals here.
-    graph
-        .release(parent, ReleaseAbsorption::IntoHolder)
-        .unwrap();
-    assert_eq!(super::state_of(&graph, parent), SlabState::Dead);
-    assert_eq!(graph.cells.sealed.len(), 0);
-
-    graph.release(child, ReleaseAbsorption::IntoHolder).unwrap();
     assert_eq!(graph.cells.sealed.len(), 0);
     assert_eq!(graph.cells.free.len(), 4);
 }

@@ -11,7 +11,7 @@
 //! surface rule stay in the sibling files.
 //!
 //! Two facts shape the generator. A keyword is drawn from a pool disjoint from the surface
-//! keywords [`FORMS`](crate::parse::forms::FORMS) spells, so no generated run matches a builtin
+//! keywords [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) spells, so no generated run matches a builtin
 //! form and the bare-parenthesized type-slot flip never fires. And a `:(…)` body of exactly one
 //! sub-expression is re-labelled rather than re-wrapped, so a lone group is never a type sigil's
 //! whole body.
@@ -23,13 +23,9 @@ use proptest::prelude::*;
 use super::super::atom::classify_token;
 use super::{top, tree};
 use crate::memory::program_storage;
-use crate::parse::labels::{Symbol, is_keyword_token, is_type_name};
-use crate::parse::powerset_probes;
-use crate::parse::{
-    DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, KeywordSymbol, LabelInterner,
-    parse,
-};
+use crate::parse::{DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, parse};
 use crate::source::Span;
+use crate::symbols::{Symbol, SymbolInterner, is_keyword_token, is_type_name};
 
 // --- The generated tree ---
 
@@ -78,9 +74,9 @@ const KEYWORD_POOL: &[&str] = &["ZZ", "QQ", "WW", "+", "*", "<", ">", "|"];
 /// passes through here, so a spelling the classifier rejects never reaches the renderer.
 fn classifies(text: &str, want: fn(&ExpressionPart<'_>) -> bool) -> bool {
     let program = program_storage();
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     matches!(
-        classify_token(program.brand(), &labels, text, 0),
+        classify_token(program.brand(), &symbols, text, 0),
         Ok(part) if want(&part.value)
     )
 }
@@ -549,23 +545,21 @@ struct StatementFacts {
     shape_string: String,
     key: Vec<KeyElement>,
     shape: DispatchShape,
-    operator_probe: Option<KeywordSymbol>,
     span: Option<Span>,
 }
 
 fn statement_facts(source: &str) -> StatementFacts {
     let program = program_storage();
-    let labels = LabelInterner::new();
+    let symbols = SymbolInterner::new();
     let statements =
-        parse(program.brand(), &labels, source).unwrap_or_else(|e| panic!("{source:?}: {e}"));
+        parse(program.brand(), &symbols, source).unwrap_or_else(|e| panic!("{source:?}: {e}"));
     let [statement] = statements.as_slice() else {
         panic!("{source:?}: expected exactly one statement")
     };
     StatementFacts {
-        shape_string: super::describe(statement, &labels),
+        shape_string: super::describe(statement, &symbols),
         key: statement.stored_key().to_vec(),
         shape: statement.shape(),
-        operator_probe: statement.operator_probe(),
         span: statement.span,
     }
 }
@@ -584,7 +578,7 @@ fn within(span: Span, parent: Option<Span>) {
 fn check_expression(
     expr: &KExpression<'_>,
     source: &str,
-    labels: &LabelInterner,
+    symbols: &SymbolInterner,
     parent: Option<Span>,
 ) {
     let span = expr.span.expect("a parsed node carries its span");
@@ -597,16 +591,16 @@ fn check_expression(
             "siblings are ordered and disjoint",
         );
         within(part_span, Some(span));
-        check_part(&part.value, part_span, source, labels);
+        check_part(&part.value, part_span, source, symbols);
         previous_end = part_span.end;
     }
 }
 
-fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, labels: &LabelInterner) {
+fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, symbols: &SymbolInterner) {
     let text = span.slice(source);
     match part {
         ExpressionPart::Keyword(symbol) => {
-            let rendering = labels.render(symbol.symbol());
+            let rendering = symbols.render(symbol.symbol());
             // A synthetic operator head takes its trigger's span instead: the `$` an evaluation
             // was written as, the `.` or `?` a compound atom folded on.
             if rendering != text {
@@ -621,8 +615,8 @@ fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, labels: &Labe
                 );
             }
         }
-        ExpressionPart::Identifier(name) => assert_eq!(labels.render(name.symbol()), text),
-        ExpressionPart::Type(name) => assert_eq!(labels.render(name.symbol()), text),
+        ExpressionPart::Identifier(name) => assert_eq!(symbols.render(name.symbol()), text),
+        ExpressionPart::Type(name) => assert_eq!(symbols.render(name.symbol()), text),
         ExpressionPart::Literal(KLiteral::Number(value)) => {
             assert_eq!(text.parse::<f64>().ok(), Some(*value));
         }
@@ -631,52 +625,52 @@ fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, labels: &Labe
         }
         ExpressionPart::Literal(KLiteral::Boolean(value)) => assert_eq!(text, value.to_string()),
         ExpressionPart::Literal(KLiteral::Null) => assert_eq!(text, "null"),
-        ExpressionPart::Expression(node) => check_expression(node, source, labels, Some(span)),
+        ExpressionPart::Expression(node) => check_expression(node, source, symbols, Some(span)),
         ExpressionPart::SigiledTypeExpr(node) => {
             assert!(text.starts_with(':') && text.ends_with(')'), "got {text:?}");
-            check_expression(node, source, labels, Some(span));
+            check_expression(node, source, symbols, Some(span));
         }
         ExpressionPart::RecordType(node) => {
             assert!(
                 text.starts_with(":{") && text.ends_with('}'),
                 "got {text:?}"
             );
-            check_expression(node, source, labels, Some(span));
+            check_expression(node, source, symbols, Some(span));
         }
         ExpressionPart::QuotedExpression(node) => {
             assert!(text.starts_with('#') && text.ends_with(')'), "got {text:?}");
-            check_expression(node, source, labels, Some(span));
+            check_expression(node, source, symbols, Some(span));
         }
         ExpressionPart::ListLiteral(items) => {
             assert!(text.starts_with('[') && text.ends_with(']'), "got {text:?}");
             for item in *items {
-                check_nested(item, span, source, labels);
+                check_nested(item, span, source, symbols);
             }
         }
         ExpressionPart::DictLiteral(pairs) => {
             assert!(text.starts_with('{') && text.ends_with('}'), "got {text:?}");
             for (key, value) in *pairs {
-                check_nested(key, span, source, labels);
-                check_nested(value, span, source, labels);
+                check_nested(key, span, source, symbols);
+                check_nested(value, span, source, symbols);
             }
         }
         ExpressionPart::RecordLiteral(fields) => {
             assert!(text.starts_with('{') && text.ends_with('}'), "got {text:?}");
             for (_, value) in *fields {
-                check_nested(value, span, source, labels);
+                check_nested(value, span, source, symbols);
             }
         }
     }
 }
 
 /// A literal's elements carry no span of their own; the nodes among them still do.
-fn check_nested(part: &ExpressionPart<'_>, parent: Span, source: &str, labels: &LabelInterner) {
+fn check_nested(part: &ExpressionPart<'_>, parent: Span, source: &str, symbols: &SymbolInterner) {
     match part {
         ExpressionPart::Expression(node)
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node) => {
-            check_expression(node, source, labels, Some(parent));
+            check_expression(node, source, symbols, Some(parent));
         }
         _ => {}
     }
@@ -902,7 +896,6 @@ proptest! {
             prop_assert_eq!(&facts.shape_string, &bare.shape_string, "source: {}", wrapped);
             prop_assert_eq!(&facts.key, &bare.key);
             prop_assert_eq!(facts.shape, bare.shape);
-            prop_assert_eq!(facts.operator_probe, bare.operator_probe);
             prop_assert_eq!(
                 facts.span,
                 Some(Span { start: 0, end: wrapped.len() as u32 }),
@@ -923,8 +916,8 @@ proptest! {
             "the keyword and Type classes are disjoint",
         );
         let program = program_storage();
-        let labels = LabelInterner::new();
-        let classified = classify_token(program.brand(), &labels, &token, 0);
+        let symbols = SymbolInterner::new();
+        let classified = classify_token(program.brand(), &symbols, &token, 0);
         let part = classified.as_ref().map(|spanned| &spanned.value);
         match reference_class(&token) {
             TokenClass::Literal => {
@@ -934,14 +927,14 @@ proptest! {
                 let Ok(ExpressionPart::Keyword(symbol)) = part else {
                     return Err(TestCaseError::fail(format!("{token:?} is keyword-class")));
                 };
-                prop_assert_eq!(labels.render(symbol.symbol()), token.as_str());
+                prop_assert_eq!(symbols.render(symbol.symbol()), token.as_str());
             }
             TokenClass::Type => {
                 if token.chars().all(|c| c.is_ascii_alphanumeric()) {
                     let Ok(ExpressionPart::Type(name)) = part else {
                         return Err(TestCaseError::fail(format!("{token:?} is Type-class")));
                     };
-                    prop_assert_eq!(labels.render(name.symbol()), token.as_str());
+                    prop_assert_eq!(symbols.render(name.symbol()), token.as_str());
                 } else {
                     prop_assert!(part.is_err(), "a Type name uses letters and digits only");
                 }
@@ -953,7 +946,7 @@ proptest! {
                     let Ok(ExpressionPart::Identifier(name)) = part else {
                         return Err(TestCaseError::fail(format!("{token:?} is a value token")));
                     };
-                    prop_assert_eq!(labels.render(name.symbol()), token.as_str());
+                    prop_assert_eq!(symbols.render(name.symbol()), token.as_str());
                 } else {
                     prop_assert!(part.is_err(), "{token:?} classifies as no token class");
                 }
@@ -968,14 +961,14 @@ proptest! {
     fn every_span_indexes_its_own_text(statements in program(), bytes in tape_bytes()) {
         let source = render(&statements, bytes);
         let program = program_storage();
-        let labels = LabelInterner::new();
-        let parsed = parse(program.brand(), &labels, &source)
+        let symbols = SymbolInterner::new();
+        let parsed = parse(program.brand(), &symbols, &source)
             .unwrap_or_else(|error| panic!("{source:?}: {error}"));
         let mut previous_end = 0;
         for statement in &parsed {
             let span = statement.span.expect("a parsed statement carries its span");
             prop_assert!(span.start >= previous_end, "statements are ordered and disjoint");
-            check_expression(statement, &source, &labels, None);
+            check_expression(statement, &source, &symbols, None);
             previous_end = span.end;
         }
     }
@@ -1001,8 +994,8 @@ proptest! {
         let mut source = String::new();
         render_item(&container, Mode::Peel, COMMAS, &mut Tape::new(bytes), &mut source);
         let program = program_storage();
-        let labels = LabelInterner::new();
-        let parsed = parse(program.brand(), &labels, &source)
+        let symbols = SymbolInterner::new();
+        let parsed = parse(program.brand(), &symbols, &source)
             .unwrap_or_else(|error| panic!("{source:?}: {error}"));
         let [statement] = parsed.as_slice() else {
             return Err(TestCaseError::fail(format!("{source:?}: one statement")));
@@ -1042,33 +1035,32 @@ proptest! {
             }
         }
         let program = program_storage();
-        let labels = LabelInterner::new();
-        let parsed = parse(program.brand(), &labels, &source)
+        let symbols = SymbolInterner::new();
+        let parsed = parse(program.brand(), &symbols, &source)
             .unwrap_or_else(|error| panic!("{source:?}: {error}"));
-        let mut symbols = Vec::new();
+        let mut minted = Vec::new();
         for statement in &parsed {
-            node_symbols(statement, &mut symbols);
+            node_symbols(statement, &mut minted);
         }
-        for symbol in symbols {
-            let text = labels.resolve(symbol);
+        for symbol in minted {
+            let text = symbols.resolve(symbol);
             prop_assert!(text.is_some(), "every minted symbol resolves");
             prop_assert!(spellings.contains(&text.expect("just checked")));
         }
         for spelling in &spellings {
-            let recorded = labels.resolve(Symbol::of(spelling));
+            let recorded = symbols.resolve(Symbol::of(spelling));
             prop_assert_eq!(recorded.as_deref(), Some(spelling.as_str()));
         }
-        prop_assert_eq!(labels.len(), spellings.len(), "one entry per distinct spelling");
+        prop_assert_eq!(symbols.len(), spellings.len(), "one entry per distinct spelling");
     }
 
-    /// **Law 8.** A chain's probe is the digest of the operator set it names — order-free and
-    /// repeat-free — and a group over any superset of those operators registers that very key,
-    /// so a live chain finds its group by construction.
+    /// **Law 8.** A slot-led run whose keywords alternate with slots, two or more of them, is an
+    /// `OperatorChain` whatever operators it names — the classification the chaining rewrite keys
+    /// on. One keyword is a plain call and is left alone.
     #[test]
-    fn a_chains_probe_is_the_digest_of_its_operator_set(
-        operands in prop::collection::vec(identifier(), 3..6),
+    fn an_alternating_run_of_two_or_more_operators_is_a_chain(
+        operands in prop::collection::vec(identifier(), 2..6),
         choices in prop::collection::vec(0usize..4, 5),
-        extra in prop::sample::select(&["+", "*", "<", ">"][..]),
     ) {
         let pool = ["+", "*", "<", ">"];
         let operators: Vec<&str> =
@@ -1079,32 +1071,15 @@ proptest! {
         }
 
         let program = program_storage();
-        let labels = LabelInterner::new();
-        let parsed = parse(program.brand(), &labels, &source)
+        let symbols = SymbolInterner::new();
+        let parsed = parse(program.brand(), &symbols, &source)
             .unwrap_or_else(|error| panic!("{source:?}: {error}"));
         let statement = &parsed[0];
-        prop_assert_eq!(statement.shape(), DispatchShape::OperatorChain, "source: {}", source);
-
-        let mut distinct: Vec<KeywordSymbol> = Vec::new();
-        for operator in &operators {
-            let symbol = KeywordSymbol::declared(operator, &labels)
-                .expect("an operator glyph is keyword-class");
-            if !distinct.contains(&symbol) {
-                distinct.push(symbol);
-            }
+        if operators.len() > 1 {
+            prop_assert_eq!(statement.shape(), DispatchShape::OperatorChain, "source: {}", source);
+        } else {
+            prop_assert_ne!(statement.shape(), DispatchShape::OperatorChain, "source: {}", source);
         }
-        prop_assert_eq!(statement.operator_probe(), Some(KeywordSymbol::of_run(&distinct)));
-
-        let mut members = distinct.clone();
-        let extra = KeywordSymbol::declared(extra, &labels).expect("keyword-class");
-        if !members.contains(&extra) {
-            members.push(extra);
-        }
-        let installed = powerset_probes(&members, &labels);
-        prop_assert!(
-            installed.contains(&statement.operator_probe().expect("a chain carries a probe")),
-            "a group over a superset registers the key {source:?} probes",
-        );
     }
 
     /// **Law 9.** The type sigil is idempotent: a body wrapped `k` layers deep names what one

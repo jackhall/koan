@@ -13,9 +13,12 @@
 //! itself, the **pledge** naming the ancestor its bump will splice into, and the tombstone links
 //! that say where its bytes went once it did.
 
-use crate::handle::{CellHandle, SlabHandle, Stale, TreeHandle};
-use crate::reattach::{Erased, Reattachable};
+use crate::handle::{HomeHandle, SlabHandle, Stale, TreeHandle};
+use crate::reattach::{Erased, Reattachable, ReattachableOverBoth};
+use crate::receipt::Delivery;
 use crate::scratch::Scratch;
+use crate::slots::StepSlots;
+use crate::tenant::Tenancy;
 
 /// What one pool index currently holds.
 ///
@@ -48,9 +51,9 @@ pub(crate) enum Ancestor {
 /// Where a tree cell sits relative to a placement destination on the same root — the classification
 /// the ancestry rule turns on.
 ///
-/// Not one of the crate's **relations**. Those are the two square bit matrices over slab slots,
-/// birth and pin ([`Matrix`](crate::matrix::Matrix)), and no tree cell is in either. Ancestry is
-/// read off the chain links instead, at a cost of the level distance between the two cells.
+/// Not the crate's **relation**. That is the square bit matrix over slab slots, pin
+/// ([`Matrix`](crate::matrix::Matrix)), and no tree cell is in it. Ancestry is read off the chain
+/// links instead, at a cost of the level distance between the two cells.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Ancestry {
     /// The destination is the cell itself, or a tree cell under it. It dies first, so a borrow into
@@ -79,9 +82,10 @@ enum Life {
 /// will go; a tombstone has none of those and knows only where they went. Splitting them is what
 /// makes [`entomb`](TreePool::entomb) one assignment rather than a list of fields to remember to
 /// clear.
-enum TreeSlot<'graph, C: Reattachable<'graph>> {
+enum TreeSlot<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
+{
     Free,
-    InTree(Branch<'graph, C>),
+    InTree(Branch<'graph, C, S, D>),
     Tombstone(Tombstone),
 }
 
@@ -90,7 +94,8 @@ enum TreeSlot<'graph, C: Reattachable<'graph>> {
 /// There is no reach table, no continuation reach and no hold set: a value homed here reaches its
 /// root and nothing else, and the root's row and sealed-hold set are where every mint from inside
 /// the subtree lands.
-struct Branch<'graph, C: Reattachable<'graph>> {
+struct Branch<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
+{
     life: Life,
     /// The slab slot of the root at the top of this cell's chain. The root cannot recycle while a
     /// tree cell under it is undisposed — its own disposal waits on the child count — so the slot
@@ -105,6 +110,9 @@ struct Branch<'graph, C: Reattachable<'graph>> {
     /// only once this reaches zero, which is what lets an embedder tear a subtree down in any
     /// order.
     children: u32,
+    /// The tenants writing this cell's region. Like an undisposed child, a tenant keeps a released
+    /// cell undisposed: its region stays put until the last one leaves.
+    tenancy: Tenancy,
     executing: bool,
     /// The shallowest ancestor a value homed here has been pinned into, and so the destination this
     /// cell's whole bump splices into at death.
@@ -112,7 +120,8 @@ struct Branch<'graph, C: Reattachable<'graph>> {
     /// Whether any value homed here was ever put to rest. A cell nothing was kept in leaves no
     /// tombstone: no key can name it, so nothing will ever ask where its bytes went.
     kept: bool,
-    continuation: Option<Erased<'graph, C>>,
+    /// What the cell carries between its steps, over its own scratch bump.
+    step_slots: StepSlots<'graph, C, S, D>,
 }
 
 /// A cell whose bytes have moved, kept only to answer for them.
@@ -120,7 +129,7 @@ struct Tombstone {
     /// Where this cell's bytes went. Never repointed when *that* cell's bytes move on in turn — the
     /// chain lengthens instead — which is what keeps a splice O(1) list work however many
     /// tombstones hang off the dying cell.
-    into: CellHandle,
+    into: HomeHandle,
     /// The next tombstone on the tombstone list this one sits in.
     next: Option<u32>,
 }
@@ -129,14 +138,21 @@ struct Tombstone {
 ///
 /// The generation outlives every occupant — it is what tells two of them apart — and a tombstone
 /// list can hang off a cell in either of the other two states, so both sit outside the variant.
-struct TreeCell<'graph, C: Reattachable<'graph>> {
+struct TreeCell<
+    'graph,
+    C: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
+    D: Delivery<'graph>,
+> {
     generation: u32,
     /// The head of the list of tombstones whose bytes spliced into this slot's occupant.
     tombstones: Option<u32>,
-    slot: TreeSlot<'graph, C>,
+    slot: TreeSlot<'graph, C, S, D>,
 }
 
-impl<'graph, C: Reattachable<'graph>> TreeCell<'graph, C> {
+impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
+    TreeCell<'graph, C, S, D>
+{
     fn free(generation: u32) -> Self {
         TreeCell {
             generation,
@@ -153,12 +169,19 @@ impl<'graph, C: Reattachable<'graph>> TreeCell<'graph, C> {
 /// pool is the depth of the call tree the embedder is running, which is the program's business.
 /// The slab's width is only where the pool starts: room for that many cells is claimed at birth,
 /// and growth doubles from there.
-pub(crate) struct TreePool<'graph, C: Reattachable<'graph>> {
-    slots: Vec<TreeCell<'graph, C>>,
+pub(crate) struct TreePool<
+    'graph,
+    C: Reattachable<'graph>,
+    S: ReattachableOverBoth<'graph>,
+    D: Delivery<'graph>,
+> {
+    slots: Vec<TreeCell<'graph, C, S, D>>,
     free: Vec<u32>,
 }
 
-impl<'graph, C: Reattachable<'graph>> TreePool<'graph, C> {
+impl<'graph, C: Reattachable<'graph>, S: ReattachableOverBoth<'graph>, D: Delivery<'graph>>
+    TreePool<'graph, C, S, D>
+{
     pub(crate) fn new(cap: u32) -> Self {
         TreePool {
             slots: Vec::with_capacity(cap as usize),
@@ -178,14 +201,14 @@ impl<'graph, C: Reattachable<'graph>> TreePool<'graph, C> {
     /// answers for none of them: a tombstone parents nothing, is nobody's child and pledges
     /// nothing, and a free slot has no occupant at all. Reaching one means a caller held an index
     /// across the disposal that retired it.
-    fn branch(&self, index: u32) -> &Branch<'graph, C> {
+    fn branch(&self, index: u32) -> &Branch<'graph, C, S, D> {
         match &self.slots[index as usize].slot {
             TreeSlot::InTree(branch) => branch,
             _ => panic!("pool slot {index} is not a cell in the tree"),
         }
     }
 
-    fn branch_mut(&mut self, index: u32) -> &mut Branch<'graph, C> {
+    fn branch_mut(&mut self, index: u32) -> &mut Branch<'graph, C, S, D> {
         match &mut self.slots[index as usize].slot {
             TreeSlot::InTree(branch) => branch,
             _ => panic!("pool slot {index} is not a cell in the tree"),
@@ -206,10 +229,11 @@ impl<'graph, C: Reattachable<'graph>> TreePool<'graph, C> {
             parent,
             depth,
             children: 0,
+            tenancy: Tenancy::default(),
             executing: false,
             pledge: None,
             kept: false,
-            continuation,
+            step_slots: StepSlots::born(continuation),
         });
         match self.free.pop() {
             Some(index) => {
@@ -281,6 +305,15 @@ impl<'graph, C: Reattachable<'graph>> TreePool<'graph, C> {
         self.branch(index).children
     }
 
+    /// The cell's tenant counts, live or dead-but-undisposed.
+    pub(crate) fn tenancy(&self, index: u32) -> Tenancy {
+        self.branch(index).tenancy
+    }
+
+    pub(crate) fn tenancy_mut(&mut self, index: u32) -> &mut Tenancy {
+        &mut self.branch_mut(index).tenancy
+    }
+
     pub(crate) fn pledge(&self, index: u32) -> Option<Ancestor> {
         self.branch(index).pledge
     }
@@ -291,7 +324,7 @@ impl<'graph, C: Reattachable<'graph>> TreePool<'graph, C> {
     }
 
     #[cfg(test)]
-    pub(crate) fn tombstone_target(&self, index: u32) -> Option<CellHandle> {
+    pub(crate) fn tombstone_target(&self, index: u32) -> Option<HomeHandle> {
         match &self.slots[index as usize].slot {
             TreeSlot::Tombstone(tombstone) => Some(tombstone.into),
             _ => None,
@@ -306,20 +339,25 @@ impl<'graph, C: Reattachable<'graph>> TreePool<'graph, C> {
         self.branch_mut(index).executing = executing;
     }
 
+    /// Declare the cell's death. A dead cell is never entered, so everything of its that names its
+    /// scratch bump goes here, and the bump stops waiting on a cell that will never read it.
     pub(crate) fn mark_dead(&mut self, index: u32) {
-        self.branch_mut(index).life = Life::Dead;
+        let branch = self.branch_mut(index);
+        branch.life = Life::Dead;
+        branch.step_slots.clear_scratch();
     }
 
     pub(crate) fn mark_kept(&mut self, index: u32) {
         self.branch_mut(index).kept = true;
     }
 
-    pub(crate) fn take_continuation(&mut self, index: u32) -> Option<Erased<'graph, C>> {
-        self.branch_mut(index).continuation.take()
+    /// The slots the cell carries between its steps, over its own scratch bump.
+    pub(crate) fn step_slots(&self, index: u32) -> &StepSlots<'graph, C, S, D> {
+        &self.branch(index).step_slots
     }
 
-    pub(crate) fn set_continuation(&mut self, index: u32, continuation: Option<Erased<'graph, C>>) {
-        self.branch_mut(index).continuation = continuation;
+    pub(crate) fn step_slots_mut(&mut self, index: u32) -> &mut StepSlots<'graph, C, S, D> {
+        &mut self.branch_mut(index).step_slots
     }
 
     pub(crate) fn add_child(&mut self, index: u32) {
@@ -434,7 +472,7 @@ impl<'graph, C: Reattachable<'graph>> TreePool<'graph, C> {
     /// parents nothing, is nobody's child and pledges nothing, and all it answers is where its
     /// bytes went. The tombstones already hanging off the slot stay there — they spliced into these
     /// bytes and travel with them.
-    pub(crate) fn entomb(&mut self, index: u32, into: CellHandle, head: Option<u32>) {
+    pub(crate) fn entomb(&mut self, index: u32, into: HomeHandle, head: Option<u32>) {
         self.slots[index as usize].slot = TreeSlot::Tombstone(Tombstone { into, next: head });
     }
 
@@ -504,8 +542,8 @@ impl<'graph, C: Reattachable<'graph>> TreePool<'graph, C> {
             match &cell.slot {
                 TreeSlot::InTree(_) => return Some(TreeForward::Tree(index)),
                 TreeSlot::Tombstone(entry) => match entry.into {
-                    CellHandle::Slab(handle) => return Some(TreeForward::Slab(handle)),
-                    CellHandle::Tree(next) => {
+                    HomeHandle::Slab(handle) => return Some(TreeForward::Slab(handle)),
+                    HomeHandle::Tree(next) => {
                         index = next.index();
                         generation = next.generation();
                     }

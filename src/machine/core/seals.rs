@@ -7,7 +7,7 @@ use crate::machine::model::{DeliveredOperatorGroup, SealedOperatorGroup};
 
 use crate::machine::model::{DispatchToken, OperatorGroup};
 
-use crate::parse::{KeywordSymbol, UntypedKey};
+use crate::parse::{ExpressionKey, KeywordSymbol};
 
 use super::scope::Scope;
 
@@ -23,7 +23,7 @@ pub(crate) struct OverloadSeal<'a> {
     /// The dormant callable carrier the dispatch bucket stores.
     pub sealed: SealedFunction<'a>,
     /// `signature.untyped_key()` — the bucket this callable belongs in.
-    pub key: UntypedKey,
+    pub key: ExpressionKey,
     /// `signature.dispatch_token()` — the stored form of the duplicate-overload predicate, and
     /// what the `DuplicateOverload` diagnostic renders the colliding overload from.
     pub token: DispatchToken,

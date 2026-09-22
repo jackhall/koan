@@ -4,7 +4,7 @@
 use std::marker::PhantomData;
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
-use crate::parse::{BinderSymbol, Symbol};
+use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, TypeRegistry};
 
 use super::{Knotted, Link, Nothing, Value, Weight, record_type};

@@ -12,11 +12,21 @@ extends the resolution described here rather than replacing it.
 
 A scope is built in three tiers, each at the moment its contents become known.
 
-- **The shape** — one per body, built once in program storage and shared by
-  every scope instance of that body. It records the value names and type names
-  the body declares, each with the lexical position its binder writes at, the
-  class of every mention and the components its bindings form, and it
-  resolves every name the body reads.
+- **The body shape** — `BodyShape`, one per body, built once in program storage
+  and shared by every scope instance of that body. It **owns the body's
+  statements**, with every [operator run](#operator-groups) in them already
+  chained, and it records the value names and
+  type names the body declares, each with the lexical position its binder writes
+  at, the class of every mention and the components its bindings form, and it
+  resolves every name the body reads. It walks a builtin node's parts by the
+  [roles](../parse/builtin_shapes/role.rs) that node's `BUILTIN_SHAPES` entry
+  gives them.
+
+  **A reader takes a body's statements from `BodyShape::body()`, never from the
+  parse.** Every site a shape records — a mention's part, a nested shape's
+  holder, a `LET`'s right-hand side — is an address inside that run, so a reader
+  holding the parsed statements instead would look its own facts up against
+  nodes the shape never saw.
 - **Closure bindings** — one run per callable, held in the callable value and
   built when the callable is born. Each slot is a `values::Link`, the one
   value-or-edge type a knot's data node holds too. Each name the body reads
@@ -24,17 +34,38 @@ A scope is built in three tiers, each at the moment its contents become known.
   a deep copy of what it points at. A name that is a member of the callable's
   own [component](#visibility) is held as an edge into the knot the component
   is born in, never as a copied value. A callable's birth reads every capture into
-  scratch first and lays the run down only once none is pending, so a closure
-  binding is never a placeholder and a refused birth writes nothing.
+  scratch first and lays the run down only once every read is finished, so a
+  closure binding is never a placeholder.
 - **Per-call bindings** — one activation per call, laid down in the call's
-  frame region: a pointer to the callable's closure bindings, the callable
-  itself, and one slot for each parameter and each local the shape declares.
+  frame region, and the top level's in the region of the program's
+  [root](../program/README.md#the-top-level): a pointer to the callable's
+  closure bindings, the callable itself, and one slot for each parameter and
+  each local the shape declares.
   Nothing is copied out of
   the closure bindings; a read of a capture goes through the pointer, one load
   more than a read of a local. Copying the captures in would cost a word per
   capture per call, multiplied by recursion depth, and a copied knot edge would
   need its knot carried beside it, where an edge left in its node resolves
   against the knot it already lives in.
+
+  An activation has a read half of its own, the **`ActivationView`**: the
+  header pointers, the callable, and a read view of the slots, with no door that
+  binds. An evaluation is handed the view of the activation it was asked from
+  and reads names through it where they lie, so a binding never travels to its
+  reader. The view is covariant in its region brand, so it rides a birth into a
+  shorter-lived cell; the `Activation` — the view beside the slot array, which
+  binds — is invariant and stays where it was laid down, reading as its view
+  through `Deref`. Both are generic over the member's *family* rather than the
+  member, because a slot holds its value erased and names its payload through
+  the family ([the slot array](../memory/README.md#the-slot-array)). The view
+  takes the member as a type parameter of its own, defaulted to the family's
+  member at the view's brand, and nothing but the default is ever meant:
+  rustc computes variance over the unnormalized field types, and a field naming
+  the brand through the family's projection would make the view invariant in
+  it. For the same reason `knot`'s `KActivationView` spells its member out, so a
+  type holding one is covariant too; the tie and
+  [elaboration](../elaborate/README.md) read the one view type at every level
+  and name no habitat.
 
 Values are immutable, so a shallow copy of a binding means the same thing as a
 reference to it: every copy names the same value, and what the copy retains is
@@ -48,8 +79,13 @@ every `FOR ALL` type parameter — or `left` and `right` for a binary `OP` and
 `operands` for a unary one, all at position `0`. A `MODULE` or `GROUP` body is
 a *module* shape: it captures, since its activation outlives the frame that
 births it, but it is not a deferring boundary, because its statements run when
-the statement holding it runs. A `MATCH` or `TRY` arm, and the code an `EVAL`
-runs, is a *block* shape: an arm's one parameter is `it`, its statements count
+the statement holding it runs. A `MATCH` or `TRY` arm, a `USING … SCOPE` body,
+the code an `EVAL`
+runs, and the block a [pairwise rewrite](#operator-groups) synthesizes to hoist
+a shared operand, is a *block* shape: an arm's one parameter is `it`, a `USING`
+body's are
+the names its operand surfaces (below), a synthesized block's are the anonymous
+slots its hoists bind, its statements count
 from `1`, its activation is laid down in the same frame as the enclosing one,
 and instead of captures it holds a pointer to the enclosing activation. A name
 declared in the block shadows the enclosing one from the next statement on and
@@ -113,9 +149,9 @@ mention is **deferred** when that path is non-empty and every context on it,
 down to the outermost callable-body boundary it crosses, is a constructor slot
 (a list element, a dict value, a record field) or that boundary itself: the
 value is only stored in a container or captured by a callable, never
-inspected. A type declaration's schema — a `UNION`'s variants, a `SIG` or
+inspected. A type declaration's definition part — a `UNION`'s variants, a `SIG` or
 `NEWTYPE`'s fields — is a constructor slot too, so a type naming itself or a
-later sibling in its schema is a deferred mention. So is a nominal
+later sibling in its definition is a deferred mention. So is a nominal
 construction's payload: in a two-part node whose head is a type name,
 `(Ring {next = a})`, the head is an eager mention and the payload a constructor
 slot, so a tagged value naming itself reaches the tie rather than being an
@@ -125,8 +161,8 @@ when it closes a cycle. A union variant's construction (`Tree.Node x`) is a
 attribute form and stays eager. A callable body is opaque — nothing inside it changes the class,
 since none of it runs until the callable is called. Any other mention is
 **eager**: the value is needed at the point it is read. A call, a keyword
-form's slot, an operator's operand, a dict key, a type expression outside a
-schema, a `MODULE` body and a `MATCH` or `TRY` arm are all eager contexts, and
+shape's slot, an operator's operand, a dict key, a type expression outside a
+definition, a `MODULE` body and a `MATCH` or `TRY` arm are all eager contexts, and
 so are a callable's parameter and return types, which are mentions of the
 enclosing shape read where the callable is born. A parenthesized group of one
 part is transparent: it is the part. So in
@@ -176,20 +212,67 @@ and so is a function outside a module that is mutually recursive with one
 inside it, since a module body is an eager context — the two belong in one
 module.
 
+**A module is therefore never in a cycle, so every module born is a one-node
+knot.** Every mention reached from a module binder's root is eager whatever body
+it sits in, so a component holding a module member and a fellow is an eager
+cycle, refused here. A module naming *itself* is refused one step earlier: an
+eager read at the binder's own position does not see that binder, so it is
+`Unbound` rather than a cycle.
+
 The shape hands the layer above each body's components — each with whether it
 is `deferred_only` and whether it is `cyclic`, holding more than one member or
-a member that reads itself — and the class of every mention, and three facts a
-tie reads: the callable body each binder births — `Shape::births`, set when the
-binder's right-hand side is a callable form at its root or its form is a
-combined one — `Shape::form`, the form node a callable body sits in, where its
-signature is read, and `Shape::rhs`, each `LET` binder's right-hand side part,
-where a data member is read. A caller ties a component of value binders when
-it is cyclic or every member births a callable; a non-cyclic data binder is an
-ordinary value, and a component of type binders is the elaborator's. A
-component never mixes the two channels: a schema names types only, so no
-mention leaves a type binder for a value binder. Tying is
-[`function`](../function/README.md#the-tie)'s, which writes a deferred mention
+a member that reads itself — and the class of every mention, and four facts the
+layer above reads off a binder's slot: the callable body each binder births —
+`BodyShape::births`, set when the binder's right-hand side is a callable shape
+at its root, its shape is a combined one, or it is a `MODULE` or `GROUP` binder,
+whose module body carries no `form` — beside it `BodyShape::birth_site`, where
+that body sits in the binder's own node, which a caller that must ask for the
+body by site names it by — `BodyShape::form`, the builtin
+shape node a callable body sits in, where its signature is read,
+`BodyShape::rhs`, each `LET` binder's right-hand side part, where a data member
+is read, and `BodyShape::declarations`, each type binder's whole declaration
+node — a `NEWTYPE`, `UNION`, `SIG`, `TYPE` or a `LET` of a type name — where the
+declaration door reads which declaration it is and where its declared part sits,
+off the node's own builtin shape. A caller ties a component of value binders
+when it is cyclic or every member births a callable or a module; a non-cyclic
+data binder is an ordinary value, and a component of type binders goes through
+[the elaborator's door](../elaborate/README.md#declarations). A component never
+mixes the two channels: a definition names types only, so no mention leaves a
+type binder for a value binder. Tying is
+[`knot`](../knot/README.md#the-tie)'s, which writes a deferred mention
 below a nested constructor into the knot as an anonymous node.
+
+A declaration's definition part is walked under the constructor state, so every
+type name it reads is a deferred mention — but a definition's own statements are
+declarators with builtin shapes of their own, and a type expression written
+inside one is a node with a shape of its own too: each is walked by *their*
+roles rather than by structure. A `SIG` body's `TYPE (Key Val AS Pair)`
+therefore declares `Pair`, and `Key` and `Val` sit in its `Name` part, which no
+walk reads; a `FOR ALL` group inside one of its heads declares its quantifiers;
+and a manifest `LET` member declares its name, so a later `VAL` naming it is no
+mention either. Every name a definition declares is the definition's own, and
+the declaration door resolves it against the definition it is elaborating.
+
+### Units
+
+A body runs as a sequence of **units**, which `BodyShape::units` hands out in
+the order they are performed. A unit is one component whose members are not all
+parameters, or one statement that binds nothing; a statement belongs to its
+binder's component's unit. Each unit follows every unit that binds a slot it
+reads, and among the units free to go next the one written first goes first,
+so independent units come out as they are written and a forward reference moves
+only the binder its reader needs. A read's wait is acyclic by construction,
+since a cycle among bindings is one component. Each unit records whether it
+holds the body's last statement, whose value a called body's is.
+
+A statement containing `EVAL` reads names no shape can enumerate, so it also
+follows every unit binding a name declared before its position, as firmly as a
+read does. A visible binder is therefore always bound when an `EVAL` runs. When
+a binder declared before the `EVAL` itself waits on the `EVAL`'s statement —
+`LET f = FN <reads g>` before `LET g = (EVAL …)` — neither can go first, and
+the shape refuses the body at load with `ShapeError::EvalCycle`, naming the
+binder and the `EVAL`'s statement. Declaring `f` after the `EVAL`'s statement
+hides it from the `EVAL` and makes its read of `g` an ordinary forward read.
 
 ## Two channels
 
@@ -212,27 +295,24 @@ no part of the builtin table.
 
 ## Placeholders and writes
 
-A slot is written once. Its binder replaces the placeholder in place, and
-nothing rewrites it after that, so a binding is as immutable as the value it
-holds.
+A slot is two-state: empty until its unit's turn, then bound, once. Nothing
+claims a slot ahead of binding it and nothing rewrites it after, so a binding is
+as immutable as the value it holds.
 
-A pending slot names its binder: the
-[`CellHandle`](../../cellgraph/src/handle.rs) of the cell that will bind it. A
-read of a visible slot returns the bound value, or the pending handle; the
-embedder turns the handle into a dependency edge from the reading cell to the
-binder, and the scope parks nothing itself. The waiter chain is the
-scheduler's dependency graph, not the slot's.
+A slot visible to a running reader is never empty. The shape orders a body's
+[units](#units) so that each follows every unit it reads, and the body runner
+performs them in that order, so a deferred mention that reads at the body's end
+still finds its sibling bound by the time anything reads it. A read that finds
+an empty slot is a scheduler bug, and `ActivationView::read` panics on one
+rather than returning a pending state nobody could act on.
 
-A slot visible to a running reader is never unwritten. A deferred mention
-reads at the body's end and sees the siblings declared after it, so the
-scheduler submits every statement of a body, in position order and claiming
-each binder's slot as it submits it, before any of those statements runs.
-Empty is a state a slot has only before its binder is submitted, and a read
-that finds one is a scheduler bug, not a pending read.
-
-A function activation and a module activation are one shape. A module body's
-binders are its exports in flight, and a `USING` over a binder that is still
-pending is the same pending read.
+A function activation and a module activation are one type with two
+constructors. A module's carries no knot member — a module's captures are never
+edges, since it is alone in its component — and the caller runs its body to
+completion and only then ties the binder over the finished activation, reading
+its slots out through `ActivationView::slots`. A module body's binders are its
+exports in flight, and nothing outside the body reads them before its binder is
+tied.
 
 ## Names that arrive at run time
 
@@ -249,10 +329,141 @@ Two forms introduce names no shape can see.
   exist, so a shape containing `EVAL`, and every shape lexically enclosing
   it, retains its defining scope. Every other shape resolves through
   coordinates alone and keeps no link to its parent.
-- **`USING … SCOPE`** takes the names it surfaces from the module's signature,
-  so a shape resolves them like any other name. The module's signature must be
-  known statically where `USING` appears; a module whose signature is not
-  requires an ascription there.
+- **`USING … SCOPE`** makes the names its operand surfaces the **parameters of
+  its body's block shape**, so a mention of one resolves through the ordinary
+  local read, a callable nested in the block captures it the ordinary way, and
+  no coordinate names a member. Only the binding is left to run time, which is
+  [the module layer](../knot/module/README.md#entering-a-using--scope-block)'s.
+
+  That works only if the names are readable where the shape is built, so the
+  builder walks the operand's spine back to a declaration that states its
+  members: a `MODULE` or `GROUP` binder's body, the `SIG` an ascription at the
+  site names, a `LET` rooted at either, a value or type alias, and a `WITH` pin,
+  which changes no name. The same walk reads the
+  [operator groups](#operator-groups) the operand surfaces — a `GROUP` binder's
+  group, or a `SIG`'s bodyless `GROUP` heads — which the body then holds, so an
+  operator run of their members may be written in it. The walk is fuel-bounded,
+  so an alias that names itself
+  terminates, and it records no mention and pushes no capture — the operand
+  itself is walked as an ordinary eager argument by the mention pass. An operand
+  that says nothing statically — a parameter, which may hold a module wider than
+  its signature, a call, a member read — is refused `Unsurfaced`, naming the
+  ascription the site needs.
+
+## Operator groups
+
+An **operator run** is a slot-led node whose keywords alternate with slots, two
+or more of them — `1 + 2 - 3`, `a < b <= c`, `A | B | C`. `a + b` is a plain
+call and is never one. An operator run is rewritten **once**, here, where the
+body shape holding it is built, into ordinary nodes built through
+[`parse`](../parse/README.md)'s own node constructor. Nothing past this builder
+ever meets an operator run: dispatch, the scheduler and the elaborator read the
+rewritten nodes and know no operator group.
+
+An **operator group** is a set of operator symbols under one `ReductionMode` —
+fold-left, fold-right, unary, or pairwise with a combiner symbol and the
+direction its pair results fold in. Its identity is its content: two
+declarations of an equal member set under an equal mode are one group, so a
+functor's `GROUP` is one group however often it is instantiated. The record is
+the lattice's [`DeclaredGroup`](../type_lattice/schema.rs), so a signature's
+operator channel and a body's held group are the same type and compare with
+`==`. [groups.rs](groups.rs) holds the model; [shape/build/rewrite.rs](shape/build/rewrite.rs)
+holds the rewrite.
+
+### How a symbol chains, and where a run may say so
+
+Two questions, answered by two different things. **Claims decide *how*; frames
+decide *where*.**
+
+A **claim** is what the program's declarations say about a symbol, collected by
+one position-blind pre-scan of all the code being built, before the first draft.
+A symbol therefore chains one way for the whole program, wherever its
+declarations sit, in this order:
+
+1. a **builtin group** covering it — `{< <= > >=}` pairwise through `AND`
+   folding left, `{+ -}` fold-left, `{* /}` fold-left, `{|}` unary. Nothing
+   overrides one, and they are seen everywhere;
+2. the claim a `GROUP` statement makes over it, or the `Unary` mark a
+   `UNARY OP` makes. A bare `OP` declares an overload and claims nothing;
+3. nothing: the symbol chains fold-left, alone.
+
+A second `GROUP` over a claimed symbol is admitted only when its group is
+*equal*, and is then the same record; a `GROUP` written out equal to a builtin
+group says what the language already says and claims nothing. Any other overlap
+— with a builtin group, with another statement's group, with a unary mark, in
+either order — is `RedeclaresGroup`. The scan never enters a quote: the code
+inside one is data until an `EVAL` builds it.
+
+A **group frame** decides where an operator run may chain under a declared
+group. Only two kinds of body hold a group, both the way a parameter is held, so
+no position is ever compared:
+
+- a **`GROUP`'s own body** holds the group it declares;
+- a **`USING … SCOPE` body** holds the groups its operand surfaces, read off the
+  same declaration [its names are](#names-that-arrive-at-run-time) — a `GROUP`
+  binder's claimed record, or the bodyless `GROUP` heads of the `SIG` an
+  ascription names.
+
+Frames nest outward from the body holding the run. A surfaced group equal to one
+already held, or to a builtin group, changes nothing and is dropped; one that
+would give a member a second chaining is `RedeclaresGroup`. An operator run over
+a *claimed* symbol no enclosing frame holds is `Unchained` — refused, rather
+than quietly folded left, because its group exists and this is not where it was
+surfaced.
+
+Each symbol of a run resolves to a **cover** this way, and every symbol of one
+run must agree, else `MixedGroups`: `a + b * c` has no one shape and must be
+parenthesized. `==` and `!=` are covered by nothing — they take `Any`, belong to
+no group, and are refused as members of one — so they join whichever pairwise
+group the rest of the run chains under, and a run of them alone folds pairwise
+through `AND`, left. Beside symbols that chain any other way they are
+`MixedGroups`.
+
+The frame is also what admits a binary `OP` stating a **result type of its own**:
+only where its symbol chains pairwise, a builtin pairwise group included, since
+a fold hands its own result back as the next operand. Elsewhere it is
+`ResultOutsidePairwise`.
+
+### The four rewrites
+
+Over operands `o0 … on` and operators `k1 … kn`, each operand already rewritten:
+
+- **fold left** — `(((o0 k1 o1) k2 o2) …)`, one nested binary keyworded node per
+  operator; **fold right** — `(o0 k1 (o1 k2 (…)))`;
+- **unary** — `k1 [o0 … on]`, one keyword-first call over a list literal. This
+  is the form a union type takes: `A | B | C` elaborates as that call, and only
+  `A | B` is read as an infix pair;
+- **pairwise** — the adjacent pairs `o(i-1) ki oi`, folded through the group's
+  combiner written infix, in the group's direction.
+
+A pairwise run names each interior operand twice, so an operand that is not a
+name, a type, a literal or a quote would evaluate twice. It is **hoisted**, in
+source order, into an anonymous slot — a name spelled with a space, so no source
+text can reach it — of a **synthesized block**, whose last statement is the
+folded result. That block is an ordinary block shape held by an `Expression`
+part, which is the one rule it asks of the evaluator: *an `Expression` part
+carrying a nested block shape, which is not a form's body or arm, runs as a
+block whose value is its last statement's.* When a whole statement is such a
+run, the statement is the one-part wrapper around its block.
+
+`!=` is never built. Wherever a pair or a bare infix node spells `a != b`, the
+rewrite emits `NOT (a == b)` instead, so `!=` reaches no bucket and is the
+opposite of `==` by construction — which is also why a declaration naming it is
+`Derived`, and why a user's `==` must return `Bool`. Every node the rewrite
+builds, bar the synthesized hoists, must spell no builtin bucket: an operator
+whose chained node a later reader would walk as a form is `SpellsForm`.
+
+A statement holding no operator run is returned unchanged, keeping its own part
+addresses, so the shape of untouched code is the shape of the parse.
+
+### Evaluated code
+
+The code an `EVAL` runs is rewritten where its own block shape is built, when
+the `EVAL` runs. Its claims chain to the program's, so a `GROUP` inside
+evaluated code is held to the program's declarations and chains that code's runs
+only, and its frame is rooted at the frame of the shape the `EVAL` sits in —
+found by a walk over shapes that reads no activation slot. A quoted operator run
+is data and is rewritten by nobody until then.
 
 ## Errors
 
@@ -263,14 +474,30 @@ error in walk order:
 - a binding that **shadows a builtin**, in either channel;
 - an **unbound** name — no binding of it visible where the mention reads;
 - an **eager cycle** — a component with an eager mention of a fellow member;
-- an **unsupported** form — `USING … SCOPE`, `CLOSE` and `CLOSE OVER`, whose
-  resolution has no rewrite home yet, and the reserved forms that exist only
-  to diagnose a miss;
+- an **unsurfaced** `USING` — an operand that does not say, where the shape is
+  built, which names it surfaces;
+- an **unsupported** form — `CLOSE` and `CLOSE OVER`, whose resolution has no
+  rewrite home yet, and the reserved forms that exist only to diagnose a miss;
 - a **malformed** form — a body or a branch list that is not the shape its form
-  declares.
+  declares;
+
+and six more from [operator groups](#operator-groups), each naming the symbol it
+is about:
+
+- **unchained** — an operator run over a symbol whose group no enclosing body
+  holds;
+- **mixed groups** — an operator run whose symbols chain under two different
+  groups;
+- **redeclares group** — a `GROUP`, or a `USING` surfacing one, that would give
+  a symbol a second chaining;
+- **result outside pairwise** — a binary `OP` stating a result of its own whose
+  symbol does not chain pairwise;
+- **spells form** — an operator run whose chained node would spell a builtin
+  bucket;
+- **derived** — a declaration naming `!=`, which is always the opposite of `==`.
 
 Each renders with the names and positions a user needs, spelled through the
-label interner.
+symbol interner.
 
 ## Memory
 
@@ -295,19 +522,20 @@ components, nested shapes — rest in program storage and are `Copy`. An
 
 ## The import rule
 
-`scope` names `crate::values`, `crate::type_lattice`, `crate::memory` and
-`crate::parse`, and no scheduler type. A pending slot's cell handle is
-`cellgraph`'s name for a unit of work, spelled through `memory`'s substrate
-re-exports like every other substrate name; the scheduler reaches scopes
-through its embedder, and scopes never reach the scheduler. The compiler
+`scope` names `crate::values`, `crate::type_lattice`, `crate::symbols`,
+`crate::memory` and
+`crate::parse`, and no scheduler type. From `type_lattice` it names the
+operator-group vocabulary — `DeclaredGroup` and its `ReductionMode` — so a
+signature's operator channel and a body's held group are one record rather than
+two that must be kept in step. The scheduler reaches scopes through its
+embedder, and scopes never reach the scheduler. The compiler
 cannot hold a module to that, so [`tests::boundary`](tests/boundary.rs) reads
 the module's source and fails on any other `crate::` path, on an owning heap
 type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [Modules](../../roadmap/rewrite/modules.md) — `USING … SCOPE` resolved
-  through a module's signature.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
-  OVER`, and an `EVAL` retaining its defining scope across frames.
+  OVER`, an `EVAL` retaining its defining scope across frames, and what an
+  `EVAL` behind a forward reference may read.

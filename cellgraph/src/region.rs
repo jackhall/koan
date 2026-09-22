@@ -21,6 +21,12 @@
 //! takes the table exclusively, which no step can do, so no `&mut` over a live region's bytes can
 //! exist under a writer into it: the borrow checker holds that line.
 //!
+//! Beside each region the table keeps the cell's **scratch bump** — the half of its habitat a
+//! step writes at its `'scratch` brand and the table hands back whole once nothing names it — and,
+//! for the whole graph, a bounded **spare list** of reset bumps: a reclaimed region's chunks wait
+//! there for the next birth, so a release-then-create loop stays off the allocator. Both are reset
+//! only through the table's `&mut` doors, outside any step.
+//!
 //! A region is a **bundle** of bumps: the one it writes into, plus the bumps of every region
 //! absorbed into it. Absorption is how a merge splices storage
 //! ([graph/README.md § Locality tactics](graph/README.md#locality-tactics)) —
@@ -29,11 +35,14 @@
 
 use std::alloc::Layout;
 use std::cell::OnceCell;
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use bumpalo::Bump;
 
+use crate::carrier::CellHome;
+use crate::graph::Config;
 use crate::sealed::SealedId;
 
 #[cfg(test)]
@@ -84,9 +93,10 @@ impl Region {
     pub(crate) fn memo(&self) -> Option<&[SealedId]> {
         let run = self.memo.get()?;
         // SAFETY: the `BumpRun` is a private field of this region, minted by `set_memo` out of this
-        // region's own bump and reachable through no other path. The bump is never reset and frees
-        // its chunks only when this `Region` drops, and moving the `Bump` moves no chunk byte, so
-        // the run stays where it was written for as long as the region lives. `SealedId: Copy`, so
+        // region's own bump and reachable through no other path. The bump is reset or freed only
+        // once this `Region` has been taken apart, which drops the memo first, and moving the
+        // `Bump` moves no chunk byte, so the run stays where it was written for as long as the
+        // region lives. `SealedId: Copy`, so
         // nothing there was ever dropped in place. The returned borrow is bounded by `&self`.
         Some(unsafe { std::slice::from_raw_parts(run.ptr.as_ptr(), run.len) })
     }
@@ -125,32 +135,52 @@ impl Region {
     /// what makes a splice up a chain O(1) apiece: a cell absorbing a bundle far larger than its
     /// own takes that bundle over instead of copying it in. Order carries no meaning here — the
     /// list exists to keep the chunks alive and to total their bytes — so the swap costs nothing.
-    pub(crate) fn absorb(&mut self, mut other: Region) {
-        // An empty bundle takes the source over whole rather than listing it, which is what keeps a
-        // merge into a cell that never wrote off the allocator. Nothing of this region's is lost:
-        // a bump with no chunk holds no value, and a memo would have cost bytes.
-        if self.bump.allocated_bytes() == 0 && self.absorbed.is_empty() {
-            *self = other;
-            return;
+    ///
+    /// Hands back **the bump that did not join the bundle**, where there is one: this region's own
+    /// when the source took it over whole, or the source's when nothing was written into it. Either
+    /// holds no value, and a warm one still owns a chunk, so the caller retires it rather than
+    /// letting it drop.
+    #[must_use = "a bump left out of the bundle may own a chunk, which its caller retires"]
+    pub(crate) fn absorb(&mut self, mut other: Region) -> Option<Bump> {
+        // An unwritten bundle takes the source over whole rather than listing it, which is what
+        // keeps a merge into a cell that never wrote off the allocator. Nothing of this region's
+        // is lost: a bump that handed out no byte holds no value, and a memo would have cost
+        // bytes.
+        if self.is_unwritten() && self.absorbed.is_empty() {
+            let displaced = std::mem::replace(self, other);
+            return Some(displaced.bump);
         }
         if self.absorbed.len() < other.absorbed.len() {
             std::mem::swap(&mut self.absorbed, &mut other.absorbed);
         }
         self.absorbed.append(&mut other.absorbed);
-        // A bump that never allocated owns no chunk, so taking it in would only lengthen the list.
-        if other.bump.allocated_bytes() > 0 {
-            self.absorbed_bytes += other.bump.allocated_bytes();
-            self.absorbed.push(other.bump);
-        }
         self.absorbed_bytes += other.absorbed_bytes;
+        // A bump nothing was written into keeps no borrow alive, so taking it in would only
+        // lengthen the list and bill the bundle for a chunk no value sits in.
+        if other.is_unwritten() {
+            return Some(other.bump);
+        }
+        self.absorbed_bytes += other.bump.allocated_bytes();
+        self.absorbed.push(other.bump);
+        None
     }
 
     /// Bytes the chunks occupy, whether or not a value still uses them — a bump never reclaims
     /// within a chunk, so this is what the region costs while anything holds it. Absorbed bumps
     /// count: the bundle is answerable for every chunk it took in. O(1), off the running total the
     /// merges maintain, since a priced operand reads this figure and a bundle grows by splices.
+    ///
+    /// A bump drawn off the spare list counts its chunk from the cell's birth, written or not: the
+    /// region occupies it.
     pub(crate) fn allocated_bytes(&self) -> usize {
         self.bump.allocated_bytes() + self.absorbed_bytes
+    }
+
+    /// Whether the region's own bump has handed out no byte: a cold bump, which owns no chunk, or a
+    /// warm one whose chunk is whole. "Did this cell write?" is this reading and never
+    /// `allocated_bytes() == 0`, which a warm bump fails with nothing written.
+    pub(crate) fn is_unwritten(&self) -> bool {
+        self.bump.allocated_bytes() == self.bump.chunk_capacity()
     }
 
     /// Whether the region is as it was built: no chunk claimed, nothing absorbed, no memo. Such a
@@ -160,7 +190,30 @@ impl Region {
     }
 }
 
-/// Every live cell's region, slab and tree, in one table the graph keeps beside its cells.
+/// What one table index holds for the cell that occupies it: both halves of its habitat, the
+/// region and the scratch bump beside it.
+///
+/// One index reaches the two together, and they stay separate structs because a [`Region`] is what
+/// seals, splices and absorbs and a scratch bump is none of that — it is pinned to its index and
+/// never travels, so an absorb leaves the absorber's scratch alone and a seal retains no scratch,
+/// by construction.
+struct Habitat {
+    region: Region,
+    /// The second bump a step writes, at its `'scratch` brand, reset at a step's end once nothing
+    /// names it. Its bytes are in no price: a hold never extends a scratch byte's life.
+    scratch: Bump,
+}
+
+impl Habitat {
+    fn new() -> Self {
+        Habitat {
+            region: Region::new(),
+            scratch: Bump::new(),
+        }
+    }
+}
+
+/// Every live cell's habitat, slab and tree, in one table the graph keeps beside its cells.
 ///
 /// Held apart from the cells so a step can borrow the two differently: the table shared, at the
 /// step's `'here` brand, and the cells exclusively. Every slot carries a region from the start —
@@ -171,40 +224,182 @@ impl Region {
 /// and since no `&mut` into the table exists inside a step, every write a step makes into a bump
 /// descends from a shared borrow, which a bump's interior-mutable bytes tolerate.
 pub(crate) struct Regions {
-    /// One region per slab slot, replaced with an empty one when the slot recycles.
-    slab: Box<[Region]>,
-    /// One region per tree-pool index, every index up to the table's capacity filled. The table
+    /// One habitat per slab slot, its region replaced with an empty one when the slot recycles.
+    slab: Box<[Habitat]>,
+    /// One habitat per tree-pool index, every index up to the table's capacity filled. The table
     /// starts a slab's width long, like the pool itself, and doubles from there in step with it;
     /// a cell's creation finds its region already waiting, and pays a length check for it.
-    tree: Vec<Region>,
+    tree: Vec<Habitat>,
+    /// Reset bumps a reclaim gave up, each still owning its chunk, for the next birth to draw:
+    /// last in, first out, so a cell born right after a death writes into the chunk that death
+    /// freed, and a push past [`bound`](Self::bound) evicts from the other end, the oldest first. Always empty under Miri, where a reclaimed
+    /// chunk goes back to the allocator so that a use after the reclaim is an error it can see.
+    spare: VecDeque<Bump>,
+    /// Cells that own a region and have not disposed — what the spare list serves. Sealed storage
+    /// and absorbed bumps are retention rather than demand, and are not counted.
+    live: u32,
+    /// A moving average of `live` in 24.8 fixed point, sampled at every birth and every disposal
+    /// and nowhere else: no clock and no float.
+    average: u32,
+    /// How many spares the list may hold per averaged live cell.
+    spare_proportion: u32,
+    /// The average's window, as a shift: each sample closes `1 / 2^shift` of the gap to `live`.
+    spare_window_shift: u32,
 }
 
 impl Regions {
-    pub(crate) fn new(cap: u32) -> Self {
+    pub(crate) fn new(config: Config) -> Self {
         Regions {
-            slab: (0..cap).map(|_| Region::new()).collect(),
-            tree: (0..cap).map(|_| Region::new()).collect(),
+            slab: (0..config.cap).map(|_| Habitat::new()).collect(),
+            tree: (0..config.cap).map(|_| Habitat::new()).collect(),
+            spare: VecDeque::with_capacity(config.cap as usize),
+            live: 0,
+            average: 0,
+            spare_proportion: config.spare_proportion,
+            spare_window_shift: config.spare_window_shift,
         }
     }
 
-    /// A slab cell's region.
-    pub(crate) fn slab(&self, slot: u32) -> &Region {
-        &self.slab[slot as usize]
+    /// One index's habitat.
+    fn habitat(&self, home: CellHome) -> &Habitat {
+        match home {
+            CellHome::Slab(slot) => &self.slab[slot as usize],
+            CellHome::Tree(index) => &self.tree[index as usize],
+        }
     }
 
-    /// A tree cell's region.
-    pub(crate) fn tree(&self, index: u32) -> &Region {
-        &self.tree[index as usize]
+    fn habitat_mut(&mut self, home: CellHome) -> &mut Habitat {
+        match home {
+            CellHome::Slab(slot) => &mut self.slab[slot as usize],
+            CellHome::Tree(index) => &mut self.tree[index as usize],
+        }
+    }
+
+    /// The most bumps the spare list may hold right now: the proportion of the averaged live
+    /// count, rounded up — so a loop holding one live cell keeps one spare. Enforced where a bump
+    /// is pushed and nowhere else: a list an earlier peak left long sheds its whole excess at the
+    /// next retire.
+    fn bound(&self) -> usize {
+        ((u64::from(self.spare_proportion) * u64::from(self.average) + 255) >> 8) as usize
+    }
+
+    /// Fold the live count into the moving average.
+    fn sample(&mut self) {
+        let gap = (i64::from(self.live) << 8) - i64::from(self.average);
+        self.average = (i64::from(self.average) + (gap >> self.spare_window_shift)) as u32;
+    }
+
+    /// A region-owning cell was born: count it, and warm its bump off the spare list if one is
+    /// there. A slot's region is cold at every birth — disposal left it so — which is why the draw
+    /// is a plain replacement. The spare comes off the list before the habitat is indexed, so the
+    /// two borrows never overlap.
+    pub(crate) fn warm(&mut self, home: CellHome) {
+        self.live += 1;
+        self.sample();
+        let spare = self.spare.pop_back();
+        let region = &mut self.habitat_mut(home).region;
+        debug_assert!(region.is_untouched(), "a cell is born into a region in use");
+        if let Some(bump) = spare {
+            region.bump = bump;
+        }
+    }
+
+    /// A region-owning cell disposed, by whichever exit.
+    pub(crate) fn departed(&mut self) {
+        debug_assert!(self.live > 0, "a cell departed that no birth counted");
+        self.live -= 1;
+        self.sample();
+    }
+
+    /// Give up a region nothing reaches: every bump of its bundle is retired, its own last, so the
+    /// next birth draws the chunk the departing cell wrote into most recently. The memo goes with
+    /// the region, before any of its bytes can be handed out again.
+    pub(crate) fn retire(&mut self, region: Region) {
+        let Region { bump, absorbed, .. } = region;
+        for absorbed in absorbed {
+            self.retire_bump(absorbed);
+        }
+        self.retire_bump(bump);
+    }
+
+    /// Reset one bump onto the spare list, or drop it: a cold one owns no chunk to keep, and under
+    /// Miri every one goes back to the allocator. A full list makes room by evicting its oldest
+    /// spares, the coldest chunks, so a bump retired now always waits unless the bound is zero.
+    ///
+    /// The caller owns the bump, so nothing borrows its bytes: the safety argument is the one a
+    /// reclaim's drop already rests on, and a reset is that drop with the largest chunk kept.
+    pub(crate) fn retire_bump(&mut self, mut bump: Bump) {
+        if bump.allocated_bytes() == 0 {
+            return;
+        }
+        let bound = self.bound();
+        if cfg!(miri) || bound == 0 {
+            return;
+        }
+        while self.spare.len() >= bound {
+            self.spare.pop_front();
+        }
+        bump.reset();
+        self.spare.push_back(bump);
+    }
+
+    /// How many bumps the spare list holds.
+    #[cfg(test)]
+    pub(crate) fn spare_len(&self) -> usize {
+        self.spare.len()
+    }
+
+    /// What [`bound`](Self::bound) reads right now.
+    #[cfg(test)]
+    pub(crate) fn spare_bound(&self) -> usize {
+        self.bound()
+    }
+
+    /// The region a step homed in `home` writes.
+    pub(crate) fn region(&self, home: CellHome) -> &Region {
+        &self.habitat(home).region
+    }
+
+    fn scratch_bump(&self, home: CellHome) -> &Bump {
+        &self.habitat(home).scratch
+    }
+
+    /// The write surface of `home`'s scratch bump, which a step takes at its `'scratch` brand.
+    pub(crate) fn scratch_writer(&self, home: CellHome) -> Writer<'_> {
+        Writer(self.scratch_bump(home))
+    }
+
+    /// Hand `home`'s scratch bump back whole. The caller has established that nothing at rest names
+    /// a byte of it, and that no step is running.
+    ///
+    /// Under Miri the bump is rebuilt rather than reset, so its chunk goes back to the allocator
+    /// and a stale `'scratch` reference is an error Miri can see.
+    pub(crate) fn reset_scratch(&mut self, home: CellHome) {
+        let bump = &mut self.habitat_mut(home).scratch;
+        if bump.allocated_bytes() > 0 {
+            if cfg!(miri) {
+                *bump = Bump::new();
+            } else {
+                bump.reset();
+            }
+        }
+    }
+
+    /// Bytes `home`'s scratch bump has handed out since its last reset.
+    #[cfg(test)]
+    pub(crate) fn scratch_in_use(&self, home: CellHome) -> usize {
+        let bump = self.scratch_bump(home);
+        bump.allocated_bytes() - bump.chunk_capacity()
     }
 
     /// Chunk bytes a slab cell's region bundle occupies, `0` where it never allocated.
     pub(crate) fn slab_bytes(&self, slot: u32) -> usize {
-        self.slab[slot as usize].allocated_bytes()
+        self.slab[slot as usize].region.allocated_bytes()
     }
 
     /// Chunk bytes a tree cell's region bundle occupies, `0` where it never allocated.
     pub(crate) fn tree_bytes(&self, index: u32) -> usize {
-        self.tree[index as usize].allocated_bytes()
+        self.tree[index as usize].region.allocated_bytes()
     }
 
     /// Make room for a tree-pool index the pool has just minted. Idempotent for one it already
@@ -215,39 +410,44 @@ impl Regions {
             let needed = index + 1 - self.tree.len();
             self.tree.reserve(needed.max(self.tree.len()));
             let room = self.tree.capacity();
-            self.tree.resize_with(room, Region::new);
+            self.tree.resize_with(room, Habitat::new);
         }
     }
 
     /// Take a slab cell's storage off it, leaving an empty region behind — for the seal, the
-    /// merge or the drop that disposal performs.
+    /// merge or the drop that disposal performs. The scratch bump stays where it is: a seal
+    /// retains no scratch.
     pub(crate) fn take_slab(&mut self, slot: u32) -> Region {
-        std::mem::replace(&mut self.slab[slot as usize], Region::new())
+        std::mem::replace(&mut self.slab[slot as usize].region, Region::new())
     }
 
-    /// Drop a slab cell's storage in place, for the slot's recycling. A region the cell never
-    /// wrote into owns nothing and stays as it is; only one that claimed a chunk is replaced.
+    /// Retire a slab cell's storage, for the slot's recycling. A region that owns nothing stays
+    /// as it is; one that claimed or drew a chunk is replaced, and its bumps retired.
     pub(crate) fn clear_slab(&mut self, slot: u32) {
-        let region = &mut self.slab[slot as usize];
-        if !region.is_untouched() {
-            *region = Region::new();
+        if !self.slab[slot as usize].region.is_untouched() {
+            let region = self.take_slab(slot);
+            self.retire(region);
         }
     }
 
     /// Take a tree cell's storage off it, leaving an empty region behind — for the splice or the
     /// drop that disposal performs.
     pub(crate) fn take_tree(&mut self, index: u32) -> Region {
-        std::mem::replace(&mut self.tree[index as usize], Region::new())
+        std::mem::replace(&mut self.tree[index as usize].region, Region::new())
     }
 
     /// Splice a departing cell's bump into a slab cell's bundle.
     pub(crate) fn splice_into_slab(&mut self, slot: u32, from: Region) {
-        self.slab[slot as usize].absorb(from);
+        if let Some(bump) = self.slab[slot as usize].region.absorb(from) {
+            self.retire_bump(bump);
+        }
     }
 
     /// Splice a departing cell's bump into a tree cell's bundle.
     pub(crate) fn splice_into_tree(&mut self, index: u32, from: Region) {
-        self.tree[index as usize].absorb(from);
+        if let Some(bump) = self.tree[index as usize].region.absorb(from) {
+            self.retire_bump(bump);
+        }
     }
 }
 
@@ -344,6 +544,26 @@ impl<'cell> Writer<'cell> {
     }
 }
 
+/// Storage the embedder keeps alive outside the graph, written through the same [`Writer`] a
+/// region is — what a graph built over it borrows as `'graph`.
+///
+/// Sound for the reason a `'graph` borrow is no operand: the storage outlives the graph, which
+/// prices, pins and reclaims none of it. The bump stays private, so an embedder writes it only
+/// through the writer's verbs.
+#[derive(Default)]
+pub struct Storage(Bump);
+
+impl Storage {
+    pub fn new() -> Self {
+        Storage(Bump::new())
+    }
+
+    /// A writer at this storage's borrow — `'graph`, for a graph built over it.
+    pub fn writer(&self) -> Writer<'_> {
+        Writer(&self.0)
+    }
+}
+
 /// What sits at the front of a [`ThinRun`]'s allocation: its length. The elements follow at
 /// `ThinRun::<T>::OFFSET`.
 #[repr(C)]
@@ -385,8 +605,9 @@ impl<'cell, T> ThinRun<'cell, T> {
     /// How many elements the run holds.
     pub fn len(self) -> usize {
         // SAFETY: `head` came from `Writer::thin_run`, which wrote the header before handing the
-        // handle out. The bump is never reset and frees its chunks only when its region drops,
-        // which no step outlives a `'cell` borrow of, and moving a bump moves no chunk byte.
+        // handle out. A bump's chunks are reset or freed only by a verb that holds the region table
+        // exclusively, which no `'cell` borrow coexists with, and moving a bump moves no chunk
+        // byte.
         unsafe { self.head.as_ptr().read() }.len
     }
 

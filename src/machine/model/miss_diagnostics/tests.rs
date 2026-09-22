@@ -1,6 +1,6 @@
 //! Miss-diagnosis tests: the write door's refusal of a user claim on a reserved key. That a
 //! diagnosing key names a live bucket and a reserved one names none is the form table's own law,
-//! checked against the single live-registration walk in `parse::forms::tests::registration`.
+//! checked against the single live-registration walk in `parse::builtin_shapes::tests::registration`.
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;

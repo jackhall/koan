@@ -73,6 +73,13 @@ else
     export PROPTEST_CASES="${PROPTEST_CASES:-64}"
 fi
 
+# One core held back. `.cargo/config.toml` does this for the compile side (`jobs = -1`);
+# this is the run side, where libtest otherwise spawns one thread per available core.
+if [ -z "${RUST_TEST_THREADS:-}" ]; then
+    CORES="$(nproc)"
+    export RUST_TEST_THREADS=$((CORES > 1 ? CORES - 1 : 1))
+fi
+
 SCOPE=""
 CLAUSES=()
 OUT=""

@@ -45,11 +45,11 @@ pub mod working;
 mod tests;
 
 pub use admission::{
-    ConstructionRefused, admits, admits_part, construction, dict_type, list_type, part_ktype,
-    record_type, satisfies,
+    ConstructionRefused, SealRefused, admits, admits_part, construction, dict_type, list_type,
+    part_ktype, record_type, satisfies, sealing,
 };
 pub use circular::{Circular, Resolved};
-pub use crossing::{COPY_RATIO, cross, cross_here, verdict};
+pub use crossing::{COPY_RATIO, copy_severed, cross, cross_here, cross_view, verdict};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use equality::Incomparable;
 pub use link::Link;
@@ -63,7 +63,7 @@ pub use working::{WorkingExpression, WorkingPart};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
-use crate::memory::{DropFree, Edge, Ready, Writer, reattachable};
+use crate::memory::{DropFree, Edge, Ready, Writer, covariant, reattachable};
 use crate::parse::ProgramNode;
 use crate::type_lattice::{KType, TypeNode, TypeRegistry};
 
@@ -81,7 +81,8 @@ pub trait Knotted: Copy + Eq + Hash {
     /// The member `edge` names among this one's own siblings.
     fn sibling(&self, edge: Edge) -> Self;
 
-    /// What the node holds: a function, opaque to `values`, or a data node read through its cells.
+    /// What the node holds: a function or a module, both opaque to `values`, or a data node read
+    /// through its cells.
     fn resolve<'a>(&self) -> Resolved<'a, Self>
     where
         Self: 'a;
@@ -156,6 +157,10 @@ impl<'graph> KnottedFamily<'graph> for NoKnot {
         match *member {}
     }
 }
+
+// A knot-free value crosses between cells like any other, so its family carries the covariance
+// witness too.
+covariant!(ValueFamily<NoKnot>);
 
 /// The value family the cell graph carries: [`Value`] at a region lifetime, beside the graph's,
 /// closed over the knot members of `XF`.
@@ -340,6 +345,26 @@ impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
         }
     }
 
+    /// The module this value is, if it is one.
+    pub fn as_module(&self) -> Option<X> {
+        match self {
+            Value::Knotted(member) if matches!(member.resolve(), Resolved::Module) => Some(*member),
+            _ => None,
+        }
+    }
+
+    /// The knot member this value is when its node is opaque to `values` — a function or a module.
+    /// Equality refuses such a pair and rendering writes its type's name.
+    pub fn as_opaque(&self) -> Option<X> {
+        match self {
+            Value::Knotted(member) => match member.resolve() {
+                Resolved::Function | Resolved::Module => Some(*member),
+                Resolved::Circular(_) => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The data node this value is, if it is one, beside the member it is read through.
     pub fn as_circular(&self) -> Option<(X, Circular<'cell, 'cell, X>)>
     where
@@ -348,7 +373,7 @@ impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
         match self {
             Value::Knotted(member) => match member.resolve() {
                 Resolved::Circular(circular) => Some((*member, circular)),
-                Resolved::Function => None,
+                Resolved::Function | Resolved::Module => None,
             },
             _ => None,
         }

@@ -79,13 +79,13 @@ Two files serve the lowering:
 
 The output is one [`KExpression`](src/parse/ast.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
 
-`parse` owns what it produces, not just the walk that produces it: [labels.rs](src/parse/labels.rs) mints and interns every symbol, [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [forms.rs](src/parse/forms.rs) holds `FORMS` — the one table spelling every builtin form's bucket key, tagged by a `FormId`, carrying the binder facts, the lazy slots and the reserved bit each form's readers ask for. A node probes that table once; the close-inference rules and the miss diagnostics name a form by its tag rather than respelling its key.
+`parse` owns what it produces, not just the walk that produces it: [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [builtin_shapes.rs](src/parse/builtin_shapes.rs) holds `BUILTIN_SHAPES` — the one table spelling every builtin bucket as a typed run, tagged by a `BuiltinShapeId`: keywords in position, and at each slot a role beside one type per overload of the bucket, with one return apiece, plus the binder facts and the reserved bit each entry's readers ask for. The untyped bucket key and the part kinds a slot keeps raw are erasures of that run, not columns of their own. A node probes that table once; the close-inference rules and the miss diagnostics name a shape by its tag rather than respelling its key.
 
 `KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/values/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [src/parse/README.md](src/parse/README.md).
 
 ### dispatch — `KExpression` → `DispatchOutcome` against a `Scope`
 
-A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/decide/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`DispatchOutcome`](src/machine/execute/decide/resolve_dispatch.rs) — `Resolved` (a unique pick, plus the bare-name slots to auto-wrap), `Ambiguous(n)` (strict-mode tie), `ParkOnProducers` (wait on a still-finalizing earlier binder), `UnboundName`, or `Unmatched` (a real dispatch failure, carrying a forgotten-quote hint when one applies). Every eager-shaped child is submitted before this runs — which slots stay raw is the `lazy_slots` stamp of the node's cached [`FORMS`](src/parse/forms.rs) entry — so dispatch selects over landed values. [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
+A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/decide/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`DispatchOutcome`](src/machine/execute/decide/resolve_dispatch.rs) — `Resolved` (a unique pick, plus the bare-name slots to auto-wrap), `Ambiguous(n)` (strict-mode tie), `ParkOnProducers` (wait on a still-finalizing earlier binder), `UnboundName`, or `Unmatched` (a real dispatch failure, carrying a forgotten-quote hint when one applies). Every eager-shaped child is submitted before this runs — which slots stay raw is the raw-capture erasure of the node's cached [`BUILTIN_SHAPES`](src/parse/builtin_shapes.rs) entry — so dispatch selects over landed values. [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
 
 Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, function references); the cross-cutting `Parseable` trait lives in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
 
@@ -99,28 +99,36 @@ The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/READ
 
 ## Source layout
 
-The crate splits into nine top-level modules: [memory/](src/memory) (where a
+The crate splits into ten top-level modules: [memory/](src/memory) (where a
 value lives and how long), [parse](src/parse.rs) (text → `KExpression`, plus the
 symbol, AST and form-table vocabulary that output is written in),
 [values/](src/values.rs) (the data values and the per-dispatch expression form,
 laid down in a cell's region — see [src/values/README.md](src/values/README.md)),
-[scope/](src/scope.rs) (lexical environments: the shape a body resolves its names
-through, closure bindings and activations — see
+[scope/](src/scope.rs) (lexical environments: the shape a body owns its
+statements and resolves its names through, closure bindings and activations — see
 [src/scope/README.md](src/scope/README.md)),
 [elaborate/](src/elaborate.rs) (type expressions elaborated into lattice handles
 where they are read — see [src/elaborate/README.md](src/elaborate/README.md)),
-[function/](src/function.rs) (functions and circular data as values: the knot
-nodes a function or a data node is, their tie and their copy — see [src/function/README.md](src/function/README.md)),
+[knot/](src/knot.rs) (functions, modules and circular data as values: the node
+each one is, the tie that births a component as one knot and the copy that
+re-ties it — see [src/knot/README.md](src/knot/README.md), and
+[src/knot/module/README.md](src/knot/module/README.md) for the views `:|` and
+`:!` build, the coercion that births a view's members, and the binding a
+`USING … SCOPE` block enters on),
+[scheduler/](src/scheduler.rs) (the deferred-work drain, where a unit of work is
+a `cellgraph` cell — see [src/scheduler/README.md](src/scheduler/README.md)),
+[program/](src/program.rs) (a loaded program as one owning value — program
+storage, the interner, the type registry and the cell graph over them — and the
+body runner that performs it — see
+[src/program/README.md](src/program/README.md)),
 [builtins/](src/builtins) (the K-language standard library, one file per
 builtin), [type_lattice/](src/type_lattice.rs) (the closed algebra over interned
 type nodes — see [src/type_lattice/README.md](src/type_lattice/README.md)),
 and [machine/](src/machine) (the execution engine that consumes a
 `KExpression`). `parse` splits into [ast/](src/parse/ast.rs) (the syntax types,
 the node cache and the eternal-tier program marker),
-[labels.rs](src/parse/labels.rs) (`Symbol`, the content-digest handle every
-syntactic label travels as, beside its interner) and
-[forms/](src/parse/forms.rs) (`FORMS` and the binder / lazy-slot / slot-layout
-facts riding its entries). `machine` further
+and [builtin_shapes/](src/parse/builtin_shapes.rs) (`BUILTIN_SHAPES` and the role /
+binder / slot-layout facts riding its entries). `machine` further
 splits into [model/](src/machine/model) (the value/type vocabulary —
 [ast.rs](src/machine/model/ast.rs) for what the machine *does* with a parsed node,
 [types/](src/machine/model/types) for `KType`/`KKind`/signatures/traits, and
@@ -159,8 +167,8 @@ schema a signature node carries, and the canonical signature-subtyping relation)
 [registry.rs](src/machine/model/types/registry.rs) (`TypeRegistry`, the
 run-frame-owned store that memoizes subtype verdicts by digest pair),
 [registries.rs](src/machine/model/registries.rs) (`RunRegistries`, the run frame's
-owned bundle of that registry beside the label interner — see
-[src/parse/README.md](src/parse/README.md) § Labels),
+owned bundle of that registry beside the symbol interner — see
+[src/symbols/README.md](src/symbols/README.md)),
 [builtins.rs](src/builtins.rs) (registry),
 [constructors.rs](src/machine/execute/decide/constructors.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
@@ -174,32 +182,35 @@ deleting the files above is
 ```
 src/
 ├── main.rs              CLI entry point — reads source, calls interpret_with_writer_path
-├── lib.rs               library facade — declares `memory`, `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph, and re-exports workgraph's DAG scheduler as `koan::scheduler`
+├── lib.rs               library facade — declares every kept module plus, behind `pending_rewrite`, `builtins` and `machine`, so integration tests under tests/ link against the same module graph; `koan::scheduler` is the kept module below, and the `pending_rewrite` re-export of workgraph's DAG scheduler under that same name is one of the reasons that build no longer resolves
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally fixed-cost measurements read; tests/boundary.rs is the source scanner every rewrite module's boundary test hands its import lists to
 ├── source.rs            source-span and provenance carrier for errors
 ├── memory.rs            pub mod memory — where a value lives and how long, in two tiers: the cell tier over cellgraph and the bump tier outside the graph
 ├── memory/
 │   ├── substrate.rs        the crate's only import of cellgraph — a re-export block binding the liveness width once (WIDTH), with the width-bound Ready / Operand / CellGraph / StepContext aliases
 │   ├── bump.rs             the bump tier — Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap and bump_table; the crate's only import of bumpalo / hashbrown / allocator_api2
-│   ├── slots.rs            SlotState / SlotArray — a fixed run of Empty | Claimed(P) | Bound(V) Cell slots laid down by Writer::fill in a cell's region, a Copy array beside the in-region live-claim counter that makes "nothing in flight" an O(1) read
+│   ├── slots.rs            SlotArray / SlotView — a fixed run of two-state write-once binding slots in a cell's region, safe code over cellgraph's once-written run: the invariant array binds, the covariant view reads
 │   ├── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and a scope's bindings both condense by
 │   ├── scope_id.rs         ScopeId — counter-minted, position-independent scope identity for per-declaration types; an identity source, never looked up against
-│   └── program.rs          ProgramStorage / ProgramBrand — the bump program text and its parsed AST live in, outside the graph
-├── parse.rs             pub mod parse — the parser and what it produces: the label vocabulary, the syntax AST, and the form table
+│   └── program.rs          ProgramStorage / ProgramBrand — outside the graph, the bump program text and its parsed AST live in beside cellgraph's Storage, whose Writer lays the builtin table and the program record down at 'graph
+├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the run's digest→text side table, read only when rendering), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so parse and type_lattice rest on it rather than on each other
+├── symbols/
+│   └── tests.rs            interning laws and the four fixed-name pins over static_name! / slots!
+├── parse.rs             pub mod parse — the parser and what it produces: the syntax AST and the builtin shape table, written in the symbol vocabulary
 ├── parse/
 │   ├── lower.rs            layout tree → KExpressions: sigils, the redundant-wrapper peel, adjacency, spans
 │   ├── atom.rs             classify one atom — the colon split, compound-operator desugaring
 │   ├── brace.rs            DictFrame state machine for `{k: v}` / `{x = 1}` pairing
 │   ├── operators.rs        operator registry
-│   ├── labels.rs           Symbol — a label's 128-bit content digest — plus LabelInterner (the run's digest→text side table, read only when rendering), the four classified symbol wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses
 │   ├── ast.rs              the syntax AST: KLiteral / ExpressionPart / KExpression — Copy handles over bumped slices, with a Type part carrying only its TypeSymbol
 │   ├── ast/
-│   │   ├── shape.rs        PartClass / DispatchShape / KeyElement / UntypedKey + NodeCache, the one structural cache both node families carry (stored key, shape, operator probe, FORMS entry, binder plan) and the readers that fill it
+│   │   ├── shape.rs        PartClass / DispatchShape / KeyElement / ExpressionKey + NodeCache, the one structural cache both node families carry (stored key, shape, BUILTIN_SHAPES entry, binder plan) and the readers that fill it
 │   │   └── program.rs      ProgramExpression / ProgramNode — the eternal-tier marker that makes "this node's parts run is hosted in program storage" a type
-│   ├── forms.rs            FORMS — every builtin form's full bucket key spelled once, tagged by FormId, carrying its binder facts, its lazy slots and its reserved bit; KEYWORDS, the one key matcher, and the single table probe
-│   └── forms/
-│       ├── binder.rs       BinderFacts and the structural extractors: which name and bucket key(s) a binder form declares, read off the node's cached entry
-│       ├── lazy.rs         LazyKinds — which part kinds a slot captures raw instead of evaluating
+│   ├── builtin_shapes.rs   BUILTIN_SHAPES — every builtin bucket as one typed run spelled once, tagged by BuiltinShapeId, carrying each slot's role and its type per overload, one return per overload, its binder facts and its reserved bit; the bucket key and the raw-capture kinds derived off that run, the two build-time laws over it, KEYWORDS, and the single table probe
+│   └── builtin_shapes/
+│       ├── role.rs         Role / BodyKind / Heads / DefinitionKind — what each part of an entry is to name resolution
+│       ├── binder.rs       BinderFacts and the structural extractors: which name and bucket key(s) a binder shape declares, read off the node's cached entry
+│       ├── lazy.rs         LazyKinds — which part kinds a slot captures raw instead of evaluating, derived from the slot's own types
 │       └── layout.rs       SlotLayout — a body's value binders as a symbol-sorted run, computed where the shape is lexically fixed
 ├── builtins.rs          register_builtin, unseeded_scopes(), seed_builtins()
 ├── builtins/            one file per builtin (body + register paired)
@@ -237,12 +248,12 @@ src/
 │   ├── using_scope.rs        USING — lexical-scope introduction
 │   ├── test_support.rs
 │   └── eval.rs               # surface form `$(expr)`
-├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over labels, `ScopeId` and the region bump seam and nothing else
+├── type_lattice.rs   pub mod type_lattice — the closed algebra over interned type nodes: the vocabulary, the registry, the identity recipe, the relations and the unifier, over symbols, `ScopeId` and the region bump seam and nothing else
 ├── type_lattice/
 │   ├── node.rs           TypeNode — one interned type's content; every child position is a KType handle, so a node is shallow
 │   ├── handle.rs         KType — the Copy content-digest handle, the pinned builtin constants, and the name/kind readings off one
 │   ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the heap verdict cache, the composite doors, canonical `union_of`, the canonicalizing `shape_type` and `signature`
+│   ├── registry.rs       TypeRegistry — the region-hosted interning table (each node beside its probe flags) and the fixed two-way verdict cache laid in the same region, the composite doors, canonical `union_of`, the canonicalizing `shape_type` and `signature`
 │   ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
 │   ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
 │   ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity — the non-type payloads a node carries
@@ -257,16 +268,17 @@ src/
 │   ├── substitute.rs     the quantifier and member substitutions, and the three slot_* relations that are each one of them composed with an ordinary relation
 │   ├── sig_relations.rs  sig_subtype and its failure record, keyworded selection, meet_schemas, and shape_specificity
 │   ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
-│   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the label interner
+│   └── render.rs         surface-syntax rendering — the one recursion written by hand, over the registry and the symbol interner
 ├── scope.rs          pub mod scope — koan's lexical environments over values and types, in three tiers: the shape, closure bindings and the activation
 ├── scope/
-│   ├── shape.rs          Shape — one body's declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the form a callable body sits in, the body each binder births and each LET binder's right-hand side, in program storage; Position / Coordinate / Site and ShapeError
-│   ├── shape/build.rs    the one shape builder: the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies and arms, and the components pass
-│   ├── roles.rs          the exhaustive FormId → part-role table name resolution walks a form by
+│   ├── shape.rs          BodyShape — one body's own statements rewritten, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the form a callable body sits in, the body each binder births and each LET binder's right-hand side, in program storage; Position / Coordinate / Site and ShapeError
+│   ├── shape/build.rs    the one shape builder: the claims pre-scan and group frames, the rewrite pre-pass, the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies and arms, the components pass, and the units pass that orders a body's units
+│   ├── shape/build/rewrite.rs  the operator-run rewrite — fold left, fold right, unary and pairwise, the pairwise hoist into a synthesized block, and a != b as NOT (a == b), every node built through parse's own constructor
+│   ├── groups.rs         operator groups — the four builtin groups, the position-blind claims pre-scan over all the code being built, the GroupFrame chain deciding where a declared group is visible, and the cover one symbol chains under
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
 │   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types
 │   ├── closure.rs        ClosureBindings — a callable's captures, read from the enclosing activation into scratch then laid down: a Link, a value word or a knot edge, each; the run's copy and weight
-│   └── activation.rs     Activation — one call's or block's Copy, Drop-free header, the knot member it runs and its slot array: claim, bind, read by coordinate (an edge capture as its sibling member), and EVAL's by-name walk
+│   └── activation.rs     ActivationView — one call's or block's Copy, Drop-free read half, covariant in its brand: its header, the knot member it runs and a view of its slots, read by coordinate (an edge capture as its sibling member) and EVAL's by-name walk; Activation — the view beside the slot array that binds, invariant
 ├── values.rs         pub mod values — Value, the 24-byte Copy sum over scalars, a region string, a quoted program node, a borrow of each per-kind resident struct and a knot-member parameter; the Knotted / KnottedFamily trait pair and its vacuous Nothing / NoKnot default; ValueFamily / ValueCarrier; the text helper and the ascription retype
 ├── values/
 │   ├── weight.rs         Weight — the saturating bytes a total rebuild writes, memoized on every composite
@@ -278,7 +290,7 @@ src/
 │   ├── link.rs           Link — a value word or an edge into the holder's own knot: a data node's cell, a closure binding
 │   ├── circular.rs       Circular / Resolved — a knot's data node over link cells, and the Composite view equality and rendering share over plain and linked composites
 │   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part, and construction, the one newtype-construction rule
-│   ├── crossing.rs       cross / cross_here over the placement doors, the deep copy, and the crossing verdict
+│   ├── crossing.rs       cross / cross_here over the placement doors, cross_view and copy_severed — the doors a copy comes through, the second for a value inside a copied operand of another family — the deep copy, and the crossing verdict
 │   ├── working.rs        WorkingExpression / WorkingPart — the scheduler's per-dispatch node in the executing cell's region, carrying the parse's node cache
 │   ├── equality.rs       Value::equals — structural equality, containers gated on related memoized types, a bisimulation over knot data nodes, Incomparable when a function is reached
 │   ├── render.rs         Value::render — the surface PRINT writes, a mark pass then a write pass labelling where a cycle closes
@@ -287,11 +299,31 @@ src/
 ├── elaborate/
 │   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups, Union.Tag
 │   └── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the form node its body sits in
-├── function.rs       pub mod function — Function, the knot Node (a function or a data node), the 16-byte Knotted member that closes Value's parameter; the KValue / KActivation aliases
-├── function/
-│   ├── birth.rs          tie — a component of value binders staged into scratch, memos derived and constructions checked, then laid down as one knot; Untieable
+├── knot.rs           pub mod knot — functions, modules and circular data as values: the 16-byte Knotted member that closes Value's parameter, the Node it holds, the KValue / KActivation aliases, Supplied and Untieable
+├── knot/
+│   ├── function.rs       Function — a function node: its memoized type, body shape, closure bindings and knot weight; the staging a tie does for a function member
 │   ├── data.rs           a knot's data members: the staging walk with its anonymous nodes and evaluator by site, container memos by the nominal cut, the construction check, and the node write
+│   ├── module.rs         Module — a module node and everything that reads one by name
+│   ├── module/
+│   │   ├── birth.rs          a module binder's activation and its tie once the body has bound every slot
+│   │   ├── view.rs           the view door: what m :! Sig and m :| Sig build
+│   │   ├── coerce.rs         members born coerced across an opaque view's barrier
+│   │   ├── layout.rs         layout order: where a member sits in a module
+│   │   └── surface.rs        entering a USING … SCOPE block: each surfaced name bound to its member
+│   ├── tie.rs            tie — a component of value binders staged into scratch, memos derived and constructions checked, then laid down as one knot
 │   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
+├── scheduler.rs      pub mod scheduler — the deferred-work drain over cellgraph's cells and liveness matrix: a unit of work is a cell, and this module adds the ready stack, the drain protocol and delivery, over one step bundle the layer above supplies
+├── scheduler/
+│   ├── drain.rs          Graph — a newtype over the CellGraph closed over the scheduler's families, with the storage-only slab roots it hands out and takes back; Scheduler — a per-call view over a borrowed Graph: the depth-first ready stack of live cells and unborn requests, run over one root work, the wake of a rested birth at the verdict's price, the deferred release a tail hand-off needs, a root work resumed from what an earlier one left (Resting), and DrainStalled; every birth and every death is the drain's
+│   ├── action.rs         Step — the only thing a step is handed: its writers, its state and scratch state, spawn, results, and the park / tail / finish_fresh / finish_in_home / finish / done / leave / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Use, Request, Received, Slot, the drain's Spawns buffer, StepError
+│   ├── continuation.rs   StepBundle — the covariant birth family and its crossing, the parked state family, the scratch family and born, which the layer above supplies; BirthAt / StateAt, NativeStep, Work, and the ContinuationFamily a cell parks: Continuation, Rested, Provenance
+│   └── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
+├── program.rs        pub mod program — a loaded program as one owning value and the body runner that performs it, over elaborate, knot, memory, parse, scheduler, scope, symbols, type_lattice and values
+├── program/
+│   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the one door every evaluation is asked through; Language — the builtin table and evaluator the layer above supplies; Evaluated, LoadError
+│   ├── bundle.rs         KBundle — koan's step bundle: the covariant KBirth (Program / Call / Evaluate / Inspect), the parked KState, and the sites a parked runner keeps in scratch
+│   ├── body.rs           run — the body runner, the one step that performs a body's units at the top level and in every frame; call and placement_of, the derived placement bit
+│   └── substrate.rs      CellSubstrate — program storage and the interner as self_cell's owner, and Running — the graph, its root, the registry and the Program record at 'graph, with run and inspect, reached through a closure per call
 ├── machine.rs           pub mod core / model / execute
 └── machine/
     ├── model.rs            re-exports from model::types and model::values
@@ -301,8 +333,8 @@ src/
     │   │   ├── shape.rs           Part / FieldSlot / PartSummary — the field-list part view both expression families answer in
     │   │   └── working.rs         WorkingExpression / WorkingPart — the scheduler's own node, the only one that can hold a spliced sub-result
     │   ├── binder.rs              what a binder *does* with what parse read: the scope install, the refusal rendering, MACHINE_BINDERS and the module-body announcement scan
-    │   ├── close_inference.rs     CLOSE_RULES — per-FormId capture rules for the implicit-close walk, probed off the node's cached form
-    │   ├── miss_diagnostics.rs    MISS_DIAGNOSTICS — per-FormId renderers for a keyword spine that dispatched to nothing, plus the reserved-key check the overload write door reads
+    │   ├── close_inference.rs     CLOSE_RULES — per-BuiltinShapeId capture rules for the implicit-close walk, probed off the node's cached entry
+    │   ├── miss_diagnostics.rs    MISS_DIAGNOSTICS — per-BuiltinShapeId renderers for a keyword spine that dispatched to nothing, plus the reserved-key check the overload write door reads
     │   ├── pair_list.rs           `<name> <slot>` pair lists over a built parts run: parse_pair_list (classified names + slots) and parse_type_tag_names (the variant-tag pre-scan)
     │   ├── operators.rs           OperatorGroup registry record — chainable-operator precedence/associativity
     │   ├── registries.rs          RunRegistries — the run frame's owned bundle of run-lifetime lookup state (the TypeRegistry beside the LabelInterner)
@@ -375,10 +407,12 @@ src/
 A module's design doc is the `README.md` in its own source directory, linked
 from that module's top-of-file comment. The kept modules carry theirs:
 
+- [src/symbols/README.md](src/symbols/README.md) — the symbol vocabulary: why
+  identity is a content digest, why the interner is not a lookup authority, and
+  what a symbol's binding class buys.
 - [src/parse/README.md](src/parse/README.md) — the division of labour with
-  `sexlex`, the label vocabulary and its content-digest identity, the borrowed
-  splice-free AST and its structural cache, and the `FORMS` table every node is
-  classified against at construction.
+  `sexlex`, the borrowed splice-free AST and its structural cache, and the
+  `BUILTIN_SHAPES` table every node is classified against at construction.
 - [src/memory/README.md](src/memory/README.md) — the three storage tiers, the
   frame shell that names no Koan value, the one-place substrate alias layer, the
   two table shapes, and the drop-freeness the region discipline rests on.
@@ -388,12 +422,30 @@ from that module's top-of-file comment. The kept modules carry theirs:
   verb, dict key order, and working expressions.
 - [src/scope/README.md](src/scope/README.md) — lexical environments: the three
   tiers, eager and deferred mentions and the visibility rule over them, the
-  components a knot can tie, the two channels and unshadowable builtins, and
-  pending slots.
+  components a knot can tie and the order a body's units run in, the two
+  channels and unshadowable builtins, write-once slots, and the operator groups
+  a body's statements are chained under.
 - [src/type_lattice/README.md](src/type_lattice/README.md) — the closed algebra:
   digest identity, the node vocabulary, the interning registry, the one order
   and the lattice operations over it, and the unifier that solves a quantified
   position.
+- [src/elaborate/README.md](src/elaborate/README.md) — type expressions
+  elaborated into lattice handles through the activation they are read in, and
+  why one did not.
+- [src/knot/README.md](src/knot/README.md) — functions, modules and circular
+  data as values: the knot a component is tied into, what a birth may name, and
+  the copy that re-ties a whole knot at its destination.
+- [src/knot/module/README.md](src/knot/module/README.md) — modules as values:
+  layout order, the views `:|` and `:!` build, the coercion that births a view's
+  members, and the binding a `USING … SCOPE` block enters on.
+- [src/scheduler/README.md](src/scheduler/README.md) — the deferred-work drain:
+  the depth-first ready stack and the root work, what a step may name, the
+  placement and use hints, delivery, the continuation and the step bundle, how
+  a cell waits, and the tail hand-off.
+- [src/program/README.md](src/program/README.md) — a loaded program: the owner
+  and its dependent, the program record and the `Language` above it, koan's
+  step bundle, and the body runner that performs the top level and every
+  called body.
 - [sexlex/README.md](sexlex/README.md) — the layout half of the parser: what it
   decides, the three things it refuses, and the three indentation regimes.
 - [cellgraph/README.md](cellgraph/README.md) — the cell substrate's contract and
@@ -419,7 +471,7 @@ a standalone library rather than as Koan's internals; work items cross-link
 across the trees and `doclinks` gates them as one dependency graph, but each tree
 derives its own "Next items" list. The
 [workgraph/](workgraph/README.md) scheduler is the old runtime's and is replaced
-by a fresh crate ([roadmap/rewrite/scheduler-on-cellgraph.md](roadmap/rewrite/scheduler-on-cellgraph.md));
+by a koan module ([src/scheduler/README.md](src/scheduler/README.md));
 its design and roadmap trees are retired under `old_` prefixes, as is the
 boundary doc [old_design/scheduler-library.md](old_design/scheduler-library.md).
 

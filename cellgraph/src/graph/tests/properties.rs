@@ -3,10 +3,11 @@
 //! / `read` / `release` can break the conditions the whole model rests on
 //! ([../README.md § Invariants](../README.md#invariants)):
 //!
-//! - a recycled slot is named by nothing — no occupant's row in either relation, and no frozen
-//!   aggregate;
-//! - a cell undisposed after its declared death is named by an occupant's birth row — the one
-//!   relation with no sealed half to convert into — or counted by an undisposed tree child;
+//! - a recycled slot is named by nothing — no occupant's pin row, and no frozen aggregate;
+//! - a cell undisposed after its declared death has an undisposed tree cell under it or a tenant
+//!   still writing its region, which are the two things that can hold a cell past its death;
+//! - every host's two tenant counts equal the tenants that name it, and the ones among them that
+//!   name its scratch bump — with a scratch state at rest, or with a receipt run;
 //! - every sealed cell's holder count equals the number of hold sets that name it, and the reverse
 //!   naming index is exactly the transpose of the aggregates;
 //! - every bit and id of a dormant carrier's mask is covered by storage its cell is answerable
@@ -35,6 +36,11 @@ use super::super::*;
 use super::{Borrowed, Number, live_bytes, number_here, one, operand_at, pin, take};
 use crate::tree::{Ancestor, TreeState};
 
+/// The scratch state these graphs park: one number in the executing cell's scratch bump, which is
+/// what the tenant verb stores and reads back to move a host's second count.
+struct Transient;
+crate::reattachable!(both Transient => &'scratch u32);
+
 const CAP: u32 = 6;
 
 /// A verdict that reaches both arms across a run: two pins, then a copy. Deterministic, so a
@@ -57,9 +63,7 @@ fn alternating() -> impl FnMut(Prices) -> Verdict + 'static {
 /// mis-applied.
 #[derive(Clone, Debug)]
 enum Verb {
-    Create {
-        parent: Option<usize>,
-    },
+    Create,
     CreateTree {
         parent: usize,
         under_tree: bool,
@@ -77,6 +81,23 @@ enum Verb {
         index: usize,
     },
     ReleaseTree {
+        cell: usize,
+    },
+    CreateTenant {
+        host: usize,
+        /// Which list the host is drawn from: slab cells, tree cells, or tenants — the last of
+        /// which resolves to a host of its own.
+        kind: u8,
+    },
+    TenantPlace {
+        tenant: usize,
+        consumer: usize,
+    },
+    TenantScratch {
+        tenant: usize,
+        store: bool,
+    },
+    ReleaseTenant {
         cell: usize,
     },
     Hold {
@@ -115,7 +136,7 @@ enum Verb {
 /// the corpus needed for one, and the three shapes are already rare in a random interleaving.
 fn merge_verb() -> impl Strategy<Value = Verb> {
     prop_oneof![
-        proptest::option::of(0..8usize).prop_map(|parent| Verb::Create { parent }),
+        Just(Verb::Create),
         (0..8usize, 0..8usize).prop_map(|(holder, held)| Verb::Hold { holder, held }),
         (0..8usize, 0..8usize).prop_map(|(producer, consumer)| Verb::Place { producer, consumer }),
         (0..8usize, 0..8usize).prop_map(|(cell, over)| Verb::Continue { cell, over }),
@@ -153,6 +174,19 @@ fn tree_verb() -> impl Strategy<Value = Verb> {
     ]
 }
 
+/// The tenant pool's verbs: a tenant of any kind of cell, a placement out of a tenant step, a
+/// scratch state stored or taken — which is what moves a host's second count — and a release.
+fn tenant_verb() -> impl Strategy<Value = Verb> {
+    prop_oneof![
+        2 => (0..8usize, 0..3u8).prop_map(|(host, kind)| Verb::CreateTenant { host, kind }),
+        1 => (0..8usize, 0..8usize)
+            .prop_map(|(tenant, consumer)| Verb::TenantPlace { tenant, consumer }),
+        1 => (0..8usize, any::<bool>())
+            .prop_map(|(tenant, store)| Verb::TenantScratch { tenant, store }),
+        1 => (0..8usize).prop_map(|cell| Verb::ReleaseTenant { cell }),
+    ]
+}
+
 /// Those plus the two dormant-carrier doors, which mint no hold and take no release path of their
 /// own — what they do reach is the reach table, the relocation map, and the masks a merge
 /// forwards.
@@ -162,6 +196,7 @@ fn state_verb() -> impl Strategy<Value = Verb> {
         1 => (0..8usize).prop_map(|cell| Verb::Keep { cell }),
         1 => (0..8usize, 0..8usize).prop_map(|(cell, index)| Verb::Redeem { cell, index }),
         4 => tree_verb(),
+        3 => tenant_verb(),
     ]
 }
 
@@ -175,7 +210,7 @@ fn verb() -> impl Strategy<Value = Verb> {
 }
 
 /// The tier's ids in id order, since a walk's answers must not depend on hash iteration order.
-fn sorted_ids(graph: &CellGraph<'static, Borrowed>) -> Vec<SealedId> {
+fn sorted_ids(graph: &CellGraph<'static, Borrowed, Transient>) -> Vec<SealedId> {
     let mut ids: Vec<SealedId> = graph.cells.sealed.ids().collect();
     ids.sort();
     ids
@@ -185,7 +220,7 @@ fn sorted_ids(graph: &CellGraph<'static, Borrowed>) -> Vec<SealedId> {
 /// current set on the way out. Only a price query may write one, so unless the step just run was a
 /// `Price` verb, an id outside that set carrying a memo is one a mint or a release left behind.
 fn check_invariants(
-    graph: &CellGraph<'static, Borrowed>,
+    graph: &CellGraph<'static, Borrowed, Transient>,
     memoized: &mut Vec<SealedId>,
     priced: bool,
 ) {
@@ -194,16 +229,12 @@ fn check_invariants(
         .collect();
 
     for slot in 0..CAP {
-        let by_birth = graph
-            .cells
-            .birth
-            .held_by_any(occupied.iter().copied(), slot);
         let by_pins = graph.cells.pins.held_by_any(occupied.iter().copied(), slot);
         let by_aggregate = !graph.cells.naming[slot as usize].is_empty();
         match graph.cells.slots[slot as usize].state {
             SlabState::Free => {
                 assert!(
-                    !by_birth && !by_pins && !by_aggregate,
+                    !by_pins && !by_aggregate,
                     "slot {slot} is free but something still names it"
                 );
                 assert!(
@@ -211,11 +242,13 @@ fn check_invariants(
                     "slot {slot} is free but kept a sealed hold"
                 );
             }
-            // Two relations keep a dead cell in place: a descendant's birth row, and an
-            // undisposed tree child, which is the same relation counted rather than rowed.
+            // Two things keep a dead cell in place, and neither is a hold: an undisposed tree cell
+            // under it, whose own disposal still has to find its root, and a tenant, whose writer
+            // is minted from the region at this slot.
             SlabState::Dead => assert!(
-                by_birth || graph.cells.tree_children_of(graph.cells.occupant(slot)) > 0,
-                "slot {slot} is undisposed but nothing names it, so it should have left the slab"
+                graph.cells.tree_children_of(graph.cells.occupant(slot)) > 0
+                    || graph.cells.tenancy(CellHome::Slab(slot)).tenants > 0,
+                "slot {slot} is undisposed with no tree child under it and no tenant, so it should have left the slab"
             ),
             SlabState::Live => {}
         }
@@ -445,13 +478,13 @@ fn check_invariants(
 /// executing cell's **root** — its own slot when it is a slab cell — against where the key's home
 /// resolves to now.
 fn expected_redeem(
-    graph: &CellGraph<'static, Borrowed>,
+    graph: &CellGraph<'static, Borrowed, Transient>,
     executing: u32,
-    home: CellHandle,
+    home: HomeHandle,
 ) -> Result<(), RedeemError> {
     let slab_home = match home {
-        CellHandle::Slab(handle) => handle,
-        CellHandle::Tree(handle) => match graph.cells.trees().resolve(handle) {
+        HomeHandle::Slab(handle) => handle,
+        HomeHandle::Tree(handle) => match graph.cells.trees().resolve(handle) {
             None => return Err(RedeemError::Gone),
             Some(crate::tree::TreeForward::Tree(index)) => {
                 return match graph.cells.trees().root(index) == executing {
@@ -465,10 +498,7 @@ fn expected_redeem(
     match graph.cells.locate(slab_home) {
         None => Err(RedeemError::Gone),
         Some(SlabForward::Slab { slot, .. }) => {
-            match slot == executing
-                || graph.cells.pins.test(executing, slot)
-                || graph.cells.birth.test(executing, slot)
-            {
+            match slot == executing || graph.cells.pins.test(executing, slot) {
                 true => Ok(()),
                 false => Err(RedeemError::Unheld),
             }
@@ -486,7 +516,7 @@ fn expected_redeem(
 /// was kept as, which is what says a mask forwarded through a merge — or a tombstone chain — still
 /// names the right storage.
 fn check_redeem(
-    context: &StepContext<'static, '_, '_, Borrowed>,
+    context: &StepContext<'static, '_, '_, '_, Borrowed, Transient>,
     dormant: Dormant<'static, Number>,
     carried: u32,
 ) -> Result<(), RedeemError> {
@@ -504,7 +534,7 @@ fn check_redeem(
 }
 
 /// The tree pool's own invariants, checked after every step beside the matrix ones.
-fn check_tree_invariants(graph: &CellGraph<'static, Borrowed>) {
+fn check_tree_invariants(graph: &CellGraph<'static, Borrowed, Transient>) {
     let pool = graph.cells.trees();
     let occupied: Vec<u32> = pool.occupied().collect();
     let alive = |index: u32| matches!(pool.state(index), TreeState::Live | TreeState::Dead);
@@ -519,11 +549,11 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed>) {
             .tombstone_target(index)
             .expect("a tombstone records where its bytes went")
         {
-            CellHandle::Tree(target) => assert!(
+            HomeHandle::Tree(target) => assert!(
                 pool.state(target.index()) != TreeState::Free,
                 "tombstone {index} points at a recycled pool slot"
             ),
-            CellHandle::Slab(handle) => assert!(
+            HomeHandle::Slab(handle) => assert!(
                 graph.cells.locate(handle).is_some(),
                 "tombstone {index} points at a slab cell nothing answers for"
             ),
@@ -568,7 +598,7 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed>) {
     }
 
     for index in occupied.iter().copied().filter(|index| alive(*index)) {
-        // The child count is the birth tally's analogue: it has to agree with a scan.
+        // The child count is a tally like the matrix's: it has to agree with a scan.
         let children = occupied
             .iter()
             .copied()
@@ -632,29 +662,73 @@ fn check_tree_invariants(graph: &CellGraph<'static, Borrowed>) {
             "slot {slot} counts tree children that do not name it, or misses ones that do"
         );
     }
+
+    // A host's tenant counts are tallies too: recounted from the pool, over every cell that can
+    // host — and a dead tree cell with neither a child nor a tenant should have disposed.
+    let census: Vec<(CellHome, bool)> = graph.cells.tenants.census().collect();
+    let recount = |home: CellHome| crate::tenant::Tenancy {
+        tenants: census.iter().filter(|(host, _)| *host == home).count() as u32,
+        scratch_tenants: census
+            .iter()
+            .filter(|(host, named)| *host == home && *named)
+            .count() as u32,
+    };
+    for slot in 0..graph.cells.cap {
+        let home = CellHome::Slab(slot);
+        assert_eq!(
+            graph.cells.tenancy(home),
+            recount(home),
+            "slot {slot} miscounts its tenants"
+        );
+    }
+    for index in occupied.iter().copied().filter(|index| alive(*index)) {
+        let home = CellHome::Tree(index);
+        assert_eq!(
+            graph.cells.tenancy(home),
+            recount(home),
+            "pool slot {index} miscounts its tenants"
+        );
+        assert!(
+            pool.state(index) != TreeState::Dead
+                || pool.children(index) > 0
+                || graph.cells.tenancy(home).tenants > 0,
+            "pool slot {index} is undisposed with no child under it and no tenant"
+        );
+    }
+    for (host, _) in &census {
+        let undisposed = match *host {
+            CellHome::Slab(slot) => graph.cells.slots[slot as usize].state != SlabState::Free,
+            CellHome::Tree(index) => alive(index),
+        };
+        assert!(
+            undisposed,
+            "a tenant names the host {host:?}, which has disposed"
+        );
+    }
 }
 
 /// Drive one generated run to its end — every verb, then a wind-down that releases everything —
 /// checking the invariants after every step. Reports the merges the run performed, which is what
 /// tells a generated corpus that reaches all three shapes from one that only claims to.
 fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merges {
-    let mut graph: CellGraph<'static, Borrowed> = CellGraph::new(CAP, verdict);
+    let mut graph: CellGraph<'static, Borrowed, Transient> = CellGraph::new(CAP, verdict);
     let mut minted: Vec<SlabHandle> = Vec::new();
     // Every tree cell the run created, in creation order. A generated index may name one that has
     // since died, which is the point: the doors have to refuse it.
     let mut grown: Vec<TreeHandle> = Vec::new();
     // Every value put to rest, beside the cell it was kept in and the number it carries — so a
     // redeem that answers can be checked against what it was supposed to hand back.
-    let mut kept: Vec<(CellHandle, Dormant<'static, Number>, u32)> = Vec::new();
+    let mut kept: Vec<(HomeHandle, Dormant<'static, Number>, u32)> = Vec::new();
+    // Every tenant the run created, in creation order, stale ones included.
+    let mut lodged: Vec<TenantHandle> = Vec::new();
     let mut next_value: u32 = 0;
     // Nothing has been priced yet, so no sealed cell may carry a memo.
     let mut memoized: Vec<SealedId> = Vec::new();
 
     for step in verbs {
         match *step {
-            Verb::Create { parent } => {
-                let parent = parent.and_then(|index| minted.get(index).copied());
-                if let Ok(handle) = graph.create(parent, None) {
+            Verb::Create => {
+                if let Ok(handle) = graph.create(None) {
                     minted.push(handle);
                 }
             }
@@ -719,7 +793,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                             context.keep(value)
                         })
                         .unwrap();
-                    kept.push((CellHandle::Slab(cell), dormant, carried));
+                    kept.push((HomeHandle::Slab(cell), dormant, carried));
                 }
             }
             // The door back. The outcome is predicted from the graph's state before the call —
@@ -749,7 +823,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 // otherwise. A run with no slab cell yet takes one now: a tree cell is meaningless
                 // without a root, so the alternative is a verb that can never fire.
                 if minted.is_empty()
-                    && let Ok(handle) = graph.create(None, None)
+                    && let Ok(handle) = graph.create(None)
                 {
                     minted.push(handle);
                 }
@@ -804,7 +878,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                             context.keep(value)
                         })
                         .unwrap();
-                    kept.push((CellHandle::Tree(cell), dormant, carried));
+                    kept.push((HomeHandle::Tree(cell), dormant, carried));
                 }
             }
             // The same door from inside the tree, where entitlement is root identity rather than a
@@ -832,6 +906,62 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
             Verb::ReleaseTree { cell } => {
                 if let Some(cell) = wrapped(&grown, cell) {
                     let _ = graph.release_tree(cell);
+                }
+            }
+            // A tenant of any live cell. Naming a tenant as the host means that tenant's host,
+            // whatever has been declared about it since.
+            Verb::CreateTenant { host, kind } => {
+                let host: Option<CellHandle> = match kind {
+                    0 => wrapped(&minted, host).map(CellHandle::Slab),
+                    1 => wrapped(&grown, host).map(CellHandle::Tree),
+                    _ => wrapped(&lodged, host).map(CellHandle::Tenant),
+                };
+                if let Some(host) = host
+                    && let Ok(handle) = graph.create_tenant(host, None)
+                {
+                    lodged.push(handle);
+                }
+            }
+            // A placement out of a tenant step: the operand is homed in the host and reaches what
+            // the host reaches, so every relation it writes is one the sweep already checks.
+            Verb::TenantPlace { tenant, consumer } => {
+                if let (Some(tenant), Some(consumer)) =
+                    (wrapped(&lodged, tenant), wrapped(&minted, consumer))
+                    && graph.is_live(tenant)
+                {
+                    let _ = graph.enter(tenant, |context| {
+                        let value = number_here(context, 1);
+                        context
+                            .alloc_into::<Number, Number>(
+                                consumer,
+                                &[operand_at(&value, 1)],
+                                |writer, views| Active::new(take(&views[0], writer)),
+                            )
+                            .map(|_| ())
+                    });
+                }
+            }
+            // A scratch state stored or taken, which is what moves the host's second count.
+            Verb::TenantScratch { tenant, store } => {
+                if let Some(tenant) = wrapped(&lodged, tenant)
+                    && graph.is_live(tenant)
+                {
+                    graph
+                        .enter(tenant, |context| {
+                            if let Some(parked) = context.scratch_state() {
+                                assert_eq!(*parked, 7, "a parked scratch value read other bytes");
+                            }
+                            if store {
+                                let parked = one(context.scratch_writer(), 7u32);
+                                context.store_scratch_state(parked);
+                            }
+                        })
+                        .unwrap();
+                }
+            }
+            Verb::ReleaseTenant { cell } => {
+                if let Some(cell) = wrapped(&lodged, cell) {
+                    let _ = graph.release_tenant(cell);
                 }
             }
             // Reading the kept continuation back is the re-anchor: the value comes out at the
@@ -910,6 +1040,10 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
     // and the tier retains only what a ring no merge met tied together. The pool first: a root with
     // an undisposed tree child under it waits dead-but-undisposed exactly as one with a live
     // descendant does, so the slab cannot finish until the trees have.
+    // Tenants before either: a host waits on them the way a root waits on its tree children.
+    for handle in &lodged {
+        let _ = graph.release_tenant(*handle);
+    }
     for handle in &grown {
         let _ = graph.release_tree(*handle);
     }
@@ -920,6 +1054,10 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
     assert!(
         graph.cells.trees().occupied().next().is_none(),
         "a wound-down run left a tree cell or a tombstone in the pool"
+    );
+    assert!(
+        graph.cells.tenants.is_empty(),
+        "a wound-down run left a tenant in the pool"
     );
     for slot in 0..CAP {
         assert_eq!(graph.cells.slots[slot as usize].state, SlabState::Free);
@@ -963,13 +1101,17 @@ proptest! {
 /// An interleaving invariant test is only worth what its runs cover: without this, a merge that
 /// never fired would look exactly like a merge that always held. Miri skips the assertion — four
 /// cases is what a slate run affords, and that is too few to reach all three shapes reliably.
+///
+/// The runs are long because the rarest shape is deep rather than wide: seal-time absorption wants
+/// a three-deep pin chain built and then wound down from the producer end inside one run, so
+/// lengthening a run reaches it far faster than drawing more short ones.
 #[test]
 fn each_merge_fires_across_generated_interleavings() {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
 
     let cases = if cfg!(miri) { 4 } else { 256 };
-    let strategy = proptest::collection::vec(merge_verb(), 1..40);
+    let strategy = proptest::collection::vec(merge_verb(), 1..100);
     let mut runner = TestRunner::deterministic();
     let mut total = Merges::default();
 

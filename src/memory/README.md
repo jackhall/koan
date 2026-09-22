@@ -28,13 +28,20 @@ identity a resident carries.
   and `alloc_str`. Bumpalo runs no destructor, so nothing with drop glue goes
   in; `bump_table` and `bump_set` assert that for their entries at compile time, and a
   slice or a single value is the caller's to keep `Copy`.
-- **Program storage** ([program.rs](program.rs)) — program text and the raw
-  AST, a bump the storage owns, because an AST needs no reach. It is its own
-  module because the parser depends on it and on nothing else here: a parsed
-  AST is bumped into this storage, so [`parse`](../parse/README.md) names
-  `ProgramBrand` and never a cell. Keeping the two apart is what lets an AST
-  node be shared by every activation without any of them being able to
-  outlive it.
+- **Program storage** ([program.rs](program.rs)) — program text, the raw
+  AST, and what a loaded program lays down at `'graph`, in two stores the
+  storage owns: a bump the parser writes the AST into, because an AST needs no
+  reach, and `cellgraph`'s `Storage` beside it, written through the same
+  `Writer` a region is (`ProgramBrand::writer`), where the builtin table and
+  the [program record](../program/README.md#the-program-record) rest. The
+  `Storage` keeps its bump private, so what goes there passes the `Writer`'s
+  drop-freeness checks, and it is sound for the reason a `'graph` borrow is no
+  operand: the storage outlives the graph, which prices, pins and reclaims none
+  of it. Program storage is its own module because the parser depends on it
+  and on nothing else here, so [`parse`](../parse/README.md) names
+  `ProgramBrand` and never a cell. Keeping the tiers apart is what lets an AST
+  node or a builtin be shared by every activation without any of them being
+  able to outlive it.
 - **Cell storage** — everything else, laid down through cellgraph's `Writer`
   at the executing cell's own brand, `'here`. There is no run root and no
   per-call frame: what a frame shell would carry, a cell already is.
@@ -72,39 +79,41 @@ slot array.
 
 ## The slot array
 
-[`SlotArray`](slots.rs) is a fixed run of binding cells laid down by
-`Writer::fill` at `'cell`, addressed by index rather than by key, for a table
-whose key set is fixed before its first write — a call's value
-bindings, sized by the body's own slot layout from
-[`parse`](../parse/README.md). An activation lays down one sized run instead
-of building a table from nothing.
+[`SlotArray`](slots.rs) is a fixed run of write-once binding slots laid down in
+a cell's region, addressed by index rather than by key, for a table whose key
+set is fixed before its first write — a call's value bindings, sized by the
+body's own slot layout from [`parse`](../parse/README.md). An activation lays
+down one sized run instead of building a table from nothing.
 
-A cell is three-state: `Empty`, `Claimed` on the in-flight binder's producer,
-or `Bound` to a payload. **One cell answers both of a name's questions** — is
-it bound, and is a binder for it in flight — so a channel storing claims in
-its cells needs no second structure keyed on the same name. The transitions
-live on the cell itself, so a *keyed* table over the same cell type rules on a
-write exactly as the array does.
+A slot is two-state: empty until its binder writes it, then bound, once.
+`bind` refuses a second write as `SlotConflict`; every read goes through the
+view, whose `get` hands back the value or `None`. Nothing else is recorded, because a body's
+[units](../scope/README.md#units) run in its shape's order and no reader looks
+at a slot before its binder has run.
+
+The array is safe code over `cellgraph`'s once-written run
+([`Writer::once_run`](../../cellgraph/src/once.rs)), which holds each value
+erased to its form at `'graph` and reattaches it at the reader's brand. That is
+what lets the array hand out a **`SlotView`**, the read half with no door that
+binds, which is covariant in the region brand, so a reader in a shorter-lived
+cell may hold one; a `Cell<Value<'cell>>` is invariant in `'cell`, so no safe
+view over live slots could shorten. The array itself binds, and is invariant.
+The payload is therefore a family rather than a type — the run names the
+payload at any brand through it — and the view needs the family to be
+[`Covariant`](../../cellgraph/src/reattach.rs). Both halves are `Copy`, so a
+continuation captures either by value, and the binding vocabulary is this
+file's: the run beneath it knows nothing of names or binders.
 
 **A value at rest in the region.** `Writer` has two write verbs, `fill` and
 `text`, and every simpler shape is derived here: `resident` lays one `Copy`
 value down (`fill` at length one) and `collect` an exact-size run (`fill`
 driven by the iterator, with no growth path). Both live beside the re-export in
 [substrate.rs](substrate.rs) and are how `values` and `scope` lay down their
-region-resident structs. `fill` hands back a shared `&'cell` borrow,
-never `&mut`, and a continuation captures `'here` borrows, so every write after
-construction goes through interior mutability. Each slot is a `Cell` — no
-borrow flag — and a `Cell` never lends a `&T`, so reads copy: both parameters
-are `Copy`, a read returns the slot state by value, and a transition is a
-by-value function the array applies with `Cell::set`. The array itself is two
-`'cell` borrows and `Copy`, so a continuation captures it by value; its
-live-claim counter is a `Cell<usize>` laid down in the region beside the slots,
-since a counter inside a `Copy` struct would diverge between copies.
+region-resident structs. `fill` hands back a shared `&'cell` borrow, never
+`&mut`, so every write after construction goes through interior mutability.
 
-Both type parameters are the embedder's: the array is the shape, and what a
-bound slot holds is a choice made where it is instantiated. Its constructor
-takes a `Writer` and never a step context, which is how the module stays free
-of the continuation family the step context is typed on.
+The array's constructor takes a `Writer` and never a step context, which is how
+the module stays free of the continuation family the step context is typed on.
 
 ## The knot
 
@@ -177,7 +186,7 @@ bisimulation over member pairs — and a renderer that terminates on a cycle
 belong to [values](../values/README.md#equality-and-rendering). Which bindings
 may form a knot is delimited by a [scope's shape](../scope/README.md#visibility),
 and tying a component of value binders — functions and data nodes — belongs to
-[`function`](../function/README.md#the-tie).
+[`knot`](../knot/README.md#the-tie).
 
 ## Strongly connected components
 

@@ -1,15 +1,13 @@
-//! Bit storage for the two cell relations, and the single row the executing flag occupies. **The
-//! relations are exactly these two** — birth and pin, both over slab slots. A tree cell is in
-//! neither, and where one sits on its chain is [`Ancestry`](crate::tree::Ancestry), which is not a
-//! relation and reads no bits. See
-//! [graph/README.md](graph/README.md) § Two relations, two structures.
+//! Bit storage for the cell relation, and the single row the executing flag occupies. **The
+//! relation is exactly one** — pin, over slab slots. A tree cell is not in it, and where one sits
+//! on its chain is [`Ancestry`](crate::tree::Ancestry), which is not a relation and reads no bits.
+//! See [graph/README.md § The pin relation](graph/README.md#the-pin-relation).
 //!
-//! Both relations take the same square shape, indexed the same way: row `holder`, bit `held`, so a
-//! cell's whole hold set is one contiguous row. That is the axis each relation's *write* wants —
-//! the birth derivation ORs a parent's row into its child's, and the pin mint ORs a reach mask
-//! into a destination's. It is the wrong axis for the reclaim query, "does anything still hold
-//! this cell", which reads down a column instead; a matrix answers that from a tally it keeps as
-//! it writes, so the query costs one read rather than a scan across every row.
+//! The matrix is square, indexed row `holder`, bit `held`, so a cell's whole hold set is one
+//! contiguous row. That is the axis the *write* wants — the mint ORs a reach mask into a
+//! destination's row. It is the wrong axis for the reclaim query, "does anything still hold this
+//! cell", which reads down a column instead; a matrix answers that from a tally it keeps as it
+//! writes, so the query costs one read rather than a scan across every row.
 //!
 //! One type, [`Bits`], is every row of bits in the crate: a matrix row, the executing row, and the
 //! slab half of a reach mask. It is `W` words held inline, so it is `Copy` and building, copying,
@@ -71,16 +69,6 @@ impl<const W: usize> Bits<W> {
     /// The bits this row sets, in bit order.
     pub(crate) fn ones(&self) -> impl Iterator<Item = u32> + '_ {
         ones_of(&self.words)
-    }
-
-    /// Whether this row sets everything `other` sets — the containment invariant a birth chain
-    /// satisfies from parent to child.
-    #[cfg(test)]
-    pub(crate) fn contains_all(&self, other: &Bits<W>) -> bool {
-        self.words
-            .iter()
-            .zip(&other.words)
-            .all(|(outer, inner)| outer & inner == *inner)
     }
 
     /// Set one bit, reporting whether it was clear before.
@@ -179,12 +167,6 @@ impl<const W: usize> Matrix<W> {
         &mut self.holders[chunk][row]
     }
 
-    pub(crate) fn set(&mut self, holder: u32, held: u32) {
-        if self.row_mut(holder).set(held) {
-            *self.tally(held) += 1;
-        }
-    }
-
     pub(crate) fn clear(&mut self, holder: u32, held: u32) {
         if self.row_mut(holder).clear(held) {
             *self.tally(held) -= 1;
@@ -202,7 +184,7 @@ impl<const W: usize> Matrix<W> {
     }
 
     /// Fold a reach mask into `holder`'s hold set, minus `holder`'s own bit — the mint OR, and the
-    /// only write into the pin relation ([graph/README.md § Reach as a hybrid
+    /// only write that can set a bit ([graph/README.md § Reach as a hybrid
     /// mask](graph/README.md#reach-as-a-hybrid-mask)). The and-not is the self rule: a
     /// cell that held itself alive would never reach a zero hold count.
     pub(crate) fn hold(&mut self, holder: u32, reach: &GraphReach<W>) {
@@ -224,22 +206,11 @@ impl<const W: usize> Matrix<W> {
         self.row(holder).ones()
     }
 
-    /// OR `source`'s row into `dest`'s. The birth relation's only compound write: a new cell's row
-    /// starts as its parent's, which is what makes transitive closure hold by construction.
-    pub(crate) fn inherit_row(&mut self, dest: u32, source: u32) {
-        debug_assert_ne!(dest, source, "a row does not inherit from itself");
-        // Copied out first: both rows live in this matrix, so they cannot be borrowed at once.
-        let source = *self.row(source);
-        self.union_into(dest, &source);
-    }
-
-    /// OR a row in, counting a hold for every bit the union newly sets — the shared body of the
-    /// mint and the birth derivation. Every write that can set a bit passes through here or
-    /// through [`Matrix::set`], which is what lets [`Matrix::holders`] answer from a tally rather
-    /// than a scan across rows.
+    /// OR a row in, counting a hold for every bit the union newly sets — the mint's body, and the
+    /// one place a bit is set at all, which is what lets [`Matrix::holders`] answer from a tally
+    /// rather than a scan across rows.
     ///
-    /// The source is borrowed, so a mint folds a reach mask's row in without copying it; the birth
-    /// derivation, whose source is a row of this same matrix, copies at its own call site.
+    /// The source is borrowed, so a mint folds a reach mask's row in without copying it.
     fn union_into(&mut self, dest: u32, source: &Bits<W>) {
         let Matrix { rows, holders } = self;
         let (chunk, row) = Self::at(dest);
@@ -274,12 +245,5 @@ impl<const W: usize> Matrix<W> {
             }
             *word = 0;
         }
-    }
-
-    /// Whether `outer`'s row names everything `inner`'s row names — the containment invariant a
-    /// birth chain satisfies from parent to child.
-    #[cfg(test)]
-    pub(crate) fn row_contains(&self, outer: u32, inner: u32) -> bool {
-        self.row(outer).contains_all(self.row(inner))
     }
 }

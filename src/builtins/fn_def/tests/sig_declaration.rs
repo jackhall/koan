@@ -7,7 +7,7 @@
 use crate::builtins::test_support::{TestRun, key_keyword, key_keyword_symbol, type_name};
 use crate::machine::model::{KType, SigSchema, TypeNode};
 use crate::memory::{program_storage, run_root_storage};
-use crate::parse::{KeyElement, UntypedKey};
+use crate::parse::{ExpressionKey, KeyElement};
 
 /// The stored schema of the signature `name` binds in `scope`.
 fn sig_schema(
@@ -40,7 +40,7 @@ fn members_keyed(
         .collect()
 }
 
-fn key(spelling: &[&str]) -> UntypedKey {
+fn key(spelling: &[&str]) -> ExpressionKey {
     spelling
         .iter()
         .map(|part| match *part {

@@ -1,7 +1,8 @@
 //! Structural equality: IEEE numbers, nominal identity first, containers gated on related types,
 //! quotes compared as syntax.
 
-use crate::parse::{BinderSymbol, ExpressionPart};
+use crate::parse::ExpressionPart;
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{Key, TypeValue};
 
@@ -33,8 +34,8 @@ fn scalars_compare_by_ieee_and_types_by_handle() {
 #[test]
 fn containers_compare_contents_only_under_related_types() {
     with_fixture(|fixture| {
-        let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
-        let x = BinderSymbol::declared("x", labels).unwrap();
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let x = BinderSymbol::declared("x", symbols).unwrap();
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let equal = |left: Value<'_, '_>, right: Value<'_, '_>| {
@@ -214,8 +215,8 @@ fn a_comparison_reaching_a_callable_is_incomparable() {
 fn circular_values_compare_as_a_bisimulation() {
     use super::{Holding, ring};
     with_fixture(|fixture| {
-        let (types, scratch, labels) = (fixture.types, fixture.scratch(), fixture.labels);
-        let next = BinderSymbol::declared("next", labels).unwrap();
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let next = BinderSymbol::declared("next", symbols).unwrap();
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let equal = |left: Holding<'_, '_>, right: Holding<'_, '_>| {

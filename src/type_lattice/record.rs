@@ -5,7 +5,7 @@
 //! Keys are [`BinderSymbol`]s, never text: a field name is a fixed-width content digest carried
 //! alongside the binding class its own parse established, so a lookup is a `u128` compare and no
 //! field name is ever copied or re-classified. Rendering resolves the text back through the run's
-//! label interner ([`LabelInterner`](crate::parse::LabelInterner)).
+//! symbol interner ([`SymbolInterner`](crate::symbols::SymbolInterner)).
 //!
 //! Identity is the key's [`Symbol`] bits alone — equality and the type digest both read
 //! `key.symbol()` and never the variant tag, so a schema's class rides past the intern boundary
@@ -28,7 +28,7 @@
 //!
 //! See [README.md](README.md) § Records and schemas.
 
-use crate::parse::{BinderSymbol, Symbol};
+use crate::symbols::{BinderSymbol, Symbol};
 
 use super::handle::KType;
 
