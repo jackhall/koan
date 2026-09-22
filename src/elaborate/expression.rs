@@ -6,7 +6,9 @@ use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_name};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol};
-use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry, constructor_param_names};
+use crate::type_lattice::{
+    DispatchTokenElement, GroupIntern, KType, TypeRegistry, constructor_param_names,
+};
 use crate::values::{KnottedFamily, Value};
 
 use super::Elaboration;
@@ -102,7 +104,7 @@ pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, XF: KnottedFamily<'gra
     pub(super) locals: &'e [(TypeSymbol, KType)],
 }
 
-impl<'graph, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, '_, XF> {
+impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, XF> {
     pub(super) fn part(
         &self,
         part: &ExpressionPart<'graph>,
@@ -194,7 +196,9 @@ impl<'graph, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, '_, XF> {
         if let Some(form) = node.cache().builtin_shape() {
             let part = |index: usize| &parts[index].value;
             return match form.id {
-                BuiltinShapeId::LambdaType => self.function(part(1), part(3), groups),
+                BuiltinShapeId::LambdaType => {
+                    Ok(self.function(&[], part(1), part(3), groups)?.handle)
+                }
                 BuiltinShapeId::ExpressionHead => self.shape(&[], part(1), part(3), groups),
                 BuiltinShapeId::QuantifiedExpressionHead => {
                     let names = quantifiers(part(3), self.scratch);
@@ -285,13 +289,23 @@ impl<'graph, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, '_, XF> {
             .constructor_apply(self.scratch, constructor, arguments))
     }
 
-    /// `FN <schema> -> <return>`.
+    /// `FN [FOR ALL <names>] <schema> -> <return>`.
+    ///
+    /// A non-empty `names` opens a group of its own, which the fields and the return read under;
+    /// an empty one reads them under `groups` unchanged, because an unquantified `FN` type written
+    /// inside a quantified head keeps reading that head's variables.
     pub(super) fn function(
         &self,
+        names: &[TypeSymbol],
         schema: &ExpressionPart<'graph>,
         ret: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
-    ) -> Result<KType, Elaboration> {
+    ) -> Result<GroupIntern<'x>, Elaboration> {
+        let own = Groups {
+            names,
+            outer: Some(groups),
+        };
+        let groups = if names.is_empty() { groups } else { &own };
         let ExpressionPart::RecordType(fields) = schema else {
             return Err(Elaboration::Unsupported {
                 site: Site::of(schema),
@@ -308,7 +322,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, '_, XF> {
             },
         )?;
         let ret = self.part(ret, groups)?;
-        Ok(self.types.function_type(self.scratch, &params, ret))
+        Ok(self.types.function_type(self.scratch, names, &params, ret))
     }
 
     /// `EXPR [FOR ALL <names>] <head> -> <return>`: the head's keywords and typed slots, under a

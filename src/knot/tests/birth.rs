@@ -58,7 +58,8 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
                 f.ktype(),
                 fixture
                     .types
-                    .function_type(scratch, &[(x, KType::NUMBER)], KType::NUMBER)
+                    .function_type(scratch, &[], &[(x, KType::NUMBER)], KType::NUMBER)
+                    .handle
             );
             assert!(std::ptr::eq(
                 f.function().expect("a function").shape(),

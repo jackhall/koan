@@ -71,6 +71,15 @@ impl<'run> Entry<'run> {
                 rigid |= entry.rigid;
             }
         });
+        // A binder — a shape, or a function carrying a group — binds its own variables, so
+        // nothing under one is free here.
+        if node.binds_quantifiers() {
+            return Entry {
+                node,
+                quantified: false,
+                rigid,
+            };
+        }
         match node {
             TypeNode::Quantified { .. } => Entry {
                 node,
@@ -81,12 +90,6 @@ impl<'run> Entry<'run> {
                 node,
                 quantified,
                 rigid: true,
-            },
-            // A shape binds its own variables, so nothing under one is free here.
-            TypeNode::ExpressionShape { .. } => Entry {
-                node,
-                quantified: false,
-                rigid,
             },
             _ => Entry {
                 node,
@@ -144,10 +147,10 @@ impl VerdictSlot {
     }
 }
 
-/// What interning a shape produced: the canonical handle, and how the caller's declaration-order
-/// quantifier indices map onto the canonical group.
+/// What interning a binder produced — a shape or a function type: the canonical handle, and how
+/// the caller's declaration-order quantifier indices map onto the canonical group.
 #[derive(Clone, Copy, Debug)]
-pub struct ShapeIntern<'s> {
+pub struct GroupIntern<'s> {
     pub handle: KType,
     /// Declaration index → canonical index, `None` for a variable canonical form dropped. Lives in
     /// the scratch the caller handed the door.
@@ -363,15 +366,78 @@ impl<'run> TypeRegistry<'run> {
         })
     }
 
-    /// A function type `(params) -> ret`.
-    pub fn function_type(
+    /// The one door that mints a function type `(params) -> ret`, in **canonical form** where it
+    /// binds a `FOR ALL` group.
+    ///
+    /// Canonicalization is [`shape_type`](Self::shape_type)'s, over the params record and the
+    /// return instead of over an element run: see [`canonical_group`](Self::canonical_group). The
+    /// census walks the params in **symbol-sorted key order**, because a record's identity is
+    /// order-blind and the renumbering must be too; the stored record keeps declaration order for
+    /// rendering. An empty group interns straight away and binds nothing.
+    pub fn function_type<'s>(
+        &self,
+        scratch: BumpAllocator<'s>,
+        quantifiers: &[TypeSymbol],
+        params: &[(BinderSymbol, KType)],
+        ret: KType,
+    ) -> GroupIntern<'s> {
+        if quantifiers.is_empty() {
+            return GroupIntern {
+                handle: self.intern_function(scratch, &[], &[], params, ret),
+                quantifier_map: &[],
+            };
+        }
+        let mut sorted = BumpVec::with_capacity_in(params.len(), scratch);
+        sorted.extend(params.iter().copied());
+        sorted.sort_by_key(|(name, _)| name.symbol());
+        let group = self.canonical_group(
+            scratch,
+            quantifiers,
+            sorted
+                .iter()
+                .map(|(_, kt)| (*kt, Variance::Contra))
+                .chain(std::iter::once((ret, Variance::Co))),
+        );
+        let mut canonical_params = BumpVec::with_capacity_in(params.len(), scratch);
+        canonical_params.extend(params.iter().map(|(name, kt)| {
+            (
+                *name,
+                substitute_quantified(self, scratch, *kt, &group.bindings),
+            )
+        }));
+        let ret = substitute_quantified(self, scratch, ret, &group.bindings);
+        debug_assert!(
+            group.names.is_empty()
+                || self.quantifier_indices_in_range(scratch, ret, group.names.len()),
+            "every quantified position names an index of the function's own canonical group",
+        );
+        GroupIntern {
+            handle: self.intern_function(
+                scratch,
+                &group.names,
+                &group.bounds,
+                &canonical_params,
+                ret,
+            ),
+            quantifier_map: group.quantifier_map,
+        }
+    }
+
+    /// Intern a function type whose form is already canonical. Probe-first, as
+    /// [`intern_shape`](Self::intern_shape) is, so the params run and the group are copied into
+    /// the region only on a genuine miss.
+    fn intern_function(
         &self,
         scratch: BumpAllocator<'_>,
+        quantifiers: &[TypeSymbol],
+        bounds: &[KType],
         params: &[(BinderSymbol, KType)],
         ret: KType,
     ) -> KType {
-        let digest = digest::function_digest(scratch, params, ret.digest());
+        let digest = digest::function_digest(scratch, quantifiers.len(), params, ret.digest());
         self.intern_digested(digest, || TypeNode::KFunction {
+            quantifiers: self.rehome(quantifiers),
+            bounds: self.rehome(bounds),
             params: Record::over(self.rehome(params)),
             ret,
         })
@@ -549,14 +615,11 @@ impl<'run> TypeRegistry<'run> {
 
     // --- Shapes ---
 
-    /// The one door that mints an expression shape, in **canonical form**.
-    ///
-    /// A variable with no occurrence is dropped; one that occurs exactly once is replaced by its
-    /// bound where the occurrence is contravariant and by [`KType::NEVER`] where it is covariant,
-    /// since a single occurrence is equivalent to that replacement in every admission and every
-    /// subtype question; survivors are renumbered by first occurrence in element order, then
-    /// return. Canonical form is what makes the order antisymmetric once quantified shapes relate
-    /// by instantiation: two shapes each below the other must be one handle.
+    /// The one door that mints an expression shape, in **canonical form** — see
+    /// [`canonical_group`](Self::canonical_group), which is run here over each argument slot in
+    /// element order and then the return. Canonical form is what makes the order antisymmetric
+    /// once quantified shapes relate by instantiation: two shapes each below the other must be
+    /// one handle.
     ///
     /// Argument names never reach here — they are binder-side — and the surviving quantifier names
     /// are render-only, so two shapes alpha-equivalent under a renaming intern to the node
@@ -568,18 +631,64 @@ impl<'run> TypeRegistry<'run> {
         quantifiers: &[TypeSymbol],
         elements: &[DispatchTokenElement],
         ret: KType,
-    ) -> ShapeIntern<'s> {
+    ) -> GroupIntern<'s> {
         if quantifiers.is_empty() {
-            return ShapeIntern {
+            return GroupIntern {
                 handle: self.intern_shape(&[], &[], elements, ret),
                 quantifier_map: &[],
             };
         }
-        let arity = quantifiers.len();
-        let census = self.quantifier_census(scratch, elements, ret, arity);
+        let group = self.canonical_group(
+            scratch,
+            quantifiers,
+            elements
+                .iter()
+                .filter_map(|element| match element {
+                    DispatchTokenElement::Slot(kt) => Some((*kt, Variance::Contra)),
+                    DispatchTokenElement::Keyword(_) => None,
+                })
+                .chain(std::iter::once((ret, Variance::Co))),
+        );
+        let mut canonical_elements = BumpVec::with_capacity_in(elements.len(), scratch);
+        canonical_elements.extend(elements.iter().map(|element| match element {
+            DispatchTokenElement::Slot(kt) => DispatchTokenElement::Slot(substitute_quantified(
+                self,
+                scratch,
+                *kt,
+                &group.bindings,
+            )),
+            keyword => *keyword,
+        }));
+        let ret = substitute_quantified(self, scratch, ret, &group.bindings);
+        debug_assert!(
+            group.names.is_empty()
+                || self.quantifier_indices_in_range(scratch, ret, group.names.len()),
+            "every quantified position names an index of the shape's own canonical group",
+        );
+        GroupIntern {
+            handle: self.intern_shape(&group.names, &group.bounds, &canonical_elements, ret),
+            quantifier_map: group.quantifier_map,
+        }
+    }
 
-        // Survivors keep their occurrences; everything else substitutes away. Renumbering follows
-        // first occurrence, which the census recorded as a visit sequence number.
+    /// Census, survivor selection and renumbering over the `(type, variance)` positions a binder
+    /// binds, walked in the order given — the canonical form both interning doors share.
+    ///
+    /// A variable with no occurrence is dropped; one that occurs exactly once is replaced by its
+    /// bound where the occurrence is contravariant and by [`KType::NEVER`] where it is covariant,
+    /// since a single occurrence is equivalent to that replacement in every admission and every
+    /// subtype question. Survivors are renumbered by first occurrence in the walked order. The
+    /// caller substitutes its own positions through [`bindings`](CanonicalGroup::bindings) and
+    /// interns the result.
+    fn canonical_group<'s>(
+        &self,
+        scratch: BumpAllocator<'s>,
+        quantifiers: &[TypeSymbol],
+        positions: impl Iterator<Item = (KType, Variance)>,
+    ) -> CanonicalGroup<'s> {
+        let arity = quantifiers.len();
+        let census = self.quantifier_census(scratch, positions, arity);
+
         let mut survivors = BumpVec::with_capacity_in(arity, scratch);
         survivors.extend((0..arity).filter(|index| census[*index].occurrences() >= 2));
         survivors.sort_by_key(|index| census[*index].first);
@@ -602,30 +711,14 @@ impl<'run> TypeRegistry<'run> {
             }
         }));
 
-        let mut canonical_names = BumpVec::with_capacity_in(survivors.len(), scratch);
-        canonical_names.extend(survivors.iter().map(|index| quantifiers[*index]));
-        let mut canonical_bounds = BumpVec::with_capacity_in(survivors.len(), scratch);
-        canonical_bounds.extend(survivors.iter().map(|index| census[*index].bound));
-        let mut canonical_elements = BumpVec::with_capacity_in(elements.len(), scratch);
-        canonical_elements.extend(elements.iter().map(|element| match element {
-            DispatchTokenElement::Slot(kt) => {
-                DispatchTokenElement::Slot(substitute_quantified(self, scratch, *kt, &bindings))
-            }
-            keyword => *keyword,
-        }));
-        let ret = substitute_quantified(self, scratch, ret, &bindings);
-        debug_assert!(
-            canonical_names.is_empty()
-                || self.quantifier_indices_in_range(scratch, ret, canonical_names.len()),
-            "every quantified position names an index of the shape's own canonical group",
-        );
-        ShapeIntern {
-            handle: self.intern_shape(
-                &canonical_names,
-                &canonical_bounds,
-                &canonical_elements,
-                ret,
-            ),
+        let mut names = BumpVec::with_capacity_in(survivors.len(), scratch);
+        names.extend(survivors.iter().map(|index| quantifiers[*index]));
+        let mut bounds = BumpVec::with_capacity_in(survivors.len(), scratch);
+        bounds.extend(survivors.iter().map(|index| census[*index].bound));
+        CanonicalGroup {
+            names,
+            bounds,
+            bindings,
             quantifier_map: quantifier_map.leak(),
         }
     }
@@ -652,52 +745,49 @@ impl<'run> TypeRegistry<'run> {
         })
     }
 
-    /// Count each variable's free occurrences across a shape's argument positions and return,
-    /// under the polarity of the position it was met at, recording its bound and the visit order of
-    /// its first occurrence. A nested shape's own group shadows this one, so the census skips it.
+    /// Count each variable's free occurrences across the positions a binder binds, under the
+    /// polarity each carries, recording its bound and the visit order of its first occurrence. A
+    /// nested binder's own group shadows this one, so the census skips it.
     fn quantifier_census<'s>(
         &self,
         scratch: BumpAllocator<'s>,
-        elements: &[DispatchTokenElement],
-        ret: KType,
+        positions: impl Iterator<Item = (KType, Variance)>,
         arity: usize,
     ) -> BumpVec<'s, Occurrences> {
         let mut census = BumpVec::with_capacity_in(arity, scratch);
         census.resize(arity, Occurrences::default());
         let mut seen = 0usize;
-        let mut count = |kt: KType, position: Variance| {
+        for (kt, position) in positions {
             visit_in(
                 self,
                 scratch,
                 kt,
                 LEAF,
                 position,
-                &mut |_, node, context| match *node {
-                    TypeNode::ExpressionShape { .. } => Visit::Skip,
-                    TypeNode::Quantified { index, bound } => {
-                        if let Some(record) = census.get_mut(index) {
-                            if record.first == usize::MAX {
-                                record.first = seen;
-                                record.bound = bound;
-                            }
-                            match context.variance() {
-                                Variance::Co => record.covariant += 1,
-                                Variance::Contra => record.contravariant += 1,
-                            }
-                            seen += 1;
-                        }
-                        Visit::Skip
+                &mut |_, node, context| {
+                    if node.binds_quantifiers() {
+                        return Visit::Skip;
                     }
-                    _ => Visit::Descend,
+                    match *node {
+                        TypeNode::Quantified { index, bound } => {
+                            if let Some(record) = census.get_mut(index) {
+                                if record.first == usize::MAX {
+                                    record.first = seen;
+                                    record.bound = bound;
+                                }
+                                match context.variance() {
+                                    Variance::Co => record.covariant += 1,
+                                    Variance::Contra => record.contravariant += 1,
+                                }
+                                seen += 1;
+                            }
+                            Visit::Skip
+                        }
+                        _ => Visit::Descend,
+                    }
                 },
             );
-        };
-        for element in elements {
-            if let DispatchTokenElement::Slot(kt) = element {
-                count(*kt, Variance::Contra);
-            }
         }
-        count(ret, Variance::Co);
         census
     }
 
@@ -809,11 +899,15 @@ impl<'run> TypeRegistry<'run> {
         index: usize,
     ) -> bool {
         self.contains_quantified(kt)
-            && visit(self, scratch, kt, LEAF, &mut |_, node, _| match *node {
-                TypeNode::ExpressionShape { .. } => Visit::Skip,
-                TypeNode::Quantified { index: found, .. } if found == index => Visit::Stop,
-                TypeNode::Quantified { .. } => Visit::Skip,
-                _ => Visit::Descend,
+            && visit(self, scratch, kt, LEAF, &mut |_, node, _| {
+                if node.binds_quantifiers() {
+                    return Visit::Skip;
+                }
+                match *node {
+                    TypeNode::Quantified { index: found, .. } if found == index => Visit::Stop,
+                    TypeNode::Quantified { .. } => Visit::Skip,
+                    _ => Visit::Descend,
+                }
             })
     }
 
@@ -825,11 +919,15 @@ impl<'run> TypeRegistry<'run> {
         kt: KType,
         arity: usize,
     ) -> bool {
-        !visit(self, scratch, kt, LEAF, &mut |_, node, _| match *node {
-            TypeNode::ExpressionShape { .. } => Visit::Skip,
-            TypeNode::Quantified { index, .. } if index >= arity => Visit::Stop,
-            TypeNode::Quantified { .. } => Visit::Skip,
-            _ => Visit::Descend,
+        !visit(self, scratch, kt, LEAF, &mut |_, node, _| {
+            if node.binds_quantifiers() {
+                return Visit::Skip;
+            }
+            match *node {
+                TypeNode::Quantified { index, .. } if index >= arity => Visit::Stop,
+                TypeNode::Quantified { .. } => Visit::Skip,
+                _ => Visit::Descend,
+            }
         })
     }
 
@@ -915,7 +1013,21 @@ fn touch(pair: &[Cell<VerdictSlot>], hit: usize) -> bool {
     this.verdict
 }
 
-/// One variable's census entry while a shape is being canonicalized.
+/// A quantifier group canonicalized over the positions it binds — what both interning doors
+/// hand their own positions and names through.
+struct CanonicalGroup<'s> {
+    /// The surviving quantifiers' names, in canonical index order.
+    names: BumpVec<'s, TypeSymbol>,
+    /// Each survivor's bound, in the same order.
+    bounds: BumpVec<'s, KType>,
+    /// What each **declared** variable substitutes to: its canonical `Quantified`, or `Never` /
+    /// its bound where canonical form dropped it.
+    bindings: BumpVec<'s, KType>,
+    /// Declaration index → canonical index, `None` for a variable canonical form dropped.
+    quantifier_map: &'s [Option<usize>],
+}
+
+/// One variable's census entry while a binder is being canonicalized.
 #[derive(Clone, Copy)]
 struct Occurrences {
     covariant: usize,

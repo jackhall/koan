@@ -34,7 +34,7 @@ use crate::type_lattice::walk::Variance;
 use crate::type_lattice::walk::unary::{LEAF, Visit, visit};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
-use super::generators::{World, arb_arguments, arb_shape_type, arb_type};
+use super::generators::{World, arb_arguments, arb_function_type, arb_shape_type, arb_type};
 
 thread_local! {
     /// One live registry and one alphabet per test thread — proptest runs each `#[test]` on its
@@ -64,6 +64,12 @@ fn small() -> BoxedStrategy<KType> {
 /// the whole vocabulary, where most draws would satisfy them vacuously.
 fn shape() -> BoxedStrategy<KType> {
     arb_shape_type(world(), 3)
+}
+
+/// A generated function type, for the same reason [`shape`] exists: the laws about a binder's
+/// canonical form have nothing to say about a draw that is not one.
+fn function() -> BoxedStrategy<KType> {
+    arb_function_type(world(), 3)
 }
 
 /// The binary laws take the whole of whatever depth the tier asks for: the space two generated
@@ -278,7 +284,8 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         let quantified = visit(&types, scratch, a, LEAF, &mut |_, node, _| match node {
-            TypeNode::ExpressionShape { .. } => Visit::Skip,
+            // Either binder's group is its own, so nothing under one is free here.
+            _ if node.binds_quantifiers() => Visit::Skip,
             TypeNode::Quantified { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
@@ -391,14 +398,58 @@ proptest! {
         let stored = quantifier_bounds(&types, a);
         let mut carried: Vec<Option<KType>> = vec![None; stored.len()];
         visit(&types, scratch, a, LEAF, &mut |_, node, context| match *node {
-            TypeNode::Quantified { index, bound } if context.shape_depth() == 1 => {
+            TypeNode::Quantified { index, bound } if context.binder_depth() == 1 => {
                 if let Some(slot) = carried.get_mut(index) {
                     *slot = Some(bound);
                 }
                 Visit::Skip
             }
             // A nested group's variables are its own.
-            TypeNode::ExpressionShape { .. } if context.shape_depth() > 0 => Visit::Skip,
+            _ if node.binds_quantifiers() && context.binder_depth() > 0 => Visit::Skip,
+            _ => Visit::Descend,
+        });
+        for (index, bound) in stored.iter().enumerate() {
+            prop_assert_eq!(carried[index], Some(*bound));
+        }
+    }
+
+    /// Re-interning a function type through the canonicalizing door with the group it already
+    /// carries returns the very handle: canonical form is idempotent, which is what makes the
+    /// order over quantified functions antisymmetric.
+    #[test]
+    fn canonical_function_form_is_a_fixed_point(a in function()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        if let TypeNode::KFunction {
+            quantifiers,
+            params,
+            ret,
+            ..
+        } = types.node(a)
+        {
+            let again = types.function_type(scratch, quantifiers, params.as_slice(), ret);
+            prop_assert_eq!(again.handle, a);
+        }
+    }
+
+    /// The function twin of [`a_shape_stores_the_bounds_its_occurrences_carry`].
+    #[test]
+    fn a_function_stores_the_bounds_its_occurrences_carry(a in function()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let stored = quantifier_bounds(&types, a);
+        let mut carried: Vec<Option<KType>> = vec![None; stored.len()];
+        visit(&types, scratch, a, LEAF, &mut |_, node, context| match *node {
+            TypeNode::Quantified { index, bound } if context.binder_depth() == 1 => {
+                if let Some(slot) = carried.get_mut(index) {
+                    *slot = Some(bound);
+                }
+                Visit::Skip
+            }
+            // A nested group's variables are its own.
+            _ if node.binds_quantifiers() && context.binder_depth() > 0 => Visit::Skip,
             _ => Visit::Descend,
         });
         for (index, bound) in stored.iter().enumerate() {

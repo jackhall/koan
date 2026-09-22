@@ -146,7 +146,7 @@ fn a_function_member_is_born_behind_a_barrier() {
 
             // The caller sees the function at the view's types; the declaration it recurses on and
             // the two substitutions ride along for the call to use.
-            let TypeNode::KFunction { params, ret } = types.node(barrier.ktype()) else {
+            let TypeNode::KFunction { params, ret, .. } = types.node(barrier.ktype()) else {
                 panic!("a barrier stands for a function");
             };
             assert_eq!(ret, mint);

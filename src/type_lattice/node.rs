@@ -96,7 +96,17 @@ pub enum TypeNode<'run> {
     },
     /// A function type `(params) -> ret`. koan has no positional call syntax, so a
     /// function-typed slot records the names a caller must use to invoke what it receives.
+    ///
+    /// A non-empty `quantifiers` makes it a **binder** of its own, exactly as an
+    /// [`Self::ExpressionShape`] is: the group is canonical, its names are render-only, and the
+    /// digest feeds the arity. An empty one binds nothing and is transparent — an unquantified
+    /// function type written inside a quantified head keeps reading that head's variables.
     KFunction {
+        /// The type parameters this function binds, in `Quantified` index order. Render-only, as
+        /// a shape's are.
+        quantifiers: &'run [TypeSymbol],
+        /// Each quantifier's bound, in the same order. Digest-excluded: the occurrences carry it.
+        bounds: &'run [KType],
         params: Record<'run>,
         ret: KType,
     },
@@ -125,9 +135,10 @@ pub enum TypeNode<'run> {
         elements: &'run [DispatchTokenElement],
         ret: KType,
     },
-    /// A **rigid variable bound by the enclosing [`Self::ExpressionShape`]**: the `index`-th
-    /// member of its quantifier group, standing over `bound`. Positional rather than named, so
-    /// two shapes alpha-equivalent under a renaming of their parameters intern to one node.
+    /// A **rigid variable bound by the enclosing binder** — a [`Self::ExpressionShape`], or a
+    /// [`Self::KFunction`] carrying a group: the `index`-th member of that group, standing over
+    /// `bound`. Positional rather than named, so two binders alpha-equivalent under a renaming of
+    /// their parameters intern to one node.
     Quantified {
         index: usize,
         bound: KType,
@@ -182,6 +193,19 @@ pub enum TypeNode<'run> {
         kind: KKind,
         schema: NodeSchema<'run>,
     },
+}
+
+impl TypeNode<'_> {
+    /// Whether this node binds a quantifier group of its own: a shape always — its group may be
+    /// empty — and a function only when it carries one. This is what every walk asks before
+    /// stepping into a child, so a `Quantified` under it reads against the right group.
+    pub fn binds_quantifiers(&self) -> bool {
+        match self {
+            TypeNode::ExpressionShape { .. } => true,
+            TypeNode::KFunction { quantifiers, .. } => !quantifiers.is_empty(),
+            _ => false,
+        }
+    }
 }
 
 /// A sealed member's schema, over absolute member handles: every sibling reference inside it is

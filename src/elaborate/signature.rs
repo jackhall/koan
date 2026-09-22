@@ -72,7 +72,7 @@ pub fn callable_type<'graph, XF: KnottedFamily<'graph>>(
                 return Err(unsupported);
             };
             if shape.id == BuiltinShapeId::Lambda {
-                return elaborator.function(signature, ret, &top);
+                return Ok(elaborator.function(&[], signature, ret, &top)?.handle);
             }
             let names = group.map(|group| quantifiers(group, scratch));
             elaborator.shape(names.as_deref().unwrap_or(&[]), signature, ret, &top)

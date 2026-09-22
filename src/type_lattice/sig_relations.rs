@@ -108,6 +108,62 @@ pub(super) fn admits_shape(
     collector.solve(types).is_ok()
 }
 
+/// Whether `declared` admits `candidate` name by name — `declared`'s variables solved,
+/// `candidate`'s rigid — with `declared`'s return under `candidate`'s. The function twin of
+/// [`admits_shape`], reached from the order alone: a function type ranks in no bucket, so there is
+/// no [`Returns::Ignored`] reading of it.
+///
+/// Width is the order's own: every name `declared` asks for, `candidate` must have, and a name
+/// only `candidate` has is one `declared` never needs. A parameter pair asks the candidate's
+/// parameter to lie under the declared one (covariant for the collector, since a parameter's own
+/// polarity is contravariant) and the return pair asks the declared return to lie under the
+/// candidate's.
+pub(super) fn admits_function(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    declared: KType,
+    candidate: KType,
+) -> bool {
+    let (
+        TypeNode::KFunction {
+            quantifiers,
+            params: declared_params,
+            ret: declared_ret,
+            ..
+        },
+        TypeNode::KFunction {
+            params: candidate_params,
+            ret: candidate_ret,
+            ..
+        },
+    ) = (types.node(declared), types.node(candidate))
+    else {
+        return false;
+    };
+    let mut collector = Collector::new(scratch, quantifiers.len());
+    for (name, slot) in declared_params.iter() {
+        let Some(argument) = candidate_params.get(name.symbol()) else {
+            return false;
+        };
+        if admits_with(types, scratch, slot, argument, Variance::Co, &mut collector).is_err() {
+            return false;
+        }
+    }
+    if admits_with(
+        types,
+        scratch,
+        declared_ret,
+        candidate_ret,
+        Variance::Contra,
+        &mut collector,
+    )
+    .is_err()
+    {
+        return false;
+    }
+    collector.solve(types).is_ok()
+}
+
 /// Rank two candidates under one bucket key by mutual admission.
 ///
 /// `a` is at least as specific as `b` when `b` admits `a`'s slot types as arguments. For

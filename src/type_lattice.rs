@@ -75,7 +75,7 @@ pub use node::{NodeSchema, TypeNode};
 pub use operators::{FoldDirection, ReductionMode};
 pub use order::{is_more_specific_than, is_subtype_of, satisfied_by};
 pub use record::Record;
-pub use registry::{ShapeIntern, TypeRegistry};
+pub use registry::{GroupIntern, TypeRegistry};
 pub use render::{
     TypeNameDisplay, display_name, display_symbol, render_keyworded_head, render_sig_failure,
     render_symbol,

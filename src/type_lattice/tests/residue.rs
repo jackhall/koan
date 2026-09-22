@@ -203,11 +203,101 @@ fn width_runs_the_way_each_arm_declares() {
     assert_eq!(meet(&types, region, wide, narrow), wide);
     assert_eq!(join(&types, region, wide, narrow), narrow);
 
-    let few = types.function_type(region, &[(x, KType::NUMBER)], KType::NULL);
-    let many = types.function_type(region, &[(x, KType::NUMBER), (y, KType::STR)], KType::NULL);
+    let few = types
+        .function_type(region, &[], &[(x, KType::NUMBER)], KType::NULL)
+        .handle;
+    let many = types
+        .function_type(
+            region,
+            &[],
+            &[(x, KType::NUMBER), (y, KType::STR)],
+            KType::NULL,
+        )
+        .handle;
     assert!(
         is_subtype_of(&types, region, few, many),
         "a function subtype asks for no name the supertype does not",
     );
     assert!(!is_subtype_of(&types, region, many, few));
+}
+
+/// No law: the canonical form of a quantified function is a claim about worked spellings — which
+/// renamings and which written orders collapse to one handle, and what a lone occurrence becomes —
+/// and a generated pair almost never spells two of them.
+#[test]
+fn a_quantified_function_interns_by_shape_whatever_its_names() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
+    let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let other = TypeSymbol::declared("Other", &symbols).expect("a Type token");
+    let variable = types.quantified(0, KType::ANY);
+
+    // `FN FOR ALL (Elt) :{x :Elt} -> Elt` under either spelling, and with the fields in either
+    // written order, is one handle: the names are render-only and the record is order-blind.
+    let identity = |group, param| {
+        types
+            .function_type(region, group, &[(x, param)], param)
+            .handle
+    };
+    let (as_elt, as_other) = ([elt], [other]);
+    assert_eq!(identity(&as_elt, variable), identity(&as_other, variable));
+    let forward = types
+        .function_type(region, &[elt], &[(x, variable), (y, KType::STR)], variable)
+        .handle;
+    let reversed = types
+        .function_type(region, &[elt], &[(y, KType::STR), (x, variable)], variable)
+        .handle;
+    assert_eq!(forward, reversed);
+
+    // A lone covariant occurrence is `Never`; a lone contravariant one is its bound.
+    let lone_return = types
+        .function_type(region, &[elt], &[(x, KType::NUMBER)], variable)
+        .handle;
+    assert_eq!(
+        lone_return,
+        types
+            .function_type(region, &[], &[(x, KType::NUMBER)], KType::NEVER)
+            .handle,
+    );
+    let lone_param = types
+        .function_type(
+            region,
+            &[elt],
+            &[(x, types.quantified(0, KType::NUMBER))],
+            KType::STR,
+        )
+        .handle;
+    assert_eq!(
+        lone_param,
+        types
+            .function_type(region, &[], &[(x, KType::NUMBER)], KType::STR)
+            .handle,
+    );
+
+    // The order instantiates: the quantified identity is below every monomorphic identity, and
+    // below a quantified function that promises less about its return.
+    let quantified_identity = identity(&as_elt, variable);
+    let on_numbers = types
+        .function_type(region, &[], &[(x, KType::NUMBER)], KType::NUMBER)
+        .handle;
+    assert!(is_subtype_of(
+        &types,
+        region,
+        quantified_identity,
+        on_numbers
+    ));
+    assert!(!is_subtype_of(
+        &types,
+        region,
+        on_numbers,
+        quantified_identity
+    ));
+    let to_any = types
+        .function_type(region, &[elt], &[(x, variable)], KType::ANY)
+        .handle;
+    assert!(is_subtype_of(&types, region, quantified_identity, to_any));
 }

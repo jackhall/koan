@@ -34,8 +34,9 @@ const OVER_MEMBERS: Rebuild = Rebuild {
 /// a solved call applies to a shape's return, and what erasure runs with each variable's bound in
 /// every cell.
 ///
-/// A **nested** shape rebinds the indices with its own group, exactly as it shadows them in the
-/// relations, so a variable under one is not free and is left alone.
+/// A **nested** binder — a shape, or a function type carrying a group — rebinds the indices with
+/// its own group, exactly as it shadows them in the relations, so a variable under one is not free
+/// and is left alone.
 pub fn substitute_quantified(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -51,7 +52,7 @@ pub fn substitute_quantified(
         kt,
         OVER_QUANTIFIERS,
         &mut |kt, node, context| match *node {
-            TypeNode::Quantified { index, .. } if context.shape_depth() == 0 => {
+            TypeNode::Quantified { index, .. } if context.binder_depth() == 0 => {
                 Some(bindings.get(index).copied().unwrap_or(kt))
             }
             _ => None,
@@ -59,25 +60,22 @@ pub fn substitute_quantified(
     )
 }
 
-/// `kt` at a solved call. A **shape** is its own binder, so instantiating one substitutes through
-/// its slots and return and the canonical form drops the emptied group: the result is the shape
-/// this call has, as against the shape the declaration wrote. Every other type carries no binder of
-/// its own and substitutes in place.
+/// `kt` at a solved call. A **binder** — a shape, or a function type carrying a group — owns the
+/// variables, so instantiating one substitutes through its positions and return and the canonical
+/// form drops the emptied group: the result is the callable this call has, as against the one the
+/// declaration wrote. Every other type carries no binder of its own and substitutes in place.
 ///
-/// `bindings` are in the shape's **canonical** quantifier order — a caller holding
+/// `bindings` are in the binder's **canonical** quantifier order — a caller holding
 /// declaration-order bindings translates them through the map
-/// [`shape_type`](TypeRegistry::shape_type) handed back.
+/// [`shape_type`](TypeRegistry::shape_type) or
+/// [`function_type`](TypeRegistry::function_type) handed back.
 pub fn instantiate_quantified(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     kt: KType,
     bindings: &[KType],
 ) -> KType {
-    let is_shape = matches!(
-        types.node(kt),
-        TypeNode::ExpressionShape { quantifiers, .. } if !quantifiers.is_empty()
-    );
-    if !is_shape {
+    if !types.node(kt).binds_quantifiers() || own_group(types, kt).is_empty() {
         return substitute_quantified(types, scratch, kt, bindings);
     }
     rebuild(
@@ -86,7 +84,7 @@ pub fn instantiate_quantified(
         kt,
         OVER_QUANTIFIERS,
         &mut |kt, node, context| match *node {
-            TypeNode::Quantified { index, .. } if context.shape_depth() == 1 => {
+            TypeNode::Quantified { index, .. } if context.binder_depth() == 1 => {
                 Some(bindings.get(index).copied().unwrap_or(kt))
             }
             _ => None,
@@ -95,7 +93,7 @@ pub fn instantiate_quantified(
 }
 
 /// `kt` with every variable of its own group replaced by that variable's bound — what a quantified
-/// callable reports on the value lane, where a lambda type has no binder to carry the parameter.
+/// callable reports where the reader has no binder to carry the parameter.
 pub fn erase_quantified(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KType) -> KType {
     let bounds = quantifier_bounds(types, kt);
     if bounds.is_empty() {
@@ -125,10 +123,15 @@ pub fn erase_rigid(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KTy
 }
 
 /// The bound each variable of `kt`'s own quantifier group stands over, in canonical index order,
-/// as the shape node stores it. Empty for anything that is not a quantified shape.
+/// as the binder node stores it. Empty for anything that binds no group.
 pub fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, kt: KType) -> &'run [KType] {
+    own_group(types, kt)
+}
+
+/// The `bounds` run either binder variant stores, and `&[]` for every other node.
+fn own_group<'run>(types: &TypeRegistry<'run>, kt: KType) -> &'run [KType] {
     match types.node(kt) {
-        TypeNode::ExpressionShape { bounds, .. } => bounds,
+        TypeNode::ExpressionShape { bounds, .. } | TypeNode::KFunction { bounds, .. } => bounds,
         _ => &[],
     }
 }

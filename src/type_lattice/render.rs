@@ -83,11 +83,27 @@ fn write_name_in(
             write_param_record(f, *fields, types, symbols, binder)?;
             f.write_str("}")
         }
-        TypeNode::KFunction { params, ret } => {
-            f.write_str(":(FN :{")?;
-            write_param_record(f, *params, types, symbols, binder)?;
+        // `:(FN FOR ALL (Elt) :{x :Elt} -> Elt)`, and without the group where it binds none — the
+        // group writer emits its own trailing space and nothing at all for an empty group, so the
+        // monomorphic surface is unchanged. Params and return read against the function's own
+        // group where it has one, and against the enclosing binder's where it has none.
+        TypeNode::KFunction {
+            quantifiers,
+            bounds,
+            params,
+            ret,
+        } => {
+            let inner = if quantifiers.is_empty() {
+                binder
+            } else {
+                quantifiers
+            };
+            f.write_str(":(FN ")?;
+            write_quantifier_group(f, quantifiers, bounds, types, symbols)?;
+            f.write_str(":{")?;
+            write_param_record(f, *params, types, symbols, inner)?;
             f.write_str("} -> ")?;
-            write_name_in(*ret, f, types, symbols, binder)?;
+            write_name_in(*ret, f, types, symbols, inner)?;
             f.write_str(")")
         }
         TypeNode::ExpressionShape {
@@ -100,9 +116,9 @@ fn write_name_in(
             write_shape_surface(f, quantifiers, bounds, elements, *ret, types, symbols)?;
             f.write_str(")")
         }
-        // A quantified position renders as the name its enclosing shape bound it to. The
-        // placeholder is diagnostic-only: a bare leaf outside a shape is unreachable from any
-        // spelling, since the only door that mints one is the shape builder.
+        // A quantified position renders as the name its enclosing binder bound it to. The
+        // placeholder is diagnostic-only: a bare leaf outside a binder is unreachable from any
+        // spelling, since the only doors that mint one are the two canonicalizing interns.
         TypeNode::Quantified { index, .. } => match binder.get(*index) {
             Some(name) => write!(f, "{}", display_symbol(name.symbol(), symbols)),
             None => write!(f, "<quantified {index}>"),
@@ -263,8 +279,8 @@ pub(super) fn write_shape_surface(
     write_name_in(ret, f, types, symbols, quantifiers)
 }
 
-/// `FOR ALL (<names>) ` — the quantifier group a shape's surface opens with, or nothing at all when
-/// the shape quantifies over nothing. A variable whose bound is not `Any` spells it: `Elt :Number`.
+/// `FOR ALL (<names>) ` — the quantifier group a binder's surface opens with, or nothing at all
+/// when it quantifies over nothing. A variable whose bound is not `Any` spells it: `Elt :Number`.
 /// The trailing space is the group's, so the head that follows spells the same either way.
 fn write_quantifier_group(
     f: &mut std::fmt::Formatter<'_>,

@@ -149,6 +149,8 @@ fn every_node_kind_has_its_own_tag() {
             fields: Record::over(&fields),
         },
         TypeNode::KFunction {
+            quantifiers: &[],
+            bounds: &[],
             params: Record::over(&fields),
             ret: KType::NUMBER,
         },

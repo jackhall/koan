@@ -5,8 +5,8 @@
 //! a leaf verdict, a set-wise rule for unions, and a structural combine that reads the width
 //! verdict generically. The order, the meet and the unifier's collector are the three.
 //!
-//! Two signatures and two quantified shapes reach the leaf verdict rather than a child pairing,
-//! because their relations are schema-level and instantiation-level doors.
+//! Two signatures, and two callables of which one is quantified, reach the leaf verdict rather
+//! than a child pairing, because their relations are schema-level and instantiation-level doors.
 //!
 //! Every pairing's buffers are built in the scratch allocator the walk is handed.
 
@@ -80,7 +80,7 @@ pub trait Lockstep {
     ) -> Option<Self::Out>;
 
     /// The verdict for a pair the table does not relate structurally: two atoms, two signatures,
-    /// two quantified shapes, or two arms of different shape.
+    /// two callables of which one is quantified, or two arms of different shape.
     fn leaf(
         &mut self,
         types: &TypeRegistry<'_>,
@@ -233,14 +233,23 @@ fn pairing<'n>(
         }
         (
             TypeNode::KFunction {
+                quantifiers: xq,
                 params: xp,
                 ret: xr,
+                ..
             },
             TypeNode::KFunction {
+                quantifiers: yq,
                 params: yp,
                 ret: yr,
+                ..
             },
         ) => {
+            // A quantified function relates to another by instantiation, which is a leaf door,
+            // not a child pairing — as a quantified shape does.
+            if !xq.is_empty() || !yq.is_empty() {
+                return Pairing::Leaf;
+            }
             let mut paired = by_name(
                 scratch,
                 xp,
@@ -407,7 +416,9 @@ impl Rebuilder<'_, '_> {
             Assembly::Record(keys) => types.record(scratch, &named(scratch, keys, paired, extra)),
             Assembly::Function(keys) => {
                 let (values, ret) = paired.split_at(keys.len());
-                types.function_type(scratch, &named(scratch, keys, values, extra), ret[0])
+                types
+                    .function_type(scratch, &[], &named(scratch, keys, values, extra), ret[0])
+                    .handle
             }
             Assembly::Shape(elements) => {
                 let mut slots = paired.iter();

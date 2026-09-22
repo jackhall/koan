@@ -74,7 +74,9 @@ LET Bare = Alias";
             );
             assert_eq!(
                 elaborated(&program, 5),
-                Ok(types.function_type(scratch, &[(x, KType::NUMBER)], KType::BOOL))
+                Ok(types
+                    .function_type(scratch, &[], &[(x, KType::NUMBER)], KType::BOOL)
+                    .handle)
             );
             let twice = [
                 keyword("TWICE", program.symbols),
@@ -187,11 +189,14 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
         let ys = BinderSymbol::classify("ys").unwrap();
         assert_eq!(
             typed("f"),
-            Ok(types.function_type(
-                scratch,
-                &[(x, KType::NUMBER), (ys, types.list(KType::STR))],
-                KType::BOOL
-            ))
+            Ok(types
+                .function_type(
+                    scratch,
+                    &[],
+                    &[(x, KType::NUMBER), (ys, types.list(KType::STR))],
+                    KType::BOOL
+                )
+                .handle)
         );
         let shape = |elements: &[DispatchTokenElement], ret| {
             types.shape_type(scratch, &[], elements, ret).handle

@@ -65,9 +65,14 @@ fn interning_and_relations_touch_no_heap() {
     // --- Interning ---
     let record = types.record(scratch, &[(x, KType::NUMBER), (y, KType::STR)]);
     let narrow = types.record(scratch, &[(x, KType::NUMBER)]);
-    let function = types.function_type(scratch, &[(x, KType::NUMBER)], record);
+    let function = types
+        .function_type(scratch, &[], &[(x, KType::NUMBER)], record)
+        .handle;
     let union = types.union_of(scratch, &[KType::NUMBER, KType::STR, record]);
     let variable = types.quantified(0, KType::NUMBER);
+    let quantified_function = types
+        .function_type(scratch, &[elt], &[(x, variable)], variable)
+        .handle;
     let shape = types
         .shape_type(
             scratch,
@@ -173,6 +178,7 @@ fn interning_and_relations_touch_no_heap() {
     assert!(!is_subtype_of(&types, scratch, narrow, record));
     let _ = is_subtype_of(&types, scratch, specialized, interface);
     let _ = join(&types, scratch, record, function);
+    let _ = is_subtype_of(&types, scratch, quantified_function, function);
     let _ = join(&types, scratch, group_member, KType::NUMBER);
     let _ = meet(&types, scratch, record, narrow);
     let _ = meet(&types, scratch, union, record);

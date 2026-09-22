@@ -118,7 +118,7 @@ fn arb_type_in(
     let (record_world, function_world) = (world.clone(), world.clone());
     let (union_world, apply_world) = (world.clone(), world.clone());
     let (shape_world, sig_world, group_world) = (world.clone(), world.clone(), world.clone());
-    let shape_members = members.clone();
+    let (shape_members, function_members) = (members.clone(), members.clone());
     prop_oneof![
         6 => leaf,
         2 => inner().prop_map(move |element| list_world.types.list(element)),
@@ -127,11 +127,7 @@ fn arb_type_in(
         2 => arb_fields(record_world.clone(), inner()).prop_map(move |fields| {
             with_scratch(|scratch| record_world.types.record(scratch, &fields))
         }),
-        2 => (arb_fields(function_world.clone(), inner()), inner()).prop_map(
-            move |(params, ret)| {
-                with_scratch(|scratch| function_world.types.function_type(scratch, &params, ret))
-            }
-        ),
+        2 => arb_function(function_world, depth, function_members),
         2 => prop::collection::vec(inner(), 1..4).prop_map(move |members| {
             with_scratch(|scratch| union_world.types.union_of(scratch, &members))
         }),
@@ -302,6 +298,71 @@ fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy
         .boxed()
 }
 
+/// A function type, sometimes over a quantifier group of its own. Every variable is minted under a
+/// variable-free bound.
+///
+/// A variable is planted at **two** positions — two parameters, or a parameter and the return —
+/// for the reason [`arb_shape`] plants one at two slots: canonical form replaces a single
+/// occurrence by its bound or by `Never`, so a sprinkled group would almost never survive
+/// interning and the laws about quantified functions would run over nothing.
+fn arb_function(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy<KType> {
+    let grounds = world.grounds();
+    (
+        1..4usize,
+        prop::collection::vec(0..grounds.len(), 0..2),
+        prop::collection::vec((0..4usize, 0..4usize), 0..2),
+    )
+        .prop_flat_map(move |(arity, bounds, plantings)| {
+            let world = world.clone();
+            let vars: Rc<Vec<KType>> = Rc::new(
+                bounds
+                    .iter()
+                    .enumerate()
+                    .map(|(index, bound)| world.types.quantified(index, world.grounds()[*bound]))
+                    .collect(),
+            );
+            let names: Vec<TypeSymbol> = world.type_names[..bounds.len()].to_vec();
+            let arity = arity.min(world.binders.len());
+            let value = arb_type_in(
+                world.clone(),
+                depth.saturating_sub(1),
+                vars.clone(),
+                members.clone(),
+            );
+            let ret = arb_type_in(
+                world.clone(),
+                depth.saturating_sub(1),
+                vars.clone(),
+                members.clone(),
+            );
+            (prop::collection::vec(value, arity), ret).prop_map(move |(drawn, ret)| {
+                // The return is the last plantable position, so even a one-parameter function
+                // gives a variable two places to occur.
+                let mut positions = drawn;
+                positions.push(ret);
+                for (index, variable) in vars.iter().enumerate() {
+                    let (first, second) = plantings.get(index).copied().unwrap_or((0, 1));
+                    let (first, second) = (first % positions.len(), second % positions.len());
+                    if first == second {
+                        continue;
+                    }
+                    positions[first] = *variable;
+                    positions[second] = *variable;
+                }
+                let ret = positions.pop().expect("the return is the last position");
+                let params: Vec<(BinderSymbol, KType)> =
+                    world.binders.iter().copied().zip(positions).collect();
+                with_scratch(|scratch| {
+                    world
+                        .types
+                        .function_type(scratch, &names, &params, ret)
+                        .handle
+                })
+            })
+        })
+        .boxed()
+}
+
 /// An interface with a handful of members of each kind.
 ///
 /// The abstract members are chosen first and their handles handed down to every member type, so a
@@ -434,6 +495,12 @@ fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
 /// whole vocabulary would leave mostly vacuous.
 pub fn arb_shape_type(world: World, depth: u32) -> BoxedStrategy<KType> {
     arb_shape(world, depth, Rc::new(Vec::new()))
+}
+
+/// A generated function type, for the laws whose subject is a function and which a draw from the
+/// whole vocabulary would leave mostly vacuous.
+pub fn arb_function_type(world: World, depth: u32) -> BoxedStrategy<KType> {
+    arb_function(world, depth, Rc::new(Vec::new()))
 }
 
 /// A tuple of argument types for a shape of `arity` positions, drawn from the ground alphabet plus a

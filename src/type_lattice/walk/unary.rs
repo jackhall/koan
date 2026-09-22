@@ -75,7 +75,7 @@ pub struct Context<'s> {
     /// Abstract member names declared by the descended signatures on the path here, innermost
     /// last. A name in the stack is bound by a nearer binder than any the rule is substituting for.
     shadow: BumpVec<'s, TypeSymbol>,
-    shape_depth: usize,
+    binder_depth: usize,
     variance: Variance,
 }
 
@@ -83,7 +83,7 @@ impl<'s> Context<'s> {
     fn root(scratch: BumpAllocator<'s>, variance: Variance) -> Self {
         Context {
             shadow: BumpVec::new_in(scratch),
-            shape_depth: 0,
+            binder_depth: 0,
             variance,
         }
     }
@@ -93,11 +93,11 @@ impl<'s> Context<'s> {
         self.shadow.contains(&name)
     }
 
-    /// Expression-shape binders on the path from the root to here, the root included: `0` means a
-    /// [`TypeNode::Quantified`] seen here is **free**, `1` that it is bound by the root shape's own
-    /// group.
-    pub fn shape_depth(&self) -> usize {
-        self.shape_depth
+    /// Binders — expression shapes, and function types carrying a group — on the path from the
+    /// root to here, the root included: `0` means a [`TypeNode::Quantified`] seen here is
+    /// **free**, `1` that it is bound by the root binder's own group.
+    pub fn binder_depth(&self) -> usize {
+        self.binder_depth
     }
 
     /// Polarity of the current position: flipped once per enclosing function parameter or shape
@@ -153,9 +153,9 @@ fn visit_at<'run>(
         return false;
     }
     let depth = shadow_depth(&node, descent.signature, context);
-    let binder = is_shape(&node);
+    let binder = node.binds_quantifiers();
     if binder {
-        context.shape_depth += 1;
+        context.binder_depth += 1;
     }
     let outer = context.variance;
     let mut stopped = false;
@@ -168,7 +168,7 @@ fn visit_at<'run>(
     }
     context.variance = outer;
     if binder {
-        context.shape_depth -= 1;
+        context.binder_depth -= 1;
     }
     context.shadow.truncate(depth);
     stopped
@@ -209,9 +209,9 @@ fn rebuild_at<'run>(
         return kt;
     }
     let depth = shadow_depth(&node, cfg.signature, context);
-    let binder = is_shape(&node);
+    let binder = node.binds_quantifiers();
     if binder {
-        context.shape_depth += 1;
+        context.binder_depth += 1;
     }
     let outer = context.variance;
     let mut rebuilt = BumpVec::with_capacity_in(kids.len(), scratch);
@@ -224,7 +224,7 @@ fn rebuild_at<'run>(
     }
     context.variance = outer;
     if binder {
-        context.shape_depth -= 1;
+        context.binder_depth -= 1;
     }
     context.shadow.truncate(depth);
     if !changed {
@@ -245,10 +245,6 @@ fn shadow_depth(node: &TypeNode<'_>, signature: Step, context: &mut Context<'_>)
             .extend(schema.abstract_members.iter().map(|(name, _)| *name));
     }
     depth
-}
-
-fn is_shape(node: &TypeNode<'_>) -> bool {
-    matches!(node, TypeNode::ExpressionShape { .. })
 }
 
 /// A node's children under the knobs, in [`children`]'s order, in a buffer sized to their count.
@@ -301,7 +297,7 @@ pub fn children(
             out(value, false);
         }
         TypeNode::Record { fields } => fields.values().for_each(|kt| out(kt, false)),
-        TypeNode::KFunction { params, ret } => {
+        TypeNode::KFunction { params, ret, .. } => {
             params.values().for_each(|kt| out(kt, true));
             out(ret, false);
         }
@@ -369,9 +365,20 @@ fn reassemble(
         TypeNode::List { .. } => types.list(new[0]),
         TypeNode::Dict { .. } => types.dict(new[0], new[1]),
         TypeNode::Record { fields } => types.record(scratch, &rekey(scratch, fields, new)),
-        TypeNode::KFunction { params, .. } => {
+        TypeNode::KFunction {
+            quantifiers,
+            params,
+            ..
+        } => {
             let (values, ret) = new.split_at(params.len());
-            types.function_type(scratch, &rekey(scratch, params, values), ret[0])
+            types
+                .function_type(
+                    scratch,
+                    quantifiers,
+                    &rekey(scratch, params, values),
+                    ret[0],
+                )
+                .handle
         }
         TypeNode::ExpressionShape {
             quantifiers,

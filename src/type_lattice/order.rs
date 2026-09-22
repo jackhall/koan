@@ -15,7 +15,7 @@ use crate::memory::{BumpAllocator, BumpVec};
 use super::handle::KType;
 use super::node::TypeNode;
 use super::registry::{Relation, TypeRegistry};
-use super::sig_relations::{Returns, admits_shape, sig_subtype};
+use super::sig_relations::{Returns, admits_function, admits_shape, sig_subtype};
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
 
@@ -35,8 +35,9 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 ///   below it are only itself and `Never`, above it only itself and everything above its bound.
 ///   The two clauses agree because a bound is a variable-free type, so nothing above a bound is
 ///   itself rigid.
-/// - A quantified shape is below another shape when some instantiation of its variables, each under
-///   its bound, puts the instance below the other with the other's variables rigid.
+/// - A quantified shape is below another shape, and a quantified function below another function,
+///   when some instantiation of its variables, each under its bound, puts the instance below the
+///   other with the other's variables rigid.
 /// - A pre-seal `Sibling` and a sealed member are atoms, with the same profile as each other.
 /// - Every other pair is unrelated.
 pub fn is_subtype_of(
@@ -148,6 +149,11 @@ impl Lockstep for Order {
             // slot and the return under the other's, with the other's rigid.
             (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
                 admits_shape(types, scratch, a, b, Returns::Checked)
+            }
+            // The same clause for a pair of function types, related name by name. Only a pair
+            // where one quantifies reaches here — two monomorphic ones pair structurally.
+            (TypeNode::KFunction { .. }, TypeNode::KFunction { .. }) => {
+                admits_function(types, scratch, a, b)
             }
             _ => false,
         }

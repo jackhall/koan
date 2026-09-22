@@ -190,9 +190,12 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::List { element } => list_digest(element.digest()),
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
         TypeNode::Record { fields } => record_digest(scratch, fields.as_slice()),
-        TypeNode::KFunction { params, ret } => {
-            function_digest(scratch, params.as_slice(), ret.digest())
-        }
+        TypeNode::KFunction {
+            quantifiers,
+            params,
+            ret,
+            ..
+        } => function_digest(scratch, quantifiers.len(), params.as_slice(), ret.digest()),
         TypeNode::ExpressionShape {
             quantifiers,
             elements,
@@ -297,13 +300,17 @@ pub(super) fn record_digest(
     h.finish()
 }
 
-/// A function type `(params) -> ret`.
+/// A function type `(params) -> ret`, its quantifier **arity** first — never the names, since
+/// alpha-variants are one type, and unconditionally, as a shape's is. Each surviving variable's
+/// bound rides in its own `Quantified` occurrences, which canonical form guarantees.
 pub(super) fn function_digest(
     scratch: BumpAllocator<'_>,
+    arity: usize,
     params: &[(BinderSymbol, KType)],
     ret: TypeDigest,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_KFUNCTION);
+    h.count(arity);
     feed_record(&mut h, scratch, params);
     h.digest(ret).finish()
 }
