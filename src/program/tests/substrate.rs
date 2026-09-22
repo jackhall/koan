@@ -105,7 +105,7 @@ fn a_stalled_substrate_stays_stalled() {
             root,
             Placement::Fresh,
         );
-        assert_eq!(stalled, Err(DrainStalled::Step(StepError::Stale)));
+        assert_eq!(stalled.err(), Some(DrainStalled::Step(StepError::Stale)));
     });
     RAN.with(|ran| ran.set(0.0));
     substrate.with(|running| {

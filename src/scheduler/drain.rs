@@ -6,20 +6,17 @@
 //! text and the shapes in it.
 
 use crate::memory::{
-    CellGraph, CellHandle, CreateError, Erased, Operand, RedeemError, ReleaseAbsorption,
+    CellGraph, CellHandle, CreateError, Dormant, Erased, Operand, RedeemError, ReleaseAbsorption,
     ReleaseError, SlabHandle,
 };
 use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
 };
 use crate::scheduler::continuation::{
-    Continuation, ContinuationFamily, Provenance, Report, Rested, StepBundle, Work,
+    Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt, StepBundle,
+    Work,
 };
 use crate::scheduler::delivery::KDelivery;
-
-/// A bundle's state at one brand.
-type StateAt<'graph, 'cell, B> =
-    <<B as StepBundle<'graph>>::State as crate::memory::Reattachable<'graph>>::At<'cell>;
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -98,7 +95,7 @@ enum Entry<'graph, B: StepBundle<'graph>> {
 
 impl<'a, 'graph, B: StepBundle<'graph>> Scheduler<'a, 'graph, B>
 where
-    Erased<'graph, B::State>: Copy,
+    Erased<'graph, B::Birth>: Copy,
 {
     /// A drain over `graph`.
     pub fn over(graph: &'a mut Graph<'graph, B>) -> Self {
@@ -111,7 +108,8 @@ where
         }
     }
 
-    /// Run `work` to its end, born under `under` at `placement`.
+    /// Run `work` to its end, born under `under` at `placement`, and hand back what it left at
+    /// rest, if it ended by [`Step::leave`](crate::scheduler::Step::leave).
     ///
     /// Everything else the drain runs is a descendant the root work asked for. The root work
     /// reports to nobody, so its end is success and the stack emptying first is
@@ -123,22 +121,52 @@ where
         work: Work<'graph, 'graph, B>,
         under: impl Into<CellHandle>,
         placement: Placement,
-    ) -> Result<(), DrainStalled> {
+    ) -> Result<Option<Resting<'graph, B>>, DrainStalled> {
+        self.drive(
+            work.step,
+            Rested::Awake(B::born(work.state)),
+            under.into(),
+            placement,
+        )
+    }
+
+    /// Run a later root work to its end, born under `under` at `placement` from what an earlier one
+    /// left at rest there, and hand back what this one leaves. The birth wakes at the new cell's
+    /// first entry at the verdict's price, exactly as a spawned child's does — free for a tenant of
+    /// the cell it was left in, which crosses nothing.
+    pub fn resume(
+        &mut self,
+        step: NativeStep<'graph, B>,
+        resting: Resting<'graph, B>,
+        under: impl Into<CellHandle>,
+        placement: Placement,
+    ) -> Result<Option<Resting<'graph, B>>, DrainStalled> {
+        self.drive(step, Rested::Dormant(resting.0), under.into(), placement)
+    }
+
+    /// The drain loop both root works share: born under `under`, reporting to nobody, run until
+    /// it ends.
+    fn drive(
+        &mut self,
+        step: NativeStep<'graph, B>,
+        state: Rested<'graph, 'graph, B>,
+        under: CellHandle,
+        placement: Placement,
+    ) -> Result<Option<Resting<'graph, B>>, DrainStalled> {
         // A view a stalled run left entries on starts over: they belong to a root work that will
         // never end, so nothing this run does may pop them.
         self.ready.clear();
-        let under = under.into();
         let root = self.born(
             under,
             placement,
             Continuation {
-                step: work.step,
+                step,
                 provenance: Provenance {
                     parent: under,
                     report: None,
                     home: under,
                 },
-                state: Rested::Awake(work.state),
+                state,
             },
         )?;
         self.ready.push(Entry::Live(root));
@@ -163,7 +191,7 @@ where
                     // off the continuation, so no step can name the cell that wakes.
                     if provenance.report.is_none() {
                         debug_assert!(self.ready.is_empty(), "the root work ended last");
-                        return Ok(());
+                        return Ok(None);
                     }
                     if completed {
                         self.ready.push(Entry::Live(provenance.parent));
@@ -175,6 +203,12 @@ where
                     asked,
                     release_after: Some(cell),
                 }),
+                // Only a root work leaves: `leave` refuses a cell that reports to somebody.
+                Kind::Left(dormant) => {
+                    self.retire(cell)?;
+                    debug_assert!(self.ready.is_empty(), "the root work ended last");
+                    return Ok(Some(Resting(dormant)));
+                }
                 Kind::Failed(error) => return Err(DrainStalled::Step(error)),
             }
         }
@@ -319,28 +353,49 @@ where
     }
 }
 
-/// Wake a state a spawn or a hop put to rest: redeem it into this step and cross it to the
+/// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and cross it to the
 /// executing cell's `'here` at the verdict's price — free for a child, whose spawner is above it,
 /// and for a tenant, which crosses nothing; copied for a tail hop's sibling, which is `Apart`.
 fn wake<'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, B>,
-    dormant: crate::memory::Dormant<'graph, B::State>,
+    dormant: Dormant<'graph, B::Birth>,
 ) -> Result<StateAt<'graph, 'here, B>, RedeemError>
 where
     'graph: 'step + 'here,
     'here: 'scratch,
-    Erased<'graph, B::State>: Copy,
+    Erased<'graph, B::Birth>: Copy,
 {
     let carrier = context.redeem(dormant)?;
     let copy_bytes = B::weight(&context.read(&carrier).value());
-    Ok(context.alloc_here(
+    let birth = context.alloc_here(
         &[Operand {
             carrier: &carrier,
             copy_bytes,
         }],
         |writer, views| B::cross(writer, &views[0]),
-    ))
+    );
+    Ok(B::born(birth))
 }
+
+/// What a root work left at rest in its home when it ended by
+/// [`Step::leave`](crate::scheduler::Step::leave), for the graph's owner to
+/// [`resume`](Scheduler::resume) a later root work from.
+///
+/// Opaque and brand-free: it names no place, since the home is the cell the root work was born
+/// under, which the owner already holds. A resume from anywhere else is refused when its birth does
+/// not redeem.
+pub struct Resting<'graph, B: StepBundle<'graph>>(Dormant<'graph, B::Birth>);
+
+impl<'graph, B: StepBundle<'graph>> Clone for Resting<'graph, B>
+where
+    Erased<'graph, B::Birth>: Copy,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'graph, B: StepBundle<'graph>> Copy for Resting<'graph, B> where Erased<'graph, B::Birth>: Copy {}
 
 /// The drain's own tally of the cells it has created and released. Cellgraph keeps no live count
 /// for tree cells or tenants, so the high-water mark a test reads is counted here, where only a

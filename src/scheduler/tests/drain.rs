@@ -305,8 +305,10 @@ fn a_step_that_cannot_proceed_stalls_the_drain() {
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     assert_eq!(
-        scheduler.run(work(fail, KValue::Null), root, Placement::Fresh),
-        Err(DrainStalled::Step(StepError::Stale))
+        scheduler
+            .run(work(fail, KValue::Null), root, Placement::Fresh)
+            .err(),
+        Some(DrainStalled::Step(StepError::Stale))
     );
 }
 
@@ -325,12 +327,14 @@ fn a_child_that_ends_without_delivering_leaves_the_drain_unfinished() {
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     assert_eq!(
-        scheduler.run(
-            work(park_on_a_silent_child, KValue::Null),
-            root,
-            Placement::Fresh
-        ),
-        Err(DrainStalled::Unfinished),
+        scheduler
+            .run(
+                work(park_on_a_silent_child, KValue::Null),
+                root,
+                Placement::Fresh
+            )
+            .err(),
+        Some(DrainStalled::Unfinished),
         "the spawner is parked on a run nothing will fill"
     );
     assert_eq!(recorded(), ["silent"]);
@@ -349,8 +353,10 @@ fn a_step_that_asks_and_does_not_park_is_refused() {
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     assert_eq!(
-        scheduler.run(work(ask_and_leave, KValue::Null), root, Placement::Fresh),
-        Err(DrainStalled::Step(StepError::Unparked))
+        scheduler
+            .run(work(ask_and_leave, KValue::Null), root, Placement::Fresh)
+            .err(),
+        Some(DrainStalled::Step(StepError::Unparked))
     );
     assert!(recorded().is_empty(), "the child was never born");
 }
@@ -440,12 +446,14 @@ fn a_view_dropped_with_a_queued_cell_leaves_cells_the_roots_release_does_not_emp
     let mut graph: TestGraph<'static> = TestGraph::new(2);
     let root = graph.root().expect("a fresh slab admits a root");
     assert_eq!(
-        Scheduler::over(&mut graph).run(
-            work(park_behind_a_failure, KValue::Null),
-            root,
-            Placement::Fresh
-        ),
-        Err(DrainStalled::Step(StepError::Stale))
+        Scheduler::over(&mut graph)
+            .run(
+                work(park_behind_a_failure, KValue::Null),
+                root,
+                Placement::Fresh
+            )
+            .err(),
+        Some(DrainStalled::Step(StepError::Stale))
     );
     assert!(
         recorded().is_empty(),
@@ -455,5 +463,88 @@ fn a_view_dropped_with_a_queued_cell_leaves_cells_the_roots_release_does_not_emp
     assert!(
         !graph.is_empty(),
         "the parked root work and the failed child are the graph's still"
+    );
+}
+
+/// A root work that writes text in its home and leaves it at rest.
+fn write_and_leave<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let left = crate::values::text(step.writer(), "left at rest");
+    record(format!("left {}", where_text(left)));
+    step.leave(left)
+}
+
+/// A later root work that records what the earlier one left.
+fn read_what_was_left<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let (step, state) = step.state();
+    record(format!("left {}", where_text(state)));
+    step.done()
+}
+
+/// Leave text at rest from a root work at `placement`, then resume a second root work from it,
+/// through a second view over the same graph.
+fn leave_then_resume(placement: Placement) -> Vec<String> {
+    reset();
+    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let root = graph.root().expect("a fresh slab admits a root");
+    let resting = Scheduler::over(&mut graph)
+        .run(work(write_and_leave, KValue::Null), root, placement)
+        .expect("the root work ends")
+        .expect("it left a birth at rest");
+    let after = Scheduler::over(&mut graph)
+        .resume(read_what_was_left, resting, root, Placement::Shares)
+        .expect("the resumed root work ends");
+    assert!(after.is_none(), "the second root work left nothing");
+    assert!(graph.is_live(root));
+    graph.release_root(root).expect("the root releases");
+    assert!(graph.is_empty());
+    recorded()
+}
+
+#[test]
+fn a_root_work_leaves_a_state_a_later_root_work_resumes_from() {
+    let seen = leave_then_resume(Placement::Shares);
+    assert_eq!(seen.len(), 2);
+    assert_eq!(
+        seen[0], seen[1],
+        "a tenant of the root reads it where it lies"
+    );
+}
+
+#[test]
+fn a_fresh_root_work_leaves_a_state_its_root_keeps() {
+    let seen = leave_then_resume(Placement::Fresh);
+    assert_eq!(seen.len(), 2);
+    // The birth crossed into the root at the verdict's price: short text copies, so the second
+    // root work reads the root's copy of it.
+    assert!(seen[1].starts_with("left left at rest@"));
+}
+
+/// A child that tries to leave: only a root work reports to nobody.
+fn leave_from_a_child<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    step.leave(KValue::Null)
+}
+
+/// A root work whose child tries to leave.
+fn spawn_a_leaver<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let asked = step.spawn(fresh(leave_from_a_child, Use::Reads, KValue::Null));
+    step.park(asked, record_state, KValue::Null, None)
+}
+
+#[test]
+fn a_cell_that_reports_to_somebody_cannot_leave() {
+    reset();
+    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let root = graph.root().expect("a fresh slab admits a root");
+    assert_eq!(
+        Scheduler::over(&mut graph)
+            .run(work(spawn_a_leaver, KValue::Null), root, Placement::Fresh)
+            .err(),
+        Some(DrainStalled::Step(StepError::Undeliverable))
     );
 }

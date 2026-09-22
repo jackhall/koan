@@ -30,5 +30,5 @@ mod tests;
 pub use action::{
     Action, Hold, Holding, Placement, Received, Request, Slot, Step, StepError, Taken, Use,
 };
-pub use continuation::{NativeStep, StepBundle, Work};
-pub use drain::{DrainStalled, Graph, Scheduler};
+pub use continuation::{BirthAt, NativeStep, StateAt, StepBundle, Work};
+pub use drain::{DrainStalled, Graph, Resting, Scheduler};

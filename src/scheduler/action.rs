@@ -18,11 +18,12 @@
 
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{
-    Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Operand, Ready,
-    Reattachable, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
+    Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Operand, Ready,
+    ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
 };
 use crate::scheduler::continuation::{
-    Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StepBundle, Work,
+    BirthAt, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt,
+    StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
 
@@ -37,10 +38,6 @@ pub(super) type Context<'graph, 'step, 'here, 'scratch, B> = StepContext<
     <B as StepBundle<'graph>>::Scratch,
     KDelivery,
 >;
-
-/// A bundle's state at one brand.
-type StateAt<'graph, 'cell, B> =
-    <<B as StepBundle<'graph>>::State as Reattachable<'graph>>::At<'cell>;
 
 /// A bundle's scratch state at a step's two brands.
 type ScratchAt<'graph, 'here, 'scratch, B> =
@@ -68,6 +65,9 @@ pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     /// first step has run. The successor inherits this cell's provenance verbatim, so the `Use` its
     /// request carries is never read.
     Tail(Asked<'graph, B>),
+    /// A root work's end that leaves a birth at rest in its home, for the graph's owner to resume a
+    /// later root work from. The drain releases the cell and hands the carrier back out of `run`.
+    Left(Dormant<'graph, B::Birth>),
     /// The step could not proceed. The drain abandons the work.
     Failed(StepError),
 }
@@ -103,8 +103,8 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// children through [`spawn`](Self::spawn), reads what they delivered through
 /// [`results`](Self::results), and ends through one of [`park`](Self::park),
 /// [`tail`](Self::tail), [`finish_fresh`](Self::finish_fresh),
-/// [`finish_in_home`](Self::finish_in_home), [`finish`](Self::finish), [`done`](Self::done) and
-/// [`failed`](Self::failed) — each takes the `Step` by value, and they are the only way to build an
+/// [`finish_in_home`](Self::finish_in_home), [`finish`](Self::finish), [`done`](Self::done),
+/// [`leave`](Self::leave) and [`failed`](Self::failed) — each takes the `Step` by value, and they are the only way to build an
 /// [`Action`], so a step ends exactly once and nothing follows its end. It cannot store a slot,
 /// register a run, cross a value or fill a receipt except as one of those does, and it never learns
 /// a handle, so it cannot deliver anywhere but where the drain said.
@@ -330,7 +330,7 @@ where
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain
     /// creates it after the step returns, under this cell.
     ///
-    /// The child's state is handed over as this step holds it, at `'here`, and put to rest here as
+    /// The child's birth is handed over as this step holds it, at `'here`, and put to rest here as
     /// a carrier in this cell; the child's first entry wakes it at its own `'here`.
     pub fn spawn(&mut self, request: Request<'graph, 'here, B>) -> Slot {
         let state = self.rest(request.work.state);
@@ -396,7 +396,7 @@ where
     }
 
     /// Hand this cell's work to a successor at `placement`, which inherits its provenance verbatim.
-    /// The successor's state is handed over at `'here` and put to rest here, as a spawn's is.
+    /// The successor's birth is handed over at `'here` and put to rest here, as a spawn's is.
     pub fn tail(mut self, placement: Placement, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
         if !self.spawns.is_empty() {
             return self.failed(StepError::Unparked);
@@ -488,6 +488,41 @@ where
         self.finish_in_home([value], |_, [value], _| Active::new(value))
     }
 
+    /// End a root work by leaving `birth` at rest in its home — the cell it was born under — for
+    /// the graph's owner to resume a later root work from through [`Scheduler::resume`]. The birth
+    /// crosses into the home at the verdict's price, so it outlives this cell: free from a tenant
+    /// of the home, which writes the home's own storage. Refused for a cell that reports to
+    /// somebody — only a root work has nobody to deliver to — and for a step that asked for
+    /// children without parking on them.
+    ///
+    /// [`Scheduler::resume`]: crate::scheduler::Scheduler::resume
+    pub fn leave(self, birth: BirthAt<'graph, 'here, B>) -> Action<'graph, B>
+    where
+        Erased<'graph, B::Birth>: Copy,
+    {
+        if self.provenance.report.is_some() {
+            return self.failed(StepError::Undeliverable);
+        }
+        if !self.spawns.is_empty() {
+            return self.failed(StepError::Unparked);
+        }
+        let copy_bytes = B::weight(&birth);
+        let lifted = self.context.lift::<B::Birth>(birth);
+        let placed = self.context.alloc_into::<B::Birth, B::Birth>(
+            self.provenance.home,
+            &[Operand {
+                carrier: &lifted,
+                copy_bytes,
+            }],
+            |writer, views| Active::new(B::cross(writer, &views[0])),
+        );
+        let Ok(placed) = placed else {
+            return self.failed(StepError::Stale);
+        };
+        let dormant = self.context.keep(placed);
+        Action(Kind::Left(dormant))
+    }
+
     /// Finish, with nothing delivered.
     pub fn done(self) -> Action<'graph, B> {
         if !self.spawns.is_empty() {
@@ -502,10 +537,10 @@ where
         Action(Kind::Failed(error))
     }
 
-    /// Put a state this step holds at `'here` to rest as a carrier in this cell, free of every step
+    /// Put a birth this step holds at `'here` to rest as a carrier in this cell, free of every step
     /// brand, for the cell it is handed to.
-    fn rest(&mut self, state: StateAt<'graph, 'here, B>) -> Dormant<'graph, B::State> {
-        let carrier = self.context.lift::<B::State>(state);
+    fn rest(&mut self, birth: BirthAt<'graph, 'here, B>) -> Dormant<'graph, B::Birth> {
+        let carrier = self.context.lift::<B::Birth>(birth);
         self.context.keep(carrier)
     }
 
@@ -610,7 +645,7 @@ pub(super) struct Asked<'graph, B: StepBundle<'graph>> {
     pub placement: Placement,
     pub use_: Use,
     pub step: NativeStep<'graph, B>,
-    pub state: Dormant<'graph, B::State>,
+    pub state: Dormant<'graph, B::Birth>,
 }
 
 /// The drain's own buffer of requests, reached by a step only through [`Step::spawn`] and emptied

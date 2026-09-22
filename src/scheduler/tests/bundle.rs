@@ -12,6 +12,7 @@ use crate::scheduler::{Graph, NativeStep, StepBundle};
 pub struct Native;
 
 impl<'graph> StepBundle<'graph> for Native {
+    type Birth = KValueFamily;
     type State = KValueFamily;
     type Scratch = ScratchFamily;
 
@@ -30,6 +31,13 @@ impl<'graph> StepBundle<'graph> for Native {
         'graph: 'cell,
     {
         crate::values::cross_view(writer, view)
+    }
+
+    fn born<'cell>(birth: KValue<'graph, 'cell>) -> KValue<'graph, 'cell>
+    where
+        'graph: 'cell,
+    {
+        birth
     }
 }
 

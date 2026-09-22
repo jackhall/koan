@@ -2,8 +2,9 @@
 //! over.
 //!
 //! The scheduler names no state and no step of the layers above it: it takes them as one
-//! [`StepBundle`] — the family of a cell's state at rest in storage, the family of what a parked
-//! cell keeps in its scratch habitat, and how the state crosses between cells. The continuation —
+//! [`StepBundle`] — the family a cell is born holding, which crosses, the family it holds at a
+//! step and parks with, which never does, the family of what a parked cell keeps in its scratch
+//! habitat, and how a birth crosses between cells. The continuation —
 //! [`ContinuationFamily`] — re-anchors at the executing cell's region brand and is what the drain
 //! reads to run a step; it is one shape with no arm to add.
 //!
@@ -18,34 +19,52 @@ use crate::memory::{
 };
 use crate::scheduler::action::{Action, Step, Use};
 
-/// What a scheduler runs: the layer above it, as one bundle — the family of a cell's state at rest
-/// in storage, the family of what a parked cell keeps in its scratch habitat, and how the state
-/// crosses between cells. The scheduler names no state and no step of its own.
+/// What a scheduler runs: the layer above it, as one bundle — the family a cell is born holding,
+/// the family it holds at a step and parks with, the family of what a parked cell keeps in its
+/// scratch habitat, and how a birth crosses between cells. The scheduler names no state and no step
+/// of its own.
 ///
-/// Where the scheduler wakes a state it also needs `Erased<'graph, Self::State>: Copy`, which a
-/// trait cannot state for its users; every concrete bundle whose state family is `Copy` meets it.
+/// Where the scheduler wakes a birth it also needs `Erased<'graph, Self::Birth>: Copy`, which a
+/// trait cannot state for its users; every concrete bundle whose birth family is `Copy` meets it.
 pub trait StepBundle<'graph>: 'graph {
-    /// The family of a cell's state, at rest in storage over one brand. Covariant, because a state
-    /// crosses pinned from its spawner into the child.
-    type State: Reattachable<'graph> + Covariant<'graph> + DropFree;
+    /// What a spawn or a tail hands the new cell, and what a root work is born with or leaves at
+    /// rest. Covariant, because a birth crosses pinned from its spawner into the child.
+    type Birth: Reattachable<'graph> + Covariant<'graph> + DropFree;
+    /// What a cell holds at a step and parks with. It never crosses — a park stores it in the
+    /// cell's own continuation and the wake hands it back at the same cell's brand — so it need not
+    /// be covariant, and may hold a borrow a crossing would refuse.
+    type State: Reattachable<'graph>;
     /// The family of a parked cell's in-progress state, over both step brands.
     type Scratch: ReattachableOverBoth<'graph>;
 
-    /// How many bytes a copy of `state` writes — what the verdict prices its crossing by.
-    fn weight<'cell>(state: &<Self::State as Reattachable<'graph>>::At<'cell>) -> usize
+    /// How many bytes a copy of `birth` writes — what the verdict prices its crossing by.
+    fn weight<'cell>(birth: &BirthAt<'graph, 'cell, Self>) -> usize
     where
         'graph: 'cell;
 
     /// `view` at the destination's brand: the pinned view as it is, a copied view rebuilt through
-    /// `writer`. The one place above the scheduler a state is copied, and the veneer calls it only
+    /// `writer`. The one place above the scheduler a birth is copied, and the veneer calls it only
     /// from inside a priced crossing.
     fn cross<'cell>(
         writer: Writer<'cell>,
-        view: &CrossedOperand<'graph, 'cell, '_, Self::State>,
-    ) -> <Self::State as Reattachable<'graph>>::At<'cell>
+        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth>,
+    ) -> BirthAt<'graph, 'cell, Self>
+    where
+        'graph: 'cell;
+
+    /// The state a cell starts its first step over, from the birth it was handed.
+    fn born<'cell>(birth: BirthAt<'graph, 'cell, Self>) -> StateAt<'graph, 'cell, Self>
     where
         'graph: 'cell;
 }
+
+/// A bundle's birth at one brand.
+pub type BirthAt<'graph, 'cell, B> =
+    <<B as StepBundle<'graph>>::Birth as Reattachable<'graph>>::At<'cell>;
+
+/// A bundle's state at one brand.
+pub type StateAt<'graph, 'cell, B> =
+    <<B as StepBundle<'graph>>::State as Reattachable<'graph>>::At<'cell>;
 
 /// A native step: a function pointer over a [`Step`], the shape a builtin body takes.
 ///
@@ -69,9 +88,9 @@ where
 {
     /// The step the cell runs first.
     pub step: NativeStep<'graph, B>,
-    /// What the cell starts holding, at the brand of whoever hands it over: a spawner's or a
+    /// What the cell is born holding, at the brand of whoever hands it over: a spawner's or a
     /// predecessor's `'here`, or `'graph` for a root work.
-    pub state: <B::State as Reattachable<'graph>>::At<'cell>,
+    pub state: BirthAt<'graph, 'cell, B>,
 }
 
 /// The family of what a cell parks in its storage: its continuation.
@@ -101,11 +120,11 @@ where
     'graph: 'cell,
 {
     /// Awake at the brand it was stored at: a successor [`Step::park`] stores, or a root work's
-    /// birth state at `'graph`.
-    Awake(<B::State as Reattachable<'graph>>::At<'cell>),
-    /// At rest as a carrier: what a spawn or a tail hop hands the new cell, woken by its first
-    /// entry at the verdict's price.
-    Dormant(Dormant<'graph, B::State>),
+    /// state at `'graph`, born from what it was handed.
+    Awake(StateAt<'graph, 'cell, B>),
+    /// A birth at rest as a carrier: what a spawn or a tail hop hands the new cell, or what a root
+    /// work left for a later one, woken by its first entry at the verdict's price.
+    Dormant(Dormant<'graph, B::Birth>),
 }
 
 /// What a cell carries about itself for the drain's use: where it sits, where its result goes and
