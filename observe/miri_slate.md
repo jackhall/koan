@@ -209,9 +209,9 @@ shorter brand than the one it was bound at.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-22: 79s — 21 tests, 0 leaks, 0 UB
 - 2026-09-21: 84s — 20 tests, 0 leaks, 0 UB
 - 2026-09-21: 52s — 18 tests, 0 leaks, 0 UB
 - 2026-09-21: 82s — 18 tests, 0 leaks, 0 UB
 - 2026-09-19: 24s — 14 tests, 0 leaks, 0 UB
-- 2026-09-18: 23s — 13 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
