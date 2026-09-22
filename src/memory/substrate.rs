@@ -8,11 +8,11 @@
 pub const WIDTH: usize = 1;
 
 pub use cellgraph::{
-    Active, CellHandle, Config, CreateError, CrossedOperand, DeliverError, Delivered, Delivery,
-    Dormant, DropFree, EnterError, Erased, NoDelivery, NoScratch, Prices, Prose, Reattachable,
-    ReattachableOverBoth, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption,
-    ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale, TenantHandle,
-    ThinRun, TreeHandle, Verdict, Writer, reattachable,
+    Active, CellHandle, Config, Covariant, CreateError, CrossedOperand, DeliverError, Delivered,
+    Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, NoScratch, Prices, Prose,
+    Reattachable, ReattachableOverBoth, ReceiptError, RedeemError, RegisterError,
+    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale,
+    TenantHandle, ThinRun, TreeHandle, Verdict, Writer, covariant, reattachable,
 };
 
 /// A carrier at rest in the region hosting it, branded by that region's `'home`; `'graph` is the

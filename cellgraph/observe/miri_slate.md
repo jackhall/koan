@@ -54,7 +54,9 @@ slot free of every step brand; the placement test is the load-bearing one, since
 `&u32` into *another* cell's chunks that the built value keeps. The third covers the case where
 nothing detaches at all: a reattached borrow names a cell that is still live, and that cell keeps
 allocating under it, so what Miri checks is that the retag a region takes at every allocation
-leaves an already-issued chunk borrow alone.
+leaves an already-issued chunk borrow alone. The re-anchor hands a pinned operand back at the
+destination's brand, shorter than its home's, and is bounded by `Covariant`, so no view it mints
+can take a borrow in; the placement test is the slate test for it.
 
 - `graph::tests::values::a_value_allocated_in_the_executing_cell_reaches_only_that_cell`
 - `graph::tests::values::placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach`

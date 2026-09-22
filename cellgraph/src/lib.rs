@@ -36,6 +36,6 @@ pub use graph::{
     ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
 };
 pub use handle::{CellHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
-pub use reattach::{DropFree, Erased, NoScratch, Reattachable, ReattachableOverBoth};
+pub use reattach::{Covariant, DropFree, Erased, NoScratch, Reattachable, ReattachableOverBoth};
 pub use receipt::{Delivered, Delivery, NoDelivery};
 pub use region::{Prose, Run, ThinRun, Writer};

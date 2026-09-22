@@ -47,7 +47,7 @@ pub use tie::tie;
 use std::fmt;
 
 use crate::elaborate::Elaboration;
-use crate::memory::{CellHandle, DropFree, Edge, Member, reattachable};
+use crate::memory::{CellHandle, DropFree, Edge, Member, covariant, reattachable};
 use crate::scope::{Activation, Site};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
@@ -225,6 +225,10 @@ pub type KValue<'graph, 'cell> = Value<'graph, 'cell, Knotted<'graph, 'cell>>;
 
 /// The family of [`KValue`].
 pub type KValueFamily = ValueFamily<KnottedFamily>;
+
+// A value crosses between cells, so its family carries the covariance witness the crossing doors
+// ask for.
+covariant!(KValueFamily);
 
 /// A carrier of a [`KValue`].
 pub type KValueCarrier<'graph, 'home> = ValueCarrier<'graph, 'home, KnottedFamily>;

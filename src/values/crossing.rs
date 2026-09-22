@@ -8,7 +8,7 @@
 //! value the knot holds.
 
 use crate::memory::{
-    Active, CellHandle, CrossedOperand, Delivery, Operand, Prices, Reattachable,
+    Active, CellHandle, Covariant, CrossedOperand, Delivery, Operand, Prices, Reattachable,
     ReattachableOverBoth, Stale, StepContext, Verdict, Writer, collect,
 };
 
@@ -41,7 +41,10 @@ pub fn cross<
     context: &mut StepContext<'graph, 'step, '_, '_, C, S, D>,
     dest: impl Into<CellHandle>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
-) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>> {
+) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>>
+where
+    ValueFamily<XF>: Covariant<'graph>,
+{
     let weight = context.read(carrier).value().weight();
     context.alloc_into::<ValueFamily<XF>, ValueFamily<XF>>(
         dest,
@@ -71,7 +74,10 @@ pub fn cross_here<
 >(
     context: &mut StepContext<'graph, 'step, 'here, '_, C, S, D>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
-) -> Value<'graph, 'here, XF::Closed<'here>> {
+) -> Value<'graph, 'here, XF::Closed<'here>>
+where
+    ValueFamily<XF>: Covariant<'graph>,
+{
     let weight = context.read(carrier).value().weight();
     context.alloc_here(
         &[Operand {

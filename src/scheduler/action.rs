@@ -13,8 +13,9 @@
 
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{
-    Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, DropFree, Erased,
-    Operand, Ready, Reattachable, Receipt, ReceiptError, RedeemError, Stale, StepContext, Writer,
+    Active, CellHandle, Covariant, CrossedOperand, DeliverError, Delivered, Dormant, DropFree,
+    Erased, Operand, Ready, Reattachable, Receipt, ReceiptError, RedeemError, Stale, StepContext,
+    Writer,
 };
 use crate::scheduler::continuation::{
     Continuation, ContinuationFamily, Destination, NativeStep, Provenance, ScratchFamily,
@@ -166,7 +167,7 @@ where
         ) -> R,
     ) -> R
     where
-        V: Reattachable<'graph> + DropFree,
+        V: Reattachable<'graph> + Covariant<'graph> + DropFree,
         Erased<'graph, V>: Copy,
     {
         self.context.alloc_here(operands, build)
@@ -184,7 +185,7 @@ where
     ) -> Result<Ready<'graph, 'step, T>, Stale<CellHandle>>
     where
         T: Reattachable<'graph> + DropFree,
-        V: Reattachable<'graph> + DropFree,
+        V: Reattachable<'graph> + Covariant<'graph> + DropFree,
         Erased<'graph, V>: Copy,
     {
         self.context.alloc_into(dest, operands, build)
@@ -223,7 +224,7 @@ where
         carrier: &'cell Ready<'graph, 'step, T>,
     ) -> Active<'graph, 'cell, T>
     where
-        T: Reattachable<'graph> + DropFree,
+        T: Reattachable<'graph> + Covariant<'graph> + DropFree,
         Erased<'graph, T>: Copy,
     {
         self.context.read(carrier)

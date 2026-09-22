@@ -63,7 +63,7 @@ pub use working::{WorkingExpression, WorkingPart};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
-use crate::memory::{DropFree, Edge, Ready, Writer, reattachable};
+use crate::memory::{DropFree, Edge, Ready, Writer, covariant, reattachable};
 use crate::parse::ProgramNode;
 use crate::type_lattice::{KType, TypeNode, TypeRegistry};
 
@@ -157,6 +157,10 @@ impl<'graph> KnottedFamily<'graph> for NoKnot {
         match *member {}
     }
 }
+
+// A knot-free value crosses between cells like any other, so its family carries the covariance
+// witness too.
+covariant!(ValueFamily<NoKnot>);
 
 /// The value family the cell graph carries: [`Value`] at a region lifetime, beside the graph's,
 /// closed over the knot members of `XF`.

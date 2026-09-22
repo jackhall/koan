@@ -11,11 +11,11 @@
 use std::marker::PhantomData;
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, Config, CreateError, CrossedOperand, DeliverError, Delivered,
-    Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, NoScratch, Operand, Prices, Prose,
-    Ready, Reattachable, Receipt, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption,
-    ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale, StepContext,
-    TenantHandle, ThinRun, TreeHandle, Verdict, Writer, reattachable,
+    Active, CellGraph, CellHandle, Config, Covariant, CreateError, CrossedOperand, DeliverError,
+    Delivered, Delivery, Dormant, DropFree, EnterError, Erased, NoDelivery, NoScratch, Operand,
+    Prices, Prose, Ready, Reattachable, Receipt, ReceiptError, RedeemError, RegisterError,
+    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale,
+    StepContext, TenantHandle, ThinRun, TreeHandle, Verdict, Writer, covariant, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -56,6 +56,10 @@ reattachable!(
     Text => &'cell str,
     Listing => &'cell Entry<'graph, 'cell>,
 );
+
+// The value families cross between cells, so each carries the covariance witness the crossing
+// doors ask for.
+covariant!(Number, Numbers, Text, Listing);
 
 impl DropFree for Number {}
 impl DropFree for Numbers {}
@@ -113,13 +117,14 @@ fn build_prose<'cell>(writer: Writer<'cell>) -> &'cell str {
 
 /// An embedder's own helper over carriers, which is the one reason [`Erased`] is nameable from
 /// outside: the read door's `Copy` bound is on the erased form, so a caller that wants to be
-/// generic over the value family has to write that bound too.
+/// generic over the value family has to write that bound too — and the [`Covariant`] one, which is
+/// what a read view of a longer-lived home at a short borrow rests on.
 fn read_first<'graph, 'cell, 'step, V>(
     context: &'cell StepContext<'graph, 'step, '_, '_, Work>,
     carrier: &'cell Ready<'graph, 'step, V>,
-) -> V::At<'cell>
+) -> <V as Reattachable<'graph>>::At<'cell>
 where
-    V: Reattachable<'graph> + DropFree,
+    V: Reattachable<'graph> + Covariant<'graph> + DropFree,
     Erased<'graph, V>: Copy,
 {
     context.read(carrier).into_value()
@@ -145,7 +150,7 @@ fn weigh(prices: Prices) -> Verdict {
 
 /// An operand the embedder is unwilling to copy: at a cost above anything a pin can price, the
 /// verdict above always pins it.
-fn pinned_operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree>(
+fn pinned_operand<'graph, 'a, 'step, V: Reattachable<'graph> + Covariant<'graph> + DropFree>(
     carrier: &'a Ready<'graph, 'step, V>,
 ) -> Operand<'graph, 'a, 'step, V> {
     Operand {

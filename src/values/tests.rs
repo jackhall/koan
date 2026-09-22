@@ -12,7 +12,7 @@ mod working;
 
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, Edge, KnotPlan, Member, Prices, ProgramBrand,
-    ReleaseAbsorption, StepContext, Verdict, Writer, program_storage, reattachable,
+    ReleaseAbsorption, StepContext, Verdict, Writer, covariant, program_storage, reattachable,
 };
 use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
@@ -173,6 +173,8 @@ impl<'graph> KnottedFamily<'graph> for NodeFamily {
         Node(knot.member(member.0.index()))
     }
 }
+
+covariant!(crate::values::ValueFamily<NodeFamily>);
 
 /// A value that may hold a [`Node`].
 pub(super) type Holding<'graph, 'cell> = crate::values::Value<'graph, 'cell, Node<'graph, 'cell>>;

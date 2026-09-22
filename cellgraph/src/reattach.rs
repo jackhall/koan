@@ -32,11 +32,108 @@ use std::mem::ManuallyDrop;
 /// size, alignment, and validity — for all `'x`, `'y` that `'graph` outlives. Every well-formed
 /// `type At<'cell> = Foo<'graph, 'cell>;` where `Foo` is generic only in lifetimes satisfies this.
 /// Do not implement it for a family whose layout depends on a lifetime.
+///
+/// Layout is the whole of this contract. What a family additionally needs to cross between cells
+/// — to be an operand, or read at a borrow shorter than its home — is [`Covariant`].
 pub unsafe trait Reattachable<'graph> {
     /// The family's form at `'cell`.
     type At<'cell>
     where
         'graph: 'cell;
+}
+
+/// A family whose form is covariant in `'cell`: `At<'long>` coerces to `At<'short>` for every
+/// `'long: 'short`. The families a value crosses between cells by must be — [`Operand`],
+/// [`alloc_here`], [`alloc_into`] and [`read`] require it. A pinned operand arrives at the
+/// destination's own brand, which is shorter than its home's, and a read view is a short borrow of
+/// a longer-lived home, so a form that could take a `'cell` borrow *in* — a `Cell<&'cell T>` —
+/// would let the destination write its own storage into a region that outlives it.
+///
+/// [`Reattachable`] speaks of layout alone; this is what crossing needs beside it. A family that
+/// only rests in a cell's own slot — a continuation, a scratch state — never crosses and need not
+/// be covariant.
+///
+/// # Safety
+///
+/// An implementor asserts that `At<'cell>` is covariant in `'cell`. [`covariant!`] discharges it
+/// with a witness the compiler checks: its [`shorten`](Covariant::shorten) is the identity, which
+/// typechecks exactly when the form is covariant. A generic family's projection is opaque to that
+/// check, so the macro is written once per concrete family, and generic code states the bound as a
+/// where-clause its concrete use site satisfies. The trait names [`Reattachable`] rather than
+/// extending it for that where-clause's sake: a bound implying the supertrait would put it in the
+/// generic code's own environment, which shadows the family's impl, so its form stops normalizing.
+///
+/// [`Operand`]: crate::Operand
+/// [`alloc_here`]: crate::StepContext::alloc_here
+/// [`alloc_into`]: crate::StepContext::alloc_into
+/// [`read`]: crate::StepContext::read
+///
+/// A covariant form takes the witness:
+///
+/// ```
+/// use cellgraph::{covariant, reattachable};
+/// struct Number;
+/// reattachable!(Number => &'cell u32);
+/// covariant!(Number);
+/// ```
+///
+/// A form holding a `Cell` at the brand does not, so it can never cross:
+///
+/// ```compile_fail
+/// use std::cell::Cell;
+/// use cellgraph::{covariant, reattachable};
+/// struct Slots;
+/// reattachable!(Slots => &'cell Cell<&'cell u32>);
+/// covariant!(Slots);
+/// ```
+pub unsafe trait Covariant<'graph> {
+    /// The form at a shorter brand. The witness: the only body [`covariant!`] writes is `form`.
+    fn shorten<'long, 'short>(
+        form: <Self as Reattachable<'graph>>::At<'long>,
+    ) -> <Self as Reattachable<'graph>>::At<'short>
+    where
+        Self: Reattachable<'graph>,
+        'graph: 'long,
+        'long: 'short;
+}
+
+/// Generate `unsafe impl Covariant` for a family whose form is covariant in `'cell`, with the
+/// identity as its witness. Name a family that names the graph lifetime itself as
+/// `Family<'graph>`, and any other concrete family by its type — `covariant!(Number,
+/// Tagged<Number>)`. The impl compiles only for a covariant form, so the macro checks what it
+/// asserts; see [`Covariant`].
+#[macro_export]
+macro_rules! covariant {
+    ($family:ident <$graph:lifetime>) => {
+        // SAFETY: the body below is the identity, so this impl exists only if `$family`'s form is
+        // covariant in `'cell`.
+        unsafe impl<$graph> $crate::Covariant<$graph> for $family<$graph> {
+            fn shorten<'long, 'short>(
+                form: <Self as $crate::Reattachable<$graph>>::At<'long>,
+            ) -> <Self as $crate::Reattachable<$graph>>::At<'short>
+            where
+                $graph: 'long,
+                'long: 'short,
+            {
+                form
+            }
+        }
+    };
+    ($($family:ty),+ $(,)?) => {$(
+        // SAFETY: the body below is the identity, so this impl exists only if `$family`'s form is
+        // covariant in `'cell`.
+        unsafe impl<'graph> $crate::Covariant<'graph> for $family {
+            fn shorten<'long, 'short>(
+                form: <Self as $crate::Reattachable<'graph>>::At<'long>,
+            ) -> <Self as $crate::Reattachable<'graph>>::At<'short>
+            where
+                'graph: 'long,
+                'long: 'short,
+            {
+                form
+            }
+        }
+    )+};
 }
 
 /// A type generic over both of a step's region lifetimes — `'here`, the executing cell's storage,

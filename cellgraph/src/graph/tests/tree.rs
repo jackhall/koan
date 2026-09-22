@@ -17,7 +17,7 @@ use crate::tree::TreeState;
 
 /// An operand the embedder will never copy: at a cost above anything a pin can price, a verdict
 /// that weighs the two always pins it.
-fn kept_operand<'a, 'step, V: Reattachable<'static> + DropFree>(
+fn kept_operand<'a, 'step, V: Reattachable<'static> + Covariant<'static> + DropFree>(
     carrier: &'a Ready<'static, 'step, V>,
 ) -> Operand<'static, 'a, 'step, V> {
     operand_at(carrier, usize::MAX)

@@ -19,7 +19,7 @@ use crate::handle::{CellHandle, HomeHandle, SlabHandle, Stale, TenantHandle, Tre
 use crate::matrix::{Bits, Matrix};
 use crate::reach::GraphReach;
 use crate::reattach::{
-    DropFree, Erased, ErasedOverBoth, NoScratch, Reattachable, ReattachableOverBoth,
+    Covariant, DropFree, Erased, ErasedOverBoth, NoScratch, Reattachable, ReattachableOverBoth,
 };
 use crate::receipt::{Delivered, Delivery, NoDelivery, ReceiptRun, ReceiptSlot, Receipts};
 use crate::region::{Region, Regions, Writer};
@@ -231,7 +231,13 @@ pub struct Prices {
 ///
 /// The two halves of the price meet here and nowhere else — the substrate walks the reach, the
 /// embedder knows the depth — and neither is representable apart from the other.
-pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const W: usize = 1> {
+pub struct Operand<
+    'graph,
+    'a,
+    'step,
+    V: Reattachable<'graph> + Covariant<'graph> + DropFree,
+    const W: usize = 1,
+> {
     pub carrier: &'a Ready<'graph, 'step, V, W>,
     pub copy_bytes: usize,
 }
@@ -246,11 +252,12 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 /// Embedding the pinned view is what a pin buys, and it compiles:
 ///
 /// ```
-/// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, reattachable};
+/// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, covariant, reattachable};
 /// struct Work;
 /// reattachable!(Work => String);
 /// struct Number;
 /// reattachable!(Number => &'cell u32);
+/// covariant!(Number);
 /// impl DropFree for Number {}
 ///
 /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -282,11 +289,12 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 /// Handing a `Copied` view back as the built value does not:
 ///
 /// ```compile_fail
-/// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, reattachable};
+/// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, covariant, reattachable};
 /// struct Work;
 /// reattachable!(Work => String);
 /// struct Number;
 /// reattachable!(Number => &'cell u32);
+/// covariant!(Number);
 /// impl DropFree for Number {}
 ///
 /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Copy);
@@ -317,11 +325,12 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 /// to put the slice:
 ///
 /// ```compile_fail
-/// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, reattachable};
+/// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, covariant, reattachable};
 /// struct Work;
 /// reattachable!(Work => String);
 /// struct Number;
 /// reattachable!(Number => &'cell u32);
+/// covariant!(Number);
 /// impl DropFree for Number {}
 ///
 /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -350,7 +359,7 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 ///
 /// ```
 /// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, Writer};
-/// use cellgraph::reattachable;
+/// use cellgraph::{covariant, reattachable};
 /// #[derive(Clone, Copy)]
 /// struct Entry<'graph, 'cell> {
 ///     program: &'graph str,
@@ -359,6 +368,7 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 /// struct Work;
 /// struct Listing;
 /// reattachable!(Work => String, Listing => &'cell Entry<'graph, 'cell>);
+/// covariant!(Listing);
 /// impl DropFree for Listing {}
 /// fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 ///     let mut value = Some(value);
@@ -396,7 +406,7 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 ///
 /// ```compile_fail
 /// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, Writer};
-/// use cellgraph::reattachable;
+/// use cellgraph::{covariant, reattachable};
 /// #[derive(Clone, Copy)]
 /// struct Entry<'graph, 'cell> {
 ///     program: &'graph str,
@@ -405,6 +415,7 @@ pub struct Operand<'graph, 'a, 'step, V: Reattachable<'graph> + DropFree, const 
 /// struct Work;
 /// struct Listing;
 /// reattachable!(Work => String, Listing => &'cell Entry<'graph, 'cell>);
+/// covariant!(Listing);
 /// impl DropFree for Listing {}
 /// fn one<'cell, T>(writer: Writer<'cell>, value: T) -> &'cell T {
 ///     let mut value = Some(value);
@@ -2935,7 +2946,7 @@ impl<
         scratch: &'scratch Scratch,
     ) -> (GraphReach<W>, &'scratch [Verdict])
     where
-        V: Reattachable<'graph> + DropFree,
+        V: Reattachable<'graph> + Covariant<'graph> + DropFree,
     {
         let mut reach = GraphReach::empty();
         // The tiers read once: they do not change between operands.
@@ -3217,14 +3228,16 @@ where
     /// `'here`, which is where every door that outlives the step asks for its value:
     ///
     /// ```compile_fail
-    /// use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// use cellgraph::{Active, CellGraph, DropFree, Verdict, covariant, reattachable};
     /// struct Work;
     /// reattachable!(Work => String);
     /// struct Number;
     /// reattachable!(Number => &'cell u32);
+    /// covariant!(Number);
     /// impl DropFree for Number {}
     /// struct Spine;
     /// reattachable!(Spine => &'cell [&'cell u32]);
+    /// covariant!(Spine);
     /// impl DropFree for Spine {}
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -3339,7 +3352,7 @@ where
     ///
     /// ```
     /// # use std::cell::Cell;
-    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, covariant, reattachable};
     /// # struct Storage;
     /// # struct Parked;
     /// # struct Number;
@@ -3350,7 +3363,9 @@ where
     /// #     Spine => &'cell [&'cell u32],
     /// # );
     /// # reattachable!(both Parked => &'scratch u32);
+    /// # covariant!(Number);
     /// # impl DropFree for Number {}
+    /// # covariant!(Spine);
     /// # impl DropFree for Spine {}
     /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
     /// # let cell = graph.create(None).unwrap();
@@ -3476,7 +3491,7 @@ where
     ///
     /// ```compile_fail
     /// # use std::cell::Cell;
-    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, covariant, reattachable};
     /// # struct Storage;
     /// # struct Parked;
     /// # struct Number;
@@ -3487,7 +3502,9 @@ where
     /// #     Spine => &'cell [&'cell u32],
     /// # );
     /// # reattachable!(both Parked => &'scratch u32);
+    /// # covariant!(Number);
     /// # impl DropFree for Number {}
+    /// # covariant!(Spine);
     /// # impl DropFree for Spine {}
     /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
     /// # let cell = graph.create(None).unwrap();
@@ -3508,7 +3525,7 @@ where
     ///
     /// ```compile_fail
     /// # use std::cell::Cell;
-    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, reattachable};
+    /// # use cellgraph::{Active, CellGraph, DropFree, Verdict, covariant, reattachable};
     /// # struct Storage;
     /// # struct Parked;
     /// # struct Number;
@@ -3519,7 +3536,9 @@ where
     /// #     Spine => &'cell [&'cell u32],
     /// # );
     /// # reattachable!(both Parked => &'scratch u32);
+    /// # covariant!(Number);
     /// # impl DropFree for Number {}
+    /// # covariant!(Spine);
     /// # impl DropFree for Spine {}
     /// # let mut graph: CellGraph<'static, Storage, Parked> = CellGraph::new(2, |_| Verdict::Pin);
     /// # let cell = graph.create(None).unwrap();
@@ -4034,11 +4053,12 @@ where
     /// already pinned.
     ///
     /// ```
-    /// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, reattachable};
+    /// use cellgraph::{Active, CellGraph, CrossedOperand, DropFree, Operand, Verdict, covariant, reattachable};
     /// struct Work;
     /// reattachable!(Work => String);
     /// struct Number;
     /// reattachable!(Number => &'cell u32);
+    /// covariant!(Number);
     /// impl DropFree for Number {}
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -4072,7 +4092,7 @@ where
         ) -> R,
     ) -> R
     where
-        V: Reattachable<'graph> + DropFree,
+        V: Reattachable<'graph> + Covariant<'graph> + DropFree,
         Erased<'graph, V>: Copy,
     {
         // The scratch splits off the graph borrow: the verdicts and the views live in it while the
@@ -4124,7 +4144,7 @@ where
     ) -> Result<Ready<'graph, 'step, T, W>, Stale<CellHandle>>
     where
         T: Reattachable<'graph> + DropFree,
-        V: Reattachable<'graph> + DropFree,
+        V: Reattachable<'graph> + Covariant<'graph> + DropFree,
         Erased<'graph, V>: Copy,
     {
         // The scratch splits off the graph borrow: the crossed operands and the views live in it
@@ -4166,11 +4186,12 @@ where
     /// merely holds is `Unheld` from the consumer — a refusal, never a dangle.
     ///
     /// ```
-    /// use cellgraph::{CellGraph, DropFree, Verdict, reattachable};
+    /// use cellgraph::{CellGraph, DropFree, Verdict, covariant, reattachable};
     /// struct Work;
     /// reattachable!(Work => String);
     /// struct Number;
     /// reattachable!(Number => &'cell u32);
+    /// covariant!(Number);
     /// impl DropFree for Number {}
     ///
     /// let mut graph: CellGraph<'static, Work> = CellGraph::new(2, |_| Verdict::Pin);
@@ -4352,13 +4373,15 @@ where
     }
 
     /// Read a carrier out at the reading borrow. The door hangs on the context, so a value with
-    /// reach is only ever live inside an `enter` scope.
+    /// reach is only ever live inside an `enter` scope. The view is at a borrow shorter than the
+    /// carrier's home, so the family must be [`Covariant`]: a form that could take a `'cell` borrow
+    /// in would let a read view store a short-lived borrow into a longer-lived region.
     pub fn read<'cell, T>(
         &'cell self,
         carrier: &'cell Ready<'graph, 'step, T, W>,
     ) -> Active<'graph, 'cell, T>
     where
-        T: Reattachable<'graph> + DropFree,
+        T: Reattachable<'graph> + Covariant<'graph> + DropFree,
         Erased<'graph, T>: Copy,
     {
         // What `Active::anchored` asks of its caller: `carrier` is branded to this step, so it was
@@ -4367,6 +4390,8 @@ where
         // the reach names, in the slab or in the tier. Either way its referents are region storage
         // that is live for the whole step: nothing dies inside one. So they are live for all of
         // `'cell`, which the `&'cell self` borrow bounds inside the step brand.
+        // The view is a short borrow of a home that may outlive this cell, which `T: Covariant`
+        // makes sound: its form can hand a `'cell` borrow out and never take one in.
         Active::anchored(carrier.erased())
     }
 }
@@ -4381,6 +4406,11 @@ where
 /// `enter` holds it exclusively — and a pinned operand's reach has additionally been minted into
 /// the destination's hold set before this runs. The views live only for the build call, and the
 /// caller's `for<'cell, 'severed>` quantifier keeps one from escaping it.
+///
+/// A pinned view comes back at the destination's brand, which is shorter than its home's: the home
+/// outlives the destination, never the reverse. That is sound because `V` is [`Covariant`] — its
+/// form can hand a borrow out at the shorter brand but never take one in, so the destination cannot
+/// write its own storage into a region that outlives it through the view.
 unsafe fn reanchor_operands<'graph, 'cell, 'severed, 'scratch, V, const W: usize>(
     operands: &[Operand<'graph, '_, '_, V, W>],
     verdicts: &[Verdict],
@@ -4388,7 +4418,7 @@ unsafe fn reanchor_operands<'graph, 'cell, 'severed, 'scratch, V, const W: usize
 ) -> &'scratch [CrossedOperand<'graph, 'cell, 'severed, V>]
 where
     'graph: 'cell + 'severed,
-    V: Reattachable<'graph> + DropFree,
+    V: Reattachable<'graph> + Covariant<'graph> + DropFree,
     Erased<'graph, V>: Copy,
 {
     scratch.slice_with(verdicts.len(), |index| {

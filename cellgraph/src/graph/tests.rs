@@ -31,6 +31,7 @@ crate::reattachable!(Counted => Rc<()>);
 /// A value family: a borrow into region storage, so a carrier's reach is a real cross-cell edge.
 struct Number;
 crate::reattachable!(Number => &'cell u32);
+crate::covariant!(Number);
 impl DropFree for Number {}
 
 /// A value nesting a borrow of storage outside the graph under a region borrow, so a keep and a
@@ -44,12 +45,14 @@ struct Entry<'graph, 'cell> {
 /// The family of an [`Entry`] behind a region borrow.
 struct Listing;
 crate::reattachable!(Listing => &'cell Entry<'graph, 'cell>);
+crate::covariant!(Listing);
 impl DropFree for Listing {}
 
 /// A family generic over another: a region count beside the inner family's form, so the generic
 /// arm's retype moves a borrow of its own and one the inner family names.
 struct Paired<V>(std::marker::PhantomData<V>);
 crate::reattachable!(Paired<V: Reattachable<'graph>> => (&'cell u32, V::At<'cell>));
+crate::covariant!(Paired<Number>);
 impl<V: DropFree> DropFree for Paired<V> {}
 
 const ANCHOR: u32 = 7;
@@ -62,7 +65,7 @@ fn pin(_: Prices) -> Verdict {
 }
 
 /// An operand at a stated copy cost — the half of the price the substrate cannot know.
-fn operand_at<'a, 'step, V: Reattachable<'static> + DropFree>(
+fn operand_at<'a, 'step, V: Reattachable<'static> + Covariant<'static> + DropFree>(
     carrier: &'a Ready<'static, 'step, V>,
     copy_bytes: usize,
 ) -> Operand<'static, 'a, 'step, V> {
@@ -73,7 +76,7 @@ fn operand_at<'a, 'step, V: Reattachable<'static> + DropFree>(
 }
 
 /// An operand at no stated copy cost — what a test that never expects a `Copy` verdict passes.
-fn operand<'a, 'step, V: Reattachable<'static> + DropFree>(
+fn operand<'a, 'step, V: Reattachable<'static> + Covariant<'static> + DropFree>(
     carrier: &'a Ready<'static, 'step, V>,
 ) -> Operand<'static, 'a, 'step, V> {
     operand_at(carrier, 0)
