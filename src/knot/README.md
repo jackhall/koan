@@ -105,9 +105,8 @@ edges — and hands to the tie by site, with every slot bound. `tie_member` asks
 [`elaborate`](../elaborate/README.md#a-modules-self-signature) for the
 self-signature over that activation and reads its slots out in slot order, which
 is [layout order](module/README.md#layout-order), so a module's type and weight
-are facts about the members its body bound and the node is written once. A slot
-the body left claimed refuses `Pending` on that binder; no body supplied refuses
-`Eager` at the body's own site. Because a module is alone in its component, it
+are facts about the members its body bound and the node is written once. No
+body supplied refuses `Eager` at the body's own site. Because a module is alone in its component, it
 shares nothing with the staging below.
 
 **Stage, with no writer in reach.** Everything a member needs is read into
@@ -122,8 +121,14 @@ scratch first.
   A literal waits to be lowered; a mention of a fellow member is an edge; any
   other mention is the word the activation reads there. A part the walk cannot
   build itself — a call, a keyword form, a `FN` — is asked of the caller's
-  evaluator by its `Site`, so the caller evaluates the eager parts and ties
-  again with their values; a dict key is a scalar literal or such a part.
+  evaluator by its `Site`, handed the part itself, so the caller evaluates the
+  eager parts and ties again with their values; a dict key is a scalar literal
+  or such a part. The walk asks for **every** such part in one attempt: a part
+  the caller has no value for is staged as a placeholder and the walk goes on,
+  and the staging is refused at its end, naming the first. A placeholder can
+  mislead what follows it, so an unevaluated part outranks every later refusal.
+  A caller refused on several parts therefore learns them all at once, asks for
+  them all at one park, and ties again once.
 - **A deferred mention below a nested constructor is written into the knot.**
   Every constructor on the path from a member's root to a fellow mention is an
   *anonymous* data node of the same knot, indexed after the members in the
@@ -156,6 +161,11 @@ ordinary construction goes through too: a tagged node against its derived
 payload memo, and a construction that is no node against its staged payload's
 type, so its later `Tagged::construct` cannot fail.
 
+Every read the staging makes — a capture, a type name in a signature, a data
+member's mention, a construction's head — finds its slot bound, because the
+body runner performs a body's [units](../scope/README.md#units) in the shape's
+order and a component follows every unit it reads.
+
 **Write.** Only then are the closure runs and each data node's resident laid
 down, the knot's weight summed, and the nodes tied: member `i` is node `i`,
 and the anonymous nodes follow.
@@ -164,9 +174,6 @@ Because nothing is written before every read and check has finished, **a
 refusal writes nothing**. The refusal is an `Untieable`:
 
 - `Opaque` — a member that is none of a function, module or data member.
-- `Pending` — a read whose binder is still running — a capture, a type name in
-  a signature, a data member's mention, a construction's head — with that
-  binder's cell handle. The caller waits on the binder and ties again.
 - `Eager` — a part of a data member at a site the evaluator has no value for,
   or a module member whose body the caller has not run. The caller supplies it
   and ties again; what it supplies is a value or a run body, the two arms of
@@ -312,9 +319,6 @@ the node while the copy's node run is still being filled.
   builtins as function values with native bodies.
 - [Module programs](../../roadmap/rewrite/modules.md) — a call through a
   barrier node, which coerces its arguments inwards and its return outwards.
-- [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
-  — a component tied as one unit by the body runner, whose eager parts it has
-  evaluated and supplies to the tie by site.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a function
   value born outside a binder's root, and union-variant construction in a
   cycle.

@@ -5,8 +5,8 @@ storage holds.
 
 **Problem.** [Program storage](../../src/memory/program.rs) holds two stores: a
 `bumpalo` bump the parser writes the AST into, and the `cellgraph`-owned
-`Storage` the [top level](top-level-on-the-scheduler.md) lays the builtin table
-and the top-level slot array down in. `ProgramBrand::allocator` hands the bare
+`Storage` a [loaded program](../../src/program/README.md) lays the builtin
+table and the `Program` record down in. `ProgramBrand::allocator` hands the bare
 bump out, so [`parse`](../../src/parse/README.md) and
 [`scope`](../../src/scope/README.md) allocate AST nodes, rewritten statements
 and group claims with bumpalo's own verbs — `alloc`, `alloc_str`,
@@ -43,8 +43,6 @@ bump-backed vector over the same bump.
 
 ## Dependencies
 
-**Requires:**
-
-- [The top level on the scheduler](top-level-on-the-scheduler.md) — it adds the `cellgraph` `Storage` this moves the AST into.
+**Requires:** none — program storage's `cellgraph` `Storage` ships.
 
 **Unblocks:** none — a leaf.

@@ -77,7 +77,6 @@ elements a consumer takes lazily.
 **Requires:**
 
 - [Dispatch](dispatch.md) — a demand for an element is an ordinary dispatch.
-- [The top level on the scheduler](top-level-on-the-scheduler.md) — a flat consumer loop is its tail call.
 
 **Unblocks:**
 

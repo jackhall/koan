@@ -1365,9 +1365,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             .map(|last| unit_of_statement(last as u32));
         let mut cursor = 0;
         while draft.units.len() < works.len() {
-            let Some(unit) = (cursor..works.len())
-                .chain(0..cursor)
-                .find(|unit| !emitted[*unit] && pending[*unit] == 0)
+            let Some(unit) =
+                (cursor..works.len()).find(|unit| !emitted[*unit] && pending[*unit] == 0)
             else {
                 let (slot, statement) = eval_cycle(&waits, &emitted);
                 return Err(ShapeError::EvalCycle {

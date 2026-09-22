@@ -14,8 +14,10 @@ parenthesized or sigiled group of parts. Its type names are not searched for:
 the shape builder already resolved each one to a coordinate and recorded it as
 a mention ([Resolution](../scope/README.md#resolution)), so
 [`type_expression`](expression.rs) looks the mention up by the name part's site
-through `BodyShape::mention` and reads it through the activation the expression is
-read in. A name bound to a type value elaborates to that value's handle. A
+through `BodyShape::mention` and reads it through the view of the activation the
+expression is read in — `scope`'s `ActivationView`, the one read type at every
+level, which names no habitat. The body runner reads a name only once its
+binder's unit has run, so every read finds its slot bound. A name bound to a type value elaborates to that value's handle. A
 parameter and return type of a callable are eager mentions of the enclosing
 shape, so the activation a signature is read through is the one the callable
 is born in.
@@ -83,10 +85,9 @@ Its keyworded channel is empty until
 [dispatch](../../roadmap/rewrite/dispatch.md) gives a bodyless definition a
 slot.
 
-Every slot must be bound: the caller runs the body to completion and only then
-ties the binder ([the tie](../knot/README.md#the-tie)). A slot still claimed
-by its binder is `Unsigned`, naming that binder's cell so the caller waits on
-it. The handle is interned like any other, so two modules binding the same
+Every slot is bound: the caller runs the body to completion and only then
+ties the binder ([the tie](../knot/README.md#the-tie)), so the self-signature
+is a type and never a refusal. The handle is interned like any other, so two modules binding the same
 members in either order are one handle.
 
 ## Declarations
@@ -197,7 +198,7 @@ the table as its own `const` handle and passes straight through; the two compoun
 a builtin slot uses — a union of leaves, the empty record — are interned here,
 which is the whole reason the door exists, since no `const` computes a compound's
 digest. Nothing here reads a name, so nothing here fails: an entry is not a type
-expression, and a `Pending` or `NotAType` has no meaning over `static` data.
+expression, and a `NotAType` has no meaning over `static` data.
 
 Every handle the door interns erases to the entry's own bucket key, so the typed
 shape and the untyped bucket a node probes with cannot drift apart.
@@ -207,8 +208,6 @@ shape and the untyped bucket a node probes with cannot drift apart.
 A type expression that does not elaborate is an [`Elaboration`](../elaborate.rs),
 never a panic and never a guess:
 
-- `Pending` — a type name whose binder is still running, with the binder's cell
-  handle, so the caller turns it into a dependency on that binder;
 - `NotAType` — a type name bound to something other than a type value;
 - `NoSuchMember` — a union projection naming a tag the union does not declare;
 - `Unsupported` — any other spelling: a `_` field, an outer quantifier read
@@ -243,20 +242,19 @@ retired lifetime name.
 
 [`tests/examples.rs`](tests/examples.rs) elaborates each production, each
 refusal, and a callable's type off each builtin shape that births one, over a
-program shaped and activated in a cell with every slot bound or claimed as the
-test asks. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
+program shaped and activated in a cell with every slot bound or left empty as
+the test asks. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
 door over the same harness: each form it elaborates, each group it seals — a
 ring, a union and a newtype in one component, a ring written in either order
 interning equal — the chaining record a bodyless `GROUP` head declares and the
 two handles two directions make of one signature, and each refusal, asserting
-the refused component left its binders claimed. [`tests/module.rs`](tests/module.rs) runs the self-signature
+the refused component left its binders' slots empty. [`tests/module.rs`](tests/module.rs) runs the self-signature
 over a module body activated in a cell with its slots bound by hand: a slot per
 value binder and a manifest member per type binder, the empty body as the empty
 signature, two bodies binding the same members in either order interning equal,
 a member carrying the type its value carries rather than one walked from its
 contents, a `GROUP` body's self-signature carrying the group it declares and
-satisfying the signature stating it, and a claimed slot leaving the module
-unsigned.
+and satisfying the signature stating it.
 [`tests/builtin.rs`](tests/builtin.rs) holds the door's own laws: each
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names

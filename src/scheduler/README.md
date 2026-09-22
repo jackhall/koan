@@ -46,8 +46,14 @@ but the program text and the shapes in it.
 
 `Scheduler::run` takes one **root work**, the cell it is born under and the
 placement it is born at, and drives it to its end. Everything else a drain runs
-is a descendant the root work asked for. The root work reports to nobody, so
-`done` is its one successful end.
+is a descendant the root work asked for. The root work reports to nobody, so it
+ends well in one of two ways: `done`, or `leave`, which rests a birth in its
+home for a later root work. `run` hands what was left back as an opaque,
+brand-free `Resting`, and `Scheduler::resume` births a later root work from it
+under the same cell — a tenant of that cell wakes it free. This is how the
+graph's owner reaches what one drain built from a later one without a cell that
+outlives the drain: a loaded [program](../program/README.md) leaves its top
+level's view at rest and inspects a binding through a resumed root work.
 
 ### The ready stack
 
@@ -89,7 +95,9 @@ first is `DrainStalled::Unfinished`: some cell is parked on a receipt run
 nothing will fill. A birth, an enter or a release the substrate refuses is a
 `DrainStalled` of its own, and a step that cannot proceed is
 `DrainStalled::Step` — among them a step that asked for children and ended
-without parking on them, `StepError::Unparked`. These are the only errors the scheduler defines. A koan
+without parking on them, `StepError::Unparked`, and a step the layer above
+refused, `StepError::Refused`, whose reason is that layer's. These are the only
+errors the scheduler defines. A koan
 error is a [tagged value](../values/README.md#what-a-value-is) and travels
 between cells as data, so no `Result` passes from one cell to another and a
 consumer checks the results it reads.
@@ -125,8 +133,8 @@ previous step parked, and exposes:
   the `Step`, and the end hands its bump back unless the step parks again;
 - `results`, the children's results it parked on;
 - `spawn`, to ask for a child;
-- the ends — `park`, `tail`, `finish_fresh`, `finish_in_home`, `finish`, `done`
-  and `failed`.
+- the ends — `park`, `tail`, `finish_fresh`, `finish_in_home`, `finish`,
+  `done`, `leave` and `failed`.
 
 **No step names a place that is not its own.** There is no handle among those
 doors — not the cell's own, not its consumer's, not its result's home — and no
@@ -134,13 +142,18 @@ carrier door: no `alloc_into`, `lift`, `keep`, `redeem` or `receipt`. A step
 holds values at its own brands and nothing else. Each crossing a computation
 needs is the veneer's to perform, from the provenance the drain filled:
 
-- **A child's state is handed over awake and arrives awake.** `spawn` and
-  `tail` take the state the new cell starts with as the step holds it, at
+- **A child's birth is handed over awake and arrives awake.** `spawn` and
+  `tail` take the birth the new cell starts from as the step holds it, at
   `'here`. The veneer puts it to rest as a dormant carrier in the birth
   continuation, and on the new cell's first entry redeems it and crosses it to
   that cell's `'here` at the [verdict](../values/README.md)'s price — free for
   a child, whose spawner is above it, and free for a tenant, which crosses
   nothing.
+- **What a root work leaves crosses into its home.** `leave` crosses the birth
+  into the cell the root work was born under at the verdict's price, not into
+  its own region, which a `Fresh` root work's release reclaims; from a tenant of
+  that cell it crosses nothing. It is refused for a cell that reports to
+  somebody.
 - **A child's result is read, not redeemed.** `results` yields each slot of the
   receipt run as the consumer can use it: a scratch fill at `'scratch`, a
   carrier fill redeemed and crossed to `'here`.
@@ -165,8 +178,8 @@ step handed back.
 
 ## Hints
 
-A `Request` is a `Work` — the step the child starts at and the state it starts
-with — and two hints. Neither is a contract: a wrong hint costs a copy or a
+A `Request` is a `Work` — the step the child starts at and the birth it starts
+from — and two hints. Neither is a contract: a wrong hint costs a copy or a
 delayed reclaim, and soundness rests on the substrate's brands either way.
 
 **`Placement`** picks the child's habitat.
@@ -235,23 +248,34 @@ in-progress state in the scratch habitat, so what it names in storage comes back
 at `'here` and what it names in the habitat at `'scratch`.
 
 The scheduler names no step and no state of the layers above it. It takes them
-as one **step bundle**, a parameter beside the delivery bundle: a state family
-at rest in storage, a scratch family over both brands, and the state family's
-crossing — a weight, and a copy over the crossed view a placement hands it. The
-veneer rests a state by `lift` then `keep`, which needs nothing of the family,
-and wakes it by a redeem and an own-cell crossing priced by the verdict, which
-needs both halves of the crossing and calls them only inside that priced
-crossing. The state family crosses pinned from a spawner into its child, so it
-is [`Covariant`](../../cellgraph/src/reattach.rs); the scratch family rests in
-its own cell and never crosses. A continuation is one
-shape with no arm to add — a `NativeStep` function pointer, the cell's
-`Provenance`, and the bundle's state. The pointer is higher-ranked over the
+as one **step bundle**, a parameter beside the delivery bundle, with three
+families:
+
+- the **birth** family — what a spawn or a tail hands a new cell, and what a
+  root work is born with or leaves at rest. A birth crosses pinned from a
+  spawner into its child, so the family is
+  [`Covariant`](../../cellgraph/src/reattach.rs), and the bundle supplies its
+  crossing: a weight, and a copy over the crossed view a placement hands it;
+- the **parked state** family — what a cell holds at a step and parks with. A
+  park stores it in the cell's own continuation and the wake hands it back at
+  the same cell's brand, so it never crosses, need not be covariant, and may
+  hold a borrow a crossing would refuse, such as an invariant activation;
+- the **scratch** family over both brands, which rests in its own cell and
+  never crosses.
+
+`born` joins the first two: the state a cell's first step runs over, made from
+the birth it was handed. The veneer rests a birth by `lift` then `keep`, which
+needs nothing of the family, and wakes it by a redeem and an own-cell crossing
+priced by the verdict, which needs both halves of the crossing and calls them
+only inside that priced crossing. A continuation is one shape with no arm to
+add — a `NativeStep` function pointer, the cell's `Provenance`, and the
+bundle's parked state, or a birth at rest. The pointer is higher-ranked over the
 three step brands and not over `'graph`, so one pointer runs in any cell at any
 step while the state it reads, the children it asks for and the action it
 returns all name the graph they belong to.
 
 A *birth* continuation is the family at `'cell = 'graph`, because every birth
-door takes one there: its state holds only words, program storage and dormant
+door takes one there: it holds only words, program storage and dormant
 carriers, which is the rested form the veneer makes of what `spawn` and `tail`
 were handed. The successor `Step::park` stores is at `'here` and may hold region
 borrows freely.
@@ -294,13 +318,13 @@ provenance; the predecessor is released once the successor holds everything
 that was homed in it. The hand-off:
 
 1. The predecessor ends with `Step::tail`, a placement, the successor's work
-   and its state, awake.
-2. The veneer rests that state into the successor's birth continuation, and the
+   and its birth, awake.
+2. The veneer rests that birth into the successor's birth continuation, and the
    drain pushes the successor and holds the predecessor aside.
 3. The drain creates the successor — `create_tree` under the predecessor's own
    parent for `Fresh`, `create_tenant` on the same host for `Shares` — and
    enters it.
-4. The veneer wakes the state, entitled by root identity, crossing it to the
+4. The veneer wakes the birth, entitled by root identity, crossing it to the
    successor's `'here`, and the successor's first step runs over it.
 5. Only then does the drain release the predecessor.
 
@@ -356,6 +380,8 @@ no layer of koan's above present. They hold, each with a workload of its own:
 - a ten-thousand-hop loop at each placement, with three cells live at the peak
   and no more heap than the same loop a hundred hops long;
 - a subtree two hundred levels deep on a slab of one;
+- a root work that leaves a birth a later root work resumes from, at each
+  placement, and a cell that reports to somebody refused on `leave`;
 - two schedulers beside each other sharing nothing, two views over one graph in
   turn, and a view dropped mid-work leaving a graph its root's release does not
   empty;
@@ -364,9 +390,3 @@ no layer of koan's above present. They hold, each with a workload of its own:
 
 A native step is a bare `fn` and carries no closure state, so what a step
 observes it records in `tests/native.rs` for the test around it to read back.
-
-## Open work
-
-- [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
-  — what turns a koan program into work for this drain, and where the hints come
-  from for a koan function.

@@ -972,7 +972,6 @@ impl<'c> Generator<'c> {
     }
 }
 
-/// Whether a statement drafted as `draft` can read `name` at all.
 /// Unwrap the `EVAL`s of each statement, in order, whose waits would close a cycle: an `EVAL`
 /// waits on every binder declared before it, and a body where one of those waits on the `EVAL`'s
 /// statement is refused. A unit is a component, or a statement that binds nothing.
@@ -1027,6 +1026,7 @@ fn break_eval_cycles(statements: &mut [Statement], group_of: &[usize], local_rea
     }
 }
 
+/// Whether a statement drafted as `draft` can read `name` at all.
 fn may_read(draft: &Draft, name: Name) -> bool {
     *draft != Draft::Union || name.is_type()
 }

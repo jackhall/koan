@@ -32,8 +32,9 @@ program runs on the rewritten stack.
   overlap a builtin's is rejected.
 - A shadowable builtin's bucket — equality, whose operands are `Any` — admits a
   user overload that is selected in the builtin's place.
-- A reference to a visible binder that has not yet bound parks until it binds,
-  and a dispatch placeholder keys on the full bucket key.
+- A reference to a visible binder always reads it bound: the shape orders its
+  binder first, and rejects a body where an `EVAL` and a binder declared before
+  it read each other. A dispatch placeholder keys on the full bucket key.
 - A combined form — `LET f = FN EXPR …`, `LET plus = OP …` — binds a lambda to
   its name and registers its expression shape under its bucket:
   [`callable_type`](../../src/elaborate/signature.rs) hands a named callable a
@@ -101,9 +102,7 @@ program runs on the rewritten stack.
 
 ## Dependencies
 
-**Requires:**
-
-- [The top level on the scheduler](top-level-on-the-scheduler.md) — running a program needs the scheduler that drives it.
+**Requires:** none — the program record and the body runner it evaluates for ship.
 
 **Unblocks:**
 

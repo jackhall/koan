@@ -155,18 +155,18 @@ refusal the position-blind claims pre-scan makes — and
 itself, asserting on the shape a body owns: the four rewrites, where an operator
 run is reached, equality and the `!=` negation, the groups a `USING` body and an
 `EVAL` see, and each refusal.
-[`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds six laws:
+[`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds five laws:
 
-- a planned program shapes back into its plan: kinds, layouts, components and whether each is
-  cyclic, one mention per planned read with its class, statement and landing, nested scopes, and
-  which captures are knot edges;
+- a planned program — the planner unwraps any `EVAL` whose waits would close a cycle, which the
+  shape refuses — shapes back into its plan: kinds, layouts, components and whether each is
+  cyclic, one mention per planned read with its class, statement and landing, nested scopes,
+  which captures are knot edges, and a unit order in which a unit runs after every unit it reads
+  and every statement is in exactly one unit;
 - a plan with exactly one refusal injected (an eager cycle, an eager read ahead, an undeclared
   name, a rebind, a shadowed builtin) is refused with that refusal;
 - a name re-declared inside a nested scope takes the reads nearest it;
 - every activation of a planned program reads by name what its coordinates name, and closure
   bindings copy the enclosing words or hold knot edges;
-- a claimed slot reads as pending until bound, and a callable is not created while a slot it reads
-  is pending;
 - an `EVAL` body planned over what a program or arm statement sees shapes back into its plan over
   that chain, and its enclosing reads agree with the site's by-name reads.
 

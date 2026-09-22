@@ -34,17 +34,38 @@ A scope is built in three tiers, each at the moment its contents become known.
   a deep copy of what it points at. A name that is a member of the callable's
   own [component](#visibility) is held as an edge into the knot the component
   is born in, never as a copied value. A callable's birth reads every capture into
-  scratch first and lays the run down only once none is pending, so a closure
-  binding is never a placeholder and a refused birth writes nothing.
+  scratch first and lays the run down only once every read is finished, so a
+  closure binding is never a placeholder.
 - **Per-call bindings** — one activation per call, laid down in the call's
-  frame region: a pointer to the callable's closure bindings, the callable
-  itself, and one slot for each parameter and each local the shape declares.
+  frame region, and the top level's in the region of the program's
+  [root](../program/README.md#the-top-level): a pointer to the callable's
+  closure bindings, the callable itself, and one slot for each parameter and
+  each local the shape declares.
   Nothing is copied out of
   the closure bindings; a read of a capture goes through the pointer, one load
   more than a read of a local. Copying the captures in would cost a word per
   capture per call, multiplied by recursion depth, and a copied knot edge would
   need its knot carried beside it, where an edge left in its node resolves
   against the knot it already lives in.
+
+  An activation has a read half of its own, the **`ActivationView`**: the
+  header pointers, the callable, and a read view of the slots, with no door that
+  binds. An evaluation is handed the view of the activation it was asked from
+  and reads names through it where they lie, so a binding never travels to its
+  reader. The view is covariant in its region brand, so it rides a birth into a
+  shorter-lived cell; the `Activation` — the view beside the slot array, which
+  binds — is invariant and stays where it was laid down, reading as its view
+  through `Deref`. Both are generic over the member's *family* rather than the
+  member, because a slot holds its value erased and names its payload through
+  the family ([the slot array](../memory/README.md#the-slot-array)). The view
+  takes the member as a type parameter of its own, defaulted to the family's
+  member at the view's brand, and nothing but the default is ever meant:
+  rustc computes variance over the unnormalized field types, and a field naming
+  the brand through the family's projection would make the view invariant in
+  it. For the same reason `knot`'s `KActivationView` spells its member out, so a
+  type holding one is covariant too; the tie and
+  [elaboration](../elaborate/README.md) read the one view type at every level
+  and name no habitat.
 
 Values are immutable, so a shallow copy of a binding means the same thing as a
 reference to it: every copy names the same value, and what the copy retains is
@@ -232,6 +253,27 @@ and a manifest `LET` member declares its name, so a later `VAL` naming it is no
 mention either. Every name a definition declares is the definition's own, and
 the declaration door resolves it against the definition it is elaborating.
 
+### Units
+
+A body runs as a sequence of **units**, which `BodyShape::units` hands out in
+the order they are performed. A unit is one component whose members are not all
+parameters, or one statement that binds nothing; a statement belongs to its
+binder's component's unit. Each unit follows every unit that binds a slot it
+reads, and among the units free to go next the one written first goes first,
+so independent units come out as they are written and a forward reference moves
+only the binder its reader needs. A read's wait is acyclic by construction,
+since a cycle among bindings is one component. Each unit records whether it
+holds the body's last statement, whose value a called body's is.
+
+A statement containing `EVAL` reads names no shape can enumerate, so it also
+follows every unit binding a name declared before its position, as firmly as a
+read does. A visible binder is therefore always bound when an `EVAL` runs. When
+a binder declared before the `EVAL` itself waits on the `EVAL`'s statement —
+`LET f = FN <reads g>` before `LET g = (EVAL …)` — neither can go first, and
+the shape refuses the body at load with `ShapeError::EvalCycle`, naming the
+binder and the `EVAL`'s statement. Declaring `f` after the `EVAL`'s statement
+hides it from the `EVAL` and makes its read of `g` an ordinary forward read.
+
 ## Two channels
 
 A value name and a type name are different key types, so the value channel and
@@ -253,31 +295,24 @@ no part of the builtin table.
 
 ## Placeholders and writes
 
-A slot is written once. Its binder replaces the placeholder in place, and
-nothing rewrites it after that, so a binding is as immutable as the value it
-holds.
+A slot is two-state: empty until its unit's turn, then bound, once. Nothing
+claims a slot ahead of binding it and nothing rewrites it after, so a binding is
+as immutable as the value it holds.
 
-A pending slot names its binder: the
-[`CellHandle`](../../cellgraph/src/handle.rs) of the cell that will bind it. A
-read of a visible slot returns the bound value, or the pending handle; the
-embedder turns the handle into a dependency edge from the reading cell to the
-binder, and the scope parks nothing itself. The waiter chain is the
-scheduler's dependency graph, not the slot's.
-
-A slot visible to a running reader is never unwritten. A deferred mention
-reads at the body's end and sees the siblings declared after it, so the
-scheduler submits every statement of a body, in position order and claiming
-each binder's slot as it submits it, before any of those statements runs.
-Empty is a state a slot has only before its binder is submitted, and a read
-that finds one is a scheduler bug, not a pending read.
+A slot visible to a running reader is never empty. The shape orders a body's
+[units](#units) so that each follows every unit it reads, and the body runner
+performs them in that order, so a deferred mention that reads at the body's end
+still finds its sibling bound by the time anything reads it. A read that finds
+an empty slot is a scheduler bug, and `ActivationView::read` panics on one
+rather than returning a pending state nobody could act on.
 
 A function activation and a module activation are one type with two
 constructors. A module's carries no knot member — a module's captures are never
 edges, since it is alone in its component — and the caller runs its body to
 completion and only then ties the binder over the finished activation, reading
-its slots out through `Activation::slots`. A module body's binders are its
-exports in flight, and a `USING` over a binder that is still pending is the same
-pending read.
+its slots out through `ActivationView::slots`. A module body's binders are its
+exports in flight, and nothing outside the body reads them before its binder is
+tied.
 
 ## Names that arrive at run time
 
@@ -492,19 +527,15 @@ components, nested shapes — rest in program storage and are `Copy`. An
 `crate::parse`, and no scheduler type. From `type_lattice` it names the
 operator-group vocabulary — `DeclaredGroup` and its `ReductionMode` — so a
 signature's operator channel and a body's held group are one record rather than
-two that must be kept in step. A pending slot's cell handle is
-`cellgraph`'s name for a unit of work, spelled through `memory`'s substrate
-re-exports like every other substrate name; the scheduler reaches scopes
-through its embedder, and scopes never reach the scheduler. The compiler
+two that must be kept in step. The scheduler reaches scopes through its
+embedder, and scopes never reach the scheduler. The compiler
 cannot hold a module to that, so [`tests::boundary`](tests/boundary.rs) reads
 the module's source and fails on any other `crate::` path, on an owning heap
 type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
-  — which habitat each tier of an activation is laid down in, and the order of
-  units a body's reference graph gives the body runner.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
-  OVER`, and an `EVAL` retaining its defining scope across frames.
+  OVER`, an `EVAL` retaining its defining scope across frames, and what an
+  `EVAL` behind a forward reference may read.

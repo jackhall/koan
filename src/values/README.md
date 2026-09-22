@@ -203,13 +203,16 @@ copy. A data node rebuilds through `Circular::copied`: each value link through
 that copy, each edge verbatim — an edge names a node by index, so it means the
 same node in the copy — and its memo and weight carried over.
 
-`copy_into` is private to the crossing and `cross_view` is its one caller.
-`cross_view` is public, because a placement a layer above builds over values —
-a scheduler's result built in its home, a state woken into a cell — hands it the
-views. It takes a `CrossedOperand`, which only a priced placement mints — its
-arms are [non-exhaustive](../../cellgraph/README.md#the-crossing-verdict), so
-nothing outside `cellgraph` can build one — so every copy is one the graph
-priced.
+`copy_into` is private to the crossing, and its callers are two public doors,
+because a placement a layer above builds over values hands them the views.
+`cross_view` rebuilds a value that is itself the crossed operand — a
+scheduler's result built in its home. `copy_severed` rebuilds a value held
+inside a *copied* operand of another family — a birth that carries values, such
+as a call's callee and arguments woken into its frame — at the operand's
+severed brand. Each takes a `CrossedOperand`, which only a priced placement
+mints — its arms are
+[non-exhaustive](../../cellgraph/README.md#the-crossing-verdict), so nothing
+outside `cellgraph` can build one — so every copy is one the graph priced.
 
 A crossing door requires its family to be
 [`Covariant`](../../cellgraph/src/reattach.rs), which a generic `ValueFamily<XF>`

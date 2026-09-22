@@ -97,6 +97,20 @@ Four absences are design statements rather than gaps:
   region is a *bundle* — the bump it writes into, plus the bumps of everything
   absorbed into it. Inside a step the executing cell's own region is reachable
   at its own brand, `'here`, distinct from the step's.
+
+  One shape in a region is laid down for reading at a shorter brand: the
+  **once-written run** ([src/once.rs](src/once.rs)), `Writer::once_run`, a run
+  of slots each set once. A slot holds its value erased to its form at
+  `'graph`, since a `Cell` over a form at the region's brand would be invariant
+  in it. The write handle, `OnceRun`, is invariant, so every value is set at
+  the run's own brand; the read handle, `OnceView`, is the only door that reads,
+  has none that sets, and is covariant, so a value crossing into a shorter-lived cell may hold one, and
+  its read reattaches the value at the view's brand — the crate's one retype
+  seam, the way `ThinRun` is its one hand-built layout. A view exists only once
+  its family is proven [`Covariant`](src/reattach.rs), because the run's one
+  constructor of a view asks for it, so a value read back at a shortened brand
+  can take no borrow in. The run carries no vocabulary: what a slot means is
+  the embedder's, built as safe code over it.
 - **Scratch habitat** — a second bump beside each region, written at a brand of
   its own, `'scratch`, for what a step can prove it throws away: the multi-step
   transients a long-lived cell would otherwise strand in the region it keeps
@@ -282,6 +296,13 @@ the substrate neither keeps nor reclaims that storage, so a `'graph` borrow is
 minted into no hold set, weighed by no verdict, and crosses a copy as it is,
 since the retype never moves it. An embedder with no such storage writes
 `CellGraph<'static, C>`.
+
+The crate ships one such store, **`Storage`** ([src/region.rs](src/region.rs)):
+a bump the embedder keeps outside the graph, written through the same `Writer`
+a region is, so what the embedder lays down at `'graph` passes the writer's
+drop-freeness checks and the embedder never names the bump underneath. Its
+writer is at the storage's borrow, which is `'graph` for a graph built over
+it.
 
 A foreign carrier is read at a borrow strictly inside the step and can never
 coerce to `'here`, so the only references that land in a cell's region without
@@ -562,7 +583,11 @@ exactly one decision.
   is settled before the first element — `thin_run` laying its run behind a
   length header so its `ThinRun` handle is one pointer wide — `run` and `prose` where only the producer settles it,
   each handing back the region borrow once the producer is done; every simpler
-  shape is the embedder's — and the sealed cell's frozen-closure memo.
+  shape is the embedder's — the sealed cell's frozen-closure memo, and
+  `Storage`, the embedder's store outside the graph behind the same `Writer`.
+- [src/once.rs](src/once.rs) — the once-written run: `Writer::once_run`, its
+  invariant write handle `OnceRun`, its covariant read handle `OnceView`, and
+  `Written`, its one refusal.
 - [src/scratch.rs](src/scratch.rs) — the graph's one scratch region and the
   doors every verb's transients go through.
 - [src/carrier.rs](src/carrier.rs) — `Ready` and `Active`, the two carrier
