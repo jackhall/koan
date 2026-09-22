@@ -109,17 +109,20 @@ drain-owned buffer rather than into what it returns.
 
 A step is handed a `Step` by value and nothing else. `Step` borrows the raw
 `StepContext`, the cell's `Provenance` and the drain's request buffer, all
-private, holds the state its cell was woken with and the scratch state it
-parked, and exposes:
+private, holds the state its cell was woken with and the scratch state the
+previous step parked, and exposes:
 
 - its cell's two writers, `writer` at `'here` and `scratch_writer` at
   `'scratch`;
 - `state` and `scratch`, which take the cell's state and its parked scratch
   state, each once. A state is a projection of the step bundle, which a
-  higher-ranked function pointer cannot take as a parameter, so a step takes
-  both from the `Step` rather than as arguments beside it. The once is a
-  run-time check: a second `state` panics, and a second `scratch` finds `None`
-  ([a step's state taken once, by type](../../roadmap/rewrite/step-state-taken-once.md));
+  higher-ranked function pointer cannot take as a parameter (rustc #100013), so
+  a step takes both from the `Step` rather than as arguments beside it. The
+  once is a type: `Step` carries one marker per state, `Holding` or `Taken`,
+  both defaulting to `Holding` so a step's own signature names neither. Each
+  take hands the value back beside the `Step` in its `Taken` form, which has no
+  second take to call. A step that never takes its scratch state leaves it in
+  the `Step`, and the end hands its bump back unless the step parks again;
 - `results`, the children's results it parked on;
 - `spawn`, to ask for a child;
 - the ends — `park`, `tail`, `finish_fresh`, `finish_in_home`, `finish`, `done`
@@ -364,9 +367,6 @@ observes it records in `tests/native.rs` for the test around it to read back.
 
 ## Open work
 
-- [A step's state taken once, by type](../../roadmap/rewrite/step-state-taken-once.md)
-  — make a second take of `state` or `scratch` a compile error rather than a
-  panic.
 - [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
   — what turns a koan program into work for this drain, and where the hints come
   from for a koan function.
