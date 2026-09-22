@@ -11,9 +11,10 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    Active, CellGraph, CellHandle, CrossedOperand, Delivery, Dormant, DropFree, NoScratch, Operand,
-    Prices, Ready, Reattachable, ReattachableOverBoth, Receipt, ReleaseAbsorption, SlabHandle,
-    StepContext, TreeHandle, Verdict, Writer, reattachable,
+    Active, CellGraph, CellHandle, Covariant, CrossedOperand, Delivery, Dormant, DropFree,
+    NoScratch, Operand, Prices, Ready, Reattachable, ReattachableOverBoth, Receipt,
+    ReleaseAbsorption, SlabHandle, StepContext, TreeHandle, Verdict, Writer, covariant,
+    reattachable,
 };
 
 use crate::counting_alloc::thread_live_bytes;
@@ -39,6 +40,8 @@ reattachable!(
 impl DropFree for Number {}
 impl DropFree for Numbers {}
 
+covariant!(Number, Numbers);
+
 /// The delivery bundle the receipt shape crosses through: a note a producer builds in the
 /// consumer's scratch habitat, and a carrier it files there at rest. Every other shape's graph
 /// takes the default bundle and delivers nothing.
@@ -61,7 +64,7 @@ fn graph() -> CellGraph<'static, Work> {
 
 /// An operand priced above anything a pin can cost, so [`always_pin`] pins it whatever the slab is
 /// doing.
-fn pinned<'a, 'step, V: Reattachable<'static> + DropFree>(
+fn pinned<'a, 'step, V: Reattachable<'static> + Covariant<'static> + DropFree>(
     carrier: &'a Ready<'static, 'step, V>,
 ) -> Operand<'static, 'a, 'step, V> {
     Operand {
