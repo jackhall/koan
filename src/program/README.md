@@ -161,10 +161,11 @@ binds each value parameter from the argument record, which must name them
 exactly. A **quantified** callee's frame first solves its group: every declared
 parameter type against the argument's carried type, under one collector, and
 each type-parameter slot is then bound to a type value holding its solution,
-read through the callee's
-[quantifier map](../knot/README.md). A group the arguments cannot solve binds
-nothing and refuses the call, as an argument record that misnames a parameter
-does.
+looked up **by its own name** through the callee's
+[quantifier map](../knot/README.md) — the slots arrive symbol-sorted, not in the
+order the `FOR ALL` group was written. A name the map says canonical form dropped
+binds that variable's bound. A group the arguments cannot solve binds nothing and
+refuses the call, as an argument record that misnames a parameter does.
 
 It performs the units in the order the shape emitted them
 ([Units](../scope/README.md#units)), each after every unit it reads, over a

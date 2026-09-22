@@ -37,10 +37,10 @@ program runs on the rewritten stack.
   it read each other. A dispatch placeholder keys on the full bucket key.
 - A combined form — `LET f = FN EXPR …`, `LET plus = OP …` — binds a lambda to
   its name and registers its expression shape under its bucket:
-  [`callable_type`](../../src/elaborate/signature.rs) hands a named callable a
-  function type — quantified, per [quantified lambdas](quantified-lambdas.md),
-  where the form carries a `FOR ALL` group — and only a bucket registration
-  carries an `ExpressionShape`.
+  [`callable_type`](../../src/elaborate/signature.rs) already hands a named
+  callable [its function type](../../src/elaborate/README.md#a-callables-type),
+  quantified where the form carries a `FOR ALL` group, so only a bucket
+  registration carries an `ExpressionShape`.
 - A statement containing `EVAL` at any nesting depth, a callable body on its
   right-hand side included, follows every unit binding a name or a bucket
   registration declared before its position; the `EvalCycle` refusal covers a
@@ -67,10 +67,12 @@ program runs on the rewritten stack.
   `LET plus = OP #(⊕) OVER Number` binds `FN :{left :Number, right :Number} ->
   Number`; a unary one's is `operands`, so it binds
   `FN :{operands :(LIST OF Number)} -> Number`. A `FN EXPR FOR ALL (Elem) …`
-  binds the quantified function type [quantified lambdas](quantified-lambdas.md)
-  supplies. Quantification changes nothing about how a call by name binds its
-  frame: arguments bind by name, and a typed argument the callee's group cannot
-  be solved against is the ordinary type mismatch.
+  binds the quantified function type `callable_type` builds for it.
+  Quantification changes nothing about how a call by name binds its frame:
+  arguments bind by name, the frame
+  [solves the group](../../src/program/README.md#the-body-runner) against them,
+  and a typed argument the callee's group cannot be solved against is the
+  ordinary type mismatch.
 - *Keyword reads resolved in the shape — decided.* A bucket key resolves when
   the shape is built, as a value or type name does
   ([src/scope/README.md](../../src/scope/README.md#resolution)), to a
@@ -127,9 +129,7 @@ program runs on the rewritten stack.
 
 ## Dependencies
 
-**Requires:**
-
-- [Quantified lambdas](quantified-lambdas.md) — the function type a quantified combined form binds.
+**Requires:** none — the lattice, the elaborator and the quantified lambda ship.
 
 **Unblocks:**
 

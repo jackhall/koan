@@ -41,10 +41,12 @@ activation. This module closes it:
 - The knot's payload is a `Node`, of four arms. A `Function` node holds the
   function's memoized type handle, the body shape it runs (in program storage),
   its closure bindings, the weight of the whole knot it sits in, and — where its
-  type binds a `FOR ALL` group — its **quantifier map**. The map is the
-  declaration-index → canonical-index run
-  [the elaborator hands back](../elaborate/README.md#a-callables-type), which a
-  call reads to bind each type parameter to what the group solved to. It is
+  type binds a `FOR ALL` group — its **quantifier map**. The map pairs each
+  `FOR ALL` name the declaration wrote with that name's index in the canonical
+  group ([the elaborator hands it back](../elaborate/README.md#a-callables-type)),
+  and a call reads it to bind each type parameter to what the group solved to.
+  It is keyed by the **name** because a frame walks its callee's slots in the
+  type channel's symbol order, so nothing positional survives the trip. It is
   homed out of line for the reason a barrier's fields are, below: the node holds
   one nullable pointer, eight bytes, and an unquantified function — which is
   almost every function — stores `None` and allocates nothing. A `Data`

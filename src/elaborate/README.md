@@ -73,10 +73,18 @@ cached `BUILTIN_SHAPES` entry gives them:
   operand, since its body's one parameter `operands` takes the whole run.
 
 A function type binds its group in canonical form, which may renumber or drop a
-variable, so `callable_type` hands back the declaration-index → canonical-index
-map beside the handle. The knot stores it on the function node and a call reads
-each type parameter's solution through it. A shape's map stays empty: its caller
-reads the group off the bucket instead.
+variable, so `callable_type` hands back a **quantifier map** beside the handle:
+each `FOR ALL` name the declaration wrote, paired with its index in the canonical
+group, or `None` where canonical form dropped it. The knot stores the map on the
+function node and a call reads each type parameter's solution through it. A
+shape's map stays empty: its caller reads the group off the bucket instead.
+
+**The name is the key, not the position.** A callee's type-parameter slots reach
+its frame in the [type channel's](../scope/README.md#two-channels) own symbol order, not
+the order the group was written, so nothing positional survives the trip; and the
+interned type's `quantifiers` cannot stand in for the declaration's names,
+because alpha-variants intern to one node and it carries whichever spelling
+interned first.
 
 A module body has no callable type here, and neither has a `USING` body: its
 type is its signature, below.
@@ -278,8 +286,5 @@ interns as the union of its three members.
 
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
   bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
-- [Quantified lambdas](../../roadmap/rewrite/quantified-lambdas.md) — a call
-  binding each of a group's type parameters to its own solution, which the frame
-  reads off the map by position.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates.
