@@ -186,9 +186,9 @@ its dependent at `'graph`.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-21: 52s — 18 tests, 0 leaks, 0 UB
 - 2026-09-21: 82s — 18 tests, 0 leaks, 0 UB
 - 2026-09-19: 24s — 14 tests, 0 leaks, 0 UB
 - 2026-09-18: 23s — 13 tests, 0 leaks, 0 UB
 - 2026-09-15: 38s — 10 tests, 0 leaks, 0 UB
-- 2026-09-15: 49s — 9 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

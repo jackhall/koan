@@ -6,10 +6,10 @@ use std::cell::Cell;
 
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{Active, Receipt};
-use crate::scheduler::tests::native::{describe, record, recorded, reset};
+use crate::scheduler::tests::native::{describe, record, recorded, reset, slab};
 use crate::scheduler::{
-    Action, Context, DrainStalled, Graph, NativeStep, Placement, Request, Resume, Scheduler,
-    Spawns, State, StepError, Work,
+    Action, DrainStalled, Graph, NativeStep, Placement, Request, Scheduler, ScratchState, State,
+    Step, StepError, Work,
 };
 
 /// Enough hops that a per-hop cost would be unmissable in the allocation count.
@@ -30,20 +30,18 @@ thread_local! {
 
 /// The caller: ask for the loop's head at `placement`, park on its single slot.
 fn start<'graph>(
-    context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_, '_>,
-    spawns: &mut Spawns<'graph>,
+    mut step: Step<'_, 'graph, '_, '_, '_>,
     placement: Placement,
-    step: NativeStep<'graph>,
+    head: NativeStep<'graph>,
 ) -> Action<'graph> {
-    let asked = spawns.push(Request {
+    let asked = step.spawn(Request {
         placement,
         work: Work {
-            step,
+            step: head,
             state: State::Empty,
         },
     });
-    Action::park(context, &resume, spawns, asked, finish, State::Empty, None)
+    step.park(asked, finish, State::Empty, None)
 }
 
 /// One turn of the loop: take the carried value in, and either hop again or deliver.
@@ -51,22 +49,22 @@ fn start<'graph>(
 /// The first turn has nothing to take in and builds the value instead, so the same step is both the
 /// head of the loop and every hop of it.
 fn turn<'graph>(
-    context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_, '_>,
+    mut step: Step<'_, 'graph, '_, '_, '_>,
+    state: State<'graph, '_>,
     placement: Placement,
-    step: NativeStep<'graph>,
+    next: NativeStep<'graph>,
 ) -> Action<'graph> {
-    let carried: KValue<'graph, '_> = match resume.state {
+    let carried: KValue<'graph, '_> = match state {
         State::Parked(dormant) => {
-            let Ok(carrier) = context.redeem(dormant) else {
-                return Action::failed(StepError::Unredeemable);
+            let Ok(carrier) = step.redeem(dormant) else {
+                return step.failed(StepError::Unredeemable);
             };
             // What this costs is the placement's whole story. A sibling is `Apart` from the cell
             // that kept the value, so the crossing is a forced copy into this cell's own region; a
             // co-tenant writes the same host, so the same call pins what is already at its `'here`.
-            crate::values::cross_here(context, &carrier)
+            step.cross_here(&carrier)
         }
-        _ => crate::values::text(context.writer(), CARRIED),
+        _ => crate::values::text(step.writer(), CARRIED),
     };
     let left = REMAINING.with(|remaining| {
         let left = remaining.get();
@@ -74,78 +72,75 @@ fn turn<'graph>(
         left
     });
     if left == 0 {
-        return deliver(context, resume, carried);
+        return deliver(step, carried);
     }
-    let carrier = context.lift::<KValueFamily>(carried);
-    let state = State::Parked(context.keep(carrier));
-    Action::tail(Request {
+    let carrier = step.lift::<KValueFamily>(carried);
+    let state = State::Parked(step.keep(carrier));
+    step.tail(Request {
         placement,
-        work: Work { step, state },
+        work: Work { step: next, state },
     })
 }
 
 /// The last turn: fill the slot the loop's head was born against. Every hop carried the same
 /// destination forward, so the caller sees one result however many cells produced it.
 fn deliver<'graph>(
-    context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_, '_>,
+    step: Step<'_, 'graph, '_, '_, '_>,
     carried: KValue<'graph, '_>,
 ) -> Action<'graph> {
     // Recorded here rather than delivered, because what proves the value survived every crossing is
     // its bytes, and its bytes are at this cell's brand.
     record(describe(carried));
     let KValue::Str(text) = carried else {
-        return Action::failed(StepError::Stale);
+        return step.failed(StepError::Stale);
     };
     let length = text.len() as f64;
-    Action::deliver_scratch(context, &resume, move |_, _| {
-        Active::new(KValue::Number(length))
-    })
+    step.deliver_scratch(move |_, _| Active::new(KValue::Number(length)))
 }
 
 /// The caller, woken by the loop's last cell.
 fn finish<'graph>(
-    context: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_, '_>,
-    _: &mut Spawns<'graph>,
+    step: Step<'_, 'graph, '_, '_, '_>,
+    _: State<'graph, '_>,
+    _: Option<ScratchState<'graph, '_, '_>>,
 ) -> Action<'graph> {
-    match context.receipt(0) {
+    match step.receipt(0) {
         Ok(Receipt::Value(value)) => record(describe(value)),
-        _ => return Action::failed(StepError::Unredeemable),
+        _ => return step.failed(StepError::Unredeemable),
     }
-    Action::done()
+    step.done()
 }
 
 fn start_fresh<'graph>(
-    context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_, '_>,
-    spawns: &mut Spawns<'graph>,
+    step: Step<'_, 'graph, '_, '_, '_>,
+    _: State<'graph, '_>,
+    _: Option<ScratchState<'graph, '_, '_>>,
 ) -> Action<'graph> {
-    start(context, resume, spawns, Placement::Fresh, turn_fresh)
+    start(step, Placement::Fresh, turn_fresh)
 }
 
 fn start_shares<'graph>(
-    context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_, '_>,
-    spawns: &mut Spawns<'graph>,
+    step: Step<'_, 'graph, '_, '_, '_>,
+    _: State<'graph, '_>,
+    _: Option<ScratchState<'graph, '_, '_>>,
 ) -> Action<'graph> {
-    start(context, resume, spawns, Placement::Shares, turn_shares)
+    start(step, Placement::Shares, turn_shares)
 }
 
 fn turn_fresh<'graph>(
-    context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_, '_>,
-    _: &mut Spawns<'graph>,
+    step: Step<'_, 'graph, '_, '_, '_>,
+    state: State<'graph, '_>,
+    _: Option<ScratchState<'graph, '_, '_>>,
 ) -> Action<'graph> {
-    turn(context, resume, Placement::Fresh, turn_fresh)
+    turn(step, state, Placement::Fresh, turn_fresh)
 }
 
 fn turn_shares<'graph>(
-    context: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_, '_>,
-    _: &mut Spawns<'graph>,
+    step: Step<'_, 'graph, '_, '_, '_>,
+    state: State<'graph, '_>,
+    _: Option<ScratchState<'graph, '_, '_>>,
 ) -> Action<'graph> {
-    turn(context, resume, Placement::Shares, turn_shares)
+    turn(step, state, Placement::Shares, turn_shares)
 }
 
 /// What one run of the loop leaves behind: what it recorded, the most cells it held live at once,
@@ -161,15 +156,16 @@ struct Run {
 fn run(hops: usize, start: NativeStep<'static>) -> Run {
     reset();
     REMAINING.with(|remaining| remaining.set(hops));
-    let mut graph: Graph<'static> = Scheduler::graph(1);
+    let mut graph: Graph<'static> = Graph::new(1);
     let mut scheduler = Scheduler::over(&mut graph);
-    scheduler
-        .admit(start, State::Empty)
-        .expect("the slab admits");
+    scheduler.submit(slab(start, State::Empty), 0);
     let before = crate::tests::allocation_count();
     scheduler.run().expect("the drain runs to empty");
     let allocations = crate::tests::allocation_count() - before;
-    assert!(scheduler.is_empty(), "the loop leaves no cell behind");
+    assert!(
+        scheduler.graph().is_empty(),
+        "the loop leaves no cell behind"
+    );
     Run {
         recorded: recorded(),
         peak: scheduler.peak_live_cells(),
@@ -238,13 +234,13 @@ fn a_hand_off_redeems_out_of_the_region_the_drain_reclaims_next() {
 }
 
 /// A slab cell asking to hop. Every other step here is reached through a spawn, so this one is
-/// admitted straight into the slab.
+/// submitted straight into the slab.
 fn hop_from_the_slab<'graph>(
-    _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_, '_>,
-    _: &mut Spawns<'graph>,
+    step: Step<'_, 'graph, '_, '_, '_>,
+    _: State<'graph, '_>,
+    _: Option<ScratchState<'graph, '_, '_>>,
 ) -> Action<'graph> {
-    Action::tail(Request {
+    step.tail(Request {
         placement: Placement::Fresh,
         work: Work {
             step: hop_from_the_slab,
@@ -255,11 +251,9 @@ fn hop_from_the_slab<'graph>(
 
 #[test]
 fn a_slab_cell_has_no_sibling_to_hop_to() {
-    let mut graph: Graph<'static> = Scheduler::graph(1);
+    let mut graph: Graph<'static> = Graph::new(1);
     let mut scheduler = Scheduler::over(&mut graph);
-    scheduler
-        .admit(hop_from_the_slab, State::Empty)
-        .expect("the slab admits");
+    scheduler.submit(slab(hop_from_the_slab, State::Empty), 0);
     // A successor would have to be a slab cell of its own, holding its predecessor to redeem — and
     // a held predecessor seals rather than reclaims, which is the one thing a hop exists to avoid.
     assert_eq!(scheduler.run(), Err(DrainStalled::Unhoppable));

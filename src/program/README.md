@@ -55,8 +55,8 @@ does. A parse error stops the builder, and `load` returns it.
 A [`Scheduler`](../scheduler/README.md#the-drain) borrows the graph and owns
 none, so `Running::scheduler` makes a fresh drain over the substrate's graph for
 the length of one call. A call whose drain stalls is accepted as it stands: the
-view drops its pending units, the graph keeps its live cells, and every later
-drain over it reports `CellsLive`. A stalled substrate is only ever dropped.
+view drops what is on its stack and the graph keeps the cells already born,
+under the root they were born under. A stalled substrate is only ever dropped.
 
 ## Imports and tests
 

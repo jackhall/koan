@@ -305,11 +305,11 @@ src/
 │   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
 ├── scheduler.rs      pub mod scheduler — the deferred-work drain over cellgraph's cells and liveness matrix: a unit of work is a cell, and this module adds the submission table, the work queue, the drain protocol and delivery
 ├── scheduler/
-│   ├── drain.rs          Graph — the CellGraph over koan's three families; Scheduler — a per-call view over a borrowed Graph: the loop, the two queues (in_flight ahead of fresh), the deferred release a tail hand-off needs, and DrainStalled; every birth and every death is the drain's
-│   ├── action.rs         Action (opaque, with its done / failed / tail / park / deliver_scratch / deliver_carrier constructors) over the drain-only Kind, Placement, Request, Slot, Spawns, StepError — what a step hands back, all of it brand-free
-│   ├── continuation.rs   ContinuationFamily / ScratchFamily, the reattachable family of each slot a cell parks in — the second over both step brands; NativeStep, Continuation, Resume, State, ScratchState, Provenance, CellPlace, Destination, Context
+│   ├── drain.rs          Graph — a newtype over the CellGraph closed over koan's three families; Scheduler — a per-call view over a borrowed Graph: the loop, the in_flight queue and the one-at-a-time launch of ready units, the deferred release a tail hand-off needs, and DrainStalled; every birth and every death is the drain's
+│   ├── action.rs         Step — the only thing a step is handed: the doors it may use, spawn, and the park / deliver_scratch / deliver_carrier / tail / done / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Request, Slot, the drain's Spawns buffer, StepError
+│   ├── continuation.rs   ContinuationFamily / ScratchFamily, the reattachable family of each slot a cell parks in — the second over both step brands; NativeStep, Continuation, Work, State, ScratchState, Provenance, CellPlace, Destination
 │   ├── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
-│   └── submit.rs         Submissions / Unit / UnitId — units with no cell yet, and the dependency counts that decide when each gets one
+│   └── submit.rs         Unit / Birth / UnitId, and the drain's own Submissions table — units with no cell yet, and the dependency counts that decide when each gets one
 ├── program.rs        pub mod program — a loaded program as one owning value, over memory, parse, scheduler, symbols and type_lattice
 ├── program/
 │   └── substrate.rs      CellSubstrate — program storage and the interner as self_cell's owner, and Running — the graph, the type registry and the parsed statements borrowing them at 'graph, reached through a closure per call

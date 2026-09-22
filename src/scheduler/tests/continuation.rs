@@ -1,12 +1,17 @@
 //! The continuation round trip: a cell born at `'graph`, entered, storing a successor at its own
 //! region brand, and entered again to take it back.
+//!
+//! It drives the raw context's slot doors on purpose — the doors a step reaches only through
+//! [`Step::park`](crate::scheduler::Step::park) — so it builds its own graph over the scheduler's
+//! families rather than a [`Graph`](crate::scheduler::Graph).
 
 use crate::knot::KValue;
 use crate::memory::CellGraph;
-use crate::scheduler::{
-    CellPlace, Context, Continuation, ContinuationFamily, KDelivery, Provenance, ScratchFamily,
-    ScratchState, State,
+use crate::scheduler::continuation::{
+    CellPlace, Continuation, ContinuationFamily, Provenance, ScratchFamily,
 };
+use crate::scheduler::delivery::KDelivery;
+use crate::scheduler::{Action, ScratchState, State, Step};
 
 type Graph<'graph> = CellGraph<'graph, ContinuationFamily, ScratchFamily, KDelivery>;
 
@@ -20,11 +25,11 @@ fn place() -> Provenance {
 
 /// A step that does nothing, named only so a continuation has a pointer to hold.
 fn inert<'graph>(
-    _: &mut Context<'graph, '_, '_, '_>,
-    _: crate::scheduler::Resume<'graph, '_, '_>,
-    _: &mut crate::scheduler::Spawns<'graph>,
-) -> crate::scheduler::Action<'graph> {
-    crate::scheduler::Action::done()
+    step: Step<'_, 'graph, '_, '_, '_>,
+    _: State<'graph, '_>,
+    _: Option<ScratchState<'graph, '_, '_>>,
+) -> Action<'graph> {
+    step.done()
 }
 
 #[test]

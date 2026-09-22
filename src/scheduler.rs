@@ -27,11 +27,7 @@ mod submit;
 #[cfg(test)]
 mod tests;
 
-pub use action::{Action, Placement, Request, Slot, Spawns, StepError};
-pub use continuation::{
-    CellPlace, Context, Continuation, ContinuationFamily, Destination, NativeStep, Provenance,
-    Resume, ScratchFamily, ScratchState, State, Work,
-};
-pub use delivery::KDelivery;
+pub use action::{Action, Placement, Request, Slot, Step, StepError};
+pub use continuation::{NativeStep, ScratchState, State, Work};
 pub use drain::{DrainStalled, Graph, Scheduler};
-pub use submit::{Birth, Submissions, Unit, UnitId};
+pub use submit::{Birth, Unit, UnitId};

@@ -313,8 +313,8 @@ the node while the copy's node run is still being filled.
 - [Module programs](../../roadmap/rewrite/modules.md) — a call through a
   barrier node, which coerces its arguments inwards and its return outwards.
 - [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
-  — a component submitted as one unit of work, whose eager parts the step
-  evaluates and supplies to the tie by site.
+  — a component tied as one unit by the body runner, whose eager parts it has
+  evaluated and supplies to the tie by site.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a function
   value born outside a binder's root, and union-variant construction in a
   cycle.

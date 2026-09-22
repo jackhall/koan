@@ -1,177 +1,162 @@
 # The scheduler
 
-The deferred-work drain koan runs on, built directly over
-[`cellgraph`](../../cellgraph/README.md)'s cells and liveness matrix, reached
-only through [`memory`](../memory/README.md). It sits above
-[`values`](../values/README.md) and [`knot`](../knot/README.md), and
-neither of them names it.
+The drain koan runs on: a veneer over
+[`cellgraph`](../../cellgraph/README.md)'s cells, reached only through
+[`memory`](../memory/README.md). It sits above [`values`](../values/README.md)
+and [`knot`](../knot/README.md), and neither of them names it.
 
-A unit of work **is** a cell. Its region, its erased continuation and its holds
-are the cell's; this module adds the submission table, the work queue, the drain
-protocol and delivery, and nothing else. Liveness is the matrix's — no reference
-count, no pin bundle and no antichain fold lives here, and a cell is reclaimed
-the instant no hold names it.
+A unit of work **is** a cell. Its region, its erased continuation, its receipt
+run and its holds are the cell's, and the scheduler keeps no second record of
+any of them. What it owns is a **ready stack** and the protocol a step ends by.
+What it offers the layers above is a way to say what a computation needs — a
+child, a wait, a successor, a result — beside the hints that place it, without
+saying which cell, which door or which region that becomes.
+
+Four things it does not keep, because a neighbour already does:
+
+- **No order of its own.** The order work runs in is the order it was asked
+  for. The dependency order of a body's bindings is the
+  [shape](../scope/README.md#visibility)'s, computed once where the shape is
+  built.
+- **No wait record.** The only thing a live cell waits on is the receipt run
+  the substrate lays down for it, and the outstanding count is that run's.
+- **No liveness.** No reference count, no tally of live cells, no pin bundle
+  and no antichain fold: a cell is reclaimed the instant no hold names it, and
+  `cellgraph`'s `is_empty` is the one alarm.
+- **No value at rest.** No envelope and no mailbox holds a value outside a cell.
 
 ## The drain
 
-The graph a drain runs over is `Graph`: a `CellGraph` over three koan types —
-the continuation family, the scratch-state family, and the delivery bundle.
-`Scheduler` owns no graph. It is a view made per call: `Scheduler::over`
-borrows a `Graph` mutably and keeps the scheduling state beside it — two queues,
-a buffer of requests and the submission table. Whatever owns the graph keeps it
-across calls, a loaded [program](../program/README.md) or a test's plain local,
-and a later view over the same graph finds every cell an earlier one left
-there. Every field is that view's own: no static, no thread-local and no lazily
-minted cell, so a second scheduler over a second graph runs beside the first
-with nothing shared but the program text and the shapes in it.
+The graph a drain runs over is `Graph`: a newtype over a `CellGraph` closed over
+the continuation family, the scratch-state family and the delivery bundle, so
+the families stay the scheduler's own. What owns a graph makes one with
+`Graph::new`, takes a storage-only slab cell from `Graph::root` — a region that
+outlives every drain over it and is never entered — gives it back with
+`Graph::release_root`, and asks `is_empty` and `is_live`. Every other cell is
+the drain's.
 
-A view dropped with cells still queued or units still pending abandons them:
-the graph keeps the live cells, and every later drain over it reports
-`DrainStalled::CellsLive`. After a successful run the view holds nothing, so
-dropping it loses nothing.
+`Scheduler` owns no graph. It is a view made per call: `Scheduler::over` borrows
+a `Graph` mutably and keeps the ready stack and a buffer of requests beside it.
+Whatever owns the graph keeps it across calls — a loaded
+[program](../program/README.md) or a test's plain local — and a later view over
+the same graph finds every cell and every root an earlier one left. Every field
+is that view's own: no static, no thread-local and no lazily minted cell, so a
+second scheduler over a second graph runs beside the first with nothing shared
+but the program text and the shapes in it.
 
-The loop pops a cell, enters it, runs the step its continuation names, and acts
-on the `Kind` the returned `Action` opens into:
+`Scheduler::run` takes one **root work**, the cell it is born under and the
+placement it is born at, and drives it to its end. Everything else a drain runs
+is a descendant the root work asked for. The root work reports to nobody, so
+`done` is its one successful end.
 
-- `Done` — the step is finished and has already filled its consumer's receipt,
-  so nothing is in flight when the drain releases the cell.
-- `Wakes` — the same, and the fill that ended the step completed that consumer's
-  run: the drain releases this cell and queues the consumer. This is the only way
-  a parked cell wakes.
-- `Park` — the step registered a receipt run and described its children; the
-  drain creates them and leaves the cell alone until the run completes.
-- `Tail` — the drain creates the successor and queues it ahead of everything,
-  and releases this cell once that successor's first step has run.
-- `Failed` — the drain abandons the run.
+### The ready stack
 
-Two queues, `in_flight` strictly ahead of `fresh`: an in-progress computation
-finishes before a new unit starts, and a tail successor pushed to the front of
-`in_flight` runs before any sibling work.
+An entry of the stack is a live cell with a step to run, or a **request not yet
+born**: the parent it will be born under, the slot it reports to and the work
+it runs. The loop pops an entry, gives an unborn one its cell, enters the cell,
+runs the step its continuation names, and acts on the `Kind` the returned
+`Action` opens into:
 
-Each round also launches: every submitted unit whose dependency count has
-reached zero gets its cell and joins `fresh`. A unit's count falls when a cell
-that answers for it finishes, which is why the launch is the drain's rather than
-the finishing step's.
+- `Finished` — any delivery the step made has already filled its consumer's
+  receipt, so nothing is in flight when the drain releases the cell. When that
+  fill completed the consumer's receipt run, the drain pushes the consumer, read
+  off its own copy of the cell's provenance. This is the only way a parked cell
+  wakes.
+- `Park` — the step registered a receipt run and asked for children. The drain
+  pushes their requests so the first asked is on top, and leaves the cell alone
+  until its receipt run completes.
+- `Tail` — the drain pushes the successor and releases this cell once that
+  successor's first step has run.
+- `Failed` — the drain abandons the work.
 
-The queue emptying with the graph and the submission table empty beside it is
-success. Anything else is `DrainStalled`, the only error the scheduler defines.
-A koan error is a
-[tagged value](../values/README.md#what-a-value-is) and travels between cells as
-data, so no `Result` passes from one cell to another and a consumer checks the
-results it redeems.
+A stack makes the drain **depth-first**. The child asked first runs to
+completion — its own children, their children, and its delivery — before the
+child asked second is born. Three things follow.
+
+- **Evaluation order is the order of asking.** Two arguments evaluated by one
+  park run one after the other, never step by step in turn, so their effects
+  do not interleave. A layer that asks in source order gets source order.
+- **The cells live at any moment are one path**: the running cell, its parked
+  ancestors, and one predecessor during a tail hop. A sibling whose turn has not
+  come has no cell and no region, so a recursion that asks for two children at
+  every level holds cells in proportion to its depth, and a body of a thousand
+  statements never holds a thousand cells.
+- **A cell that waits on an earlier sibling needs no wait.** It is born after
+  that sibling finished.
+
+The stack emptying with the root work ended is success. The stack emptying
+first is `DrainStalled::Unfinished`: some cell is parked on a receipt run
+nothing will fill. A birth, an enter or a release the substrate refuses is a
+`DrainStalled` of its own, and a step that cannot proceed is
+`DrainStalled::Step`. These are the only errors the scheduler defines. A koan
+error is a [tagged value](../values/README.md#what-a-value-is) and travels
+between cells as data, so no `Result` passes from one cell to another and a
+consumer checks the results it reads.
+
+A view dropped before its root work ended abandons what is on its stack. The
+graph keeps the cells already born, under the root they were born under, and
+that root's release does not empty the graph — which is what `is_empty` reports.
 
 ## What a step may name
 
 `enter` quantifies a step's three brands — `'step`, `'here` and `'scratch` — per
-call, so a step's return type can name none of them. What crosses back out of a
-step is a handle, an index, a dormant carrier or a borrow of program storage.
-That is why `Action` carries no region borrow, and why a step describes its
-children by pushing `Request`s into a drain-owned `Spawns` buffer it is handed
-by `&mut`: a slice of requests would have nowhere to be branded.
+call, so a step's return type can name none of them. That is why `Action`
+carries no region borrow, and why the children a step asks for go into a
+drain-owned buffer rather than into what it returns.
 
-A `Request` names a placement and a `Work` — the step the child starts at and
-what it starts holding — and neither a place nor a destination. The drain fills
-in the child's `Provenance` from how the request was handed over: pushed into
-`Spawns`, the child is born under the pusher and reports to the slot of its push
-position; handed to `Action::tail`, it inherits its predecessor's provenance
-verbatim. So a cell is always born under the cell that asked for it and always
-reports to that cell's run; no step can name a destination that is not its
-spawner's.
+A step is handed a `Step` by value, the state its cell holds and the scratch
+state it parked. `Step` borrows the raw `StepContext`, the cell's `Provenance`
+and the drain's request buffer, all private, and exposes:
 
-`Action` is opaque — a private field over an internal `Kind` — and a step gets
-one only from a constructor, so the bookkeeping an arm implies has always
-happened by the time the drain reads it. `Action::park` registers the run and
-stores **both** of the cell's slots — the successor, and the scratch state it
-takes as an `Option` — and takes the `Slot` the last `Spawns::push` handed back,
-so a park with nothing to wait on does not typecheck. `None` clears the scratch
-slot rather than merely not filling it, so a park that carries nothing there
-leaves it empty and that step's end hands the bump back; no step reaches the
-context's scratch doors itself. `Action::deliver_scratch`
-and `Action::deliver_carrier` read the destination off the `Provenance` and
-decide between `Wakes` and `Done` from what the fill answered, so a wake names
-the consumer whose run the step just completed and nothing else.
+- its cell's two writers, `writer` at `'here` and `scratch_writer` at
+  `'scratch`;
+- `results`, the children's results it parked on;
+- `spawn`, to ask for a child;
+- the ends — `park`, `tail`, `finish_fresh`, `finish_in_home`, `finish`, `done`
+  and `failed`.
 
-A step also cannot create or release a cell. `StepContext` has no `create`, no
-`release` and no second `enter`, so every birth and every death is the drain's,
-performed from the `Action` the step handed back.
+**No step names a place that is not its own.** There is no handle among those
+doors — not the cell's own, not its consumer's, not its result's home — and no
+carrier door: no `alloc_into`, `lift`, `keep`, `redeem` or `receipt`. A step
+holds values at its own brands and nothing else. Each crossing a computation
+needs is the veneer's to perform, from the provenance the drain filled:
 
-## The continuation
+- **A child's state is handed over awake and arrives awake.** `spawn` and
+  `tail` take the state the new cell starts with as the step holds it, at
+  `'here`. The veneer puts it to rest as dormant carriers in the birth
+  continuation, and on the new cell's first entry redeems each and crosses it to
+  that cell's `'here` at the [verdict](../values/README.md)'s price — free for
+  a child, whose spawner is above it, and free for a tenant, which crosses
+  nothing.
+- **A child's result is read, not redeemed.** `results` yields each slot of the
+  receipt run as the consumer can use it: a scratch fill at `'scratch`, a
+  carrier fill redeemed and crossed to `'here`.
+- **A result goes where the drain said.** The three `finish` ends below build
+  or cross into the home the provenance names and fill the slot it names.
 
-A cell parks in two slots, one per habitat, each its own family, so the wrong
-form is unrepresentable in each. `ContinuationFamily` re-anchors at the executing
-cell's region brand and is what the drain reads to run a step; `ScratchFamily` is
-a family over **both** step brands and carries a parked cell's in-progress state
-in the scratch habitat. `ScratchState` has two arms: a `KValue` built in the
-habitat and read back at `'scratch`, and `Gathered`, a run laid down in the
-habitat over values homed in the cell's own storage — `&'scratch [KValue<'graph,
-'here>]`, each element at `'here`, so the step that finally builds in storage
-embeds one as it is, with no `keep` at the park and no `redeem` at the wake.
+Each end consumes the `Step`, and `Action` is opaque, a private field over an
+internal `Kind`, with no other constructor. So a step ends exactly once, nothing
+it does follows its end, and the bookkeeping an arm implies has always happened
+by the time the drain reads it. `Step::park` takes the `Slot` the last `spawn`
+handed back, so a park with nothing to wait on does not typecheck; it registers
+a receipt run sized by the spawns so far, stores the successor under the cell's
+own provenance, and stores the scratch state when it is given one. The drain
+took the scratch slot off before the step began and nothing else fills it, so a
+park that carries nothing there leaves it empty and that step's end hands the
+bump back.
 
-The drain takes both slots off the cell before it calls the step and hands them
-over in `Resume`: the `Provenance`, the `State` the previous step left in
-storage, and the scratch state as an `Option`. A step that finishes, hops or
-fails never hands the scratch state back, so the slot stays empty and its bump
-goes back at that step's end.
+A step also cannot create or release a cell. Neither `Step` nor the
+`StepContext` behind it has a `create`, a `release` or a second `enter`, so
+every birth and every death is the drain's, performed from the `Action` the
+step handed back.
 
-`Continuation` has one arm here, `Native`: a `NativeStep` function pointer, the
-cell's `Provenance`, and the `State` the step runs over. The pointer is
-higher-ranked over the three step brands and not over `'graph`, so one pointer
-runs in any cell at any step while the state it reads, the children it describes
-and the action it returns all name the graph they belong to. The arm beside
-`Native` is a component step, and it is
-[the top level's](../../roadmap/rewrite/top-level-on-the-scheduler.md) to add;
-nothing else joins them.
+## Hints
 
-A *birth* continuation is the family at `'cell = 'graph`, because `create`,
-`create_tree` and `create_tenant` all take one there: its state holds only words,
-program storage and dormant carriers. A continuation a step stores for itself
-through `store_successor` is at `'here` and may hold region borrows freely.
+A `Request` is a `Work` — the step the child starts at and the state it starts
+with — and two hints. Neither is a contract: a wrong hint costs a copy or a
+delayed reclaim, and soundness rests on the substrate's brands either way.
 
-`Provenance` is what a cell carries about itself, for the drain's use: the
-`CellPlace` it was born at — the parent a sibling is born under, the host a
-co-tenant is born of, or the slab — the `Destination` its result goes to, a
-consumer handle and a slot, and the submission it answers for. Every field is
-brand-free, so it survives a tail hop verbatim — which is what "the successor
-inherits its receipt" means. `cellgraph` exposes no parent accessor, so a cell
-remembers its place here rather than in a table beside the graph.
-
-## The two ways a cell waits
-
-They never overlap.
-
-A **binder dependency** is waited on by a unit that has no cell yet. A body's
-reference graph is known before it runs, so a unit is submitted with a count of
-unmet dependencies, the count is decremented as each producing unit finishes, and
-the drain creates the cell when it reaches zero. A reader therefore never
-observes a binding whose binder has not run — the discipline
-[scopes](../scope/README.md#placeholders-and-writes) already assert, where a read
-that finds an empty slot is a scheduler bug. This is why there is no wait record,
-no waiter list and no per-slot park, and why the drain's bookkeeping is per
-*unit* rather than per parked cell.
-
-That record is `submit.rs`'s table. A `Unit` pairs a `Birth` — the slab, or a
-parent and the door to go through — with the same `Work` a request carries, and
-says nothing about where its result goes: a submitted unit reports by finishing,
-not by filling a slot. `submit` takes the count, `edge`
-says which finishes answer for it, and both are wired before the run. A cell
-carries the unit it answers for in its `Provenance`, so a chain of tail hops
-settles once, at whichever successor finishes the work. Entries and edges live
-in two flat arenas threaded by index, so a table of any width costs a handful of
-amortized allocations rather than one per unit. A `UnitId` is an index into the
-entry arena, so a settled unit's entry stays where it is, whole: the arena is
-sized by the units the drain has been given over the run, not by the units
-outstanding at any moment. The ready list is what a unit reaches once, so that
-is what launches it once. Units left waiting on each other
-never reach zero and never get a cell: the queue runs dry with the graph already
-empty, which the drain reports as `DrainStalled::UnitsPending`.
-
-A **sub-dispatch** is waited on by a live, parked cell, and the count lives in
-the substrate's own receipt run. A producer's delivery door decrements it, and
-the consumer wakes once, when the last slot fills.
-
-## Placement
-
-One bit picks a spawned cell's habitat, supplied by the spawner per spawn.
+**`Placement`** picks the child's habitat.
 
 | `Placement` | door | the child's region | the spawner's price |
 |---|---|---|---|
@@ -182,129 +167,189 @@ The same bit decides a tail hop. A `Fresh` hop draws a recycled region and the
 loop runs in memory independent of hop count; a `Shares` hop joins its
 predecessor's region, whose growth the result retains anyway. Bounded memory has
 a price the bit also carries: sibling tree cells are `Apart`, so a `Fresh` hop's
-arguments homed in its predecessor cross by a forced copy, every hop, while an
-argument homed in the caller's frame or above is `Under` and free. A loop that
-threads a large state it built itself wants `Shares` whatever its return type
-says.
+state homed in its predecessor crosses by a forced copy, every hop, while state
+homed in the caller's frame or above is `Under` and free. A loop that threads a
+large state it built itself wants `Shares` whatever its return type says. A
+tenant's scratch is its host's, so a tenant writes its intermediates there while
+a result bound for storage is built in host storage from the start.
 
-The hint is never a contract. A wrong `Fresh` costs a priced copy, a wrong
-`Shares` costs delayed reclaim, and soundness rests on the substrate's brands
-either way. This module ships the bit as a mechanism its caller supplies per
-spawn; where it comes from for a koan function is
-[the top level's](../../roadmap/rewrite/top-level-on-the-scheduler.md).
+**`Use`** says what the spawner will do with the result, which only the spawner
+knows, and so where the result's **home** is.
 
-A tenant's scratch is its host's, so a tenant writes its intermediates there
-while a result bound for storage is built in host storage from the start.
+| `Use` | the spawner will | the result's home |
+|---|---|---|
+| `Reads` | inspect it and drop it — a condition, a lookup key, a discarded statement value | the spawner's scratch where the result is fresh, else the spawner |
+| `Keeps` | embed it, bind it or hold it across parks | the spawner |
+| `Forwards` | embed it in its own result | the spawner's own home |
+
+`Forwards` is destination passing: in `cons(1, f(z))` the call of `f` is asked
+for with `Forwards`, so `f` builds in the region `cons`'s result is bound for
+and `cons` embeds it at no price. The home travels down a chain of forwards and
+across a tail hop unchanged.
 
 ## Delivery
 
-A producer pushes. It builds its result in its consumer, fills its receipt slot
-through `cellgraph`'s
+A producer pushes. It builds its result in its home, fills its consumer's
+receipt slot through `cellgraph`'s
 [delivery doors](../../cellgraph/README.md#passing-values-between-cells), and
-dies.
+dies. The producer says what shape its result has by which end it takes, the
+spawner said what it is for by the `Use` it asked with, and the veneer picks the
+door from the two.
 
-Which door depends on where the result is bound:
+| end | the producer has | under `Reads` | under `Keeps` or `Forwards` |
+|---|---|---|---|
+| `finish_fresh(build)` | a build that takes no operands | built in the consumer's scratch habitat, `deliver_scratch` | built operand-free in the home, filed as a carrier |
+| `finish_in_home(operands, build)` | a build over values it holds | built in the home, each operand [pinned or severed](../../cellgraph/README.md#the-crossing-verdict) as the verdict ruled, filed as a carrier | the same |
+| `finish(value)` | a value already at `'here` | crossed into the home at the verdict's price, filed as a carrier | the same |
 
-- **Bound for the consumer's storage** — one the consumer embeds, binds or passes
-  on. The producer builds it in the consumer's region from the start with
-  `alloc_into`, `keep`s it, and files the dormant carrier with
-  `Action::deliver_carrier`. Never through scratch first: a value that passes
-  through scratch comes back at `'scratch` and can never be embedded in storage
-  again.
-  The carrier has no region brand, so it rests in a scratch slot like any other.
-- **Fresh and only read** — a condition, a computed lookup key, a discarded
-  statement value. The producer fills the consumer's scratch habitat with
-  `Action::deliver_scratch`, whose build takes no operands and is quantified over
-  the consumer's own brand. A scratch result is not short-lived by nature: it
-  lasts for as long as the consumer's scratch continuation names it, and never
-  past the cell.
+A result that passes through scratch comes back at `'scratch` and can never be
+embedded in storage again, which is why only `Reads` reaches that door, and
+because the scratch build takes no operands only `finish_fresh` does. A scratch
+result is not short-lived by nature: it lasts for as long as the consumer's
+scratch state names it, and never past the cell. A tenant's result is already in
+its home when that home is its host, so its `finish` crosses nothing.
 
-Because the scratch build takes no operands, a read-only result that borrows data
-already in the consumer goes as a carrier too.
+The outstanding count lives in the receipt run, each producer carries its slot
+in its `Provenance`, and a tail hop hands the provenance to its successor.
 
-No envelope and no mailbox holds a value at rest outside a cell. The outstanding
-count lives in the receipt run, each producer carries its consumer and slot in
-its `Provenance`, and a tail hop hands that pair to its successor.
+## The continuation
+
+A cell parks in two slots, one per habitat, each its own family, so the wrong
+form is unrepresentable in each. The continuation family re-anchors at the
+executing cell's region brand and is what the drain reads to run a step; the
+scratch family is over **both** step brands and carries a parked cell's
+in-progress state in the scratch habitat, so what it names in storage comes back
+at `'here` and what it names in the habitat at `'scratch`.
+
+The scheduler names no step and no state of the layers above it. It takes them
+as one **step bundle**, a parameter beside the delivery bundle: a state family
+at rest in storage and a scratch family over both brands. A continuation is one
+shape with no arm to add — a `NativeStep` function pointer, the cell's
+`Provenance`, and the bundle's state. The pointer is higher-ranked over the
+three step brands and not over `'graph`, so one pointer runs in any cell at any
+step while the state it reads, the children it asks for and the action it
+returns all name the graph they belong to.
+
+A *birth* continuation is the family at `'cell = 'graph`, because every birth
+door takes one there: its state holds only words, program storage and dormant
+carriers, which is the rested form the veneer makes of what `spawn` and `tail`
+were handed. The successor `Step::park` stores is at `'here` and may hold region
+borrows freely.
+
+`Provenance` is what a cell carries about itself, for the drain's use:
+
+- the **parent** it was born under, which is also the consumer it reports to
+  and the place a successor of it is born beside;
+- the **slot** of that parent's receipt run it fills and the `Use` it was asked
+  with, absent for a root work;
+- the **home** its result is built in.
+
+Every field is brand-free, so it survives a tail hop verbatim — which is what
+"the successor inherits its receipt" means. The drain fills it from how a
+request was handed over: given to `Step::spawn`, the child is born under the
+spawner and reports to the slot of its spawn position; given to `Step::tail`,
+the successor inherits its predecessor's provenance. A step never sees it.
+
+## How a cell waits
+
+One way: parked on its receipt run, for children it asked for. The count lives
+in the substrate's own run, a producer's delivery decrements it, and the
+consumer wakes once, when the last slot fills.
+
+The dependencies between a body's bindings are not a wait. A
+[shape](../scope/README.md#visibility) knows its body's reference graph before
+the body runs and numbers the body's units so that each follows every unit it
+reads, and a drain that runs what it is asked in the order it is asked turns
+that numbering into the run-time order. A reader therefore never observes a
+binding whose binder has not run, with no count, no edge, no waiter list and no
+park on a slot. An outside event reaches a koan program only through a form the
+shape can see, so nothing at run time can make a unit ready in any order but
+the one the shape gave.
 
 ## Tail hops
 
 A tail call is a create plus a release, in that order. The successor is born a
-sibling of its predecessor or a co-tenant of its host, and inherits its receipt;
-the predecessor is released once the successor holds every argument that was
-homed in it. The hand-off:
+sibling of its predecessor or a co-tenant of its host, and inherits its
+provenance; the predecessor is released once the successor holds everything
+that was homed in it. The hand-off:
 
-1. The predecessor's step `keep`s every argument the successor needs, getting
-   dormant carriers, and puts them in the successor's birth continuation.
-2. It returns `Action::tail` with a `Request` — a placement and a `Work`. Its
-   `Provenance` travels verbatim, so the successor is born in the same place
-   and reports to the same slot.
+1. The predecessor ends with `Step::tail`, a placement, the successor's work
+   and its state, awake.
+2. The veneer rests that state into the successor's birth continuation, and the
+   drain pushes the successor and holds the predecessor aside.
 3. The drain creates the successor — `create_tree` under the predecessor's own
-   parent for `Fresh`, `create_tenant` on the same host for `Shares`.
-4. The successor's first step redeems each dormant carrier, entitled by root
-   identity, and copies it in through `alloc_here`.
+   parent for `Fresh`, `create_tenant` on the same host for `Shares` — and
+   enters it.
+4. The veneer wakes the state, entitled by root identity, crossing it to the
+   successor's `'here`, and the successor's first step runs over it.
 5. Only then does the drain release the predecessor.
 
-Step 5 is why the release is not part of step 3: the drain holds the predecessor
-aside and releases it at the top of the round that follows, which is the
-successor's own, because a released cell with no pledge reclaims its bump and the
-bytes the successor is about to redeem would be gone. The successor is queued at
-the *front* of `in_flight`, so that round is the very next one and at most two
-hops of a loop are live at once.
+Step 5 is why the release is not part of step 3: a released cell with no pledge
+reclaims its bump, and the bytes the successor is about to redeem would be
+gone. The successor is on top of the stack, so its round is the very next one
+and at most two hops of a loop are live at once.
 
-A tail hop is a tree cell or a tenant, never a slab cell. A slab successor would
-have to `hold` its predecessor to redeem, which pins the predecessor's region
-into its row, so the release would seal rather than reclaim and constant
-occupancy would be lost. Tree siblings share a root, and root identity is the
-entitlement — no hold, no pin, no seal. A slab cell is under nothing and so has
-no sibling to become: a hop out of one is `DrainStalled::Unhoppable`.
+Every cell a drain runs is born under a parent, so every cell can hop, and a
+hop is a tree cell or a tenant, never a slab cell. A slab successor would have
+to `hold` its predecessor to redeem, which pins the predecessor's region into
+its row, so the release would seal rather than reclaim and constant occupancy
+would be lost. Tree siblings share a root, and root identity is the
+entitlement — no hold, no pin, no seal.
 
 ## Memory
 
-Slab cells are rare: the tree pool takes no cap, so a call subtree deeper than
-any slab cap runs on tree cells without touching the matrix, and
-[the top level's](../../roadmap/rewrite/top-level-on-the-scheduler.md)
-statements are tree children of one storage-only root. The matrix width is
-therefore one word — `WIDTH` in [substrate.rs](../memory/substrate.rs) is `1`,
-sixty-four slab slots.
+The slab holds roots and nothing else: the tree pool takes no cap, so a call
+subtree deeper than any slab cap runs on tree cells without touching the matrix.
+The matrix width is therefore one word — `WIDTH` in
+[substrate.rs](../memory/substrate.rs) is `1`, sixty-four slab slots.
+
+The view's heap is the ready stack and the request buffer. Both are amortized,
+neither grows per step once warm, and the stack's depth is the unborn siblings
+along the current path. Everything a computation keeps across a park is in its
+cell: the continuation in storage, the in-progress state and the receipt run in
+the scratch habitat, handed back whole at the first step end that leaves
+nothing naming it.
 
 ## The import rule
 
 Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
 `crate::memory` and `crate::values`, and nothing else in the crate. It does not
-name `scope`, `parse` or `elaborate`. `cellgraph` is reached only through
-`memory`, and `cellgraph` itself depends on neither this module nor koan.
-`tests/boundary.rs` reads the source to hold the rule there; the work queues, the
-request buffer and the submission table's arenas are the owning heap types it
-blanks, because each is the scheduler's own runtime state and never a value in a
-region.
+name `scope`, `parse`, `elaborate` or `program`. `cellgraph` is reached only
+through `memory`, and `cellgraph` itself depends on neither this module nor
+koan. `tests/boundary.rs` reads the source to hold the rule there; the ready
+stack and the request buffer are the owning heap types it blanks, because each
+is the scheduler's own runtime state and never a value in a region.
 
 ## Testing
 
-The tests drive the drain with native-step workloads and no dispatch layer
-present: a call, a tail loop, a subtree deeper than any slab cap, a diamond of
-submissions, and a consumer parked on several producers. `tests/continuation.rs`
-holds the round trip a continuation makes between `'graph` and a step's `'here`;
-`tests/drain.rs` holds the loop itself, including two schedulers running beside
-each other and sharing nothing, two views over one graph in turn, and a view
-dropped with a queued cell stalling the next; `tests/calls.rs` holds a call at each placement
-and `tests/delivery.rs` a consumer parked on three producers.
-`tests/gather.rs` holds a cell that gathers its children's results into a run in
-its scratch habitat across two parks and builds from them in storage, which is
-what reads the scratch state's two positions back at their own brands.
-`tests/submissions.rs` holds a diamond of four submitted units, a pair that wait
-on each other, and a producer whose dependent waits out its whole parked subtree.
-`tests/tail.rs`
-runs a ten-thousand-hop loop at each placement and reads the drain's own
-high-water mark and the process allocation count back: three cells live at the
-peak, and no more heap than the same loop a hundred hops long.
-`tests/subtree.rs` descends two hundred levels on a slab of one, so a level that
-reached for a slab slot would be refused; `tests/placement.rs` runs one loop at
-each hint and reads the same answer off both, with the heap flat one way round
-and growing the other. A native step is a
-bare `fn` and carries no closure state, so what a step observes it records in
-`tests/native.rs` for the test around it to read back.
+The tests drive the drain with native-step workloads over a test bundle, with
+no layer of koan's above present. They hold, each with a workload of its own:
+
+- a call at each placement, and a result at each `Use` through each end, read
+  back at the brand the table above gives it;
+- depth-first order — two children asked in one park, each with children of its
+  own, record their steps one subtree after the other — and the live path: a
+  recursion asking two children per level peaks at cells in proportion to its
+  depth, and a hundred siblings asked in one park run one cell at a time;
+- a consumer parked on several producers waking once, and a cell gathering its
+  children's results into a run in its scratch habitat across two parks;
+- a ten-thousand-hop loop at each placement, with three cells live at the peak
+  and no more heap than the same loop a hundred hops long, the heap flat under
+  `Fresh` and growing under `Shares`;
+- a subtree two hundred levels deep on a slab of one;
+- two schedulers beside each other sharing nothing, two views over one graph in
+  turn, and a view dropped mid-work leaving a graph its root's release does not
+  empty;
+- the round trip a continuation makes between `'graph` and a step's `'here`,
+  through the raw slot doors a step never reaches.
+
+A native step is a bare `fn` and carries no closure state, so what a step
+observes it records in `tests/native.rs` for the test around it to read back.
 
 ## Open work
 
+- [The scheduler as a veneer](../../roadmap/rewrite/scheduler-veneer.md) — the
+  ready stack, the root work, the step bundle and the ends that name no place.
 - [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
-  — what turns a koan program into work for this drain.
+  — what turns a koan program into work for this drain, and where the hints come
+  from for a koan function.

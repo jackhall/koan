@@ -7,7 +7,9 @@ use std::cell::Cell as Tally;
 use crate::knot::KValue;
 use crate::memory::Bump;
 use crate::program::CellSubstrate;
-use crate::scheduler::{Action, Context, DrainStalled, Resume, Spawns, State, StepError};
+use crate::scheduler::{
+    Action, Birth, DrainStalled, NativeStep, ScratchState, State, Step, StepError, Unit, Work,
+};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode};
 
@@ -23,24 +25,32 @@ fn tally() -> f64 {
 
 /// A step that adds the number it was born with to the tally, and finishes.
 fn add<'graph>(
-    _: &mut Context<'graph, '_, '_, '_>,
-    resume: Resume<'graph, '_, '_>,
-    _: &mut Spawns<'graph>,
+    step: Step<'_, 'graph, '_, '_, '_>,
+    state: State<'graph, '_>,
+    _: Option<ScratchState<'graph, '_, '_>>,
 ) -> Action<'graph> {
-    let State::Value(KValue::Number(count)) = resume.state else {
-        return Action::failed(StepError::Stale);
+    let State::Value(KValue::Number(count)) = state else {
+        return step.failed(StepError::Stale);
     };
     RAN.with(|ran| ran.set(ran.get() + count));
-    Action::done()
+    step.done()
 }
 
 /// A step that refuses to proceed.
 fn fail<'graph>(
-    _: &mut Context<'graph, '_, '_, '_>,
-    _: Resume<'graph, '_, '_>,
-    _: &mut Spawns<'graph>,
+    step: Step<'_, 'graph, '_, '_, '_>,
+    _: State<'graph, '_>,
+    _: Option<ScratchState<'graph, '_, '_>>,
 ) -> Action<'graph> {
-    Action::failed(StepError::Stale)
+    step.failed(StepError::Stale)
+}
+
+/// A unit born in the slab with `state`, for a test to submit with no dependencies.
+fn slab<'graph>(step: NativeStep<'graph>, state: State<'graph, 'graph>) -> Unit<'graph> {
+    Unit {
+        birth: Birth::Slab,
+        work: Work { step, state },
+    }
 }
 
 fn loaded(source: &str) -> CellSubstrate {
@@ -59,11 +69,9 @@ fn two_substrates_load_move_and_run_in_separate_calls() {
             let x = BinderSymbol::declared("x", running.symbols()).expect("a bindable token");
             let record = running.types().record(&scratch, &[(x, KType::NUMBER)]);
             let mut scheduler = running.scheduler();
-            scheduler
-                .admit(add, State::Value(KValue::Number(1.0)))
-                .expect("the slab admits");
+            scheduler.submit(slab(add, State::Value(KValue::Number(1.0))), 0);
             scheduler.run().expect("the drain runs to empty");
-            assert!(scheduler.is_empty());
+            assert!(scheduler.graph().is_empty());
             record
         });
         substrate.with(|running| {
@@ -73,11 +81,9 @@ fn two_substrates_load_move_and_run_in_separate_calls() {
             ));
             assert_eq!(running.statements().len(), 2 - index);
             let mut scheduler = running.scheduler();
-            scheduler
-                .admit(add, State::Value(KValue::Number(10.0)))
-                .expect("the slab admits");
+            scheduler.submit(slab(add, State::Value(KValue::Number(10.0))), 0);
             scheduler.run().expect("the drain runs to empty again");
-            assert!(scheduler.is_empty());
+            assert!(scheduler.graph().is_empty());
         });
     }
     assert_eq!(tally(), 22.0);
@@ -94,9 +100,7 @@ fn a_stalled_substrate_stays_stalled() {
     let mut substrate = loaded("PRINT 1");
     substrate.with(|running| {
         let mut scheduler = running.scheduler();
-        scheduler
-            .admit(fail, State::Empty)
-            .expect("the slab admits");
+        scheduler.submit(slab(fail, State::Empty), 0);
         assert_eq!(scheduler.run(), Err(DrainStalled::Step(StepError::Stale)));
     });
     substrate.with(|running| {

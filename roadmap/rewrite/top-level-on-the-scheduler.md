@@ -1,7 +1,8 @@
 # The top level on the scheduler
 
-What turns a koan program into work for the drain: the root cell a top-level
-binding lives in, the components its statements are, and the tie that binds them.
+What turns a koan program into work for the drain: the root a top-level binding
+lives in, the body runner that performs a body's units, and the tie that binds
+them.
 
 **Problem.** The [scheduler](../../src/scheduler/README.md) drives native steps —
 a function pointer over a state value — and nothing turns a program into those.
@@ -10,77 +11,82 @@ other: [shapes](../../src/scope/README.md) resolve a body's names to slot
 indices and condense its bindings into components, [the
 tie](../../src/knot/README.md#the-tie) births a deferred-only component as
 one knot, and [values](../../src/values/README.md) prices every crossing. What is
-missing between them is where a top-level binding lives, which cell a statement
-is, how a component's dependencies reach the drain's submission table, where the
-builtin table a shape resolves its names against rests once a program runs, and
-where the placement bit for a koan function comes from. Two of those layers record the
-gap as open work of their own: `scope` does not say which habitat each tier of an
-activation is laid down in, and `knot` does not say who evaluates the eager
-part a refused tie names.
+missing between them is where a top-level binding lives, which cell performs a
+statement, in what order a body's units are performed, where the builtin table
+a shape resolves its names against rests once a program runs, and where the
+hints a spawn carries come from for a koan function. Two of those layers record
+the gap as open work of their own: `scope` does not say which habitat each tier
+of an activation is laid down in, and `knot` does not say who evaluates the
+eager part a refused tie names.
 
 **Acceptance criteria.**
 
 - A top-level binding lives in the region of a **root** slab cell that is
   created before the first statement, released after the last, and never
-  entered. The top level's slot array lives in program storage at `'graph` and a
-  bound slot holds a dormant carrier homed in the root, so a statement cell
-  claims, binds and reads a slot with no door.
+  entered. The top level's activation is laid down there by the **body runner**,
+  a tenant of the root born as the root work of each call, so a top-level bind
+  is a plain write at `'here` and the top level is a frame like any other.
 - The builtin table rests in program storage at `'graph`, laid down by the
   constructor a region's table is, through the writer of a store `cellgraph`
   owns outside the graph. An activation at any brand names it with no door,
   so a call pays nothing to reach a builtin.
-- The top level's statements are tree cells under the root, so a binder builds
-  its value in the root's region by an upward crossing the verdict prices, a
-  reader redeems it entitled by root identity with no hold of its own, and the
-  slab holds the root and nothing else. A binder's region splices into the root
-  at retirement when the verdict pinned it and is reclaimed when it copied, and
-  its intermediates go to its scratch habitat and are freed at retirement either
-  way.
+- One body runner performs the top level and every called body: one step
+  function whose state is the activation, the next unit and the stage it parked
+  at. It claims nothing ahead, ties and binds each unit itself, and no unit has
+  a cell of its own. In a called body it runs in the frame's own cell.
+- The shape emits a body's units in an order where each follows every unit it
+  reads and two independent units come out as they are written, and the body
+  runner performs them in that order, so a refused tie naming a pending binder
+  ([src/knot/README.md](../../src/knot/README.md#the-tie)) is a scheduler bug
+  rather than a wait. A statement containing `EVAL`, whose free names no shape
+  can enumerate, follows every unit that binds a name declared before its
+  position.
+- A program whose statements have effects and no data dependency between them
+  takes source order, and the effects of one statement's evaluation never
+  interleave with the next's.
+- The only children a body runner asks for are evaluations, through the
+  program record's one `evaluate` function, which turns a node and the
+  environment it is read in into a child the drain can create — so evaluating
+  an expression stays [dispatch](dispatch.md)'s and nothing below it names an
+  expression form.
+- The evaluation of a top-level statement's eager part is a `Fresh` tree cell
+  under the root with the root as its result's home, so the value is built in
+  the root's region from the start, everything else the evaluation allocates is
+  reclaimed at its retirement, and the slab holds the root and nothing else. A
+  result the evaluation built in its own region crosses into the root at the
+  verdict's price: its region splices into the root at retirement when the
+  verdict pinned it and is reclaimed when it copied.
 - A program with more top-level statements than the slab cap runs to
-  completion, because the tree pool has no cap and nothing a running statement
-  asks for takes a slab slot: its call subtree is tree cells and tenants under
-  its own root, a stream at rest is a value
-  ([yielding-iterators.md](yielding-iterators.md)), a module activation is data,
-  and a top-level binding lives in the root.
+  completion, because nothing a running statement asks for takes a slab slot:
+  its call subtree is tree cells and tenants under its own root, a stream at
+  rest is a value ([yielding-iterators.md](yielding-iterators.md)), a module
+  activation is data, and a top-level binding lives in the root.
 - A deferred-only component of a body's bindings
-  ([src/scope/README.md](../../src/scope/README.md#visibility)) is one unit of
-  work: one cell claims every member's slot as its first act and binds every
-  member's slot from the knot the tie hands back.
-- A component's submission carries the count of lower components it reads,
-  taken from the shape's reference graph in condensation order, so a refused tie
-  naming a pending binder
-  ([src/knot/README.md](../../src/knot/README.md#the-tie)) is a
-  scheduler bug rather than a wait. A statement containing `EVAL`, whose free
-  names no shape can enumerate, counts every binder declared before its position.
-- Two units whose counts reach zero in the same round are launched in the order
-  their statements are written, so a run is deterministic and a program whose
-  statements have effects and no data dependency between them takes source
-  order.
-- The statements of a called body reach the submission table from the step that
-  activates the body, which asks for a unit the way it asks for a child: the
-  drain performs every birth, and no step names a place that is not its own.
-- A cell builds its result in the region its spawner named rather than in its
-  consumer's, so a called body's result outlives the frame that ran it and the
-  value a top-level call binds is built in the root from the start.
-- A refused tie naming an eager part of a data member becomes a sub-dispatch
-  whose value the step supplies to the tie by site when it re-runs, and a step
-  refused on several parts at once wakes once, when the last receipt slot fills.
-- Every statement cell of a called body is a tenant of its frame, so binding a
-  claimed slot is a plain write at `'here` and a reader of a bound slot reads it
-  where it lies; the value never travels to the reader.
-- The [scheduler](../../src/scheduler/README.md) names no step of koan's: it
-  takes the step state as one bundle parameter, as it takes delivery, and its
-  continuation is one shape with no arm to add. Koan's steps and the state they
-  run over are one module above it, `program`, whose design doc is the `README.md` in its
-  source directory and whose top-of-file comment links it.
-- The program record carries one `evaluate` function that turns a node and the
-  environment it is read in into a child the drain can create, and the component
-  step spawns an eager part through it — so evaluating an expression stays
-  [dispatch](dispatch.md)'s and nothing below it names an expression form.
-- A read of a name goes through one interface the activation of a called body
-  and the top level's staged reads both answer, so
-  [the tie](../../src/knot/README.md#the-tie) and
-  [elaboration](../../src/elaborate/README.md) name no habitat.
+  ([src/scope/README.md](../../src/scope/README.md#visibility)) is one unit: the
+  body runner ties it once and binds every member's slot from the knot the tie
+  hands back.
+- An evaluation is asked for with the `Use` its result is bound for — `Keeps`
+  for a binding, `Forwards` for a body's last value, `Reads` for a condition or
+  a discarded statement — so a called body's result outlives the frame that ran
+  it and the value a top-level call binds is built in the root from the start.
+- A refused tie naming an eager part of a data member becomes an evaluation
+  whose value the body runner supplies to the tie by site when it ties again,
+  and a runner refused on several parts at once wakes once, when the last
+  receipt slot fills.
+- An evaluation asked for at `Shares` in a called body is a tenant of the frame,
+  so what it builds is at the frame's `'here`, binding a slot is a plain write,
+  and a reader of a bound slot reads it where it lies; the value never travels
+  to the reader.
+- An evaluation reads names through a read-only view of the activation it was
+  asked from — the root's at the top level, the frame's in a called body —
+  which has no door that claims or binds a slot, pinned by a `compile_fail`
+  doctest. [The tie](../../src/knot/README.md#the-tie) and
+  [elaboration](../../src/elaborate/README.md) read one activation type at both
+  levels and name no habitat.
+- Koan's steps and the state they run over are one module above the
+  [scheduler](../../src/scheduler/README.md), `program`, which supplies the
+  scheduler's step bundle, whose design doc is the `README.md` in its source
+  directory and whose top-of-file comment links it.
 - The placement bit a spawn carries is derived: a builtin declares it, and a
   user function derives it from its return type, a flat return being one that
   cannot share. A `MODULE` or `GROUP` activation takes no cell of its own — it
@@ -92,25 +98,24 @@ part a refused tie names.
   `ShapeError` that stopped it.
 - A test loads two programs through a helper function that returns each
   `CellSubstrate`, moves both into a `Vec`, runs each, and reads a top-level
-  binding after the drain in a separate call from the one that ran it.
+  binding after the drain in a separate call from the one that ran it, through
+  a second root work born under the same root.
 - A whole koan program — top-level bindings, calls, a recursive call deeper than
   the slab cap, and a deferred-only component with a pending sibling and an eager
   part — runs to completion under the drain, and the run's Miri slate is clean.
 
 **Directions.**
 
-- *Where the top level's bindings live — decided.* In the region of a root slab
-  cell, storage-only and never entered, that outlives every statement. Only a
-  cell can hold, and a hold is what lets a binder's region splice at retirement
-  rather than reclaim; program storage
-  ([src/scope/README.md](../../src/scope/README.md#three-tiers)) is no cell, and
-  a `'graph` borrow cannot embed a `'here` one, so a top-level value kept there
-  could only be a deep copy. The slot array itself does live in program storage:
-  `'graph` is nameable from every step, so a claim and a bind are plain `Cell`
-  writes from any statement cell, and what a bound slot holds is a dormant
-  carrier, which carries no brand. A `SlotArray` is invariant in its brand, so
-  it is instantiated at two habitats — `'graph` at the top level holding
-  carriers, `'here` in a frame holding values — and they are distinct types.
+- *Where the top level's bindings live — decided.* In an ordinary activation in
+  the region of a root slab cell, storage-only and never entered, that outlives
+  every statement. The body runner is a tenant of the root, so its `'here` is
+  the root's region, a bind is a plain write, and the drain creates and retires
+  every cell it runs. A root that was itself the runner would be a cell the
+  drain must not retire, and a later call over it would have to re-arm a
+  finished cell. A slot array in program storage holding dormant carriers would
+  be a second habitat behind a second read interface, would cost a redeem and a
+  crossing per read, and would put run-time state in the tier that is never
+  released.
 - *Where the builtin table lives — decided.* In program storage, in a store
   `cellgraph` owns outside the graph and hands a `Writer` over, so the embedder
   never names the bump underneath. Program storage holds it beside the bump
@@ -123,24 +128,27 @@ part a refused tie names.
   of it. The alternative, a table in the root's region written by the root's
   first tree child, costs a redeem and a pinned placement in every cell that
   owns an environment — one per call in a region of its own.
-- *Statements are tree children of the root, not slab cells — decided.* The tree
-  pool takes no cap, which is what lets every statement of a body have its slot
-  claimed before any of them runs; and a tree cell's redeem entitlement is root
-  identity, so a statement reads a top-level binding homed in its own root with
-  no hold. The alternative, a tenant of the root, would make a bind free but
-  leave nothing a statement allocates ever reclaimable. Because the pool has no
-  cap there is no admission policy to write: no marker into the AST, no refused
-  create, and no deadlock argument — position order is still a topological order
-  of the reference graph, but nothing turns on it beyond the submission counts.
-- *What a statement of a called body is — decided.* A tenant of its frame, so
-  binding a claimed slot is a plain write at `'here` and a reader reads the slot
-  where it lies.
-- *Where the destination of a top-level call is — decided.* The destination
-  forwards: a call whose result is bound for the root builds it there, and a
-  *shares* call passes that destination to the argument it embeds, so in
-  `x = cons(1, f(z))` at the top level `f` builds its result in the root's
-  region for `cons` to embed. A *shares* call made at the top level has no frame
-  to be a tenant of and is a tenant of its statement's tree cell.
+- *What performs a statement — decided.* The body runner, inline, at both
+  levels. A cell per unit would cost a create, an enter, a release and a
+  continuation store per statement per call, and a receipt slot per statement
+  per body, for statements that mostly never park; inline costs the unit's
+  stage in the runner's state. The tie and the bind are the same code at the top
+  level and in a frame, and the two differ only in the placement of the
+  evaluations they ask for.
+- *What a top-level statement's evaluation is — decided.* A `Fresh` tree child
+  of the root. The root's region lives as long as the program, so anything the
+  runner wrote there beyond a binding would never be reclaimed: the runner
+  writes bindings and nothing else, and an evaluation's arguments, records and
+  intermediates rest in a region of its own that dies with it. The tree pool
+  takes no cap, so nothing here needs an admission policy. In a called body the
+  frame dies soon enough, and an evaluation takes the placement its callee
+  declares.
+- *Where the destination of a top-level call is — decided.* The home forwards: a
+  call whose result is bound for the root builds it there, and a *shares* call
+  asks for the argument it embeds with `Forwards`, so in `x = cons(1, f(z))` at
+  the top level `f` builds its result in the root's region for `cons` to embed.
+  A *shares* call made at the top level has no frame to be a tenant of and is a
+  tenant of its statement's evaluation cell.
 - *Where the placement bit comes from — open.* First cut: builtins declare the
   bit and a user function derives it from its return type, since a flat return
   cannot share. Open beyond the first cut, in precedence order over the derived
@@ -148,15 +156,16 @@ part a refused tie names.
   wrong guess scales with data size only a programmer can predict; and a runtime
   measurement of copied and retained bytes per function. *Recommended:* ship the
   first cut and leave both extensions to the item that needs them.
-- *How the drain learns a component's dependencies — decided.* From the shape's
-  reference graph, condensed. The shape emits its statements' units in an order
-  where each follows every unit it reads and two independent units come out as
-  they are written, so a unit's count is the number of distinct lower units its
-  members read, the edges are the reads themselves, and the drain launches the
-  lowest-numbered ready unit first. This is what makes a refused tie naming a
-  pending binder unreachable, and it is why the
-  [scheduler](../../src/scheduler/README.md#the-two-ways-a-cell-waits) needs no
-  park on a slot.
+- *Where a body's order comes from — decided.* From the shape's reference graph,
+  condensed. The shape emits its statements' units in an order where each
+  follows every unit it reads and two independent units come out as they are
+  written, and the runner performs them in that order over a depth-first drain,
+  which finishes each before the next begins. An outside event reaches a program
+  only through a monad, which a shape sees, so no unit becomes ready in any
+  order but the shape's. This is what makes a refused tie naming a pending
+  binder unreachable, and it is why the
+  [scheduler](../../src/scheduler/README.md#how-a-cell-waits) keeps no
+  dependency count and no park on a slot.
 - *Where a body's statements come from — decided.* From the shape that owns
   them, since the [shape builder](../../src/scope/README.md#operator-groups)
   rewrites an operator run
@@ -168,28 +177,35 @@ part a refused tie names.
   the step: the alternative — the scheduler declaring an arm per step of every
   layer above it — makes the drain the declaration site for dispatch, modules
   and iterators in turn, and widens its import rule each time.
-- *How a top-level binding reaches a reader — decided.* Staged: the unit
-  redeems the dormant carrier each slot it reads holds and crosses it into its
-  own cell, where the price is zero because the value is already homed in the
-  reader's root, and hands the tie a reader over the staged run. The
-  alternative, an activation over the program's slots materialized in the
-  statement's own region, costs the whole program's slot count per statement and
-  inflates the region enough to flip the binder's upward crossing to a copy.
-- *How effects are ordered — deferred.* Launch order gives source order except
-  where a unit's dependencies are met late, and no rule says more. An effects
-  item chains the statements that can have effects, which is the only ordering
-  that survives a park; until then the gap is recorded under
-  [unplanned work](README.md#unplanned-work).
-- *What the `Pending` refusal becomes — open.* `function::Untieable::Pending`
-  and `scope::Binding::Pending` both carry a producer `CellHandle` that nothing
-  reads once dependencies are wired statically, and `SlotArray`'s `Claimed`
-  payload carries it too. *Recommended:* keep all three as the diagnostic they
-  become — a scheduler bug names the binder it found in flight — and drop the
-  handle only if it proves unreachable in practice.
+- *How a binding reaches an evaluation — decided.* By reference: the evaluation
+  is handed a read-only view of the activation it was asked from as part of its
+  state, which arrives pinned, since the activation's home is above the
+  evaluation and the crossing prices zero. Staging each read into the
+  evaluation's own region costs a redeem and a crossing per read and weighs the
+  region enough to flip an upward crossing to a copy. The view is read-only
+  because the activation's slots are `Cell`s of a region that outlives the
+  evaluation; what `cellgraph` itself says about a write through such a view is
+  [the veneer's](scheduler-veneer.md) to settle first.
+- *How effects are ordered — deferred.* Unit order is source order except where
+  a forward reference moves a binder ahead of its reader, a reordering the shape
+  makes and a program can predict, and no rule says more. An effects item gives
+  the statements that can have effects their own order; until then the gap is
+  recorded under [unplanned work](README.md#unplanned-work).
+- *What the `Pending` refusal becomes — open.* With a body's order fixed by its
+  shape nothing claims a slot ahead of binding it, so `SlotArray`'s `Claimed`
+  state, `scope::Binding::Pending` and `function::Untieable::Pending` are never
+  observed, and the producer `CellHandle` each carries is read by nothing.
+  Either keep all three as the diagnostic they become — a scheduler bug names
+  the binder it found in flight — or make a slot two-state and rewrite
+  [placeholders and writes](../../src/scope/README.md#placeholders-and-writes)
+  to say a slot is empty until its unit's turn. *Recommended:* make it
+  two-state, since a state nothing can reach is a protocol nothing tests.
 
 ## Dependencies
 
-**Requires:** none — every value a top-level statement places ships, and so does the substrate it loads into.
+**Requires:**
+
+- [The scheduler as a veneer](scheduler-veneer.md) — the body runner is a root work over its drain, and its evaluations carry its hints.
 
 **Unblocks:**
 

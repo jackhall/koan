@@ -7,17 +7,37 @@
 
 use std::collections::VecDeque;
 
-use crate::memory::{CellGraph, CellHandle, ReleaseAbsorption, SlabHandle};
-use crate::scheduler::action::{Action, Kind, Placement, Request, Spawns, StepError};
+use crate::memory::{CellGraph, CellHandle, ReleaseAbsorption};
+use crate::scheduler::action::{Action, Kind, Placement, Request, Spawns, Step, StepError};
 use crate::scheduler::continuation::{
-    CellPlace, Continuation, ContinuationFamily, Destination, NativeStep, Provenance, Resume,
-    ScratchFamily, State, Work,
+    CellPlace, Continuation, ContinuationFamily, Destination, Provenance, ScratchFamily,
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::submit::{Birth, Submissions, Unit, UnitId};
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over koan's three families.
-pub type Graph<'graph> = CellGraph<'graph, ContinuationFamily, ScratchFamily, KDelivery>;
+///
+/// A newtype rather than an alias, so the families stay the scheduler's own: what owns a graph
+/// makes one, keeps it across calls and asks what is left in it, and reaches its cells only through
+/// a [`Scheduler`] over it.
+pub struct Graph<'graph>(CellGraph<'graph, ContinuationFamily, ScratchFamily, KDelivery>);
+
+impl<'graph> Graph<'graph> {
+    /// A graph over a slab of `cap` cells, under koan's own crossing verdict.
+    pub fn new(cap: u32) -> Self {
+        Graph(CellGraph::new(cap, crate::values::verdict))
+    }
+
+    /// Whether every cell a drain created in this graph has been reclaimed.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether the named cell is still live — what a test reads to watch a release land.
+    pub fn is_live(&self, cell: impl Into<CellHandle>) -> bool {
+        self.0.is_live(cell)
+    }
+}
 
 /// The drain: scheduling state made per call over a graph it borrows.
 ///
@@ -26,7 +46,10 @@ pub type Graph<'graph> = CellGraph<'graph, ContinuationFamily, ScratchFamily, KD
 /// successful [`run`](Scheduler::run) the view holds nothing.
 pub struct Scheduler<'a, 'graph> {
     graph: &'a mut Graph<'graph>,
-    queue: Queue,
+    /// Cells with a step to run: an in-progress computation's children, its woken consumers and
+    /// its tail successors. A tail successor goes to the *front* — it continues the step that
+    /// just ran, and its predecessor is not released until it has run.
+    in_flight: VecDeque<CellHandle>,
     spawns: Spawns<'graph>,
     /// Units of work with no cell yet, each waiting on a count of dependencies.
     pending: Submissions<'graph>,
@@ -38,16 +61,11 @@ pub struct Scheduler<'a, 'graph> {
 }
 
 impl<'a, 'graph> Scheduler<'a, 'graph> {
-    /// A graph over a slab of `cap` cells, under koan's own crossing verdict.
-    pub fn graph(cap: u32) -> Graph<'graph> {
-        CellGraph::new(cap, crate::values::verdict)
-    }
-
     /// A drain over `graph`.
     pub fn over(graph: &'a mut Graph<'graph>) -> Self {
         Scheduler {
             graph,
-            queue: Queue::new(),
+            in_flight: VecDeque::new(),
             spawns: Spawns::new(),
             pending: Submissions::new(),
             deferred: None,
@@ -56,24 +74,8 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
         }
     }
 
-    /// Admit a unit of work as a slab cell and queue it, with nothing waiting on it. The drain's
-    /// one door onto a birth that neither a running step nor the submission table asked for.
-    pub fn admit(
-        &mut self,
-        step: NativeStep<'graph>,
-        state: State<'graph, 'graph>,
-    ) -> Result<SlabHandle, DrainStalled> {
-        let continuation = Work { step, state }.continuation(Provenance {
-            place: CellPlace::Slab,
-            destination: None,
-            unit: None,
-        });
-        let handle = self.in_slab(continuation)?;
-        self.queue.push_fresh(handle.into());
-        Ok(handle)
-    }
-
-    /// Register a unit that gets its cell once `dependencies` submitted units have finished.
+    /// Register a unit that gets its cell once `dependencies` submitted units have finished — the
+    /// drain's one door in. A unit with none gets its cell when the run reaches it.
     ///
     /// The count is the unit's, the edges say which finishes answer for it, and both are wired
     /// before the run: a body's reference graph is known before it runs, which is why a reader
@@ -87,7 +89,7 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
         self.pending.edge(producer, dependent);
     }
 
-    /// Run until the queue empties with nothing left to launch.
+    /// Run until the queue empties with no unit left ready to launch.
     ///
     /// Success is the queue empty, the graph empty, and the submission table empty beside them.
     /// Anything else is the drain's one failure: a koan error is a tagged value and travels between
@@ -95,19 +97,32 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
     /// scheduler defines.
     pub fn run(&mut self) -> Result<(), DrainStalled> {
         loop {
-            // Whatever the round before released. A unit reaching zero is a birth like any other,
-            // so it happens here rather than inside the step that satisfied the last dependency.
-            self.launch()?;
-            let Some(cell) = self.queue.pop() else { break };
+            // An in-progress computation finishes before a new unit starts, so a ready unit gets
+            // its cell only when nothing is in flight: the live cells are the in-flight subtree
+            // plus one. A unit reaching zero is a birth like any other, so it happens here rather
+            // than inside the step that satisfied the last dependency.
+            let cell = match self.in_flight.pop_front() {
+                Some(cell) => cell,
+                None => match self.pending.ready() {
+                    Some((id, unit)) => self.launch(id, unit)?,
+                    None => break,
+                },
+            };
             let (action, provenance) = self.step(cell)?;
             // The hop whose successor the step just was: what that successor redeemed is copied in
             // and its own hand-off is behind it, so the predecessor's region can go now.
             self.release_deferred()?;
             match action.kind() {
-                Kind::Done => self.finish(cell, provenance)?,
-                Kind::Wakes(consumer) => {
+                Kind::Finished { completed } => {
                     self.finish(cell, provenance)?;
-                    self.queue.push_in_flight(consumer);
+                    // The consumer comes off the drain's own copy of the provenance, read straight
+                    // off the continuation, so no step can name the cell that wakes.
+                    if completed {
+                        let to = provenance
+                            .destination
+                            .expect("only a delivery completes a run");
+                        self.in_flight.push_back(to.consumer);
+                    }
                 }
                 Kind::Park => self.spawn(cell)?,
                 Kind::Tail(successor) => self.hop(cell, provenance, successor)?,
@@ -125,21 +140,17 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
         }
     }
 
-    /// Give a cell to every unit whose dependencies are all met, and queue it.
-    fn launch(&mut self) -> Result<(), DrainStalled> {
-        while let Some((id, unit)) = self.pending.ready() {
-            let continuation = unit.work.continuation(Provenance {
-                place: unit.birth.place(),
-                destination: None,
-                unit: Some(id),
-            });
-            let cell = match unit.birth {
-                Birth::Slab => self.in_slab(continuation)?.into(),
-                Birth::Under(parent, placement) => self.under(parent, placement, continuation)?,
-            };
-            self.queue.push_fresh(cell);
+    /// Give a unit whose dependencies are all met its cell, to step at once.
+    fn launch(&mut self, id: UnitId, unit: Unit<'graph>) -> Result<CellHandle, DrainStalled> {
+        let continuation = unit.work.continuation(Provenance {
+            place: unit.birth.place(),
+            destination: None,
+            unit: Some(id),
+        });
+        match unit.birth {
+            Birth::Slab => self.in_slab(continuation),
+            Birth::Under(parent, placement) => self.under(parent, placement, continuation),
         }
-        Ok(())
     }
 
     /// Release a cell whose work is done, and release the dependents of the unit it answered for.
@@ -161,14 +172,15 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
         // are taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
         graph
+            .0
             .enter(cell, |context| {
                 let continuation = context
                     .continuation()
                     .expect("a queued cell carries a continuation");
                 // Both slots come off here, so the step is handed what it parked in each and
-                // reaches neither door itself. A step that finishes, hops or fails never hands
-                // the scratch state back, so the slot stays empty and its bump goes back at this
-                // step's end.
+                // reaches neither door itself. Only a park stores the scratch state back, so a
+                // step that finishes, hops or fails leaves the slot empty and its bump goes back at
+                // this step's end.
                 let scratch = context.scratch_state();
                 match continuation {
                     Continuation::Native {
@@ -176,15 +188,7 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
                         provenance,
                         state,
                     } => (
-                        step(
-                            context,
-                            Resume {
-                                provenance,
-                                state,
-                                scratch,
-                            },
-                            spawns,
-                        ),
+                        step(Step::new(context, &provenance, spawns), state, scratch),
                         provenance,
                     ),
                 }
@@ -198,7 +202,7 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
         for index in 0..self.spawns.len() {
             let request = self.spawns.get(index);
             let child = self.create(cell, request, index)?;
-            self.queue.push_in_flight(child);
+            self.in_flight.push_back(child);
         }
         Ok(())
     }
@@ -248,7 +252,7 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
         };
         let continuation = successor.work.continuation(provenance);
         let successor = self.under(place, successor.placement, continuation)?;
-        self.queue.push_hop(successor);
+        self.in_flight.push_front(successor);
         self.deferred = Some(cell);
         Ok(())
     }
@@ -257,14 +261,15 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
     fn in_slab(
         &mut self,
         continuation: Continuation<'graph, 'graph>,
-    ) -> Result<SlabHandle, DrainStalled> {
+    ) -> Result<CellHandle, DrainStalled> {
         let handle = self
             .graph
+            .0
             .create(Some(continuation))
             .map_err(|_| DrainStalled::SlabFull)?;
         #[cfg(test)]
         self.census.born();
-        Ok(handle)
+        Ok(handle.into())
     }
 
     /// One cell born under another, through the door its placement names.
@@ -277,10 +282,12 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
         let born = match placement {
             Placement::Fresh => self
                 .graph
+                .0
                 .create_tree(under, Some(continuation))
                 .map(CellHandle::from),
             Placement::Shares => self
                 .graph
+                .0
                 .create_tenant(under, Some(continuation))
                 .map(CellHandle::from),
         }
@@ -306,22 +313,18 @@ impl<'a, 'graph> Scheduler<'a, 'graph> {
         let released = match cell {
             CellHandle::Slab(handle) => self
                 .graph
+                .0
                 .release(handle, ReleaseAbsorption::IntoHolder)
                 .is_ok(),
-            CellHandle::Tree(handle) => self.graph.release_tree(handle).is_ok(),
-            CellHandle::Tenant(handle) => self.graph.release_tenant(handle).is_ok(),
+            CellHandle::Tree(handle) => self.graph.0.release_tree(handle).is_ok(),
+            CellHandle::Tenant(handle) => self.graph.0.release_tenant(handle).is_ok(),
         };
         released.then_some(()).ok_or(DrainStalled::Unreleasable)
     }
 
-    /// Whether every cell the drain created has been reclaimed.
-    pub fn is_empty(&self) -> bool {
-        self.graph.is_empty()
-    }
-
-    /// Whether the named cell is still live — what a test reads to watch a release land.
-    pub fn is_live(&self, cell: impl Into<CellHandle>) -> bool {
-        self.graph.is_live(cell)
+    /// The graph this drain runs over, to ask what is left in it.
+    pub fn graph(&self) -> &Graph<'graph> {
+        self.graph
     }
 
     /// The most cells the drain has held live at once — what a test reads to hold a loop of tail
@@ -353,43 +356,6 @@ impl Census {
     /// Count one release.
     fn retired(&mut self) {
         self.live -= 1;
-    }
-}
-
-/// The two queues, `in_flight` strictly ahead of `fresh`: an in-progress computation finishes
-/// before a new unit starts, and a tail successor pushed to the front of `in_flight` runs before
-/// any sibling work.
-struct Queue {
-    in_flight: VecDeque<CellHandle>,
-    fresh: VecDeque<CellHandle>,
-}
-
-impl Queue {
-    fn new() -> Self {
-        Queue {
-            in_flight: VecDeque::new(),
-            fresh: VecDeque::new(),
-        }
-    }
-
-    fn pop(&mut self) -> Option<CellHandle> {
-        self.in_flight
-            .pop_front()
-            .or_else(|| self.fresh.pop_front())
-    }
-
-    fn push_fresh(&mut self, cell: CellHandle) {
-        self.fresh.push_back(cell);
-    }
-
-    fn push_in_flight(&mut self, cell: CellHandle) {
-        self.in_flight.push_back(cell);
-    }
-
-    /// A tail successor goes to the *front*: it is the continuation of the step that just ran, and
-    /// its predecessor is not released until it has run.
-    fn push_hop(&mut self, cell: CellHandle) {
-        self.in_flight.push_front(cell);
     }
 }
 

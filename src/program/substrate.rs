@@ -81,7 +81,7 @@ impl CellSubstrate {
                 .allocator()
                 .alloc(TypeRegistry::in_region(brand.allocator()));
             Ok(Running {
-                graph: Scheduler::graph(cap),
+                graph: Graph::new(cap),
                 brand,
                 symbols: &owner.symbols,
                 types,
