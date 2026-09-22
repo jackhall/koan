@@ -23,11 +23,11 @@ fn slots_start_empty_and_bind_once() {
     in_cell(|writer| {
         let slots: SlotArray<'static, '_, Number> = SlotArray::new(writer, 3);
         assert_eq!(slots.len(), 3);
-        assert!(slots.get(0).is_none());
+        assert!(slots.view().get(0).is_none());
         slots.bind(1, one(writer, 42)).expect("an empty slot binds");
         assert_eq!(slots.bind(1, one(writer, 43)), Err(SlotConflict));
         assert_eq!(
-            slots.get(1).copied(),
+            slots.view().get(1).copied(),
             Some(42),
             "a refused bind changes nothing"
         );
@@ -46,7 +46,7 @@ fn copies_share_slots() {
         captured
             .bind(0, one(writer, 7))
             .expect("an empty slot binds");
-        assert_eq!(slots.get(0).copied(), Some(7));
+        assert_eq!(slots.view().get(0).copied(), Some(7));
     });
 }
 

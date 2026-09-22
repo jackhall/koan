@@ -114,7 +114,8 @@ pub fn copy_severed<'graph, 'cell, 'severed, F: Reattachable<'graph>, XF: Knotte
 
 /// The deep copy: every region part of `value` rebuilt through `writer`, every program node
 /// embedded as the same node, every memoized type and weight carried over, a knot member rebuilt by
-/// its family. Total. Reached only through [`cross_view`], so every copy is one the graph priced.
+/// its family. Total. Reached only through [`cross_view`] and [`copy_severed`], so every copy is one
+/// the graph priced.
 fn copy_into<'graph, 'from, 'to, XF: KnottedFamily<'graph>>(
     writer: Writer<'to>,
     value: &Value<'graph, 'from, XF::Closed<'from>>,

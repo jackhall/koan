@@ -10,8 +10,9 @@
 //! part only the caller can evaluate asked of its evaluator by site —
 //! every mention of a fellow member minted as an edge into the knot about to be tied. Container
 //! memos are derived and every construction checked, and a part the caller has not evaluated, a
-//! cycle of containers or a construction that misfits refuses the tie before a byte is written. Only then are the closure runs and data nodes laid down, the knot's weight
-//! summed, and the nodes tied: member `i` is node `i`, and the anonymous data nodes follow.
+//! cycle of containers or a construction that misfits refuses the tie before a byte is written.
+//! Only then are the closure runs and data nodes laid down, the knot's weight summed, and the nodes
+//! tied: member `i` is node `i`, and the anonymous data nodes follow.
 
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;

@@ -353,8 +353,8 @@ where
     }
 }
 
-/// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and cross it to the
-/// executing cell's `'here` at the verdict's price — free for a child, whose spawner is above it,
+/// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and
+/// cross it to the executing cell's `'here` at the verdict's price — free for a child, whose spawner is above it,
 /// and for a tenant, which crosses nothing; copied for a tail hop's sibling, which is `Apart`.
 fn wake<'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, B>,

@@ -97,7 +97,6 @@ fn build_once_run<'cell>(writer: Writer<'cell>) -> &'cell u32 {
     assert!(!run.is_empty() && run.len() == 2);
     run.set(1, one(writer, 5)).unwrap();
     assert_eq!(run.set(1, one(writer, 6)), Err(Written));
-    assert_eq!(run.get(1).copied(), Some(5));
     let view: OnceView<'static, 'cell, Number> = run.view();
     assert!(view.get(0).is_none() && view.len() == 2 && !view.is_empty());
     view.get(1).expect("slot one was set")

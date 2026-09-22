@@ -119,6 +119,40 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
     Ok(builder.seal(draft, None))
 }
 
+/// One unit's wait on another, by unit: the unit waited on, the waiter, and for an `EVAL`'s wait
+/// the slot it waits through and the `EVAL`'s statement.
+type Wait = (u32, u32, Option<(Slot, u32)>);
+
+/// Why a body's waits cycle, from the waits no emitted unit released: walk back from an unemitted
+/// unit through waits on unemitted ones until on a cycle, and name an `EVAL`'s wait on it — the
+/// slot it waits through and its statement. One exists, since the reads alone are acyclic.
+fn eval_cycle(waits: &[Wait], emitted: &[bool]) -> (Slot, u32) {
+    let outstanding = |waiter: u32| {
+        waits
+            .iter()
+            .find(|(bound, at, _)| *at == waiter && !emitted[*bound as usize])
+            .expect("an unemitted unit waits on an unemitted one")
+    };
+    let start = emitted
+        .iter()
+        .position(|emitted| !emitted)
+        .expect("a stalled order has an unemitted unit") as u32;
+    // Walk far enough back to be on the cycle, then once around it.
+    let mut unit = start;
+    for _ in 0..emitted.len() {
+        unit = outstanding(unit).0;
+    }
+    let on_cycle = unit;
+    loop {
+        let (bound, _, through) = *outstanding(unit);
+        if let Some(through) = through {
+            return through;
+        }
+        unit = bound;
+        assert_ne!(unit, on_cycle, "the reads alone are acyclic");
+    }
+}
+
 /// The class a mention met in this context takes, before the context's own role applies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
@@ -369,7 +403,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
         let mut draft = self.chain.pop().expect("this draft was pushed above");
         self.components(&mut draft)?;
-        self.units(&mut draft);
+        self.units(&mut draft)?;
         Ok(draft)
     }
 
@@ -1234,10 +1268,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// The units pass: one unit per component whose members are not all parameters, keyed by its
     /// lowest statement, and one per statement that binds nothing, keyed by that statement; each
     /// unit waits on the units binding a slot it reads, and a unit holding an `EVAL` on every unit
-    /// binding a name declared before it. The units are emitted in the smallest-key order that
-    /// respects every wait, so independent units come out as they are written. Every read, wait and
+    /// binding a name declared before it — a wait that closes a cycle refuses the body. The units are
+    /// emitted in the smallest-key order that respects every wait, so independent units come out
+    /// as they are written. Every read, wait and
     /// count is scratch: the shape keeps only the order.
-    fn units(&self, draft: &mut Draft<'graph, 'x>) {
+    fn units(&self, draft: &mut Draft<'graph, 'x>) -> Result<(), ShapeError> {
         let scratch = self.scratch;
         let statements = draft.statements as usize;
         let channels = draft.channels();
@@ -1288,17 +1323,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             let component = draft.component_of[slot.index()];
             component_key[component.index()].map(|key| unit_of_key[key as usize])
         };
-        // `(waited on, waiter, hard)`, one per wait — duplicates only raise a count they also
-        // lower. A read is a hard wait, and the hard waits are acyclic: a cycle among bindings is
-        // one component. An `EVAL`'s waits are soft: a binder declared before it may itself read
-        // the `EVAL`'s own binder, and then the read wins.
-        let mut waits: BumpVec<'x, (u32, u32, bool)> = BumpVec::new_in(scratch);
+        // `(waited on, waiter, through)`, one per wait — duplicates only raise a count they also
+        // lower. A read waits through nothing, and the reads are acyclic: a cycle among bindings
+        // is one component. An `EVAL` waits through each slot declared before it, which it may
+        // read, so a cycle holds at least one `EVAL` and the body is refused.
+        let mut waits: BumpVec<'x, Wait> = BumpVec::new_in(scratch);
         for (statement, slot) in draft.reads.iter() {
             let waiter = unit_of_statement(*statement);
             if let Some(bound) = unit_of_slot(*slot)
                 && bound != waiter
             {
-                waits.push((bound, waiter, true));
+                waits.push((bound, waiter, None));
             }
         }
         for statement in draft.eval_statements.iter() {
@@ -1312,17 +1347,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 if let Some(bound) = unit_of_slot(Slot(slot as u32))
                     && bound != waiter
                 {
-                    waits.push((bound, waiter, false));
+                    waits.push((bound, waiter, Some((Slot(slot as u32), *statement))));
                 }
             }
         }
         waits.sort_unstable();
-        // Per unit: the hard waits outstanding, and the soft ones.
-        let mut pending: BumpVec<'x, (u32, u32)> = BumpVec::with_capacity_in(works.len(), scratch);
-        pending.resize(works.len(), (0, 0));
-        for (_, waiter, hard) in waits.iter() {
-            let (hard_count, soft_count) = &mut pending[*waiter as usize];
-            *if *hard { hard_count } else { soft_count } += 1;
+        // Per unit: the waits outstanding.
+        let mut pending: BumpVec<'x, u32> = BumpVec::with_capacity_in(works.len(), scratch);
+        pending.resize(works.len(), 0);
+        for (_, waiter, _) in waits.iter() {
+            pending[*waiter as usize] += 1;
         }
         let mut emitted: BumpVec<'x, bool> = BumpVec::with_capacity_in(works.len(), scratch);
         emitted.resize(works.len(), false);
@@ -1331,10 +1365,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             .map(|last| unit_of_statement(last as u32));
         let mut cursor = 0;
         while draft.units.len() < works.len() {
-            let unit = (cursor..works.len())
-                .find(|unit| !emitted[*unit] && pending[*unit] == (0, 0))
-                .or_else(|| (0..works.len()).find(|unit| !emitted[*unit] && pending[*unit].0 == 0))
-                .expect("the hard waits are acyclic: a cycle among bindings is one component");
+            let Some(unit) = (cursor..works.len())
+                .chain(0..cursor)
+                .find(|unit| !emitted[*unit] && pending[*unit] == 0)
+            else {
+                let (slot, statement) = eval_cycle(&waits, &emitted);
+                return Err(ShapeError::EvalCycle {
+                    name: draft.channels().name(slot.index()),
+                    eval: Position::statement(statement as usize),
+                });
+            };
             emitted[unit] = true;
             draft.units.push(Unit {
                 work: works[unit],
@@ -1342,17 +1382,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             });
             cursor = unit + 1;
             let first = waits.partition_point(|(bound, _, _)| (*bound as usize) < unit);
-            for (bound, waiter, hard) in waits[first..].iter() {
+            for (bound, waiter, _) in waits[first..].iter() {
                 if *bound as usize != unit {
                     break;
                 }
-                let (hard_count, soft_count) = &mut pending[*waiter as usize];
-                *if *hard { hard_count } else { soft_count } -= 1;
-                if pending[*waiter as usize] == (0, 0) {
+                pending[*waiter as usize] -= 1;
+                if pending[*waiter as usize] == 0 {
                     cursor = cursor.min(*waiter as usize);
                 }
             }
         }
+        Ok(())
     }
 
     /// Lay a finished draft down in program storage, its nested drafts first; `form` is the node

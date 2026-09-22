@@ -104,10 +104,11 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// [`results`](Self::results), and ends through one of [`park`](Self::park),
 /// [`tail`](Self::tail), [`finish_fresh`](Self::finish_fresh),
 /// [`finish_in_home`](Self::finish_in_home), [`finish`](Self::finish), [`done`](Self::done),
-/// [`leave`](Self::leave) and [`failed`](Self::failed) — each takes the `Step` by value, and they are the only way to build an
-/// [`Action`], so a step ends exactly once and nothing follows its end. It cannot store a slot,
-/// register a run, cross a value or fill a receipt except as one of those does, and it never learns
-/// a handle, so it cannot deliver anywhere but where the drain said.
+/// [`leave`](Self::leave) and [`failed`](Self::failed) — each takes the `Step` by value, and they
+/// are the only way to build an [`Action`], so a step ends exactly once and nothing follows its
+/// end. It cannot store a slot, register a run, cross a value or fill a receipt except as one of
+/// those does, and it never learns a handle, so it cannot deliver anywhere but where the drain
+/// said.
 ///
 /// ```
 /// use koan::program::KBundle;

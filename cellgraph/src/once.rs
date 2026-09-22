@@ -85,19 +85,6 @@ where
         Ok(())
     }
 
-    /// What `slot` holds, at the run's own brand, or `None` while it is empty. Out of range panics
-    /// like a slice index.
-    pub fn get(self, slot: usize) -> Option<V::At<'cell>>
-    where
-        'graph: 'cell,
-    {
-        // SAFETY: every value in the run was erased by `set` at this run's own brand `'cell`, and
-        // the run is invariant, so it comes back at the brand it was set at.
-        self.slots[slot]
-            .get()
-            .map(|erased| unsafe { erased.reattach::<'cell>() })
-    }
-
     /// The read handle over the same slots, at the run's own brand.
     ///
     /// `V` must be [`Covariant`]: the view shortens, so a value comes back through it at a brand

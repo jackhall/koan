@@ -261,7 +261,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
     /// then one slot or capture. A capture that is an edge reads as the sibling member it names.
     ///
     /// Panics on an empty slot: the shape orders a body's units so every binder runs before its
-    /// readers, so an empty slot here is a scheduler bug.
+    /// readers and before every `EVAL` that sees it, so an empty slot here is a scheduler bug.
     pub fn read(&self, at: Coordinate) -> Value<'graph, 'cell, XF::Closed<'cell>> {
         let (hops, target) = match at {
             Coordinate::Builtin(index) => return self.builtins.get(index),

@@ -54,14 +54,6 @@ where
         self.0.set(slot, value).map_err(|_| SlotConflict)
     }
 
-    /// What `slot` is bound to, or `None` while it is empty.
-    pub fn get(self, slot: usize) -> Option<V::At<'cell>>
-    where
-        'graph: 'cell,
-    {
-        self.0.get(slot)
-    }
-
     /// The read half over the same slots.
     pub fn view(self) -> SlotView<'graph, 'cell, V>
     where

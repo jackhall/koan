@@ -483,6 +483,9 @@ pub enum ShapeError {
     },
     /// A component containing an eager mention of one of its own members.
     EagerCycle { members: Vec<BinderSymbol> },
+    /// An `EVAL` at `eval` that may read `name`, declared before it, whose binding waits on the
+    /// `EVAL`'s statement.
+    EvalCycle { name: BinderSymbol, eval: Position },
     /// A form the shape builder does not resolve.
     Unsupported { form: BuiltinShapeId, at: Position },
     /// A form whose body or branches are not the shape it declares.
@@ -553,6 +556,11 @@ impl fmt::Display for ShapeErrorDisplay<'_> {
                 }
                 Ok(())
             }
+            ShapeError::EvalCycle { name: read, eval } => write!(
+                f,
+                "the `EVAL` in {eval} may read `{}`, which needs that statement's value first",
+                name(read)
+            ),
             ShapeError::Unsupported { form, at } => {
                 write!(f, "`{form:?}` in {at} is not supported here yet")
             }
