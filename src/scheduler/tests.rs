@@ -1,13 +1,13 @@
-//! The scheduler's tests: the drain driven by native steps, with no dispatch layer present.
+//! The scheduler's tests: the drain driven by native steps over a test bundle, with no layer of
+//! koan's above present.
 
 mod boundary;
-mod calls;
+mod bundle;
 mod continuation;
 mod delivery;
 mod drain;
 mod gather;
 mod native;
 mod placement;
-mod submissions;
 mod subtree;
 mod tail;

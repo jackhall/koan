@@ -2,8 +2,9 @@
 
 use self_cell::self_cell;
 
-use crate::memory::{ProgramBrand, ProgramStorage, program_storage};
+use crate::memory::{ProgramBrand, ProgramStorage, SlabHandle, program_storage};
 use crate::parse::{KExpression, ParseError, parse_with_path};
+use crate::program::Steps;
 use crate::scheduler::{Graph, Scheduler};
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::TypeRegistry;
@@ -16,10 +17,11 @@ struct Owner {
 }
 
 /// Everything that names `'graph`: the graph by value, since reclaiming a region needs exclusive
-/// access, and the registry and the parsed program in program storage, so a record laid down there
-/// can borrow them at `'graph`.
+/// access, and its root, the region every root work is born under; and the registry and the parsed
+/// program in program storage, so a record laid down there can borrow them at `'graph`.
 pub struct Running<'graph> {
-    graph: Graph<'graph>,
+    graph: Graph<'graph, Steps>,
+    root: SlabHandle,
     brand: ProgramBrand<'graph>,
     symbols: &'graph SymbolInterner,
     types: &'graph TypeRegistry<'graph>,
@@ -28,8 +30,15 @@ pub struct Running<'graph> {
 
 impl<'graph> Running<'graph> {
     /// A drain over this substrate's graph, for the length of one call.
-    pub fn scheduler(&mut self) -> Scheduler<'_, 'graph> {
+    pub fn scheduler(&mut self) -> Scheduler<'_, 'graph, Steps> {
         Scheduler::over(&mut self.graph)
+    }
+
+    /// The graph's root: a storage-only slab cell taken at load, which no drain enters or releases,
+    /// so every root work is born under it and a result built there outlives the drain that built
+    /// it.
+    pub fn root(&self) -> SlabHandle {
+        self.root
     }
 
     /// The program storage this substrate's AST and registry rest in.
@@ -65,7 +74,7 @@ pub struct CellSubstrate(Joined);
 
 impl CellSubstrate {
     /// Parse `source` into fresh program storage and stand the graph up beside it, over a slab of
-    /// `cap` cells.
+    /// `cap` cells, one of which is its root. `cap` is at least one.
     pub fn load(source: &str, path: &str, cap: u32) -> Result<Self, ParseError> {
         let owner = Owner {
             storage: program_storage(),
@@ -80,8 +89,13 @@ impl CellSubstrate {
             let types = &*brand
                 .allocator()
                 .alloc(TypeRegistry::in_region(brand.allocator()));
+            let mut graph = Graph::new(cap);
+            let root = graph
+                .root()
+                .expect("a fresh slab of at least one cell admits its root");
             Ok(Running {
-                graph: Graph::new(cap),
+                graph,
+                root,
                 brand,
                 symbols: &owner.symbols,
                 types,

@@ -60,7 +60,7 @@ silence the stale-anchor check; delete a redundant test instead.
   deep copy are written into the same region. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s `thin_run`, `fill` and reattach seam.
 - `src/scheduler/drain.rs` — the drain performs every birth and every death: it creates a tail
-  successor, lets it redeem out of its predecessor, and only then releases that predecessor, whose
+  successor, wakes its state out of its predecessor, and only then releases that predecessor, whose
   region goes back to the pool for the hop after. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s creation and release doors, its delivery doors and its reattach seam.
 - `src/program/substrate.rs` — the substrate owns program storage beside the graph and registry
@@ -149,46 +149,54 @@ destination's writer, and is read through its edges after the region it came fro
   bytes read back.
 
 **Cells the drain creates and releases** ([src/scheduler/drain.rs](../src/scheduler/drain.rs)) — a
-tail hand-off redeeming across a release, and a producer's result filed into a consumer that
-outlives it. What the other groups pin is one cell's region; what this pins is the ordering between
-two.
+tail hand-off waking its state across a release, a state kept in one cell and woken in another,
+and a producer's result filed into a consumer that outlives it. What the other groups pin is one
+cell's region; what this pins is the ordering between two.
 
 - `a_hand_off_redeems_out_of_the_region_the_drain_reclaims_next`
-  three hops at each placement: the successor redeems a carrier homed in a predecessor the drain
-  releases the round after, and at `Fresh` that region comes straight back out of the pool for the
-  hop behind it, so every carried byte is written where somebody else's was.
+  three hops at each placement: the veneer wakes each successor's state out of a predecessor the
+  drain releases once that first step returns, and at `Fresh` that region comes straight back out
+  of the pool for the hop behind it, so every carried byte is written where somebody else's was.
+- `a_spawned_child_wakes_holding_the_state_its_spawner_handed_over`
+  the veneer's wake: a spawner's `'here` state is lifted and kept in its own region, and the child
+  redeems it and crosses it to its own `'here` on its first entry, at each placement — the child
+  reads the very bytes its spawner built.
 - `a_shares_call_returns_its_result_through_the_callers_storage`
-  the carrier door: the producer builds its result in the consumer's region with `alloc_into`,
-  keeps it, files the dormant, and dies — and the consumer redeems it out of a producer that is
-  gone.
+  the carrier door: `finish_fresh` under `Keeps` builds the result in the consumer's region, keeps
+  it, files the dormant, and the producer dies — and the consumer redeems it out of a producer that
+  is gone.
 - `a_consumer_parked_on_three_producers_wakes_once_when_the_last_slot_fills`
   three producers filling one receipt run, so the run's slots and the consumer's scratch habitat
   are written by cells that are released before the consumer reads them back.
 - `a_cell_gathers_here_values_across_two_parks_and_builds_from_them_in_storage`
   the scratch state over both brands: a cell parks twice, and the run it lays down in the habitat
   carries values homed in the executing cell at `'here` across the second park, so the last step
-  builds its result out of them with no `keep` and no `redeem` — what Miri checks is storage read
+  builds its result out of them with no crossing at the wake — what Miri checks is storage read
   through a run that is retyped at a fresh pair of brands each wake and whose own bytes are handed
   back under the result built from it.
+- `a_recursion_asking_two_children_per_level_peaks_at_its_depth`
+  a deep stack of births and releases: five hundred and eleven tree cells born one path at a
+  time under one root work, each delivering into its parked parent's scratch run before it is
+  released.
 
 **Self-contained substrate** ([src/program/substrate.rs](../src/program/substrate.rs)) — program
 storage and the interner in `self_cell`'s owner, the graph, the registry and the parsed program in
 its dependent at `'graph`.
 
 - `two_substrates_load_move_and_run_in_separate_calls`
-  two substrates returned from a helper, moved through a `Vec` into a `Box`, each running a cell
-  and interning a type in one call and reading it back and running another in a second, then
-  dropped: the owner's box, the registry and AST in program storage, and the graph beside them
-  all released.
+  two substrates returned from a helper, moved through a `Vec` into a `Box`, each running a root
+  work under the root taken at load and interning a type in one call and reading it back and
+  running another in a second, then dropped: the owner's box, the registry and AST in program
+  storage, and the graph and its root beside them all released.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-21: 84s — 20 tests, 0 leaks, 0 UB
 - 2026-09-21: 52s — 18 tests, 0 leaks, 0 UB
 - 2026-09-21: 82s — 18 tests, 0 leaks, 0 UB
 - 2026-09-19: 24s — 14 tests, 0 leaks, 0 UB
 - 2026-09-18: 23s — 13 tests, 0 leaks, 0 UB
-- 2026-09-15: 38s — 10 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

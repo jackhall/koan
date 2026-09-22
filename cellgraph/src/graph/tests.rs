@@ -91,8 +91,8 @@ where
     V::At<'cell>: Copy,
 {
     match view {
-        CrossedOperand::Pinned(value) => *value,
-        CrossedOperand::Copied(_) => unreachable!("the test's verdict always pins"),
+        CrossedOperand::Pinned { view: value, .. } => *value,
+        CrossedOperand::Copied { .. } => unreachable!("the test's verdict always pins"),
     }
 }
 
@@ -104,9 +104,9 @@ fn take<'cell>(
 ) -> &'cell u32 {
     match view {
         // Pinned: the borrow itself, embedded in the destination's storage.
-        CrossedOperand::Pinned(value) => value,
+        CrossedOperand::Pinned { view: value, .. } => value,
         // Copied: severed, so the only thing that typechecks is a fresh allocation.
-        CrossedOperand::Copied(value) => one(writer, **value),
+        CrossedOperand::Copied { view: value, .. } => one(writer, **value),
     }
 }
 
@@ -134,8 +134,8 @@ fn number_here<
 /// What a view reads, whichever brand it arrived at — for a build that only needs the number.
 fn number(view: &CrossedOperand<'static, '_, '_, Number>) -> u32 {
     match view {
-        CrossedOperand::Pinned(value) => **value,
-        CrossedOperand::Copied(value) => **value,
+        CrossedOperand::Pinned { view: value, .. } => **value,
+        CrossedOperand::Copied { view: value, .. } => **value,
     }
 }
 

@@ -1,228 +1,454 @@
-//! The drain's loop over native steps: a queued cell runs, finishes and is reclaimed.
+//! The drain's loop over native steps: a root work runs to its end over the ready stack, depth
+//! first, with the cells live at any moment one path from the root.
 
 use crate::knot::KValue;
-use crate::scheduler::tests::native::{record, record_cell, recorded, recorded_cells, slab};
+use crate::memory::Active;
+use crate::scheduler::tests::bundle::{Native, TestGraph};
+use crate::scheduler::tests::native::{
+    describe, fresh, record, recorded, reset, shares, where_text, work,
+};
 use crate::scheduler::{
-    Action, DrainStalled, Graph, NativeStep, Placement, Request, Scheduler, ScratchState, State,
-    Step, StepError, Work,
+    Action, DrainStalled, Placement, Received, Scheduler, Step, StepError, Use,
 };
 
-use std::cell::Cell as Tally;
-
-thread_local! {
-    /// What a step records for the test around it. A step is a bare `fn`, so it carries no
-    /// closure state; the tally stands in for one, in the test alone.
-    static RAN: Tally<u32> = const { Tally::new(0) };
-}
-
-fn tally() -> u32 {
-    RAN.with(|ran| ran.get())
-}
-
-fn reset() {
-    RAN.with(|ran| ran.set(0));
-    crate::scheduler::tests::native::reset();
-}
-
-/// A step that records that it ran, and the cell it ran in, and finishes.
-fn finish<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
-    RAN.with(|ran| ran.set(ran.get() + 1));
-    record_cell(step.cell());
-    step.done()
-}
-
-/// A step that reads the number it was born with, records it, and finishes.
-fn finish_with_state<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    state: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
-    let State::Value(KValue::Number(count)) = state else {
-        return step.failed(StepError::Stale);
-    };
-    RAN.with(|ran| ran.set(count as u32));
+/// A step that records the number or text it holds, and finishes.
+fn record_state<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let state = step.state();
+    record(describe(state));
     step.done()
 }
 
 /// A step that refuses to proceed.
-fn fail<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
+fn fail<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     step.failed(StepError::Stale)
 }
 
 #[test]
-fn one_native_cell_runs_dies_and_leaves_the_graph_empty() {
+fn one_root_work_runs_dies_and_leaves_the_root_live() {
     reset();
-    let mut graph: Graph<'static> = Graph::new(4);
+    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
-    scheduler.submit(slab(finish, State::Empty), 0);
-    scheduler.run().expect("the drain runs to empty");
-    assert_eq!(tally(), 1);
-    let cells = recorded_cells();
-    assert_eq!(cells.len(), 1, "one cell ran");
-    assert!(!scheduler.graph().is_live(cells[0]));
-    assert!(scheduler.graph().is_empty());
-}
-
-#[test]
-fn a_birth_state_reaches_the_step_that_runs_the_cell() {
-    reset();
-    let mut graph: Graph<'static> = Graph::new(4);
-    let mut scheduler = Scheduler::over(&mut graph);
-    scheduler.submit(
-        slab(finish_with_state, State::Value(KValue::Number(7.0))),
-        0,
+    scheduler
+        .run(
+            work(record_state, KValue::Number(1.0)),
+            root,
+            Placement::Fresh,
+        )
+        .expect("the root work ends");
+    assert_eq!(recorded(), ["1"]);
+    assert_eq!(scheduler.peak_live_cells(), 1);
+    assert!(
+        !scheduler.graph().is_empty(),
+        "the root is a cell of the graph"
     );
-    scheduler.run().expect("the drain runs to empty");
-    assert_eq!(tally(), 7);
+    assert!(scheduler.graph().is_live(root), "and no drain releases it");
+    graph.release_root(root).expect("the root releases");
+    assert!(graph.is_empty());
 }
 
 #[test]
-fn every_queued_cell_runs_before_the_queue_empties() {
+fn a_birth_state_reaches_the_step_that_runs_the_root_work() {
     reset();
-    let mut graph: Graph<'static> = Graph::new(4);
-    let mut scheduler = Scheduler::over(&mut graph);
-    for _ in 0..3 {
-        scheduler.submit(slab(finish, State::Empty), 0);
-    }
-    scheduler.run().expect("the drain runs to empty");
-    assert_eq!(tally(), 3);
-    assert!(scheduler.graph().is_empty());
+    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let root = graph.root().expect("a fresh slab admits a root");
+    Scheduler::over(&mut graph)
+        .run(
+            work(record_state, KValue::Str("born")),
+            root,
+            Placement::Shares,
+        )
+        .expect("the root work ends");
+    assert_eq!(recorded(), ["born"]);
 }
+
+/// Hand a child a state built in this cell's own region, at `'here`.
+fn hand_over<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    placement: Placement,
+) -> Action<'graph, Native> {
+    let handed = crate::values::text(step.writer(), "handed over");
+    record(format!("handed {}", where_text(handed)));
+    let request = match placement {
+        Placement::Fresh => fresh(take_over, Use::Reads, handed),
+        Placement::Shares => shares(take_over, Use::Reads, handed),
+    };
+    let asked = step.spawn(request);
+    step.park(asked, woken, KValue::Null, None)
+}
+
+fn hand_over_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    hand_over(step, Placement::Fresh)
+}
+
+fn hand_over_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    hand_over(step, Placement::Shares)
+}
+
+/// The child: record the state it woke holding, and deliver nothing but the wake.
+fn take_over<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let state = step.state();
+    record(format!("woke {}", where_text(state)));
+    step.finish_fresh(|_, _| Active::new(KValue::Null))
+}
+
+/// A consumer woken by its children, with nothing more to do.
+fn woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    step.done()
+}
+
+/// The spawner is above the child and a tenant crosses nothing, so either way the child wakes over
+/// the very bytes its spawner built.
+#[test]
+fn a_spawned_child_wakes_holding_the_state_its_spawner_handed_over() {
+    for spawner in [hand_over_fresh as _, hand_over_shares as _] {
+        reset();
+        let mut graph: TestGraph<'static> = TestGraph::new(2);
+        let root = graph.root().expect("a fresh slab admits a root");
+        Scheduler::over(&mut graph)
+            .run(work(spawner, KValue::Null), root, Placement::Fresh)
+            .expect("the root work ends");
+        let seen = recorded();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert!(seen[0].starts_with("handed handed over@"), "{seen:?}");
+        assert_eq!(
+            seen[0].strip_prefix("handed "),
+            seen[1].strip_prefix("woke "),
+            "the child woke over its spawner's bytes"
+        );
+    }
+}
+
+// ---- Depth first. ----
+
+/// A cell of the order test: record its name, ask for two children named after it when it is not
+/// a leaf, and park on them.
+fn named<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let KValue::Str(name) = step.state() else {
+        return step.failed(StepError::Stale);
+    };
+    record(name.to_owned());
+    if name.len() == 2 {
+        return step.finish_fresh(|_, _| Active::new(KValue::Null));
+    }
+    let children: [&str; 2] = if name == "root" {
+        ["A", "B"]
+    } else {
+        ["1", "2"]
+    };
+    let mut last = None;
+    for child in children {
+        let label = if name == "root" {
+            child.to_owned()
+        } else {
+            format!("{name}{child}")
+        };
+        let text = crate::values::text(step.writer(), &label);
+        last = Some(step.spawn(fresh(named, Use::Reads, text)));
+    }
+    let asked = last.expect("two children asked");
+    let text = crate::values::text(step.writer(), name);
+    step.park(asked, named_woken, text, None)
+}
+
+/// A cell of the order test, woken: record that it woke, and deliver to its own spawner.
+fn named_woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let KValue::Str(name) = step.state() else {
+        return step.failed(StepError::Stale);
+    };
+    record(format!("{name} woken"));
+    if name == "root" {
+        return step.done();
+    }
+    step.finish_fresh(|_, _| Active::new(KValue::Null))
+}
+
+#[test]
+fn two_children_asked_in_one_park_run_one_subtree_after_the_other() {
+    reset();
+    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let root = graph.root().expect("a fresh slab admits a root");
+    Scheduler::over(&mut graph)
+        .run(work(named, KValue::Str("root")), root, Placement::Fresh)
+        .expect("the root work ends");
+    assert_eq!(
+        recorded(),
+        [
+            "root",
+            "A",
+            "A1",
+            "A2",
+            "A woken",
+            "B",
+            "B1",
+            "B2",
+            "B woken",
+            "root woken"
+        ],
+        "the child asked first runs to completion before the second is born"
+    );
+}
+
+/// How deep the recursion goes below its root work.
+const DEPTH: f64 = 8.0;
+
+/// One level of a recursion that asks for two children at every level, down to a leaf.
+fn node<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let KValue::Number(depth) = step.state() else {
+        return step.failed(StepError::Stale);
+    };
+    if depth == 0.0 {
+        return step.finish_fresh(|_, _| Active::new(KValue::Number(1.0)));
+    }
+    step.spawn(fresh(node, Use::Reads, KValue::Number(depth - 1.0)));
+    let asked = step.spawn(fresh(node, Use::Reads, KValue::Number(depth - 1.0)));
+    step.park(asked, node_woken, KValue::Number(depth), None)
+}
+
+/// One level, woken: count the leaves below it and hand the count up, or record it at the top.
+fn node_woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let KValue::Number(depth) = step.state() else {
+        return step.failed(StepError::Stale);
+    };
+    let mut leaves = 0.0;
+    for received in step.results().collect::<Vec<_>>() {
+        let Ok(Received::Scratch(KValue::Number(count))) = received else {
+            return step.failed(StepError::Unredeemable);
+        };
+        leaves += count;
+    }
+    if depth == DEPTH {
+        record(leaves.to_string());
+        return step.done();
+    }
+    step.finish_fresh(move |_, _| Active::new(KValue::Number(leaves)))
+}
+
+#[test]
+fn a_recursion_asking_two_children_per_level_peaks_at_its_depth() {
+    reset();
+    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let root = graph.root().expect("a fresh slab admits a root");
+    let mut scheduler = Scheduler::over(&mut graph);
+    scheduler
+        .run(work(node, KValue::Number(DEPTH)), root, Placement::Fresh)
+        .expect("the root work ends");
+    assert_eq!(recorded(), ["256"], "every leaf answered");
+    // The running leaf and its parked ancestors, up to and including the root work: a sibling
+    // whose turn has not come has no cell.
+    assert_eq!(scheduler.peak_live_cells(), DEPTH as usize + 1);
+}
+
+/// How many siblings one park asks for.
+const SIBLINGS: usize = 100;
+
+/// Ask for a hundred children in one park.
+fn ask_a_hundred<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let mut last = None;
+    for index in 0..SIBLINGS {
+        last = Some(step.spawn(fresh(sibling, Use::Reads, KValue::Number(index as f64))));
+    }
+    step.park(
+        last.expect("a hundred asked"),
+        count_them,
+        KValue::Null,
+        None,
+    )
+}
+
+/// One sibling: record its index, and deliver it.
+fn sibling<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let KValue::Number(index) = step.state() else {
+        return step.failed(StepError::Stale);
+    };
+    record(index.to_string());
+    step.finish_fresh(move |_, _| Active::new(KValue::Number(index)))
+}
+
+/// The spawner, woken: count what arrived.
+fn count_them<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let arrived = step.results().filter(Result::is_ok).count();
+    record(format!("{arrived} arrived"));
+    step.done()
+}
+
+#[test]
+fn a_hundred_siblings_asked_in_one_park_run_one_at_a_time() {
+    reset();
+    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let root = graph.root().expect("a fresh slab admits a root");
+    let mut scheduler = Scheduler::over(&mut graph);
+    scheduler
+        .run(work(ask_a_hundred, KValue::Null), root, Placement::Fresh)
+        .expect("the root work ends");
+    let mut order: Vec<String> = (0..SIBLINGS).map(|index| index.to_string()).collect();
+    order.push(format!("{SIBLINGS} arrived"));
+    assert_eq!(recorded(), order, "in the order they were asked");
+    assert_eq!(
+        scheduler.peak_live_cells(),
+        2,
+        "the spawner and one sibling"
+    );
+}
+
+// ---- What the drain refuses. ----
 
 #[test]
 fn a_step_that_cannot_proceed_stalls_the_drain() {
     reset();
-    let mut graph: Graph<'static> = Graph::new(4);
+    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
-    scheduler.submit(slab(fail, State::Empty), 0);
-    assert_eq!(scheduler.run(), Err(DrainStalled::Step(StepError::Stale)));
+    assert_eq!(
+        scheduler.run(work(fail, KValue::Null), root, Placement::Fresh),
+        Err(DrainStalled::Step(StepError::Stale))
+    );
 }
+
+/// Ask for a child that ends without delivering, and park on it.
+fn park_on_a_silent_child<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let asked = step.spawn(fresh(record_state, Use::Reads, KValue::Str("silent")));
+    step.park(asked, woken, KValue::Null, None)
+}
+
+#[test]
+fn a_child_that_ends_without_delivering_leaves_the_drain_unfinished() {
+    reset();
+    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let root = graph.root().expect("a fresh slab admits a root");
+    let mut scheduler = Scheduler::over(&mut graph);
+    assert_eq!(
+        scheduler.run(
+            work(park_on_a_silent_child, KValue::Null),
+            root,
+            Placement::Fresh
+        ),
+        Err(DrainStalled::Unfinished),
+        "the spawner is parked on a run nothing will fill"
+    );
+    assert_eq!(recorded(), ["silent"]);
+}
+
+/// Ask for a child, then end without parking on it.
+fn ask_and_leave<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    step.spawn(fresh(record_state, Use::Reads, KValue::Null));
+    step.done()
+}
+
+#[test]
+fn a_step_that_asks_and_does_not_park_is_refused() {
+    reset();
+    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let root = graph.root().expect("a fresh slab admits a root");
+    let mut scheduler = Scheduler::over(&mut graph);
+    assert_eq!(
+        scheduler.run(work(ask_and_leave, KValue::Null), root, Placement::Fresh),
+        Err(DrainStalled::Step(StepError::Unparked))
+    );
+    assert!(recorded().is_empty(), "the child was never born");
+}
+
+// ---- Views. ----
 
 #[test]
 fn two_schedulers_run_beside_each_other_sharing_nothing() {
     reset();
-    let mut first_graph: Graph<'static> = Graph::new(2);
+    let mut first_graph: TestGraph<'static> = TestGraph::new(1);
+    let first_root = first_graph.root().expect("a fresh slab admits a root");
     let mut first = Scheduler::over(&mut first_graph);
-    let mut second_graph: Graph<'static> = Graph::new(2);
+    let mut second_graph: TestGraph<'static> = TestGraph::new(1);
+    let second_root = second_graph.root().expect("a fresh slab admits a root");
     let mut second = Scheduler::over(&mut second_graph);
 
-    first.submit(slab(record_state, State::Value(KValue::Number(1.0))), 0);
-    second.submit(slab(record_state, State::Value(KValue::Number(2.0))), 0);
-
-    // Each drain runs with the other holding work of its own, and neither touches the other's.
-    first.run().expect("the first drain runs to empty");
-    assert!(first.graph().is_empty());
-
-    first.submit(slab(record_state, State::Value(KValue::Number(3.0))), 0);
-    second.run().expect("the second drain runs to empty");
-    assert!(second.graph().is_empty());
-
-    first.run().expect("the first drain runs to empty again");
-    assert!(first.graph().is_empty());
+    // Each drain runs with the other alive beside it, and neither touches the other's graph.
+    first
+        .run(
+            work(record_state, KValue::Number(1.0)),
+            first_root,
+            Placement::Fresh,
+        )
+        .expect("the first drain ends");
+    second
+        .run(
+            work(record_state, KValue::Number(2.0)),
+            second_root,
+            Placement::Fresh,
+        )
+        .expect("the second drain ends");
+    first
+        .run(
+            work(record_state, KValue::Number(3.0)),
+            first_root,
+            Placement::Shares,
+        )
+        .expect("the first drain ends again");
     assert_eq!(
         recorded(),
         ["1", "2", "3"],
         "each cell ran in its own graph's turn"
     );
-    assert!(!first.graph().is_live(recorded_cells()[0]));
-}
-
-/// Record the number this cell was born with, so an interleaved pair of drains is legible as one
-/// sequence, and the cell it ran in.
-fn record_state<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    state: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
-    let State::Value(KValue::Number(mark)) = state else {
-        return step.failed(StepError::Stale);
-    };
-    record(mark.to_string());
-    record_cell(step.cell());
-    step.done()
-}
-
-/// A hundred units with nothing to wait on, on a slab of one: each gets its cell only when the one
-/// before it has gone, so a drain that gave every ready unit its cell up front would be refused.
-#[test]
-fn independent_units_run_one_at_a_time_in_submission_order() {
-    reset();
-    let mut graph: Graph<'static> = Graph::new(1);
-    let mut scheduler = Scheduler::over(&mut graph);
-    for mark in 0..100 {
-        scheduler.submit(
-            slab(record_state, State::Value(KValue::Number(f64::from(mark)))),
-            0,
-        );
-    }
-    scheduler.run().expect("the drain runs to empty");
-    let order: Vec<String> = (0..100).map(|mark| mark.to_string()).collect();
-    assert_eq!(recorded(), order);
-    assert_eq!(scheduler.peak_live_cells(), 1);
+    assert!(first.graph().is_live(first_root));
+    assert!(second.graph().is_live(second_root));
 }
 
 #[test]
 fn two_views_over_one_graph_run_in_turn() {
     reset();
-    let mut graph: Graph<'static> = Graph::new(2);
-    {
-        let mut view = Scheduler::over(&mut graph);
-        view.submit(slab(finish, State::Empty), 0);
-        view.run().expect("the first view runs to empty");
-    }
-    let mut view = Scheduler::over(&mut graph);
-    view.submit(slab(finish, State::Empty), 0);
-    view.run().expect("the second view runs to empty");
-    assert_eq!(tally(), 2);
-    assert!(view.graph().is_empty());
+    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let root = graph.root().expect("a fresh slab admits a root");
+    Scheduler::over(&mut graph)
+        .run(
+            work(record_state, KValue::Number(1.0)),
+            root,
+            Placement::Fresh,
+        )
+        .expect("the first view's root work ends");
+    // A second view over the same graph finds the root the first left, and runs a second root work
+    // under it.
+    Scheduler::over(&mut graph)
+        .run(
+            work(record_state, KValue::Number(2.0)),
+            root,
+            Placement::Fresh,
+        )
+        .expect("the second view's root work ends");
+    assert_eq!(recorded(), ["1", "2"]);
+    graph.release_root(root).expect("the root releases");
+    assert!(graph.is_empty());
 }
 
 /// Park on two children, the first of which refuses to proceed: the drain stalls on it with the
-/// second still queued.
+/// second still unborn on the stack.
 fn park_behind_a_failure<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
-    step.spawn(fresh(fail));
-    let asked = step.spawn(fresh(finish));
-    step.park(asked, finish, State::Empty, None)
-}
-
-/// A child in a region of its own, born holding nothing.
-fn fresh(child: NativeStep<'_>) -> Request<'_> {
-    Request {
-        placement: Placement::Fresh,
-        work: Work {
-            step: child,
-            state: State::Empty,
-        },
-    }
+    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    step.spawn(fresh(fail, Use::Reads, KValue::Null));
+    let asked = step.spawn(fresh(record_state, Use::Reads, KValue::Str("queued")));
+    step.park(asked, woken, KValue::Null, None)
 }
 
 #[test]
-fn a_view_dropped_with_a_queued_cell_leaves_the_next_drain_stalled() {
+fn a_view_dropped_with_a_queued_cell_leaves_cells_the_roots_release_does_not_empty() {
     reset();
-    let mut graph: Graph<'static> = Graph::new(2);
-    {
-        let mut view = Scheduler::over(&mut graph);
-        view.submit(slab(park_behind_a_failure, State::Empty), 0);
-        assert_eq!(view.run(), Err(DrainStalled::Step(StepError::Stale)));
-    }
-    let mut view = Scheduler::over(&mut graph);
-    assert!(!view.graph().is_empty());
-    assert_eq!(view.run(), Err(DrainStalled::CellsLive));
+    let mut graph: TestGraph<'static> = TestGraph::new(2);
+    let root = graph.root().expect("a fresh slab admits a root");
     assert_eq!(
-        tally(),
-        0,
+        Scheduler::over(&mut graph).run(
+            work(park_behind_a_failure, KValue::Null),
+            root,
+            Placement::Fresh
+        ),
+        Err(DrainStalled::Step(StepError::Stale))
+    );
+    assert!(
+        recorded().is_empty(),
         "the queued sibling went with the view that dropped it"
+    );
+    let _ = graph.release_root(root);
+    assert!(
+        !graph.is_empty(),
+        "the parked root work and the failed child are the graph's still"
     );
 }

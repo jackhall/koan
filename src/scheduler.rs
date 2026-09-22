@@ -1,15 +1,16 @@
 //! The deferred-work drain koan runs on, built directly over `cellgraph`'s cells and liveness
 //! matrix.
 //!
-//! A unit of work **is** a cell: its region, its erased continuation and its holds are the cell's,
-//! and this module adds only the submission table, the work queue, the drain protocol and delivery.
+//! A unit of work **is** a cell: its region, its erased continuation, its receipt run and its holds
+//! are the cell's, and this module adds only the ready stack, the drain protocol and delivery.
 //! Liveness is the matrix's — no reference count, no pin bundle and no antichain fold lives here,
-//! and a cell is reclaimed the instant no hold names it.
+//! and a cell is reclaimed the instant no hold names it. The layers above reach it as one
+//! [`StepBundle`], and the scheduler names no state and no step of its own.
 //!
-//! A step cannot create or release a cell: it hands the drain an [`Action`] naming nothing but
-//! `'graph`, and the drain performs every birth and every death. A unit whose dependencies are
-//! unmet has no cell at all — the drain holds it as a submission with a count — so the only thing a
-//! live cell ever waits on is its receipt run.
+//! A step cannot create or release a cell, and names no handle and no carrier door: it hands the
+//! drain an [`Action`] naming nothing but `'graph`, and the drain performs every birth and every
+//! death. A request has no cell until the drain pops it, so the only thing a live cell ever waits
+//! on is its receipt run.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
 //! `crate::memory` and `crate::values`, and nothing else in the crate; [`tests::boundary`] reads
@@ -22,12 +23,10 @@ mod action;
 mod continuation;
 mod delivery;
 mod drain;
-mod submit;
 
 #[cfg(test)]
 mod tests;
 
-pub use action::{Action, Placement, Request, Slot, Step, StepError};
-pub use continuation::{NativeStep, ScratchState, State, Work};
+pub use action::{Action, Placement, Received, Request, Slot, Step, StepError, Use};
+pub use continuation::{NativeStep, StepBundle, Work};
 pub use drain::{DrainStalled, Graph, Scheduler};
-pub use submit::{Birth, Unit, UnitId};

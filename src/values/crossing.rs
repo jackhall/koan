@@ -52,12 +52,7 @@ where
             carrier,
             copy_bytes: weight.bytes(),
         }],
-        |writer, views| {
-            Active::new(match views[0] {
-                CrossedOperand::Pinned(value) => value,
-                CrossedOperand::Copied(value) => copy_into::<XF>(writer, &value),
-            })
-        },
+        |writer, views| Active::new(cross_view(writer, &views[0])),
     )
 }
 
@@ -84,16 +79,27 @@ where
             carrier,
             copy_bytes: weight.bytes(),
         }],
-        |writer, views| match views[0] {
-            CrossedOperand::Pinned(value) => value,
-            CrossedOperand::Copied(value) => copy_into::<XF>(writer, &value),
-        },
+        |writer, views| cross_view(writer, &views[0]),
     )
+}
+
+/// One crossed operand as a value at the destination's brand: the pinned view as it is, a copied
+/// view rebuilt through `writer`. The one door a copy of a value comes through, and it takes a
+/// [`CrossedOperand`], which only a priced placement hands out — so every copy is one the graph
+/// priced. See [README.md § Crossing](README.md#crossing).
+pub fn cross_view<'graph, 'cell, XF: KnottedFamily<'graph>>(
+    writer: Writer<'cell>,
+    view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>>,
+) -> Value<'graph, 'cell, XF::Closed<'cell>> {
+    match *view {
+        CrossedOperand::Pinned { view: value, .. } => value,
+        CrossedOperand::Copied { view: value, .. } => copy_into::<XF>(writer, &value),
+    }
 }
 
 /// The deep copy: every region part of `value` rebuilt through `writer`, every program node
 /// embedded as the same node, every memoized type and weight carried over, a knot member rebuilt by
-/// its family. Total. Reached only through the two doors above, so every copy is one the graph priced.
+/// its family. Total. Reached only through [`cross_view`], so every copy is one the graph priced.
 fn copy_into<'graph, 'from, 'to, XF: KnottedFamily<'graph>>(
     writer: Writer<'to>,
     value: &Value<'graph, 'from, XF::Closed<'from>>,

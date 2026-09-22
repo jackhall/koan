@@ -6,10 +6,8 @@ use std::cell::Cell as Tally;
 
 use crate::knot::KValue;
 use crate::memory::Bump;
-use crate::program::CellSubstrate;
-use crate::scheduler::{
-    Action, Birth, DrainStalled, NativeStep, ScratchState, State, Step, StepError, Unit, Work,
-};
+use crate::program::{CellSubstrate, Steps};
+use crate::scheduler::{Action, DrainStalled, Placement, Step, StepError, Work};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode};
 
@@ -24,12 +22,8 @@ fn tally() -> f64 {
 }
 
 /// A step that adds the number it was born with to the tally, and finishes.
-fn add<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    state: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
-    let State::Value(KValue::Number(count)) = state else {
+fn add<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+    let KValue::Number(count) = step.state() else {
         return step.failed(StepError::Stale);
     };
     RAN.with(|ran| ran.set(ran.get() + count));
@@ -37,19 +31,15 @@ fn add<'graph>(
 }
 
 /// A step that refuses to proceed.
-fn fail<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
+fn fail<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
     step.failed(StepError::Stale)
 }
 
-/// A unit born in the slab with `state`, for a test to submit with no dependencies.
-fn slab<'graph>(step: NativeStep<'graph>, state: State<'graph, 'graph>) -> Unit<'graph> {
-    Unit {
-        birth: Birth::Slab,
-        work: Work { step, state },
+/// A root work that adds `count`.
+fn adding<'graph>(count: f64) -> Work<'graph, 'graph, Steps> {
+    Work {
+        step: add,
+        state: KValue::Number(count),
     }
 }
 
@@ -68,10 +58,12 @@ fn two_substrates_load_move_and_run_in_separate_calls() {
             let scratch = Bump::new();
             let x = BinderSymbol::declared("x", running.symbols()).expect("a bindable token");
             let record = running.types().record(&scratch, &[(x, KType::NUMBER)]);
+            let root = running.root();
             let mut scheduler = running.scheduler();
-            scheduler.submit(slab(add, State::Value(KValue::Number(1.0))), 0);
-            scheduler.run().expect("the drain runs to empty");
-            assert!(scheduler.graph().is_empty());
+            scheduler
+                .run(adding(1.0), root, Placement::Shares)
+                .expect("the root work ends");
+            assert!(scheduler.graph().is_live(root));
             record
         });
         substrate.with(|running| {
@@ -80,10 +72,12 @@ fn two_substrates_load_move_and_run_in_separate_calls() {
                 TypeNode::Record { .. }
             ));
             assert_eq!(running.statements().len(), 2 - index);
+            let root = running.root();
             let mut scheduler = running.scheduler();
-            scheduler.submit(slab(add, State::Value(KValue::Number(10.0))), 0);
-            scheduler.run().expect("the drain runs to empty again");
-            assert!(scheduler.graph().is_empty());
+            scheduler
+                .run(adding(10.0), root, Placement::Fresh)
+                .expect("the root work ends again");
+            assert!(scheduler.graph().is_live(root));
         });
     }
     assert_eq!(tally(), 22.0);
@@ -95,15 +89,31 @@ fn a_parse_error_comes_back_from_load() {
     assert!(CellSubstrate::load("foo[2]", "<test>", 2).is_err());
 }
 
+/// A stalled drain leaves its cells in the graph, under the root; a later call's drain still runs
+/// a fresh root work under that same root.
 #[test]
 fn a_stalled_substrate_stays_stalled() {
     let mut substrate = loaded("PRINT 1");
     substrate.with(|running| {
-        let mut scheduler = running.scheduler();
-        scheduler.submit(slab(fail, State::Empty), 0);
-        assert_eq!(scheduler.run(), Err(DrainStalled::Step(StepError::Stale)));
+        let root = running.root();
+        let stalled = running.scheduler().run(
+            Work {
+                step: fail,
+                state: KValue::Null,
+            },
+            root,
+            Placement::Fresh,
+        );
+        assert_eq!(stalled, Err(DrainStalled::Step(StepError::Stale)));
     });
+    RAN.with(|ran| ran.set(0.0));
     substrate.with(|running| {
-        assert_eq!(running.scheduler().run(), Err(DrainStalled::CellsLive));
+        let root = running.root();
+        let mut scheduler = running.scheduler();
+        assert!(!scheduler.graph().is_empty());
+        scheduler
+            .run(adding(5.0), root, Placement::Fresh)
+            .expect("a fresh root work runs beside the stalled one");
     });
+    assert_eq!(tally(), 5.0);
 }

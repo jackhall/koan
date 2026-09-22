@@ -1,8 +1,9 @@
-//! The import boundary and the storage discipline, as a test over this module's own source.
+//! The import boundary, the storage discipline and the step's public surface, as tests over this
+//! module's own source.
 //!
 //! `scheduler` may name `knot`, `memory` and `values` and nothing else in the crate — no
 //! `scope`, no `parse`, no `elaborate`; outside its tests it holds no owning heap type but its own
-//! runtime state, which is never a value in a region.
+//! runtime state, which is never a value in a region. A step names no handle and no carrier door.
 
 /// The path prefixes `scheduler` may name.
 const PREFIXES: &[&str] = &[
@@ -15,23 +16,90 @@ const PREFIXES: &[&str] = &[
     "crate::values",
 ];
 
-/// The owning types outside the tests: the drain's own work queue, the buffer a step pushes its
-/// requests into, and the submission table's three flat arenas. Each is the scheduler's runtime
-/// state, held beside the graph and never written into a region, so a value's no-drop-glue
-/// discipline does not reach them.
+/// The owning types outside the tests: the buffer a step pushes its requests into, and the drain's
+/// ready stack. Each is the scheduler's runtime state, held beside the graph and never written into
+/// a region, so a value's no-drop-glue discipline does not reach them.
 const OWNING_ALLOWED: &[(&str, &str)] = &[
-    ("src/scheduler/action.rs", "requests: Vec<Request<'graph>>"),
+    ("src/scheduler/action.rs", "requests: Vec<Asked<'graph, B>>"),
     ("src/scheduler/action.rs", "Vec::new()"),
-    ("src/scheduler/drain.rs", "in_flight: VecDeque<CellHandle>"),
-    ("src/scheduler/drain.rs", "VecDeque::new()"),
-    ("src/scheduler/submit.rs", "entries: Vec<Entry<'graph>>"),
-    ("src/scheduler/submit.rs", "edges: Vec<Edge>"),
-    ("src/scheduler/submit.rs", "ready: VecDeque<UnitId>"),
-    ("src/scheduler/submit.rs", "VecDeque::new()"),
-    ("src/scheduler/submit.rs", "Vec::new()"),
+    ("src/scheduler/drain.rs", "ready: Vec<Entry<'graph, B>>"),
+    ("src/scheduler/drain.rs", "Vec::new()"),
+];
+
+/// What no public method of `Step` may spell: a handle, a carrier door, or a carrier.
+const STEP_MAY_NOT_NAME: &[&str] = &[
+    "CellHandle",
+    "alloc_into",
+    "alloc_here",
+    "lift",
+    "keep",
+    "redeem",
+    "receipt",
+    "Ready<",
+    "Dormant<",
+    "Operand<",
 ];
 
 #[test]
 fn scheduler_names_only_the_layers_below_it_holds_no_heap_and_spells_the_stack_lifetimes() {
     crate::tests::boundary::holds("scheduler", PREFIXES, OWNING_ALLOWED);
+}
+
+#[test]
+fn a_step_names_no_handle_and_no_carrier_door() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/scheduler/action.rs");
+    let source = std::fs::read_to_string(path).expect("action.rs reads");
+    let signatures = step_signatures(&source);
+    assert!(
+        signatures
+            .iter()
+            .any(|signature| signature.contains("fn finish_fresh")),
+        "the walk found `Step`'s methods: {signatures:?}"
+    );
+    let offenders: Vec<&String> = signatures
+        .iter()
+        .filter(|signature| {
+            STEP_MAY_NOT_NAME
+                .iter()
+                .any(|word| signature.contains(word))
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "a public method of `Step` names a place or a carrier door: {offenders:?}"
+    );
+}
+
+/// Every `pub fn` signature of the `impl` block over `Step`, each joined onto one line and cut at
+/// the body's opening brace: from the `impl<` line whose header names `Step<` to the `}` closing
+/// it at column zero.
+fn step_signatures(source: &str) -> Vec<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let start = (0..lines.len())
+        .find(|&index| {
+            lines[index].starts_with("impl<")
+                && lines[index..(index + 2).min(lines.len())]
+                    .iter()
+                    .any(|line| line.contains("Step<"))
+        })
+        .expect("action.rs has an impl block over `Step`");
+    let end = (start..lines.len())
+        .find(|&index| lines[index] == "}")
+        .expect("the impl block closes");
+    let mut signatures = Vec::new();
+    let mut current: Option<String> = None;
+    for line in &lines[start..end] {
+        let line = line.trim();
+        if line.starts_with("pub fn") {
+            current = Some(String::new());
+        }
+        if let Some(signature) = current.as_mut() {
+            signature.push_str(line);
+            signature.push(' ');
+            if line.ends_with('{') {
+                signatures.push(current.take().expect("a signature in progress"));
+            }
+        }
+    }
+    signatures
 }

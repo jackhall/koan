@@ -94,7 +94,9 @@ fn build_number<'cell, 'severed>(
     views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
 ) -> Active<'static, 'cell, Number> {
     Active::new(match views[0] {
-        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => one(writer, *value),
+        CrossedOperand::Pinned { view: value, .. } | CrossedOperand::Copied { view: value, .. } => {
+            one(writer, *value)
+        }
     })
 }
 
@@ -105,7 +107,9 @@ fn build_slice<'cell, 'severed>(
     views: &[CrossedOperand<'static, 'cell, 'severed, Number>],
 ) -> Active<'static, 'cell, Numbers> {
     Active::new(writer.fill(views.len(), |index| match views[index] {
-        CrossedOperand::Pinned(value) | CrossedOperand::Copied(value) => *value,
+        CrossedOperand::Pinned { view: value, .. } | CrossedOperand::Copied { view: value, .. } => {
+            *value
+        }
     }))
 }
 

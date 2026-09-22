@@ -201,7 +201,7 @@ fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
             ] {
                 context
                     .alloc_into::<Number, Number>(dest, &[kept_operand(&value)], |writer, views| {
-                        copied.push(matches!(views[0], CrossedOperand::Copied(_)));
+                        copied.push(matches!(views[0], CrossedOperand::Copied { .. }));
                         Active::new(take(&views[0], writer))
                     })
                     .unwrap();
@@ -717,7 +717,7 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
             let placed = context
                 .alloc_into::<Number, Number>(next, &[kept_operand(&value)], |writer, views| {
                     assert!(
-                        matches!(views[0], CrossedOperand::Copied(_)),
+                        matches!(views[0], CrossedOperand::Copied { .. }),
                         "a sibling is off the chain"
                     );
                     Active::new(take(&views[0], writer))

@@ -7,11 +7,8 @@ use crate::memory::Delivery;
 /// carrier filed at rest in the consumer's region. Both halves are koan's value family — a scratch
 /// fill and a carrier fill differ in where the bytes are, never in what they are.
 ///
-/// `pub` in a module nothing re-exports, so it can appear in [`Step::receipt`]'s signature while
-/// nothing outside the scheduler can name it.
-///
-/// [`Step::receipt`]: crate::scheduler::Step::receipt
-pub struct KDelivery;
+/// `pub(super)`: no step reaches a receipt slot, so nothing outside the scheduler names it.
+pub(super) struct KDelivery;
 
 impl<'graph> Delivery<'graph> for KDelivery {
     type Scratch = KValueFamily;

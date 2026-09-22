@@ -1,8 +1,8 @@
 //! The import boundary and the storage discipline, as a test over this module's own source.
 //!
-//! `program` may name the layers it stands over — `memory`, `parse`, `scheduler`, `symbols` and
-//! `type_lattice` — and its tests may name `knot` for the values their steps carry. It holds no
-//! owning heap type outside its tests.
+//! `program` may name the layers it stands over — `knot`, `memory`, `parse`, `scheduler`,
+//! `symbols`, `type_lattice` and `values`, the last two for the value its step bundle carries. It
+//! holds no owning heap type outside its tests.
 
 /// The path prefixes `program` may name.
 const PREFIXES: &[&str] = &[
@@ -14,6 +14,7 @@ const PREFIXES: &[&str] = &[
     "crate::symbols",
     "crate::tests::boundary",
     "crate::type_lattice",
+    "crate::values",
 ];
 
 #[test]

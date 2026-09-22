@@ -5,12 +5,10 @@
 use std::cell::Cell;
 
 use crate::knot::KValue;
-use crate::memory::{Active, Receipt};
-use crate::scheduler::tests::native::{record, recorded, reset, slab};
-use crate::scheduler::{
-    Action, Graph, NativeStep, Placement, Request, Scheduler, ScratchState, State, Step, StepError,
-    Work,
-};
+use crate::memory::Active;
+use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep};
+use crate::scheduler::tests::native::{fresh, record, recorded, reset, work};
+use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, Use, Work};
 
 /// Enough turns that a region which only ever grows parts company with one that is recycled.
 const MANY: usize = 4_000;
@@ -32,17 +30,11 @@ thread_local! {
 
 /// The caller: ask for the loop's head, park on its single slot.
 fn start<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_>,
-    head: NativeStep<'graph>,
-) -> Action<'graph> {
-    let asked = step.spawn(Request {
-        placement: Placement::Fresh,
-        work: Work {
-            step: head,
-            state: State::Empty,
-        },
-    });
-    step.park(asked, finish, State::Empty, None)
+    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    head: TestStep<'graph>,
+) -> Action<'graph, Native> {
+    let asked = step.spawn(fresh(head, Use::Reads, KValue::Null));
+    step.park(asked, finish, KValue::Null, None)
 }
 
 /// One turn: write a blob where this cell stands, then hand on or deliver.
@@ -51,10 +43,10 @@ fn start<'graph>(
 /// successor writes a region drawn back from the pool its predecessor returned, while a `Shares`
 /// successor writes its host's, which no turn of the loop ever returns.
 fn turn<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
+    step: Step<'_, 'graph, '_, '_, '_, Native>,
     placement: Placement,
-    next: NativeStep<'graph>,
-) -> Action<'graph> {
+    next: TestStep<'graph>,
+) -> Action<'graph, Native> {
     let written: KValue<'graph, '_> = crate::values::text(step.writer(), BLOB);
     let KValue::Str(text) = written else {
         return step.failed(StepError::Stale);
@@ -66,59 +58,40 @@ fn turn<'graph>(
         left
     });
     if left > 0 {
-        return step.tail(Request {
+        return step.tail(
             placement,
-            work: Work {
+            Work {
                 step: next,
-                state: State::Empty,
+                state: KValue::Null,
             },
-        });
+        );
     }
-    step.deliver_scratch(move |_, _| Active::new(KValue::Number(length)))
+    step.finish_fresh(move |_, _| Active::new(KValue::Number(length)))
 }
 
 /// The caller, woken by the loop's last cell.
-fn finish<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
-    match step.receipt(0) {
-        Ok(Receipt::Value(KValue::Number(length))) => record(length.to_string()),
+fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let first = step.results().next();
+    match first {
+        Some(Ok(Received::Scratch(KValue::Number(length)))) => record(length.to_string()),
         _ => return step.failed(StepError::Unredeemable),
     }
     step.done()
 }
 
-fn start_fresh<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
+fn start_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     start(step, turn_fresh)
 }
 
-fn start_shares<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
+fn start_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     start(step, turn_shares)
 }
 
-fn turn_fresh<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
+fn turn_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     turn(step, Placement::Fresh, turn_fresh)
 }
 
-fn turn_shares<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
+fn turn_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     turn(step, Placement::Shares, turn_shares)
 }
 
@@ -128,16 +101,19 @@ struct Run {
     allocations: u64,
 }
 
-fn run(hops: usize, start: NativeStep<'static>) -> Run {
+fn run(hops: usize, start: TestStep<'static>) -> Run {
     reset();
     REMAINING.with(|remaining| remaining.set(hops));
-    let mut graph: Graph<'static> = Graph::new(1);
+    let mut graph: TestGraph<'static> = TestGraph::new(1);
+    let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
-    scheduler.submit(slab(start, State::Empty), 0);
     let before = crate::tests::allocation_count();
-    scheduler.run().expect("the drain runs to empty");
+    scheduler
+        .run(work(start, KValue::Null), root, Placement::Fresh)
+        .expect("the root work ends");
     let allocations = crate::tests::allocation_count() - before;
-    assert!(scheduler.graph().is_empty());
+    graph.release_root(root).expect("the root releases");
+    assert!(graph.is_empty());
     Run {
         recorded: recorded(),
         allocations,

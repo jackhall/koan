@@ -249,6 +249,17 @@ pub struct Operand<
 /// the destination's region and embedding one is a compile error. A shallow copy is therefore
 /// unrepresentable, and the only copy that typechecks is a deep one through the writer.
 ///
+/// Only a priced placement hands one out: both arms are `#[non_exhaustive]`, so outside this crate
+/// neither can be built, and a match names each as `Pinned { view, .. }`. An embedder's deep copy
+/// therefore runs only on a view the verdict ruled a copy, and every copy is one the graph priced.
+///
+/// ```compile_fail,E0639
+/// use cellgraph::{CrossedOperand, reattachable};
+/// struct Number;
+/// reattachable!(Number => &'cell u32);
+/// let forged: CrossedOperand<'static, '_, '_, Number> = CrossedOperand::Copied { view: &7 };
+/// ```
+///
 /// Embedding the pinned view is what a pin buys, and it compiles:
 ///
 /// ```
@@ -273,9 +284,9 @@ pub struct Operand<
 ///                 |writer, views| {
 ///                     Active::new(match views[0] {
 ///                         // The borrow itself, stored in the destination's region.
-///                         CrossedOperand::Pinned(value) => value,
+///                         CrossedOperand::Pinned { view: value, .. } => value,
 ///                         // A severed view can only be read and written again.
-///                         CrossedOperand::Copied(value) => &writer.fill(1, |_| *value)[0],
+///                         CrossedOperand::Copied { view: value, .. } => &writer.fill(1, |_| *value)[0],
 ///                     })
 ///                 },
 ///             )
@@ -309,8 +320,8 @@ pub struct Operand<
 ///                 &[Operand { carrier: &value, copy_bytes: 0 }],
 ///                 |_writer, views| {
 ///                     Active::new(match views[0] {
-///                         CrossedOperand::Pinned(value) => value,
-///                         CrossedOperand::Copied(value) => value,
+///                         CrossedOperand::Pinned { view: value, .. } => value,
+///                         CrossedOperand::Copied { view: value, .. } => value,
 ///                     })
 ///                 },
 ///             )
@@ -389,9 +400,9 @@ pub struct Operand<
 ///                 other,
 ///                 &[Operand { carrier: &source, copy_bytes: 0 }],
 ///                 |writer, views| match views[0] {
-///                     CrossedOperand::Pinned(entry) => Active::new(entry),
+///                     CrossedOperand::Pinned { view: entry, .. } => Active::new(entry),
 ///                     // The `'graph` borrow embeds as it is; the count is written again.
-///                     CrossedOperand::Copied(entry) => Active::new(one(writer, Entry {
+///                     CrossedOperand::Copied { view: entry, .. } => Active::new(one(writer, Entry {
 ///                         program: entry.program,
 ///                         count: one(writer, *entry.count),
 ///                     })),
@@ -436,8 +447,8 @@ pub struct Operand<
 ///                 other,
 ///                 &[Operand { carrier: &source, copy_bytes: 0 }],
 ///                 |writer, views| match views[0] {
-///                     CrossedOperand::Pinned(entry) => Active::new(entry),
-///                     CrossedOperand::Copied(entry) => Active::new(one(writer, Entry {
+///                     CrossedOperand::Pinned { view: entry, .. } => Active::new(entry),
+///                     CrossedOperand::Copied { view: entry, .. } => Active::new(one(writer, Entry {
 ///                         program: entry.program,
 ///                         count: entry.count,
 ///                     })),
@@ -451,8 +462,12 @@ pub enum CrossedOperand<'graph, 'cell, 'severed, V: Reattachable<'graph>>
 where
     'graph: 'cell + 'severed,
 {
-    Pinned(V::At<'cell>),
-    Copied(V::At<'severed>),
+    /// Pinned: at the destination's brand, embeddable as it is.
+    #[non_exhaustive]
+    Pinned { view: V::At<'cell> },
+    /// Copied: at an unrelated brand, readable and rebuildable through the writer.
+    #[non_exhaustive]
+    Copied { view: V::At<'severed> },
 }
 
 /// What a hold on one sealed region costs: the chunk bytes of everything it pins, which is
@@ -4074,8 +4089,8 @@ where
     ///         let pinned: &u32 = context.alloc_here(
     ///             &[Operand { carrier: &foreign, copy_bytes: usize::MAX }],
     ///             |_writer, views| match views[0] {
-    ///                 CrossedOperand::Pinned(value) => value,
-    ///                 CrossedOperand::Copied(_) => unreachable!("the verdict always pins"),
+    ///                 CrossedOperand::Pinned { view: value, .. } => value,
+    ///                 CrossedOperand::Copied { view: _, .. } => unreachable!("the verdict always pins"),
     ///             },
     ///         );
     ///         *pinned
@@ -4425,9 +4440,13 @@ where
         let erased = operands[index].carrier.erased();
         match verdicts[index] {
             // SAFETY: see the function contract.
-            Verdict::Pin => CrossedOperand::Pinned(unsafe { erased.reattach::<'cell>() }),
+            Verdict::Pin => CrossedOperand::Pinned {
+                view: unsafe { erased.reattach::<'cell>() },
+            },
             // SAFETY: see the function contract.
-            Verdict::Copy => CrossedOperand::Copied(unsafe { erased.reattach::<'severed>() }),
+            Verdict::Copy => CrossedOperand::Copied {
+                view: unsafe { erased.reattach::<'severed>() },
+            },
         }
     })
 }

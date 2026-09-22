@@ -7,12 +7,11 @@
 //! last step builds its result straight out of them — no `keep` at either park, no `redeem` at
 //! either wake, and no copy.
 
-use crate::knot::{KValue, KValueFamily};
-use crate::memory::{Active, Receipt};
-use crate::scheduler::tests::native::{record, recorded, reset, slab};
-use crate::scheduler::{
-    Action, Graph, Placement, Request, Scheduler, ScratchState, Slot, State, Step, StepError, Work,
-};
+use crate::knot::KValue;
+use crate::memory::Active;
+use crate::scheduler::tests::bundle::{Native, ScratchState, TestGraph};
+use crate::scheduler::tests::native::{record, recorded, reset, shares, where_text, work};
+use crate::scheduler::{Action, Placement, Received, Scheduler, Slot, Step, StepError, Use};
 
 /// The three texts the producers write, one per spawn, in the order the consumer asks for them.
 const TEXTS: [&str; 3] = ["first", "second", "third"];
@@ -20,78 +19,50 @@ const TEXTS: [&str; 3] = ["first", "second", "third"];
 /// Accepts only values at the step's own `'here`, which is invariant: a run read back at
 /// `'scratch` does not pass. What the final build asserts about where its result lives.
 fn in_storage<'graph, 'here>(
-    _: &Step<'_, 'graph, '_, 'here, '_>,
+    _: &Step<'_, 'graph, '_, 'here, '_, Native>,
     _: &'here [KValue<'graph, 'here>],
 ) {
 }
 
-/// The text a producer was born holding, as a borrow of program storage.
-fn born_text<'cell>(state: State<'_, 'cell>) -> Option<&'cell str> {
-    match state {
-        State::Value(KValue::Str(text)) => Some(text),
-        _ => None,
-    }
+/// Ask for one producer of `text`, placed as a co-tenant and asked with `Keeps`, so its result is
+/// built in this cell's own storage and reaches it as a carrier homed here.
+fn ask_for<'graph>(step: &mut Step<'_, 'graph, '_, '_, '_, Native>, text: &'graph str) -> Slot {
+    step.spawn(shares(produce, Use::Keeps, KValue::Str(text)))
 }
 
-/// Ask for one producer of `text`, placed as a co-tenant so its result is built in this cell's own
-/// storage and reaches it as a carrier homed here.
-fn ask_for<'graph>(step: &mut Step<'_, 'graph, '_, '_, '_>, text: &'graph str) -> Slot {
-    step.spawn(Request {
-        placement: Placement::Shares,
-        work: Work {
-            step: produce,
-            state: State::Value(KValue::Str(text)),
-        },
+/// A producer: build the text it was born holding. Asked with `Keeps`, the build lands in the
+/// consumer's storage and is filed as a carrier.
+fn produce<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let KValue::Str(text) = step.state() else {
+        return step.failed(StepError::Stale);
+    };
+    step.finish_fresh(move |writer, _| {
+        let value: KValue<'graph, '_> = crate::values::text(writer, text);
+        Active::new(value)
     })
 }
 
-/// A producer: build the text it was born holding in the consumer's own region, keep it, and file
-/// the carrier. Copied in shape from `tests::calls::place_in_storage`.
-fn produce<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_>,
-    state: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
-    let (Some(text), Some(consumer)) = (born_text(state), step.consumer()) else {
-        return step.failed(StepError::Undeliverable);
-    };
-    let Ok(placed) = step.alloc_into::<KValueFamily, KValueFamily>(consumer, &[], |writer, _| {
-        let value: KValue<'graph, '_> = crate::values::text(writer, text);
-        Active::new(value)
-    }) else {
-        return step.failed(StepError::Stale);
-    };
-    let carrier = step.keep(placed);
-    step.deliver_carrier(carrier)
-}
-
 /// The consumer's first step: ask for two producers and park on them, carrying nothing in scratch.
-fn ask_for_two<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_>,
-    _: State<'graph, '_>,
-    _: Option<ScratchState<'graph, '_, '_>>,
-) -> Action<'graph> {
+fn ask_for_two<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     ask_for(&mut step, TEXTS[0]);
     let asked = ask_for(&mut step, TEXTS[1]);
-    step.park(asked, gather_two, State::Empty, None)
+    step.park(asked, gather_two, KValue::Null, None)
 }
 
-/// The second step: bring both results to this cell's `'here`, lay them down as a run in the
+/// The second step: take both results at this cell's `'here`, lay them down as a run in the
 /// scratch habitat, ask for a third producer, and park carrying the run.
 fn gather_two<'graph, 'here, 'scratch>(
-    mut step: Step<'_, 'graph, '_, 'here, 'scratch>,
-    _: State<'graph, 'here>,
-    _: Option<ScratchState<'graph, 'here, 'scratch>>,
-) -> Action<'graph> {
+    mut step: Step<'_, 'graph, '_, 'here, 'scratch, Native>,
+) -> Action<'graph, Native> {
     let mut gathered = [KValue::Null; 2];
-    for (slot, held) in gathered.iter_mut().enumerate() {
-        let Ok(Receipt::Carrier(Ok(carrier))) = step.receipt(slot) else {
-            return step.failed(StepError::Unredeemable);
-        };
+    for (held, received) in gathered.iter_mut().zip(step.results().collect::<Vec<_>>()) {
         // Homed in this very cell, so the verdict pins and nothing is copied: the value reads at
         // this step's `'here` over the bytes the producer wrote.
-        *held = step.cross_here(&carrier);
-        record(where_text(*held));
+        let Ok(Received::Here(value)) = received else {
+            return step.failed(StepError::Unredeemable);
+        };
+        *held = value;
+        record(where_text(value));
     }
     // The run lives in the habitat; each element it holds names storage at `'here`.
     let run: &[KValue<'graph, '_>] = step.scratch_writer().fill(2, |index| gathered[index]);
@@ -100,7 +71,7 @@ fn gather_two<'graph, 'here, 'scratch>(
     step.park(
         asked,
         build,
-        State::Empty,
+        KValue::Null,
         Some(ScratchState::Gathered(run)),
     )
 }
@@ -108,17 +79,14 @@ fn gather_two<'graph, 'here, 'scratch>(
 /// The last step: take the third result and build all three into this cell's storage, straight out
 /// of the gathered run.
 fn build<'graph, 'here>(
-    mut step: Step<'_, 'graph, '_, 'here, '_>,
-    _: State<'graph, 'here>,
-    scratch: Option<ScratchState<'graph, 'here, '_>>,
-) -> Action<'graph> {
-    let Some(ScratchState::Gathered(run)) = scratch else {
+    mut step: Step<'_, 'graph, '_, 'here, '_, Native>,
+) -> Action<'graph, Native> {
+    let Some(ScratchState::Gathered(run)) = step.scratch() else {
         return step.failed(StepError::Unredeemable);
     };
-    let Ok(Receipt::Carrier(Ok(carrier))) = step.receipt(0) else {
+    let Some(Ok(Received::Here(third))) = step.results().next() else {
         return step.failed(StepError::Unredeemable);
     };
-    let third = step.cross_here(&carrier);
     // The gathered values go into storage as they are — the whole point of holding them at
     // `'here` across the park.
     let result = step
@@ -131,22 +99,14 @@ fn build<'graph, 'here>(
     step.done()
 }
 
-/// A text value as "<text>@<address>": what it says, and the bytes it says it from, so a copy is
-/// visible as a different address.
-fn where_text(value: KValue<'_, '_>) -> String {
-    match value {
-        KValue::Str(text) => format!("{text}@{:?}", text.as_ptr()),
-        _ => String::from("not text"),
-    }
-}
-
 #[test]
 fn a_cell_gathers_here_values_across_two_parks_and_builds_from_them_in_storage() {
     reset();
-    let mut graph: Graph<'static> = Graph::new(8);
-    let mut scheduler = Scheduler::over(&mut graph);
-    scheduler.submit(slab(ask_for_two, State::Empty), 0);
-    scheduler.run().expect("the drain runs to empty");
+    let mut graph: TestGraph<'static> = TestGraph::new(8);
+    let root = graph.root().expect("a fresh slab admits a root");
+    Scheduler::over(&mut graph)
+        .run(work(ask_for_two, KValue::Null), root, Placement::Fresh)
+        .expect("the root work ends");
 
     // Two recorded where they were gathered, then three where the result was built.
     let seen = recorded();
@@ -159,5 +119,6 @@ fn a_cell_gathers_here_values_across_two_parks_and_builds_from_them_in_storage()
     // Address and all: the two gathered values reached the build unmoved.
     assert_eq!((&seen[0], &seen[1]), (&seen[2], &seen[3]));
 
-    assert!(scheduler.graph().is_empty());
+    graph.release_root(root).expect("the root releases");
+    assert!(graph.is_empty());
 }
