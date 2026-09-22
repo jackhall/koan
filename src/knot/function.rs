@@ -7,7 +7,7 @@
 //! minted as an edge into the knot about to be tied — so a refusal writes nothing.
 
 use crate::elaborate::callable_type;
-use crate::memory::{BumpAllocator, BumpVec, KnotPlan};
+use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Component};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Link, Weight};
@@ -17,6 +17,12 @@ use super::{KActivationView, Knotted, Untieable};
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
     ktype: KType,
+    /// The quantifier map, or `None` where the function binds no group — which is almost every
+    /// function, and costs nothing at all. Homed out of line for the reason [`Node::Coerced`] is:
+    /// a fat slice here would widen every node in the program.
+    ///
+    /// [`Node::Coerced`]: super::Node::Coerced
+    quantifier_map: Option<&'cell QuantifierMap<'cell>>,
     shape: &'graph BodyShape<'graph>,
     closure: &'cell ClosureBindings<'graph, 'cell, X>,
     /// What rebuilding the whole knot this node sits in writes, the same on every node.
@@ -36,12 +42,14 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     /// `knot_weight`. The private-field constructor the tie uses.
     pub(super) fn new(
         ktype: KType,
+        quantifier_map: Option<&'cell QuantifierMap<'cell>>,
         shape: &'graph BodyShape<'graph>,
         closure: &'cell ClosureBindings<'graph, 'cell, X>,
         knot_weight: Weight,
     ) -> Self {
         Function {
             ktype,
+            quantifier_map,
             shape,
             closure,
             knot_weight,
@@ -51,6 +59,15 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     /// The function's type, elaborated from its signature where it was born.
     pub fn ktype(&self) -> KType {
         self.ktype
+    }
+
+    /// Where each `FOR ALL` name the declaration wrote landed in the canonical group, empty for
+    /// an unquantified function.
+    pub fn quantifier_map(&self) -> &'cell [Option<usize>] {
+        match self.quantifier_map {
+            Some(map) => map.0,
+            None => &[],
+        }
     }
 
     /// The body shape a call activates.
@@ -68,13 +85,16 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     }
 
     /// This function over `closure` rebuilt at another region lifetime — the copy's arm. The type,
-    /// the body shape and the knot weight ride over: a copy re-ties the same knot.
+    /// the body shape and the knot weight ride over: a copy re-ties the same knot. The quantifier
+    /// map is re-homed through `writer`, since it is a run in the source region.
     pub(super) fn rebuilt<'to, Y>(
         &self,
+        writer: Writer<'to>,
         closure: &'to ClosureBindings<'graph, 'to, Y>,
     ) -> Function<'graph, 'to, Y> {
         Function {
             ktype: self.ktype,
+            quantifier_map: QuantifierMap::laid_down(writer, self.quantifier_map()),
             shape: self.shape,
             closure,
             knot_weight: self.knot_weight,
@@ -82,10 +102,45 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     }
 }
 
+/// A quantified function's map from the declaration order its `FOR ALL` group was written in to
+/// the canonical group's order: declaration index → canonical index, `None` where canonical form
+/// dropped the variable.
+///
+/// A call binds the `k`-th type-parameter slot to the solution at `map[k]`, or to the variable's
+/// bound where canonical form dropped it. The node points at this rather than holding the run
+/// inline, so a `Node` stays its width.
+#[derive(Clone, Copy)]
+pub struct QuantifierMap<'cell>(&'cell [Option<usize>]);
+
+impl<'cell> QuantifierMap<'cell> {
+    /// `map` written into the region `writer` fills, or `None` where it is empty — an unquantified
+    /// function allocates nothing.
+    pub(super) fn laid_down(
+        writer: Writer<'cell>,
+        map: &[Option<usize>],
+    ) -> Option<&'cell QuantifierMap<'cell>> {
+        (!map.is_empty()).then(|| {
+            let run = writer.fill(map.len(), |at| map[at]);
+            resident(writer, QuantifierMap(run))
+        })
+    }
+
+    /// What laying `len` entries down costs a rebuild: the run, plus the header pointing at it.
+    pub(super) fn weight(len: usize) -> Weight {
+        if len == 0 {
+            return Weight::ZERO;
+        }
+        Weight::run::<Option<usize>>(len).plus(Weight::flat::<QuantifierMap<'_>>())
+    }
+}
+
 /// A function member, read and not yet written.
 pub(super) struct Staged<'graph, 'cell, 'x> {
     pub shape: &'graph BodyShape<'graph>,
     pub ktype: KType,
+    /// The declaration-order → canonical map the elaborator handed back, scratch-lived until the
+    /// tie lays it into the region.
+    pub quantifier_map: &'x [Option<usize>],
     pub captures: BumpVec<'x, Link<'graph, 'cell, Knotted<'graph, 'cell>>>,
 }
 
@@ -106,14 +161,15 @@ pub(super) fn stage<'graph, 'cell, 'x>(
             continue;
         };
         let form = body.form().expect("a callable body sits in its form");
-        let ktype = callable_type(form, activation, types, scratch).map_err(Untieable::Type)?;
+        let callable = callable_type(form, activation, types, scratch).map_err(Untieable::Type)?;
         let captures = ClosureBindings::read_captures(body, activation, scratch, |index| {
             plan.edge(index)
                 .expect("a member index is below the knot's count")
         });
         staged.push(Some(Staged {
             shape: body,
-            ktype,
+            ktype: callable.ktype,
+            quantifier_map: callable.quantifier_map,
             captures,
         }));
     }

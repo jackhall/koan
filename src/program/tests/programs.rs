@@ -213,3 +213,51 @@ fn a_whole_program() {
         "`f` returns `a`, the data node it closes over"
     );
 }
+
+#[test]
+fn a_quantified_lambda_is_called_by_name() {
+    let mut substrate = loaded(
+        "LET id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))\nLET r = (id 7)",
+        2,
+    );
+    let read = run_and_read(&mut substrate, &["r"]);
+    assert_eq!(read[0], "7");
+}
+
+#[test]
+fn a_call_binds_each_type_parameter_to_its_solution() {
+    // The frame solves the callee's group against the arguments' carried types and binds `Elt` to
+    // what it solved, so the body reads the argument's own type.
+    let mut substrate = loaded(
+        "LET which = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (Elt))\n\
+         LET n = (which 7)\nLET s = (which \"a\")",
+        2,
+    );
+    let read = run_and_read(&mut substrate, &["n", "s"]);
+    assert_eq!(read[0], "Number");
+    assert_eq!(read[1], "Str");
+}
+
+/// A quantified return is no scalar, so a call through one shares its frame rather than placing
+/// its result fresh — which is what [`a_quantified_return_shares_its_frame`] observes end to end.
+#[test]
+fn a_quantified_return_places_as_shares() {
+    let arena = crate::memory::Bump::new();
+    let types = crate::type_lattice::TypeRegistry::in_region(&arena);
+    assert_eq!(
+        crate::program::placement_of(types.quantified(0, crate::type_lattice::KType::ANY)),
+        crate::scheduler::Placement::Shares
+    );
+}
+
+#[test]
+fn a_quantified_return_shares_its_frame() {
+    // A quantified return places as `Shares`, so the frame forwards the argument rather than
+    // copying it: `r` reads back at the very address `xs` was built at.
+    let mut substrate = loaded(
+        "LET id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))\nLET xs = [1 2]\nLET r = (id xs)",
+        2,
+    );
+    let read = run_and_read(&mut substrate, &["xs", "r"]);
+    assert_eq!(address(&read[0]), address(&read[1]), "{read:?}");
+}

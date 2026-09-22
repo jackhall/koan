@@ -60,7 +60,7 @@ const KNOT: &str = "\
 LET greeting = \"hi\"
 LET words = [\"alpha\" \"beta\"]
 LET f = (FN :{} -> Str = (greeting words g))
-LET g = (FN :{} -> Str = (words f))";
+LET g = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (words f x))";
 
 #[test]
 fn a_copied_knot_is_the_same_knot_rebuilt() {
@@ -88,6 +88,13 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                     copied.function().expect("a function").shape(),
                     g.function().expect("a function").shape()
                 ));
+                // The quantifier map is a run in the source region, so the copy re-homes it: a
+                // different address holding the same entries.
+                let map = g.function().expect("a function").quantifier_map();
+                let copied_map = copied.function().expect("a function").quantifier_map();
+                assert_eq!(map, [Some(0)]);
+                assert_eq!(copied_map, map);
+                assert!(!ptr::eq(copied_map, map), "the run is re-homed, not shared");
 
                 let (f, copied_f) = (
                     captured_sibling(fixture, g, "f"),

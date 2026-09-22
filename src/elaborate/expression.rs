@@ -199,6 +199,10 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                 BuiltinShapeId::LambdaType => {
                     Ok(self.function(&[], part(1), part(3), groups)?.handle)
                 }
+                BuiltinShapeId::QuantifiedLambdaType => {
+                    let names = quantifiers(part(3), self.scratch);
+                    Ok(self.function(&names, part(4), part(6), groups)?.handle)
+                }
                 BuiltinShapeId::ExpressionHead => self.shape(&[], part(1), part(3), groups),
                 BuiltinShapeId::QuantifiedExpressionHead => {
                     let names = quantifiers(part(3), self.scratch);
@@ -321,6 +325,48 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                 Ok(())
             },
         )?;
+        let ret = self.part(ret, groups)?;
+        Ok(self.types.function_type(self.scratch, names, &params, ret))
+    }
+
+    /// The **function** type a combined form's head declares: the head's `<name> :<Type>` pairs as
+    /// a params record, its keywords dropped, under a group of its own.
+    ///
+    /// A call through the `LET` name the combined form binds is by name, not by keyword, so this
+    /// is the type the name holds; the head's shape goes only to the dispatch bucket. A `_` pair
+    /// is unsupported here: a body-bearing definition names its parameters, and a function type
+    /// has no positional slot to put a nameless one in.
+    pub(super) fn head_function(
+        &self,
+        names: &[TypeSymbol],
+        head: &ExpressionPart<'graph>,
+        ret: &ExpressionPart<'graph>,
+        groups: &Groups<'_>,
+    ) -> Result<GroupIntern<'x>, Elaboration> {
+        let own = Groups {
+            names,
+            outer: Some(groups),
+        };
+        let groups = if names.is_empty() { groups } else { &own };
+        let unsupported = Elaboration::Unsupported {
+            site: Site::of(head),
+        };
+        let ExpressionPart::Expression(run) = head else {
+            return Err(unsupported);
+        };
+        let run = run.reference();
+        let mut params = BumpVec::with_capacity_in(run.parts.len() / 2, self.scratch);
+        let mut index = 0;
+        while index < run.parts.len() {
+            match (run.parts[index].value, pair_name(run, index)) {
+                (_, Some(Some(name))) => {
+                    params.push((name, self.part(&run.parts[index + 1].value, groups)?));
+                    index += 2;
+                }
+                (ExpressionPart::Keyword(_), None) => index += 1,
+                _ => return Err(unsupported),
+            }
+        }
         let ret = self.part(ret, groups)?;
         Ok(self.types.function_type(self.scratch, names, &params, ret))
     }

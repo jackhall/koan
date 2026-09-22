@@ -134,9 +134,10 @@ member copied across a crossing, a function or a data node, re-ties its whole kn
 destination's writer, and is read through its edges after the region it came from is released.
 
 - `a_copied_knot_outlives_its_home`
-  a two-node knot of mutually recursive functions, whose closures capture a string and a string
-  list, crosses under a copy verdict, is kept, its home released, and redeemed in the destination's
-  next step: each edge names a node of the copy and every captured byte reads back.
+  a two-node knot of mutually recursive functions, one of them quantified, whose closures capture a
+  string and a string list, crosses under a copy verdict, is kept, its home released, and redeemed
+  in the destination's next step: each edge names a node of the copy, the quantifier map is re-homed
+  through the destination's writer, and every captured byte reads back.
 - `a_copied_ring_outlives_its_home`
   a self-referencing tagged value whose record holds a string cell and an anonymous list node
   naming the ring crosses under a copy verdict, is kept, its home released, and redeemed: every
@@ -205,6 +206,10 @@ shorter brand than the one it was bound at.
   every unit kind in one program, on a one-cell slab, read back after the drain.
 - `an_eager_part_is_supplied_by_site_in_one_wake`
   a cyclic data member whose two eager parts are evaluated at one park and tied by site.
+- `a_call_binds_each_type_parameter_to_its_solution`
+  a quantified lambda called twice: each frame reads the callee's quantifier map out of the knot's
+  region, solves the group against the argument's carried type, and lays the solution down as a type
+  value in its own region — a read across the two regions at every call.
 
 ## Recent full-slate run durations
 

@@ -34,9 +34,9 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
         let source = member.member().knot();
         let knot =
             KnotPlan::new(source.len()).tie(writer, |edge| match source.member(edge).payload() {
-                Node::Function(function) => {
-                    Node::Function(function.rebuilt(function.closure().copied(writer, &mut *copy)))
-                }
+                Node::Function(function) => Node::Function(
+                    function.rebuilt(writer, function.closure().copied(writer, &mut *copy)),
+                ),
                 Node::Data {
                     circular,
                     knot_weight,

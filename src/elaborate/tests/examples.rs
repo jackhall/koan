@@ -104,6 +104,64 @@ LET Fixed = :(EXPR (ID x :Number) -> Number)";
     });
 }
 
+#[test]
+fn a_quantified_lambda_type_interns_by_shape_whatever_its_names() {
+    let source = "\
+LET Named = :(FN FOR ALL (Elt) :{x :Elt} -> Elt)
+LET Renamed = :(FN FOR ALL (Other) :{x :Other} -> Other)
+LET Fixed = :(FN :{x :Number} -> Number)";
+    with_program(source, scalars, nulls, |program| {
+        let named = elaborated(&program, 0).unwrap();
+        assert_eq!(elaborated(&program, 1), Ok(named));
+        assert_ne!(elaborated(&program, 2), Ok(named));
+    });
+}
+
+#[test]
+fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
+    // A bare `FN` type opens no group, so its field and return keep reading the head's `Elt`.
+    let source =
+        "LET Applied = :(EXPR FOR ALL (Elt) (APPLY f :(FN :{x :Elt} -> Elt) TO v :Elt) -> Elt)";
+    with_program(source, scalars, nulls, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        let quantified = types.quantified(0, KType::ANY);
+        let x = BinderSymbol::classify("x").unwrap();
+        let inner = types
+            .function_type(scratch, &[], &[(x, quantified)], quantified)
+            .handle;
+        let elt = program.type_name("Elt");
+        assert_eq!(
+            elaborated(&program, 0),
+            Ok(types
+                .shape_type(
+                    scratch,
+                    &[elt],
+                    &[
+                        keyword("APPLY", program.symbols),
+                        DispatchTokenElement::Slot(inner),
+                        keyword("TO", program.symbols),
+                        DispatchTokenElement::Slot(quantified),
+                    ],
+                    quantified
+                )
+                .handle)
+        );
+    });
+}
+
+#[test]
+fn an_outer_quantifier_read_under_a_nested_function_group_is_refused() {
+    // The nested `FN FOR ALL` opens a group of its own, which shadows the head's `Elt`.
+    let source = "LET Shadowed = :(EXPR FOR ALL (Elt) \
+                    (APPLY f :(FN FOR ALL (Other) :{x :Elt} -> Other) TO v :Elt) -> Elt)";
+    with_program(source, scalars, nulls, |program| {
+        assert!(matches!(
+            elaborated(&program, 0),
+            Err(Elaboration::Unsupported { .. })
+        ));
+    });
+}
+
 /// A union `Shape` of two singleton members, `Circle` and `Square`.
 fn shapes(
     types: &TypeRegistry<'_>,
@@ -173,6 +231,7 @@ fn a_callable_type_is_read_off_the_form_that_births_it() {
 LET f = (FN :{x :Number, ys :(LIST OF Str)} -> Bool = (x))
 LET twice = FN EXPR (TWICE x :Number) -> Number = (x)
 LET id = FN EXPR FOR ALL (Elt) (ID x :Elt) -> Elt = (x)
+LET lambda_id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))
 LET plus = OP #(+) OVER Number = (left)
 LET less = OP #(<) OVER Number -> Bool = (left)
 LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
@@ -183,7 +242,17 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
                 .birth(name)
                 .form()
                 .expect("a callable body sits in a form");
+            callable_type(form, program.activation, types, scratch).map(|callable| callable.ktype)
+        };
+        let mapped = |name| {
+            let form = program
+                .birth(name)
+                .form()
+                .expect("a callable body sits in a form");
             callable_type(form, program.activation, types, scratch)
+                .expect("the definition elaborates")
+                .quantifier_map
+                .to_vec()
         };
         let x = BinderSymbol::classify("x").unwrap();
         let ys = BinderSymbol::classify("ys").unwrap();
@@ -202,25 +271,34 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
             types.shape_type(scratch, &[], elements, ret).handle
         };
         let number = DispatchTokenElement::Slot(KType::NUMBER);
+        // A combined form's type is the function over its head's **slot names**, not the head's
+        // shape: a call through the `LET` name is by name. Only the dispatch bucket carries the
+        // shape.
         assert_eq!(
             typed("twice"),
-            Ok(shape(&[keyword("TWICE", symbols), number], KType::NUMBER))
+            Ok(types
+                .function_type(scratch, &[], &[(x, KType::NUMBER)], KType::NUMBER)
+                .handle)
         );
         let elt = program.type_name("Elt");
         let quantified = types.quantified(0, KType::ANY);
+        let identity = types
+            .function_type(scratch, &[elt], &[(x, quantified)], quantified)
+            .handle;
         assert_eq!(
             typed("id"),
-            Ok(types
-                .shape_type(
-                    scratch,
-                    &[elt],
-                    &[
-                        keyword("ID", symbols),
-                        DispatchTokenElement::Slot(quantified)
-                    ],
-                    quantified
-                )
-                .handle)
+            Ok(identity),
+            "a quantified combined form carries its group onto the function type"
+        );
+        assert_eq!(
+            typed("lambda_id"),
+            Ok(identity),
+            "the `FN FOR ALL` lambda spells the same type its combined twin does"
+        );
+        assert_eq!(
+            mapped("lambda_id"),
+            vec![Some(0)],
+            "the one declared name survives canonical form at index 0"
         );
         assert_eq!(
             typed("plus"),

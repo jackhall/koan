@@ -214,11 +214,13 @@ fn a_signatures_bodyless_heads_are_keyworded_members() {
 
 #[test]
 fn a_bodyless_head_spells_the_shape_its_definition_spells() {
-    // One builder reads both, so a head and the definition satisfying it can never disagree.
+    // One builder reads both, so an operator head and the definition satisfying it can never
+    // disagree. An `EXPR` head's twin is not here: a combined definition's type is the function
+    // over its head's slot names, and the shape it registers is the dispatch bucket's — see
+    // [dispatch](../../../roadmap/rewrite/dispatch.md).
     brought(
-        "SIG Arith = ((EXPR (TWICE x :Number) -> Number) (OP #(+) OVER Number) \
+        "SIG Arith = ((OP #(+) OVER Number) \
                       (UNARY OP #(~) OVER Number -> Number))\n\
-         LET twice = FN EXPR (TWICE x :Number) -> Number = (x)\n\
          LET plus = OP #(+) OVER Number = (left)\n\
          LET negate = UNARY OP #(~) OVER Number -> Number = (operands)",
         |program| {
@@ -233,9 +235,10 @@ fn a_bodyless_head_spells_the_shape_its_definition_spells() {
                     .expect("a callable body sits in a form");
                 callable_type(form, program.activation, program.types, program.scratch)
                     .expect("the definition elaborates")
+                    .ktype
             };
             let mut declared: Vec<KType> = schema.keyworded.to_vec();
-            let mut satisfiers = vec![defined("twice"), defined("plus"), defined("negate")];
+            let mut satisfiers = vec![defined("plus"), defined("negate")];
             declared.sort_unstable();
             satisfiers.sort_unstable();
             assert_eq!(declared, satisfiers);

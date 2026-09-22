@@ -20,7 +20,7 @@ use crate::scheduler::{
 };
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, TypeNode};
+use crate::type_lattice::{Collector, KType, TypeNode, Variance, admits_with};
 use crate::values::{TypeValue, Value};
 
 use super::bundle::{KBirth, KBundle, KState};
@@ -204,8 +204,10 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     }
 }
 
-/// A frame's activation: laid down for `callee`, with every parameter bound from `arguments`.
-/// `None` when the callee is no function, or the arguments do not name its parameters exactly.
+/// A frame's activation: laid down for `callee`, with every value parameter bound from
+/// `arguments` and every type parameter bound to what the callee's `FOR ALL` group solves to.
+/// `None` when the callee is no function, the arguments do not name its value parameters exactly,
+/// or its group has no solution — which [`run`] turns into a refusal, as an arity mismatch is.
 fn frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_>,
     program: &'graph Program<'graph>,
@@ -217,6 +219,39 @@ fn frame<'graph, 'here>(
     let record = arguments.as_record()?;
     let shape = function.shape();
     let writer = step.writer();
+    let types = program.types();
+    let TypeNode::KFunction {
+        quantifiers,
+        params,
+        ..
+    } = types.node(function.ktype())
+    else {
+        return None;
+    };
+    // Solve the group first: every value parameter's declared type against the argument's carried
+    // type, under one collector. An unquantified callee has nothing to solve and skips the walk,
+    // so its frame is byte-for-byte what it was.
+    // `Bump::new` claims no chunk until something is put in it, so an unquantified call pays
+    // nothing for having one in reach.
+    let bump = Bump::new();
+    let scratch = &bump;
+    let mut solution = None;
+    if !quantifiers.is_empty() {
+        let mut collector = Collector::new(scratch, quantifiers.len());
+        for (name, declared) in params.iter() {
+            let argument = record.field(name.symbol())?;
+            admits_with(
+                types,
+                scratch,
+                declared,
+                argument.ktype(),
+                Variance::Co,
+                &mut collector,
+            )
+            .ok()?;
+        }
+        solution = Some(collector.solve(types).ok()?);
+    }
     let activation = resident(
         writer,
         KActivation::of_callable(
@@ -227,15 +262,32 @@ fn frame<'graph, 'here>(
             program.builtins(),
         ),
     );
-    let mut parameters = 0;
+    let map = function.quantifier_map();
+    let (mut parameters, mut declared) = (0, 0);
     for slot in 0..shape.slots() {
         let slot = Slot(slot as u32);
         let name = shape.slot_name(slot);
         if shape.slot(name).map(|(_, at)| at) != Some(Position::PARAMETER) {
             continue;
         }
-        parameters += 1;
-        let value = *record.field(name.symbol())?;
+        let value = match name {
+            BinderSymbol::Value(name) => {
+                parameters += 1;
+                *record.field(name.symbol())?
+            }
+            // The type parameters sit in the group's **written** order, because the `Quantifiers`
+            // role precedes the `Signature` role in every quantified entry. The `k`-th takes the
+            // solution at `map[k]`, or `Any` — every `FOR ALL` name's bound today — where
+            // canonical form dropped the variable and there is nothing to solve for.
+            BinderSymbol::Type(_) => {
+                let solved = match map.get(declared).copied().flatten() {
+                    Some(canonical) => *solution.as_ref()?.get(canonical)?,
+                    None => KType::ANY,
+                };
+                declared += 1;
+                Value::Type(TypeValue::new(writer, solved, types))
+            }
+        };
         activation.bind(slot, value).ok()?;
     }
     (parameters == record.len()).then_some(activation)

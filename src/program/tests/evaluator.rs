@@ -151,7 +151,9 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 )
             });
         }
-        Form::Leaf(part @ ExpressionPart::Identifier(_)) => {
+        // A Type-class name reads through the activation like any other mention: a frame binds
+        // its callee's type parameters, so `Elt` inside a quantified body is an ordinary read.
+        Form::Leaf(part @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
             let Some(value) = read(&view, part) else {
                 return step.failed(StepError::Refused);
             };
@@ -297,10 +299,12 @@ fn park<'graph, 'here>(
     step.park(asked, evaluate, KState::Evaluating { birth, stage }, None)
 }
 
-/// The name of `callee`'s one parameter.
+/// The name of `callee`'s one **value** parameter. A quantified callee's type-parameter slots are
+/// bound by the frame from its solved group, not by the caller, so they are skipped here.
 fn parameter(callee: KValue<'_, '_>) -> Option<crate::symbols::BinderSymbol> {
     let shape = callee.as_callable().and_then(Knotted::function)?.shape();
     (0..shape.slots())
         .map(|slot| shape.slot_name(Slot(slot as u32)))
+        .filter(|name| matches!(name, crate::symbols::BinderSymbol::Value(_)))
         .find(|name| shape.slot(*name).map(|(_, at)| at) == Some(Position::PARAMETER))
 }

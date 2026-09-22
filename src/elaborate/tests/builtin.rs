@@ -89,6 +89,7 @@ fn a_bucket_interns_one_handle_per_overload() {
     assert_eq!(count(BuiltinShapeId::NewTypeDefinition), 3);
     assert_eq!(count(BuiltinShapeId::Attribute), 6);
     assert_eq!(count(BuiltinShapeId::CombinedLambda), 0);
+    assert_eq!(count(BuiltinShapeId::CombinedQuantifiedLambda), 0);
 }
 
 /// The one union a builtin slot names interns as the union of its three members — the compound the

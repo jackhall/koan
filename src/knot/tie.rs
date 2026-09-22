@@ -22,6 +22,7 @@ use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::Weight;
 
 use super::data::{self, Stager};
+use super::function::QuantifierMap;
 use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, function, module};
 
 /// Tie `component` of `activation`'s shape as one knot in `writer`'s region: every member born
@@ -91,11 +92,20 @@ pub fn tie<'graph, 'cell, 'x>(
 
     let mut knot_weight = Weight::flat::<usize>();
     let mut closures = BumpVec::with_capacity_in(functions.len(), scratch);
+    // Each function member's quantifier map is laid down once, beside its closure: the run lives
+    // in the region for the knot's life, and a copy re-homes it through the destination writer.
+    // An unquantified member's map is empty and writes nothing.
+    let mut maps = BumpVec::with_capacity_in(functions.len(), scratch);
     for staged in functions.iter() {
         closures.push(staged.as_ref().map(|staged| {
             let closure = ClosureBindings::of(writer, &staged.captures);
             knot_weight = knot_weight.plus(closure.weight());
             closure
+        }));
+        maps.push(staged.as_ref().map(|staged| {
+            let map = staged.quantifier_map;
+            knot_weight = knot_weight.plus(QuantifierMap::weight(map.len()));
+            QuantifierMap::laid_down(writer, map)
         }));
     }
     let mut circulars = BumpVec::with_capacity_in(nodes.len(), scratch);
@@ -118,6 +128,7 @@ pub fn tie<'graph, 'cell, 'x>(
         ) {
             (Some(staged), _) => Node::Function(Function::new(
                 staged.ktype,
+                maps[index].expect("a function member staged its quantifier map"),
                 staged.shape,
                 closures[index].expect("a function member has a closure"),
                 knot_weight,

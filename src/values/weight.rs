@@ -23,6 +23,11 @@ impl Weight {
         Weight(len)
     }
 
+    /// A run of `len` `T`s laid down in a region — a function's quantifier map.
+    pub const fn run<T>(len: usize) -> Weight {
+        Weight(size_of::<T>().saturating_mul(len))
+    }
+
     /// Both weights, saturating.
     pub const fn plus(self, other: Weight) -> Weight {
         Weight(self.0.saturating_add(other.0))

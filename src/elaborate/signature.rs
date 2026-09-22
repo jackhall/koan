@@ -1,5 +1,10 @@
 //! A callable's type, read off the form node its body sits in: a `FN`'s function type over its
 //! parameter schema, an `EXPR`'s or `OP`'s expression shape over its head.
+//!
+//! A **combined** form — `LET name = FN EXPR …` — is handed the function type over its head's slot
+//! names too, because that is the type the `LET` name holds and the type a call through the name
+//! reads. Only its bucket registration carries the shape; see
+//! [dispatch](../../roadmap/rewrite/dispatch.md).
 
 use crate::memory::BumpAllocator;
 use crate::parse::builtin_shapes::BuiltinShapeId;
@@ -13,20 +18,31 @@ use crate::values::KnottedFamily;
 use super::Elaboration;
 use super::expression::{Elaborator, Groups, quantifiers};
 
+/// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
+/// canonical group — what a call needs to bind each type parameter to its solution.
+pub struct Callable<'x> {
+    pub ktype: KType,
+    /// Declaration index → canonical index, `None` for a variable canonical form dropped. Empty
+    /// for an unquantified callable, and for every shape, whose caller reads the group off the
+    /// bucket instead.
+    pub quantifier_map: &'x [Option<usize>],
+}
+
 /// The type of the callable whose body sits in `form`, its signature's names read through
 /// `reader` — the activation the form runs in.
 ///
-/// A `FN` is the function type over its `:{…}` schema's fields and its return. An `EXPR` is the
-/// expression shape over its head's keywords and typed slots and its return, quantified over its
-/// `FOR ALL` names. A binary `OP` is the shape `operand <symbol> operand`, returning its declared
-/// result or else its operand, since a chain of it folds; a `UNARY OP` is the shape `<symbol>
-/// operands`, over a list of its operand, since its body takes the whole run.
-pub fn callable_type<'graph, XF: KnottedFamily<'graph>>(
+/// A `FN`, and a **combined** `LET name = FN EXPR …` alike, is the function type over its
+/// parameter names and its return, quantified where the form carries a `FOR ALL` group. A bodyless
+/// `EXPR` is the expression shape over its head's keywords and typed slots and its return,
+/// quantified over its `FOR ALL` names. A binary `OP` is the shape `operand <symbol> operand`,
+/// returning its declared result or else its operand, since a chain of it folds; a `UNARY OP` is
+/// the shape `<symbol> operands`, over a list of its operand, since its body takes the whole run.
+pub fn callable_type<'graph, 'x, XF: KnottedFamily<'graph>>(
     form: &KExpression<'graph>,
     reader: &ActivationView<'graph, '_, XF>,
     types: &TypeRegistry<'_>,
-    scratch: BumpAllocator<'_>,
-) -> Result<KType, Elaboration> {
+    scratch: BumpAllocator<'x>,
+) -> Result<Callable<'x>, Elaboration> {
     let shape = form
         .cache()
         .builtin_shape()
@@ -66,29 +82,46 @@ pub fn callable_type<'graph, XF: KnottedFamily<'graph>>(
     let unsupported = Elaboration::Unsupported {
         site: Site::of(body),
     };
+    let plain = |ktype| {
+        Ok(Callable {
+            ktype,
+            quantifier_map: &[],
+        })
+    };
     match kind {
         BodyKind::Lambda => {
             let (Some(signature), Some(ret)) = (signature, type_parts[0]) else {
                 return Err(unsupported);
             };
-            if shape.id == BuiltinShapeId::Lambda {
-                return Ok(elaborator.function(&[], signature, ret, &top)?.handle);
-            }
             let names = group.map(|group| quantifiers(group, scratch));
-            elaborator.shape(names.as_deref().unwrap_or(&[]), signature, ret, &top)
+            let names = names.as_deref().unwrap_or(&[]);
+            let interned = match shape.id {
+                BuiltinShapeId::Lambda | BuiltinShapeId::QuantifiedLambda => {
+                    elaborator.function(names, signature, ret, &top)?
+                }
+                BuiltinShapeId::CombinedExpression
+                | BuiltinShapeId::CombinedQuantifiedExpression => {
+                    elaborator.head_function(names, signature, ret, &top)?
+                }
+                _ => return plain(elaborator.shape(names, signature, ret, &top)?),
+            };
+            Ok(Callable {
+                ktype: interned.handle,
+                quantifier_map: interned.quantifier_map,
+            })
         }
         BodyKind::Operator | BodyKind::UnaryOperator => {
             let (Some(symbol), Some(operand)) = (symbol, type_parts[0]) else {
                 return Err(unsupported);
             };
-            operator_shape(
+            plain(operator_shape(
                 &elaborator,
                 kind == BodyKind::UnaryOperator,
                 symbol,
                 operand,
                 type_parts[1],
                 &top,
-            )
+            )?)
         }
         BodyKind::Module | BodyKind::Surfaced => Err(unsupported),
     }

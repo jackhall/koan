@@ -9,9 +9,11 @@ mod substrate;
 use std::cell::RefCell;
 
 use crate::knot::{KValue, Knotted};
+use crate::program::record::Program;
 use crate::program::{CellSubstrate, KBirth, KBundle, KState};
 use crate::scheduler::{Action, Step, StepError};
 use crate::scope::{Coordinate, Target};
+use crate::type_lattice::display_name;
 use crate::values::Value;
 
 use evaluator::{Mini, record};
@@ -60,30 +62,40 @@ fn inspecting<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'gr
             hops: 0,
             target: Target::Local(slot),
         });
-        record(describe(value));
+        record(describe(value, program));
     }
     step.leave(birth)
 }
 
 /// A value in a form a test can assert on.
-fn describe(value: KValue<'_, '_>) -> String {
+fn describe<'graph>(value: KValue<'graph, '_>, program: &'graph Program<'graph>) -> String {
     match value {
         Value::Number(number) => number.to_string(),
         Value::Bool(flag) => flag.to_string(),
         Value::Null => String::from("null"),
         Value::Str(text) => format!("{text:?}"),
         Value::List(list) => {
-            let cells: Vec<_> = list.cells().iter().map(|cell| describe(*cell)).collect();
+            let cells: Vec<_> = list
+                .cells()
+                .iter()
+                .map(|cell| describe(*cell, program))
+                .collect();
             format!("[{}]@{:p}", cells.join(" "), list)
         }
-        Value::Knotted(member) => describe_member(member),
+        Value::Type(value) => {
+            display_name(value.handle(), program.types(), program.symbols()).to_string()
+        }
+        Value::Knotted(member) => describe_member(member, program),
         _ => String::from("other"),
     }
 }
 
 /// A knot member: a function by the knot it sits in, a module by its members, a data node by its
 /// knot.
-fn describe_member(member: Knotted<'_, '_>) -> String {
+fn describe_member<'graph>(
+    member: Knotted<'graph, '_>,
+    program: &'graph Program<'graph>,
+) -> String {
     let knot = member
         .member()
         .knot()
@@ -95,7 +107,7 @@ fn describe_member(member: Knotted<'_, '_>) -> String {
         let members: Vec<_> = module
             .members()
             .iter()
-            .map(|value| describe(*value))
+            .map(|value| describe(*value, program))
             .collect();
         return format!("module({})", members.join(", "));
     }
