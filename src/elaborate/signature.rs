@@ -6,12 +6,13 @@
 //! reads. Only its bucket registration carries the shape; see
 //! [dispatch](../../roadmap/rewrite/dispatch.md).
 
-use crate::memory::BumpAllocator;
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ActivationView, Site, is_equal, is_unequal};
+use crate::symbols::TypeSymbol;
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
 use crate::values::KnottedFamily;
 
@@ -22,10 +23,15 @@ use super::expression::{Elaborator, Groups, quantifiers};
 /// canonical group — what a call needs to bind each type parameter to its solution.
 pub struct Callable<'x> {
     pub ktype: KType,
-    /// Declaration index → canonical index, `None` for a variable canonical form dropped. Empty
-    /// for an unquantified callable, and for every shape, whose caller reads the group off the
-    /// bucket instead.
-    pub quantifier_map: &'x [Option<usize>],
+    /// Each `FOR ALL` name the declaration wrote, in written order, with its index in `ktype`'s
+    /// canonical group — `None` for a variable canonical form dropped. Empty for an unquantified
+    /// callable, and for every shape, whose caller reads the group off the bucket instead.
+    ///
+    /// The **name** is the key, not the position: a callee's type-parameter slots reach its frame
+    /// symbol-sorted, not in written order, and `ktype`'s own `quantifiers` cannot stand in for
+    /// this because alpha-variants intern to one node and it holds whichever spelling interned
+    /// first.
+    pub quantifier_map: &'x [(TypeSymbol, Option<usize>)],
 }
 
 /// The type of the callable whose body sits in `form`, its signature's names read through
@@ -105,9 +111,16 @@ pub fn callable_type<'graph, 'x, XF: KnottedFamily<'graph>>(
                 }
                 _ => return plain(elaborator.shape(names, signature, ret, &top)?),
             };
+            let mut map = BumpVec::with_capacity_in(names.len(), scratch);
+            map.extend(
+                names
+                    .iter()
+                    .zip(interned.quantifier_map)
+                    .map(|(name, canonical)| (*name, *canonical)),
+            );
             Ok(Callable {
                 ktype: interned.handle,
-                quantifier_map: interned.quantifier_map,
+                quantifier_map: map.leak(),
             })
         }
         BodyKind::Operator | BodyKind::UnaryOperator => {

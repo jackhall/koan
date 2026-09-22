@@ -157,8 +157,14 @@ cell of its own: a cell per unit would cost a create, an enter, a release and a
 receipt slot per statement per call, for statements that mostly never park.
 Born as `KBirth::Program` it lays the top level's activation down; born as
 `KBirth::Call` it lays the callee's activation down in the frame's own cell and
-binds each parameter from the argument record, which must name the parameters
-exactly.
+binds each value parameter from the argument record, which must name them
+exactly. A **quantified** callee's frame first solves its group: every declared
+parameter type against the argument's carried type, under one collector, and
+each type-parameter slot is then bound to a type value holding its solution,
+read through the callee's
+[quantifier map](../knot/README.md). A group the arguments cannot solve binds
+nothing and refuses the call, as an argument record that misnames a parameter
+does.
 
 It performs the units in the order the shape emitted them
 ([Units](../scope/README.md#units)), each after every unit it reads, over a

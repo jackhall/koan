@@ -32,8 +32,8 @@ registry's own doors:
   [chained form](../scope/README.md#operator-groups) the shape builder
   already rewrote it into, so nothing here walks a union part by part;
 - `:{x :Elem, …}` is the record type of its fields in written order;
-- `FN :{x :Elem, …} -> Ret` is the function type over the schema's fields and
-  the return;
+- `FN :{x :Elem, …} -> Ret`, with or without `FOR ALL (names)`, is the function
+  type over the schema's fields and the return;
 - `EXPR (head) -> Ret`, with or without `FOR ALL (names)`, is the expression
   shape over the head's keywords and typed slots and the return;
 - `Union.Tag` is the member of the union whose tag it names;
@@ -46,8 +46,11 @@ registry's own doors:
 is that group's quantifier at its written position, elaborated as
 `quantified(index, Any)`, so two heads that differ only in what they call their
 quantifiers intern to one shape. Groups nest: an `EXPR` type inside a signature
-opens its own group, and a name the innermost group declares shadows the rest.
-A name only an *outer* group declares, read under a nested group, is refused.
+opens its own group, as does a `FN FOR ALL` type, and a name the innermost group
+declares shadows the rest. A name only an *outer* group declares, read under a
+nested group, is refused. A **bare** `FN` type opens no group at all, so a
+parameter or return it spells inside a quantified head keeps reading that head's
+variables.
 
 ## A callable's type
 
@@ -56,13 +59,24 @@ node its body sits in — `BodyShape::form` of the body shape the binder births 
 walking the node's parts by the [roles](../parse/builtin_shapes/role.rs) its
 cached `BUILTIN_SHAPES` entry gives them:
 
-- a `FN` is the function type over its `:{…}` schema and its return;
-- an `EXPR` is the expression shape over its head and its return, quantified
+- a `FN` is the function type over its `:{…}` schema and its return, quantified
   over its `FOR ALL` names;
+- a **combined** form — `LET name = FN EXPR …`, with or without a group — is the
+  function type over its head's slot names and its return, because a call
+  through the `LET` name is by name; only its bucket registration carries the
+  head's shape;
+- a bodyless `EXPR` is the expression shape over its head and its return,
+  quantified over its `FOR ALL` names;
 - a binary `OP` is the shape `operand <symbol> operand`, returning its declared
   result, or its operand when it declares none, since a chain of it folds;
 - a `UNARY OP` is the shape `<symbol> operands`, whose slot is a list of its
   operand, since its body's one parameter `operands` takes the whole run.
+
+A function type binds its group in canonical form, which may renumber or drop a
+variable, so `callable_type` hands back the declaration-index → canonical-index
+map beside the handle. The knot stores it on the function node and a call reads
+each type parameter's solution through it. A shape's map stays empty: its caller
+reads the group off the bucket instead.
 
 A module body has no callable type here, and neither has a `USING` body: its
 type is its signature, below.
@@ -264,8 +278,8 @@ interns as the union of its three members.
 
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
   bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
-- [Quantified lambdas](../../roadmap/rewrite/quantified-lambdas.md) — the
-  quantified function type `callable_type` hands a `FN EXPR FOR ALL` combined
-  form, and the `FN FOR ALL` lambda that elaborates to one.
+- [Quantified lambdas](../../roadmap/rewrite/quantified-lambdas.md) — a call
+  binding each of a group's type parameters to its own solution, which the frame
+  reads off the map by position.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates.

@@ -19,6 +19,7 @@ the link in each section to the relevant chapter.
 | `EXPR FOR ALL (<names>) (<head>) -> <Type> = (<body>)` | The same, quantified: each name is solved per call from the types the arguments carry. |
 | `LET <name> = FN EXPR (<head>) -> <Type> = (<body>)` | Both channels from one statement: the value name and the shape's bucket. |
 | `FN :{<fields>} -> <Type> = (<body>)`      | A lambda: keyword-less, reached by name, called with a record of named arguments. |
+| `FN FOR ALL (<names>) :{<fields>} -> <Type> = (<body>)` | The same, quantified: each name is solved per call from the types the arguments carry, and the body reads it as a type. |
 | `<keyword> <args>`                         | Call a function by writing its shape (e.g. `ECHO 21`). |
 | `<fn> {name = value, ...}`                 | Call a captured function by named arguments. |
 | `CLOSE OVER (<captures>) (<block>)`        | Run a block over a region of its own, copying the named values in; only the block's last expression escapes, and it holds copies rather than the enclosing call. |
@@ -81,6 +82,7 @@ the link in each section to the relevant chapter.
 | `:(LIST OF <Type>)`           | List type.                                         |
 | `:(MAP <Key> -> <Value>)`     | Map / dictionary type.                             |
 | `:(FN :{<params>} -> <Result>)`| Lambda type — the parameter list is a record type (`:{}` when nullary). |
+| `:(FN FOR ALL (<names>) :{<params>} -> <Result>)` | The quantified lambda type. |
 | `:(EXPR (<head>) -> <Result>)` | Expression-shape type — the type of a keyworded definition; write `_` at each slot. |
 | `:(EXPR FOR ALL (<names>) (<head>) -> <Result>)` | The quantified shape type. |
 | `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |

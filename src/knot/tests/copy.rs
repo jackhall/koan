@@ -92,7 +92,8 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                 // different address holding the same entries.
                 let map = g.function().expect("a function").quantifier_map();
                 let copied_map = copied.function().expect("a function").quantifier_map();
-                assert_eq!(map, [Some(0)]);
+                assert_eq!(map.len(), 1);
+                assert_eq!(map[0].1, Some(0));
                 assert_eq!(copied_map, map);
                 assert!(!ptr::eq(copied_map, map), "the run is re-homed, not shared");
 

@@ -241,6 +241,42 @@ fn a_call_binds_each_type_parameter_to_its_solution() {
 /// A quantified return is no scalar, so a call through one shares its frame rather than placing
 /// its result fresh — which is what [`a_quantified_return_shares_its_frame`] observes end to end.
 #[test]
+fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
+    // A callee's type-parameter slots reach its frame **symbol-sorted**, which is BLAKE3 order and
+    // so unrelated to what was written. These two callees are the same type — canonical form drops
+    // the unused name from both — and differ only in the order their groups were written, so a
+    // frame that read the map positionally would hand one of them the other's answer. Both must
+    // read `Unused` as `Any` whichever way the two symbols happen to sort.
+    let mut substrate = loaded(
+        "LET ab = (FN FOR ALL (Held Unused) :{x :(LIST OF Held)} -> Held = (Unused))\n\
+         LET ba = (FN FOR ALL (Unused Held) :{x :(LIST OF Held)} -> Held = (Unused))\n\
+         LET one = (ab [1 2])\nLET two = (ba [1 2])",
+        2,
+    );
+    let read = run_and_read(&mut substrate, &["one", "two"]);
+    assert_eq!(read[0], "Any", "`Unused` is dropped by canonical form");
+    assert_eq!(
+        read[1], read[0],
+        "the written order does not change the answer"
+    );
+}
+
+#[test]
+fn a_call_whose_argument_cannot_solve_the_group_is_refused() {
+    // `Held` is reached only under a list, so a bare number admits nowhere and the walk refuses
+    // before the frame binds anything.
+    let mut substrate = loaded(
+        "LET first = (FN FOR ALL (Held) :{x :(LIST OF Held)} -> Held = (x))\nLET r = (first 7)",
+        2,
+    );
+    let outcome = substrate.with(|running| running.run());
+    assert!(
+        outcome.is_err(),
+        "a group the argument cannot solve refuses"
+    );
+}
+
+#[test]
 fn a_quantified_return_places_as_shares() {
     let arena = crate::memory::Bump::new();
     let types = crate::type_lattice::TypeRegistry::in_region(&arena);

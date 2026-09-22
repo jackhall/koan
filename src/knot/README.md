@@ -40,7 +40,14 @@ activation. This module closes it:
   Its equality is node identity.
 - The knot's payload is a `Node`, of four arms. A `Function` node holds the
   function's memoized type handle, the body shape it runs (in program storage),
-  its closure bindings, and the weight of the whole knot it sits in. A `Data`
+  its closure bindings, the weight of the whole knot it sits in, and — where its
+  type binds a `FOR ALL` group — its **quantifier map**. The map is the
+  declaration-index → canonical-index run
+  [the elaborator hands back](../elaborate/README.md#a-callables-type), which a
+  call reads to bind each type parameter to what the group solved to. It is
+  homed out of line for the reason a barrier's fields are, below: the node holds
+  one nullable pointer, eight bytes, and an unquantified function — which is
+  almost every function — stores `None` and allocates nothing. A `Data`
   node holds a [`Circular`](../values/circular.rs) — a list, dict, record or
   tagged resident whose cells are links — and the same knot weight. A `Module`
   node holds its self-signature, its members in
@@ -208,8 +215,9 @@ not an edge.
 ## Weight and copy
 
 A member's weight is its knot's: the run header, one `Node` per node, each
-function's closure run, each data node's resident, each module's member run and
-each barrier's resident, with everything their value words point at. A member
+function's closure run and quantifier map, each data node's resident, each
+module's member run and each barrier's resident, with everything their value
+words point at. A member
 that is itself a knot member contributes its *whole* knot's weight, since a
 crossing rebuilds that knot whole. It is summed at the tie and memoized on every node, so a
 crossing prices a member by reading one field, under the ordinary
@@ -219,7 +227,8 @@ crossing prices a member by reading one field, under the ordinary
 this module's family together with the copy itself, and
 [`copy_into`](copy.rs) re-ties the whole knot in the destination's region:
 every node rebuilt in index order — a function's closure run through
-`ClosureBindings::copied`, a data node through `Circular::copied`, a module's
+`ClosureBindings::copied` and its quantifier map re-homed beside it through the
+destination's writer, a data node through `Circular::copied`, a module's
 member run and a barrier's underlying function through that same copy — each held
 value deep-copied through the copy the crossing priced, each edge carried
 verbatim, since an edge names a node by index and so means the same node in

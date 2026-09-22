@@ -82,7 +82,8 @@ subtree.
   *value*, never a runtime instance. A value is matched by a type, never by a
   kind.
 - **Composites** — `List`, `Dict`, `Record` (structural, width- and
-  depth-subtyped), `KFunction` (a named-parameter record plus a return),
+  depth-subtyped), `KFunction` (a named-parameter record plus a return, over a quantifier
+  group of its own where a `FOR ALL` declared one),
   `Union` (canonical: deduplicated, no nesting, no member below another, two or
   more, in the order first written), and `ConstructorApply`.
 - **`ExpressionShape`** — the type of a keyworded, positional definition reached
@@ -92,9 +93,10 @@ subtree.
   arguments and is reached by name; a shape is reached by its keyword sequence and
   its argument *positions* are load-bearing, which a canonically ordered record
   erases. So no shape is ever equal to, satisfies, or is satisfied by a lambda
-  type.
+  type. What the two *share* is the binder: both carry a quantifier group, and
+  every walk asks [`binds_quantifiers`](node.rs) rather than naming either arm.
 - **Two rigid variables**, and the split is deliberate. `Quantified` is
-  positional and bound by the enclosing shape, so two shapes alpha-equivalent
+  positional and bound by the enclosing binder, so two binders alpha-equivalent
   under a renaming intern to one node. `AbstractType` is *named*, because
   signature members are reached by name and schemas are edited by name. They
   share the rigid rule in the order, the substitution mechanism, and the role of
@@ -177,7 +179,31 @@ substitution, each keyworded member satisfied by an overload the same selection
 dispatch would make, and each operator record covered at an equal mode.
 `meet_schemas` is what two signatures meet at; **the module lattice has no join
 of its own**, since two unordered signatures join to their union.
-`shape_specificity` ranks two candidates under one bucket key.
+`shape_specificity` ranks two candidates under one bucket key — and it reads
+shapes alone, since a function type ranks in no bucket.
+
+A quantified binder relates to another of its kind by **instantiation**, not
+structurally: some instantiation of the subject's variables, each under its
+bound, must put the instance below the other with the other's variables rigid.
+[`admits_shape`](sig_relations.rs) is that clause for two shapes, position by
+position; [`admits_function`](sig_relations.rs) is its twin for two function
+types, name by name — each parameter pair asking the candidate's parameter to
+lie under the declared one and the return pair the reverse, then one `solve`.
+Width is the order's own either way: a function subtype asks for no name its
+supertype does not.
+
+**Canonical form is what makes that order antisymmetric.** Both interning
+doors — [`shape_type`](registry.rs) and [`function_type`](registry.rs) — run
+one canonicalizer over the positions the binder binds: a variable with no
+occurrence is dropped, one that occurs exactly once is replaced by its bound at
+a contravariant position and by `Never` at a covariant one, and the survivors
+are renumbered by first occurrence. A shape walks its slots in element order,
+a function its parameters in **symbol-sorted key order** — a record's identity
+is order-blind, so the renumbering must be too — and then the return. The
+surviving names are render-only and the digest feeds the group's arity, so two
+alpha-variants are one handle; the door hands its caller back the
+declaration-index → canonical-index map alongside the handle, which is what a
+call needs to bind each type parameter to its solution.
 
 ### Substitute, then ask
 
@@ -299,14 +325,15 @@ Ask first whether the walk is unary or binary, then whether it rebuilds.
 - **Binary** ([walk/binary.rs](walk/binary.rs)) — implement `Lockstep`: an entry
   guard, a leaf verdict, a set-wise rule for unions, and a structural combine that
   reads the arm's width verdict generically. The order, the meet and the unifier's
-  collector are the three instances. Two signatures and two quantified shapes
-  reach the leaf verdict rather than a child pairing, because their relations are
-  schema-level and instantiation-level doors.
+  collector are the three instances. Two signatures, and two callables of which
+  one is quantified, reach the leaf verdict rather than a child pairing, because
+  their relations are schema-level and instantiation-level doors.
 
 The context a unary rule is handed answers the three questions the arm table
 alone cannot: whether an enclosing descended signature declares a given abstract
-member, how many shape binders lie between the root and here, and the variance of
-the current position.
+member, how many binders lie between the root and here — `binder_depth`, which
+counts shapes and quantified function types alike — and the variance of the
+current position.
 
 [Rendering](render.rs) is exempt, and for a stated reason: it spells syntax
 *between* children and inherits the quantifier binder from above, which neither

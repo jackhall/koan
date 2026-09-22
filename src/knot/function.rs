@@ -9,6 +9,7 @@
 use crate::elaborate::callable_type;
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Component};
+use crate::symbols::TypeSymbol;
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Link, Weight};
 
@@ -63,11 +64,24 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 
     /// Where each `FOR ALL` name the declaration wrote landed in the canonical group, empty for
     /// an unquantified function.
-    pub fn quantifier_map(&self) -> &'cell [Option<usize>] {
+    pub fn quantifier_map(&self) -> &'cell [(TypeSymbol, Option<usize>)] {
         match self.quantifier_map {
             Some(map) => map.0,
             None => &[],
         }
+    }
+
+    /// Which canonical quantifier the type parameter named `name` stands for, and `None` where
+    /// the function binds no such name or canonical form dropped it — in which case the caller
+    /// binds the variable's bound instead.
+    ///
+    /// Keyed by name because a frame walks its callee's slots **symbol-sorted**, not in the order
+    /// the `FOR ALL` group was written.
+    pub fn canonical_quantifier(&self, name: TypeSymbol) -> Option<usize> {
+        self.quantifier_map()
+            .iter()
+            .find(|(declared, _)| *declared == name)
+            .and_then(|(_, canonical)| *canonical)
     }
 
     /// The body shape a call activates.
@@ -102,22 +116,22 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     }
 }
 
-/// A quantified function's map from the declaration order its `FOR ALL` group was written in to
-/// the canonical group's order: declaration index → canonical index, `None` where canonical form
-/// dropped the variable.
+/// A quantified function's map from each `FOR ALL` name it declared to that name's index in the
+/// canonical group, `None` where canonical form dropped the variable.
 ///
-/// A call binds the `k`-th type-parameter slot to the solution at `map[k]`, or to the variable's
-/// bound where canonical form dropped it. The node points at this rather than holding the run
-/// inline, so a `Node` stays its width.
+/// A call binds each type-parameter slot to the solution its name maps to, or to the variable's
+/// bound where the map says it was dropped. The **name** is the key: a frame walks its callee's
+/// slots symbol-sorted, so a positional read would hand one variable another's solution. The node
+/// points at this run rather than holding it inline, so a `Node` stays its width.
 #[derive(Clone, Copy)]
-pub struct QuantifierMap<'cell>(&'cell [Option<usize>]);
+pub struct QuantifierMap<'cell>(&'cell [(TypeSymbol, Option<usize>)]);
 
 impl<'cell> QuantifierMap<'cell> {
     /// `map` written into the region `writer` fills, or `None` where it is empty — an unquantified
     /// function allocates nothing.
     pub(super) fn laid_down(
         writer: Writer<'cell>,
-        map: &[Option<usize>],
+        map: &[(TypeSymbol, Option<usize>)],
     ) -> Option<&'cell QuantifierMap<'cell>> {
         (!map.is_empty()).then(|| {
             let run = writer.fill(map.len(), |at| map[at]);
@@ -130,7 +144,7 @@ impl<'cell> QuantifierMap<'cell> {
         if len == 0 {
             return Weight::ZERO;
         }
-        Weight::run::<Option<usize>>(len).plus(Weight::flat::<QuantifierMap<'_>>())
+        Weight::run::<(TypeSymbol, Option<usize>)>(len).plus(Weight::flat::<QuantifierMap<'_>>())
     }
 }
 
@@ -138,9 +152,9 @@ impl<'cell> QuantifierMap<'cell> {
 pub(super) struct Staged<'graph, 'cell, 'x> {
     pub shape: &'graph BodyShape<'graph>,
     pub ktype: KType,
-    /// The declaration-order → canonical map the elaborator handed back, scratch-lived until the
-    /// tie lays it into the region.
-    pub quantifier_map: &'x [Option<usize>],
+    /// The name-keyed quantifier map the elaborator handed back, scratch-lived until the tie lays
+    /// it into the region.
+    pub quantifier_map: &'x [(TypeSymbol, Option<usize>)],
     pub captures: BumpVec<'x, Link<'graph, 'cell, Knotted<'graph, 'cell>>>,
 }
 

@@ -220,23 +220,21 @@ fn frame<'graph, 'here>(
     let shape = function.shape();
     let writer = step.writer();
     let types = program.types();
-    let TypeNode::KFunction {
+    // Solve the group first: every value parameter's declared type against the argument's carried
+    // type, under one collector. A callee that binds no group — an unquantified function, or a
+    // callable whose type is a shape — has nothing to solve and skips the walk, so its frame is
+    // byte-for-byte what it was. `Bump::new` claims no chunk until something is put in it, so it
+    // pays nothing for having one in reach either.
+    let bump = Bump::new();
+    let scratch = &bump;
+    let mut solution = None;
+    if let TypeNode::KFunction {
         quantifiers,
         params,
         ..
     } = types.node(function.ktype())
-    else {
-        return None;
-    };
-    // Solve the group first: every value parameter's declared type against the argument's carried
-    // type, under one collector. An unquantified callee has nothing to solve and skips the walk,
-    // so its frame is byte-for-byte what it was.
-    // `Bump::new` claims no chunk until something is put in it, so an unquantified call pays
-    // nothing for having one in reach.
-    let bump = Bump::new();
-    let scratch = &bump;
-    let mut solution = None;
-    if !quantifiers.is_empty() {
+        && !quantifiers.is_empty()
+    {
         let mut collector = Collector::new(scratch, quantifiers.len());
         for (name, declared) in params.iter() {
             let argument = record.field(name.symbol())?;
@@ -262,8 +260,7 @@ fn frame<'graph, 'here>(
             program.builtins(),
         ),
     );
-    let map = function.quantifier_map();
-    let (mut parameters, mut declared) = (0, 0);
+    let mut parameters = 0;
     for slot in 0..shape.slots() {
         let slot = Slot(slot as u32);
         let name = shape.slot_name(slot);
@@ -275,16 +272,15 @@ fn frame<'graph, 'here>(
                 parameters += 1;
                 *record.field(name.symbol())?
             }
-            // The type parameters sit in the group's **written** order, because the `Quantifiers`
-            // role precedes the `Signature` role in every quantified entry. The `k`-th takes the
-            // solution at `map[k]`, or `Any` — every `FOR ALL` name's bound today — where
-            // canonical form dropped the variable and there is nothing to solve for.
-            BinderSymbol::Type(_) => {
-                let solved = match map.get(declared).copied().flatten() {
+            // A type parameter is bound by **name**: the shape's type channel reaches here
+            // symbol-sorted, not in the order the `FOR ALL` group was written, so a positional
+            // read would hand one variable another's solution. A name the map dropped takes
+            // `Any` — every `FOR ALL` name's bound today — since there is nothing to solve for.
+            BinderSymbol::Type(name) => {
+                let solved = match function.canonical_quantifier(name) {
                     Some(canonical) => *solution.as_ref()?.get(canonical)?,
                     None => KType::ANY,
                 };
-                declared += 1;
                 Value::Type(TypeValue::new(writer, solved, types))
             }
         };

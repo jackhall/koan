@@ -297,8 +297,8 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
         );
         assert_eq!(
             mapped("lambda_id"),
-            vec![Some(0)],
-            "the one declared name survives canonical form at index 0"
+            vec![(elt, Some(0))],
+            "the one declared name survives canonical form at index 0, keyed by the name written"
         );
         assert_eq!(
             typed("plus"),
