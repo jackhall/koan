@@ -16,8 +16,8 @@ library-side by [cellgraph/observe/miri_slate.md](../cellgraph/observe/miri_slat
 or in `bumpalo`'s allocator under the bump tier. `Writer::thin_run`, under
 `memory`'s knot, is pinned library-side: the knot is safe indexing over the
 `ThinRun` handle, with no layout or retype of its own. What this slate pins is
-the *safe* koan code that drives them: a bump-hosted table, slots laid down in a
-cell's region and written through `Cell`, a scratch arena shared with the
+the *safe* koan code that drives them: a bump-hosted table, write-once slots laid
+down in a cell's region and read through a covariant view, a scratch arena shared with the
 registry it serves, and a knot re-tied at a crossing's destination. Each anchor file is therefore whitelisted below, and the
 fingerprint block stays empty.
 
@@ -44,9 +44,9 @@ silence the stale-anchor check; delete a redundant test instead.
   (`bump_table`) and every interned node's slices are bumped into the same region, so nothing the
   lattice owns carries drop glue and the region releases it whole; the relations take a scratch
   allocator from the caller. The backing `unsafe` is `bumpalo`'s.
-- `src/memory/slots.rs` — the slot array's cells and its claim counter are laid down by
-  `Writer::fill` at `'cell` and written through `Cell` under the region's shared borrow, released
-  with the cell. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s.
+- `src/memory/slots.rs` — the slot array is a safe façade over `cellgraph`'s `Writer::once_run`:
+  each slot holds its value erased and is read through a covariant view at a shorter brand. No
+  `unsafe` of its own; the backing `unsafe` is `cellgraph`'s `once_run` read, the reattach seam.
 - `src/parse/ast/program.rs` — the program-region storage doors: plain bump allocations whose
   destination brand discharges residence at compile time, over `bumpalo`'s `unsafe`. No `unsafe`
   of its own.
@@ -105,16 +105,14 @@ the storage releases the whole tree.
   the same form unquoted, so the top-level statement peel and the type-slot flip run over
   region-hosted parts.
 
-**Slot array in a cell's region** ([src/memory/slots.rs](../src/memory/slots.rs)) — a fixed run
-of three-state `Cell` slots and a claim counter laid down by `Writer::fill` in a one-cell graph,
-released with the cell.
+**Slot array in a cell's region** ([src/memory/slots.rs](../src/memory/slots.rs)) — a run of
+write-once slots laid down through `cellgraph`'s `Writer::once_run`, each holding its value erased,
+and read through the covariant `SlotView` at a brand shorter than the one it was bound at: the read
+is `cellgraph`'s reattach, reached from koan's safe façade.
 
-- `a_commit_retires_its_own_claim`
-  claim then bind in place: the two writes a binder makes to one
-  cell, read back through the array.
-- `conflicts_name_what_stands`
-  refused writes against standing claims and bindings, so a refusal
-  is proven to change nothing in the region-resident slot.
+- `a_tree_child_reads_a_slot_bound_in_its_root_through_a_view`
+  a slot bound in a root's region, its view kept at rest, redeemed by a
+  tree child, parked in its continuation and read a step later.
 
 **Values in a cell's region** ([src/values/crossing.rs](../src/values/crossing.rs)) — a composite
 value copied across a crossing is rebuilt through the destination's writer and read after the

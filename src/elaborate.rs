@@ -38,10 +38,9 @@ mod tests;
 pub use builtin::builtin_shape_types;
 pub use declaration::type_declarations;
 pub use expression::type_expression;
-pub use module::{Unsigned, self_signature};
+pub use module::self_signature;
 pub use signature::callable_type;
 
-use crate::memory::CellHandle;
 use crate::scope::Site;
 use crate::symbols::{Symbol, TypeSymbol};
 use crate::type_lattice::KType;
@@ -49,11 +48,6 @@ use crate::type_lattice::KType;
 /// Why a type expression did not elaborate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Elaboration {
-    /// The binder of the type name `name` is still running.
-    Pending {
-        name: TypeSymbol,
-        binder: CellHandle,
-    },
     /// The type name at `site` is bound to something other than a type.
     NotAType { name: TypeSymbol, site: Site },
     /// A spelling this module does not elaborate, at `site`.

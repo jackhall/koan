@@ -35,5 +35,5 @@ pub use components::strongly_connected_components;
 pub use knot::{Edge, Knot, KnotPlan, Member};
 pub use program::{ProgramBrand, ProgramStorage, program_storage};
 pub use scope_id::ScopeId;
-pub use slots::{SlotArray, SlotConflict, SlotState};
+pub use slots::{SlotArray, SlotConflict, SlotView};
 pub use substrate::*;

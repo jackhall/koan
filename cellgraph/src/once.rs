@@ -85,8 +85,29 @@ where
         Ok(())
     }
 
+    /// What `slot` holds, at the run's own brand, or `None` while it is empty. Out of range panics
+    /// like a slice index.
+    pub fn get(self, slot: usize) -> Option<V::At<'cell>>
+    where
+        'graph: 'cell,
+    {
+        // SAFETY: every value in the run was erased by `set` at this run's own brand `'cell`, and
+        // the run is invariant, so it comes back at the brand it was set at.
+        self.slots[slot]
+            .get()
+            .map(|erased| unsafe { erased.reattach::<'cell>() })
+    }
+
     /// The read handle over the same slots, at the run's own brand.
-    pub fn view(self) -> OnceView<'graph, 'cell, V> {
+    ///
+    /// `V` must be [`Covariant`]: the view shortens, so a value comes back through it at a brand
+    /// shorter than the one it was set at, and a form that could take a `'cell` borrow in would let
+    /// the reader store a short-lived borrow in a longer-lived region. The bound is proven here,
+    /// where the only view of a run is made, so a reader of one never restates it.
+    pub fn view(self) -> OnceView<'graph, 'cell, V>
+    where
+        V: Covariant<'graph>,
+    {
         OnceView(self.slots)
     }
 }
@@ -140,20 +161,15 @@ where
 
     /// What `slot` holds, at this view's brand, or `None` while it is empty. Out of range panics
     /// like a slice index.
-    ///
-    /// `V` must be [`Covariant`]: the value comes back at a brand shorter than the one it was set
-    /// at, and a form that could take a `'cell` borrow in would let the reader store a short-lived
-    /// borrow in a longer-lived region.
     pub fn get(self, slot: usize) -> Option<V::At<'cell>>
     where
-        V: Covariant<'graph>,
         'graph: 'cell,
     {
         // SAFETY: every value in the run was erased by `OnceRun::set` at the run's own brand `'x`,
-        // and `OnceRun` is invariant, so none was set at a shorter one. This view was reached from
-        // that run by covariance alone, so `'x: 'cell`, and the region referents a value set at
-        // `'x` holds outlive `'cell`. `V` is covariant, so a form re-anchored at the shorter brand
-        // admits no borrow in.
+        // and `OnceRun` is invariant, so none was set at a shorter one. This view was made by
+        // `OnceRun::view` at `'x` and reached here by covariance alone, so `'x: 'cell`, and the
+        // region referents a value set at `'x` holds outlive `'cell`. `view` required `V` to be
+        // covariant, so a form re-anchored at the shorter brand admits no borrow in.
         self.0[slot]
             .get()
             .map(|erased| unsafe { erased.reattach::<'cell>() })

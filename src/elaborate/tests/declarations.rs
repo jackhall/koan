@@ -9,7 +9,7 @@ use crate::type_lattice::{
 use super::super::{Elaboration, callable_type};
 use super::{Held, Program, scalars, with_program};
 
-/// Shape and activate `source` with every slot claimed, run the door over every component of type
+/// Shape and activate `source` with every slot empty, run the door over every component of type
 /// binders, and hand the result to `check`.
 fn declared<R>(
     source: &str,
@@ -18,7 +18,7 @@ fn declared<R>(
     with_program(
         source,
         scalars,
-        |_, _, _| Held::Pending,
+        |_, _, _| Held::Empty,
         |program| {
             let brought = program.declare();
             check(program, brought)
@@ -314,7 +314,7 @@ fn a_signatures_higher_kinded_member_has_a_use_site() {
 
 #[test]
 fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
-    // Each case names the binder the refusal must leave claimed.
+    // Each case names the binder whose slot the refusal must leave empty.
     for (source, left) in [
         // A cycle through a signature names no fresh identity, so it has no finite type. A
         // cycle through a transparent alias does not reach the door at all: a `LET`'s right-hand
@@ -352,10 +352,7 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
                 matches!(brought, Err(Elaboration::Unsupported { .. })),
                 "`{source}` refuses: {brought:?}"
             );
-            assert!(
-                program.unbound(left),
-                "`{source}` leaves `{left}` claimed by its binder"
-            );
+            assert!(program.unbound(left), "`{source}` leaves `{left}` empty");
         });
     }
 }
@@ -480,7 +477,7 @@ fn a_group_head_the_door_cannot_read_refuses() {
                 matches!(brought, Err(Elaboration::Unsupported { .. })),
                 "`{source}` refuses: {brought:?}"
             );
-            assert!(program.unbound("Bad"), "`{source}` leaves `Bad` claimed");
+            assert!(program.unbound("Bad"), "`{source}` leaves `Bad` empty");
         });
     }
     // The same returning head over a symbol that chains pairwise is admitted.

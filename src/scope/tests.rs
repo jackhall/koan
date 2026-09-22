@@ -8,15 +8,18 @@ mod groups;
 pub(crate) mod plan;
 mod properties;
 mod rewrite;
+mod units;
 
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, CellHandle, Edge, ProgramBrand, ReleaseAbsorption, SlabHandle,
-    Verdict, Writer, program_storage, reattachable,
+    Bump, BumpAllocator, CellGraph, Edge, ProgramBrand, ReleaseAbsorption, Verdict, Writer,
+    covariant, program_storage, reattachable,
 };
 use crate::parse::{KExpression, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
-use crate::values::{Knotted, Resolved, TypeValue, Value, Weight};
+use crate::values::{
+    DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
+};
 
 use super::Builtins;
 
@@ -47,8 +50,30 @@ impl Knotted for Probe {
     }
 }
 
-/// How many cells a fixture's graph stands up — one to run in, the rest as binder handles.
-const CELLS: u32 = 64;
+/// The family of [`Probe`], which holds no region borrow: its form is `Probe` at every brand.
+pub(super) struct ProbeFamily;
+
+impl<'graph> KnottedFamily<'graph> for ProbeFamily {
+    type Closed<'cell>
+        = Probe
+    where
+        'graph: 'cell;
+
+    fn copy_into<'from, 'to>(
+        _: Writer<'to>,
+        member: &Probe,
+        _: &mut DeepCopy<'_, 'graph, 'from, 'to, Probe, Probe>,
+    ) -> Probe
+    where
+        'graph: 'from,
+        'graph: 'to,
+    {
+        *member
+    }
+}
+
+// An activation over probes lays down a view of its slots, which is proven covariant here.
+covariant!(ValueFamily<ProbeFamily>);
 
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
@@ -68,22 +93,16 @@ impl<'graph> Fixture<'_, 'graph> {
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"))
     }
 
-    /// Run `step` in one cell of a graph over this fixture's storage, handing it the cell's writer
-    /// and the handles of every other cell, to stand for binders.
-    pub fn in_cell<R>(&self, step: impl for<'cell> FnOnce(Writer<'cell>, &[CellHandle]) -> R) -> R {
-        let mut graph: CellGraph<'graph, Step> = CellGraph::new(CELLS, |_| Verdict::Pin);
-        let cells: Vec<SlabHandle> = (0..CELLS)
-            .map(|_| graph.create(None).expect("the graph has a free slot"))
-            .collect();
-        let handles: Vec<CellHandle> = cells[1..].iter().map(|cell| (*cell).into()).collect();
+    /// Run `step` in one cell of a graph over this fixture's storage, handing it the cell's writer.
+    pub fn in_cell<R>(&self, step: impl for<'cell> FnOnce(Writer<'cell>) -> R) -> R {
+        let mut graph: CellGraph<'graph, Step> = CellGraph::new(1, |_| Verdict::Pin);
+        let cell = graph.create(None).expect("the graph has a free slot");
         let out = graph
-            .enter(cells[0], |context| step(context.writer(), &handles))
+            .enter(cell, |context| step(context.writer()))
             .expect("a fresh cell is enterable");
-        for cell in cells {
-            graph
-                .release(cell, ReleaseAbsorption::IntoHolder)
-                .expect("a cell outside its step releases");
-        }
+        graph
+            .release(cell, ReleaseAbsorption::IntoHolder)
+            .expect("a cell outside its step releases");
         out
     }
 }

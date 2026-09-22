@@ -47,8 +47,9 @@ pub use tie::tie;
 use std::fmt;
 
 use crate::elaborate::Elaboration;
-use crate::memory::{CellHandle, DropFree, Edge, Member, covariant, reattachable};
-use crate::scope::{Activation, Site};
+use crate::memory::{DropFree, Edge, Member, covariant, reattachable};
+use crate::parse::ExpressionPart;
+use crate::scope::{Activation, ActivationView, Builtins, Site};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{
@@ -84,7 +85,7 @@ pub struct Knotted<'graph, 'cell>(Member<'cell, Node<'graph, 'cell>>);
 
 const _: () = assert!(size_of::<Knotted<'static, 'static>>() == 16);
 const _: () = assert!(size_of::<KValue<'static, 'static>>() == 24);
-const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 72);
+const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 80);
 /// The module arm sets the node's width; a barrier's six fields would widen every node in the
 /// program, so [`Node::Coerced`] points at them instead.
 const _: () = assert!(size_of::<Node<'static, 'static>>() == 64);
@@ -179,15 +180,14 @@ pub enum Supplied<'graph, 'cell> {
     Body(&'cell KActivation<'graph, 'cell>),
 }
 
+/// What a tie's caller answers a part only it can evaluate with, asked by site with the part itself
+/// — or `None` for a module body, which the caller runs.
+pub type Eager<'e, 'graph, 'cell> =
+    dyn FnMut(Site, Option<&'graph ExpressionPart<'graph>>) -> Option<Supplied<'graph, 'cell>> + 'e;
+
 /// Why a component could not be tied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Untieable<'x> {
-    /// A read — a capture, a signature's type name, a data member's mention, a construction's head
-    /// — whose binder is still running.
-    Pending {
-        name: BinderSymbol,
-        binder: CellHandle,
-    },
     /// A member's signature did not elaborate.
     Type(Elaboration),
     /// A member that is neither a callable binder, nor a module binder, nor a `LET` of a value name
@@ -234,4 +234,10 @@ covariant!(KValueFamily);
 pub type KValueCarrier<'graph, 'home> = ValueCarrier<'graph, 'home, KnottedFamily>;
 
 /// An activation whose values may hold functions.
-pub type KActivation<'graph, 'cell> = Activation<'graph, 'cell, Knotted<'graph, 'cell>>;
+pub type KActivation<'graph, 'cell> = Activation<'graph, 'cell, KnottedFamily>;
+
+/// The read half of a [`KActivation`].
+pub type KActivationView<'graph, 'cell> = ActivationView<'graph, 'cell, KnottedFamily>;
+
+/// A builtin table whose values may hold functions.
+pub type KBuiltins<'graph, 'cell> = Builtins<'graph, 'cell, Knotted<'graph, 'cell>>;

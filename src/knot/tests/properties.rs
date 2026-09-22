@@ -16,8 +16,7 @@ use proptest::prelude::*;
 use crate::memory::{CellGraph, Edge, ReleaseAbsorption, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binding, BodyShape, CaptureSlot, CaptureSource, Component, Coordinate, ShapeKind, Site, Slot,
-    Target,
+    BodyShape, CaptureSlot, CaptureSource, Component, Coordinate, ShapeKind, Site, Slot, Target,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
@@ -179,7 +178,7 @@ fn run<'graph, 'cell>(
             component,
             fixture.types,
             fixture.scratch(),
-            &mut |_| Some(Supplied::Value(Value::Null)),
+            &mut |_, _| Some(Supplied::Value(Value::Null)),
         );
         let data: Vec<usize> = (0..component.members.len())
             .filter(|index| shape.births(component.members[*index]).is_none())
@@ -235,9 +234,7 @@ fn run<'graph, 'cell>(
                     match (item, cell) {
                         (Some(Ok(index)), Link::Edge(edge)) => assert_eq!(edge.index(), index),
                         (Some(Err(coordinate)), Link::Value(value)) => {
-                            let Binding::Bound(enclosing) = activation.read(coordinate) else {
-                                panic!("every enclosing binding is bound before the tie");
-                            };
+                            let enclosing = activation.read(coordinate);
                             assert!(same(*value, enclosing), "a read cell is the enclosing word");
                         }
                         (None, Link::Value(Value::Null)) => {}
@@ -255,9 +252,7 @@ fn run<'graph, 'cell>(
                         assert_eq!(edge.index(), index)
                     }
                     (CaptureSource::Read(coordinate), Link::Value(value)) => {
-                        let Binding::Bound(enclosing) = activation.read(coordinate) else {
-                            panic!("every enclosing binding is bound before the tie");
-                        };
+                        let enclosing = activation.read(coordinate);
                         assert!(same(value, enclosing), "a capture is the enclosing word");
                     }
                     (source, _) => {

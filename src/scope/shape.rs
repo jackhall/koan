@@ -7,7 +7,8 @@
 //! the capture layout a callable's closure bindings are born through, the strongly connected
 //! components of the body's bindings, the shapes nested in it by site, the form node a callable's
 //! body sits in, the callable body each binder births, each `LET` binder's right-hand side, and
-//! each type binder's declaration node. [`build`] is the one builder every kind goes through.
+//! each type binder's declaration node, and the order its units run in. [`build`] is the one
+//! builder every kind goes through.
 //!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
 //! position is strictly greater than the binding's own. A parameter writes at `0`, statement `i` at
@@ -23,9 +24,9 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::DeclaredGroup;
-use crate::values::Knotted;
+use crate::values::{Knotted, KnottedFamily};
 
-use super::activation::Activation;
+use super::activation::ActivationView;
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
@@ -200,6 +201,22 @@ pub struct Component<'graph> {
     pub cyclic: bool,
 }
 
+/// What one unit of a body performs: a component of its bindings, or a statement that binds
+/// nothing, by index into [`BodyShape::body`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UnitWork {
+    Component(ComponentIndex),
+    Statement(u32),
+}
+
+/// One unit of a body, in the order its body runs them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Unit {
+    pub work: UnitWork,
+    /// Whether this unit holds the body's last statement — whose value a called body's is.
+    pub last: bool,
+}
+
 /// One body's resolved lexical structure. See the module documentation.
 #[derive(Clone, Copy)]
 pub struct BodyShape<'graph> {
@@ -230,6 +247,8 @@ pub struct BodyShape<'graph> {
     rhs: &'graph [(Slot, &'graph ExpressionPart<'graph>)],
     /// Each type binder beside the declaration node that binds it, by slot.
     declarations: &'graph [(Slot, &'graph KExpression<'graph>)],
+    /// The body's units in the order they are performed.
+    units: &'graph [Unit],
     keeps_defining_scope: bool,
 }
 
@@ -248,10 +267,10 @@ impl<'graph> BodyShape<'graph> {
 
     /// The block shape of `body` evaluated by an `EVAL` reading at `at` in `site`: every free name
     /// resolves by name over `site`'s chain, and a binder in `body` binds in this block.
-    pub fn for_eval<X: Knotted>(
+    pub fn for_eval<XF: KnottedFamily<'graph>>(
         brand: ProgramBrand<'graph>,
         body: &KExpression<'graph>,
-        site: &Activation<'graph, '_, X>,
+        site: &ActivationView<'graph, '_, XF>,
         at: Position,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
@@ -330,6 +349,14 @@ impl<'graph> BodyShape<'graph> {
 
     pub fn components(&self) -> &'graph [Component<'graph>] {
         self.components
+    }
+
+    /// The body's units in the order they are performed: each after every unit it reads, two
+    /// independent ones as they are written. A unit is a component whose members are not all
+    /// parameters, or a statement that binds nothing; a statement containing `EVAL` also follows
+    /// every unit binding a name declared before it, since no shape can enumerate what it reads.
+    pub fn units(&self) -> &'graph [Unit] {
+        self.units
     }
 
     /// The component `slot` belongs to, by index into [`components`](Self::components).

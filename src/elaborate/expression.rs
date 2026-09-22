@@ -4,10 +4,10 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Activation, Binding, Coordinate, Site, Slot, Target, pair_name};
+use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_name};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry, constructor_param_names};
-use crate::values::{Knotted, Value};
+use crate::values::{KnottedFamily, Value};
 
 use super::Elaboration;
 
@@ -33,9 +33,9 @@ static CONNECTORS: Connectors = Connectors {
 /// `part` as a type, its names read through `reader`: a name in `quantifiers` is that group's
 /// quantifier at its position, and every other name is the mention `reader`'s shape recorded at its
 /// site, which must read as a type.
-pub fn type_expression<'graph, X: Knotted>(
+pub fn type_expression<'graph, XF: KnottedFamily<'graph>>(
     part: &ExpressionPart<'graph>,
-    reader: &Activation<'graph, '_, X>,
+    reader: &ActivationView<'graph, '_, XF>,
     quantifiers: &[TypeSymbol],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
@@ -88,8 +88,8 @@ impl Groups<'_> {
 }
 
 /// What elaborating one expression reads through.
-pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, X> {
-    pub(super) reader: &'e Activation<'graph, 'cell, X>,
+pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, XF: KnottedFamily<'graph>> {
+    pub(super) reader: &'e ActivationView<'graph, 'cell, XF>,
     pub(super) types: &'e TypeRegistry<'run>,
     pub(super) scratch: BumpAllocator<'x>,
     /// Fellow members of the component being declared, each at the relative handle it is named by
@@ -102,7 +102,7 @@ pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, X> {
     pub(super) locals: &'e [(TypeSymbol, KType)],
 }
 
-impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
+impl<'graph, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, '_, XF> {
     pub(super) fn part(
         &self,
         part: &ExpressionPart<'graph>,
@@ -161,9 +161,8 @@ impl<'graph, X: Knotted> Elaborator<'_, '_, 'graph, '_, '_, X> {
             return Ok(*handle);
         }
         match self.reader.read(mention.coordinate) {
-            Binding::Bound(Value::Type(value)) => Ok(value.handle()),
-            Binding::Bound(_) => Err(Elaboration::NotAType { name, site }),
-            Binding::Pending(binder) => Err(Elaboration::Pending { name, binder }),
+            Value::Type(value) => Ok(value.handle()),
+            _ => Err(Elaboration::NotAType { name, site }),
         }
     }
 

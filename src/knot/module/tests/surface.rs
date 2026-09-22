@@ -1,8 +1,9 @@
 //! Entering a `USING … SCOPE` block, and the layout law the whole item rests on.
 
+use crate::knot::KActivation;
 use crate::knot::tests::{pin, with_fixture};
-use crate::memory::{CellHandle, Writer, resident};
-use crate::scope::{Activation, Binding, BodyShape, Coordinate, ShapeKind, Slot, Target};
+use crate::memory::{Writer, resident};
+use crate::scope::{Activation, BodyShape, Coordinate, ShapeKind, Slot, Target};
 use crate::symbols::BinderSymbol;
 use crate::values::Value;
 
@@ -34,20 +35,13 @@ fn local(slot: Slot) -> Coordinate {
     }
 }
 
-/// The block of `enclosing`'s shape, activated with every slot claimed.
-fn entered<'graph, 'cell, X: crate::values::Knotted>(
+/// The block of `enclosing`'s shape, activated with every slot empty.
+fn entered<'graph, 'cell>(
     writer: Writer<'cell>,
-    enclosing: &'cell Activation<'graph, 'cell, X>,
-    binder: CellHandle,
-) -> &'cell Activation<'graph, 'cell, X> {
+    enclosing: &'cell KActivation<'graph, 'cell>,
+) -> &'cell KActivation<'graph, 'cell> {
     let block = only_block(enclosing.shape());
-    let activation = resident(writer, Activation::of_block(writer, block, enclosing));
-    for slot in 0..block.slots() {
-        activation
-            .claim(Slot(slot as u32), binder)
-            .expect("a fresh slot claims");
-    }
-    activation
+    resident(writer, Activation::of_block(writer, block, enclosing))
 }
 
 const PROGRAM: &str = "\
@@ -59,21 +53,18 @@ fn a_surfaced_name_reads_the_member_it_names() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
-            let block = entered(writer, activation, binder);
+            let block = entered(writer, activation);
 
             surface(m, block, types, scratch).expect("the block's parameters are `m`'s members");
 
             let read = |name: &str| {
                 let name = fixture.name(name);
                 let (slot, _) = block.shape().slot(name).expect("a surfaced parameter");
-                match block.read(local(slot)) {
-                    Binding::Bound(value) => value,
-                    Binding::Pending(_) => panic!("`{name:?}` is bound by surfacing"),
-                }
+                block.read(local(slot))
             };
             assert!(matches!(read("zero"), Value::Number(zero) if zero == 0.0));
             assert_eq!(read("name").as_str(), Some("m"));
@@ -99,10 +90,10 @@ USING m SCOPE (zero name)";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
-            let block = entered(writer, activation, binder);
+            let activation = fixture.run(writer, &lines, &[]);
+            let block = entered(writer, activation);
 
             assert_eq!(
                 surface(module(fixture, activation, "n"), block, types, scratch),
@@ -117,9 +108,10 @@ USING m SCOPE (zero name)";
                     name: fixture.name("zero")
                 }),
             );
+            // A slot takes a bind exactly when it was empty.
             for slot in 0..block.shape().slots() {
                 assert!(
-                    matches!(block.read(local(Slot(slot as u32))), Binding::Pending(_)),
+                    block.bind(Slot(slot as u32), Value::Null).is_ok(),
                     "a refusal binds nothing"
                 );
             }
@@ -136,11 +128,11 @@ USING m SCOPE (zero)";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let f = crate::knot::tests::callable(fixture, activation, "f");
-            let block = entered(writer, activation, binder);
+            let block = entered(writer, activation);
             assert_eq!(
                 surface(f, block, types, scratch),
                 Err(Unsurfaceable::NotAModule)
@@ -163,9 +155,9 @@ fn the_block_the_body_and_the_signature_agree_on_every_members_place() {
         with_fixture(|fixture| {
             let lines = fixture.parse(source);
             let (types, scratch) = (fixture.types, fixture.scratch());
-            fixture.in_cell(pin, |context, binder| {
+            fixture.in_cell(pin, |context| {
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, binder, &[]);
+                let activation = fixture.run(writer, &lines, &[]);
                 let m = module(fixture, activation, "m");
                 let sig = schema(m.module().expect("a module").ktype(), types);
                 let body = activation

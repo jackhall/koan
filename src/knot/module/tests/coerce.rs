@@ -37,9 +37,9 @@ fn every_slot_that_names_the_carrier_is_born_at_the_mint() {
     with_fixture(|fixture| {
         let lines = fixture.parse(BAG);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             let view = ascribe(writer, m, bag, Ascription::Opaque, types, scratch)
@@ -121,9 +121,9 @@ fn a_function_member_is_born_behind_a_barrier() {
     with_fixture(|fixture| {
         let lines = fixture.parse(BAG);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             let source_step = member(fixture, m, "step", types, scratch);
@@ -169,9 +169,9 @@ fn a_transparent_view_coerces_nothing() {
     with_fixture(|fixture| {
         let lines = fixture.parse(BAG);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             let view = ascribe(writer, m, bag, Ascription::Transparent, types, scratch)
@@ -223,9 +223,9 @@ MODULE m = ((LET Carrier = Number) (LET one = 1) \
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let outer = declared(fixture, activation, "Outer");
             let source_inner = member(fixture, m, "inner", types, scratch);
@@ -263,9 +263,9 @@ MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let inner_schema = schema(declared(fixture, activation, "Inner"), types);
 
@@ -329,9 +329,9 @@ LET f = (FN :{} -> Number = (1))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let inner_schema = schema(declared(fixture, activation, "Inner"), types);
             let BinderSymbol::Type(carrier) = fixture.name("Carrier") else {
                 panic!("`Carrier` is a Type token");
@@ -373,9 +373,9 @@ MODULE m = ((LET Carrier = Any) (LET ring = [1 spin]) \
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             assert!(

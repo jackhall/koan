@@ -72,7 +72,7 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
         let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
+                let activation = fixture.run(context.writer(), &lines, &[]);
                 let g = callable(fixture, activation, "g");
                 let source = context.lift::<KValueFamily>(Value::Knotted(g));
                 let crossed = cross(context, dest, &source).unwrap();
@@ -138,7 +138,7 @@ fn a_copied_knot_outlives_its_home() {
         let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
+                let activation = fixture.run(context.writer(), &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 let source = context.lift::<KValueFamily>(Value::Knotted(f));
                 let crossed = cross(context, dest, &source).unwrap();
@@ -202,7 +202,7 @@ fn a_copied_ring_is_the_same_graph_rebuilt() {
         let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
+                let activation = fixture.run(context.writer(), &lines, &[]);
                 let ring = declared(fixture, activation, "Ring");
                 let f = callable(fixture, activation, "f");
                 let source = context.lift::<KValueFamily>(Value::Knotted(f));
@@ -263,7 +263,7 @@ fn a_copied_ring_outlives_its_home() {
         let dest = graph.create(None).unwrap();
         let dormant = graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
+                let activation = fixture.run(context.writer(), &lines, &[]);
                 let a = super::bound(fixture, activation, "a");
                 let source = context.lift::<KValueFamily>(a);
                 let crossed = cross(context, dest, &source).unwrap();
@@ -338,7 +338,7 @@ fn a_copied_module_is_the_same_members_rebuilt() {
         let dest = graph.create(None).unwrap();
         graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
+                let activation = fixture.run(context.writer(), &lines, &[]);
                 let slots = member_slots(fixture, activation, ["words", "f", "Dist"]);
                 let m = bound(fixture, activation, "m")
                     .as_module()
@@ -393,7 +393,7 @@ fn a_copied_module_outlives_its_home() {
         let dest = graph.create(None).unwrap();
         let (dormant, slots) = graph
             .enter(home, |context| {
-                let activation = fixture.run(context.writer(), &lines, dest.into(), &[]);
+                let activation = fixture.run(context.writer(), &lines, &[]);
                 let slots = member_slots(fixture, activation, ["words", "f", "g"]);
                 let m = bound(fixture, activation, "m")
                     .as_module()
@@ -453,7 +453,7 @@ fn a_copied_barrier_outlives_its_home() {
         let (dormant, ktype) = graph
             .enter(home, |context| {
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, dest.into(), &[]);
+                let activation = fixture.run(writer, &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 // The barrier's types are this item's only fiction: a real view substitutes, which
                 // is the module layer's work. What is pinned here is that the node and the function

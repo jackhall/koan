@@ -1,25 +1,34 @@
-//! **Program storage**: the tier where program text and the raw AST live — a bump the storage
-//! owns, outside the graph. Its own module because the parser depends on it and on nothing else
-//! here, so `parse` names [`ProgramBrand`] and never a cell.
+//! **Program storage**: the tier where program text, the raw AST and what a loaded program lays
+//! down at `'graph` live — outside the graph, in two stores: a bump the parser writes the AST into,
+//! and `cellgraph`'s [`Storage`], written through the same [`Writer`] a region is. Its own module
+//! because the parser depends on it and on nothing else here, so `parse` names [`ProgramBrand`] and
+//! never a cell.
 
 use std::marker::PhantomData;
 
 use super::bump::{Bump, BumpAllocator};
+use super::substrate::{Storage, Writer};
 
 /// Stand up a fresh program storage.
 pub fn program_storage() -> ProgramStorage {
-    ProgramStorage(Bump::new())
+    ProgramStorage {
+        bump: Bump::new(),
+        store: Storage::new(),
+    }
 }
 
-/// The owner of the bump an AST borrows. It never enters the graph: the bump is private and
-/// [`brand`](ProgramStorage::brand) is the only capability the type exposes, and
-/// [`program_storage`] is its only constructor.
-pub struct ProgramStorage(Bump);
+/// The owner of the stores an AST and a loaded program's tables borrow. It never enters the graph:
+/// both stores are private and [`brand`](ProgramStorage::brand) is the only capability the type
+/// exposes, and [`program_storage`] is its only constructor.
+pub struct ProgramStorage {
+    bump: Bump,
+    store: Storage,
+}
 
 impl ProgramStorage {
     /// Mint this storage's [`ProgramBrand`] — the allocation capability the parse entry points take.
     pub fn brand(&self) -> ProgramBrand<'_> {
-        ProgramBrand(&self.0, PhantomData)
+        ProgramBrand(&self.bump, self.store.writer(), PhantomData)
     }
 }
 
@@ -43,6 +52,7 @@ impl ProgramStorage {
 #[derive(Clone, Copy)]
 pub struct ProgramBrand<'graph>(
     BumpAllocator<'graph>,
+    Writer<'graph>,
     PhantomData<fn(&'graph ()) -> &'graph ()>,
 );
 
@@ -51,5 +61,11 @@ impl<'graph> ProgramBrand<'graph> {
     /// no more than a bump to allocate into.
     pub fn allocator(self) -> BumpAllocator<'graph> {
         self.0
+    }
+
+    /// A writer into the store `cellgraph` owns, at `'graph` — where a loaded program lays down
+    /// what every cell names at no price: the builtin table and the program's record.
+    pub fn writer(self) -> Writer<'graph> {
+        self.1
     }
 }

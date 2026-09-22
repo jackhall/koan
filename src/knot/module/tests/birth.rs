@@ -2,15 +2,13 @@
 
 use std::ptr;
 
-use crate::scope::{Binding, ShapeKind, Slot};
+use crate::scope::{ShapeKind, Slot};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::{Incomparable, Knotted as _, Resolved, Value};
 
-use crate::knot::tests::{Fixture, bound, callable, declared, pin, read, with_fixture};
-use crate::knot::{KActivation, Knotted, Supplied, Untieable, tie};
-
-use super::super::body_activation;
+use crate::knot::tests::{Fixture, bound, callable, declared, pin, with_fixture};
+use crate::knot::{KActivation, Knotted, Untieable, tie};
 
 /// The module bound under `name`, and its node.
 fn module<'graph, 'cell>(
@@ -30,8 +28,8 @@ MODULE m = ((LET zero = 0) (LET name = \"m\") (NEWTYPE Dist = Number))
 LET outside = 1";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &[]);
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
             let m = module(fixture, activation, "m");
             assert!(matches!(m.resolve(), Resolved::Module));
             assert_eq!(
@@ -109,8 +107,8 @@ LET greeting = \"hi\"
 MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = (greeting))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &[]);
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
             let outer = module(fixture, activation, "outer");
             let node = outer.module().expect("a module node");
             let body = activation
@@ -156,8 +154,8 @@ fn a_group_binder_births_a_module_the_same_way() {
     let source = "GROUP g FOLD LEFT = ((LET step = 1) (OP #(@) OVER Number = (left)))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &[]);
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
             let g = module(fixture, activation, "g");
             assert_eq!(g.module().expect("a module node").members().len(), 1);
         })
@@ -170,8 +168,8 @@ fn a_module_whose_body_ties_a_knot_holds_each_member_callable() {
 MODULE m = ((LET f = (FN :{} -> Number = (g))) (LET g = (FN :{} -> Number = (f))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &[]);
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
             let m = module(fixture, activation, "m");
             let node = m.module().expect("a module node");
             assert_eq!(node.members().len(), 2);
@@ -196,8 +194,8 @@ fn two_modules_are_incomparable_and_render_as_their_signature() {
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &[]);
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
             let (m, n) = (
                 Value::Knotted(module(fixture, activation, "m")),
                 Value::Knotted(module(fixture, activation, "n")),
@@ -220,8 +218,8 @@ fn a_module_member_with_no_body_supplied_is_eager_at_its_bodys_site() {
     let source = "MODULE m = (LET x = 1)";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &["m"]);
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &["m"]);
             let shape = activation.shape();
             let (slot, _) = shape.slot(fixture.name("m")).unwrap();
             let refused = tie(
@@ -230,7 +228,7 @@ fn a_module_member_with_no_body_supplied_is_eager_at_its_bodys_site() {
                 shape.component_of(slot),
                 fixture.types,
                 fixture.scratch(),
-                &mut |_| None,
+                &mut |_, _| None,
             )
             .map(|_| ())
             .expect_err("no body was supplied");
@@ -246,85 +244,12 @@ fn a_module_member_with_no_body_supplied_is_eager_at_its_bodys_site() {
 }
 
 #[test]
-fn a_claimed_slot_in_the_supplied_body_leaves_the_module_pending() {
-    let source = "MODULE m = ((LET x = 1) (LET y = 2))";
-    with_fixture(|fixture| {
-        let lines = fixture.parse(source);
-        fixture.in_cell(pin, |context, binder| {
-            let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &["m"]);
-            let shape = activation.shape();
-            let (slot, _) = shape.slot(fixture.name("m")).unwrap();
-            let body = crate::memory::resident(
-                writer,
-                body_activation(writer, activation, slot, fixture.scratch())
-                    .expect("the body captures nothing"),
-            );
-            for index in 0..body.shape().slots() {
-                body.claim(Slot(index as u32), binder).unwrap();
-            }
-            let (x, _) = body
-                .shape()
-                .slot(fixture.name("x"))
-                .expect("`x` is declared");
-            body.bind(x, Value::Number(1.0)).unwrap();
-            let refused = tie(
-                writer,
-                activation,
-                shape.component_of(slot),
-                fixture.types,
-                fixture.scratch(),
-                &mut |_| Some(Supplied::Body(body)),
-            )
-            .map(|_| ())
-            .expect_err("`y` is still claimed");
-            assert_eq!(
-                refused,
-                Untieable::Pending {
-                    name: fixture.name("y"),
-                    binder,
-                },
-            );
-        })
-    });
-}
-
-#[test]
-fn a_pending_capture_refuses_the_body_activation_and_writes_nothing() {
-    let source = "\
-LET later = 1
-MODULE m = (LET held = later)";
-    with_fixture(|fixture| {
-        let lines = fixture.parse(source);
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &["later", "m"]);
-            let shape = activation.shape();
-            let (slot, _) = shape.slot(fixture.name("m")).unwrap();
-            assert!(matches!(
-                read(fixture, activation, "later"),
-                Binding::Pending(_)
-            ));
-            let refused = body_activation(context.writer(), activation, slot, fixture.scratch())
-                .map(|_| ())
-                .expect_err("the capture is pending");
-            assert_eq!(
-                refused,
-                Untieable::Pending {
-                    name: fixture.name("later"),
-                    binder,
-                },
-            );
-        })
-    });
-}
-
-#[test]
 fn a_type_member_is_read_back_through_the_declaration_door() {
     let source = "MODULE m = (NEWTYPE Dist = Number)\nNEWTYPE Outer = Str";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &[]);
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
             assert_eq!(declared(fixture, activation, "Outer"), {
                 let TypeNode::SetMember { .. } =
                     fixture.types.node(declared(fixture, activation, "Outer"))

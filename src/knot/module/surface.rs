@@ -83,7 +83,7 @@ pub fn surface<'graph, 'cell>(
         });
     }
     for (slot, member) in bindings {
-        block.bind(slot, member).expect("a claimed slot binds");
+        block.bind(slot, member).expect("an empty slot binds");
     }
     Ok(())
 }

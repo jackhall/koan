@@ -14,13 +14,13 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Activation, BuiltinGroup, Component, Site, is_equality};
+use crate::scope::{ActivationView, BuiltinGroup, Component, Site, is_equality};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, FoldDirection, KKind, KType, RecursiveGroupWindow, ReductionMode,
     RelativeSchema, SchemaDraft, TypeRegistry,
 };
-use crate::values::Knotted;
+use crate::values::KnottedFamily;
 
 use super::Elaboration;
 use super::expression::{Elaborator, Groups};
@@ -36,9 +36,9 @@ use super::signature::operator_shape;
 /// does, naming the site, and writes nothing: the window, its member list and every staged run
 /// live in `scratch`, and the only durable write is the registry intern, which is content-
 /// addressed and idempotent.
-pub fn type_declarations<'graph, 'x, X: Knotted>(
+pub fn type_declarations<'graph, 'x, XF: KnottedFamily<'graph>>(
     component: &Component<'graph>,
-    reader: &Activation<'graph, '_, X>,
+    reader: &ActivationView<'graph, '_, XF>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<&'x [KType], Elaboration> {
@@ -251,9 +251,9 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
     }
 
     /// The handle of a member declared alone, outside any window.
-    fn standalone<X: Knotted>(
+    fn standalone<XF: KnottedFamily<'graph>>(
         &self,
-        reader: &Activation<'graph, '_, X>,
+        reader: &ActivationView<'graph, '_, XF>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<KType, Elaboration> {
@@ -339,8 +339,8 @@ fn last_type_name(part: &ExpressionPart<'_>) -> Option<TypeSymbol> {
 /// local table rather than through a mention, since the shape declared them in the definition. A
 /// bodyless `EXPR`, `OP` or `UNARY OP` head is a keyworded member; a bodyless `GROUP` is the
 /// operator channel's and is refused here.
-fn signature_type<'graph, X: Knotted>(
-    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, X>,
+fn signature_type<'graph, XF: KnottedFamily<'graph>>(
+    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, XF>,
     body: &'graph ExpressionPart<'graph>,
     site: Site,
 ) -> Result<KType, Elaboration> {
@@ -526,8 +526,8 @@ fn group_mode(
 /// The members a bodyless `GROUP` head declares, each head's shape pushed as a keyworded member as
 /// it is read. A group's body is binary operator heads and nothing else, and a head stating a
 /// result of its own belongs only to a pairwise group.
-fn group_members<'graph, 'x, X: Knotted>(
-    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, X>,
+fn group_members<'graph, 'x, XF: KnottedFamily<'graph>>(
+    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, XF>,
     definition: &'graph ExpressionPart<'graph>,
     mode: ReductionMode,
     draft: &mut SchemaDraft<'x>,

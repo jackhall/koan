@@ -20,9 +20,9 @@ fn a_transparent_view_carries_what_the_signature_names_and_drops_the_rest() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             // `Ord` declares `Carrier` abstract and `zero :Carrier`; `m` binds `zero` to a number,
             // so the source's binding for `Carrier` is `Number`.
@@ -64,9 +64,9 @@ fn an_opaque_view_mints_a_fresh_carrier_per_application() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
             let opaque = |()| {
@@ -117,9 +117,9 @@ fn a_mint_is_sourced_at_its_own_nonce() {
     with_fixture(|fixture| {
         let lines = fixture.parse(PROGRAM);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
             let view = ascribe(writer, m, ord, Ascription::Opaque, types, scratch)
@@ -171,9 +171,9 @@ LET f = (FN :{} -> Number = (1))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let m = module(fixture, activation, "m");
             let ord = declared(fixture, activation, "Ord");
             let wider = declared(fixture, activation, "Wider");
@@ -211,7 +211,7 @@ fn a_view_copies_across_a_cell_like_any_module() {
         let (dormant, mint) = graph
             .enter(home, |context| {
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, dest.into(), &[]);
+                let activation = fixture.run(writer, &lines, &[]);
                 let m = module(fixture, activation, "m");
                 let ord = declared(fixture, activation, "Ord");
                 let view = ascribe(writer, m, ord, Ascription::Opaque, types, scratch)

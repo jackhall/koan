@@ -6,14 +6,13 @@
 //! elaborated from the form that body sits in, and its captures, every mention of a fellow member
 //! minted as an edge into the knot about to be tied — so a refusal writes nothing.
 
-use crate::elaborate::{Elaboration, callable_type};
+use crate::elaborate::callable_type;
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan};
-use crate::scope::{BodyShape, ClosureBindings, ClosureRefused, Component};
-use crate::symbols::BinderSymbol;
+use crate::scope::{BodyShape, ClosureBindings, Component};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Link, Weight};
 
-use super::{KActivation, Knotted, Untieable};
+use super::{KActivationView, Knotted, Untieable};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
@@ -94,7 +93,7 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
 /// member.
 pub(super) fn stage<'graph, 'cell, 'x>(
     plan: &KnotPlan,
-    activation: &KActivation<'graph, 'cell>,
+    activation: &KActivationView<'graph, 'cell>,
     component: &Component<'graph>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
@@ -107,22 +106,11 @@ pub(super) fn stage<'graph, 'cell, 'x>(
             continue;
         };
         let form = body.form().expect("a callable body sits in its form");
-        let ktype =
-            callable_type(form, activation, types, scratch).map_err(|error| match error {
-                Elaboration::Pending { name, binder } => Untieable::Pending {
-                    name: BinderSymbol::Type(name),
-                    binder,
-                },
-                error => Untieable::Type(error),
-            })?;
+        let ktype = callable_type(form, activation, types, scratch).map_err(Untieable::Type)?;
         let captures = ClosureBindings::read_captures(body, activation, scratch, |index| {
             plan.edge(index)
                 .expect("a member index is below the knot's count")
-        })
-        .map_err(|ClosureRefused { name, pending }| Untieable::Pending {
-            name,
-            binder: pending,
-        })?;
+        });
         staged.push(Some(Staged {
             shape: body,
             ktype,

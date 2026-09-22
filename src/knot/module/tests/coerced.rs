@@ -34,7 +34,7 @@ fn a_barrier_holds_its_view_and_the_function_behind_it() {
         graph
             .enter(home, |context| {
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, home.into(), &[]);
+                let activation = fixture.run(writer, &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 let dist = declared(fixture, activation, "Dist");
                 let knot = Coerced::tie(writer, f, f.ktype(), dist, dist, f.ktype());
@@ -64,7 +64,7 @@ fn values_sees_a_barrier_as_the_function_it_stands_for() {
         graph
             .enter(home, |context| {
                 let writer = context.writer();
-                let activation = fixture.run(writer, &lines, home.into(), &[]);
+                let activation = fixture.run(writer, &lines, &[]);
                 let f = callable(fixture, activation, "f");
                 let barrier = Knotted::of(
                     Coerced::tie(writer, f, f.ktype(), f.ktype(), f.ktype(), f.ktype()),

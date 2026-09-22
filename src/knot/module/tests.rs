@@ -9,9 +9,8 @@ mod surface;
 mod view;
 
 use crate::knot::tests::{Fixture, bound};
-use crate::knot::{KValue, Knotted};
+use crate::knot::{KActivation, KValue, Knotted};
 use crate::memory::BumpAllocator;
-use crate::scope::Activation;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, SigSchema, TypeRegistry};
 
@@ -20,7 +19,7 @@ use super::layout;
 /// The module bound under `name`.
 pub(super) fn module<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
-    activation: &Activation<'graph, 'cell, Knotted<'graph, 'cell>>,
+    activation: &KActivation<'graph, 'cell>,
     name: &str,
 ) -> Knotted<'graph, 'cell> {
     bound(fixture, activation, name)

@@ -1,5 +1,5 @@
 //! Shared scaffolding for `elaborate`'s suites: a program shaped over a builtin table of type
-//! values, activated in a cell with each slot bound — or claimed — as the test asks.
+//! values, activated in a cell with each slot bound — or left empty — as the test asks.
 
 mod boundary;
 mod builtin;
@@ -8,13 +8,11 @@ mod examples;
 mod module;
 
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, CellHandle, ProgramBrand, ReleaseAbsorption, SlabHandle,
-    Verdict, Writer, program_storage, reattachable, resident,
+    Bump, BumpAllocator, CellGraph, ProgramBrand, ReleaseAbsorption, SlabHandle, Verdict, Writer,
+    program_storage, reattachable, resident,
 };
 use crate::parse::{KExpression, parse};
-use crate::scope::{
-    Activation, Binding, BodyShape, Builtins, ClosureBindings, Coordinate, Slot, Target,
-};
+use crate::scope::{Activation, BodyShape, Builtins, ClosureBindings, Coordinate, Slot, Target};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{TypeValue, Value};
@@ -36,8 +34,8 @@ reattachable!(Step => ());
 /// What a slot of the program holds when the check runs.
 pub(super) enum Held<'graph, 'cell> {
     Bound(Value<'graph, 'cell>),
-    /// Claimed by a binder still running.
-    Pending,
+    /// Empty: its unit has not run.
+    Empty,
 }
 
 /// What a check reads: the fixture's storage and the activated program.
@@ -48,8 +46,6 @@ pub(super) struct Program<'p, 'graph, 'cell> {
     pub lines: &'p [KExpression<'graph>],
     pub activation: &'cell Activation<'graph, 'cell>,
     pub writer: Writer<'cell>,
-    /// The cell a pending slot is claimed by.
-    pub binder: CellHandle,
 }
 
 impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
@@ -75,7 +71,7 @@ impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
                 let value = Value::Type(TypeValue::new(self.writer, *handle, self.types));
                 self.activation
                     .bind(*slot, value)
-                    .expect("a claimed slot binds");
+                    .expect("an empty slot binds");
             }
         }
         Ok(())
@@ -90,12 +86,13 @@ impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
             .slot(name)
             .expect("a declared type binder");
         match self.activation.read(local(slot)) {
-            Binding::Bound(Value::Type(value)) => value.handle(),
+            Value::Type(value) => value.handle(),
             _ => panic!("`{name:?}` is bound to a type"),
         }
     }
 
-    /// Whether the type name `name` is still claimed by its binder.
+    /// Whether the type name `name`'s slot is still empty. A read of an empty slot is a scheduler
+    /// bug, so this probes by binding it: a slot takes a bind exactly when it was empty.
     pub fn unbound(&self, name: &str) -> bool {
         let name = BinderSymbol::Type(self.type_name(name));
         let (slot, _) = self
@@ -103,15 +100,15 @@ impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
             .shape()
             .slot(name)
             .expect("a declared type binder");
-        matches!(self.activation.read(local(slot)), Binding::Pending(_))
+        self.activation.bind(slot, Value::Null).is_ok()
     }
 
-    /// The activation of the module body the binder `name` births, every slot claimed. The body
+    /// The activation of the module body the binder `name` births, every slot empty. The body
     /// must capture nothing: a test binds its slots by hand.
     pub fn module_body(&self, name: &str) -> &'cell Activation<'graph, 'cell> {
         let body = self.birth(name);
         assert!(body.captures().is_empty(), "this body captures nothing");
-        let activation = resident(
+        resident(
             self.writer,
             Activation::of_module(
                 self.writer,
@@ -119,13 +116,7 @@ impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
                 ClosureBindings::empty(),
                 self.activation.builtins(),
             ),
-        );
-        for slot in 0..body.slots() {
-            activation
-                .claim(Slot(slot as u32), self.binder)
-                .expect("a fresh slot claims");
-        }
-        activation
+        )
     }
 
     /// Bind `name`'s slot in `body` to `value`.
@@ -137,7 +128,7 @@ impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
     ) {
         let name = BinderSymbol::classify(name).expect("a binder name");
         let (slot, _) = body.shape().slot(name).expect("a declared binder");
-        body.bind(slot, value).expect("a claimed slot binds");
+        body.bind(slot, value).expect("an empty slot binds");
     }
 
     /// The body shape the binder `name` births.
@@ -175,11 +166,10 @@ pub(super) fn with_program<R>(
     let lines = parse(program, &symbols, source)
         .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
     let extra = extra(&types, &scratch, &symbols);
-    let mut graph: CellGraph<'_, Step> = CellGraph::new(2, |_| Verdict::Pin);
-    let cells: Vec<SlabHandle> = (0..2)
+    let mut graph: CellGraph<'_, Step> = CellGraph::new(1, |_| Verdict::Pin);
+    let cells: Vec<SlabHandle> = (0..1)
         .map(|_| graph.create(None).expect("the graph has a free slot"))
         .collect();
-    let binder: CellHandle = cells[1].into();
     let out = graph
         .enter(cells[0], |context| {
             let writer = context.writer();
@@ -201,13 +191,13 @@ pub(super) fn with_program<R>(
             let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table);
             let shape = BodyShape::of_program(program, &lines, builtins, &scratch)
                 .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(&symbols)));
-            let activation = resident(writer, Activation::of_program(writer, shape, builtins));
+            let activation: &Activation =
+                resident(writer, Activation::of_program(writer, shape, builtins));
             for slot in 0..shape.slots() {
                 let slot = Slot(slot as u32);
                 let name = symbols.display(shape.slot_name(slot).symbol()).to_string();
-                activation.claim(slot, binder).expect("a fresh slot claims");
                 if let Held::Bound(value) = hold(&name, writer, &types) {
-                    activation.bind(slot, value).expect("a claimed slot binds");
+                    activation.bind(slot, value).expect("an empty slot binds");
                 }
             }
             check(Program {
@@ -219,7 +209,6 @@ pub(super) fn with_program<R>(
                 lines: shape.body(),
                 activation,
                 writer,
-                binder,
             })
         })
         .expect("a fresh cell is enterable");

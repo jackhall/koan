@@ -14,9 +14,9 @@ fn a_comparison_reaching_a_callable_is_an_error() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET f = (FN :{x :Number} -> Number = (x))");
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let activation = fixture.run(writer, &lines, binder, &[]);
+            let activation = fixture.run(writer, &lines, &[]);
             let f = bound(fixture, activation, "f");
             let one = Value::Number(1.0);
             let list = |cell| Value::List(List::new(writer, [cell].into_iter(), types, scratch));
@@ -38,8 +38,8 @@ fn a_callable_renders_as_its_type() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET k = 7\nLET f = (FN :{x :Number} -> Number = (k))");
         let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &[]);
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
             let f = bound(fixture, activation, "f");
             let mut rendered = String::new();
             f.render(&mut rendered, types, symbols, scratch).unwrap();
@@ -60,11 +60,11 @@ fn two_rings_from_two_programs_are_equal() {
             fixture.parse(RING),
             fixture.parse("NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = a})"),
         );
-        fixture.in_cell(pin, |context, binder| {
+        fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let first = fixture.run(writer, &pair, binder, &[]);
-            let second = fixture.run(writer, &pair, binder, &[]);
-            let lone = fixture.run(writer, &single, binder, &[]);
+            let first = fixture.run(writer, &pair, &[]);
+            let second = fixture.run(writer, &pair, &[]);
+            let lone = fixture.run(writer, &single, &[]);
             let (a, other) = (bound(fixture, first, "a"), bound(fixture, second, "a"));
             assert!(
                 a.as_circular().unwrap().0.member().knot()
@@ -85,8 +85,8 @@ fn a_list_node_holding_a_function_is_incomparable() {
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = [f]\nLET f = (FN :{} -> Any = (a))");
         let (types, scratch) = (fixture.types, fixture.scratch());
-        fixture.in_cell(pin, |context, binder| {
-            let activation = fixture.run(context.writer(), &lines, binder, &[]);
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
             let a = bound(fixture, activation, "a");
             assert_eq!(a.equals(&a, types, scratch), Err(Incomparable));
         });
@@ -105,8 +105,8 @@ fn a_ring_renders_with_a_label_where_it_closes() {
             (RING, "@0 = Ring({next = Ring({next = @0})})"),
         ] {
             let lines = fixture.parse(source);
-            fixture.in_cell(pin, |context, binder| {
-                let activation = fixture.run(context.writer(), &lines, binder, &[]);
+            fixture.in_cell(pin, |context| {
+                let activation = fixture.run(context.writer(), &lines, &[]);
                 let mut rendered = String::new();
                 bound(fixture, activation, "a")
                     .render(&mut rendered, types, symbols, scratch)

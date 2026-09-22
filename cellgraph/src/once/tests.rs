@@ -45,6 +45,8 @@ fn a_slot_is_set_once_and_reads_back_through_the_view() {
     assert_eq!(run.set(0, one(writer, 8)), Err(Written));
     assert_eq!(run.view().get(0).copied(), Some(7));
     assert!(run.view().get(1).is_none());
+    assert_eq!(run.get(0).copied(), Some(7));
+    assert!(run.get(2).is_none());
     assert!(writer.once_run::<Number>(0).is_empty());
 }
 

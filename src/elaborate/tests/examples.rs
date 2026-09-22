@@ -141,36 +141,24 @@ LET Missing = :(Shape.Triangle)";
 }
 
 #[test]
-fn a_name_reads_pending_or_not_a_type_and_application_is_unsupported() {
+fn a_name_reads_not_a_type_and_application_is_unsupported() {
     let source = "\
-LET Running = Str
 LET Data = Str
-LET Waits = :(LIST OF Running)
 LET Wrong = :(LIST OF Data)
 LET Applied = :(Number AS Wrap)";
     with_program(
         source,
         shapes,
-        |name, _, _| match name {
-            "Running" => Held::Pending,
-            _ => Held::Bound(Value::Number(1.0)),
-        },
+        |_, _, _| Held::Bound(Value::Number(1.0)),
         |program| {
-            assert_eq!(
-                elaborated(&program, 2),
-                Err(Elaboration::Pending {
-                    name: program.type_name("Running"),
-                    binder: program.binder,
-                })
-            );
             assert!(matches!(
-                elaborated(&program, 3),
+                elaborated(&program, 1),
                 Err(Elaboration::NotAType { name, .. }) if name == program.type_name("Data")
             ));
             assert_eq!(
-                elaborated(&program, 4),
+                elaborated(&program, 2),
                 Err(Elaboration::Unsupported {
-                    site: Site::of(rhs(&program.lines[4])),
+                    site: Site::of(rhs(&program.lines[2])),
                 })
             );
         },

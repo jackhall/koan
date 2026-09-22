@@ -7,7 +7,7 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{Activation, BodyShape, Builtins, Position, ShapeError, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 
-use super::{Fixture, Probe, builtins, value_name, with_fixture};
+use super::{Fixture, Probe, ProbeFamily, builtins, value_name, with_fixture};
 
 /// Build `source` against the suites' builtins and hand the result to `check`.
 fn shaped<R>(
@@ -24,7 +24,7 @@ fn shaped<R>(
             KeywordSymbol::declared(name, fixture.symbols).expect("a keyword token");
         }
         let lines = fixture.parse(source);
-        fixture.in_cell(|writer, _| {
+        fixture.in_cell(|writer| {
             let table: &Builtins = builtins(fixture, writer);
             let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch());
             check(fixture, shape)
@@ -351,11 +351,12 @@ fn evaluated<R>(
             panic!("`{quoted}` is a quote");
         };
         let quote = quote.reference();
-        fixture.in_cell(|writer, _| {
+        fixture.in_cell(|writer| {
             let table: &Builtins<'_, '_, Probe> = builtins(fixture, writer);
             let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
                 .expect("the program shapes");
-            let program = resident(writer, Activation::of_program(writer, shape, table));
+            let program: &Activation<'_, '_, ProbeFamily> =
+                resident(writer, Activation::of_program(writer, shape, table));
             let (site, at) = if inside_using {
                 let using = &shape.body()[shape.body().len() - 1];
                 let block = nested(shape, using, 3);

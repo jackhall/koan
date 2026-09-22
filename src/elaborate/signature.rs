@@ -6,9 +6,9 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Activation, Site, is_equal, is_unequal};
+use crate::scope::{ActivationView, Site, is_equal, is_unequal};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
-use crate::values::Knotted;
+use crate::values::KnottedFamily;
 
 use super::Elaboration;
 use super::expression::{Elaborator, Groups, quantifiers};
@@ -21,9 +21,9 @@ use super::expression::{Elaborator, Groups, quantifiers};
 /// `FOR ALL` names. A binary `OP` is the shape `operand <symbol> operand`, returning its declared
 /// result or else its operand, since a chain of it folds; a `UNARY OP` is the shape `<symbol>
 /// operands`, over a list of its operand, since its body takes the whole run.
-pub fn callable_type<'graph, X: Knotted>(
+pub fn callable_type<'graph, XF: KnottedFamily<'graph>>(
     form: &KExpression<'graph>,
-    reader: &Activation<'graph, '_, X>,
+    reader: &ActivationView<'graph, '_, XF>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, Elaboration> {
@@ -103,8 +103,8 @@ pub fn callable_type<'graph, X: Knotted>(
 /// spell different shapes. A run of operators chains through the signature's operator channel,
 /// which a bodyless `GROUP` head fills and this builder does not write — see
 /// [operator groups](../scope/README.md#operator-groups).
-pub(super) fn operator_shape<'graph, X: Knotted>(
-    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, X>,
+pub(super) fn operator_shape<'graph, XF: KnottedFamily<'graph>>(
+    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, XF>,
     unary: bool,
     symbol: &ExpressionPart<'graph>,
     operand: &ExpressionPart<'graph>,

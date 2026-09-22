@@ -9,34 +9,35 @@
 //! body, its type elaborated from its signature and its captures; a data member's cells, with a
 //! part only the caller can evaluate asked of its evaluator by site —
 //! every mention of a fellow member minted as an edge into the knot about to be tied. Container
-//! memos are derived and every construction checked, and a read still pending, a part the caller
-//! has not evaluated, a cycle of containers or a construction that misfits refuses the tie before a
-//! byte is written. Only then are the closure runs and data nodes laid down, the knot's weight
+//! memos are derived and every construction checked, and a part the caller has not evaluated, a
+//! cycle of containers or a construction that misfits refuses the tie before a byte is written. Only then are the closure runs and data nodes laid down, the knot's weight
 //! summed, and the nodes tied: member `i` is node `i`, and the anonymous data nodes follow.
 
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
-use crate::scope::{BodyShape, ClosureBindings, Component, ShapeKind, Site};
+use crate::scope::{BodyShape, ClosureBindings, Component, ShapeKind};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::Weight;
 
 use super::data::{self, Stager};
-use super::{Function, KActivation, Knotted, Node, Supplied, Untieable, function, module};
+use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, function, module};
 
 /// Tie `component` of `activation`'s shape as one knot in `writer`'s region: every member born
 /// together, each closure binding and data cell a value word or an edge into this knot, each part
-/// only the caller can evaluate read from `eager` by site. A refusal writes nothing.
+/// only the caller can evaluate read from `eager` by site. `eager` is asked for every such part in
+/// one attempt, handed the part itself — or `None` for a module body — so a caller refused on
+/// several learns them all at once. A refusal writes nothing.
 ///
 /// Member `i` of `component` is the knot's node `i`; the caller binds each member's slot to the
 /// member at that node.
 pub fn tie<'graph, 'cell, 'x>(
     writer: Writer<'cell>,
-    activation: &KActivation<'graph, 'cell>,
+    activation: &KActivationView<'graph, 'cell>,
     component: &Component<'graph>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
-    eager: &mut dyn FnMut(Site) -> Option<Supplied<'graph, 'cell>>,
+    eager: &mut Eager<'_, 'graph, 'cell>,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'x>> {
     debug_assert!(
         component.deferred_only,

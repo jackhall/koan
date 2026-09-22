@@ -1,12 +1,14 @@
 //! The **shape builder**: one recursive walk that every kind of shape goes through.
 //!
-//! A body is built in three passes over a draft kept in scratch. The binders pass lays out the
+//! A body is built in four passes over a draft kept in scratch. The binders pass lays out the
 //! declared names and refuses a repeated name or a builtin's. The mention pass walks each statement
 //! from its root, carrying the class a mention met there would take, resolving each mention as it
 //! is met and building each nested body or arm as a draft of its own on top of the chain of
 //! enclosing drafts. The components pass condenses the bindings' reference graph, refuses a
 //! component with an eager internal mention, turns a nested callable's capture of a fellow member
-//! into a knot edge, and seals the nested drafts into program storage.
+//! into a knot edge, and seals the nested drafts into program storage. The units pass orders the
+//! body's units — its components and the statements that bind nothing — so each follows every unit
+//! it reads and independent ones come out as written; the runner performs them in that order.
 //!
 //! A callable body records the form node holding it, a binder whose right-hand side is a callable
 //! form at its root — or a combined form that is one, or a `MODULE`/`GROUP` binder — records the
@@ -21,11 +23,11 @@ use crate::memory::{
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, StaticName, TypeSymbol, ValueSymbol};
-use crate::values::Knotted;
+use crate::values::{Knotted, KnottedFamily};
 
 use crate::type_lattice::DeclaredGroup;
 
-use super::super::activation::Activation;
+use super::super::activation::ActivationView;
 use super::super::builtins::Builtins;
 use super::super::channels::Channels;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
@@ -34,8 +36,8 @@ use super::super::signature::{
 };
 use super::{
     BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex,
-    Coordinate, Mention, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target,
-    resolve_here,
+    Coordinate, Mention, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target, Unit,
+    UnitWork, resolve_here,
 };
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Role};
 
@@ -90,10 +92,10 @@ pub(super) fn program<'graph, X: Knotted>(
 }
 
 /// An `EVAL` body's block shape over `site`'s chain, reading at `at`.
-pub(super) fn eval<'graph, X: Knotted>(
+pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
     brand: ProgramBrand<'graph>,
     body: &KExpression<'graph>,
-    site: &Activation<'graph, '_, X>,
+    site: &ActivationView<'graph, '_, XF>,
     at: Position,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
@@ -179,6 +181,13 @@ struct Draft<'graph, 'x> {
     captures: BumpVec<'x, CaptureSpec>,
     /// `(binder, bound, class)`: the binder's statement reads the bound slot.
     edges: BumpVec<'x, (Slot, Slot, MentionClass)>,
+    /// `(statement, bound)`: the statement reads the bound slot, whether or not it binds — what a
+    /// unit waits on.
+    reads: BumpVec<'x, (u32, Slot)>,
+    /// Each statement that holds an `EVAL`, whose free names no shape can enumerate.
+    eval_statements: BumpVec<'x, u32>,
+    /// The body's units in the order they are performed, once the components pass has run.
+    units: BumpVec<'x, Unit>,
     /// Finished nested drafts, waiting on this draft's components to settle their captures.
     children: BumpVec<'x, (Site, Draft<'graph, 'x>)>,
     /// `(binder, body)`: the binder's right-hand side births the callable whose body sits at `body`.
@@ -360,6 +369,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
         let mut draft = self.chain.pop().expect("this draft was pushed above");
         self.components(&mut draft)?;
+        self.units(&mut draft);
         Ok(draft)
     }
 
@@ -426,6 +436,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             mentions: BumpVec::new_in(scratch),
             captures: BumpVec::new_in(scratch),
             edges: BumpVec::new_in(scratch),
+            reads: BumpVec::new_in(scratch),
+            eval_statements: BumpVec::new_in(scratch),
+            units: BumpVec::new_in(scratch),
             children: BumpVec::new_in(scratch),
             births: BumpVec::new_in(scratch),
             rhs: BumpVec::new_in(scratch),
@@ -494,8 +507,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             });
         }
         if form.id == BuiltinShapeId::Eval {
-            for draft in self.chain.iter_mut() {
+            for (at, draft) in self.chain.iter_mut().enumerate() {
                 draft.keeps_defining_scope = true;
+                let walked = if at == level {
+                    statement
+                } else {
+                    draft.current.0
+                };
+                draft.eval_statements.push(walked);
             }
         }
         // A type binder records its whole declaration node: the door reads which declaration it
@@ -1105,6 +1124,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         } else {
             draft.current
         };
+        draft.reads.push((statement, slot));
         if let Some(binder) = draft.statement_binder[statement as usize] {
             draft.edges.push((binder, slot, class));
         }
@@ -1211,6 +1231,130 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         Ok(())
     }
 
+    /// The units pass: one unit per component whose members are not all parameters, keyed by its
+    /// lowest statement, and one per statement that binds nothing, keyed by that statement; each
+    /// unit waits on the units binding a slot it reads, and a unit holding an `EVAL` on every unit
+    /// binding a name declared before it. The units are emitted in the smallest-key order that
+    /// respects every wait, so independent units come out as they are written. Every read, wait and
+    /// count is scratch: the shape keeps only the order.
+    fn units(&self, draft: &mut Draft<'graph, 'x>) {
+        let scratch = self.scratch;
+        let statements = draft.statements as usize;
+        let channels = draft.channels();
+        // The unit each statement belongs to, and the key-ordered works: a statement belongs to
+        // its binder's component's unit, or to a unit of its own.
+        let mut component_key: BumpVec<'x, Option<u32>> =
+            BumpVec::with_capacity_in(draft.components.len(), scratch);
+        component_key.resize(draft.components.len(), None);
+        for (slot, component) in draft.component_of.iter().enumerate() {
+            if let Some(statement) = channels.get(slot).0.checked_sub(1) {
+                let key = &mut component_key[component.index()];
+                *key = Some(key.map_or(statement, |key| key.min(statement)));
+            }
+        }
+        // A unit's key is a statement, and no two units share one, so a run indexed by statement
+        // orders them.
+        let mut by_key: BumpVec<'x, Option<UnitWork>> =
+            BumpVec::with_capacity_in(statements, scratch);
+        by_key.resize(statements, None);
+        for (component, key) in component_key.iter().enumerate() {
+            if let Some(key) = key {
+                by_key[*key as usize] = Some(UnitWork::Component(ComponentIndex(component as u32)));
+            }
+        }
+        for (statement, binder) in draft.statement_binder.iter().enumerate() {
+            if binder.is_none() {
+                by_key[statement] = Some(UnitWork::Statement(statement as u32));
+            }
+        }
+        let mut works: BumpVec<'x, UnitWork> = BumpVec::with_capacity_in(statements, scratch);
+        let mut unit_of_key: BumpVec<'x, u32> = BumpVec::with_capacity_in(statements, scratch);
+        unit_of_key.resize(statements, u32::MAX);
+        for (key, work) in by_key.iter().enumerate() {
+            if let Some(work) = work {
+                unit_of_key[key] = works.len() as u32;
+                works.push(*work);
+            }
+        }
+        let unit_of_statement = |statement: u32| match draft.statement_binder[statement as usize] {
+            Some(binder) => {
+                let component = draft.component_of[binder.index()];
+                let key = component_key[component.index()].expect("a binder's component has a key");
+                unit_of_key[key as usize]
+            }
+            None => unit_of_key[statement as usize],
+        };
+        let unit_of_slot = |slot: Slot| {
+            let component = draft.component_of[slot.index()];
+            component_key[component.index()].map(|key| unit_of_key[key as usize])
+        };
+        // `(waited on, waiter, hard)`, one per wait — duplicates only raise a count they also
+        // lower. A read is a hard wait, and the hard waits are acyclic: a cycle among bindings is
+        // one component. An `EVAL`'s waits are soft: a binder declared before it may itself read
+        // the `EVAL`'s own binder, and then the read wins.
+        let mut waits: BumpVec<'x, (u32, u32, bool)> = BumpVec::new_in(scratch);
+        for (statement, slot) in draft.reads.iter() {
+            let waiter = unit_of_statement(*statement);
+            if let Some(bound) = unit_of_slot(*slot)
+                && bound != waiter
+            {
+                waits.push((bound, waiter, true));
+            }
+        }
+        for statement in draft.eval_statements.iter() {
+            let waiter = unit_of_statement(*statement);
+            let before = Position::statement(*statement as usize);
+            for slot in 0..channels.len() {
+                let declared = channels.get(slot);
+                if declared == Position::PARAMETER || declared >= before {
+                    continue;
+                }
+                if let Some(bound) = unit_of_slot(Slot(slot as u32))
+                    && bound != waiter
+                {
+                    waits.push((bound, waiter, false));
+                }
+            }
+        }
+        waits.sort_unstable();
+        // Per unit: the hard waits outstanding, and the soft ones.
+        let mut pending: BumpVec<'x, (u32, u32)> = BumpVec::with_capacity_in(works.len(), scratch);
+        pending.resize(works.len(), (0, 0));
+        for (_, waiter, hard) in waits.iter() {
+            let (hard_count, soft_count) = &mut pending[*waiter as usize];
+            *if *hard { hard_count } else { soft_count } += 1;
+        }
+        let mut emitted: BumpVec<'x, bool> = BumpVec::with_capacity_in(works.len(), scratch);
+        emitted.resize(works.len(), false);
+        let last = statements
+            .checked_sub(1)
+            .map(|last| unit_of_statement(last as u32));
+        let mut cursor = 0;
+        while draft.units.len() < works.len() {
+            let unit = (cursor..works.len())
+                .find(|unit| !emitted[*unit] && pending[*unit] == (0, 0))
+                .or_else(|| (0..works.len()).find(|unit| !emitted[*unit] && pending[*unit].0 == 0))
+                .expect("the hard waits are acyclic: a cycle among bindings is one component");
+            emitted[unit] = true;
+            draft.units.push(Unit {
+                work: works[unit],
+                last: last == Some(unit as u32),
+            });
+            cursor = unit + 1;
+            let first = waits.partition_point(|(bound, _, _)| (*bound as usize) < unit);
+            for (bound, waiter, hard) in waits[first..].iter() {
+                if *bound as usize != unit {
+                    break;
+                }
+                let (hard_count, soft_count) = &mut pending[*waiter as usize];
+                *if *hard { hard_count } else { soft_count } -= 1;
+                if pending[*waiter as usize] == (0, 0) {
+                    cursor = cursor.min(*waiter as usize);
+                }
+            }
+        }
+    }
+
     /// Lay a finished draft down in program storage, its nested drafts first; `form` is the node
     /// holding a callable draft's body.
     fn seal(
@@ -1273,6 +1417,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             births: storage.alloc_slice_copy(&births),
             rhs: storage.alloc_slice_copy(&rhs),
             declarations: storage.alloc_slice_copy(&declarations),
+            units: storage.alloc_slice_copy(&draft.units),
             keeps_defining_scope: draft.keeps_defining_scope,
         })
     }

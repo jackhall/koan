@@ -20,7 +20,7 @@
 
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected_components};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
-use crate::scope::{Binding, BodyShape, Component, Coordinate, Site, Target};
+use crate::scope::{BodyShape, Component, Coordinate, Site, Target};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{
@@ -28,7 +28,7 @@ use crate::values::{
     construction, dict_type, kept_entries, list_type, part_ktype, record_type,
 };
 
-use super::{KActivation, KValue, Knotted, Supplied, Untieable};
+use super::{Eager, KActivationView, KValue, Knotted, Supplied, Untieable};
 
 /// One part of a data member's right-hand side, read and not yet written.
 pub(super) enum Staged<'graph, 'cell, 'x> {
@@ -102,24 +102,30 @@ fn construction_parts<'graph>(
 
 /// The walk over data members' right-hand sides.
 pub(super) struct Stager<'stage, 'graph, 'cell> {
-    activation: &'stage KActivation<'graph, 'cell>,
+    activation: &'stage KActivationView<'graph, 'cell>,
     component: &'stage Component<'graph>,
     scratch: BumpAllocator<'stage>,
-    eager: &'stage mut dyn FnMut(Site) -> Option<Supplied<'graph, 'cell>>,
+    eager: &'stage mut Eager<'stage, 'graph, 'cell>,
     nodes: Nodes<'graph, 'cell, 'stage>,
     /// The member whose right-hand side is being walked.
     owner: u32,
+    /// The first part the caller had not evaluated. The walk goes on past it on a placeholder, so
+    /// `eager` is asked for every such part in one attempt, and the staging is refused at its end.
+    refused: Option<Untieable<'static>>,
 }
 
 impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
     /// Stage each member whose root is `Some`, into a node run whose first `roots.len()` indices
     /// are the members.
+    ///
+    /// Every part only the caller can evaluate is asked of `eager` before the staging is refused on
+    /// the first it could not answer, so one refusal names them all by the sites `eager` saw.
     pub(super) fn nodes(
-        activation: &'stage KActivation<'graph, 'cell>,
+        activation: &'stage KActivationView<'graph, 'cell>,
         component: &'stage Component<'graph>,
         roots: &[Option<&'graph ExpressionPart<'graph>>],
         scratch: BumpAllocator<'stage>,
-        eager: &'stage mut dyn FnMut(Site) -> Option<Supplied<'graph, 'cell>>,
+        eager: &'stage mut Eager<'stage, 'graph, 'cell>,
     ) -> Result<Nodes<'graph, 'cell, 'stage>, Untieable<'static>> {
         let mut nodes = BumpVec::with_capacity_in(roots.len(), scratch);
         nodes.extend(roots.iter().map(|_| None));
@@ -130,17 +136,38 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
             eager,
             nodes,
             owner: 0,
+            refused: None,
         };
+        let staged = stager.roots(roots);
+        // A placeholder can mislead what follows it, so an unevaluated part outranks every later
+        // refusal.
+        if let Some(refused) = stager.refused {
+            return Err(refused);
+        }
+        staged?;
+        Ok(stager.nodes)
+    }
+
+    fn roots(
+        &mut self,
+        roots: &[Option<&'graph ExpressionPart<'graph>>],
+    ) -> Result<(), Untieable<'static>> {
         for (index, root) in roots.iter().enumerate() {
             let Some(root) = root else { continue };
-            stager.owner = index as u32;
-            let shape = stager.part(root, true)?;
-            stager.nodes[index] = Some(Node {
+            self.owner = index as u32;
+            let shape = self.part(root, true)?;
+            self.nodes[index] = Some(Node {
                 owner: index as u32,
                 shape,
             });
         }
-        Ok(stager.nodes)
+        Ok(())
+    }
+
+    /// Record that the part at `site` is still the caller's to evaluate, if it is the first.
+    fn unevaluated(&mut self, site: Site) {
+        let name = self.name();
+        self.refused.get_or_insert(Untieable::Eager { name, site });
     }
 
     fn name(&self) -> BinderSymbol {
@@ -257,10 +284,8 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         {
             return Ok(Staged::Edge(index as u32));
         }
-        match self.activation.read(coordinate) {
-            Binding::Bound(value) => Ok(Staged::Value(value)),
-            Binding::Pending(binder) => Err(Untieable::Pending { name, binder }),
-        }
+        let _ = name;
+        Ok(Staged::Value(self.activation.read(coordinate)))
     }
 
     /// A part only the caller can evaluate.
@@ -269,13 +294,13 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         part: &'graph ExpressionPart<'graph>,
     ) -> Result<Staged<'graph, 'cell, 'stage>, Untieable<'static>> {
         let site = Site::of(part);
-        match (self.eager)(site) {
+        match (self.eager)(site, Some(part)) {
             Some(Supplied::Value(value)) => Ok(Staged::Value(value)),
             Some(Supplied::Body(_)) => unreachable!("a data member's part is a value"),
-            None => Err(Untieable::Eager {
-                name: self.name(),
-                site,
-            }),
+            None => {
+                self.unevaluated(site);
+                Ok(Staged::Value(Value::Null))
+            }
         }
     }
 
@@ -289,14 +314,12 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
             ExpressionPart::Literal(KLiteral::String(literal)) => Ok(Key::str(literal)),
             ExpressionPart::Literal(KLiteral::Number(number)) => Key::number(*number),
             ExpressionPart::Literal(KLiteral::Boolean(flag)) => Ok(Key::bool(*flag)),
-            _ => match (self.eager)(site) {
+            _ => match (self.eager)(site, Some(part)) {
                 Some(Supplied::Value(value)) => Key::of(&value),
                 Some(Supplied::Body(_)) => unreachable!("a dict key is a value"),
                 None => {
-                    return Err(Untieable::Eager {
-                        name: self.name(),
-                        site,
-                    });
+                    self.unevaluated(site);
+                    return Ok(Key::bool(false));
                 }
             },
         };

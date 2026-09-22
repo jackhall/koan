@@ -7,34 +7,23 @@
 //! declares — and its keyworded and operator channels are empty until
 //! [dispatch](../../roadmap/rewrite/dispatch.md) gives a bodyless definition a slot.
 
-use crate::memory::{BumpAllocator, CellHandle};
-use crate::scope::{Activation, Binding, ShapeKind};
+use crate::memory::BumpAllocator;
+use crate::scope::{ActivationView, ShapeKind};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, SchemaDraft, TypeRegistry};
-use crate::values::{Knotted, Value};
+use crate::values::{KnottedFamily, Value};
 
-/// Why a module's self-signature cannot be read yet: the binder of `name` is still running.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Unsigned {
-    pub name: BinderSymbol,
-    pub binder: CellHandle,
-}
-
-/// The self-signature of the module whose body `activation` ran. Every slot must be bound: the
-/// caller runs the body to completion and only then ties the binder.
-pub fn self_signature<X: Knotted>(
-    activation: &Activation<'_, '_, X>,
+/// The self-signature of the module whose body `activation` ran. Every slot is bound: the caller
+/// runs the body to completion and only then ties the binder.
+pub fn self_signature<'graph, XF: KnottedFamily<'graph>>(
+    activation: &ActivationView<'graph, '_, XF>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> Result<KType, Unsigned> {
+) -> KType {
     debug_assert_eq!(activation.shape().kind(), ShapeKind::Module);
     let mut draft = SchemaDraft::new(scratch);
-    for (slot, binding) in activation.slots() {
+    for (slot, value) in activation.slots() {
         let name = activation.shape().slot_name(slot);
-        let value = match binding {
-            Binding::Bound(value) => value,
-            Binding::Pending(binder) => return Err(Unsigned { name, binder }),
-        };
         match name {
             BinderSymbol::Value(name) => draft.insert_value_slot(name, value.ktype()),
             BinderSymbol::Type(name) => {
@@ -50,5 +39,5 @@ pub fn self_signature<X: Knotted>(
     for group in activation.shape().held_groups() {
         draft.push_operator_group(group.members, group.mode);
     }
-    Ok(types.signature(scratch, draft))
+    types.signature(scratch, draft)
 }
