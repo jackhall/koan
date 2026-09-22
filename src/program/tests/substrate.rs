@@ -22,8 +22,9 @@ fn tally() -> f64 {
 }
 
 /// A step that adds the number it was born with to the tally, and finishes.
-fn add<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
-    let KValue::Number(count) = step.state() else {
+fn add<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+    let (step, state) = step.state();
+    let KValue::Number(count) = state else {
         return step.failed(StepError::Stale);
     };
     RAN.with(|ran| ran.set(ran.get() + count));

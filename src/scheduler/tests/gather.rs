@@ -11,15 +11,15 @@ use crate::knot::KValue;
 use crate::memory::Active;
 use crate::scheduler::tests::bundle::{Native, ScratchState, TestGraph};
 use crate::scheduler::tests::native::{record, recorded, reset, shares, where_text, work};
-use crate::scheduler::{Action, Placement, Received, Scheduler, Slot, Step, StepError, Use};
+use crate::scheduler::{Action, Hold, Placement, Received, Scheduler, Slot, Step, StepError, Use};
 
 /// The three texts the producers write, one per spawn, in the order the consumer asks for them.
 const TEXTS: [&str; 3] = ["first", "second", "third"];
 
 /// Accepts only values at the step's own `'here`, which is invariant: a run read back at
 /// `'scratch` does not pass. What the final build asserts about where its result lives.
-fn in_storage<'graph, 'here>(
-    _: &Step<'_, 'graph, '_, 'here, '_, Native>,
+fn in_storage<'graph, 'here, S: Hold, X: Hold>(
+    _: &Step<'_, 'graph, '_, 'here, '_, Native, S, X>,
     _: &'here [KValue<'graph, 'here>],
 ) {
 }
@@ -32,8 +32,9 @@ fn ask_for<'graph>(step: &mut Step<'_, 'graph, '_, '_, '_, Native>, text: &'grap
 
 /// A producer: build the text it was born holding. Asked with `Keeps`, the build lands in the
 /// consumer's storage and is filed as a carrier.
-fn produce<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let KValue::Str(text) = step.state() else {
+fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (step, state) = step.state();
+    let KValue::Str(text) = state else {
         return step.failed(StepError::Stale);
     };
     step.finish_fresh(move |writer, _| {
@@ -78,10 +79,9 @@ fn gather_two<'graph, 'here, 'scratch>(
 
 /// The last step: take the third result and build all three into this cell's storage, straight out
 /// of the gathered run.
-fn build<'graph, 'here>(
-    mut step: Step<'_, 'graph, '_, 'here, '_, Native>,
-) -> Action<'graph, Native> {
-    let Some(ScratchState::Gathered(run)) = step.scratch() else {
+fn build<'graph, 'here>(step: Step<'_, 'graph, '_, 'here, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, scratch) = step.scratch();
+    let Some(ScratchState::Gathered(run)) = scratch else {
         return step.failed(StepError::Unredeemable);
     };
     let Some(Ok(Received::Here(third))) = step.results().next() else {

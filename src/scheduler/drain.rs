@@ -257,13 +257,7 @@ where
                         }
                     },
                 };
-                let step = step(Step::new(
-                    context,
-                    &provenance,
-                    spawns,
-                    Some(state),
-                    scratch,
-                ));
+                let step = step(Step::new(context, &provenance, spawns, state, scratch));
                 (step, provenance)
             })
             .map_err(|_| DrainStalled::Unenterable)

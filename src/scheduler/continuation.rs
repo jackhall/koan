@@ -51,8 +51,9 @@ pub trait StepBundle<'graph>: 'graph {
 ///
 /// It is handed its `Step` by value — every door it may use, the state its cell holds and the
 /// scratch state it parked, and the only way to end. A state is a projection of the bundle, which a
-/// higher-ranked function pointer cannot take as a parameter, so the step takes both from the
-/// `Step`.
+/// higher-ranked function pointer cannot take as a parameter (rustc #100013), so the step takes
+/// both from the `Step`, whose [`Hold`](crate::scheduler::Hold) markers — lifetime-free, so they
+/// may appear here — default to holding both.
 ///
 /// Higher-ranked over the three brands one `enter` quantifies, so one pointer runs in any cell at
 /// any step. It is not ranked over `'graph`: the state it reads, the children it asks for and the

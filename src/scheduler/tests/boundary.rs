@@ -70,34 +70,34 @@ fn a_step_names_no_handle_and_no_carrier_door() {
     );
 }
 
-/// Every `pub fn` signature of the `impl` block over `Step`, each joined onto one line and cut at
-/// the body's opening brace: from the `impl<` line whose header names `Step<` to the `}` closing
-/// it at column zero.
+/// Every `pub fn` signature of the `impl` blocks over `Step`, each joined onto one line and cut at
+/// the body's opening brace: from each `impl<` line whose header names `Step<` to the `}` closing
+/// it at column zero. `Step` has one block per typestate, so the walk reads them all.
 fn step_signatures(source: &str) -> Vec<String> {
     let lines: Vec<&str> = source.lines().collect();
-    let start = (0..lines.len())
-        .find(|&index| {
-            lines[index].starts_with("impl<")
-                && lines[index..(index + 2).min(lines.len())]
-                    .iter()
-                    .any(|line| line.contains("Step<"))
-        })
-        .expect("action.rs has an impl block over `Step`");
-    let end = (start..lines.len())
-        .find(|&index| lines[index] == "}")
-        .expect("the impl block closes");
+    let starts = (0..lines.len()).filter(|&index| {
+        lines[index].starts_with("impl<")
+            && lines[index..(index + 2).min(lines.len())]
+                .iter()
+                .any(|line| line.contains("Step<"))
+    });
     let mut signatures = Vec::new();
-    let mut current: Option<String> = None;
-    for line in &lines[start..end] {
-        let line = line.trim();
-        if line.starts_with("pub fn") {
-            current = Some(String::new());
-        }
-        if let Some(signature) = current.as_mut() {
-            signature.push_str(line);
-            signature.push(' ');
-            if line.ends_with('{') {
-                signatures.push(current.take().expect("a signature in progress"));
+    for start in starts {
+        let end = (start..lines.len())
+            .find(|&index| lines[index] == "}")
+            .expect("the impl block closes");
+        let mut current: Option<String> = None;
+        for line in &lines[start..end] {
+            let line = line.trim();
+            if line.starts_with("pub fn") {
+                current = Some(String::new());
+            }
+            if let Some(signature) = current.as_mut() {
+                signature.push_str(line);
+                signature.push(' ');
+                if line.ends_with('{') {
+                    signatures.push(current.take().expect("a signature in progress"));
+                }
             }
         }
     }

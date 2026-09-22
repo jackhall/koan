@@ -5,7 +5,8 @@
 //! cell's provenance and the drain's request buffer are its private fields, so every door that
 //! registers a run, stores a slot, crosses a value or fills a receipt is the veneer's, performed
 //! inside one of its methods from the provenance the drain filled. Those methods that end the step
-//! consume it, so a step ends exactly once.
+//! consume it, so a step ends exactly once. Its two states are taken the same way: each take
+//! hands back the `Step` in a form without that take, so a step takes each at most once.
 //!
 //! **No step names a place that is not its own.** No method takes or returns a handle, and none is
 //! a carrier door: a step holds values at its own brands and nothing else, and says what it needs —
@@ -98,7 +99,7 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// ways to end.
 ///
 /// It borrows the raw context, the cell's provenance and the drain's request buffer, all private,
-/// and holds the state its cell was woken with and the scratch state it parked. A step asks for
+/// and holds the cell's two states until the step takes them. A step asks for
 /// children through [`spawn`](Self::spawn), reads what they delivered through
 /// [`results`](Self::results), and ends through one of [`park`](Self::park),
 /// [`tail`](Self::tail), [`finish_fresh`](Self::finish_fresh),
@@ -128,16 +129,93 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 ///     step.done()
 /// }
 /// ```
-pub struct Step<'a, 'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>>
-where
+///
+/// It holds the state its cell was woken with and the scratch state the previous step parked, and
+/// each is taken once, by type: [`state`](Step::state) and [`scratch`](Step::scratch) hand the value
+/// back beside the `Step` in its [`Taken`] form, which has no second take to call. A step that
+/// never takes either names neither form — the two parameters default to [`Holding`].
+///
+/// ```
+/// use koan::program::Steps;
+/// use koan::scheduler::{Action, Step};
+///
+/// fn state_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+///     let (step, _) = step.state();
+///     step.done()
+/// }
+///
+/// fn scratch_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+///     let (step, _) = step.scratch();
+///     step.done()
+/// }
+/// ```
+///
+/// A second take of the state does not compile:
+///
+/// ```compile_fail,E0599
+/// use koan::program::Steps;
+/// use koan::scheduler::{Action, Step};
+///
+/// fn state_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+///     let (step, _) = step.state();
+///     let (step, _) = step.state();
+///     step.done()
+/// }
+/// ```
+///
+/// Nor does a second take of the scratch state:
+///
+/// ```compile_fail,E0599
+/// use koan::program::Steps;
+/// use koan::scheduler::{Action, Step};
+///
+/// fn scratch_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+///     let (step, _) = step.scratch();
+///     let (step, _) = step.scratch();
+///     step.done()
+/// }
+/// ```
+pub struct Step<
+    'a,
+    'graph,
+    'step,
+    'here,
+    'scratch,
+    B: StepBundle<'graph>,
+    S: Hold = Holding,
+    X: Hold = Holding,
+> where
     'graph: 'step + 'here,
     'here: 'scratch,
 {
     context: &'a mut Context<'graph, 'step, 'here, 'scratch, B>,
     provenance: &'a Provenance,
     spawns: &'a mut Spawns<'graph, B>,
-    state: Option<StateAt<'graph, 'here, B>>,
-    scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
+    state: S::Of<StateAt<'graph, 'here, B>>,
+    scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
+}
+
+/// Whether a [`Step`] still holds one of its two states. [`Holding`] keeps the field's type and
+/// [`Taken`] replaces it with `()`, so the method that takes it is not there to call twice.
+///
+/// The markers carry no lifetime: the bundle's projection stays a field of `Step`, the only place
+/// rustc #100013 lets it be named under [`NativeStep`]'s higher-ranked brands.
+pub trait Hold {
+    type Of<T>;
+}
+
+/// A [`Step`] still holding a state.
+pub struct Holding;
+
+/// A [`Step`] whose state has been taken.
+pub struct Taken;
+
+impl Hold for Holding {
+    type Of<T> = T;
+}
+
+impl Hold for Taken {
+    type Of<T> = ();
 }
 
 impl<'a, 'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>>
@@ -152,7 +230,7 @@ where
         context: &'a mut Context<'graph, 'step, 'here, 'scratch, B>,
         provenance: &'a Provenance,
         spawns: &'a mut Spawns<'graph, B>,
-        state: Option<StateAt<'graph, 'here, B>>,
+        state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
     ) -> Self {
         Step {
@@ -163,7 +241,82 @@ where
             scratch,
         }
     }
+}
 
+impl<'a, 'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>, X: Hold>
+    Step<'a, 'graph, 'step, 'here, 'scratch, B, Holding, X>
+where
+    'graph: 'step + 'here,
+    'here: 'scratch,
+{
+    /// The state this cell holds: the one the previous step parked with, or the one the cell was
+    /// born with, woken to this step's `'here` at the verdict's price. It comes back beside the
+    /// `Step` in its [`Taken`] form, which has no `state` to call again; a park hands the next
+    /// state back through [`park`](Step::park).
+    pub fn state(
+        self,
+    ) -> (
+        Step<'a, 'graph, 'step, 'here, 'scratch, B, Taken, X>,
+        StateAt<'graph, 'here, B>,
+    ) {
+        let Step {
+            context,
+            provenance,
+            spawns,
+            state,
+            scratch,
+        } = self;
+        let step = Step {
+            context,
+            provenance,
+            spawns,
+            state: (),
+            scratch,
+        };
+        (step, state)
+    }
+}
+
+impl<'a, 'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>, S: Hold>
+    Step<'a, 'graph, 'step, 'here, 'scratch, B, S, Holding>
+where
+    'graph: 'step + 'here,
+    'here: 'scratch,
+{
+    /// The scratch state the previous step parked, if it parked one, beside the `Step` in its
+    /// [`Taken`] form, like [`state`](Step::state). A step that parks again hands it, or its
+    /// successor, back to [`park`](Step::park), and one that drops it lets this step's end hand the
+    /// bump back.
+    pub fn scratch(
+        self,
+    ) -> (
+        Step<'a, 'graph, 'step, 'here, 'scratch, B, S, Taken>,
+        Option<ScratchAt<'graph, 'here, 'scratch, B>>,
+    ) {
+        let Step {
+            context,
+            provenance,
+            spawns,
+            state,
+            scratch,
+        } = self;
+        let step = Step {
+            context,
+            provenance,
+            spawns,
+            state,
+            scratch: (),
+        };
+        (step, scratch)
+    }
+}
+
+impl<'a, 'graph, 'step, 'here, 'scratch, B: StepBundle<'graph>, S: Hold, X: Hold>
+    Step<'a, 'graph, 'step, 'here, 'scratch, B, S, X>
+where
+    'graph: 'step + 'here,
+    'here: 'scratch,
+{
     /// This cell's region, at its own brand.
     pub fn writer(&self) -> Writer<'here> {
         self.context.writer()
@@ -172,20 +325,6 @@ where
     /// This cell's scratch habitat, at its own brand.
     pub fn scratch_writer(&self) -> Writer<'scratch> {
         self.context.scratch_writer()
-    }
-
-    /// The state this cell holds: the one the previous step parked with, or the one the cell was
-    /// born with, woken to this step's `'here` at the verdict's price. Taken once, by the step that
-    /// wants it; a park hands the next one back through [`park`](Self::park).
-    pub fn state(&mut self) -> StateAt<'graph, 'here, B> {
-        self.state.take().expect("a step takes its state once")
-    }
-
-    /// The scratch state the previous step parked, if it parked one. Taken once, like
-    /// [`state`](Self::state); a step that parks again hands it, or its successor, back to
-    /// [`park`](Self::park), and one that drops it lets this step's end hand the bump back.
-    pub fn scratch(&mut self) -> Option<ScratchAt<'graph, 'here, 'scratch, B>> {
-        self.scratch.take()
     }
 
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain

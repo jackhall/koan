@@ -27,6 +27,8 @@ mod drain;
 #[cfg(test)]
 mod tests;
 
-pub use action::{Action, Placement, Received, Request, Slot, Step, StepError, Use};
+pub use action::{
+    Action, Hold, Holding, Placement, Received, Request, Slot, Step, StepError, Taken, Use,
+};
 pub use continuation::{NativeStep, StepBundle, Work};
 pub use drain::{DrainStalled, Graph, Scheduler};

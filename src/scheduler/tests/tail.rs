@@ -8,7 +8,7 @@ use crate::knot::KValue;
 use crate::memory::Active;
 use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{describe, fresh, record, recorded, reset, shares, work};
-use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, Use, Work};
+use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, Taken, Use, Work};
 
 /// Enough hops that a per-hop cost would be unmissable in the allocation count.
 const MANY: usize = 10_000;
@@ -48,11 +48,12 @@ fn start<'graph>(
 /// into this cell's own region; a co-tenant writes the same host, so the same wake pins what is
 /// already at its `'here`.
 fn turn<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, Native>,
     placement: Placement,
     next: TestStep<'graph>,
 ) -> Action<'graph, Native> {
-    let carried = match step.state() {
+    let (step, state) = step.state();
+    let carried = match state {
         KValue::Null => crate::values::text(step.writer(), CARRIED),
         carried => carried,
     };
@@ -76,7 +77,7 @@ fn turn<'graph>(
 /// The last turn: fill the slot the loop's head was born against. Every hop carried the same
 /// provenance forward, so the caller sees one result however many cells produced it.
 fn deliver<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, Native, Taken>,
     carried: KValue<'graph, '_>,
 ) -> Action<'graph, Native> {
     // Recorded here rather than delivered, because what proves the value survived every crossing is

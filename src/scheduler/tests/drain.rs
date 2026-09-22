@@ -12,8 +12,8 @@ use crate::scheduler::{
 };
 
 /// A step that records the number or text it holds, and finishes.
-fn record_state<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let state = step.state();
+fn record_state<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (step, state) = step.state();
     record(describe(state));
     step.done()
 }
@@ -86,8 +86,8 @@ fn hand_over_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Actio
 }
 
 /// The child: record the state it woke holding, and deliver nothing but the wake.
-fn take_over<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let state = step.state();
+fn take_over<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (step, state) = step.state();
     record(format!("woke {}", where_text(state)));
     step.finish_fresh(|_, _| Active::new(KValue::Null))
 }
@@ -123,8 +123,9 @@ fn a_spawned_child_wakes_holding_the_state_its_spawner_handed_over() {
 
 /// A cell of the order test: record its name, ask for two children named after it when it is not
 /// a leaf, and park on them.
-fn named<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let KValue::Str(name) = step.state() else {
+fn named<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, state) = step.state();
+    let KValue::Str(name) = state else {
         return step.failed(StepError::Stale);
     };
     record(name.to_owned());
@@ -152,8 +153,9 @@ fn named<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'grap
 }
 
 /// A cell of the order test, woken: record that it woke, and deliver to its own spawner.
-fn named_woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let KValue::Str(name) = step.state() else {
+fn named_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (step, state) = step.state();
+    let KValue::Str(name) = state else {
         return step.failed(StepError::Stale);
     };
     record(format!("{name} woken"));
@@ -193,8 +195,9 @@ fn two_children_asked_in_one_park_run_one_subtree_after_the_other() {
 const DEPTH: f64 = 8.0;
 
 /// One level of a recursion that asks for two children at every level, down to a leaf.
-fn node<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let KValue::Number(depth) = step.state() else {
+fn node<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, state) = step.state();
+    let KValue::Number(depth) = state else {
         return step.failed(StepError::Stale);
     };
     if depth == 0.0 {
@@ -206,8 +209,9 @@ fn node<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph
 }
 
 /// One level, woken: count the leaves below it and hand the count up, or record it at the top.
-fn node_woken<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let KValue::Number(depth) = step.state() else {
+fn node_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, state) = step.state();
+    let KValue::Number(depth) = state else {
         return step.failed(StepError::Stale);
     };
     let mut leaves = 0.0;
@@ -257,8 +261,9 @@ fn ask_a_hundred<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Acti
 }
 
 /// One sibling: record its index, and deliver it.
-fn sibling<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let KValue::Number(index) = step.state() else {
+fn sibling<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (step, state) = step.state();
+    let KValue::Number(index) = state else {
         return step.failed(StepError::Stale);
     };
     record(index.to_string());

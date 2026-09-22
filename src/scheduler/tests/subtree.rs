@@ -5,7 +5,7 @@ use crate::knot::KValue;
 use crate::memory::Active;
 use crate::scheduler::tests::bundle::{Native, TestGraph};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, work};
-use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, Use};
+use crate::scheduler::{Action, Hold, Placement, Received, Scheduler, Step, StepError, Use};
 
 /// Deeper than the sixty-four slots a one-word matrix has, several times over.
 const DEPTH: f64 = 200.0;
@@ -17,8 +17,9 @@ fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'grap
 }
 
 /// One level: park on a child one shallower, or turn around at the bottom.
-fn descend<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let KValue::Number(depth) = step.state() else {
+fn descend<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, state) = step.state();
+    let KValue::Number(depth) = state else {
         return step.failed(StepError::Stale);
     };
     if depth == 0.0 {
@@ -45,7 +46,10 @@ fn ascend<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gra
 }
 
 /// Put one number in the slot this cell was born against.
-fn fill<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>, count: f64) -> Action<'graph, Native> {
+fn fill<'graph, S: Hold>(
+    step: Step<'_, 'graph, '_, '_, '_, Native, S>,
+    count: f64,
+) -> Action<'graph, Native> {
     step.finish_fresh(move |_, _| Active::new(KValue::Number(count)))
 }
 

@@ -11,7 +11,9 @@ use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{
     describe, fresh, record, recorded, reset, shares, where_text, work,
 };
-use crate::scheduler::{Action, Placement, Received, Request, Scheduler, Step, StepError, Use};
+use crate::scheduler::{
+    Action, Placement, Received, Request, Scheduler, Step, StepError, Taken, Use,
+};
 
 /// Which end a producer takes, encoded with the `Use` it is asked with into the number a test's
 /// root work is born holding: a native step is a bare `fn`, so what it is to do reaches it as data.
@@ -37,11 +39,17 @@ fn code_of(end: u32, use_: Use) -> KValue<'static, 'static> {
     KValue::Number(f64::from(end + use_))
 }
 
-/// The code a step was born holding.
-fn code(step: &mut Step<'_, '_, '_, '_, '_, Native>) -> Option<u32> {
-    match step.state() {
-        KValue::Number(code) => Some(code as u32),
-        _ => None,
+/// The code a step was born holding, beside the step it was taken from.
+fn code<'a, 'graph, 'step, 'here, 'scratch>(
+    step: Step<'a, 'graph, 'step, 'here, 'scratch, Native>,
+) -> (
+    Step<'a, 'graph, 'step, 'here, 'scratch, Native, Taken>,
+    Option<u32>,
+) {
+    let (step, state) = step.state();
+    match state {
+        KValue::Number(code) => (step, Some(code as u32)),
+        _ => (step, None),
     }
 }
 
@@ -57,8 +65,9 @@ fn seven<'graph, 'their>(
 }
 
 /// A producer: end by the end its code names.
-fn produce<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let Some(code) = code(&mut step) else {
+fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (step, code) = code(step);
+    let Some(code) = code else {
         return step.failed(StepError::Stale);
     };
     match code - code % 10 {
@@ -75,10 +84,11 @@ fn produce<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'gr
 /// The consumer: ask for one producer with the `Use` its code names, at the placement the test
 /// gives it, and park on its single slot.
 fn consume<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, Native>,
+    step: Step<'_, 'graph, '_, '_, '_, Native>,
     placement: Placement,
 ) -> Action<'graph, Native> {
-    let Some(code) = code(&mut step) else {
+    let (mut step, code) = code(step);
+    let Some(code) = code else {
         return step.failed(StepError::Stale);
     };
     let born = KValue::Number(f64::from(code));
@@ -211,8 +221,8 @@ fn both_placements_compute_the_same_value() {
 
 /// The grandparent: lay a marker down in its own region, ask for the middle with `Keeps`, and park.
 /// The middle's home is therefore this cell, and a leaf the middle forwards to builds here too.
-fn grandparent<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let state = step.state();
+fn grandparent<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, state) = step.state();
     record(format!(
         "marker {}",
         where_text(crate::values::text(step.writer(), "marker"))
@@ -222,8 +232,8 @@ fn grandparent<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action
 }
 
 /// The middle: ask for the leaf with `Forwards`, and park.
-fn middle<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let state = step.state();
+fn middle<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, state) = step.state();
     let asked = step.spawn(fresh(produce, Use::Forwards, state));
     step.park(asked, middle_woken, KValue::Null, None)
 }
@@ -367,10 +377,11 @@ fn producer<'graph, 'here>(slot: usize) -> Request<'graph, 'here, Native> {
 }
 
 /// One producer: fill the slot the drain gave it with ten times the number it was born holding.
-fn scale<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
+fn scale<'graph>(step: Step<'_, 'graph, '_, '_, '_, Native>) -> Action<'graph, Native> {
     // The number itself, not the value: a value at this producer's brand is not one the consumer's
     // scratch can hold, so what crosses is the word inside it.
-    let KValue::Number(born) = step.state() else {
+    let (step, state) = step.state();
+    let KValue::Number(born) = state else {
         return step.failed(StepError::Stale);
     };
     step.finish_fresh(move |_, _| Active::new(KValue::Number(born * 10.0)))
