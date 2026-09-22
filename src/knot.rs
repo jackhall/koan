@@ -236,8 +236,11 @@ pub type KValueCarrier<'graph, 'home> = ValueCarrier<'graph, 'home, KnottedFamil
 /// An activation whose values may hold functions.
 pub type KActivation<'graph, 'cell> = Activation<'graph, 'cell, KnottedFamily>;
 
-/// The read half of a [`KActivation`].
-pub type KActivationView<'graph, 'cell> = ActivationView<'graph, 'cell, KnottedFamily>;
+/// The read half of a [`KActivation`]. The member is spelled out rather than left to the view's
+/// default: a type holding one in a field is then covariant in `'cell`, which the projection the
+/// default names would not be.
+pub type KActivationView<'graph, 'cell> =
+    ActivationView<'graph, 'cell, KnottedFamily, Knotted<'graph, 'cell>>;
 
 /// A builtin table whose values may hold functions.
 pub type KBuiltins<'graph, 'cell> = Builtins<'graph, 'cell, Knotted<'graph, 'cell>>;

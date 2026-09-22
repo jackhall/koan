@@ -110,10 +110,10 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// a handle, so it cannot deliver anywhere but where the drain said.
 ///
 /// ```
-/// use koan::program::Steps;
+/// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn once<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+/// fn once<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     step.done()
 /// }
 /// ```
@@ -121,10 +121,10 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// A second end does not compile:
 ///
 /// ```compile_fail,E0382
-/// use koan::program::Steps;
+/// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+/// fn twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let _ = step.done();
 ///     step.done()
 /// }
@@ -136,15 +136,15 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// never takes either names neither form — the two parameters default to [`Holding`].
 ///
 /// ```
-/// use koan::program::Steps;
+/// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn state_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+/// fn state_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let (step, _) = step.state();
 ///     step.done()
 /// }
 ///
-/// fn scratch_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+/// fn scratch_once<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let (step, _) = step.scratch();
 ///     step.done()
 /// }
@@ -153,10 +153,10 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// A second take of the state does not compile:
 ///
 /// ```compile_fail,E0599
-/// use koan::program::Steps;
+/// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn state_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+/// fn state_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let (step, _) = step.state();
 ///     let (step, _) = step.state();
 ///     step.done()
@@ -166,10 +166,10 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// Nor does a second take of the scratch state:
 ///
 /// ```compile_fail,E0599
-/// use koan::program::Steps;
+/// use koan::program::KBundle;
 /// use koan::scheduler::{Action, Step};
 ///
-/// fn scratch_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, Steps>) -> Action<'graph, Steps> {
+/// fn scratch_twice<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
 ///     let (step, _) = step.scratch();
 ///     let (step, _) = step.scratch();
 ///     step.done()
@@ -703,4 +703,6 @@ pub enum StepError {
     Unredeemable,
     /// The step asked for children and ended without parking on them.
     Unparked,
+    /// The layer above refused the work; its reason is that layer's to report.
+    Refused,
 }

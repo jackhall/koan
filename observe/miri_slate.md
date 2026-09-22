@@ -67,6 +67,11 @@ silence the stale-anchor check; delete a redundant test instead.
   that borrow it, and moves, runs across separate calls and drops as one value. No `unsafe` of its
   own; the backing `unsafe` is `self_cell`'s joined allocation, which lends the dependent a
   borrow of the boxed owner.
+- `src/program/body.rs` — the body runner parks holding an activation at `'here` and wakes it at
+  the next step's, while evaluations read the same slots through a covariant view at their own
+  shorter brands and a module body's activation and the enclosing place are written into the
+  running region mid-body. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s
+  once-written run read, its reattach seam and its keep and redeem doors.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -178,14 +183,26 @@ cell's region; what this pins is the ordering between two.
   released.
 
 **Self-contained substrate** ([src/program/substrate.rs](../src/program/substrate.rs)) — program
-storage and the interner in `self_cell`'s owner, the graph, the registry and the parsed program in
-its dependent at `'graph`.
+storage and the interner in `self_cell`'s owner, the graph, the registry, the builtin table and the
+program record in its dependent at `'graph`.
 
-- `two_substrates_load_move_and_run_in_separate_calls`
-  two substrates returned from a helper, moved through a `Vec` into a `Box`, each running a root
-  work under the root taken at load and interning a type in one call and reading it back and
-  running another in a second, then dropped: the owner's box, the registry and AST in program
+- `two_programs_run_and_are_read_back_in_a_separate_call`
+  two substrates returned from a helper, moved through a `Vec` into a `Box`, each running its
+  program in one call and read back in another through a root work resumed from the view the top
+  level left at rest in the root, then dropped: the owner's box, the table and record in program
   storage, and the graph and its root beside them all released.
+
+**The top level on the scheduler** ([src/program/body.rs](../src/program/body.rs)) — the body
+runner performing a whole program under the drain: top-level bindings written in the root's region
+by a tenant of it, each evaluation a tree child of the root or a tenant of its frame, a recursion
+deeper than the slab cap on tree cells, module bodies laid down inline, and a component tied from
+parts its evaluations built — each binding read later through a covariant view of an activation at a
+shorter brand than the one it was bound at.
+
+- `a_whole_program`
+  every unit kind in one program, on a one-cell slab, read back after the drain.
+- `an_eager_part_is_supplied_by_site_in_one_wake`
+  a cyclic data member whose two eager parts are evaluated at one park and tied by site.
 
 ## Recent full-slate run durations
 

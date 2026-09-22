@@ -2,12 +2,16 @@
 
 use self_cell::self_cell;
 
-use crate::memory::{ProgramBrand, ProgramStorage, SlabHandle, program_storage};
-use crate::parse::{KExpression, ParseError, parse_with_path};
-use crate::program::Steps;
-use crate::scheduler::{Graph, Scheduler};
+use crate::memory::{Bump, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident};
+use crate::parse::parse_with_path;
+use crate::scheduler::{DrainStalled, Graph, NativeStep, Placement, Resting, Scheduler, Work};
+use crate::scope::BodyShape;
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::TypeRegistry;
+
+use super::body;
+use super::bundle::{KBirth, KBundle};
+use super::record::{Language, LoadError, Program};
 
 /// What the substrate owns outright. It borrows nothing, and `self_cell` boxes it and only ever
 /// lends it shared, so everything that borrows it lives in [`Running`].
@@ -17,21 +21,53 @@ struct Owner {
 }
 
 /// Everything that names `'graph`: the graph by value, since reclaiming a region needs exclusive
-/// access, and its root, the region every root work is born under; and the registry and the parsed
-/// program in program storage, so a record laid down there can borrow them at `'graph`.
+/// access, and its root, the region every root work is born under and the top level's bindings
+/// live in; the registry and the program record in program storage, so what a step reads is a
+/// `'graph` borrow; and what the top level left at rest when it last ran.
 pub struct Running<'graph> {
-    graph: Graph<'graph, Steps>,
+    graph: Graph<'graph, KBundle>,
     root: SlabHandle,
     brand: ProgramBrand<'graph>,
     symbols: &'graph SymbolInterner,
     types: &'graph TypeRegistry<'graph>,
-    statements: &'graph [KExpression<'graph>],
+    program: &'graph Program<'graph>,
+    resting: Option<Resting<'graph, KBundle>>,
 }
 
 impl<'graph> Running<'graph> {
     /// A drain over this substrate's graph, for the length of one call.
-    pub fn scheduler(&mut self) -> Scheduler<'_, 'graph, Steps> {
+    pub fn scheduler(&mut self) -> Scheduler<'_, 'graph, KBundle> {
         Scheduler::over(&mut self.graph)
+    }
+
+    /// Run the program: the body runner born as a tenant of the root, so the top level's bindings
+    /// are written in the root's region. What it leaves at rest is kept for [`inspect`](Self::inspect);
+    /// a second run runs the program again and replaces it.
+    pub fn run(&mut self) -> Result<(), DrainStalled> {
+        let work = Work {
+            step: body::run,
+            state: KBirth::Program {
+                program: self.program,
+            },
+        };
+        self.resting = Scheduler::over(&mut self.graph).run(work, self.root, Placement::Shares)?;
+        Ok(())
+    }
+
+    /// Run `step` as a later root work, a tenant of the root born from what the top level left at
+    /// rest: [`KBirth::Inspect`], the view of its activation. It is how a REPL or a test reads a
+    /// top-level binding after the drain; what the step leaves at rest is kept in turn. Refused as
+    /// [`DrainStalled::Unfinished`] before the program has run.
+    pub fn inspect(&mut self, step: NativeStep<'graph, KBundle>) -> Result<(), DrainStalled> {
+        let resting = self.resting.ok_or(DrainStalled::Unfinished)?;
+        self.resting =
+            Scheduler::over(&mut self.graph).resume(step, resting, self.root, Placement::Shares)?;
+        Ok(())
+    }
+
+    /// The program record, in program storage.
+    pub fn program(&self) -> &'graph Program<'graph> {
+        self.program
     }
 
     /// The graph's root: a storage-only slab cell taken at load, which no drain enters or releases,
@@ -53,11 +89,6 @@ impl<'graph> Running<'graph> {
     pub fn types(&self) -> &'graph TypeRegistry<'graph> {
         self.types
     }
-
-    /// The parsed program's top-level statements, in source order.
-    pub fn statements(&self) -> &'graph [KExpression<'graph>] {
-        self.statements
-    }
 }
 
 self_cell!(
@@ -73,22 +104,31 @@ self_cell!(
 pub struct CellSubstrate(Joined);
 
 impl CellSubstrate {
-    /// Parse `source` into fresh program storage and stand the graph up beside it, over a slab of
-    /// `cap` cells, one of which is its root. `cap` is at least one.
-    pub fn load(source: &str, path: &str, cap: u32) -> Result<Self, ParseError> {
+    /// Parse `source` into fresh program storage and stand the program up beside it, over a slab of
+    /// `cap` cells, one of which is its root: `language`'s builtin table at `'graph`, the program's
+    /// shape over it, the root, and the [`Program`] record. `cap` is at least one.
+    pub fn load<L: Language>(source: &str, path: &str, cap: u32) -> Result<Self, LoadError> {
         let owner = Owner {
             storage: program_storage(),
             symbols: SymbolInterner::new(),
         };
         Joined::try_new(owner, |owner| {
             let brand = owner.storage.brand();
-            let parsed = parse_with_path(brand, &owner.symbols, source, path)?;
-            let statements = brand.allocator().alloc_slice_copy(&parsed);
+            let parsed =
+                parse_with_path(brand, &owner.symbols, source, path).map_err(LoadError::Parse)?;
             // The registry's destructor never runs: everything it owns is bumped into program
             // storage, which releases it whole.
             let types = &*brand
                 .allocator()
                 .alloc(TypeRegistry::in_region(brand.allocator()));
+            let scratch = Bump::new();
+            let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
+            let shape = BodyShape::of_program(brand, &parsed, builtins, &scratch)
+                .map_err(LoadError::Shape)?;
+            let program = resident(
+                brand.writer(),
+                Program::new(shape, builtins, types, &owner.symbols, L::evaluator()),
+            );
             let mut graph = Graph::new(cap);
             let root = graph
                 .root()
@@ -99,7 +139,8 @@ impl CellSubstrate {
                 brand,
                 symbols: &owner.symbols,
                 types,
-                statements,
+                program,
+                resting: None,
             })
         })
         .map(CellSubstrate)

@@ -97,6 +97,21 @@ pub fn cross_view<'graph, 'cell, XF: KnottedFamily<'graph>>(
     }
 }
 
+/// A value held inside a copied operand of another family — a birth that carries values — rebuilt
+/// through `writer`. The operand is the proof: only a priced placement hands one out, and its
+/// severed brand is the one `value` is read at, so this is still a copy the graph priced.
+pub fn copy_severed<'graph, 'cell, 'severed, F: Reattachable<'graph>, XF: KnottedFamily<'graph>>(
+    writer: Writer<'cell>,
+    operand: &CrossedOperand<'graph, 'cell, 'severed, F>,
+    value: &Value<'graph, 'severed, XF::Closed<'severed>>,
+) -> Value<'graph, 'cell, XF::Closed<'cell>> {
+    debug_assert!(
+        matches!(operand, CrossedOperand::Copied { .. }),
+        "a pinned operand's values embed as they are"
+    );
+    copy_into::<XF>(writer, value)
+}
+
 /// The deep copy: every region part of `value` rebuilt through `writer`, every program node
 /// embedded as the same node, every memoized type and weight carried over, a knot member rebuilt by
 /// its family. Total. Reached only through [`cross_view`], so every copy is one the graph priced.

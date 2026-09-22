@@ -49,7 +49,7 @@ pub use admission::{
     part_ktype, record_type, satisfies, sealing,
 };
 pub use circular::{Circular, Resolved};
-pub use crossing::{COPY_RATIO, cross, cross_here, cross_view, verdict};
+pub use crossing::{COPY_RATIO, copy_severed, cross, cross_here, cross_view, verdict};
 pub use dict::{Dict, Key, KeyRejected, kept_entries};
 pub use equality::Incomparable;
 pub use link::Link;

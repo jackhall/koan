@@ -57,7 +57,7 @@ does. A parse error stops the builder, and `load` returns it.
 
 A [`Scheduler`](../scheduler/README.md#the-drain) borrows the graph and owns
 none, so `Running::scheduler` makes a fresh drain over the substrate's graph for
-the length of one call. The graph is over [`Steps`](steps.rs), the step bundle
+the length of one call. The graph is over [`KBundle`](bundle.rs), the step bundle
 a program's steps run over: a cell's state is a value and its scratch habitat
 parks nothing. A call whose drain stalls is accepted as it stands: the
 view drops what is on its stack and the graph keeps the cells already born,
