@@ -192,16 +192,30 @@ doors ([crossing.rs](crossing.rs)): `cross` builds a carrier's value into
 another cell's region and hands back the carrier resting there, and
 `cross_here` builds it into the executing cell, where it is a plain `'here`
 value the step may embed or its continuation capture. Both price the operand at
-its weight, and both build the same way: a **pinned** operand arrives at the
-destination's brand and embeds as it is, and a **copied** one is rebuilt through
+its weight, and both build through `cross_view`, which turns one crossed operand
+into a value at the destination's brand: a **pinned** operand arrives there and
+embeds as it is, and a **copied** one is rebuilt through
 `copy_into` — region parts written again through the destination's writer,
 program nodes embedded verbatim, memoized types and weights carried over
 unchanged, and a knot member handed to its family's copy together with
 `copy_into` itself, so every value its knot holds is rebuilt by the same
 copy. A data node rebuilds through `Circular::copied`: each value link through
 that copy, each edge verbatim — an edge names a node by index, so it means the
-same node in the copy — and its memo and weight carried over. `copy_into` is private to the crossing: the two doors are the only way
-to a deep copy, so every copy is one the graph priced.
+same node in the copy — and its memo and weight carried over.
+
+`copy_into` is private to the crossing and `cross_view` is its one caller.
+`cross_view` is public, because a placement a layer above builds over values —
+a scheduler's result built in its home, a state woken into a cell — hands it the
+views. It takes a `CrossedOperand`, which only a priced placement mints — its
+arms are [non-exhaustive](../../cellgraph/README.md#the-crossing-verdict), so
+nothing outside `cellgraph` can build one — so every copy is one the graph
+priced.
+
+A crossing door requires its family to be
+[`Covariant`](../../cellgraph/src/reattach.rs), which a generic `ValueFamily<XF>`
+cannot show, so `cross` and `cross_here` state it as a where-clause and each
+concrete family — `ValueFamily<NoKnot>` here, `KValueFamily` in
+[knot](../knot/README.md) — says `covariant!` once.
 
 The graph consults an embedder closure for each operand's verdict, and this
 module owns it: [`verdict`](crossing.rs) copies when the copy costs less than a

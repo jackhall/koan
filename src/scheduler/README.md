@@ -88,7 +88,8 @@ The stack emptying with the root work ended is success. The stack emptying
 first is `DrainStalled::Unfinished`: some cell is parked on a receipt run
 nothing will fill. A birth, an enter or a release the substrate refuses is a
 `DrainStalled` of its own, and a step that cannot proceed is
-`DrainStalled::Step`. These are the only errors the scheduler defines. A koan
+`DrainStalled::Step` — among them a step that asked for children and ended
+without parking on them, `StepError::Unparked`. These are the only errors the scheduler defines. A koan
 error is a [tagged value](../values/README.md#what-a-value-is) and travels
 between cells as data, so no `Result` passes from one cell to another and a
 consumer checks the results it reads.
@@ -96,6 +97,8 @@ consumer checks the results it reads.
 A view dropped before its root work ended abandons what is on its stack. The
 graph keeps the cells already born, under the root they were born under, and
 that root's release does not empty the graph — which is what `is_empty` reports.
+A later `run` over the same view clears the stack before it births its root
+work, so nothing a stalled run left there is ever popped.
 
 ## What a step may name
 
@@ -104,12 +107,19 @@ call, so a step's return type can name none of them. That is why `Action`
 carries no region borrow, and why the children a step asks for go into a
 drain-owned buffer rather than into what it returns.
 
-A step is handed a `Step` by value, the state its cell holds and the scratch
-state it parked. `Step` borrows the raw `StepContext`, the cell's `Provenance`
-and the drain's request buffer, all private, and exposes:
+A step is handed a `Step` by value and nothing else. `Step` borrows the raw
+`StepContext`, the cell's `Provenance` and the drain's request buffer, all
+private, holds the state its cell was woken with and the scratch state it
+parked, and exposes:
 
 - its cell's two writers, `writer` at `'here` and `scratch_writer` at
   `'scratch`;
+- `state` and `scratch`, which take the cell's state and its parked scratch
+  state, each once. A state is a projection of the step bundle, which a
+  higher-ranked function pointer cannot take as a parameter, so a step takes
+  both from the `Step` rather than as arguments beside it. The once is a
+  run-time check: a second `state` panics, and a second `scratch` finds `None`
+  ([a step's state taken once, by type](../../roadmap/rewrite/step-state-taken-once.md));
 - `results`, the children's results it parked on;
 - `spawn`, to ask for a child;
 - the ends — `park`, `tail`, `finish_fresh`, `finish_in_home`, `finish`, `done`
@@ -123,8 +133,8 @@ needs is the veneer's to perform, from the provenance the drain filled:
 
 - **A child's state is handed over awake and arrives awake.** `spawn` and
   `tail` take the state the new cell starts with as the step holds it, at
-  `'here`. The veneer puts it to rest as dormant carriers in the birth
-  continuation, and on the new cell's first entry redeems each and crosses it to
+  `'here`. The veneer puts it to rest as a dormant carrier in the birth
+  continuation, and on the new cell's first entry redeems it and crosses it to
   that cell's `'here` at the [verdict](../values/README.md)'s price — free for
   a child, whose spawner is above it, and free for a tenant, which crosses
   nothing.
@@ -223,7 +233,14 @@ at `'here` and what it names in the habitat at `'scratch`.
 
 The scheduler names no step and no state of the layers above it. It takes them
 as one **step bundle**, a parameter beside the delivery bundle: a state family
-at rest in storage and a scratch family over both brands. A continuation is one
+at rest in storage, a scratch family over both brands, and the state family's
+crossing — a weight, and a copy over the crossed view a placement hands it. The
+veneer rests a state by `lift` then `keep`, which needs nothing of the family,
+and wakes it by a redeem and an own-cell crossing priced by the verdict, which
+needs both halves of the crossing and calls them only inside that priced
+crossing. The state family crosses pinned from a spawner into its child, so it
+is [`Covariant`](../../cellgraph/src/reattach.rs); the scratch family rests in
+its own cell and never crosses. A continuation is one
 shape with no arm to add — a `NativeStep` function pointer, the cell's
 `Provenance`, and the bundle's state. The pointer is higher-ranked over the
 three step brands and not over `'graph`, so one pointer runs in any cell at any
@@ -334,8 +351,7 @@ no layer of koan's above present. They hold, each with a workload of its own:
 - a consumer parked on several producers waking once, and a cell gathering its
   children's results into a run in its scratch habitat across two parks;
 - a ten-thousand-hop loop at each placement, with three cells live at the peak
-  and no more heap than the same loop a hundred hops long, the heap flat under
-  `Fresh` and growing under `Shares`;
+  and no more heap than the same loop a hundred hops long;
 - a subtree two hundred levels deep on a slab of one;
 - two schedulers beside each other sharing nothing, two views over one graph in
   turn, and a view dropped mid-work leaving a graph its root's release does not
@@ -348,8 +364,9 @@ observes it records in `tests/native.rs` for the test around it to read back.
 
 ## Open work
 
-- [The scheduler as a veneer](../../roadmap/rewrite/scheduler-veneer.md) — the
-  ready stack, the root work, the step bundle and the ends that name no place.
+- [A step's state taken once, by type](../../roadmap/rewrite/step-state-taken-once.md)
+  — make a second take of `state` or `scratch` a compile error rather than a
+  panic.
 - [The top level on the scheduler](../../roadmap/rewrite/top-level-on-the-scheduler.md)
   — what turns a koan program into work for this drain, and where the hints come
   from for a koan function.

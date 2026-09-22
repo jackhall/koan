@@ -289,7 +289,7 @@ src/
 │   ├── link.rs           Link — a value word or an edge into the holder's own knot: a data node's cell, a closure binding
 │   ├── circular.rs       Circular / Resolved — a knot's data node over link cells, and the Composite view equality and rendering share over plain and linked composites
 │   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part, and construction, the one newtype-construction rule
-│   ├── crossing.rs       cross / cross_here over the placement doors, the deep copy, and the crossing verdict
+│   ├── crossing.rs       cross / cross_here over the placement doors, cross_view — the one door a copy comes through — the deep copy, and the crossing verdict
 │   ├── working.rs        WorkingExpression / WorkingPart — the scheduler's per-dispatch node in the executing cell's region, carrying the parse's node cache
 │   ├── equality.rs       Value::equals — structural equality, containers gated on related memoized types, a bisimulation over knot data nodes, Incomparable when a function is reached
 │   ├── render.rs         Value::render — the surface PRINT writes, a mark pass then a write pass labelling where a cycle closes
@@ -303,16 +303,16 @@ src/
 │   ├── birth.rs          tie — a component of value binders staged into scratch, memos derived and constructions checked, then laid down as one knot; Untieable
 │   ├── data.rs           a knot's data members: the staging walk with its anonymous nodes and evaluator by site, container memos by the nominal cut, the construction check, and the node write
 │   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
-├── scheduler.rs      pub mod scheduler — the deferred-work drain over cellgraph's cells and liveness matrix: a unit of work is a cell, and this module adds the submission table, the work queue, the drain protocol and delivery
+├── scheduler.rs      pub mod scheduler — the deferred-work drain over cellgraph's cells and liveness matrix: a unit of work is a cell, and this module adds the ready stack, the drain protocol and delivery, over one step bundle the layer above supplies
 ├── scheduler/
-│   ├── drain.rs          Graph — a newtype over the CellGraph closed over koan's three families; Scheduler — a per-call view over a borrowed Graph: the loop, the in_flight queue and the one-at-a-time launch of ready units, the deferred release a tail hand-off needs, and DrainStalled; every birth and every death is the drain's
-│   ├── action.rs         Step — the only thing a step is handed: the doors it may use, spawn, and the park / deliver_scratch / deliver_carrier / tail / done / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Request, Slot, the drain's Spawns buffer, StepError
-│   ├── continuation.rs   ContinuationFamily / ScratchFamily, the reattachable family of each slot a cell parks in — the second over both step brands; NativeStep, Continuation, Work, State, ScratchState, Provenance, CellPlace, Destination
-│   ├── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
-│   └── submit.rs         Unit / Birth / UnitId, and the drain's own Submissions table — units with no cell yet, and the dependency counts that decide when each gets one
-├── program.rs        pub mod program — a loaded program as one owning value, over memory, parse, scheduler, symbols and type_lattice
+│   ├── drain.rs          Graph — a newtype over the CellGraph closed over the scheduler's families, with the storage-only slab roots it hands out and takes back; Scheduler — a per-call view over a borrowed Graph: the depth-first ready stack of live cells and unborn requests, run over one root work, the wake of a rested state at the verdict's price, the deferred release a tail hand-off needs, and DrainStalled; every birth and every death is the drain's
+│   ├── action.rs         Step — the only thing a step is handed: its writers, its state and scratch state, spawn, results, and the park / tail / finish_fresh / finish_in_home / finish / done / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Use, Request, Received, Slot, the drain's Spawns buffer, StepError
+│   ├── continuation.rs   StepBundle — the state family, the scratch family and the state's crossing the layer above supplies; NativeStep, Work, and the ContinuationFamily a cell parks: Continuation, Rested, Provenance
+│   └── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
+├── program.rs        pub mod program — a loaded program as one owning value, over knot, memory, parse, scheduler, symbols, type_lattice and values
 ├── program/
-│   └── substrate.rs      CellSubstrate — program storage and the interner as self_cell's owner, and Running — the graph, the type registry and the parsed statements borrowing them at 'graph, reached through a closure per call
+│   ├── steps.rs          Steps — the step bundle a program's steps run over: a value in storage, nothing in scratch
+│   └── substrate.rs      CellSubstrate — program storage and the interner as self_cell's owner, and Running — the graph, its root taken at load, the type registry and the parsed statements borrowing them at 'graph, reached through a closure per call
 ├── machine.rs           pub mod core / model / execute
 └── machine/
     ├── model.rs            re-exports from model::types and model::values
@@ -427,8 +427,9 @@ from that module's top-of-file comment. The kept modules carry theirs:
   layout order, the views `:|` and `:!` build, the coercion that births a view's
   members, and the binding a `USING … SCOPE` block enters on.
 - [src/scheduler/README.md](src/scheduler/README.md) — the deferred-work drain:
-  what a step may hand back, the two halves of a continuation, the two ways a
-  cell waits, the placement hint, delivery, and the tail hand-off.
+  the depth-first ready stack and the root work, what a step may name, the
+  placement and use hints, delivery, the continuation and the step bundle, how
+  a cell waits, and the tail hand-off.
 - [sexlex/README.md](sexlex/README.md) — the layout half of the parser: what it
   decides, the three things it refuses, and the three indentation regimes.
 - [cellgraph/README.md](cellgraph/README.md) — the cell substrate's contract and

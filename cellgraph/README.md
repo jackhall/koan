@@ -178,7 +178,20 @@ reaching it through an adapter.
 
 **Value** — what passes between cells. Also a reattachable family,
 carried witnessed: born in a region, duplicated per reader, read only under a
-hold. It is held in exactly three states, and **the type of each is what says
+hold. A family that crosses is also **covariant** in its brand,
+[`Covariant`](src/reattach.rs): a pinned operand arrives at the destination's
+brand, shorter than its home's, and a read view is a short borrow of a
+longer-lived home, which is sound exactly when the form can hand a borrow out at
+the shorter brand and never take one in. `Operand`, `alloc_here`, `alloc_into`
+and `read` require it. `Reattachable` speaks of layout alone, and `Covariant`
+names it rather than extending it: a generic family's projection is opaque to
+the compiler, so generic code states the bound as a where-clause, and a bound
+implying the supertrait would shadow the family's impl there and stop its form
+normalizing. Its one method shortens the form, and `covariant!` writes it once
+per concrete family as the identity — which compiles for a covariant form and
+is refused for one holding a `Cell` at the brand, so such a family can never
+cross. A continuation or a scratch state rests in its own cell's slot, never
+crosses, and need not be covariant. It is held in exactly three states, and **the type of each is what says
 which** — they are named in order of liveness:
 
 - **`Dormant`** ([src/dormant.rs](src/dormant.rs)), at rest — free of every
@@ -493,9 +506,13 @@ system enforces it:
   through the destination's writer. Severing is by lifetime and `'graph` is not
   a region's, so a `'graph` borrow inside a copied view embeds as it is.
 
-Both shapes reach the build closure out of the scratch region and neither
-outlives the call: their brands are quantified over the call, so a caller has
-nowhere to put a view it kept.
+Both shapes reach the build closure as a `CrossedOperand`, `Pinned { view }`
+or `Copied { view }`, out of the scratch region, and neither outlives the call:
+their brands are quantified over the call, so a caller has nowhere to put a view
+it kept. Only a placement mints one. Both arms are `#[non_exhaustive]`, so an
+embedder can match one (`CrossedOperand::Pinned { view, .. }`) but never build
+one, and an embedder's deep copy runs only on a view the verdict ruled a copy:
+every copy is one the graph priced.
 
 The verdict is skipped in exactly one case, and only because there is no choice
 to put: an operand homed in a tree cell crossing to a destination neither on
@@ -553,9 +570,10 @@ exactly one decision.
 - [src/dormant.rs](src/dormant.rs) — `Dormant`, the private key naming its
   reach, and the per-cell reach table that reach lives in.
 - [src/reattach.rs](src/reattach.rs) — the reattachable contract in both its
-  arities, over one region lifetime and over both step brands, the erased
-  holders and the unit scratch family, and the single lifetime-retype the crate
-  is built on.
+  arities, over one region lifetime and over both step brands, the `Covariant`
+  witness a crossing family carries and the `covariant!` macro that writes it,
+  the erased holders and the unit scratch family, and the single lifetime-retype
+  the crate is built on.
 - [src/receipt.rs](src/receipt.rs) — the `Delivery` bundle and the delivers-
   nothing default, the receipt run and its slots, and what a fill answers.
 - [tests/surface.rs](tests/surface.rs) — the public surface, named and exercised

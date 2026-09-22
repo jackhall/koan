@@ -184,8 +184,9 @@ eager part a refused tie names.
   evaluation's own region costs a redeem and a crossing per read and weighs the
   region enough to flip an upward crossing to a copy. The view is read-only
   because the activation's slots are `Cell`s of a region that outlives the
-  evaluation; what `cellgraph` itself says about a write through such a view is
-  [the veneer's](scheduler-veneer.md) to settle first.
+  evaluation, and it is a covariant type of its own: a state crosses only as a
+  [`Covariant`](../../cellgraph/src/reattach.rs) family, and an activation,
+  whose `Cell`s hold borrows at its brand, is invariant and never crosses.
 - *How effects are ordered — deferred.* Unit order is source order except where
   a forward reference moves a binder ahead of its reader, a reordering the shape
   makes and a program can predict, and no rule says more. An effects item gives
@@ -203,9 +204,7 @@ eager part a refused tie names.
 
 ## Dependencies
 
-**Requires:**
-
-- [The scheduler as a veneer](scheduler-veneer.md) — the body runner is a root work over its drain, and its evaluations carry its hints.
+**Requires:** none — the scheduler it runs on and the substrate beneath it ship.
 
 **Unblocks:**
 

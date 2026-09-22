@@ -22,6 +22,9 @@ than a generic `cellgraph` type.
 - **The dependent**, `Running<'graph>`, is everything that names `'graph`:
   - the **graph**, by value. Reclaiming one of its recycling regions needs
     exclusive access, which a shared borrow of the owner cannot give.
+  - the graph's **root**, a storage-only slab cell taken at load and handed
+    out by `Running::root`. No drain enters or releases it, so every root work
+    is born under it and a result built there outlives the drain that built it.
   - the **type registry**, laid down in program storage rather than held by
     value, so a record laid down there can borrow it at `'graph`. A registry
     held in the dependent could not be borrowed by a sibling, and would reach a
@@ -54,16 +57,18 @@ does. A parse error stops the builder, and `load` returns it.
 
 A [`Scheduler`](../scheduler/README.md#the-drain) borrows the graph and owns
 none, so `Running::scheduler` makes a fresh drain over the substrate's graph for
-the length of one call. A call whose drain stalls is accepted as it stands: the
+the length of one call. The graph is over [`Steps`](steps.rs), the step bundle
+a program's steps run over: a cell's state is a value and its scratch habitat
+parks nothing. A call whose drain stalls is accepted as it stands: the
 view drops what is on its stack and the graph keeps the cells already born,
 under the root they were born under. A stalled substrate is only ever dropped.
 
 ## Imports and tests
 
-Outside `#[cfg(test)]` this module names `crate::memory`, `crate::parse`,
-`crate::scheduler`, `crate::symbols` and `crate::type_lattice`; its tests may
-also name `crate::knot` for the values their steps carry. `tests/boundary.rs`
-reads the source to hold the rule there. `tests/substrate.rs` loads two
+Outside `#[cfg(test)]` this module names `crate::knot`, `crate::memory`,
+`crate::parse`, `crate::scheduler`, `crate::symbols`, `crate::type_lattice` and
+`crate::values` — the first and the last for the value its step bundle
+carries. `tests/boundary.rs` reads the source to hold the rule there. `tests/substrate.rs` loads two
 programs through a helper, moves them, and runs each across two separate calls;
 it is on the [Miri slate](../../observe/miri_slate.md).
 
