@@ -51,29 +51,37 @@ use super::shape::{BodyShape, Coordinate, Position, ShapeKind, Slot, Target};
 ///     view.read(at)
 /// }
 /// ```
-pub struct ActivationView<'graph, 'cell, XF: KnottedFamily<'graph> = NoKnot>
-where
+///
+/// The member type `X` is the family's member at `'cell`, and nothing but its default is ever
+/// meant: it is a parameter of its own so no field names `'cell` through a projection, which would
+/// make the view invariant in it. The impl is over the default alone.
+pub struct ActivationView<
+    'graph,
+    'cell,
+    XF: KnottedFamily<'graph> = NoKnot,
+    X = <XF as KnottedFamily<'graph>>::Closed<'cell>,
+> where
     'graph: 'cell,
 {
     shape: &'graph BodyShape<'graph>,
-    closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
-    builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
-    enclosing: Option<&'cell ActivationView<'graph, 'cell, XF>>,
+    closure: &'cell ClosureBindings<'graph, 'cell, X>,
+    builtins: &'cell Builtins<'graph, 'cell, X>,
+    enclosing: Option<&'cell ActivationView<'graph, 'cell, XF, X>>,
     /// The knot member this activation runs: `Some` for a callable's activation and every block
     /// inside one, `None` for the program's, a module's, and every block inside those. An edge
     /// capture resolves through it, and a module's captures are never edges — a module is alone in
     /// its component, so it runs no member of its own.
-    callable: Option<XF::Closed<'cell>>,
+    callable: Option<X>,
     slots: SlotView<'graph, 'cell, ValueFamily<XF>>,
 }
 
-impl<'graph, XF: KnottedFamily<'graph>> Clone for ActivationView<'graph, '_, XF> {
+impl<'graph, XF: KnottedFamily<'graph>, X: Copy> Clone for ActivationView<'graph, '_, XF, X> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'graph, XF: KnottedFamily<'graph>> Copy for ActivationView<'graph, '_, XF> {}
+impl<'graph, XF: KnottedFamily<'graph>, X: Copy> Copy for ActivationView<'graph, '_, XF, X> {}
 
 /// One body's bindings for one call or one block entry: the view, and the door that binds a slot.
 /// Invariant in `'cell`, since it binds; it reads as its view through `Deref`.
