@@ -109,3 +109,4 @@ program runs on the rewritten stack.
 
 - [Modules](modules.md) — a module program runs only under dispatch.
 - [Yielding iterators](yielding-iterators.md) — a demand for an element is an ordinary dispatch.
+- [A compact type node table](compact-type-node-table.md) — its presize is calibrated on running programs.
