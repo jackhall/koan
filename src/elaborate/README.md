@@ -74,28 +74,41 @@ by `Never` would lie both above and below it.
 [`callable_type`](signature.rs) reads a callable's type off the builtin shape
 node its body sits in — `BodyShape::form` of the body shape the binder births —
 walking the node's parts by the [roles](../parse/builtin_shapes/role.rs) its
-cached `BUILTIN_SHAPES` entry gives them:
+cached `BUILTIN_SHAPES` entry gives them. Every callable is typed by a
+function type, so a call through any of them is by name:
 
 - a `FN` is the function type over its `:{…}` schema and its return, quantified
   over its `FOR ALL` names;
-- a **combined** form — `LET name = FN EXPR …`, with or without a group — is the
-  function type over its head's slot names and its return, because a call
-  through the `LET` name is by name; only its bucket registration carries the
-  head's shape;
-- a bodyless `EXPR` is the expression shape over its head and its return,
-  quantified over its `FOR ALL` names;
-- a binary `OP` is the shape `operand <symbol> operand`, returning its declared
-  result, or its operand when it declares none, since a chain of it folds;
-- a `UNARY OP` is the shape `<symbol> operands`, whose slot is a list of its
-  operand, since its body's one parameter `operands` takes the whole run.
+- an `EXPR` definition, bare or **combined** (`LET name = FN EXPR …`), is the
+  function type over its head's slot names and its return, quantified over its
+  `FOR ALL` names — so a bare definition and its combined twin are one type, and
+  their bodies bind the same parameters. A definition's head names every slot,
+  so one writing `_` is refused;
+- a binary `OP` is `FN :{left :Operand, right :Operand} -> Result`, returning
+  its declared result, or its operand when it declares none, since a chain of it
+  folds;
+- a `UNARY OP` is `FN :{operands :(LIST OF Operand)} -> Result`, since its body's
+  one parameter takes the whole run.
+
+The operator parameter names are the ones the shape builder binds in an
+operator's body, read from the one table both sides share.
+
+A definition that registers — every `EXPR` and operator one — also hands back
+its **registered shape**: the expression shape its bucket holds, keyword and
+slot in the head's written order, each slot at the type its function type gives
+that parameter. It is built from the function type rather than re-read from the
+head, so the two cannot disagree, and it is exactly the shape `:(EXPR …)` spells
+for the same head: the shape door renumbers the group by first occurrence in
+written order, where the function type numbers it by its sorted parameters. A
+`FN` registers nothing.
 
 A function type binds its group in canonical form, which may renumber or drop a
 variable, so `callable_type` hands back a **quantifier map** beside the handle:
 each `FOR ALL` name the declaration wrote, paired with its index in the canonical
 group, or with its bound where canonical form dropped it — a call has nothing to
-solve a dropped name from, so its body reads the bound. The knot stores the map on the
-function node and a call reads each type parameter's solution through it. A
-shape's map stays empty: its caller reads the group off the bucket instead.
+solve a dropped name from, so its body reads the bound. The knot stores the map
+and the registered shape with the function, and a call reads each type
+parameter's solution through the map.
 
 **The name is the key, not the position.** A callee's type-parameter slots reach
 its frame in the [type channel's](../scope/README.md#two-channels) own symbol order, not
@@ -196,10 +209,11 @@ builtin shapes' roles:
   higher-kinded member, and a `NEWTYPE` family, take no bound;
 - `LET Elem = Number` — a manifest member, fixed to its type;
 - `VAL x :Elem` — a value slot;
-- a bodyless `EXPR`, `OP` or `UNARY OP` head — a keyworded member, an operator
-  head through the same builder [`callable_type`](signature.rs) reads a
-  definition's operator shape through, so a head and the definition satisfying it
-  cannot spell different shapes.
+- a bodyless `EXPR`, `OP` or `UNARY OP` head — a keyworded member, the shape
+  the definition satisfying it registers. An operator head is built by the same
+  door as that definition's registered shape; an `EXPR` head, which may write
+  `_` for a slot's name, is read as the type expression `:(EXPR …)`, which spells
+  the same shape.
 
 A signature's scope id is the sentinel, stamped here rather than round-tripped
 through the declaring scope, which is what makes two textually identical `SIG`
@@ -289,16 +303,18 @@ retired lifetime name.
 ## Testing
 
 [`tests/examples.rs`](tests/examples.rs) elaborates each production, each
-refusal, and a callable's type off each builtin shape that births one, over a
-program shaped and activated in a cell with every slot bound or left empty as
-the test asks; [`tests/projections.rs`](tests/projections.rs) reads a record
+refusal, and a callable's type and registered shape off each builtin shape that
+births one — a bare definition and its combined twin alike — over a program
+shaped and activated in a cell with every slot bound or left empty as the test
+asks; [`tests/projections.rs`](tests/projections.rs) reads a record
 field's declared type through an alias, a newtype layer and a chain, and each
 refusal. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
 door over the same harness: each form it elaborates, each group it seals — a
 ring, a union and a newtype in one component, a ring written in either order
 interning equal — the chaining record a bodyless `GROUP` head declares and the
-two handles two directions make of one signature, and each refusal, asserting
-the refused component left its binders' slots empty. [`tests/module.rs`](tests/module.rs) runs the self-signature
+two handles two directions make of one signature, each bodyless head spelling
+the shape its definition registers, and each refusal, asserting the refused
+component left its binders' slots empty. [`tests/module.rs`](tests/module.rs) runs the self-signature
 over a module body activated in a cell with its slots bound by hand: a slot per
 value binder and a manifest member per type binder, the empty body as the empty
 signature, two bodies binding the same members in either order interning equal,
@@ -314,7 +330,5 @@ interns as the union of its three members.
 
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
   bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
-- [Callables typed by function types](../../roadmap/rewrite/function-typed-callables.md)
-  — a bare `EXPR` or `OP` typed by its function type, its shape carried beside.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates.

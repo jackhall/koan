@@ -40,17 +40,23 @@ activation. This module closes it:
   Its equality is node identity.
 - The knot's payload is a `Node`, of four arms. A `Function` node holds the
   function's memoized type handle, the body shape it runs (in program storage),
-  its closure bindings, the weight of the whole knot it sits in, and — where its
-  type binds a `FOR ALL` group — its **quantifier map**. The map pairs each
+  its closure bindings, the weight of the whole knot it sits in, and its
+  **typing record**: its quantifier map and its registered shape. The
+  **registered shape** is the expression shape a function born for an `EXPR` or
+  operator definition puts in its bucket, which the
+  [elaborator builds](../elaborate/README.md#a-callables-type) from the
+  function's type over its head. The **quantifier map**, where the function's
+  type binds a `FOR ALL` group, pairs each
   `FOR ALL` name the declaration wrote with that name's index in the canonical
   group, or with its bound where canonical form dropped it
   ([the elaborator hands it back](../elaborate/README.md#a-callables-type)),
   and a call reads it to bind each type parameter to what the group solved to.
   It is keyed by the **name** because a frame walks its callee's slots in the
-  type channel's symbol order, so nothing positional survives the trip. It is
-  homed out of line for the reason a barrier's fields are, below: the node holds
-  one nullable pointer, eight bytes, and an unquantified function — which is
-  almost every function — stores `None` and allocates nothing. A `Data`
+  type channel's symbol order, so nothing positional survives the trip. The
+  record is homed out of line for the reason a barrier's fields are, below: the
+  node holds one nullable pointer, eight bytes, where a second type handle inline
+  would widen every node from 64 to 80 bytes. An unquantified `FN` — which is
+  almost every function — has neither, stores `None` and allocates nothing. A `Data`
   node holds a [`Circular`](../values/circular.rs) — a list, dict, record or
   tagged resident whose cells are links — and the same knot weight. A `Module`
   node holds its self-signature, its members in
@@ -218,7 +224,7 @@ not an edge.
 ## Weight and copy
 
 A member's weight is its knot's: the run header, one `Node` per node, each
-function's closure run and quantifier map, each data node's resident, each
+function's closure run and typing record, each data node's resident, each
 module's member run and each barrier's resident, with everything their value
 words point at. A member
 that is itself a knot member contributes its *whole* knot's weight, since a
@@ -230,7 +236,7 @@ crossing prices a member by reading one field, under the ordinary
 this module's family together with the copy itself, and
 [`copy_into`](copy.rs) re-ties the whole knot in the destination's region:
 every node rebuilt in index order — a function's closure run through
-`ClosureBindings::copied` and its quantifier map re-homed beside it through the
+`ClosureBindings::copied` and its typing record re-homed beside it through the
 destination's writer, a data node through `Circular::copied`, a module's
 member run and a barrier's underlying function through that same copy — each held
 value deep-copied through the copy the crossing priced, each edge carried
@@ -286,7 +292,8 @@ can build a module to look at. A test that constructs a nominal writes its `NEWT
 source and reads the handle back off the slot the door bound; the builtin table
 carries the scalar types alone.
 
-- [`tests/birth.rs`](tests/birth.rs) — a lone function, a captured value word,
+- [`tests/birth.rs`](tests/birth.rs) — a lone function, a function born for a
+  registration carrying its shape, a captured value word,
   mutual and self recursion read back through their edges, a nested capture of
   an enclosing edge; a tagged self-reference and a two-member tagged ring, a
   container sharing a knot with the function that captures it, an anonymous

@@ -451,13 +451,13 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
             .function_type(self.scratch, &group.names, &params, ret))
     }
 
-    /// The **function** type a combined form's head declares: the head's `<name> :<Type>` pairs as
-    /// a params record, its keywords dropped, under a group of its own.
+    /// The **function** type an `EXPR` definition's head declares, bare or combined: the head's
+    /// `<name> :<Type>` pairs as a params record, its keywords dropped, under a group of its own.
     ///
-    /// A call through the `LET` name the combined form binds is by name, not by keyword, so this
-    /// is the type the name holds; the head's shape goes only to the dispatch bucket. A `_` pair
-    /// is unsupported here: a body-bearing definition names its parameters, and a function type
-    /// has no positional slot to put a nameless one in.
+    /// A call through the function is by name, not by keyword, so this is the type its value holds;
+    /// the head's shape goes only to the dispatch bucket. A `_` pair is unsupported here: a
+    /// body-bearing definition names its parameters, and a function type has no positional slot
+    /// to put a nameless one in.
     pub(super) fn head_function(
         &self,
         group: &QuantifierGroup<'_>,
@@ -479,17 +479,12 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         };
         let run = run.reference();
         let mut params = BumpVec::with_capacity_in(run.parts.len() / 2, self.scratch);
-        let mut index = 0;
-        while index < run.parts.len() {
-            match (run.parts[index].value, pair_name(run, index)) {
-                (_, Some(Some(name))) => {
-                    params.push((name, self.part(&run.parts[index + 1].value, groups)?));
-                    index += 2;
-                }
-                (ExpressionPart::Keyword(_), None) => index += 1,
-                _ => return Err(unsupported),
+        walk_head(run, unsupported, |element| {
+            if let HeadElement::Slot(name, slot) = element {
+                params.push((name.ok_or(unsupported)?, self.part(slot, groups)?));
             }
-        }
+            Ok(())
+        })?;
         let ret = self.part(ret, groups)?;
         Ok(self
             .types
@@ -518,21 +513,13 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         };
         let run = run.reference();
         let mut elements = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
-        let mut index = 0;
-        while index < run.parts.len() {
-            match (run.parts[index].value, pair_name(run, index)) {
-                (_, Some(_)) => {
-                    let slot = self.part(&run.parts[index + 1].value, &own)?;
-                    elements.push(DispatchTokenElement::Slot(slot));
-                    index += 2;
-                }
-                (ExpressionPart::Keyword(symbol), None) => {
-                    elements.push(DispatchTokenElement::Keyword(symbol));
-                    index += 1;
-                }
-                _ => return Err(unsupported),
-            }
-        }
+        walk_head(run, unsupported, |element| {
+            elements.push(match element {
+                HeadElement::Keyword(symbol) => DispatchTokenElement::Keyword(symbol),
+                HeadElement::Slot(_, slot) => DispatchTokenElement::Slot(self.part(slot, &own)?),
+            });
+            Ok(())
+        })?;
         let ret = self.part(ret, &own)?;
         Ok(self
             .types
@@ -559,4 +546,37 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         }
         Ok(())
     }
+}
+
+/// One element of an `EXPR` head's run.
+#[derive(Clone, Copy)]
+pub(super) enum HeadElement<'p, 'graph> {
+    Keyword(KeywordSymbol),
+    /// A `<name> :<Type>` pair: its name, `None` for `_`, and its type part.
+    Slot(Option<BinderSymbol>, &'p ExpressionPart<'graph>),
+}
+
+/// Hand each keyword and `<name> :<Type>` pair of an `EXPR` head's `run` to `each`, in written
+/// order, or fail with `malformed` at the first part that is neither. The one walk every reader of
+/// a head shares: its shape, its function type, and the shape a definition registers.
+pub(super) fn walk_head<'p, 'graph, E>(
+    run: &'p KExpression<'graph>,
+    malformed: E,
+    mut each: impl FnMut(HeadElement<'p, 'graph>) -> Result<(), E>,
+) -> Result<(), E> {
+    let mut index = 0;
+    while index < run.parts.len() {
+        match (&run.parts[index].value, pair_name(run, index)) {
+            (_, Some(name)) => {
+                each(HeadElement::Slot(name, &run.parts[index + 1].value))?;
+                index += 2;
+            }
+            (ExpressionPart::Keyword(symbol), None) => {
+                each(HeadElement::Keyword(*symbol))?;
+                index += 1;
+            }
+            _ => return Err(malformed),
+        }
+    }
+    Ok(())
 }

@@ -221,10 +221,9 @@ fn frame<'graph, 'here>(
     let writer = step.writer();
     let types = program.types();
     // Solve the group first: every value parameter's declared type against the argument's carried
-    // type, under one collector. A callee that binds no group — an unquantified function, or a
-    // callable whose type is a shape — has nothing to solve and skips the walk, so its frame is
-    // byte-for-byte what it was. `Bump::new` claims no chunk until something is put in it, so it
-    // pays nothing for having one in reach either.
+    // type, under one collector. A callee whose type binds no group has nothing to solve and skips
+    // the walk. `Bump::new` claims no chunk until something is put in it, so it pays nothing for
+    // having one in reach either.
     let bump = Bump::new();
     let scratch = &bump;
     let mut solution = None;

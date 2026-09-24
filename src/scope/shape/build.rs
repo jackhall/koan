@@ -48,18 +48,19 @@ mod surface;
 
 use surface::Surfaced;
 
-/// The names a body declares without a binder statement.
-struct ImplicitNames {
+/// The names a body binds that no signature writes. The shape builder binds them, and the
+/// elaborator reads an operator's function type over them, so the two cannot disagree.
+pub(crate) struct ImplicitNames {
     /// An arm's matched value.
-    it: StaticName<ValueSymbol>,
+    pub(crate) it: StaticName<ValueSymbol>,
     /// A binary operator's operands.
-    left: StaticName<ValueSymbol>,
-    right: StaticName<ValueSymbol>,
+    pub(crate) left: StaticName<ValueSymbol>,
+    pub(crate) right: StaticName<ValueSymbol>,
     /// A unary operator's operand run.
-    operands: StaticName<ValueSymbol>,
+    pub(crate) operands: StaticName<ValueSymbol>,
 }
 
-static IMPLICIT: ImplicitNames = ImplicitNames {
+pub(crate) static IMPLICIT: ImplicitNames = ImplicitNames {
     it: crate::static_name!(ValueSymbol, "it"),
     left: crate::static_name!(ValueSymbol, "left"),
     right: crate::static_name!(ValueSymbol, "right"),

@@ -3,9 +3,9 @@
 //! `a_copied_knot_outlives_its_home`, `a_copied_ring_outlives_its_home`,
 //! `a_copied_module_outlives_its_home` and `a_copied_barrier_outlives_its_home` are on the Miri
 //! slate:
-//! they are the paths only `knot` drives — a knot's run laid down with closure runs, data nodes
-//! and deep copies written into the region while the node run is being filled, read through edges
-//! after the region it was copied from is gone.
+//! they are the paths only `knot` drives — a knot's run laid down with closure runs, typing
+//! records, data nodes and deep copies written into the region while the node run is being filled,
+//! read through edges after the region it was copied from is gone.
 
 use std::ptr;
 
@@ -59,7 +59,7 @@ fn captured_sibling<'graph, 'cell>(
 const KNOT: &str = "\
 LET greeting = \"hi\"
 LET words = [\"alpha\" \"beta\"]
-LET f = (FN :{} -> Str = (greeting words g))
+LET f = FN EXPR (GREET n :Number) -> Str = (greeting words g)
 LET g = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (words f x))";
 
 #[test]
@@ -100,6 +100,13 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                 let (f, copied_f) = (
                     captured_sibling(fixture, g, "f"),
                     captured_sibling(fixture, copied, "f"),
+                );
+                // `f` is born for a registration, so its typing record rides the copy too.
+                let registered = f.function().expect("a function").registered_shape();
+                assert!(registered.is_some());
+                assert_eq!(
+                    copied_f.function().expect("a function").registered_shape(),
+                    registered
                 );
                 assert!(
                     ptr::eq(

@@ -134,10 +134,11 @@ member copied across a crossing, a function or a data node, re-ties its whole kn
 destination's writer, and is read through its edges after the region it came from is released.
 
 - `a_copied_knot_outlives_its_home`
-  a two-node knot of mutually recursive functions, one of them quantified, whose closures capture a
-  string and a string list, crosses under a copy verdict, is kept, its home released, and redeemed
-  in the destination's next step: each edge names a node of the copy, the quantifier map is re-homed
-  through the destination's writer, and every captured byte reads back.
+  a two-node knot of mutually recursive functions, one of them quantified and the other born for a
+  registration, whose closures capture a string and a string list, crosses under a copy verdict, is
+  kept, its home released, and redeemed in the destination's next step: each edge names a node of
+  the copy, each typing record — the quantifier map and the registered shape — is re-homed through
+  the destination's writer, and every captured byte reads back.
 - `a_copied_ring_outlives_its_home`
   a self-referencing tagged value whose record holds a string cell and an anonymous list node
   naming the ring crosses under a copy verdict, is kept, its home released, and redeemed: every

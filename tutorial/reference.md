@@ -86,7 +86,7 @@ the link in each section to the relevant chapter.
 | `:(MAP <Key> -> <Value>)`     | Map / dictionary type.                             |
 | `:(FN :{<params>} -> <Result>)`| Lambda type — the parameter list is a record type (`:{}` when nullary). |
 | `:(FN FOR ALL (<names>) :{<params>} -> <Result>)` | The quantified lambda type. |
-| `:(EXPR (<head>) -> <Result>)` | Expression-shape type — the type of a keyworded definition; write `_` at each slot. |
+| `:(EXPR (<head>) -> <Result>)` | Expression-shape type — the keyword/slot run a keyworded definition registers for dispatch; write `_` at each slot. |
 | `:(EXPR FOR ALL (<names>) (<head>) -> <Result>)` | The quantified shape type. |
 | `FOR ALL ((<Name> UNDER <Type>) <Name> ...)` | A bounded type parameter beside a bare one (bounded by `Any`); a lone bounded name is `FOR ALL (<Name> UNDER <Type>)`. See [12](12-functors.md#bounding-a-type-parameter-under). |
 | `TYPE (<Name> UNDER <Type>)`  | A bounded type member, inside a `SIG`.             |

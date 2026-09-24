@@ -4,7 +4,8 @@
 //! already resolved to coordinates. [`type_expression`] turns one into a [`KType`] by reading each
 //! name through the activation the expression is read in — a type binding holds a
 //! [`TypeValue`](crate::values::TypeValue) — and building lattice nodes over what it reads.
-//! [`callable_type`] reads a callable's signature and return off the builtin shape node its body
+//! [`callable_type`] reads a callable's function type, and the shape a registration puts in
+//! its bucket, off the builtin shape node its body
 //! sits in, where the callable is born, and [`builtin_shape_types`] interns a builtin bucket's own
 //! overloads — the `static` slot types of a
 //! [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) entry — as one handle apiece.

@@ -33,6 +33,8 @@ use super::groups::GroupFrame;
 
 mod build;
 
+pub(crate) use build::IMPLICIT;
+
 /// An index into an activation's slot run: value slots first, type slots after.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Slot(pub(crate) u32);

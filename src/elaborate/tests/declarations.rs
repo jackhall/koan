@@ -192,15 +192,27 @@ fn a_signatures_bodyless_heads_are_keyworded_members() {
 
 #[test]
 fn a_bodyless_head_spells_the_shape_its_definition_spells() {
-    // One builder reads both, so an operator head and the definition satisfying it can never
-    // disagree. An `EXPR` head's twin is not here: a combined definition's type is the function
-    // over its head's slot names, and the shape it registers is the dispatch bucket's — see
-    // [dispatch](../../../roadmap/rewrite/dispatch.md).
+    // A definition registers the shape built from its function type over its head, which must be
+    // the one its bodyless `SIG` twin spells. The operator twins share one builder. `pair` and
+    // `swap` write the same four names in swapped roles, so whichever name sorts first by digest,
+    // one of them has a first-written slot that is not the first sorted parameter: a shape that
+    // copied the function type's numbering fails on it. `first` drops a variable that occurs once,
+    // and `least` carries a bound.
     brought(
         "SIG Arith = ((OP #(+) OVER Number) \
-                      (UNARY OP #(~) OVER Number -> Number))\n\
+                      (UNARY OP #(~) OVER Number -> Number) \
+                      (EXPR (TWICE _ :Number) -> Number) \
+                      (EXPR FOR ALL (Elt Key) (PAIR _ :Elt _ :Key _ :Elt _ :Key) -> Elt) \
+                      (EXPR FOR ALL (Elt Key) (SWAP _ :Elt _ :Key _ :Elt _ :Key) -> Elt) \
+                      (EXPR FOR ALL (Elt) (FIRST _ :Elt _ :Number) -> Number) \
+                      (EXPR FOR ALL (Elt UNDER Number) (LEAST _ :Elt _ :Elt) -> Elt))\n\
          LET plus = OP #(+) OVER Number = (left)\n\
-         LET negate = UNARY OP #(~) OVER Number -> Number = (operands)",
+         LET negate = UNARY OP #(~) OVER Number -> Number = (operands)\n\
+         LET twice = FN EXPR (TWICE x :Number) -> Number = (x)\n\
+         LET pair = FN EXPR FOR ALL (Elt Key) (PAIR p :Elt q :Key r :Elt s :Key) -> Elt = (p)\n\
+         LET swap = FN EXPR FOR ALL (Elt Key) (SWAP q :Elt p :Key s :Elt r :Key) -> Elt = (q)\n\
+         LET first = FN EXPR FOR ALL (Elt) (FIRST x :Elt n :Number) -> Number = (n)\n\
+         LET least = FN EXPR FOR ALL (Elt UNDER Number) (LEAST x :Elt y :Elt) -> Elt = (x)",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Arith"))
             else {
@@ -213,10 +225,14 @@ fn a_bodyless_head_spells_the_shape_its_definition_spells() {
                     .expect("a callable body sits in a form");
                 callable_type(form, program.activation, program.types, program.scratch)
                     .expect("the definition elaborates")
-                    .ktype
+                    .registered
+                    .expect("a registration")
             };
             let mut declared: Vec<KType> = schema.keyworded.to_vec();
-            let mut satisfiers = vec![defined("plus"), defined("negate")];
+            let mut satisfiers: Vec<KType> =
+                ["plus", "negate", "twice", "pair", "swap", "first", "least"]
+                    .map(defined)
+                    .to_vec();
             declared.sort_unstable();
             satisfiers.sort_unstable();
             assert_eq!(declared, satisfiers);

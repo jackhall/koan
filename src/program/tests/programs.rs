@@ -239,6 +239,20 @@ fn a_call_binds_each_type_parameter_to_its_solution() {
     assert_eq!(read[1], "Str");
 }
 
+#[test]
+fn a_combined_quantified_expression_called_by_name_binds_its_solution() {
+    // A combined definition is typed by its function type, so a call through its `LET` name solves
+    // the group as a `FN FOR ALL`'s does.
+    let mut substrate = loaded(
+        "LET which = FN EXPR FOR ALL (Elt) (WHICH x :Elt) -> Elt = (Elt)\n\
+         LET n = (which 7)\nLET s = (which \"a\")",
+        2,
+    );
+    let read = run_and_read(&mut substrate, &["n", "s"]);
+    assert_eq!(read[0], "Number");
+    assert_eq!(read[1], "Str");
+}
+
 /// A quantified return is no scalar, so a call through one shares its frame rather than placing
 /// its result fresh — which is what [`a_quantified_return_shares_its_frame`] observes end to end.
 #[test]

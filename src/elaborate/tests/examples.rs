@@ -3,7 +3,7 @@
 
 use crate::memory::BumpAllocator;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::Site;
+use crate::scope::{BodyShape, Position, Site, Slot};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{
     DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
@@ -253,8 +253,20 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
                 .quantifier_map
                 .to_vec()
         };
+        let registered = |name| {
+            let form = program
+                .birth(name)
+                .form()
+                .expect("a callable body sits in a form");
+            callable_type(form, program.activation, types, scratch)
+                .expect("the definition elaborates")
+                .registered
+        };
         let x = BinderSymbol::classify("x").unwrap();
         let ys = BinderSymbol::classify("ys").unwrap();
+        let left = BinderSymbol::classify("left").unwrap();
+        let right = BinderSymbol::classify("right").unwrap();
+        let operands = BinderSymbol::classify("operands").unwrap();
         assert_eq!(
             typed("f"),
             Ok(types
@@ -270,9 +282,9 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
             types.shape_type(scratch, &[], elements, ret).handle
         };
         let number = DispatchTokenElement::Slot(KType::NUMBER);
-        // A combined form's type is the function over its head's **slot names**, not the head's
-        // shape: a call through the `LET` name is by name. Only the dispatch bucket carries the
-        // shape.
+        // Every definition is typed by its function type, over its head's **slot names**: a call
+        // through the `LET` name is by name. The registration carries the head's shape, which the
+        // dispatch bucket holds.
         assert_eq!(
             typed("twice"),
             Ok(types
@@ -299,28 +311,156 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
             vec![(elt, Canonical::At(0))],
             "the one declared name survives canonical form at index 0, keyed by the name written"
         );
+        let binary = |ret| {
+            types
+                .function_type(
+                    scratch,
+                    &[],
+                    &[(left, KType::NUMBER), (right, KType::NUMBER)],
+                    ret,
+                )
+                .handle
+        };
         assert_eq!(
             typed("plus"),
-            Ok(shape(
-                &[number, keyword("+", symbols), number],
-                KType::NUMBER
-            )),
+            Ok(binary(KType::NUMBER)),
             "a binary operator with no result folds to its operand"
         );
-        assert_eq!(
-            typed("less"),
-            Ok(shape(&[number, keyword("<", symbols), number], KType::BOOL))
-        );
+        assert_eq!(typed("less"), Ok(binary(KType::BOOL)));
         assert_eq!(
             typed("negate"),
-            Ok(shape(
+            Ok(types
+                .function_type(
+                    scratch,
+                    &[],
+                    &[(operands, types.list(KType::NUMBER))],
+                    KType::NUMBER
+                )
+                .handle),
+            "a unary operator's body takes the whole run as a list"
+        );
+        assert_eq!(registered("f"), None, "no bucket holds a `FN`");
+        assert_eq!(registered("lambda_id"), None);
+        assert_eq!(
+            registered("twice"),
+            Some(shape(&[keyword("TWICE", symbols), number], KType::NUMBER))
+        );
+        assert_eq!(
+            registered("id"),
+            Some(
+                types
+                    .shape_type(
+                        scratch,
+                        &[elt],
+                        &[
+                            keyword("ID", symbols),
+                            DispatchTokenElement::Slot(quantified)
+                        ],
+                        quantified
+                    )
+                    .handle
+            )
+        );
+        assert_eq!(
+            registered("plus"),
+            Some(shape(
+                &[number, keyword("+", symbols), number],
+                KType::NUMBER
+            ))
+        );
+        assert_eq!(
+            registered("less"),
+            Some(shape(&[number, keyword("<", symbols), number], KType::BOOL))
+        );
+        assert_eq!(
+            registered("negate"),
+            Some(shape(
                 &[
                     keyword("~", symbols),
                     DispatchTokenElement::Slot(types.list(KType::NUMBER))
                 ],
                 KType::NUMBER
-            )),
-            "a unary operator's body takes the whole run as a list"
+            ))
+        );
+    });
+}
+
+/// The names `body` binds as parameters, in slot order.
+fn parameters(body: &BodyShape<'_>) -> Vec<BinderSymbol> {
+    (0..body.slots())
+        .map(|slot| body.slot_name(Slot(slot as u32)))
+        .filter(|name| body.slot(*name).map(|(_, at)| at) == Some(Position::PARAMETER))
+        .collect()
+}
+
+#[test]
+fn a_bare_definition_is_typed_as_its_combined_twin_is() {
+    let source = "\
+EXPR FOR ALL (Elt) (WHICH x :Elt ys :(LIST OF Elt)) -> Elt = (x)
+LET which = FN EXPR FOR ALL (Elt) (WHICH x :Elt ys :(LIST OF Elt)) -> Elt = (x)
+EXPR (TWICE x :Number) -> Number = (x)
+LET twice = FN EXPR (TWICE x :Number) -> Number = (x)
+OP #(*) OVER Number = (left)
+LET times = OP #(*) OVER Number = (left)
+UNARY OP #(~) OVER Number -> Number = (operands)
+LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
+    with_program(source, scalars, nulls, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        // A bare definition has no binder, so its body is reached by the site of its last part.
+        let bare = |line: usize| {
+            let body = &program.lines[line]
+                .parts
+                .last()
+                .expect("a definition has a body")
+                .value;
+            program
+                .activation
+                .shape()
+                .nested(Site::of(body))
+                .expect("a bare definition's body is shaped")
+        };
+        let callable = |body| {
+            let form = BodyShape::form(body).expect("a callable body sits in a form");
+            let callable = callable_type(form, program.activation, types, scratch)
+                .expect("the definition elaborates");
+            (
+                callable.ktype,
+                callable.quantifier_map.to_vec(),
+                callable.registered,
+            )
+        };
+        for (line, name) in [(0, "which"), (2, "twice"), (4, "times"), (6, "negate")] {
+            let (bare, combined) = (bare(line), program.birth(name));
+            let twin = callable(combined);
+            assert_eq!(callable(bare), twin, "`{name}` and its bare twin");
+            assert!(twin.2.is_some(), "`{name}` registers a shape");
+            assert_eq!(parameters(bare), parameters(combined), "`{name}`'s slots");
+        }
+        let elt = program.type_name("Elt");
+        let quantified = types.quantified(0, KType::ANY);
+        let [x, ys, left, right] = ["x", "ys", "left", "right"]
+            .map(|name| BinderSymbol::classify(name).expect("a binder name"));
+        assert_eq!(
+            callable(bare(0)).0,
+            types
+                .function_type(
+                    scratch,
+                    &[elt],
+                    &[(x, quantified), (ys, types.list(quantified))],
+                    quantified
+                )
+                .handle
+        );
+        assert_eq!(
+            callable(bare(4)).0,
+            types
+                .function_type(
+                    scratch,
+                    &[],
+                    &[(left, KType::NUMBER), (right, KType::NUMBER)],
+                    KType::NUMBER
+                )
+                .handle
         );
     });
 }

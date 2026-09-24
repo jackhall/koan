@@ -37,6 +37,7 @@ mod signature;
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::pair_name;
 
 pub use activation::{Activation, ActivationView};

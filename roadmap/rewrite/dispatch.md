@@ -56,6 +56,8 @@ program runs on the rewritten stack.
   [self-signature](../../src/elaborate/README.md#a-modules-self-signature)
   carries it in its keyworded channel; a combined expression shape's bucket is
   carried there beside its named value slot.
+- A bare `EXPR FOR ALL` called by keyword binds each type parameter to its
+  group's solution against the arguments, which a test reads in the body.
 - A call in a body's tail position whose declared return satisfies the
   caller's runs as a tail hop: a tail recursion N deep holds O(1) cells.
 - A frame's value satisfies its callee's declared return and carries it — a
@@ -188,7 +190,6 @@ program runs on the rewritten stack.
 - [Code as values](code-values.md) — `ATTR`'s symbol label, `EVAL`'s operand, and code-typed parameters.
 - [Parameterized unions](parameterized-unions.md) — the family construction rule.
 - [Binders nested in expressions](nested-binders.md) — a nested binder is hoisted before dispatch meets it.
-- [Callables typed by function types](function-typed-callables.md) — each candidate's shape, and one group solve.
 - [Lambdas born where they are written](lambdas-where-written.md) — the door the evaluator births a lambda through.
 - [Quotes resolve where they are written](eval-scope.md) — a quote's names and candidates resolve at the quote.
 

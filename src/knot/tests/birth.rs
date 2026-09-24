@@ -1,14 +1,17 @@
-//! The tie: a lone function, closure words, knots of fellow members read through their edges, data
-//! members and the anonymous nodes below them, and every refusal.
+//! The tie: a lone function, the shape a registration's function carries, closure words, knots of
+//! fellow members read through their edges, data members and the anonymous nodes below them, and
+//! every refusal.
 
 use crate::elaborate::Elaboration;
 use crate::memory::{Knot, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{CaptureSlot, Coordinate, Site, Target};
-use crate::type_lattice::{KType, NodeSchema, TypeNode};
+use crate::symbols::KeywordSymbol;
+use crate::type_lattice::{DispatchTokenElement, KType, NodeSchema, TypeNode};
 use crate::values::{Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
+use super::super::function::Typing;
 use super::super::{Eager, KActivation, KValue, Knotted, Node, Supplied, Untieable, tie};
 use super::{Fixture, bound, callable, circular, declared, follow, pin, with_fixture};
 
@@ -74,6 +77,69 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
                 Weight::flat::<usize>()
                     .plus(Weight::flat::<Node<'static, 'static>>())
                     .plus(f.function().expect("a function").closure().weight())
+            );
+        });
+    });
+}
+
+#[test]
+fn a_function_born_for_a_registration_carries_its_shape() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(
+            "LET twice = FN EXPR (TWICE x :Number) -> Number = (x)\n\
+             LET plus = OP #(+) OVER Number = (left)\n\
+             LET f = (FN :{x :Number} -> Number = (x))",
+        );
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let (types, scratch) = (fixture.types, fixture.scratch());
+            let keyword = |text| {
+                DispatchTokenElement::Keyword(
+                    KeywordSymbol::declared(text, fixture.symbols).expect("a keyword"),
+                )
+            };
+            let number = DispatchTokenElement::Slot(KType::NUMBER);
+            let shape = |elements: &[DispatchTokenElement]| {
+                Some(
+                    types
+                        .shape_type(scratch, &[], elements, KType::NUMBER)
+                        .handle,
+                )
+            };
+            let twice = callable(fixture, activation, "twice");
+            let twice_function = twice.function().expect("a function");
+            assert_eq!(
+                twice_function.registered_shape(),
+                shape(&[keyword("TWICE"), number])
+            );
+            let plus = callable(fixture, activation, "plus");
+            assert_eq!(
+                plus.function().expect("a function").registered_shape(),
+                shape(&[number, keyword("+"), number])
+            );
+            assert_eq!(
+                plus.ktype(),
+                types
+                    .function_type(
+                        scratch,
+                        &[],
+                        &[
+                            (fixture.name("left"), KType::NUMBER),
+                            (fixture.name("right"), KType::NUMBER)
+                        ],
+                        KType::NUMBER
+                    )
+                    .handle
+            );
+            let f = callable(fixture, activation, "f");
+            assert_eq!(f.function().expect("a function").registered_shape(), None);
+            // The typing record is laid down although the quantifier map is empty.
+            assert_eq!(
+                twice.weight(),
+                Weight::flat::<usize>()
+                    .plus(Weight::flat::<Node<'static, 'static>>())
+                    .plus(twice_function.closure().weight())
+                    .plus(Weight::flat::<Typing<'static>>())
             );
         });
     });
