@@ -250,7 +250,7 @@ pub(super) fn sibling_digest(index: usize) -> TypeDigest {
 }
 
 /// A named rigid variable's identity fields: the generativity `nonce` first, then the binder
-/// `source`, the name, the parameter names, and the bound the variable stands over. The parameter
+/// `source`, the name, the parameter names, and the variable's bound. The parameter
 /// names arrive symbol-sorted — the order the node stores them in, a canonical order over the set
 /// that is their identity — and feed as fixed-width symbol bits.
 pub(super) fn abstract_type_digest(
@@ -342,7 +342,7 @@ pub(super) fn shape_digest(
 }
 
 /// A positional rigid variable: its index in the enclosing shape's quantifier group, then the
-/// bound it stands over. The bound is identity — two shapes differing only in a variable's bound
+/// variable's bound. The bound is identity — two shapes differing only in a variable's bound
 /// admit different arguments.
 pub(super) fn quantified_digest(index: usize, bound: KType) -> TypeDigest {
     DigestHasher::new(TAG_QUANTIFIED)
@@ -403,7 +403,7 @@ pub(super) fn schema_content_digest(schema: SigSchema<'_>, types: &TypeRegistry<
     let mut h = DigestHasher::new(TAG_SIG_CONTENT);
 
     // Each abstract member feeds its name, then its order — `0x00` for a first-order proper type,
-    // `0x01` plus the parameter names for a constructor — then the bound it stands over. The
+    // `0x01` plus the parameter names for a constructor — then its bound. The
     // parameter names are stored sorted, so the encoding is order-blind.
     h.count(schema.abstract_members.len());
     for (name, member) in schema.abstract_members {
@@ -479,8 +479,8 @@ pub(super) fn empty_schema_digest() -> TypeDigest {
 
 /// An abstract member's order and bound, read off its own node. The one read
 /// [`schema_content_digest`] takes: a member handle names an `AbstractType`, whose parameter names
-/// carry its order and whose `bound` is what it stands over. Anything else in the table is a
-/// first-order member over `Any`.
+/// carry its order and whose `bound` is what bounds it. Anything else in the table is a
+/// first-order member bounded by `Any`.
 fn read_abstract<'run>(member: KType, types: &TypeRegistry<'run>) -> (&'run [TypeSymbol], KType) {
     match types.node(member) {
         TypeNode::AbstractType {

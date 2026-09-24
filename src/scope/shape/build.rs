@@ -21,6 +21,7 @@ use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, collect, resident,
     strongly_connected_components,
 };
+use crate::parse::builtin_shapes::binder::bounded;
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, StaticName, TypeSymbol, ValueSymbol};
@@ -33,7 +34,7 @@ use super::super::builtins::Builtins;
 use super::super::channels::Channels;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::signature::{
-    body_of, declare_parameters, declare_quantifiers, pair_name, signature_run,
+    body_of, declare_parameters, declare_quantifiers, pair_name, quantifier_bounds, signature_run,
 };
 use super::{
     BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex,
@@ -607,7 +608,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         for (role, part) in form.roles().zip(node.parts) {
             let part = &part.value;
             match role {
-                Role::Keyword | Role::Name | Role::Data | Role::Label | Role::Quantifiers => {}
+                Role::Keyword | Role::Name | Role::Data | Role::Label => {}
+                // A group's names are the body's; its bounds are read where the form runs, as the
+                // signature's types are. The group's own names are already skipped, so a bound
+                // naming one records nothing and the elaborator refuses it.
+                Role::Quantifiers => {
+                    for bound in quantifier_bounds(part) {
+                        self.walk_part(level, statement, bound, State::Eager)?;
+                    }
+                }
                 Role::Rhs => {
                     let draft = &mut self.chain[level];
                     if state == State::Root
@@ -812,7 +821,32 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         for (role, part) in form.roles().zip(node.parts) {
             let part = &part.value;
             match role {
-                Role::Keyword | Role::Name | Role::Data | Role::Label | Role::Quantifiers => {}
+                Role::Keyword | Role::Data | Role::Label => {}
+                Role::Quantifiers => {
+                    for bound in quantifier_bounds(part) {
+                        self.walk_definition_part(
+                            level,
+                            statement,
+                            bound,
+                            DefinitionKind::Plain,
+                            state,
+                        )?;
+                    }
+                }
+                // A `TYPE` member's bound is read where the `SIG` runs; its name is the body's.
+                Role::Name => {
+                    if form.id == BuiltinShapeId::TypeDeclaration
+                        && let Some((_, bound)) = bounded(part)
+                    {
+                        self.walk_definition_part(
+                            level,
+                            statement,
+                            bound,
+                            DefinitionKind::Plain,
+                            state,
+                        )?;
+                    }
+                }
                 Role::Definition(inner) => {
                     self.walk_definition(level, statement, part, inner, state)?
                 }

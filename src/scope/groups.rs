@@ -45,6 +45,7 @@ struct OperatorSymbols {
     times: StaticName<KeywordSymbol>,
     divide: StaticName<KeywordSymbol>,
     union: StaticName<KeywordSymbol>,
+    meet: StaticName<KeywordSymbol>,
     /// The combiner a comparison run and a bare equality run fold their pairs through.
     and: StaticName<KeywordSymbol>,
     /// What the rewrite of `a != b` negates through.
@@ -63,6 +64,7 @@ static OPERATORS: OperatorSymbols = OperatorSymbols {
     times: crate::static_name!(KeywordSymbol, "*"),
     divide: crate::static_name!(KeywordSymbol, "/"),
     union: crate::static_name!(KeywordSymbol, "|"),
+    meet: crate::static_name!(KeywordSymbol, "&"),
     and: crate::static_name!(KeywordSymbol, "AND"),
     not: crate::static_name!(KeywordSymbol, "NOT"),
     equal: crate::static_name!(KeywordSymbol, "=="),
@@ -79,6 +81,7 @@ static COMPARISON: &[&StaticName<KeywordSymbol>] = &[
 static ADDITIVE: &[&StaticName<KeywordSymbol>] = &[&OPERATORS.plus, &OPERATORS.minus];
 static MULTIPLICATIVE: &[&StaticName<KeywordSymbol>] = &[&OPERATORS.times, &OPERATORS.divide];
 static UNION: &[&StaticName<KeywordSymbol>] = &[&OPERATORS.union];
+static MEET: &[&StaticName<KeywordSymbol>] = &[&OPERATORS.meet];
 
 /// The negation `a != b` is rewritten through.
 pub(crate) fn not_symbol() -> KeywordSymbol {
@@ -108,7 +111,7 @@ pub fn is_unequal(symbol: KeywordSymbol) -> bool {
     symbol == OPERATORS.unequal.symbol()
 }
 
-/// The four groups the language itself declares. They cover their members everywhere, no
+/// The five groups the language itself declares. They cover their members everywhere, no
 /// declaration overrides one, and a `GROUP` equal to one of them declares nothing new.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BuiltinGroup {
@@ -120,15 +123,18 @@ pub enum BuiltinGroup {
     Multiplicative,
     /// `{|}`, unary — a union type's operator run.
     Union,
+    /// `{&}`, unary — a meet type's operator run.
+    Meet,
 }
 
 impl BuiltinGroup {
     /// Every builtin group, in declaration order.
-    const ALL: [BuiltinGroup; 4] = [
+    const ALL: [BuiltinGroup; 5] = [
         BuiltinGroup::Comparison,
         BuiltinGroup::Additive,
         BuiltinGroup::Multiplicative,
         BuiltinGroup::Union,
+        BuiltinGroup::Meet,
     ];
 
     /// The builtin group covering `symbol`, if one does.
@@ -145,6 +151,7 @@ impl BuiltinGroup {
             BuiltinGroup::Additive => ADDITIVE,
             BuiltinGroup::Multiplicative => MULTIPLICATIVE,
             BuiltinGroup::Union => UNION,
+            BuiltinGroup::Meet => MEET,
         }
     }
 
@@ -156,7 +163,7 @@ impl BuiltinGroup {
                 direction: FoldDirection::Left,
             },
             BuiltinGroup::Additive | BuiltinGroup::Multiplicative => ReductionMode::FoldLeft,
-            BuiltinGroup::Union => ReductionMode::Unary,
+            BuiltinGroup::Union | BuiltinGroup::Meet => ReductionMode::Unary,
         }
     }
 

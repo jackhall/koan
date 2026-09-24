@@ -101,9 +101,11 @@ fn construction_parts<'graph>(
 }
 
 /// The walk over data members' right-hand sides.
-pub(super) struct Stager<'stage, 'graph, 'cell> {
+pub(super) struct Stager<'stage, 'graph, 'cell, 'run> {
     activation: &'stage KActivationView<'graph, 'cell>,
     component: &'stage Component<'graph>,
+    /// What an evaluated dict key is read through, should it be a sealed scalar.
+    types: &'stage TypeRegistry<'run>,
     scratch: BumpAllocator<'stage>,
     eager: &'stage mut Eager<'stage, 'graph, 'cell>,
     nodes: Nodes<'graph, 'cell, 'stage>,
@@ -114,7 +116,7 @@ pub(super) struct Stager<'stage, 'graph, 'cell> {
     refused: Option<Untieable<'static>>,
 }
 
-impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
+impl<'stage, 'graph, 'cell, 'run> Stager<'stage, 'graph, 'cell, 'run> {
     /// Stage each member whose root is `Some`, into a node run whose first `roots.len()` indices
     /// are the members.
     ///
@@ -124,6 +126,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         activation: &'stage KActivationView<'graph, 'cell>,
         component: &'stage Component<'graph>,
         roots: &[Option<&'graph ExpressionPart<'graph>>],
+        types: &'stage TypeRegistry<'run>,
         scratch: BumpAllocator<'stage>,
         eager: &'stage mut Eager<'stage, 'graph, 'cell>,
     ) -> Result<Nodes<'graph, 'cell, 'stage>, Untieable<'static>> {
@@ -132,6 +135,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         let mut stager = Stager {
             activation,
             component,
+            types,
             scratch,
             eager,
             nodes,
@@ -315,7 +319,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
             ExpressionPart::Literal(KLiteral::Number(number)) => Key::number(*number),
             ExpressionPart::Literal(KLiteral::Boolean(flag)) => Ok(Key::bool(*flag)),
             _ => match (self.eager)(site, Some(part)) {
-                Some(Supplied::Value(value)) => Key::of(&value),
+                Some(Supplied::Value(value)) => Key::of(&value, self.types, self.scratch),
                 Some(Supplied::Body(_)) => unreachable!("a dict key is a value"),
                 None => {
                     self.unevaluated(site);

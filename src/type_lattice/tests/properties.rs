@@ -252,15 +252,20 @@ proptest! {
         let mut with_any = members.clone();
         with_any.push(KType::ANY);
         prop_assert_eq!(KType::ANY, types.union_of(scratch, &with_any));
-        // No member of a canonical union lies below another.
+        // No member of a canonical union lies below the union of the others.
         if let TypeNode::Union { members: kept } = types.node(union) {
             for (index, member) in kept.iter().enumerate() {
-                for (peer, other) in kept.iter().enumerate() {
-                    prop_assert!(
-                        index == peer || !is_subtype_of(&types, scratch, *member, *other),
-                        "a canonical union kept a member below another",
-                    );
-                }
+                let others: Vec<KType> = kept
+                    .iter()
+                    .enumerate()
+                    .filter(|(peer, _)| *peer != index)
+                    .map(|(_, other)| *other)
+                    .collect();
+                let rest = types.union_of(scratch, &others);
+                prop_assert!(
+                    !is_subtype_of(&types, scratch, *member, rest),
+                    "a canonical union kept a member below the rest",
+                );
             }
         }
         // Every member is below the union, and the union is below anything all members are below.
@@ -630,6 +635,33 @@ proptest! {
         let mut collector = Collector::new(scratch, 0);
         let admitted = admits_with(&types, scratch, a, b, Variance::Co, &mut collector).is_ok();
         prop_assert_eq!(admitted, satisfied_by(&types, scratch, a, b));
+    }
+
+    #[test]
+    fn a_carried_variable_is_admitted_where_its_bound_is(a in one(), b in one()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let Some(bound) = types.node(b).rigid_bound() else {
+            return Ok(());
+        };
+        // A generated type holds no free quantifier, so a declared side that has one is built:
+        // `a | LIST OF X` reaches the unifier's leaf through the list, and a union bound spanning
+        // `a`'s members and the list reaches its member-by-member fallback.
+        let variable = types.list(types.quantified(0, KType::ANY));
+        for declared in [a, types.union_of(scratch, &[a, variable])] {
+            let mut through_bound = Collector::new(scratch, 1);
+            if admits_with(&types, scratch, declared, bound, Variance::Co, &mut through_bound)
+                .is_err()
+            {
+                continue;
+            }
+            let mut collector = Collector::new(scratch, 1);
+            prop_assert!(
+                admits_with(&types, scratch, declared, b, Variance::Co, &mut collector).is_ok(),
+                "a position its bound fills refused the variable",
+            );
+        }
     }
 
     #[test]

@@ -31,6 +31,9 @@ registry's own doors:
   union arrives as `| [Left Right …]` — the
   [chained form](../scope/README.md#operator-groups) the shape builder
   already rewrote it into, so nothing here walks a union part by part;
+- `Left & Right` is the [meet](../type_lattice/README.md#the-relations) of its
+  two members, and `& [Left Right …]` its chained form — a meet that comes out
+  `Never` is a type like any other;
 - `:{x :Elem, …}` is the record type of its fields in written order;
 - `FN :{x :Elem, …} -> Ret`, with or without `FOR ALL (names)`, is the function
   type over the schema's fields and the return;
@@ -44,13 +47,22 @@ registry's own doors:
 
 **Quantifiers are positions, not mentions.** A name a `FOR ALL` group declares
 is that group's quantifier at its written position, elaborated as
-`quantified(index, Any)`, so two heads that differ only in what they call their
-quantifiers intern to one shape. Groups nest: an `EXPR` type inside a signature
+`quantified(index, bound)`, so two heads that differ only in what they call their
+quantifiers intern to one shape. The bound is what `(Elt UNDER <bound>)` writes —
+one type part, `Value` or `:(Number | Str)` — and `Any` for a name written bare;
+a group of one bounded name is `FOR ALL (Elt UNDER Value)`. Groups nest: an `EXPR` type inside a signature
 opens its own group, as does a `FN FOR ALL` type, and a name the innermost group
 declares shadows the rest. A name only an *outer* group declares, read under a
 nested group, is refused. A **bare** `FN` type opens no group at all, so a
 parameter or return it spells inside a quantified head keeps reading that head's
 variables.
+
+**A bound is closed and inhabited.** Every bound in a group is read under the
+group with no bounds of its own, so a bound naming one of the group's names — or
+a signature's abstract member, or anything else holding a rigid variable — is
+refused as `Bound`, and so is a bound that elaborates to `Never`. The lattice's
+order assumes nothing above a bound is itself a variable, and a variable bounded
+by `Never` would lie both above and below it.
 
 ## A callable's type
 
@@ -75,7 +87,8 @@ cached `BUILTIN_SHAPES` entry gives them:
 A function type binds its group in canonical form, which may renumber or drop a
 variable, so `callable_type` hands back a **quantifier map** beside the handle:
 each `FOR ALL` name the declaration wrote, paired with its index in the canonical
-group, or `None` where canonical form dropped it. The knot stores the map on the
+group, or with its bound where canonical form dropped it — a call has nothing to
+solve a dropped name from, so its body reads the bound. The knot stores the map on the
 function node and a call reads each type parameter's solution through it. A
 shape's map stays empty: its caller reads the group off the bucket instead.
 
@@ -171,7 +184,10 @@ builtin shapes' roles:
 
 - `TYPE Carrier`, `TYPE (Held AS Boxed)` — an abstract member, bare or
   higher-kinded, and the only place a bare `TYPE` binds: outside a `SIG` it is
-  refused;
+  refused. `TYPE (Carrier UNDER Number)` bounds a first-order member, under the
+  same closed-bound rule as a `FOR ALL` name; a bound reads earlier members, so a
+  manifest one stands for its type and an abstract one is refused. A
+  higher-kinded member, and a `NEWTYPE` family, take no bound;
 - `LET Elem = Number` — a manifest member, fixed to its type;
 - `VAL x :Elem` — a value slot;
 - a bodyless `EXPR`, `OP` or `UNARY OP` head — a keyworded member, an operator
@@ -232,9 +248,11 @@ never a panic and never a guess:
 
 - `NotAType` — a type name bound to something other than a type value;
 - `NoSuchMember` — a union projection naming a tag the union does not declare;
+- `Bound` — a bound that names a type variable or is `Never`;
 - `Unsupported` — any other spelling: a `_` field, an outer quantifier read
   under a nested group, an application whose arguments are not exactly the
-  parameters its constructor declares, and every declaration the door refuses —
+  parameters its constructor declares, a bound on a higher-kinded `TYPE` member
+  or a `NEWTYPE` family, and every declaration the door refuses —
   a cyclic component through a non-nominal member, a bare `TYPE` outside a
   `SIG`, a repeated union tag or family parameter, a union
   with no variant, and a forward reference inside a `SIG` body. An operator

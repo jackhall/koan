@@ -278,3 +278,54 @@ fn circular_values_compare_as_a_bisimulation() {
         })
     });
 }
+
+#[test]
+fn a_seal_its_bound_reveals_is_read_through_and_any_other_stays() {
+    use crate::memory::ScopeId;
+    use crate::values::KeyRejected;
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let carrier = crate::symbols::TypeSymbol::declared("Carrier", symbols).unwrap();
+        // Each opaque ascription mints its own nonce, so two mints of one bound are two identities.
+        let mint = |bound| {
+            let nonce = ScopeId::next();
+            types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), bound)
+        };
+        let number_or_str = types.union_of(scratch, &[KType::NUMBER, KType::STR]);
+        let (by_number, by_number_again) = (mint(KType::NUMBER), mint(KType::NUMBER));
+        let (by_value, by_either) = (mint(KType::ANY_VALUE), mint(number_or_str));
+        let distance = fixture.newtype("Distance", KType::NUMBER);
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let five = Value::Number(5.0);
+            let sealed = |mint| {
+                let tagged = Tagged::seal(writer, five, mint, KType::NUMBER, types, scratch);
+                Value::Tagged(tagged.expect("5 satisfies its witness"))
+            };
+            let equal = |left: Value<'_, '_>, right: Value<'_, '_>| {
+                left.equals(&right, types, scratch).expect("no callable")
+            };
+            assert!(equal(sealed(by_number), five));
+            assert!(equal(five, sealed(by_number)));
+            assert!(equal(sealed(by_number), sealed(by_number_again)));
+            let key = Key::of(&sealed(by_number), types, scratch).expect("a revealed number keys");
+            assert_eq!(key, Key::number(5.0).unwrap());
+            assert!(matches!(
+                key.value::<crate::values::Nothing>(),
+                Value::Number(5.0)
+            ));
+
+            // A bound that does not reveal the payload's kind keeps the seal.
+            for mint in [by_value, by_either] {
+                assert!(!equal(sealed(mint), five));
+                assert_eq!(
+                    Key::of(&sealed(mint), types, scratch),
+                    Err(KeyRejected::NotAScalar(mint))
+                );
+            }
+            // A newtype is no seal: it is nominal whatever it wraps.
+            let wrapped = Value::Tagged(Tagged::hold(writer, five, distance));
+            assert!(!equal(wrapped, five));
+        })
+    });
+}

@@ -73,7 +73,7 @@ pub enum TypeNode<'run> {
     /// `param_names` carries the member's order — empty is a first-order proper type
     /// (`TYPE Elt`), non-empty a constructor over those named parameters (`TYPE (Elem AS Wrap)`).
     /// They are stored symbol-sorted: a constructor's identity is its parameter-name *set*.
-    /// `bound` is what the variable stands over, [`KType::ANY`] unless declared.
+    /// `bound` is what the variable is bounded by, [`KType::ANY`] unless declared.
     ///
     /// Every field is identity; nothing here is digest-excluded.
     AbstractType {
@@ -140,7 +140,7 @@ pub enum TypeNode<'run> {
         ret: KType,
     },
     /// A **rigid variable bound by the enclosing binder** — a [`Self::ExpressionShape`], or a
-    /// [`Self::KFunction`] carrying a group: the `index`-th member of that group, standing over
+    /// [`Self::KFunction`] carrying a group: the `index`-th member of that group, bounded by
     /// `bound`. Positional rather than named, so two binders alpha-equivalent under a renaming of
     /// their parameters intern to one node.
     Quantified {
@@ -148,7 +148,7 @@ pub enum TypeNode<'run> {
         bound: KType,
     },
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
-    /// deduplicated, no nested `Union`, no member below another, always two or more, in the order
+    /// deduplicated, no nested `Union`, no member below the rest, always two or more, in the order
     /// first written. Identity is order-blind. Build through
     /// [`TypeRegistry::union_of`](super::registry::TypeRegistry::union_of).
     Union {
@@ -208,6 +208,17 @@ impl TypeNode<'_> {
             TypeNode::ExpressionShape { .. } => true,
             TypeNode::KFunction { quantifiers, .. } => !quantifiers.is_empty(),
             _ => false,
+        }
+    }
+
+    /// A rigid variable's bound — a [`Self::Quantified`]'s or an [`Self::AbstractType`]'s — or
+    /// `None` for any other node.
+    pub fn rigid_bound(&self) -> Option<KType> {
+        match self {
+            TypeNode::Quantified { bound, .. } | TypeNode::AbstractType { bound, .. } => {
+                Some(*bound)
+            }
+            _ => None,
         }
     }
 }

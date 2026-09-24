@@ -11,7 +11,7 @@
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
 use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::binder::symbol_from_quote_body;
+use crate::parse::builtin_shapes::binder::{bounded, symbol_from_quote_body};
 use crate::parse::builtin_shapes::role::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ActivationView, BuiltinGroup, Component, Site, is_equality};
@@ -158,6 +158,7 @@ pub fn type_declarations<'graph, 'x, XF: KnottedFamily<'graph>>(
 /// The group-free top of the quantifier stack: a declaration's own part encloses no `FOR ALL`.
 const TOP: Groups<'static> = Groups {
     names: &[],
+    bounds: &[],
     outer: None,
 };
 
@@ -213,6 +214,10 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
             }
         }
         let name_part = name_part.ok_or(unsupported)?;
+        // A constructor family declares no bound.
+        if form.id == BuiltinShapeId::NewTypeDeclaration && bounded(name_part).is_some() {
+            return Err(unsupported);
+        }
         let kind = match form.id {
             BuiltinShapeId::NewTypeDefinition => Declared::NewType {
                 repr: declared.ok_or(unsupported)?,
@@ -398,15 +403,27 @@ fn signature_type<'graph, XF: KnottedFamily<'graph>>(
         match form.id {
             BuiltinShapeId::TypeDeclaration => {
                 let name_part = name_part.ok_or(unsupported)?;
-                let (name, params) = match name_part {
+                let (declarator, bound) = match bounded(name_part) {
+                    Some((declarator, bound)) => (declarator, Some(bound)),
+                    None => (name_part, None),
+                };
+                let (name, params) = match declarator {
                     ExpressionPart::Type(name) => (*name, &[][..]),
                     _ => (
-                        last_type_name(name_part).ok_or(unsupported)?,
-                        parameters(name_part, scratch).ok_or(unsupported)?,
+                        last_type_name(declarator).ok_or(unsupported)?,
+                        parameters(declarator, scratch).ok_or(unsupported)?,
                     ),
                 };
+                // A bound reads earlier members through `locals`, so one naming an abstract member
+                // is refused and one naming a manifest member reads its type. A higher-kinded
+                // member takes no bound.
+                let bound = match bound {
+                    Some(_) if !params.is_empty() => return Err(unsupported),
+                    Some(part) => member.bound(part, &TOP)?,
+                    None => KType::ANY,
+                };
                 let handle =
-                    types.abstract_type(scratch, ScopeId::SENTINEL, name, params, None, KType::ANY);
+                    types.abstract_type(scratch, ScopeId::SENTINEL, name, params, None, bound);
                 draft.insert_abstract(name, handle);
                 locals.push((name, handle));
             }

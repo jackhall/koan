@@ -88,6 +88,9 @@ impl World {
             KType::of_kind(KKind::AnyType),
             KType::LIST_OF_ANY,
             KType::of_kind(KKind::ProperType),
+            // A bound spanning two members, which the order, a union's canonical form, the meet
+            // and the unifier each read whole.
+            with_scratch(|scratch| self.types.union_of(scratch, &[KType::NUMBER, KType::STR])),
         ]
     }
 }

@@ -38,7 +38,7 @@ use super::digest::{self, TypeDigest, schema_content_digest};
 use super::handle::KType;
 use super::kind::KKind;
 use super::node::{NodeSchema, TypeNode};
-use super::order::{Dropped, unsubsumed};
+use super::order::{Dropped, is_subtype_of, unsubsumed};
 use super::record::Record;
 use super::schema::{
     DeclaredGroup, Members, SchemaDraft, SigSchema, canonical_groups, canonical_overloads,
@@ -474,7 +474,7 @@ impl<'run> TypeRegistry<'run> {
     }
 
     /// A named rigid variable — a signature's abstract member, or an opaque ascription's
-    /// per-application mint when `nonce` is set. `bound` is what it stands over, [`KType::ANY`]
+    /// per-application mint when `nonce` is set. `bound` is what bounds it, [`KType::ANY`]
     /// where the declaration constrains nothing. `param_names` may arrive in any order: identity is
     /// their set, so they are stored symbol-sorted.
     ///
@@ -506,7 +506,7 @@ impl<'run> TypeRegistry<'run> {
         })
     }
 
-    /// The `index`-th rigid variable of the enclosing shape's group, standing over `bound`.
+    /// The `index`-th rigid variable of the enclosing shape's group, bounded by `bound`.
     ///
     /// A bound holds no rigid variable of its own — see [`contains_rigid`](Self::contains_rigid).
     pub fn quantified(&self, index: usize, bound: KType) -> KType {
@@ -799,8 +799,8 @@ impl<'run> TypeRegistry<'run> {
     ///
     /// Flattens any nested union member into its members, drops [`KType::NEVER`] (the identity
     /// element: it admits nothing, so it widens nothing), deduplicates by handle, then drops every
-    /// member that is a subtype of another member, so [`KType::ANY`] absorbs, a union holding all
-    /// three family tops is [`KType::ANY`], and no two distinct members are ordered. One survivor
+    /// member that is a subtype of the rest, so [`KType::ANY`] absorbs, a union holding all three
+    /// family tops is [`KType::ANY`], and no member lies under the union of the others. One survivor
     /// collapses to that member; none is `Never`.
     pub fn union_of(&self, scratch: BumpAllocator<'_>, members: &[KType]) -> KType {
         let width: usize = members
@@ -833,9 +833,10 @@ impl<'run> TypeRegistry<'run> {
             let keep = unsubsumed(self, scratch, &flat, Dropped::Below);
             let mut keep = keep.iter();
             flat.retain(|_| *keep.next().unwrap_or(&true));
+            self.drop_variables_under_the_rest(scratch, &mut flat);
         }
         // The three family tops together hold every type, so their union is `Any` — and must be, or
-        // a type variable over `Any` would lie under `Any` but not under the union that equals it.
+        // a type variable bounded by `Any` would lie under `Any` but not under the union that equals it.
         if [KType::ANY_VALUE, KType::ANY_TYPE, KType::ANY_CODE]
             .iter()
             .all(|top| flat.contains(top))
@@ -847,6 +848,38 @@ impl<'run> TypeRegistry<'run> {
             1 => flat[0],
             _ => self.intern_union_members(scratch, &flat),
         }
+    }
+
+    /// Drop from the antichain `flat` every rigid variable whose bound lies under the union of the
+    /// other members — a bound spanning several members, which the pairwise pass cannot see. Only
+    /// the non-rigid members are read: a bound is variable-free, so no rigid member holds one up.
+    fn drop_variables_under_the_rest(
+        &self,
+        scratch: BumpAllocator<'_>,
+        flat: &mut BumpVec<'_, KType>,
+    ) {
+        let bounded = |member: KType| {
+            self.node(member)
+                .rigid_bound()
+                .filter(|bound| *bound != KType::ANY)
+        };
+        if !flat.iter().any(|member| bounded(*member).is_some()) {
+            return;
+        }
+        let mut concrete = BumpVec::with_capacity_in(flat.len(), scratch);
+        concrete.extend(
+            flat.iter()
+                .copied()
+                .filter(|member| self.node(*member).rigid_bound().is_none()),
+        );
+        // With one concrete member the pairwise pass already decided.
+        if concrete.len() < 2 {
+            return;
+        }
+        let rest = self.intern_union_members(scratch, &concrete);
+        flat.retain(|member| {
+            bounded(*member).is_none_or(|bound| !is_subtype_of(self, scratch, bound, rest))
+        });
     }
 
     /// Intern a union from members that are already flat and already an antichain — dedup by handle

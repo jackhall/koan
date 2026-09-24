@@ -28,7 +28,7 @@ fn claimed<R>(
 }
 
 #[test]
-fn the_builtin_groups_cover_eleven_symbols_and_equality_belongs_to_none() {
+fn the_builtin_groups_cover_twelve_symbols_and_equality_belongs_to_none() {
     with_fixture(|fixture| {
         let symbols = fixture.symbols;
         let covered = [
@@ -41,6 +41,7 @@ fn the_builtin_groups_cover_eleven_symbols_and_equality_belongs_to_none() {
             ("*", BuiltinGroup::Multiplicative),
             ("/", BuiltinGroup::Multiplicative),
             ("|", BuiltinGroup::Union),
+            ("&", BuiltinGroup::Meet),
         ];
         for (text, group) in covered {
             assert_eq!(
@@ -58,6 +59,7 @@ fn the_builtin_groups_cover_eleven_symbols_and_equality_belongs_to_none() {
         );
         assert_eq!(BuiltinGroup::Additive.mode(), ReductionMode::FoldLeft);
         assert_eq!(BuiltinGroup::Union.mode(), ReductionMode::Unary);
+        assert_eq!(BuiltinGroup::Meet.mode(), ReductionMode::Unary);
         for text in ["==", "!="] {
             let symbol = keyword(text, symbols);
             assert!(is_equality(symbol), "`{text}` is an equality symbol");
@@ -73,13 +75,13 @@ fn a_group_body_declares_its_binary_operators_and_nothing_else() {
         let fold = fixture.parse(
             "GROUP ring FOLD RIGHT = (\
              (OP #(@) OVER Ring = (left))\
-             (OP #(&) OVER Ring = (right)))",
+             (OP #(%) OVER Ring = (right)))",
         );
         let group = declared_group(&fold[0], scratch)
             .expect("the body is a run of binary operators")
             .expect("the statement is a `GROUP`");
         assert_eq!(group.mode, ReductionMode::FoldRight);
-        let mut expected = [keyword("@", fixture.symbols), keyword("&", fixture.symbols)];
+        let mut expected = [keyword("@", fixture.symbols), keyword("%", fixture.symbols)];
         expected.sort_unstable();
         assert_eq!(group.members, expected);
 
@@ -150,7 +152,7 @@ fn two_equal_groups_are_one_record_and_two_unequal_ones_are_refused() {
         format!(
             "MODULE {name} = (GROUP g {mode} = (\
              (OP #(@) OVER Ring = (left))\
-             (OP #(&) OVER Ring = (right))))"
+             (OP #(%) OVER Ring = (right))))"
         )
     };
     let equal = format!(
@@ -161,9 +163,9 @@ fn two_equal_groups_are_one_record_and_two_unequal_ones_are_refused() {
     claimed(&equal, |fixture, claims| {
         let claims = claims.expect("two equal groups agree");
         let at = keyword("@", fixture.symbols);
-        let amp = keyword("&", fixture.symbols);
+        let percent = keyword("%", fixture.symbols);
         let (Some(Claim::Group(left)), Some(Claim::Group(right))) =
-            (claims.get(at), claims.get(amp))
+            (claims.get(at), claims.get(percent))
         else {
             panic!("both members are claimed by a group");
         };

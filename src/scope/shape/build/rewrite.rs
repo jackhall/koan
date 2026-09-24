@@ -26,8 +26,9 @@
 //! See [README.md § Operator groups](../../README.md#operator-groups).
 
 use crate::memory::{BumpVec, collect};
-use crate::parse::builtin_shapes::KEYWORDS;
+use crate::parse::builtin_shapes::binder::{bounded, bounded_run};
 use crate::parse::builtin_shapes::role::Role;
+use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, ProgramNode, Spanned};
 use crate::symbols::{KeywordSymbol, ValueSymbol};
 use crate::type_lattice::{FoldDirection, ReductionMode};
@@ -89,11 +90,14 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         }
                         Role::Signature => self.rewrite_signature(at, &part.value)?,
                         Role::Branches(_) => self.rewrite_branches(at, &part.value)?,
+                        Role::Quantifiers => self.rewrite_bounds(at, &part.value)?,
+                        Role::Name if form.id == BuiltinShapeId::TypeDeclaration => {
+                            self.rewrite_bounds(at, &part.value)?
+                        }
                         Role::Keyword
                         | Role::Name
                         | Role::Data
                         | Role::Label
-                        | Role::Quantifiers
                         | Role::Body(_)
                         | Role::Unsupported => None,
                     };
@@ -229,6 +233,39 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             index += if typed { 2 } else { 1 };
         }
         Ok(changed.then(|| self.brand.nested_node(&parts)))
+    }
+
+    /// A `FOR ALL` group or a `TYPE` declarator with every bound's operator runs chained. A bound
+    /// is the third part of a `<Name> UNDER <bound>` run; a group that is not one such run holds its
+    /// entries as its parts, each a bare name or one such run.
+    fn rewrite_bounds(
+        &mut self,
+        at: Position,
+        part: &ExpressionPart<'graph>,
+    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
+        let ExpressionPart::Expression(node) = part else {
+            return Ok(None);
+        };
+        let run = node.reference();
+        let mut parts: Run<'x, 'graph> = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
+        parts.extend_from_slice(run.parts);
+        let mut changed = false;
+        if bounded_run(run).is_some() {
+            if let Some(rewritten) = self.rewrite_part(at, &run.parts[2].value)? {
+                changed = true;
+                parts[2].value = rewritten;
+            }
+        } else {
+            for (index, entry) in run.parts.iter().enumerate() {
+                if bounded(&entry.value).is_some()
+                    && let Some(rewritten) = self.rewrite_bounds(at, &entry.value)?
+                {
+                    changed = true;
+                    parts[index].value = rewritten;
+                }
+            }
+        }
+        Ok(changed.then(|| ExpressionPart::Expression(self.brand.nested_node(&parts))))
     }
 
     /// The arm heads of a branches part. An arm's body is a block shape of its own and is rewritten

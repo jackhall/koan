@@ -6,7 +6,7 @@
 //! elaborated from the form that body sits in, and its captures, every mention of a fellow member
 //! minted as an edge into the knot about to be tied — so a refusal writes nothing.
 
-use crate::elaborate::callable_type;
+use crate::elaborate::{Canonical, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, resident};
 use crate::scope::{BodyShape, ClosureBindings, Component};
 use crate::symbols::TypeSymbol;
@@ -64,24 +64,23 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 
     /// Where each `FOR ALL` name the declaration wrote landed in the canonical group, empty for
     /// an unquantified function.
-    pub fn quantifier_map(&self) -> &'cell [(TypeSymbol, Option<usize>)] {
+    pub fn quantifier_map(&self) -> &'cell [(TypeSymbol, Canonical)] {
         match self.quantifier_map {
             Some(map) => map.0,
             None => &[],
         }
     }
 
-    /// Which canonical quantifier the type parameter named `name` stands for, and `None` where
-    /// the function binds no such name or canonical form dropped it — in which case the caller
-    /// binds the variable's bound instead.
+    /// Where the type parameter named `name` landed in the canonical group — its index, or its
+    /// bound where canonical form dropped it — and `None` where the function binds no such name.
     ///
     /// Keyed by name because a frame walks its callee's slots **symbol-sorted**, not in the order
     /// the `FOR ALL` group was written.
-    pub fn canonical_quantifier(&self, name: TypeSymbol) -> Option<usize> {
+    pub fn canonical_quantifier(&self, name: TypeSymbol) -> Option<Canonical> {
         self.quantifier_map()
             .iter()
             .find(|(declared, _)| *declared == name)
-            .and_then(|(_, canonical)| *canonical)
+            .map(|(_, canonical)| *canonical)
     }
 
     /// The body shape a call activates.
@@ -117,21 +116,21 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 }
 
 /// A quantified function's map from each `FOR ALL` name it declared to that name's index in the
-/// canonical group, `None` where canonical form dropped the variable.
+/// canonical group, or to its bound where canonical form dropped the variable.
 ///
 /// A call binds each type-parameter slot to the solution its name maps to, or to the variable's
 /// bound where the map says it was dropped. The **name** is the key: a frame walks its callee's
 /// slots symbol-sorted, so a positional read would hand one variable another's solution. The node
 /// points at this run rather than holding it inline, so a `Node` stays its width.
 #[derive(Clone, Copy)]
-pub struct QuantifierMap<'cell>(&'cell [(TypeSymbol, Option<usize>)]);
+pub struct QuantifierMap<'cell>(&'cell [(TypeSymbol, Canonical)]);
 
 impl<'cell> QuantifierMap<'cell> {
     /// `map` written into the region `writer` fills, or `None` where it is empty — an unquantified
     /// function allocates nothing.
     pub(super) fn laid_down(
         writer: Writer<'cell>,
-        map: &[(TypeSymbol, Option<usize>)],
+        map: &[(TypeSymbol, Canonical)],
     ) -> Option<&'cell QuantifierMap<'cell>> {
         (!map.is_empty()).then(|| {
             let run = writer.fill(map.len(), |at| map[at]);
@@ -144,7 +143,7 @@ impl<'cell> QuantifierMap<'cell> {
         if len == 0 {
             return Weight::ZERO;
         }
-        Weight::run::<(TypeSymbol, Option<usize>)>(len).plus(Weight::flat::<QuantifierMap<'_>>())
+        Weight::run::<(TypeSymbol, Canonical)>(len).plus(Weight::flat::<QuantifierMap<'_>>())
     }
 }
 
@@ -154,7 +153,7 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     pub ktype: KType,
     /// The name-keyed quantifier map the elaborator handed back, scratch-lived until the tie lays
     /// it into the region.
-    pub quantifier_map: &'x [(TypeSymbol, Option<usize>)],
+    pub quantifier_map: &'x [(TypeSymbol, Canonical)],
     pub captures: BumpVec<'x, Link<'graph, 'cell, Knotted<'graph, 'cell>>>,
 }
 

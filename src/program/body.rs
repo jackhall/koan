@@ -10,7 +10,7 @@
 //! nothing are one evaluation each. The only children the runner asks for are evaluations, through
 //! the program record's `evaluate`. See [README.md § The body runner](README.md#the-body-runner).
 
-use crate::elaborate::type_declarations;
+use crate::elaborate::{Canonical, type_declarations};
 use crate::knot::module::body_activation;
 use crate::knot::{KActivation, KValue, Knotted, Supplied, Untieable, tie};
 use crate::memory::{Bump, BumpVec, resident};
@@ -274,11 +274,13 @@ fn frame<'graph, 'here>(
             }
             // A type parameter is bound by **name**: the shape's type channel reaches here
             // symbol-sorted, not in the order the `FOR ALL` group was written, so a positional
-            // read would hand one variable another's solution. A name the map dropped takes
-            // `Any` — every `FOR ALL` name's bound today — since there is nothing to solve for.
+            // read would hand one variable another's solution. A name the map dropped takes its
+            // bound, since there is nothing to solve for.
             BinderSymbol::Type(name) => {
                 let solved = match function.canonical_quantifier(name) {
-                    Some(canonical) => *solution.as_ref()?.get(canonical)?,
+                    Some(Canonical::At(canonical)) => *solution.as_ref()?.get(canonical)?,
+                    Some(Canonical::Dropped { bound }) => bound,
+                    // A type-class name the group does not declare has nothing to solve it from.
                     None => KType::ANY,
                 };
                 Value::Type(TypeValue::new(writer, solved, types))

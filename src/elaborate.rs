@@ -13,10 +13,12 @@
 //! reads a module's own signature off the activation its body ran in.
 //!
 //! Elaborated: a bare type name, `LIST OF Elem`, `MAP Key -> Val`, `FN :{…} -> Ret`,
-//! `EXPR (head) -> Ret` with and without `FOR ALL`, a union of members, a record type `:{…}`, a
-//! union member `Union.Tag`, and a constructor application `Pair {Key = Number}` with its
-//! arity-one sugar `Number AS Wrap`. A name a `FOR ALL` group declares is that group's quantifier,
-//! and is never a mention. Every other spelling is [`Unsupported`].
+//! `EXPR (head) -> Ret` with and without `FOR ALL`, a union `A | B` and a meet `A & B` of members,
+//! a record type `:{…}`, a union member `Union.Tag`, and a constructor application
+//! `Pair {Key = Number}` with its arity-one sugar `Number AS Wrap`. A name a `FOR ALL` group
+//! declares is that group's quantifier, bounded by what `(Name UNDER <bound>)` writes or else by
+//! `Any`, and is never a mention; a `SIG`'s `TYPE (Name UNDER <bound>)` bounds its abstract member
+//! the same way. Every other spelling is [`Unsupported`].
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
 //! `crate::parse`, `crate::scope`, `crate::type_lattice` and `crate::values`, and nothing else in
@@ -39,7 +41,7 @@ pub use builtin::builtin_shape_types;
 pub use declaration::type_declarations;
 pub use expression::type_expression;
 pub use module::self_signature;
-pub use signature::callable_type;
+pub use signature::{Canonical, callable_type};
 
 use crate::scope::Site;
 use crate::symbols::{Symbol, TypeSymbol};
@@ -54,4 +56,7 @@ pub enum Elaboration {
     Unsupported { site: Site },
     /// A union member projection naming a tag the union does not declare.
     NoSuchMember { union: KType, tag: Symbol },
+    /// A bound at `site` that names a type variable — a `FOR ALL` name or a signature's abstract
+    /// member — or is `Never`.
+    Bound { site: Site },
 }

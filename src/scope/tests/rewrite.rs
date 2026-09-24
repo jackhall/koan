@@ -373,9 +373,9 @@ fn evaluated<R>(
     })
 }
 
-/// A `GROUP` whose members are `@` and `&`, under `mode`, named `name`.
+/// A `GROUP` whose members are `@` and `%`, under `mode`, named `name`.
 fn group(name: &str, mode: &str) -> String {
-    format!("GROUP {name} {mode} = ((OP #(@) OVER Ring = (left)) (OP #(&) OVER Ring = (right)))")
+    format!("GROUP {name} {mode} = ((OP #(@) OVER Ring = (left)) (OP #(%) OVER Ring = (right)))")
 }
 
 /// A `SIG` named `name` whose body is one bodyless `GROUP` head over `members`, under `mode`.
@@ -391,45 +391,45 @@ fn signature(name: &str, mode: &str, members: &[&str]) -> String {
 fn a_using_body_chains_the_group_its_operand_surfaces() {
     let source = format!(
         "{}
-USING g SCOPE (1 @ 2 & 3)",
+USING g SCOPE (1 @ 2 % 3)",
         group("g", "FOLD RIGHT")
     );
     shaped(&source, |fixture, shape| {
         let shape = shape.expect("the program shapes");
         let block = nested(shape, &shape.body()[1], 3);
         assert_eq!(block.kind(), ShapeKind::Block);
-        assert_eq!(tree(&block.body()[0], fixture.symbols), "(1 @ (2 & 3))");
+        assert_eq!(tree(&block.body()[0], fixture.symbols), "(1 @ (2 % 3))");
     });
 
     // A signature's bodyless `GROUP` head is a group too, reached through an ascription.
-    let module = "MODULE m = ((OP #(@) OVER Ring = (left)) (OP #(&) OVER Ring = (right)))";
+    let module = "MODULE m = ((OP #(@) OVER Ring = (left)) (OP #(%) OVER Ring = (right)))";
     let source = format!(
         "{}
 {module}
-USING (m :! Ops) SCOPE (1 @ 2 & 3)",
-        signature("Ops", "FOLD LEFT", &["@", "&"])
+USING (m :! Ops) SCOPE (1 @ 2 % 3)",
+        signature("Ops", "FOLD LEFT", &["@", "%"])
     );
     shaped(&source, |fixture, shape| {
         let shape = shape.expect("the program shapes");
         let block = nested(shape, &shape.body()[2], 3);
-        assert_eq!(tree(&block.body()[0], fixture.symbols), "((1 @ 2) & 3)");
+        assert_eq!(tree(&block.body()[0], fixture.symbols), "((1 @ 2) % 3)");
     });
 }
 
 #[test]
 fn a_group_surfaced_twice_is_held_once_and_a_second_chaining_is_refused() {
-    let module = "MODULE m = ((OP #(@) OVER Ring = (left)) (OP #(&) OVER Ring = (right)))";
+    let module = "MODULE m = ((OP #(@) OVER Ring = (left)) (OP #(%) OVER Ring = (right)))";
     let nest = |first: &str, second: &str| {
         format!(
             "{first}
 {second}
 {module}
-USING (m :! Ops) SCOPE ((USING (m :! Peer) SCOPE (1 @ 2 & 3)))"
+USING (m :! Ops) SCOPE ((USING (m :! Peer) SCOPE (1 @ 2 % 3)))"
         )
     };
     let equal = nest(
-        &signature("Ops", "FOLD LEFT", &["@", "&"]),
-        &signature("Peer", "FOLD LEFT", &["@", "&"]),
+        &signature("Ops", "FOLD LEFT", &["@", "%"]),
+        &signature("Peer", "FOLD LEFT", &["@", "%"]),
     );
     shaped(&equal, |fixture, shape| {
         let shape = shape.expect("two equal groups are one group");
@@ -439,15 +439,15 @@ USING (m :! Ops) SCOPE ((USING (m :! Peer) SCOPE (1 @ 2 & 3)))"
             inner.held_groups().is_empty(),
             "the group the outer body holds is not held twice"
         );
-        assert_eq!(tree(&inner.body()[0], fixture.symbols), "((1 @ 2) & 3)");
+        assert_eq!(tree(&inner.body()[0], fixture.symbols), "((1 @ 2) % 3)");
     });
 
     let unequal = nest(
-        &signature("Ops", "FOLD LEFT", &["@", "&"]),
-        &signature("Peer", "FOLD RIGHT", &["@", "&"]),
+        &signature("Ops", "FOLD LEFT", &["@", "%"]),
+        &signature("Peer", "FOLD RIGHT", &["@", "%"]),
     );
     shaped(&unequal, |fixture, shape| {
-        let members = [keyword("@", fixture.symbols), keyword("&", fixture.symbols)];
+        let members = [keyword("@", fixture.symbols), keyword("%", fixture.symbols)];
         assert!(
             matches!(
                 shape.err(),
@@ -483,12 +483,12 @@ fn evaluated_code_chains_under_its_site_and_is_held_to_the_programs_claims() {
 USING g SCOPE (1)",
         group("g", "FOLD RIGHT")
     );
-    evaluated(&source, "#(1 @ 2 & 3)", true, |fixture, shape| {
+    evaluated(&source, "#(1 @ 2 % 3)", true, |fixture, shape| {
         let shape = shape.expect("the quoted operator run shapes at its site");
-        assert_eq!(tree(&shape.body()[0], fixture.symbols), "(1 @ (2 & 3))");
+        assert_eq!(tree(&shape.body()[0], fixture.symbols), "(1 @ (2 % 3))");
     });
     // The same operator run outside that body has no group to chain under.
-    evaluated(&source, "#(1 @ 2 & 3)", false, |fixture, shape| {
+    evaluated(&source, "#(1 @ 2 % 3)", false, |fixture, shape| {
         assert_eq!(
             shape.err(),
             Some(ShapeError::Unchained {
@@ -533,4 +533,34 @@ fn a_result_typed_operator_is_admitted_wherever_its_group_chains_pairwise() {
             );
         },
     );
+}
+
+#[test]
+fn an_operator_run_in_a_bound_is_chained() {
+    shaped(
+        "LET f = (FN FOR ALL ((Elt UNDER :(Number | Str | Bool)) Key) :{x :Elt y :Key} -> Elt = (x))",
+        |fixture, shape| {
+            let shape = shape.expect("the program shapes");
+            let lambda = expression(&shape.body()[0].parts[3].value);
+            assert_eq!(
+                part_tree(&lambda.parts[3].value, fixture.symbols),
+                "((Elt UNDER :(| [Number Str Bool])) Key)"
+            );
+        },
+    );
+    shaped(
+        "SIG Shown = ((TYPE (Carrier UNDER :(Number & Str & Bool))) (VAL zero :Carrier))",
+        |fixture, shape| {
+            let shape = shape.expect("the program shapes");
+            let body = expression(&shape.body()[0].parts[3].value);
+            let declaration = expression(&body.parts[0].value);
+            assert_eq!(
+                part_tree(&declaration.parts[1].value, fixture.symbols),
+                "(Carrier UNDER :(& [Number Str Bool]))"
+            );
+        },
+    );
+    shaped("LET Mixed = :(Number | Str & Bool)", |_, shape| {
+        assert!(matches!(shape.err(), Some(ShapeError::MixedGroups { .. })));
+    });
 }

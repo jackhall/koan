@@ -102,6 +102,7 @@ impl<'graph> Fixture<'_, 'graph> {
             ("Bool", KType::BOOL),
             ("Null", KType::NULL),
             ("Any", KType::ANY),
+            ("Value", KType::ANY_VALUE),
         ]
         .into_iter()
         .map(|(name, handle)| {

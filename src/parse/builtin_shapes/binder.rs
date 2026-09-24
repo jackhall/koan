@@ -17,7 +17,7 @@ use crate::memory::{Writer, collect};
 use crate::parse::ast::{ExpressionPart, KExpression, KeyElement};
 use crate::parse::builtin_shapes::{BuiltinShape, KEYWORDS, builtin_shape_for};
 use crate::source::Spanned;
-use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, WILDCARD};
+use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol, WILDCARD};
 
 /// Structural name extractor for a binder builtin. Returning `Some(name)` names the placeholder a
 /// forward reference parks on while the binder's body is in flight. Both channels' names are `Copy`
@@ -106,9 +106,12 @@ pub(crate) fn identifier_part_binder_name(expr: &KExpression<'_>) -> Option<Bind
 
 /// Placeholder extractor covering both `TYPE` overloads: the bare form's name is the `Type` part at
 /// `parts[1]`; the higher-kinded form's name is the *last* inner part of the parenthesized
-/// `(Param AS Name)` expression.
+/// `(Param AS Name)` expression. A bounded declarator, `(<declarator> UNDER <bound>)`, names what
+/// its declarator names.
 pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<BinderSymbol> {
-    match expr.parts.get(1)?.value {
+    let part = &expr.parts.get(1)?.value;
+    let declarator = bounded(part).map_or(part, |(declarator, _)| declarator);
+    match *declarator {
         ExpressionPart::Type(t) => Some(BinderSymbol::Type(t)),
         ExpressionPart::Expression(inner) => match inner.parts.last()?.value {
             ExpressionPart::Type(t) => Some(BinderSymbol::Type(t)),
@@ -116,6 +119,62 @@ pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<BinderSymb
         },
         _ => None,
     }
+}
+
+/// The declarator and bound of a `<declarator> UNDER <bound>` run: exactly three parts, the middle
+/// one `UNDER`.
+pub(crate) fn bounded_run<'g>(
+    run: &'g KExpression<'g>,
+) -> Option<(&'g ExpressionPart<'g>, &'g ExpressionPart<'g>)> {
+    match run.parts {
+        [declarator, keyword, bound] if matches!(keyword.value, ExpressionPart::Keyword(symbol) if symbol == KEYWORDS.under.symbol()) => {
+            Some((&declarator.value, &bound.value))
+        }
+        _ => None,
+    }
+}
+
+/// [`bounded_run`] of a parenthesized part.
+pub(crate) fn bounded<'g>(
+    part: &ExpressionPart<'g>,
+) -> Option<(&'g ExpressionPart<'g>, &'g ExpressionPart<'g>)> {
+    match part {
+        ExpressionPart::Expression(node) => bounded_run(node.reference()),
+        _ => None,
+    }
+}
+
+/// One `FOR ALL` entry: a bare type name, or `(<Name> UNDER <bound>)` — the name and its bound
+/// part. `None` for anything else, a higher-kinded declarator included.
+pub(crate) fn bounded_name<'g>(
+    part: &ExpressionPart<'g>,
+) -> Option<(TypeSymbol, Option<&'g ExpressionPart<'g>>)> {
+    if let ExpressionPart::Type(name) = part {
+        return Some((*name, None));
+    }
+    match bounded(part)? {
+        (ExpressionPart::Type(name), bound) => Some((*name, Some(bound))),
+        _ => None,
+    }
+}
+
+/// The entries a `FOR ALL` group declares, in written order: the group itself when its run is one
+/// bounded name (`(Elt UNDER Value)` — also what `((Elt UNDER Value))` peels to), otherwise each of
+/// its parts. A group that is not a parenthesized run declares nothing.
+pub(crate) fn quantifier_entries<'p, 'g>(
+    group: &'p ExpressionPart<'g>,
+) -> impl Iterator<Item = &'p ExpressionPart<'g>> {
+    let (lone, parts): (
+        Option<&'p ExpressionPart<'g>>,
+        &'p [Spanned<ExpressionPart<'g>>],
+    ) = match group {
+        ExpressionPart::Expression(node) if bounded_run(node.reference()).is_some() => {
+            (Some(group), &[])
+        }
+        ExpressionPart::Expression(node) => (None, node.reference().parts),
+        _ => (None, &[]),
+    };
+    lone.into_iter().chain(parts.iter().map(|part| &part.value))
 }
 
 /// Bucket-key extractor for FN. The key must match what a future call would compute via

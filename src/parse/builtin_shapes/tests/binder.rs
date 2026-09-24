@@ -4,7 +4,9 @@
 use proptest::prelude::*;
 
 use crate::memory::{ProgramBrand, program_storage};
-use crate::parse::builtin_shapes::binder::BinderFacts;
+use crate::parse::builtin_shapes::binder::{
+    BinderFacts, bounded_name, quantifier_entries, type_decl_binder_name,
+};
 use crate::parse::builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShape, ShapeElement, builtin_shape_for, render_key,
 };
@@ -294,4 +296,52 @@ proptest! {
         }
         }
     }
+}
+
+/// The declared names of a `FOR ALL` group, each with whether it writes a bound.
+fn entries(group: &ExpressionPart<'_>) -> Vec<(Symbol, bool)> {
+    quantifier_entries(group)
+        .map(|entry| {
+            let (name, bound) = bounded_name(entry).expect("a well-formed entry");
+            (name.symbol(), bound.is_some())
+        })
+        .collect()
+}
+
+/// A bounded `TYPE` declarator names what its declarator names, and a lone bounded `FOR ALL` name
+/// is one entry however many parentheses it is written in — a value expression peels one pair, a
+/// type expression keeps both.
+#[test]
+fn a_bound_is_read_off_its_declarator() {
+    let program = program_storage();
+    let brand = program.brand();
+    let declared =
+        |source: &str| type_decl_binder_name(&parse_one(brand, source)).map(|name| name.symbol());
+    assert_eq!(declared("TYPE (Elt UNDER Value)"), Some(Symbol::of("Elt")));
+    assert_eq!(
+        declared("TYPE ((Elem AS Wrap) UNDER Value)"),
+        Some(Symbol::of("Wrap"))
+    );
+    assert_eq!(declared("TYPE (Elem AS Wrap)"), Some(Symbol::of("Wrap")));
+
+    let group = |source: &str| entries(&parse_one(brand, source).parts[3].value);
+    let (elt, key) = (Symbol::of("Elt"), Symbol::of("Key"));
+    assert_eq!(
+        group("FN FOR ALL ((Elt UNDER Value) Key) :{a :Elt b :Key} -> Elt = (a)"),
+        vec![(elt, true), (key, false)]
+    );
+    for source in [
+        "FN FOR ALL ((Elt UNDER Value)) :{a :Elt} -> Elt = (a)",
+        "FN FOR ALL (Elt UNDER Value) :{a :Elt} -> Elt = (a)",
+    ] {
+        assert_eq!(group(source), vec![(elt, true)], "{source}");
+    }
+    let typed = parse_one(
+        brand,
+        "LET t = :(FN FOR ALL ((Elt UNDER Value)) :{a :Elt} -> Elt)",
+    );
+    let ExpressionPart::SigiledTypeExpr(node) = typed.parts[3].value else {
+        panic!("a sigiled type expression");
+    };
+    assert_eq!(entries(&node.reference().parts[3].value), vec![(elt, true)]);
 }

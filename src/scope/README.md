@@ -163,8 +163,9 @@ since none of it runs until the callable is called. Any other mention is
 **eager**: the value is needed at the point it is read. A call, a keyword
 shape's slot, an operator's operand, a dict key, a type expression outside a
 definition, a `MODULE` body and a `MATCH` or `TRY` arm are all eager contexts, and
-so are a callable's parameter and return types, which are mentions of the
-enclosing shape read where the callable is born. A parenthesized group of one
+so are a callable's parameter and return types and each `FOR ALL` name's bound,
+which are mentions of the enclosing shape read where the callable is born. A
+parenthesized group of one
 part is transparent: it is the part. So in
 
 ```
@@ -248,7 +249,9 @@ declarators with builtin shapes of their own, and a type expression written
 inside one is a node with a shape of its own too: each is walked by *their*
 roles rather than by structure. A `SIG` body's `TYPE (Key Val AS Pair)`
 therefore declares `Pair`, and `Key` and `Val` sit in its `Name` part, which no
-walk reads; a `FOR ALL` group inside one of its heads declares its quantifiers;
+walk reads; `TYPE (Carrier UNDER Number)` declares `Carrier`, and its bound is a
+deferred mention like the rest of the definition; a `FOR ALL` group inside one of
+its heads declares its quantifiers, bounded or not;
 and a manifest `LET` member declares its name, so a later `VAL` naming it is no
 mention either. Every name a definition declares is the definition's own, and
 the declaration door resolves it against the definition it is elaborating.
@@ -381,7 +384,8 @@ A symbol therefore chains one way for the whole program, wherever its
 declarations sit, in this order:
 
 1. a **builtin group** covering it — `{< <= > >=}` pairwise through `AND`
-   folding left, `{+ -}` fold-left, `{* /}` fold-left, `{|}` unary. Nothing
+   folding left, `{+ -}` fold-left, `{* /}` fold-left, `{|}` unary, and `{&}`
+   unary — the meet type's run, beside the union's. Nothing
    overrides one, and they are seen everywhere;
 2. the claim a `GROUP` statement makes over it, or the `Unary` mark a
    `UNARY OP` makes. A bare `OP` declares an overload and claims nothing;
@@ -431,8 +435,11 @@ Over operands `o0 … on` and operators `k1 … kn`, each operand already rewrit
 - **fold left** — `(((o0 k1 o1) k2 o2) …)`, one nested binary keyworded node per
   operator; **fold right** — `(o0 k1 (o1 k2 (…)))`;
 - **unary** — `k1 [o0 … on]`, one keyword-first call over a list literal. This
-  is the form a union type takes: `A | B | C` elaborates as that call, and only
-  `A | B` is read as an infix pair;
+  is the form a union and a meet type take: `A | B | C` elaborates as that call,
+  and only `A | B` is read as an infix pair. Koan has no precedence, so
+  `A | B & C` is `MixedGroups`. An operator run inside a bound — the third part
+  of a `FOR ALL` entry's or a `TYPE` declarator's `<Name> UNDER <bound>` — is
+  rewritten too;
 - **pairwise** — the adjacent pairs `o(i-1) ki oi`, folded through the group's
   combiner written infix, in the group's direction.
 

@@ -33,10 +33,10 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 /// - A union is below `b` when every member is; a non-union is below a union when it is below some
 ///   member.
 /// - A signature is below another when [`sig_subtype`] accepts the pair.
-/// - A **rigid variable** — `Quantified` or `AbstractType` — is a nominal identity over its bound:
-///   below it are only itself and `Never`, above it only itself and everything above its bound.
-///   The two clauses agree because a bound is a variable-free type, so nothing above a bound is
-///   itself rigid.
+/// - A **rigid variable** — `Quantified` or `AbstractType` — is a nominal identity bounded by its
+///   bound: below it are only itself and `Never`, above it itself and everything above its bound,
+///   a union included. The two clauses agree because a bound is a variable-free type, so nothing
+///   above a bound is itself rigid.
 /// - A quantified shape is below another shape, and a quantified function below another function,
 ///   when some instantiation of its variables, each under its bound, puts the instance below the
 ///   other with the other's variables rigid.
@@ -116,7 +116,22 @@ impl Lockstep for Order {
             });
         }
         self.root = false;
-        None
+        let na = types.node(a);
+        // Above a rigid variable is itself and everything above its bound — a union included, which
+        // a member-by-member reading would miss when the bound spans several members.
+        if let Some(bound) = na.rigid_bound() {
+            return Some(
+                matches!(types.node(b), TypeNode::Union { members } if members.contains(&a))
+                    || is_subtype_of(types, scratch, bound, b),
+            );
+        }
+        // A union is below `b` when every member is below `b` whole, for the same reason.
+        match na {
+            TypeNode::Union { members } => {
+                Some(members.iter().all(|x| is_subtype_of(types, scratch, *x, b)))
+            }
+            _ => None,
+        }
     }
 
     fn leaf(
@@ -130,7 +145,7 @@ impl Lockstep for Order {
         let (na, nb) = (types.node(a), types.node(b));
         // A rigid variable's down-set is checked first: below one are only itself — which the
         // caller's equality guard already answered — and `Never`.
-        if is_rigid(&nb) {
+        if nb.rigid_bound().is_some() {
             return false;
         }
         match (na, nb) {
@@ -142,10 +157,6 @@ impl Lockstep for Order {
                 let verdict = sig_subtype(types, scratch, sub, sup).is_ok();
                 types.record_verdict(a.digest(), b.digest(), Relation::SigSatisfies, verdict);
                 verdict
-            }
-            // Above a rigid variable is everything above its bound.
-            (TypeNode::Quantified { bound, .. }, _) | (TypeNode::AbstractType { bound, .. }, _) => {
-                is_subtype_of(types, scratch, bound, b)
             }
             // A quantified shape is below another when some instantiation of its group puts every
             // slot and the return under the other's, with the other's rigid.
@@ -172,8 +183,8 @@ impl Lockstep for Order {
         v: Variance,
         recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> bool,
     ) -> bool {
-        // A union is below `b` when every member is; a non-union is below a union when it is below
-        // some member. One rule covers both, since a non-union side arrives as a one-element slice.
+        // `enter` takes every union on the left whole, so `a` is one non-rigid type here: it is
+        // below a union when it is below some member.
         a.iter().all(|x| b.iter().any(|y| recurse(self, *x, *y, v)))
     }
 
@@ -190,13 +201,6 @@ impl Lockstep for Order {
     fn short_circuits(&self, out: &bool) -> bool {
         !*out
     }
-}
-
-fn is_rigid(node: &TypeNode<'_>) -> bool {
-    matches!(
-        node,
-        TypeNode::Quantified { .. } | TypeNode::AbstractType { .. }
-    )
 }
 
 /// The family top `node` lies under by its own shape — `Value`, `Type` or `Code` — or `None` for a

@@ -4,6 +4,10 @@
 //! the other in either direction; an unrelated pair is unequal without descending. That makes `==`
 //! intransitive across ascriptions by design.
 //!
+//! A value sealed behind an opaque view compares as its payload wherever the seal's bound reveals
+//! the payload's kind ([`unsealed`]), so a sealed number behind a `Number`-bounded member equals
+//! the number; any other seal compares by identity, as every tagged value does.
+//!
 //! A function has no structural equality: a comparison that reaches one on either side is
 //! [`Incomparable`], which the `==` builtin reports, never `false`.
 //!
@@ -16,7 +20,7 @@ use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::type_lattice::{KType, TypeRegistry, satisfied_by};
 
 use super::circular::{Cells, Composite};
-use super::{Knotted, Value};
+use super::{Knotted, Value, unsealed};
 
 /// A comparison reached a function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +28,8 @@ pub struct Incomparable;
 
 impl<X: Knotted> Value<'_, '_, X> {
     /// Whether two values are equal. Numbers follow IEEE (`NaN != NaN`, `-0 == 0`); a tagged value
-    /// compares its identity first, so it never equals its bare payload; two types are equal when
+    /// compares its identity first, so it never equals its bare payload — save a sealed value whose
+    /// seal [`unsealed`] reads through, which compares as its payload; two types are equal when
     /// they are the same handle; two quoted expressions compare as syntax, part by part with spans
     /// ignored; a knot's data node compares as the plain value of its kind would, its cells read
     /// through it. The two sides may live at unrelated lifetimes. A function on either side is
@@ -49,10 +54,13 @@ impl<X: Knotted> Value<'_, '_, X> {
         scratch: BumpAllocator<'_>,
         seen: &mut BumpBackedSet<'_, (X, Y)>,
     ) -> Result<bool, Incomparable> {
-        if self.as_opaque().is_some() || other.as_opaque().is_some() {
+        // A seal whose bound reveals its payload's kind is read through, on either side.
+        let this = unsealed(*self, types, scratch);
+        let that = unsealed(*other, types, scratch);
+        if this.as_opaque().is_some() || that.as_opaque().is_some() {
             return Err(Incomparable);
         }
-        Ok(match (self.composite(), other.composite()) {
+        Ok(match (this.composite(), that.composite()) {
             (Some((left_node, left)), Some((right_node, right))) => {
                 if let (Some(left_node), Some(right_node)) = (left_node, right_node)
                     && !seen.insert((left_node, right_node))
@@ -62,7 +70,7 @@ impl<X: Knotted> Value<'_, '_, X> {
                 composite_equal(left, right, types, scratch, seen)?
             }
             (Some(_), None) | (None, Some(_)) => false,
-            (None, None) => match (self, other) {
+            (None, None) => match (&this, &that) {
                 (Value::Number(left), Value::Number(right)) => left == right,
                 (Value::Bool(left), Value::Bool(right)) => left == right,
                 (Value::Null, Value::Null) => true,

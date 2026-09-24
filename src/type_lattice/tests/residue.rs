@@ -386,8 +386,8 @@ fn each_node_kind_lies_under_its_family_top() {
         assert_eq!(under(KType::of_kind(kind)), [KType::ANY_TYPE]);
     }
 
-    // A variable answers by its bound; one over `Any` — a sealed member's default — lies under no
-    // family top, since the view hides which family it stands for.
+    // A variable answers by its bound; one bounded by `Any` — a sealed member's default — lies
+    // under no family top, since the view hides which family it stands for.
     assert!(under(types.quantified(0, KType::ANY)).is_empty());
     assert_eq!(
         under(types.quantified(0, KType::ANY_VALUE)),
@@ -411,5 +411,162 @@ fn each_node_kind_lies_under_its_family_top() {
     assert_eq!(
         join(&types, region, KType::ANY_VALUE, KType::ANY_TYPE),
         pair_top
+    );
+}
+
+/// No law: the order's laws hold over union-bounded variables without naming one. These pin the
+/// worked examples — a variable bounded by `Number | Str` against the unions above and around its
+/// bound, in the order, a union's canonical form and the meet.
+#[test]
+fn a_union_bounded_variable_lies_under_every_union_above_its_bound() {
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
+    let elt = types.quantified(0, number_or_str);
+    let wider = types.union_of(region, &[KType::NUMBER, KType::STR, KType::BOOL]);
+    assert!(is_subtype_of(&types, region, elt, number_or_str));
+    assert!(is_subtype_of(&types, region, elt, wider));
+    assert!(!is_subtype_of(&types, region, elt, KType::NUMBER));
+
+    // `Elt | Number | Str` holds nothing `Number | Str` does not.
+    assert_eq!(
+        types.union_of(region, &[elt, KType::NUMBER, KType::STR]),
+        number_or_str
+    );
+    let elt_or_bool = types.union_of(region, &[elt, KType::BOOL]);
+    assert_ne!(elt_or_bool, types.union_of(region, &[KType::BOOL]));
+
+    // The meet keeps a variable whose bound spans the other side's members, from either side.
+    assert_eq!(meet(&types, region, elt_or_bool, number_or_str), elt);
+    assert_eq!(meet(&types, region, number_or_str, elt_or_bool), elt);
+}
+
+/// No law: the unifier's carried-variable rule is covered by a property, but the solution it
+/// reaches is a worked example. `Y` bounded by `LIST OF Number` fills `LIST OF X`, solving `X` to
+/// `Number` — and that closes the order's transitivity through a monomorphic instance.
+#[test]
+fn a_carried_variable_fills_what_its_bound_fills() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let name = TypeSymbol::declared("Held", &symbols).expect("a Type token");
+    let list_of_number = types.list(KType::NUMBER);
+    let carried = types.abstract_type(region, ScopeId::SENTINEL, name, &[], None, list_of_number);
+    let declared = types.list(types.quantified(0, KType::ANY));
+    let mut collector = Collector::new(region, 1);
+    assert_eq!(
+        admits_with(
+            &types,
+            region,
+            declared,
+            carried,
+            Variance::Co,
+            &mut collector
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        collector.solve(&types).map(|solution| solution.to_vec()),
+        Ok(vec![KType::NUMBER])
+    );
+
+    // `FOR ALL (X) FN :{y :(LIST OF X) z :(LIST OF X)} -> Null` ≤ the `Number` instance ≤
+    // `FOR ALL (Y UNDER :(LIST OF Number)) FN :{y :Y z :Y} -> Null`, and the first ≤ the third.
+    let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
+    let z = BinderSymbol::declared("z", &symbols).expect("a bindable token");
+    let x_name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let each_list = types
+        .function_type(
+            region,
+            &[x_name],
+            &[(y, declared), (z, declared)],
+            KType::NULL,
+        )
+        .handle;
+    let on_numbers = types
+        .function_type(
+            region,
+            &[],
+            &[(y, list_of_number), (z, list_of_number)],
+            KType::NULL,
+        )
+        .handle;
+    let bounded = types.quantified(0, list_of_number);
+    let each_bounded = types
+        .function_type(region, &[name], &[(y, bounded), (z, bounded)], KType::NULL)
+        .handle;
+    // A bound spanning two declared members is admitted member by member: `Held` bounded by
+    // `LIST OF Number | Str` fills `LIST OF X | Str`, though neither member alone takes it.
+    let spanning_bound = types.union_of(region, &[list_of_number, KType::STR]);
+    let spanning = types.abstract_type(region, ScopeId::SENTINEL, name, &[], None, spanning_bound);
+    let either = types.union_of(region, &[declared, KType::STR]);
+    let mut collector = Collector::new(region, 1);
+    assert_eq!(
+        admits_with(
+            &types,
+            region,
+            either,
+            spanning,
+            Variance::Co,
+            &mut collector
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        collector.solve(&types).map(|solution| solution.to_vec()),
+        Ok(vec![KType::NUMBER])
+    );
+
+    assert!(is_subtype_of(&types, region, each_list, on_numbers));
+    assert!(is_subtype_of(&types, region, on_numbers, each_bounded));
+    assert!(is_subtype_of(&types, region, each_list, each_bounded));
+}
+
+/// No law: a spelling. A bounded quantifier renders as the `UNDER` run it is written as, and a
+/// group of one bounded name drops its own parentheses.
+#[test]
+fn a_bounded_quantifier_renders_under_its_bound() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let a = BinderSymbol::declared("a", &symbols).expect("a bindable token");
+    let b = BinderSymbol::declared("b", &symbols).expect("a bindable token");
+    let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let key = TypeSymbol::declared("Key", &symbols).expect("a Type token");
+    let value_bounded = types.quantified(0, KType::ANY_VALUE);
+    let free = types.quantified(1, KType::ANY);
+    let pair = types
+        .function_type(
+            region,
+            &[elt, key],
+            &[(a, value_bounded), (b, free)],
+            types.dict(value_bounded, free),
+        )
+        .handle;
+    // Canonical form orders the group by first occurrence, which puts `Key` first here.
+    assert_eq!(
+        crate::type_lattice::display_name(pair, &types, &symbols).to_string(),
+        ":(FN FOR ALL (Key (Elt UNDER Value)) :{a :Elt b :Key} -> :(MAP Elt -> Key))"
+    );
+    let alone = types
+        .function_type(region, &[elt], &[(a, value_bounded)], value_bounded)
+        .handle;
+    let rendered = crate::type_lattice::display_name(alone, &types, &symbols).to_string();
+    assert!(
+        rendered.contains("FOR ALL (Elt UNDER Value) "),
+        "{rendered}"
+    );
+    let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
+    let union_bounded = types.quantified(0, number_or_str);
+    let spanning = types
+        .function_type(region, &[elt], &[(a, union_bounded)], union_bounded)
+        .handle;
+    let rendered = crate::type_lattice::display_name(spanning, &types, &symbols).to_string();
+    assert!(
+        rendered.contains("FOR ALL (Elt UNDER :(Number | Str)) "),
+        "{rendered}"
     );
 }

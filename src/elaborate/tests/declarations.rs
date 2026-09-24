@@ -181,7 +181,7 @@ fn a_signature_declares_its_abstract_and_manifest_members() {
                         ..
                     }
                 ),
-                "an unbounded `TYPE` member stands over `Any`"
+                "an unbounded `TYPE` member is bounded by `Any`"
             );
             assert_eq!(
                 member(schema.manifest_members, program.type_name("Elem")),
@@ -402,9 +402,9 @@ fn operator(text: &str, program: &Program<'_, '_, '_>) -> KeywordSymbol {
 fn a_bodyless_group_head_declares_a_chaining_record_over_its_heads() {
     brought(
         "SIG Ring = ((TYPE Carrier) \
-         (GROUP FOLD RIGHT = ((OP #(@) OVER Carrier) (OP #(&) OVER Carrier))))",
+         (GROUP FOLD RIGHT = ((OP #(@) OVER Carrier) (OP #(%) OVER Carrier))))",
         |program| {
-            let mut members = vec![operator("@", &program), operator("&", &program)];
+            let mut members = vec![operator("@", &program), operator("%", &program)];
             members.sort_unstable();
             assert_eq!(
                 operators(&program, "Ring"),
@@ -452,7 +452,7 @@ fn a_bodyless_group_head_declares_a_chaining_record_over_its_heads() {
 fn two_signatures_differing_only_in_a_groups_direction_are_two_handles() {
     let sig = |mode: &str| {
         brought(
-            &format!("SIG Ring = ((GROUP {mode} = ((OP #(@) OVER Number) (OP #(&) OVER Number))))"),
+            &format!("SIG Ring = ((GROUP {mode} = ((OP #(@) OVER Number) (OP #(%) OVER Number))))"),
             |program| program.bound("Ring"),
         )
     };
@@ -500,4 +500,53 @@ fn a_group_head_the_door_cannot_read_refuses() {
             assert_eq!(schema.keyworded.len(), 2);
         },
     );
+}
+
+/// The bound of the abstract member `name` of the signature bound to `sig`.
+fn member_bound(program: &Program<'_, '_, '_>, sig: &str, name: &str) -> KType {
+    let TypeNode::Signature { schema, .. } = program.types.node(program.bound(sig)) else {
+        panic!("a SIG binds a signature");
+    };
+    let rigid = member(schema.abstract_members, program.type_name(name))
+        .expect("the signature declares the member");
+    let TypeNode::AbstractType { bound, .. } = program.types.node(rigid) else {
+        panic!("an abstract member is a rigid variable");
+    };
+    bound
+}
+
+#[test]
+fn a_bounded_type_member_carries_its_bound() {
+    let source = "\
+SIG Plain = ((TYPE (Carrier UNDER Number)) (VAL c :Carrier))
+SIG Either = ((TYPE (Carrier UNDER :(Number | Str))) (VAL c :Carrier))
+SIG Based = ((LET Base = Number) (TYPE (Carrier UNDER Base)) (VAL c :Carrier))";
+    brought(source, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        assert_eq!(member_bound(&program, "Plain", "Carrier"), KType::NUMBER);
+        assert_eq!(
+            member_bound(&program, "Either", "Carrier"),
+            types.union_of(scratch, &[KType::NUMBER, KType::STR])
+        );
+        assert_eq!(
+            member_bound(&program, "Based", "Carrier"),
+            KType::NUMBER,
+            "a manifest member reads as its type"
+        );
+    });
+}
+
+#[test]
+fn a_bound_on_an_abstract_or_higher_kinded_member_or_a_family_is_refused() {
+    declared(
+        "SIG Chained = ((TYPE Key) (TYPE (Elt UNDER Key)))",
+        |_, brought| assert!(matches!(brought, Err(Elaboration::Bound { .. }))),
+    );
+    declared(
+        "SIG Kinded = (TYPE ((Elem AS Wrap) UNDER Number))",
+        |_, brought| assert!(matches!(brought, Err(Elaboration::Unsupported { .. }))),
+    );
+    declared("NEWTYPE (Elt UNDER Number)", |_, brought| {
+        assert!(matches!(brought, Err(Elaboration::Unsupported { .. })))
+    });
 }

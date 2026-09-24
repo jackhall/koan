@@ -319,7 +319,7 @@ pub fn children(
             out(constructor, false);
             arguments.values().for_each(|kt| out(kt, false));
         }
-        // A rigid variable's one child is the bound it stands over.
+        // A rigid variable's one child is its bound.
         TypeNode::Quantified { bound, .. } | TypeNode::AbstractType { bound, .. } => {
             out(bound, false)
         }

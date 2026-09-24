@@ -57,6 +57,7 @@ impl Language for Mini {
             ("Bool", KType::BOOL),
             ("Null", KType::NULL),
             ("Any", KType::ANY),
+            ("Value", KType::ANY_VALUE),
         ]
         .into_iter()
         .map(|(name, handle)| {

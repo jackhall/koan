@@ -103,6 +103,19 @@ the checked door over it, and it `peel`s, so a sealed member takes the mint as
 its one tagged layer rather than a second one. Sealing happens where a view is
 built, never where a koan program writes a construction.
 
+**A seal its bound reveals is read through.** A sealed value stays a `Tagged`
+wrapper — a scalar carries no type of its own, so the mint rides on the wrapper
+— and rendering keeps it. A reader that needs a representation reads through
+the mint layer exactly where the mint lies under the representation it reads,
+which is where the member's declared bound reveals it. [`unsealed`](admission.rs)
+is that one reading for equality and dict keys, under the payload's own kind —
+`Number` for a number, `LIST OF Any` for a list: a 5 sealed behind a member
+bounded by `Number` equals 5, equals another view's sealed 5, and keys a dict as
+5. Behind a member bounded by `Value`, or by `Number | Str`, the mint lies under
+no one kind, so the seal stays opaque to both. A reader reached through a slot
+typed `T` reads through a mint lying under `T` by the same rule. A seal takes
+one layer, so there is one layer to read through.
+
 ## Two lifetimes
 
 A value borrows at two lifetimes, `Value<'graph, 'cell>`, following
@@ -166,7 +179,8 @@ The same module answers the question for what is not yet a value.
 no type memo: a container literal admits on its kind alone, a union on any
 member, a family top — `Value` or `Code` — on any concrete type of its family,
 a kind slot takes a type token only for `ProperType` and `AnyType`, a
-quantified slot takes every shape, and a nominal, function, signature or shape
+quantified slot takes what its bound takes — a slot bounded by `Value` refuses a
+quote — and a nominal, function, signature or shape
 slot takes no raw part at all. So a type token is taken by `Code` (as a
 `TypeNameToken`) and by `Type` alike. `part_ktype` is its inverse — the type dispatch
 matched a raw part on, and the one a diagnostic renders — and the two agree for
@@ -266,7 +280,9 @@ lookup is a binary search and **entry order is key order**. A key is a string, a
 number or a bool behind a private representation, and every door that makes
 one refuses NaN and folds `-0` to `0`, so the key order agrees with IEEE
 equality on every key there is. The order is total: every bool, then every
-number in numeric order, then every string by bytes. A
+number in numeric order, then every string by bytes. A sealed scalar
+[its bound reveals](#what-a-value-is) keys as that scalar; any other value is
+refused, naming its own type. A
 repeated key keeps its last occurrence. The sort and the de-duplication are
 staged in a `BumpVec` over the caller's scratch, and string keys are written
 into the dict's own region wherever they borrowed from.
@@ -284,7 +300,8 @@ their names' text.
 
 `Value::equals` is what `==` means over data. Numbers follow IEEE; a tagged
 value compares its identity before its payload, so it never equals its bare
-payload; two type values are equal when they name the same handle; two quotes
+payload — save a seal its bound reveals, which is read through on either side;
+two type values are equal when they name the same handle; two quotes
 compare as syntax, part by part with spans ignored. Containers compare their
 contents **only when their memoized types are related**, one satisfied by the
 other in either direction — an empty list of strings and an empty list of
@@ -403,3 +420,5 @@ pair with are `cellgraph`'s own slate.
   over lists and strings, resolved at a crossing.
 - [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,
   the lazy transformations that run koan code.
+- [Dispatch](../../roadmap/rewrite/dispatch.md) — a builtin reading a sealed
+  argument through a mint lying under the slot type it was reached through.

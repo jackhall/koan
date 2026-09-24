@@ -117,7 +117,8 @@ Where they differ, the arm is the declared type's:
 - a list, dict or record — rebuilt cell by cell through its own public door and
   re-stamped with the declared handle where the derived memo is not that one,
   which is the empty container and the widened declaration; a dict's keys are
-  untouched, since a key type names no member a signature can declare abstract;
+  untouched, so a key read back through the view carries the source's scalar
+  type even where the dict's declared key type names a mint;
 - a union — the first declared member whose source side admits the value, in the
   union's interned order, then that member's arm; two members that both admit it
   take whichever that order reaches first;
@@ -202,5 +203,5 @@ suite, since they are facts about the shape.
 - [Dispatch](../../../roadmap/rewrite/dispatch.md) — the keyworded channel of a
   module's signature, empty until a bodyless definition has a slot.
 - [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
-  data member coerced through a barrier, and `WITH` over a signature in a type
-  expression.
+  data member coerced through a barrier, `WITH` over a signature in a type
+  expression, and a dict's keys crossing a barrier unsealed.

@@ -88,6 +88,9 @@ the link in each section to the relevant chapter.
 | `:(FN FOR ALL (<names>) :{<params>} -> <Result>)` | The quantified lambda type. |
 | `:(EXPR (<head>) -> <Result>)` | Expression-shape type — the type of a keyworded definition; write `_` at each slot. |
 | `:(EXPR FOR ALL (<names>) (<head>) -> <Result>)` | The quantified shape type. |
+| `FOR ALL ((<Name> UNDER <Type>) <Name> ...)` | A bounded type parameter beside a bare one (bounded by `Any`); a lone bounded name is `FOR ALL (<Name> UNDER <Type>)`. See [12](12-functors.md#bounding-a-type-parameter-under). |
+| `TYPE (<Name> UNDER <Type>)`  | A bounded type member, inside a `SIG`.             |
+| `:(<Type> & <Type>)`          | Meet — a value of both types; mixes with `\|` only through parentheses. |
 | `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |
 | `NEWTYPE (Key Val AS Pair)`   | A type constructor with one or more parameters.    |
 | `:(Pair {Key = Number, Val = Str})` | Apply a type constructor, binding each parameter by name. |

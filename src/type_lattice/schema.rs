@@ -148,7 +148,7 @@ pub struct SigSchema<'run> {
     pub sig_id: Option<ScopeId>,
     /// Abstract type members: name → the rigid variable standing for it. Its `param_names` carry
     /// the member's order (empty = first-order, non-empty = a constructor over those parameters)
-    /// and its `bound` what it stands over.
+    /// and its `bound` what bounds it.
     pub abstract_members: Members<'run, TypeSymbol>,
     /// Manifest type members: name → the fixed type.
     pub manifest_members: Members<'run, TypeSymbol>,

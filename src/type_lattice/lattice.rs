@@ -83,7 +83,22 @@ impl Lockstep for Meet {
         if is_subtype_of(types, scratch, b, a) {
             return Some(b);
         }
-        None
+        // A union meets the other side member by member, each member against the other side
+        // *whole*: pairing members one at a time would lose a variable whose bound spans several
+        // of them. With a union on both sides both distributions are taken, since either may hold
+        // such a variable. Members that meet at `Never` contribute nothing, and `union_of` drops them.
+        let (na, nb) = (types.node(a), types.node(b));
+        if !matches!(na, TypeNode::Union { .. }) && !matches!(nb, TypeNode::Union { .. }) {
+            return None;
+        }
+        let mut met = BumpVec::new_in(scratch);
+        if let TypeNode::Union { members } = na {
+            met.extend(members.iter().map(|x| meet(types, scratch, *x, b)));
+        }
+        if let TypeNode::Union { members } = nb {
+            met.extend(members.iter().map(|y| meet(types, scratch, a, *y)));
+        }
+        Some(types.union_of(scratch, &met))
     }
 
     fn leaf(
@@ -106,22 +121,15 @@ impl Lockstep for Meet {
 
     fn set_wise(
         &mut self,
-        types: &TypeRegistry<'_>,
-        scratch: BumpAllocator<'_>,
-        a: &[KType],
-        b: &[KType],
-        v: Variance,
-        recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> KType,
+        _types: &TypeRegistry<'_>,
+        _scratch: BumpAllocator<'_>,
+        _a: &[KType],
+        _b: &[KType],
+        _v: Variance,
+        _recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> KType,
     ) -> KType {
-        // A value in both operands is in some member of each, so the meet is the union of the
-        // per-pair meets. Pairs that meet at `Never` contribute nothing, and `union_of` drops them.
-        let mut met = BumpVec::with_capacity_in(a.len() * b.len(), scratch);
-        for x in a {
-            for y in b {
-                met.push(recurse(self, *x, *y, v));
-            }
-        }
-        types.union_of(scratch, &met)
+        // `enter` answers every pair with a union on either side.
+        unreachable!("Meet::enter distributes every union")
     }
 
     fn structural(

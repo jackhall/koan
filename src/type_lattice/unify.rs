@@ -297,6 +297,29 @@ struct Admits<'c, 's> {
 
 type Admission = Result<(), UnifyFailure<'static>>;
 
+impl Admits<'_, '_> {
+    /// Whether some member of `declared` admits the one carried type `one`, tried most determined
+    /// first. A rejected member's contributions are rolled back; the admitting member's stay.
+    fn admit_one(
+        &mut self,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+        declared: &[KType],
+        one: KType,
+        v: Variance,
+        recurse: &mut dyn FnMut(&mut Self, KType, KType, Variance) -> Admission,
+    ) -> bool {
+        for option in most_determined_first(types, scratch, declared, one).iter() {
+            let mark = self.collector.mark();
+            match recurse(self, *option, one, v) {
+                Ok(()) => return true,
+                Err(_) => self.collector.rollback(mark),
+            }
+        }
+        false
+    }
+}
+
 impl Lockstep for Admits<'_, '_> {
     type Out = Admission;
 
@@ -327,16 +350,24 @@ impl Lockstep for Admits<'_, '_> {
     fn leaf(
         &mut self,
         types: &TypeRegistry<'_>,
-        _scratch: BumpAllocator<'_>,
-        _declared: KType,
+        scratch: BumpAllocator<'_>,
+        declared: KType,
         carried: KType,
         v: Variance,
     ) -> Admission {
+        let carried_node = types.node(carried);
         // A deferred FN return is a per-call-elaborated placeholder: it admits nothing on its own,
         // and a return position carrying one has nothing yet to disagree with.
-        let deferred = matches!(types.node(carried), TypeNode::DeferredReturn(_));
+        let deferred = matches!(carried_node, TypeNode::DeferredReturn(_));
         if deferred && v == Variance::Co {
             return Ok(());
+        }
+        // A carried rigid variable fills what its bound fills. Below one is only itself, so a
+        // contravariant position has nothing more to try.
+        if let Some(bound) = carried_node.rigid_bound()
+            && v == Variance::Co
+        {
+            return lockstep(types, scratch, declared, bound, v, self);
         }
         Err(UnifyFailure::Mismatch)
     }
@@ -355,19 +386,24 @@ impl Lockstep for Admits<'_, '_> {
         // declared-side choice rolls back on rejection, so a rejected member leaves no contribution
         // behind; contributions from every carried member accumulate in the one collector.
         for one in carried {
-            let mut admitted = false;
-            for option in most_determined_first(types, scratch, declared, *one).iter() {
-                let mark = self.collector.mark();
-                match recurse(self, *option, *one, v) {
-                    Ok(()) => {
-                        admitted = true;
-                        break;
-                    }
-                    Err(_) => self.collector.rollback(mark),
-                }
+            if self.admit_one(types, scratch, declared, *one, v, recurse) {
+                continue;
             }
-            if !admitted {
+            // A carried variable whose bound spans several declared members is admitted through
+            // the bound's members, each by some declared member.
+            let bound = types.node(*one).rigid_bound();
+            let Some(bound) = bound.filter(|_| v == Variance::Co) else {
                 return Err(UnifyFailure::Mismatch);
+            };
+            let TypeNode::Union { members } = types.node(bound) else {
+                return Err(UnifyFailure::Mismatch);
+            };
+            let mark = self.collector.mark();
+            for member in members {
+                if !self.admit_one(types, scratch, declared, *member, v, recurse) {
+                    self.collector.rollback(mark);
+                    return Err(UnifyFailure::Mismatch);
+                }
             }
         }
         Ok(())

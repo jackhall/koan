@@ -76,7 +76,7 @@ pub fn tie<'graph, 'cell, 'x>(
             }
         }
     }
-    let nodes = Stager::nodes(activation, component, &roots, scratch, eager)?;
+    let nodes = Stager::nodes(activation, component, &roots, types, scratch, eager)?;
     let plan = KnotPlan::new(nodes.len() as u32);
     let functions = function::stage(&plan, activation, component, types, scratch)?;
 

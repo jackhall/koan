@@ -129,7 +129,7 @@ fn a_module_member_carries_the_type_its_value_carries_not_one_walked_from_its_co
 #[test]
 fn a_group_bodys_self_signature_carries_the_chaining_it_declares() {
     let source = "GROUP g FOLD RIGHT = (\
-                  (OP #(@) OVER Number = (left)) (OP #(&) OVER Number = (right)))";
+                  (OP #(@) OVER Number = (left)) (OP #(%) OVER Number = (right)))";
     with_program(
         source,
         |_, _, _| Vec::new(),
@@ -143,7 +143,7 @@ fn a_group_bodys_self_signature_carries_the_chaining_it_declares() {
             let operator = |text: &str| {
                 KeywordSymbol::declared(text, program.symbols).expect("a keyword token")
             };
-            let mut members = vec![operator("@"), operator("&")];
+            let mut members = vec![operator("@"), operator("%")];
             members.sort_unstable();
             assert_eq!(schema.operators.len(), 1);
             assert_eq!(schema.operators[0].members, members);

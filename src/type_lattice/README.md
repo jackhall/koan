@@ -86,7 +86,7 @@ subtree.
 - **Composites** — `List`, `Dict`, `Record` (structural, width- and
   depth-subtyped), `KFunction` (a named-parameter record plus a return, over a quantifier
   group of its own where a `FOR ALL` declared one),
-  `Union` (canonical: deduplicated, no nesting, no member below another, two or
+  `Union` (canonical: deduplicated, no nesting, no member below the rest, two or
   more, in the order first written), and `ConstructorApply`.
 - **`ExpressionShape`** — the type of a keyworded, positional definition reached
   by dispatch: the interleaved keyword/argument element sequence a call must
@@ -102,7 +102,10 @@ subtree.
   under a renaming intern to one node. `AbstractType` is *named*, because
   signature members are reached by name and schemas are edited by name. They
   share the rigid rule in the order, the substitution mechanism, and the role of
-  the rigid side in a specificity check.
+  the rigid side in a specificity check. Each is **bounded by** a closed type —
+  one that names no variable and is not `Never` — and lies under its bound and
+  under everything above it, a union included: a variable bounded by
+  `Number | Str` lies under `Number | Str | Bool`, though under neither member.
 - **`Signature`** — owned interface content. A `SIG`-declared interface, a
   module's self-sig, and the empty signature that `:Module` lowers to are all
   this one node, distinguished only by the schema. It carries no binder and no
@@ -168,9 +171,12 @@ question read from a slot's side.
 
 [`join`](lattice.rs) **is not a walk.** It is the larger operand when the two are
 ordered and their canonical union otherwise, which is what makes it associative —
-a structural join stops being associative the moment `a ≤ a | b`. `meet` is the
-binary driver's rebuilding instance and is total: a pair with no common
-refinement meets at `Never`, which is always a sound lower bound. The four
+a structural join stops being associative the moment `a ≤ a | b`. `meet`,
+spelled `A & B`, is the binary driver's rebuilding instance and is total: a pair
+with no common refinement meets at `Never`, which is always a sound lower bound.
+A union meets member by member, each member against the other side *whole*, so
+a variable whose bound spans several members survives: with `Elt` bounded by
+`Number | Str`, `(Elt | Bool) & (Number | Str)` is `Elt`. The four
 laws — commutativity, associativity, idempotence and absorption — hold over every
 node kind, and that is what fixes both operations.
 
@@ -221,10 +227,11 @@ shape, per the table in [`family_top`](order.rs):
 | `Type` | every `OfKind` |
 
 The other nodes take their family from elsewhere. A union lies under a top when
-every member does, and a rigid variable when its bound does, so a variable over
-`Any` — the default bound of a `FOR ALL` name and of a signature's `TYPE`
-member — lies under no family top: a value sealed behind an unbounded member
-satisfies that member and `Any`, but not `Value`. A deferred return lies under
+every member does, and a rigid variable when its bound does. A variable bounded
+by `Value` lies under `Value`, and one bounded by `Value | Type` under that
+union. A variable bounded by `Any` — the default bound of a `FOR ALL` name and
+of a signature's `TYPE` member — lies under no family top: a value sealed behind
+an unbounded member satisfies that member and `Any`, but not `Value`. A deferred return lies under
 none, since its return is not known. So no type but `Never` lies under two tops.
 
 A pair of tops is their union: `Value | Type` is the top of values and types
@@ -232,7 +239,7 @@ together, since a named node for it would be a second node for one type. A
 union holding all three tops is canonicalized to `Any` by
 [`union_of`](registry.rs), so the three families together are the whole
 lattice. Left uncollapsed, that union would be a second top strictly below
-`Any`, missing only the variables over `Any`, which lie under no member.
+`Any`, missing only the variables bounded by `Any`, which lie under no member.
 
 ### Substitute, then ask
 
@@ -252,6 +259,11 @@ to the first argument it meets, it records **every** argument type that reaches
 the variable as a lower contribution (covariant position) or an upper one
 (contravariant). `Collector::solve` then takes, per variable, the maximum of the
 lower contributions, else the minimum of the upper ones, else the declared bound.
+
+A **carried** rigid variable fills, at a covariant position, whatever its bound
+fills: a `Held` bounded by `LIST OF Number` fills `LIST OF Elt`, solving `Elt` to
+`Number`, just as the monomorphic instance between the two would. Below a rigid
+variable is only itself, so at a contravariant position it fills nothing more.
 
 A contribution set with no maximum is a **failure, not a join**: the solver never
 mints a union nobody wrote, and admission cannot depend on the order the slots
@@ -385,3 +397,9 @@ boundary ([tests/boundary.rs](tests/boundary.rs)), golden digests for the builti
 vocabulary so an identity move is visible in a diff
 ([tests/golden.rs](tests/golden.rs)), and the heap-allocation bracket
 ([tests/heap.rs](tests/heap.rs)).
+
+## Open work
+
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
+  signature meet that bounds an abstract member by `Never`, which the
+  closed-bound rule forbids.

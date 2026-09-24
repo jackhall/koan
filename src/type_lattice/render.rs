@@ -260,7 +260,7 @@ fn write_param_record(
     Ok(())
 }
 
-/// `FOR ALL (Elt :Number) (PURE _ :Elt) -> :(Elt AS Wrap)` — an expression shape's surface below
+/// `FOR ALL (Elt UNDER Number) (PURE _ :Elt) -> :(Elt AS Wrap)` — an expression shape's surface below
 /// the `:(EXPR …)` wrapper. The one spelling of a shape, shared by the type surface and by the head
 /// a signature's rendered member is named with, so a declaration and the error naming it read
 /// alike.
@@ -282,8 +282,10 @@ pub(super) fn write_shape_surface(
 }
 
 /// `FOR ALL (<names>) ` — the quantifier group a binder's surface opens with, or nothing at all
-/// when it quantifies over nothing. A variable whose bound is not `Any` spells it: `Elt :Number`.
-/// The trailing space is the group's, so the head that follows spells the same either way.
+/// when it quantifies over nothing. A variable whose bound is not `Any` spells it:
+/// `FOR ALL ((Elt UNDER Number) Key) `, and a group of one bounded name drops its own parentheses,
+/// `FOR ALL (Elt UNDER Number) `. The trailing space is the group's, so the head that follows
+/// spells the same either way.
 fn write_quantifier_group(
     f: &mut std::fmt::Formatter<'_>,
     quantifiers: &[TypeSymbol],
@@ -294,25 +296,24 @@ fn write_quantifier_group(
     if quantifiers.is_empty() {
         return Ok(());
     }
-    f.write_str("FOR ALL (")?;
+    let bound_of = |index: usize| bounds.get(index).copied().filter(|b| *b != KType::ANY);
+    let lone = quantifiers.len() == 1 && bound_of(0).is_some();
+    f.write_str(if lone { "FOR ALL " } else { "FOR ALL (" })?;
     for (index, name) in quantifiers.iter().enumerate() {
         if index > 0 {
             f.write_str(" ")?;
         }
-        write!(f, "{}", display_symbol(name.symbol(), symbols))?;
-        match bounds.get(index) {
-            Some(bound) if *bound != KType::ANY => {
-                if !surface_opens_sigil(*bound, types) {
-                    f.write_str(" :")?;
-                } else {
-                    f.write_str(" ")?;
-                }
-                write_name_in(*bound, f, types, symbols, &[])?;
+        let name = display_symbol(name.symbol(), symbols);
+        match bound_of(index) {
+            Some(bound) => {
+                write!(f, "({name} UNDER ")?;
+                write_name_in(bound, f, types, symbols, &[])?;
+                f.write_str(")")?;
             }
-            _ => {}
+            None => write!(f, "{name}")?,
         }
     }
-    f.write_str(") ")
+    f.write_str(if lone { " " } else { ") " })
 }
 
 /// `(<keyword> _ :<Type> …)` — an expression shape's head. Every argument position is the wildcard

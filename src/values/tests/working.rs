@@ -186,3 +186,16 @@ fn each_family_top_admits_the_parts_a_type_below_it_admits() {
         }
     });
 }
+
+#[test]
+fn a_quantified_slot_takes_a_raw_part_its_bound_takes() {
+    with_fixture(|fixture| {
+        let types = fixture.types;
+        let by_value = types.quantified(0, KType::ANY_VALUE);
+        let free = types.quantified(0, KType::ANY);
+        assert!(admits_part(by_value, &fixture.part("1"), types));
+        assert!(!admits_part(by_value, &fixture.part("#(a)"), types));
+        assert!(admits_part(free, &fixture.part("1"), types));
+        assert!(admits_part(free, &fixture.part("#(a)"), types));
+    });
+}

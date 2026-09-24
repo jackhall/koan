@@ -10,7 +10,7 @@ use crate::type_lattice::{
 };
 use crate::values::Value;
 
-use super::super::{Elaboration, callable_type, type_expression};
+use super::super::{Canonical, Elaboration, callable_type, type_expression};
 use super::{Held, Program, nulls, scalars, with_program};
 
 /// The right-hand side of `LET <name> = <rhs>` on `line`.
@@ -23,7 +23,6 @@ fn elaborated(program: &Program<'_, '_, '_>, line: usize) -> Result<KType, Elabo
     type_expression(
         rhs(&program.lines[line]),
         program.activation,
-        &[],
         program.types,
         program.scratch,
     )
@@ -297,7 +296,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
         );
         assert_eq!(
             mapped("lambda_id"),
-            vec![(elt, Some(0))],
+            vec![(elt, Canonical::At(0))],
             "the one declared name survives canonical form at index 0, keyed by the name written"
         );
         assert_eq!(
@@ -322,6 +321,142 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
                 KType::NUMBER
             )),
             "a unary operator's body takes the whole run as a list"
+        );
+    });
+}
+
+/// The scalars and the value family's top, which a bound most often names.
+fn with_value(
+    _: &TypeRegistry<'_>,
+    _: BumpAllocator<'_>,
+    _: &SymbolInterner,
+) -> Vec<(&'static str, KType)> {
+    vec![("Value", KType::ANY_VALUE)]
+}
+
+/// Each variable's bound in `handle`'s own group, sorted, so a canonical order the test does not
+/// pin reads the same either way.
+fn sorted_bounds(types: &TypeRegistry<'_>, handle: KType) -> Vec<KType> {
+    let mut bounds = crate::type_lattice::quantifier_bounds(types, handle).to_vec();
+    bounds.sort();
+    bounds
+}
+
+#[test]
+fn a_bounded_quantifier_carries_its_bound() {
+    let source = "\
+LET Pair = :(FN FOR ALL ((Elt UNDER Value) Key) :{a :Elt b :Key c :Elt d :Key} -> Elt)
+LET Shape = :(EXPR FOR ALL ((Elt UNDER Value) Key) (PAIR a :Elt b :Key c :Elt d :Key) -> Elt)
+LET Lone = :(FN FOR ALL (Elt UNDER Value) :{x :Elt y :Elt} -> Elt)
+LET Doubled = :(FN FOR ALL ((Elt UNDER Value)) :{x :Elt y :Elt} -> Elt)
+LET Free = :(FN FOR ALL (Elt) :{x :Elt y :Elt} -> Elt)
+LET Spanning = :(FN FOR ALL (Elt UNDER :(Number | Str | Bool)) :{x :Elt y :Elt} -> Elt)";
+    with_program(source, with_value, nulls, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        let mut expected = vec![KType::ANY_VALUE, KType::ANY];
+        expected.sort();
+        for line in [0, 1] {
+            let handle = elaborated(&program, line).expect("the type elaborates");
+            assert_eq!(sorted_bounds(types, handle), expected, "line {line}");
+        }
+        let lone = elaborated(&program, 2).expect("the type elaborates");
+        assert_eq!(sorted_bounds(types, lone), vec![KType::ANY_VALUE]);
+        assert_eq!(
+            elaborated(&program, 3),
+            Ok(lone),
+            "one bounded name, however parenthesized"
+        );
+        assert_ne!(elaborated(&program, 4), Ok(lone), "a bound is identity");
+        let spanning = elaborated(&program, 5).expect("the type elaborates");
+        assert_eq!(
+            sorted_bounds(types, spanning),
+            vec![types.union_of(scratch, &[KType::NUMBER, KType::STR, KType::BOOL])]
+        );
+    });
+}
+
+#[test]
+fn a_meet_is_the_greatest_lower_bound_of_its_operands() {
+    let source = "\
+LET Met = :((Number | Str) & (Str | Bool))
+LET Chained = :((Number | Str | Bool) & (Str | Bool | Null) & (Bool | Number))
+LET Fields = :(:{x :Number} & :{y :Str})
+LET Disjoint = :(Number & Str)";
+    with_program(source, scalars, nulls, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        let x = BinderSymbol::classify("x").unwrap();
+        let y = BinderSymbol::classify("y").unwrap();
+        assert_eq!(elaborated(&program, 0), Ok(KType::STR));
+        assert_eq!(elaborated(&program, 1), Ok(KType::BOOL));
+        assert_eq!(
+            elaborated(&program, 2),
+            Ok(types.record(scratch, &[(x, KType::NUMBER), (y, KType::STR)]))
+        );
+        assert_eq!(elaborated(&program, 3), Ok(KType::NEVER));
+    });
+}
+
+#[test]
+fn a_bound_naming_a_variable_or_never_is_refused() {
+    let source = "\
+LET Own = :(FN FOR ALL ((Elt UNDER Key) Key) :{x :Elt y :Key} -> Elt)
+LET Empty = :(FN FOR ALL (Elt UNDER :(Number & Str)) :{x :Elt y :Elt} -> Elt)
+LET Over = :(FN FOR ALL ((Elt OVER Value)) :{x :Number} -> Number)
+LET Nested = :(FN FOR ALL (Outer) :{f :(FN FOR ALL (Elt UNDER Outer) :{x :Elt y :Elt} -> Elt) g :Outer} -> Outer)";
+    with_program(source, with_value, nulls, |program| {
+        assert!(matches!(
+            elaborated(&program, 0),
+            Err(Elaboration::Bound { .. })
+        ));
+        assert!(matches!(
+            elaborated(&program, 1),
+            Err(Elaboration::Bound { .. })
+        ));
+        assert!(matches!(
+            elaborated(&program, 2),
+            Err(Elaboration::Unsupported { .. })
+        ));
+        assert!(matches!(
+            elaborated(&program, 3),
+            Err(Elaboration::Unsupported { .. })
+        ));
+    });
+}
+
+#[test]
+fn a_callable_carries_its_bounds_and_maps_a_dropped_name_to_its_bound() {
+    let source = "\
+LET lambda = (FN FOR ALL (Elt UNDER Number) :{x :Elt y :Elt} -> Elt = (x))
+LET id = FN EXPR FOR ALL (Elt UNDER Number) (ID x :Elt) -> Elt = (x)
+EXPR FOR ALL (Elt UNDER Number) (TWICE x :Elt y :Elt) -> Elt = (x)
+LET which = (FN FOR ALL ((Unused UNDER Value) Held) :{x :(LIST OF Held)} -> Held = (Unused))";
+    with_program(source, with_value, nulls, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        let twice = program
+            .activation
+            .shape()
+            .nested(Site::of(&program.lines[2].parts[8].value))
+            .expect("the definition births a body");
+        for body in [program.birth("lambda"), program.birth("id"), twice] {
+            let form = body.form().expect("a callable body sits in a form");
+            let ktype = callable_type(form, program.activation, types, scratch)
+                .expect("it elaborates")
+                .ktype;
+            assert_eq!(sorted_bounds(types, ktype), vec![KType::NUMBER]);
+        }
+        let form = program.birth("which").form().expect("a form");
+        let which = callable_type(form, program.activation, types, scratch).expect("it elaborates");
+        assert_eq!(
+            which.quantifier_map.to_vec(),
+            vec![
+                (
+                    program.type_name("Unused"),
+                    Canonical::Dropped {
+                        bound: KType::ANY_VALUE
+                    }
+                ),
+                (program.type_name("Held"), Canonical::At(0)),
+            ]
         );
     });
 }

@@ -102,7 +102,7 @@ pub fn erase_quantified(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt
     instantiate_quantified(types, scratch, kt, bounds)
 }
 
-/// `kt` with every rigid variable reachable from it replaced by the bound it stands over — the
+/// `kt` with every rigid variable reachable from it replaced by its bound — the
 /// variable-free type it constrains to.
 ///
 /// A bound is itself variable-free, so one pass reaches a fixed point. What a caller minting a
@@ -122,7 +122,7 @@ pub fn erase_rigid(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, kt: KTy
     )
 }
 
-/// The bound each variable of `kt`'s own quantifier group stands over, in canonical index order,
+/// The bound of each variable of `kt`'s own quantifier group, in canonical index order,
 /// as the binder node stores it. Empty for anything that binds no group.
 pub fn quantifier_bounds<'run>(types: &TypeRegistry<'run>, kt: KType) -> &'run [KType] {
     own_group(types, kt)

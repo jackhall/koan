@@ -745,3 +745,57 @@ fn an_operand_whose_names_cannot_be_read_is_refused() {
         });
     }
 }
+
+#[test]
+fn a_bound_is_a_mention_of_the_enclosing_shape() {
+    let missing = |fixture: &Fixture<'_, '_>, shape: Result<&BodyShape<'_>, ShapeError>| {
+        assert!(matches!(
+            shape,
+            Err(ShapeError::Unbound { name: BinderSymbol::Type(name), .. })
+                if name == type_name("Missing", fixture.symbols)
+        ));
+    };
+    // A bound naming nothing in scope is unbound, in a `FOR ALL` group and a `TYPE` declarator.
+    shaped(
+        "LET f = (FN FOR ALL (Elt UNDER Missing) :{x :Elt y :Elt} -> Elt = (x))",
+        |fixture, _, shape| missing(fixture, shape),
+    );
+    shaped(
+        "SIG Shown = ((TYPE (Carrier UNDER Missing)) (VAL zero :Carrier))",
+        |fixture, _, shape| missing(fixture, shape),
+    );
+    // A bound naming a declared type is that type's mention; the bounded name is the body's.
+    shaped(
+        "NEWTYPE Dist = Number\nLET f = (FN FOR ALL ((Elt UNDER Dist) Key) :{x :Elt y :Key} -> Elt = (x))",
+        |fixture, lines, shape| {
+            let shape = shape.expect("the program shapes");
+            let dist = BinderSymbol::Type(type_name("Dist", fixture.symbols));
+            let _ = mention_of(shape, dist);
+            let body = nested_at(shape, &lines[1], 3, 8);
+            for name in ["Elt", "Key"] {
+                let name = BinderSymbol::Type(type_name(name, fixture.symbols));
+                assert_eq!(
+                    body.slot(name).map(|(_, position)| position),
+                    Some(Position::PARAMETER)
+                );
+            }
+            assert!(body.slot(dist).is_none());
+        },
+    );
+    // A bounded `TYPE` member is the signature's own, and its bound a mention.
+    shaped(
+        "SIG Shown = ((TYPE (Carrier UNDER Number)) (VAL zero :Carrier))",
+        |fixture, _, shape| {
+            let shape = shape.expect("the program shapes");
+            let carrier = BinderSymbol::Type(type_name("Carrier", fixture.symbols));
+            assert!(
+                !shape
+                    .mentions()
+                    .iter()
+                    .any(|mention| mention.name == carrier)
+            );
+            let number = BinderSymbol::Type(type_name("Number", fixture.symbols));
+            assert_eq!(mention_of(shape, number).class, MentionClass::Deferred);
+        },
+    );
+}

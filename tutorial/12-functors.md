@@ -278,6 +278,66 @@ takes the type as an *argument*, written at the call (`MAKESET Number`).
 `EXPR FOR ALL (Elt) …` takes no such argument: the type is worked out from what the
 other arguments carry.
 
+## Bounding a type parameter: `UNDER`
+
+A bare `FOR ALL` name stands for any type at all — an ordinary value's, a type's,
+or code's. To keep a parameter to one part of that, give it a **bound** with
+`UNDER`:
+
+```koan
+EXPR FOR ALL (Elt UNDER Value) (KEEP x :Elt) -> Elt = (x)
+LET pick = (FN FOR ALL ((Elt UNDER Number) Key) :{x :Elt y :Key} -> Elt = (x))
+```
+
+`KEEP` takes any ordinary value — a number, a string, a list, a module — but not a
+quote: `#(1)` is code, and code does not lie under `Value`. `pick` works out `Elt`
+from `x` as before, and a call whose `x` is not a number, such as
+`pick {x = "a", y = 1}`, is refused just as a call that leaves `Elt` with no
+answer is. `Key` is written bare, so it is bounded by `Any` and takes anything.
+
+Each bounded name sits in parentheses of its own, beside the bare ones; a group
+holding a single bounded name drops the outer pair, as `KEEP` does. A bound is one
+type, so a union is written sigiled: `(Elt UNDER :(Number | Str))`. It may not name
+another type parameter or a signature's abstract type, and it may not be `Never`,
+which no value could ever satisfy.
+
+A signature's type member takes a bound the same way:
+
+```koan
+SIG Counter = (
+  (TYPE (Carrier UNDER Number))
+  (VAL zero :Carrier)
+)
+MODULE ints = (
+  (LET Carrier = Number)
+  (LET zero = 0)
+)
+LET counter = (ints :| Counter)
+```
+
+A module satisfies `Counter` only when it binds `Carrier` to a type under
+`Number`; one binding it to `Str` is refused. The opaque view still hides *which*
+type `Carrier` is, but not its bound: `counter.zero` is admitted by a `:Number`
+slot and compares equal to `0`. With a bare `TYPE Carrier`, the view would hide
+even that `zero` is an ordinary value. A higher-kinded member such as
+`TYPE (Type AS Wrap)` takes no bound, and neither does a `NEWTYPE` constructor.
+
+## Both at once: `&`
+
+`A | B` admits a value of *either* type; `A & B` admits only a value of *both*,
+and a longer run chains as `|` does:
+
+```koan
+LET Text = :((Number | Str) & (Str | Bool))
+LET Named = :(:{x :Number} & :{y :Str})
+```
+
+`Text` is `Str`, the one type the two unions share, and `Named` is the record type
+`:{x :Number y :Str}`, which has both fields. Two types with nothing in common meet
+at `Never`. Koan has no operator precedence, so `|` and `&` mix only through
+parentheses: `Number | Str & Bool` is an error, and `:((Number | Str) & Bool)` says
+which one you mean.
+
 ---
 
 That completes the tour of the language as it stands. For the shape of what's

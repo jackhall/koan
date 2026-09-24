@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::type_lattice::{KType, TypeRegistry};
 
-use super::{Knotted, Link, Nothing, Value, Weight, dict_type};
+use super::{Knotted, Link, Nothing, Value, Weight, dict_type, unsealed};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
 /// normalises — NaN is refused and `-0` folds to `0` — so the order and equality below agree with
@@ -32,13 +32,18 @@ pub enum KeyRejected {
 }
 
 impl<'cell> Key<'cell> {
-    /// The key a value makes, borrowing its bytes where they already live.
-    pub fn of<X: Knotted>(value: &Value<'_, 'cell, X>) -> Result<Key<'cell>, KeyRejected> {
-        match *value {
+    /// The key a value makes, borrowing its bytes where they already live. A sealed scalar whose
+    /// seal [`unsealed`] reads through keys as the scalar; a refusal names the value's own type.
+    pub fn of<X: Knotted>(
+        value: &Value<'_, 'cell, X>,
+        types: &TypeRegistry<'_>,
+        scratch: BumpAllocator<'_>,
+    ) -> Result<Key<'cell>, KeyRejected> {
+        match unsealed(*value, types, scratch) {
             Value::Str(text) => Ok(Key::str(text)),
             Value::Number(number) => Key::number(number),
             Value::Bool(flag) => Ok(Key::bool(flag)),
-            other => Err(KeyRejected::NotAScalar(other.ktype())),
+            _ => Err(KeyRejected::NotAScalar(value.ktype())),
         }
     }
 

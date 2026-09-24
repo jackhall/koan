@@ -138,14 +138,21 @@ fn a_key_refuses_nan_and_non_scalars_and_folds_the_zeros() {
                 fixture.types,
                 fixture.scratch(),
             );
-            assert_eq!(Key::of(&Value::Number(f64::NAN)), Err(KeyRejected::NaN));
             assert_eq!(
-                Key::of(&Value::List(list)),
+                Key::of(&Value::Number(f64::NAN), fixture.types, fixture.scratch()),
+                Err(KeyRejected::NaN)
+            );
+            assert_eq!(
+                Key::of(&Value::List(list), fixture.types, fixture.scratch()),
                 Err(KeyRejected::NotAScalar(list.ktype()))
             );
             assert_eq!(Key::number(-0.0), Ok(Key::number(0.0).unwrap()));
             assert_eq!(Key::number(f64::NAN), Err(KeyRejected::NaN));
-            let Value::Number(zero) = Key::of(&Value::Number(-0.0)).unwrap().value() else {
+            let Value::Number(zero) =
+                Key::of(&Value::Number(-0.0), fixture.types, fixture.scratch())
+                    .unwrap()
+                    .value()
+            else {
                 panic!("a number key is a number");
             };
             assert!(zero.is_sign_positive());

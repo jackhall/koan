@@ -2,12 +2,13 @@
 //! the handles its parts elaborate to.
 
 use crate::memory::{BumpAllocator, BumpVec};
+use crate::parse::builtin_shapes::binder::{bounded_name, quantifier_entries};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_name};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol};
 use crate::type_lattice::{
-    DispatchTokenElement, GroupIntern, KType, TypeRegistry, constructor_param_names,
+    DispatchTokenElement, GroupIntern, KType, TypeRegistry, constructor_param_names, meet,
 };
 use crate::values::{KnottedFamily, Value};
 
@@ -19,6 +20,7 @@ struct Connectors {
     of: StaticName<KeywordSymbol>,
     map: StaticName<KeywordSymbol>,
     union: StaticName<KeywordSymbol>,
+    meet: StaticName<KeywordSymbol>,
     /// Arity-one constructor application. A connector of the type language, not a table keyword:
     /// the surrounding `:(…)` is what puts it in type context.
     as_: StaticName<KeywordSymbol>,
@@ -29,21 +31,22 @@ static CONNECTORS: Connectors = Connectors {
     of: crate::static_name!(KeywordSymbol, "OF"),
     map: crate::static_name!(KeywordSymbol, "MAP"),
     union: crate::static_name!(KeywordSymbol, "|"),
+    meet: crate::static_name!(KeywordSymbol, "&"),
     as_: crate::static_name!(KeywordSymbol, "AS"),
 };
 
-/// `part` as a type, its names read through `reader`: a name in `quantifiers` is that group's
-/// quantifier at its position, and every other name is the mention `reader`'s shape recorded at its
-/// site, which must read as a type.
+/// `part` as a type, its names read through `reader`: every name is the mention `reader`'s shape
+/// recorded at its site, which must read as a type, save one a `FOR ALL` group inside `part`
+/// declares.
 pub fn type_expression<'graph, XF: KnottedFamily<'graph>>(
     part: &ExpressionPart<'graph>,
     reader: &ActivationView<'graph, '_, XF>,
-    quantifiers: &[TypeSymbol],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, Elaboration> {
     let groups = Groups {
-        names: quantifiers,
+        names: &[],
+        bounds: &[],
         outer: None,
     };
     Elaborator {
@@ -60,7 +63,27 @@ pub fn type_expression<'graph, XF: KnottedFamily<'graph>>(
 #[derive(Clone, Copy)]
 pub(super) struct Groups<'q> {
     pub(super) names: &'q [TypeSymbol],
+    /// Each name's bound, parallel to `names`. Empty while a group's own bounds are elaborated:
+    /// every name then reads bounded by `Any`, and a bound holding one is refused.
+    pub(super) bounds: &'q [KType],
     pub(super) outer: Option<&'q Groups<'q>>,
+}
+
+/// A `FOR ALL` group as written: its names in written order, each with its elaborated bound —
+/// `Any` for a name written without one.
+pub(super) struct QuantifierGroup<'x> {
+    pub(super) names: BumpVec<'x, TypeSymbol>,
+    pub(super) bounds: BumpVec<'x, KType>,
+}
+
+impl<'x> QuantifierGroup<'x> {
+    /// The group an unquantified callable carries.
+    pub(super) fn empty(scratch: BumpAllocator<'x>) -> Self {
+        QuantifierGroup {
+            names: BumpVec::new_in(scratch),
+            bounds: BumpVec::new_in(scratch),
+        }
+    }
 }
 
 /// Where a name sits among the enclosing groups.
@@ -136,7 +159,10 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         groups: &Groups<'_>,
     ) -> Result<KType, Elaboration> {
         match groups.find(name) {
-            Quantifier::Innermost(index) => return Ok(self.types.quantified(index, KType::ANY)),
+            Quantifier::Innermost(index) => {
+                let bound = groups.bounds.get(index).copied().unwrap_or(KType::ANY);
+                return Ok(self.types.quantified(index, bound));
+            }
             Quantifier::Shadowed => return Err(Elaboration::Unsupported { site }),
             Quantifier::Free => {}
         }
@@ -197,16 +223,20 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
             let part = |index: usize| &parts[index].value;
             return match form.id {
                 BuiltinShapeId::LambdaType => {
-                    Ok(self.function(&[], part(1), part(3), groups)?.handle)
+                    let group = QuantifierGroup::empty(self.scratch);
+                    Ok(self.function(&group, part(1), part(3), groups)?.handle)
                 }
                 BuiltinShapeId::QuantifiedLambdaType => {
-                    let names = quantifiers(part(3), self.scratch);
-                    Ok(self.function(&names, part(4), part(6), groups)?.handle)
+                    let group = self.group(part(3), groups)?;
+                    Ok(self.function(&group, part(4), part(6), groups)?.handle)
                 }
-                BuiltinShapeId::ExpressionHead => self.shape(&[], part(1), part(3), groups),
+                BuiltinShapeId::ExpressionHead => {
+                    let group = QuantifierGroup::empty(self.scratch);
+                    self.shape(&group, part(1), part(3), groups)
+                }
                 BuiltinShapeId::QuantifiedExpressionHead => {
-                    let names = quantifiers(part(3), self.scratch);
-                    self.shape(&names, part(4), part(6), groups)
+                    let group = self.group(part(3), groups)?;
+                    self.shape(&group, part(4), part(6), groups)
                 }
                 BuiltinShapeId::Attribute => {
                     let union = self.part(part(1), groups)?;
@@ -263,8 +293,73 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                 }
                 Ok(self.types.union_of(self.scratch, &members))
             }
+            // `A & B`, and `& [A B C]`, its chained form — the meet, as a union is the join. A meet
+            // that comes out `Never` is a type like any other; only a bound refuses it.
+            3 if keyword(1, &CONNECTORS.meet) => Ok(meet(
+                self.types,
+                self.scratch,
+                self.part(&parts[0].value, groups)?,
+                self.part(&parts[2].value, groups)?,
+            )),
+            2 if keyword(0, &CONNECTORS.meet) => {
+                let ExpressionPart::ListLiteral(operands) = parts[1].value else {
+                    return Err(unsupported);
+                };
+                let mut met = KType::ANY;
+                for operand in operands.iter() {
+                    met = meet(self.types, self.scratch, met, self.part(operand, groups)?);
+                }
+                Ok(met)
+            }
             _ => Err(unsupported),
         }
+    }
+
+    /// A `FOR ALL` group's names and bounds, in written order. Each entry is a bare name or
+    /// `(<Name> UNDER <bound>)`; anything else is unsupported. Every bound is read under the group
+    /// with no bounds of its own, so a bound naming one of the group's names is refused.
+    pub(super) fn group(
+        &self,
+        part: &ExpressionPart<'graph>,
+        groups: &Groups<'_>,
+    ) -> Result<QuantifierGroup<'x>, Elaboration> {
+        let mut group = QuantifierGroup::empty(self.scratch);
+        let mut written = BumpVec::new_in(self.scratch);
+        for entry in quantifier_entries(part) {
+            let (name, bound) = bounded_name(entry).ok_or(Elaboration::Unsupported {
+                site: Site::of(entry),
+            })?;
+            group.names.push(name);
+            written.push(bound);
+        }
+        let unbounded = Groups {
+            names: &group.names,
+            bounds: &[],
+            outer: Some(groups),
+        };
+        for bound in written {
+            group.bounds.push(match bound {
+                Some(part) => self.bound(part, &unbounded)?,
+                None => KType::ANY,
+            });
+        }
+        Ok(group)
+    }
+
+    /// A bound: a closed, inhabited type. One naming a type variable — a `FOR ALL` name or a
+    /// signature's abstract member — or that is `Never` is refused at its site.
+    pub(super) fn bound(
+        &self,
+        part: &ExpressionPart<'graph>,
+        groups: &Groups<'_>,
+    ) -> Result<KType, Elaboration> {
+        let bound = self.part(part, groups)?;
+        if bound == KType::NEVER || self.types.contains_rigid(bound) {
+            return Err(Elaboration::Bound {
+                site: Site::of(part),
+            });
+        }
+        Ok(bound)
     }
 
     /// A declared type constructor applied to `arguments`, keyed by the parameter names the
@@ -295,21 +390,22 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
 
     /// `FN [FOR ALL <names>] <schema> -> <return>`.
     ///
-    /// A non-empty `names` opens a group of its own, which the fields and the return read under;
+    /// A non-empty `group` opens a group of its own, which the fields and the return read under;
     /// an empty one reads them under `groups` unchanged, because an unquantified `FN` type written
     /// inside a quantified head keeps reading that head's variables.
     pub(super) fn function(
         &self,
-        names: &[TypeSymbol],
+        group: &QuantifierGroup<'_>,
         schema: &ExpressionPart<'graph>,
         ret: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
     ) -> Result<GroupIntern<'x>, Elaboration> {
         let own = Groups {
-            names,
+            names: &group.names,
+            bounds: &group.bounds,
             outer: Some(groups),
         };
-        let groups = if names.is_empty() { groups } else { &own };
+        let groups = if group.names.is_empty() { groups } else { &own };
         let ExpressionPart::RecordType(fields) = schema else {
             return Err(Elaboration::Unsupported {
                 site: Site::of(schema),
@@ -326,7 +422,9 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
             },
         )?;
         let ret = self.part(ret, groups)?;
-        Ok(self.types.function_type(self.scratch, names, &params, ret))
+        Ok(self
+            .types
+            .function_type(self.scratch, &group.names, &params, ret))
     }
 
     /// The **function** type a combined form's head declares: the head's `<name> :<Type>` pairs as
@@ -338,16 +436,17 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
     /// has no positional slot to put a nameless one in.
     pub(super) fn head_function(
         &self,
-        names: &[TypeSymbol],
+        group: &QuantifierGroup<'_>,
         head: &ExpressionPart<'graph>,
         ret: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
     ) -> Result<GroupIntern<'x>, Elaboration> {
         let own = Groups {
-            names,
+            names: &group.names,
+            bounds: &group.bounds,
             outer: Some(groups),
         };
-        let groups = if names.is_empty() { groups } else { &own };
+        let groups = if group.names.is_empty() { groups } else { &own };
         let unsupported = Elaboration::Unsupported {
             site: Site::of(head),
         };
@@ -368,20 +467,23 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
             }
         }
         let ret = self.part(ret, groups)?;
-        Ok(self.types.function_type(self.scratch, names, &params, ret))
+        Ok(self
+            .types
+            .function_type(self.scratch, &group.names, &params, ret))
     }
 
     /// `EXPR [FOR ALL <names>] <head> -> <return>`: the head's keywords and typed slots, under a
     /// group of its own.
     pub(super) fn shape(
         &self,
-        names: &[TypeSymbol],
+        group: &QuantifierGroup<'_>,
         head: &ExpressionPart<'graph>,
         ret: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
     ) -> Result<KType, Elaboration> {
         let own = Groups {
-            names,
+            names: &group.names,
+            bounds: &group.bounds,
             outer: Some(groups),
         };
         let unsupported = Elaboration::Unsupported {
@@ -410,7 +512,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let ret = self.part(ret, &own)?;
         Ok(self
             .types
-            .shape_type(self.scratch, names, &elements, ret)
+            .shape_type(self.scratch, &group.names, &elements, ret)
             .handle)
     }
 
@@ -433,19 +535,4 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         }
         Ok(())
     }
-}
-
-/// The names a `FOR ALL` group declares, in written order.
-pub(super) fn quantifiers<'x>(
-    group: &ExpressionPart<'_>,
-    scratch: BumpAllocator<'x>,
-) -> BumpVec<'x, TypeSymbol> {
-    let mut names = BumpVec::new_in(scratch);
-    if let ExpressionPart::Expression(group) = group {
-        names.extend(group.parts.iter().filter_map(|part| match part.value {
-            ExpressionPart::Type(name) => Some(name),
-            _ => None,
-        }));
-    }
-    names
 }

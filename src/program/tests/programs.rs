@@ -346,3 +346,33 @@ fn a_quantified_return_shares_its_frame() {
     let read = run_and_read(&mut substrate, &["xs", "r"]);
     assert_eq!(address(&read[0]), address(&read[1]), "{read:?}");
 }
+
+#[test]
+fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
+    let mut substrate = loaded(
+        "LET num = (FN FOR ALL (Elt UNDER Number) :{x :Elt} -> Elt = (x))\nLET r = (num 7)",
+        2,
+    );
+    assert_eq!(run_and_read(&mut substrate, &["r"]), ["7"]);
+    for source in [
+        "LET num = (FN FOR ALL (Elt UNDER Number) :{x :Elt} -> Elt = (x))\nLET r = (num \"a\")",
+        // A quote is code, not a value.
+        "LET v = (FN FOR ALL (Elt UNDER Value) :{x :Elt} -> Elt = (x))\nLET q = (v #(1))",
+    ] {
+        let mut substrate = loaded(source, 2);
+        assert!(
+            substrate.with(|running| running.run()).is_err(),
+            "`{source}` refuses"
+        );
+    }
+}
+
+#[test]
+fn a_type_parameter_canonical_form_dropped_reads_as_its_bound() {
+    let mut substrate = loaded(
+        "LET which = (FN FOR ALL ((Unused UNDER Value) Held) :{x :(LIST OF Held)} -> Held = (Unused))\n\
+         LET t = (which [1 2])",
+        2,
+    );
+    assert_eq!(run_and_read(&mut substrate, &["t"]), ["Value"]);
+}

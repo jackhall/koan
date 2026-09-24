@@ -39,6 +39,10 @@ program runs on the rewritten stack.
   overlap a builtin's is rejected.
 - A shadowable builtin's bucket — equality, whose operands are `Any` — admits a
   user overload that is selected in the builtin's place.
+- A builtin reads each argument through every mint layer whose mint lies under
+  the slot type it was reached through: a value sealed behind a member bounded
+  by `Number` reaches a `:Number` builtin slot and is read as its number, while
+  a seal its bound does not reveal stays wrapped.
 - A reference to a visible binder always reads it bound: the shape orders its
   binder first. A dispatch placeholder keys on the full bucket key.
 - A combined expression shape — `LET f = FN EXPR …`, `LET plus = OP …` — binds

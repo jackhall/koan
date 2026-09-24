@@ -4,7 +4,7 @@ use crate::knot::tests::{declared, pin, with_fixture};
 use crate::memory::ScopeId;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode, sig_subtype};
-use crate::values::Value;
+use crate::values::{Value, satisfies};
 
 use super::super::view::{Ascription, Unascribable, ascribe};
 use super::{member, module, schema};
@@ -155,7 +155,7 @@ fn a_mint_is_sourced_at_its_own_nonce() {
             assert_eq!(
                 bound,
                 KType::ANY,
-                "`TYPE` declares no bound, so the mint stands over Any"
+                "`TYPE` declares no bound, so the mint is bounded by Any"
             );
         })
     });
@@ -244,5 +244,63 @@ fn a_view_copies_across_a_cell_like_any_module() {
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
         assert!(graph.is_empty());
+    });
+}
+
+#[test]
+fn a_bounded_member_bounds_its_mint_and_what_is_sealed_behind_it() {
+    use crate::type_lattice::SigSubtypeFailure;
+    let source = "\
+SIG Ord = ((TYPE (Carrier UNDER Value)) (VAL zero :Carrier))
+SIG Loose = ((TYPE Carrier) (VAL zero :Carrier))
+SIG Counted = ((TYPE (Carrier UNDER Number)) (VAL zero :Carrier))
+MODULE m = ((LET Carrier = Number) (LET zero = 0))
+MODULE s = ((LET Carrier = Str) (LET zero = \"\"))";
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let activation = fixture.run(writer, &lines, &[]);
+            let (m, s) = (
+                module(fixture, activation, "m"),
+                module(fixture, activation, "s"),
+            );
+            let ord = declared(fixture, activation, "Ord");
+            let view = ascribe(writer, m, ord, Ascription::Opaque, types, scratch)
+                .unwrap_or_else(|error| panic!("`m` satisfies `Ord`: {error:?}"));
+            let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
+                panic!("`Carrier` is a type member");
+            };
+            assert!(matches!(
+                types.node(carrier.handle()),
+                TypeNode::AbstractType {
+                    bound: KType::ANY_VALUE,
+                    ..
+                }
+            ));
+            let zero = member(fixture, view, "zero", types, scratch);
+            assert!(satisfies(KType::ANY_VALUE, &zero, types, scratch));
+            let view_schema = schema(view.module().expect("a module").ktype(), types);
+            assert!(
+                sig_subtype(types, scratch, view_schema, schema(ord, types)).is_ok(),
+                "an opaque view of a bounded signature still satisfies it"
+            );
+
+            // Unbounded, the seal hides which family it holds.
+            let loose = declared(fixture, activation, "Loose");
+            let view = ascribe(writer, m, loose, Ascription::Opaque, types, scratch)
+                .unwrap_or_else(|error| panic!("`m` satisfies `Loose`: {error:?}"));
+            let zero = member(fixture, view, "zero", types, scratch);
+            assert!(!satisfies(KType::ANY_VALUE, &zero, types, scratch));
+
+            let counted = declared(fixture, activation, "Counted");
+            assert!(matches!(
+                ascribe(writer, s, counted, Ascription::Opaque, types, scratch),
+                Err(Unascribable::Unsatisfied(
+                    SigSubtypeFailure::BoundMismatch { .. }
+                )),
+            ));
+        })
     });
 }

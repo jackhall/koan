@@ -17,21 +17,30 @@ use crate::type_lattice::{DispatchTokenElement, KType, TypeRegistry};
 use crate::values::KnottedFamily;
 
 use super::Elaboration;
-use super::expression::{Elaborator, Groups, quantifiers};
+use super::expression::{Elaborator, Groups, QuantifierGroup};
+
+/// Where a `FOR ALL` name the declaration wrote landed in its callable's canonical group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Canonical {
+    /// The group's variable at this index: a call binds the name to what the group solves it to.
+    At(usize),
+    /// Dropped by canonical form: a call binds the name to its bound.
+    Dropped { bound: KType },
+}
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
 /// canonical group — what a call needs to bind each type parameter to its solution.
 pub struct Callable<'x> {
     pub ktype: KType,
-    /// Each `FOR ALL` name the declaration wrote, in written order, with its index in `ktype`'s
-    /// canonical group — `None` for a variable canonical form dropped. Empty for an unquantified
-    /// callable, and for every shape, whose caller reads the group off the bucket instead.
+    /// Each `FOR ALL` name the declaration wrote, in written order, with where it landed in
+    /// `ktype`'s canonical group. Empty for an unquantified callable, and for every shape, whose
+    /// caller reads the group off the bucket instead.
     ///
     /// The **name** is the key, not the position: a callee's type-parameter slots reach its frame
     /// symbol-sorted, not in written order, and `ktype`'s own `quantifiers` cannot stand in for
     /// this because alpha-variants intern to one node and it holds whichever spelling interned
     /// first.
-    pub quantifier_map: &'x [(TypeSymbol, Option<usize>)],
+    pub quantifier_map: &'x [(TypeSymbol, Canonical)],
 }
 
 /// The type of the callable whose body sits in `form`, its signature's names read through
@@ -62,6 +71,7 @@ pub fn callable_type<'graph, 'x, XF: KnottedFamily<'graph>>(
     };
     let top = Groups {
         names: &[],
+        bounds: &[],
         outer: None,
     };
     let mut body = None;
@@ -99,24 +109,34 @@ pub fn callable_type<'graph, 'x, XF: KnottedFamily<'graph>>(
             let (Some(signature), Some(ret)) = (signature, type_parts[0]) else {
                 return Err(unsupported);
             };
-            let names = group.map(|group| quantifiers(group, scratch));
-            let names = names.as_deref().unwrap_or(&[]);
+            let group = match group {
+                Some(part) => elaborator.group(part, &top)?,
+                None => QuantifierGroup::empty(scratch),
+            };
             let interned = match shape.id {
                 BuiltinShapeId::Lambda | BuiltinShapeId::QuantifiedLambda => {
-                    elaborator.function(names, signature, ret, &top)?
+                    elaborator.function(&group, signature, ret, &top)?
                 }
                 BuiltinShapeId::CombinedExpression
                 | BuiltinShapeId::CombinedQuantifiedExpression => {
-                    elaborator.head_function(names, signature, ret, &top)?
+                    elaborator.head_function(&group, signature, ret, &top)?
                 }
-                _ => return plain(elaborator.shape(names, signature, ret, &top)?),
+                _ => return plain(elaborator.shape(&group, signature, ret, &top)?),
             };
-            let mut map = BumpVec::with_capacity_in(names.len(), scratch);
+            let mut map = BumpVec::with_capacity_in(group.names.len(), scratch);
             map.extend(
-                names
+                group
+                    .names
                     .iter()
+                    .zip(&group.bounds)
                     .zip(interned.quantifier_map)
-                    .map(|(name, canonical)| (*name, *canonical)),
+                    .map(|((name, bound), canonical)| {
+                        let canonical = match canonical {
+                            Some(index) => Canonical::At(*index),
+                            None => Canonical::Dropped { bound: *bound },
+                        };
+                        (*name, canonical)
+                    }),
             );
             Ok(Callable {
                 ktype: interned.handle,

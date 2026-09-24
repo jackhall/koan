@@ -5,13 +5,16 @@
 //!
 //! A value is checked by the one lattice relation over its memoized type, never by walking its
 //! contents. A raw part is checked by shape, since an unevaluated literal has no value yet.
+//!
+//! [`unsealed`] is the one peel: a value sealed behind an opaque view read through each seal whose
+//! bound reveals the payload's kind.
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KLiteral};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with, join,
-    satisfied_by,
+    Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with,
+    is_subtype_of, join, satisfied_by,
 };
 
 use super::{Knotted, Value, WorkingPart};
@@ -96,15 +99,7 @@ pub fn sealing(
     witness: KType,
     payload: KType,
 ) -> Result<KType, SealRefused> {
-    let minted = match types.node(mint) {
-        TypeNode::AbstractType { nonce, .. } => nonce.is_some(),
-        TypeNode::ConstructorApply { constructor, .. } => matches!(
-            types.node(constructor),
-            TypeNode::AbstractType { nonce: Some(_), .. }
-        ),
-        _ => false,
-    };
-    if !minted {
+    if !is_mint(types, mint) {
         return Err(SealRefused::NotAMint(mint));
     }
     if satisfied_by(types, scratch, witness, payload) {
@@ -112,6 +107,60 @@ pub fn sealing(
     } else {
         Err(SealRefused::Misfit { mint, witness })
     }
+}
+
+/// Whether `ktype` is a per-application mint: a nonced abstract type, or an application of one.
+fn is_mint(types: &TypeRegistry<'_>, ktype: KType) -> bool {
+    match types.node(ktype) {
+        TypeNode::AbstractType { nonce, .. } => nonce.is_some(),
+        TypeNode::ConstructorApply { constructor, .. } => matches!(
+            types.node(constructor),
+            TypeNode::AbstractType { nonce: Some(_), .. }
+        ),
+        _ => false,
+    }
+}
+
+/// `value` read through its seal where the seal's bound licenses it. An opaque view's seal is
+/// transparent exactly where the member's bound reveals the kind of value it holds — where the mint
+/// lies under its payload's kind. A seal bounded by `Value`, or by a union spanning kinds, stays.
+/// A seal re-tags rather than wraps ([`Tagged::seal`](super::Tagged::seal)), so there is one layer
+/// to read through. Equality and dict keys read a value through this.
+pub fn unsealed<'graph, 'cell, X: Knotted>(
+    value: Value<'graph, 'cell, X>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> Value<'graph, 'cell, X> {
+    let Value::Tagged(tagged) = value else {
+        return value;
+    };
+    let payload = *tagged.payload();
+    let revealed = is_mint(types, tagged.ktype())
+        && kind_of(&payload, types, scratch)
+            .is_some_and(|kind| is_subtype_of(types, scratch, tagged.ktype(), kind));
+    if revealed { payload } else { value }
+}
+
+/// The top of `value`'s own kind — `Number` for a number, `LIST OF Any` for a list, the empty
+/// record for a record — or `None` for a knot member, which no seal reads through.
+fn kind_of<X: Knotted>(
+    value: &Value<'_, '_, X>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> Option<KType> {
+    Some(match value {
+        Value::Number(_) => KType::NUMBER,
+        Value::Bool(_) => KType::BOOL,
+        Value::Null => KType::NULL,
+        Value::Str(_) => KType::STR,
+        Value::Expression(_) => KType::KEXPRESSION,
+        Value::Type(_) => KType::ANY_TYPE,
+        Value::List(_) => KType::LIST_OF_ANY,
+        Value::Dict(_) => KType::DICT_ANY_ANY,
+        Value::Record(_) => types.record(scratch, &[]),
+        Value::Tagged(tagged) => tagged.ktype(),
+        Value::Knotted(_) => return None,
+    })
 }
 
 /// The type dispatch matches a raw part on, and the one a diagnostic naming the slot renders. `None`
@@ -203,12 +252,13 @@ pub fn record_type(
 /// Whether `slot` takes a raw part, by shape. An unevaluated container literal admits on its kind
 /// alone, since its element types are unknown until it runs; a union admits what any member admits;
 /// a family top admits what some concrete type of its family admits, as a union does; a kind slot
-/// takes a type token only for `ProperType` and `AnyType`; a quantified slot is the top and takes
-/// every shape. A function, nominal, signature, shape, constructor-application, deferred or sibling
-/// slot admits no raw part — only a resolved value.
+/// takes a type token only for `ProperType` and `AnyType`; a quantified slot takes what its bound
+/// takes. A function, nominal, signature, shape, constructor-application, deferred or sibling slot
+/// admits no raw part — only a resolved value.
 pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<'_>) -> bool {
     match types.node(slot) {
-        TypeNode::Any | TypeNode::Quantified { .. } => true,
+        TypeNode::Any => true,
+        TypeNode::Quantified { bound, .. } => admits_part(bound, part, types),
         TypeNode::Never => false,
         TypeNode::AnyValue => matches!(
             part,
