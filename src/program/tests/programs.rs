@@ -1,9 +1,10 @@
 //! Whole programs under the drain: unit order, where a value is built, the slab holding the root
 //! alone, calls and recursion, components, eager parts and module bodies.
 
+use crate::program::CellSubstrate;
 use crate::program::body::SUPPLIED_WAKES;
 
-use super::evaluator::{recorded, reset};
+use super::evaluator::{Mini, recorded, reset};
 use super::{loaded, read_back, run_and_read};
 
 /// The depth a recursion runs to: past the slab cap, and small under Miri.
@@ -258,6 +259,54 @@ fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
     assert_eq!(
         read[1], read[0],
         "the written order does not change the answer"
+    );
+}
+
+#[test]
+fn a_lowercase_name_holds_a_value_a_type_or_code() {
+    // An `Any` parameter binds a type argument and a quote without a refusal at bind.
+    let mut substrate = loaded(
+        "LET f = (FN :{x :Any} -> Any = (x))\n\
+         LET t = (f Number)\nLET q = (f #(1))\nLET u = Number",
+        2,
+    );
+    let read = run_and_read(&mut substrate, &["t", "q", "u"]);
+    assert_eq!(read[0], "Number");
+    assert!(
+        read[1].starts_with("#(") && read[1].contains('1'),
+        "{read:?}"
+    );
+    assert_eq!(read[2], "Number");
+}
+
+#[test]
+fn a_generic_function_carries_types_and_code() {
+    // A `FOR ALL` parameter's default bound is `Any`, so it stands for a type or a quote too.
+    let mut substrate = loaded(
+        "LET id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))\n\
+         LET t = (id Number)\nLET q = (id #(1))",
+        2,
+    );
+    let read = run_and_read(&mut substrate, &["t", "q"]);
+    assert_eq!(read[0], "Number");
+    assert!(
+        read[1].starts_with("#(") && read[1].contains('1'),
+        "{read:?}"
+    );
+}
+
+#[test]
+fn a_capitalized_name_holds_only_a_type() {
+    // Whether the refusal comes at load or at run is not this test's business.
+    let refused = |source: &str| match CellSubstrate::load::<Mini>(source, "<test>", 2) {
+        Err(_) => true,
+        Ok(mut substrate) => substrate.with(|running| running.run()).is_err(),
+    };
+    assert!(!refused("LET Foo = Number"), "a type under a type name");
+    assert!(refused("LET Foo = 1"), "a number under a type name");
+    assert!(
+        refused("LET t = Number\nLET Foo = t"),
+        "a type read from a value name under a type name"
     );
 }
 

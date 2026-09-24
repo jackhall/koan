@@ -144,9 +144,14 @@ The type names you can write in source are:
 | `:(LIST OF <element>)`        | ordered list                        | `[1, 2, 3]`                    |
 | `:(MAP <key> -> <value>)`     | map / dictionary                    | `{"a": 1}`                     |
 | `:(FN :{<params>} -> <result>)`| function value                     | see [Functions](04-functions.md) |
-| `Any`                         | wildcard — accepts any value        | used only in annotations       |
+| `Value`                       | any ordinary value                  | `42`, `"hi"`, `[1, 2]`         |
+| `Type`                        | any type                            | `Number`, `:(LIST OF Str)`     |
+| `Code`                        | any [quoted](10-quoting.md) code    | `#(PRINT "hi")`                |
+| `Any`                         | wildcard — accepts any value, type or code | used only in annotations |
 
-You'll also occasionally see `Type`, `Module`, `Signature`, and `KExpression`
+`Value`, `Type` and `Code` split everything `Any` accepts into three families
+that never overlap: a slot typed `Value` never receives a type or a piece of
+code. You'll also occasionally see `Module`, `Signature`, and `KExpression`
 in error messages or signatures — these are real types, but you rarely write
 them by hand. `KExpression` is an unevaluated, [quoted](10-quoting.md)
 expression carried as a value.
@@ -198,6 +203,10 @@ PRINT Numbers
 ```text
 :(LIST OF Number)
 ```
+
+A lowercase name can hold a type too, as data: you can pass it to a function,
+print it, or compare it. But only a type name stands where a type goes, so
+`LET Alias = t` is rejected even when `t` holds a type.
 
 This is the foundation the [module system](11-modules.md) builds on, where
 signatures describe types abstractly and modules supply them.

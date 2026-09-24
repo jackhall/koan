@@ -27,7 +27,7 @@ without bound.
 
 **Acceptance criteria.**
 
-- Five kinds of code lie under `AnyCode`: literal, symbol, expression, block
+- Five kinds of code lie under `Code`: literal, symbol, expression, block
   and arm.
 - A quote is typed by its body as written: `#(y)` is a symbol, `#(42)` and
   `#("y")` are literals, and `#((y))` and `#(f x)` are expressions.
@@ -39,7 +39,7 @@ without bound.
 - `ATTR`'s label is a symbol. `ATTR p y` and `LET which = #(y)` followed by
   `ATTR p (which)` read the same field, a `Str` label is a no-overload miss, and
   tutorial 07's field read named at run time is spelled this way.
-- `EVAL`'s operand is typed `AnyCode`, so `$(n)` over a number is a no-overload
+- `EVAL`'s operand is typed `Code`, so `$(n)` over a number is a no-overload
   miss rather than a check of its own.
 - An arm is a guard type and a block binding `it`. The scope builder builds each
   `MATCH` and `TRY` arm as one, and reads from it that its block's last
@@ -142,9 +142,7 @@ without bound.
 
 ## Dependencies
 
-**Requires:**
-
-- [Value, type and code tops](channel-tops.md) — the `AnyCode` top.
+**Requires:** none.
 
 **Unblocks:**
 

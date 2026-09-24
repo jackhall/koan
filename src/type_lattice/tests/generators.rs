@@ -83,6 +83,9 @@ impl World {
             KType::NUMBER,
             KType::STR,
             KType::ANY,
+            KType::ANY_VALUE,
+            KType::ANY_CODE,
+            KType::of_kind(KKind::AnyType),
             KType::LIST_OF_ANY,
             KType::of_kind(KKind::ProperType),
         ]
@@ -161,6 +164,8 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
         Just(KType::STR),
         Just(KType::BOOL),
         Just(KType::ANY),
+        Just(KType::ANY_VALUE),
+        Just(KType::ANY_CODE),
         Just(KType::NEVER),
         Just(KType::IDENTIFIER),
         Just(KType::NAME_TOKEN),

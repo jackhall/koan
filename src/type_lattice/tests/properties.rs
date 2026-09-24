@@ -198,6 +198,18 @@ proptest! {
             );
         }
     }
+
+    #[test]
+    fn no_type_lies_below_two_family_tops(a in one()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let tops = [KType::ANY_VALUE, KType::ANY_TYPE, KType::ANY_CODE]
+            .into_iter()
+            .filter(|top| is_subtype_of(&types, scratch, a, *top))
+            .count();
+        prop_assert!(tops <= 1 || a == KType::NEVER, "a type lies below {} family tops", tops);
+    }
 }
 
 proptest! {
@@ -255,6 +267,26 @@ proptest! {
         for member in &members {
             prop_assert!(is_subtype_of(&types, scratch, *member, union));
         }
+    }
+}
+
+proptest! {
+    #![proptest_config(binary())]
+
+    #[test]
+    fn a_union_holding_the_three_family_tops_is_any(
+        members in prop::collection::vec(one(), 0..4),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let tops = [KType::ANY_VALUE, KType::ANY_TYPE, KType::ANY_CODE];
+        let mut tops_last = members.clone();
+        tops_last.extend(tops);
+        prop_assert_eq!(types.union_of(scratch, &tops_last), KType::ANY);
+        let mut tops_first = tops.to_vec();
+        tops_first.extend(members.iter().rev());
+        prop_assert_eq!(types.union_of(scratch, &tops_first), KType::ANY);
     }
 }
 

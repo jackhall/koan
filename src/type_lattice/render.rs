@@ -13,9 +13,9 @@ use crate::symbols::{KeywordSymbol, Symbol, SymbolDisplay, SymbolInterner, TypeS
 
 use super::digest::empty_schema_digest;
 use super::handle::{
-    ANY_NAME, BOOL_NAME, IDENTIFIER_NAME, KEXPRESSION_NAME, KType, MODULE_NAME, NAME_TOKEN_NAME,
-    NEVER_NAME, NULL_NAME, NUMBER_NAME, RECORD_TYPE_NAME, SIGILED_TYPE_EXPR_NAME, STR_NAME,
-    TYPE_NAME_TOKEN_NAME,
+    ANY_NAME, BOOL_NAME, CODE_NAME, IDENTIFIER_NAME, KEXPRESSION_NAME, KType, MODULE_NAME,
+    NAME_TOKEN_NAME, NEVER_NAME, NULL_NAME, NUMBER_NAME, RECORD_TYPE_NAME, SIGILED_TYPE_EXPR_NAME,
+    STR_NAME, TYPE_NAME_TOKEN_NAME, VALUE_NAME,
 };
 use super::node::TypeNode;
 use super::operators::{FoldDirection, ReductionMode};
@@ -62,6 +62,8 @@ fn write_name_in(
         TypeNode::SigiledTypeExpr => f.write_str(SIGILED_TYPE_EXPR_NAME.text()),
         TypeNode::RecordType => f.write_str(RECORD_TYPE_NAME.text()),
         TypeNode::Any => f.write_str(ANY_NAME.text()),
+        TypeNode::AnyValue => f.write_str(VALUE_NAME.text()),
+        TypeNode::AnyCode => f.write_str(CODE_NAME.text()),
         TypeNode::Never => f.write_str(NEVER_NAME.text()),
         TypeNode::OfKind(kind) => f.write_str(kind.surface_keyword()),
         TypeNode::List { element } => {

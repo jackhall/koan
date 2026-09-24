@@ -46,8 +46,12 @@ pub enum TypeNode<'run> {
     /// Lazy slot for a `:{…}` record type — captured raw so the NEWTYPE record-repr declarator
     /// owns its elaboration and threads its own binder name.
     RecordType,
-    /// The lattice top: above every type, and the default bound of a rigid variable.
+    /// The lattice top: above the three family tops, and the default bound of a rigid variable.
     Any,
+    /// The value family's top, spelled `Value`: above every type whose values are ordinary values.
+    AnyValue,
+    /// The code family's top, spelled `Code`: above every raw-part type.
+    AnyCode,
     /// The uninhabited bottom: admitted by no value, below every other type, and the identity
     /// element of both [`join`](super::lattice::join) and union canonicalization. Spellable as
     /// the builtin name `Never`, where it declares a slot nothing fills.

@@ -149,3 +149,33 @@ fn a_circular_value_satisfies_by_its_node_memo() {
         })
     });
 }
+
+#[test]
+fn a_value_a_type_and_a_quote_each_satisfy_their_family_alone() {
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let quote = fixture.part("#(a)");
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let number = Value::Number(1.0);
+            let type_value = Value::Type(TypeValue::new(writer, KType::NUMBER, types));
+            let quote = Value::lower_part(writer, &quote, types, scratch).expect("a quote lowers");
+            let families = [
+                (&number, [KType::ANY_VALUE, KType::NUMBER]),
+                (&type_value, [KType::ANY_TYPE, KType::PROPER_TYPE]),
+                (&quote, [KType::ANY_CODE, KType::KEXPRESSION]),
+            ];
+            for (value, own) in &families {
+                assert!(satisfies(KType::ANY, value, types, scratch));
+                for top in [KType::ANY_VALUE, KType::ANY_TYPE, KType::ANY_CODE] {
+                    assert_eq!(
+                        satisfies(top, value, types, scratch),
+                        top == own[0],
+                        "{value:?} against {top:?}"
+                    );
+                }
+                assert!(satisfies(own[1], value, types, scratch));
+            }
+        })
+    });
+}

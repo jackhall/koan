@@ -1,8 +1,9 @@
 //! The miniature evaluator the program suites supply as their [`Language`]: not dispatch, and kept
 //! small. Its builtin table is `origin = 0` and the scalar types, and it evaluates exactly a
-//! literal, a name, a list of literals and names, `(WHEN c THEN a ELSE b)`, `(a MINUS b)`, and a
-//! call `(f x)` of a function with one parameter. `WHEN`, `THEN`, `ELSE` and `MINUS` are no
-//! builtin shapes, so the shape builder walks them as plain calls; anything else is refused.
+//! literal, a quote, a name, a list of literals and names, `(WHEN c THEN a ELSE b)`,
+//! `(a MINUS b)`, and a call `(f x)` of a function with one parameter. `WHEN`, `THEN`, `ELSE` and
+//! `MINUS` are no builtin shapes, so the shape builder walks them as plain calls; anything else is
+//! refused.
 //!
 //! A step is a bare `fn`, so what it observes it records in a thread-local for the test around it.
 
@@ -141,13 +142,14 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
     let types = program.types();
     let scratch = Bump::new();
     let parts = match form(node) {
-        Form::Leaf(part @ ExpressionPart::Literal(literal)) => {
-            if let KLiteral::Number(number) = literal {
+        Form::Leaf(part @ (ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_))) => {
+            if let ExpressionPart::Literal(KLiteral::Number(number)) = part {
                 record(format!("literal {number}"));
             }
             return step.finish_fresh(|writer, _| {
                 Active::new(
-                    Value::lower_part(writer, part, types, &scratch).expect("a literal lowers"),
+                    Value::lower_part(writer, part, types, &scratch)
+                        .expect("a literal or a quote lowers"),
                 )
             });
         }

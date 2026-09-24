@@ -109,7 +109,7 @@ like `K9`, is rejected — Koan reserves uppercase-leading shapes for types and
 keywords and won't guess which you meant. In practice:
 
 - Pick **type names** with at least one lowercase letter: `Elem`, `Key`,
-  `Value`, `Maybe` — never a single capital.
+  `Val`, `Maybe` — never a single capital.
 - Pick **keywords** (the fixed words in a function you define) with two or more
   capitals and no lowercase: `DOUBLE`, `SWAP`, `THEN`.
 

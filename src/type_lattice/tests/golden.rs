@@ -13,6 +13,7 @@ use crate::type_lattice::kind::KKind;
 use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
+use crate::type_lattice::render::display_name;
 use crate::type_lattice::schema::{SchemaDraft, SigSchema};
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 
@@ -41,6 +42,8 @@ fn constants_match_freshly_interned_nodes() {
         ),
         ("RECORD_TYPE", KType::RECORD_TYPE, TypeNode::RecordType),
         ("ANY", KType::ANY, TypeNode::Any),
+        ("ANY_VALUE", KType::ANY_VALUE, TypeNode::AnyValue),
+        ("ANY_CODE", KType::ANY_CODE, TypeNode::AnyCode),
         ("NEVER", KType::NEVER, TypeNode::Never),
         (
             "PROPER_TYPE",
@@ -129,6 +132,8 @@ fn every_node_kind_has_its_own_tag() {
         TypeNode::SigiledTypeExpr,
         TypeNode::RecordType,
         TypeNode::Any,
+        TypeNode::AnyValue,
+        TypeNode::AnyCode,
         TypeNode::Never,
         TypeNode::OfKind(KKind::ProperType),
         TypeNode::AbstractType {
@@ -199,6 +204,8 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::SigiledTypeExpr => "SigiledTypeExpr",
             TypeNode::RecordType => "RecordType",
             TypeNode::Any => "Any",
+            TypeNode::AnyValue => "AnyValue",
+            TypeNode::AnyCode => "AnyCode",
             TypeNode::Never => "Never",
             TypeNode::OfKind(_) => "OfKind",
             TypeNode::AbstractType { .. } => "AbstractType",
@@ -232,5 +239,27 @@ fn every_node_kind_has_its_own_tag() {
     for node in representatives {
         let handle = types.intern(region, node);
         types.with_node(handle, |_| ());
+    }
+}
+
+/// The family tops' surface spellings: `Value`, `Type` and `Code` each lower to their top, and
+/// each top renders back under that name.
+#[test]
+fn the_family_tops_are_spelled_value_type_and_code() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let types = TypeRegistry::in_region(&bump);
+    for (spelling, top) in [
+        ("Value", KType::ANY_VALUE),
+        ("Type", KType::ANY_TYPE),
+        ("Code", KType::ANY_CODE),
+    ] {
+        let name = TypeSymbol::declared(spelling, &symbols).expect("a Type token");
+        assert_eq!(
+            KType::from_symbol(name),
+            Some(top),
+            "`{spelling}` lowers to its top"
+        );
+        assert_eq!(display_name(top, &types, &symbols).to_string(), spelling);
     }
 }

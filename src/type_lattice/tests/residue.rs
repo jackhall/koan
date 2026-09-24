@@ -5,18 +5,19 @@
 //! that pins the *edge* of a law rather than the law itself. Each builds its own registry over a
 //! region of its own, which doubles as its scratch.
 
-use crate::memory::Bump;
+use crate::memory::{Bump, ScopeId};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
-use crate::type_lattice::digest::{TypeDigest, empty_schema_digest};
+use crate::type_lattice::digest::{TypeDigest, empty_schema_digest, node_digest};
 use crate::type_lattice::handle::KType;
+use crate::type_lattice::kind::KKind;
 use crate::type_lattice::lattice::{join, meet};
-use crate::type_lattice::node::TypeNode;
+use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{SchemaDraft, shape_slots};
-use crate::type_lattice::shape::DispatchTokenElement;
+use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 use crate::type_lattice::unify::{Collector, UnifyFailure, admits_with};
 use crate::type_lattice::walk::Variance;
 
@@ -300,4 +301,115 @@ fn a_quantified_function_interns_by_shape_whatever_its_names() {
         .function_type(region, &[elt], &[(x, variable)], KType::ANY)
         .handle;
     assert!(is_subtype_of(&types, region, quantified_identity, to_any));
+}
+
+/// No law: which family top a node kind lies under is a definition, not a property — the family
+/// table in `order::family_top`. One representative per row pins it, with the rows whose family is
+/// decided elsewhere: a type variable by its bound, a union by its members, and a deferred return
+/// under no family at all.
+#[test]
+fn each_node_kind_lies_under_its_family_top() {
+    let symbols = SymbolInterner::new();
+    let x = BinderSymbol::declared("x", &symbols).expect("a bindable token");
+    let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let keyword = KeywordSymbol::declared("PURE", &symbols).expect("a keyword token");
+    // Declared ahead of the registry, so it outlives the shape node interned over it.
+    let elements = [DispatchTokenElement::Keyword(keyword)];
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let tops = [KType::ANY_VALUE, KType::ANY_TYPE, KType::ANY_CODE];
+    let under = |ktype: KType| -> Vec<KType> {
+        tops.into_iter()
+            .filter(|top| is_subtype_of(&types, region, ktype, *top))
+            .collect()
+    };
+
+    let values = [
+        KType::NUMBER,
+        KType::STR,
+        KType::BOOL,
+        KType::NULL,
+        KType::LIST_OF_ANY,
+        KType::DICT_ANY_ANY,
+        types.record(region, &[(x, KType::ANY)]),
+        types
+            .function_type(region, &[], &[(x, KType::ANY)], KType::ANY)
+            .handle,
+        types.intern(
+            region,
+            TypeNode::ExpressionShape {
+                quantifiers: &[],
+                bounds: &[],
+                elements: &elements,
+                ret: KType::NUMBER,
+            },
+        ),
+        types.constructor_apply(region, KType::NUMBER, &[(x, KType::ANY)]),
+        KType::EMPTY_SIGNATURE,
+        types.intern(
+            region,
+            TypeNode::SetMember {
+                scc_digest: node_digest(region, &TypeNode::Number),
+                index: 0,
+                scc_size: 1,
+                name,
+                kind: KKind::NewType,
+                schema: NodeSchema::NewType(KType::NUMBER),
+            },
+        ),
+        types.sibling(0),
+        KType::ANY_VALUE,
+    ];
+    for value in values {
+        assert_eq!(under(value), [KType::ANY_VALUE], "{value:?}");
+    }
+    let codes = [
+        KType::IDENTIFIER,
+        KType::NAME_TOKEN,
+        KType::TYPE_NAME_TOKEN,
+        KType::KEXPRESSION,
+        KType::SIGILED_TYPE_EXPR,
+        KType::RECORD_TYPE,
+        KType::ANY_CODE,
+    ];
+    for code in codes {
+        assert_eq!(under(code), [KType::ANY_CODE], "{code:?}");
+    }
+    for kind in [
+        KKind::ProperType,
+        KKind::Signature,
+        KKind::AnyType,
+        KKind::NewType,
+        KKind::TypeConstructor,
+    ] {
+        assert_eq!(under(KType::of_kind(kind)), [KType::ANY_TYPE]);
+    }
+
+    // A variable answers by its bound; one over `Any` — a sealed member's default — lies under no
+    // family top, since the view hides which family it stands for.
+    assert!(under(types.quantified(0, KType::ANY)).is_empty());
+    assert_eq!(
+        under(types.quantified(0, KType::ANY_VALUE)),
+        [KType::ANY_VALUE]
+    );
+    let sealed = types.abstract_type(region, ScopeId::SENTINEL, name, &[], None, KType::ANY);
+    assert!(under(sealed).is_empty());
+    // A union answers by its members, and a deferred return, whose return is unknown, by none.
+    let mixed = types.union_of(region, &[KType::NUMBER, KType::PROPER_TYPE]);
+    assert!(under(mixed).is_empty());
+    let pair_top = types.union_of(region, &[KType::ANY_VALUE, KType::ANY_TYPE]);
+    assert!(is_subtype_of(&types, region, mixed, pair_top));
+    assert!(under(types.deferred_return(DeferredReturnSurface::Type(name))).is_empty());
+    assert!(under(KType::ANY).is_empty());
+
+    // The families are disjoint and join to their union.
+    assert_eq!(
+        meet(&types, region, KType::ANY_VALUE, KType::ANY_CODE),
+        KType::NEVER
+    );
+    assert_eq!(
+        join(&types, region, KType::ANY_VALUE, KType::ANY_TYPE),
+        pair_top
+    );
 }

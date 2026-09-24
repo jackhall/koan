@@ -161,3 +161,28 @@ fn every_part_shape_admits_the_type_it_reports() {
         ));
     });
 }
+
+#[test]
+fn each_family_top_admits_the_parts_a_type_below_it_admits() {
+    with_fixture(|fixture| {
+        let types = fixture.types;
+        let every_shape = fixture.parse(
+            "x Number (a b) :(LIST OF Number) :{x :Number} [1 \"a\"] {\"k\": 1} {x = true} 1 \"s\" \
+             true null #(a)",
+        );
+        assert_eq!(every_shape.parts.len(), 13);
+        for (index, part) in every_shape.parts.iter().enumerate() {
+            let part = &part.value;
+            assert_eq!(
+                admits_part(KType::ANY_VALUE, part, types),
+                (5..=11).contains(&index),
+                "`Value` on {part:?}"
+            );
+            assert_eq!(
+                admits_part(KType::ANY_CODE, part, types),
+                (0..=4).contains(&index) || index == 12,
+                "`Code` on {part:?}"
+            );
+        }
+    });
+}

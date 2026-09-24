@@ -42,6 +42,25 @@ fn a_list_memoizes_the_join_of_its_cells_and_weighs_every_byte_it_lays_down() {
 }
 
 #[test]
+fn a_list_mixing_a_value_and_a_type_joins_their_families() {
+    with_fixture(|fixture| {
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let (types, scratch) = (fixture.types, fixture.scratch());
+            let mixed = [
+                Value::Number(1.0),
+                Value::Type(TypeValue::new(writer, KType::NUMBER, types)),
+            ];
+            let list = List::new(writer, mixed.into_iter(), types, scratch);
+            assert_eq!(
+                list.ktype(),
+                types.list(types.union_of(scratch, &[KType::NUMBER, KType::PROPER_TYPE]))
+            );
+        })
+    });
+}
+
+#[test]
 fn a_record_sorts_its_fields_and_memoizes_the_record_of_their_types() {
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {

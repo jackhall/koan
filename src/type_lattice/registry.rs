@@ -221,6 +221,8 @@ impl<'run> TypeRegistry<'run> {
             TypeNode::SigiledTypeExpr,
             TypeNode::RecordType,
             TypeNode::Any,
+            TypeNode::AnyValue,
+            TypeNode::AnyCode,
             TypeNode::Never,
         ] {
             self.intern(self.bump, leaf);
@@ -797,8 +799,9 @@ impl<'run> TypeRegistry<'run> {
     ///
     /// Flattens any nested union member into its members, drops [`KType::NEVER`] (the identity
     /// element: it admits nothing, so it widens nothing), deduplicates by handle, then drops every
-    /// member that is a subtype of another member, so [`KType::ANY`] absorbs and no two distinct
-    /// members are ordered. One survivor collapses to that member; none is `Never`.
+    /// member that is a subtype of another member, so [`KType::ANY`] absorbs, a union holding all
+    /// three family tops is [`KType::ANY`], and no two distinct members are ordered. One survivor
+    /// collapses to that member; none is `Never`.
     pub fn union_of(&self, scratch: BumpAllocator<'_>, members: &[KType]) -> KType {
         let width: usize = members
             .iter()
@@ -830,6 +833,14 @@ impl<'run> TypeRegistry<'run> {
             let keep = unsubsumed(self, scratch, &flat, Dropped::Below);
             let mut keep = keep.iter();
             flat.retain(|_| *keep.next().unwrap_or(&true));
+        }
+        // The three family tops together hold every type, so their union is `Any` — and must be, or
+        // a type variable over `Any` would lie under `Any` but not under the union that equals it.
+        if [KType::ANY_VALUE, KType::ANY_TYPE, KType::ANY_CODE]
+            .iter()
+            .all(|top| flat.contains(top))
+        {
+            return KType::ANY;
         }
         match flat.len() {
             0 => KType::NEVER,

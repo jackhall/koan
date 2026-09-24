@@ -287,6 +287,8 @@ pub fn children(
         | TypeNode::SigiledTypeExpr
         | TypeNode::RecordType
         | TypeNode::Any
+        | TypeNode::AnyValue
+        | TypeNode::AnyCode
         | TypeNode::Never
         | TypeNode::OfKind(_)
         | TypeNode::DeferredReturn(_)

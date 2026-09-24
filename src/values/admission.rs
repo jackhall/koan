@@ -202,13 +202,30 @@ pub fn record_type(
 
 /// Whether `slot` takes a raw part, by shape. An unevaluated container literal admits on its kind
 /// alone, since its element types are unknown until it runs; a union admits what any member admits;
-/// a kind slot takes a type token only for `ProperType` and `AnyType`; a quantified slot is the top
-/// and takes every shape. A function, nominal, signature, shape, constructor-application, deferred
-/// or sibling slot admits no raw part — only a resolved value.
+/// a family top admits what some concrete type of its family admits, as a union does; a kind slot
+/// takes a type token only for `ProperType` and `AnyType`; a quantified slot is the top and takes
+/// every shape. A function, nominal, signature, shape, constructor-application, deferred or sibling
+/// slot admits no raw part — only a resolved value.
 pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<'_>) -> bool {
     match types.node(slot) {
         TypeNode::Any | TypeNode::Quantified { .. } => true,
         TypeNode::Never => false,
+        TypeNode::AnyValue => matches!(
+            part,
+            ExpressionPart::Literal(_)
+                | ExpressionPart::ListLiteral(_)
+                | ExpressionPart::DictLiteral(_)
+                | ExpressionPart::RecordLiteral(_)
+        ),
+        TypeNode::AnyCode => matches!(
+            part,
+            ExpressionPart::Identifier(_)
+                | ExpressionPart::Type(_)
+                | ExpressionPart::Expression(_)
+                | ExpressionPart::QuotedExpression(_)
+                | ExpressionPart::SigiledTypeExpr(_)
+                | ExpressionPart::RecordType(_)
+        ),
         TypeNode::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),
         TypeNode::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
         TypeNode::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),

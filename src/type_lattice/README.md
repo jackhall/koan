@@ -69,14 +69,16 @@ a node holds is a slice in the run region, so a node is `Copy` and carries no
 drop glue, and reading one out of the registry copies a few words rather than a
 subtree.
 
-- **Leaves** — `Number`, `Str`, `Bool`, `Null`, `Identifier`, and the two bounds
+- **Leaves** — `Number`, `Str`, `Bool`, `Null`, `Identifier`, the two bounds
   `Any` (the top, and the default bound of a rigid variable) and `Never` (the
   uninhabited bottom, the identity element of both `join` and union
-  canonicalization).
+  canonicalization), and two of the three family tops, `AnyValue` (spelled
+  `Value`) and `AnyCode` (spelled `Code`). See *Three families*, below.
 - **Binder-position slots** that capture syntax raw and never resolve —
   `NameToken`, `TypeNameToken`, `KExpression`, `SigiledTypeExpr`, `RecordType`.
   They are types because a declarator's slot has to be typed like any other, not
-  because anything is ever matched against them structurally.
+  because anything is ever matched against them structurally. With `Identifier`,
+  they are the code family: every one lies under `Code`.
 - **`OfKind(KKind)`** — a type-accepting argument slot carrying the shallow
   [`KKind`](kind.rs) it admits. It is **type-channel only**: it admits a type
   *value*, never a runtime instance. A value is matched by a type, never by a
@@ -115,6 +117,7 @@ Kinds form one subsumption lattice —
 `OfKind(x) ≤ OfKind(y)` iff `y.admits(x)`. The signature wall lives here: a
 proper-type slot names what can type an ordinary value, which a signature is not.
 `AnyType` is a *slot* expectation only, never a classification `kind_of` produces.
+As `OfKind(AnyType)`, spelled `Type`, it is also the type family's top.
 
 ## Storage: one region
 
@@ -204,6 +207,32 @@ surviving names are render-only and the digest feeds the group's arity, so two
 alpha-variants are one handle; the door hands its caller back the
 declaration-index → canonical-index map alongside the handle, which is what a
 call needs to bind each type parameter to its solution.
+
+### Three families
+
+Below `Any` lie three disjoint family tops: `Value`, `Type` (`OfKind(AnyType)`,
+the kind order's top) and `Code`. A type lies under a family top by its own node
+shape, per the table in [`family_top`](order.rs):
+
+| Family top | Node variants |
+|---|---|
+| `Value` | `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `Record`, `KFunction`, `ExpressionShape`, `ConstructorApply`, `Signature` (a module is a value), `SetMember`, `Sibling` |
+| `Code` | `Identifier`, `NameToken`, `TypeNameToken`, `KExpression`, `SigiledTypeExpr`, `RecordType` |
+| `Type` | every `OfKind` |
+
+The other nodes take their family from elsewhere. A union lies under a top when
+every member does, and a rigid variable when its bound does, so a variable over
+`Any` — the default bound of a `FOR ALL` name and of a signature's `TYPE`
+member — lies under no family top: a value sealed behind an unbounded member
+satisfies that member and `Any`, but not `Value`. A deferred return lies under
+none, since its return is not known. So no type but `Never` lies under two tops.
+
+A pair of tops is their union: `Value | Type` is the top of values and types
+together, since a named node for it would be a second node for one type. A
+union holding all three tops is canonicalized to `Any` by
+[`union_of`](registry.rs), so the three families together are the whole
+lattice. Left uncollapsed, that union would be a second top strictly below
+`Any`, missing only the variables over `Any`, which lie under no member.
 
 ### Substitute, then ask
 
@@ -310,7 +339,9 @@ Every structural recursion here goes through one of the two drivers in
 [walk](walk.rs), with rendering the single hand-written exhaustive match. Adding
 a compound node variant is a compile error at the drivers' arm tables, at the
 descent-knob sites, and in the renderer — **and nowhere else**. That is the
-property the drivers exist for.
+property the drivers exist for. Adding any variant, leaf or compound, is also a
+compile error at [`family_top`](order.rs), which has no wildcard arm, so no
+type goes without a family.
 
 Ask first whether the walk is unary or binary, then whether it rebuilds.
 

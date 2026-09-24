@@ -51,17 +51,8 @@ PRINT (Option.Some 7)
 Some(7)
 ```
 
-Binding a type to a *lowercase* name is rejected — types live in the type
-namespace:
-
-```koan
-UNION Maybe = (Some :Number None :Null)
-LET maybe = Maybe
-```
-
-```text
-error: shape error: LET binder `maybe` is value-classified but the bound value is a type (a type-language carrier); rebind under a Type-classified identifier instead (uppercase-leading plus at least one lowercase letter, e.g. `Maybe`)
-```
+A lowercase name can hold `Maybe` too, as data to pass around or print, but
+only a type name constructs through it or names it in a type.
 
 ## Dispatching on a variant
 

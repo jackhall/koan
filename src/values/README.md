@@ -132,7 +132,8 @@ handle, computed in the pass that lays its cells down: a list the join of its
 cells' types (`Never` when empty), a dict the joins over its keys and its
 cells, a record the record type of its fields in written order, a type value
 `OfKind` of the kind of the type it names, a tagged value its identity, and a
-knot member reports its own.
+knot member reports its own. A join across families is their union, so a list
+holding a number and a type memoizes `List<(Number | ProperType)>`.
 `Value::ktype` copies that handle or names a leaf constant; it reads no registry
 and walks nothing.
 
@@ -163,9 +164,11 @@ contents' incidental precision.
 The same module answers the question for what is not yet a value.
 `admits_part` checks a raw AST part by shape, since an unevaluated literal has
 no type memo: a container literal admits on its kind alone, a union on any
-member, a kind slot takes a type token only for `ProperType` and `AnyType`, a
+member, a family top — `Value` or `Code` — on any concrete type of its family,
+a kind slot takes a type token only for `ProperType` and `AnyType`, a
 quantified slot takes every shape, and a nominal, function, signature or shape
-slot takes no raw part at all. `part_ktype` is its inverse — the type dispatch
+slot takes no raw part at all. So a type token is taken by `Code` (as a
+`TypeNameToken`) and by `Type` alike. `part_ktype` is its inverse — the type dispatch
 matched a raw part on, and the one a diagnostic renders — and the two agree for
 every part shape. `admits` routes a working part to one or the other.
 

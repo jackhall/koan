@@ -181,7 +181,6 @@ program runs on the rewritten stack.
 
 **Requires:**
 
-- [Value, type and code tops](channel-tops.md) — admission keeps the families apart.
 - [Code as values](code-values.md) — `ATTR`'s symbol label, `EVAL`'s operand, and code-typed parameters.
 - [Parameterized unions](parameterized-unions.md) — the family construction rule.
 - [Binders nested in expressions](nested-binders.md) — a nested binder is hoisted before dispatch meets it.

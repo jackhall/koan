@@ -21,7 +21,9 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 
 /// Whether `a` is below `b` in the one order.
 ///
-/// - `Never` is the bottom and `Any` the top.
+/// - `Never` is the bottom and `Any` the top, above the three family tops.
+/// - A family top — `Value` or `Code` — is above every type whose own family it is
+///   ([`family_top`]); `Type` is the kind order's top.
 /// - `OfKind(x) ≤ OfKind(y)` when `y` admits `x`; the kind lattice is the whole story on the type
 ///   channel.
 /// - Lists, dicts and constructor applications are covariant in every child. Records are covariant
@@ -155,6 +157,8 @@ impl Lockstep for Order {
             (TypeNode::KFunction { .. }, TypeNode::KFunction { .. }) => {
                 admits_function(types, scratch, a, b)
             }
+            // A family top is above every type whose own family it is.
+            (_, TypeNode::AnyValue | TypeNode::AnyCode) => family_top(&na) == Some(b),
             _ => false,
         }
     }
@@ -193,6 +197,43 @@ fn is_rigid(node: &TypeNode<'_>) -> bool {
         node,
         TypeNode::Quantified { .. } | TypeNode::AbstractType { .. }
     )
+}
+
+/// The family top `node` lies under by its own shape — `Value`, `Type` or `Code` — or `None` for a
+/// node whose family is decided elsewhere: the lattice's top and bottom, a union by its members, a
+/// type variable by its bound, and a deferred return by the return it defers. No arm is a wildcard,
+/// so a new variant does not compile until it is given a family.
+fn family_top(node: &TypeNode<'_>) -> Option<KType> {
+    match node {
+        TypeNode::Number
+        | TypeNode::Str
+        | TypeNode::Bool
+        | TypeNode::Null
+        | TypeNode::List { .. }
+        | TypeNode::Dict { .. }
+        | TypeNode::Record { .. }
+        | TypeNode::KFunction { .. }
+        | TypeNode::ExpressionShape { .. }
+        | TypeNode::ConstructorApply { .. }
+        | TypeNode::Signature { .. }
+        | TypeNode::SetMember { .. }
+        | TypeNode::Sibling(_)
+        | TypeNode::AnyValue => Some(KType::ANY_VALUE),
+        TypeNode::Identifier
+        | TypeNode::NameToken
+        | TypeNode::TypeNameToken
+        | TypeNode::KExpression
+        | TypeNode::SigiledTypeExpr
+        | TypeNode::RecordType
+        | TypeNode::AnyCode => Some(KType::ANY_CODE),
+        TypeNode::OfKind(_) => Some(KType::ANY_TYPE),
+        TypeNode::Any
+        | TypeNode::Never
+        | TypeNode::Union { .. }
+        | TypeNode::Quantified { .. }
+        | TypeNode::AbstractType { .. }
+        | TypeNode::DeferredReturn(_) => None,
+    }
 }
 
 /// Which member of an ordered pair a canonicalization drops.

@@ -13,7 +13,9 @@ evaluator answers each with an error saying it does not run yet. The builtin
 
 **Acceptance criteria.**
 
-- `MATCH` and `MATCH … OVER` select the first arm whose head admits the
+- `MATCH`'s union form is spelled `MATCH <scrutinee> UNDER <union> -> <type>
+  WITH <arms>`, in the builtin table and in the tutorial.
+- `MATCH` and `MATCH … UNDER` select the first arm whose head admits the
   scrutinee, bind `it` in that arm's block and yield its value, checked against
   the declared result type; no admitting arm is an error.
 - `TRY` runs its body and, on an error value, selects an arm by the error the
@@ -32,6 +34,10 @@ evaluator answers each with an error saying it does not run yet. The builtin
   `TRY` arm selecting by kind needs a discriminant: a `kind` field of a builtin
   union, or one `Error` variant per kind. Recommended: decide when the arms'
   heads are written, against the tutorial's `TRY` snippets.
+- *`MATCH … UNDER` — decided.* The union clause claims the scrutinee's type
+  lies under the union, the relation a bound's `UNDER` names
+  ([bounded type variables](bounded-type-variables.md)). `OVER` is left naming
+  a domain: an operator's operand type, and the captures `CLOSE OVER` copies.
 - *An arm is a block — decided.* An arm runs as the block shape the scope
   builder already builds for it, with `it` its one parameter, through the same
   block evaluation dispatch uses for a synthesized block.

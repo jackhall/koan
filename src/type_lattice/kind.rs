@@ -16,7 +16,8 @@ use crate::symbols::{StaticName, SymbolInterner, TypeSymbol};
 /// ```
 ///
 /// [`AnyType`](KKind::AnyType) is a *slot* expectation only ("accepts any proper type value"),
-/// never a value classification produced by [`kind_of`](super::handle::KType::kind_of).
+/// never a value classification produced by [`kind_of`](super::handle::KType::kind_of). As an
+/// `OfKind` it is also the type family's top, beside `Value` and `Code`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum KKind {
     /// A proper (non-module, non-signature) type value with no finer nominal family —
@@ -28,8 +29,8 @@ pub enum KKind {
     /// which is also where a module lands: a module is a *value*, matched by a signature type,
     /// and the `:Module` surface lowers to the empty signature rather than to a kind.
     Signature,
-    /// A slot accepting any type value (the `:Type` surface) — the kind lattice's top: the proper
-    /// subtree and signature values alike.
+    /// A slot accepting any type value (the `:Type` surface) — the kind lattice's top and the type
+    /// family's top, beside `Value` and `Code`: the proper subtree and signature values alike.
     AnyType,
     /// A newtype (record-repr or scalar) — the family a `NEWTYPE` or a user-`UNION` variant
     /// declares. Strictly below `ProperType`.

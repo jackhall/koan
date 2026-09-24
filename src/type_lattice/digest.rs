@@ -84,6 +84,8 @@ const TAG_TYPE_NAME_TOKEN: u8 = 0x1F;
 const TAG_NEVER: u8 = 0x20;
 const TAG_EXPRESSION_SHAPE: u8 = 0x21;
 const TAG_QUANTIFIED: u8 = 0x22;
+const TAG_ANY_VALUE: u8 = 0x23;
+const TAG_ANY_CODE: u8 = 0x24;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -177,6 +179,8 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::SigiledTypeExpr => leaf_digest(TAG_SIGILED_TYPE_EXPR),
         TypeNode::RecordType => leaf_digest(TAG_RECORD_TYPE),
         TypeNode::Any => leaf_digest(TAG_ANY),
+        TypeNode::AnyValue => leaf_digest(TAG_ANY_VALUE),
+        TypeNode::AnyCode => leaf_digest(TAG_ANY_CODE),
         TypeNode::Never => leaf_digest(TAG_NEVER),
         TypeNode::OfKind(k) => of_kind_digest(*k),
         TypeNode::DeferredReturn(surface) => deferred_return_digest(*surface),

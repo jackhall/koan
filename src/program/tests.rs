@@ -85,6 +85,7 @@ fn describe<'graph>(value: KValue<'graph, '_>, program: &'graph Program<'graph>)
         Value::Type(value) => {
             display_name(value.handle(), program.types(), program.symbols()).to_string()
         }
+        Value::Expression(node) => format!("#({})", node.summary(program.symbols())),
         Value::Knotted(member) => describe_member(member, program),
         _ => String::from("other"),
     }

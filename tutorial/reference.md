@@ -7,7 +7,7 @@ the link in each section to the relevant chapter.
 
 | Form                          | Meaning                                            |
 |-------------------------------|----------------------------------------------------|
-| `LET <name> = <value>`        | Bind a value to a lowercase name. Evaluates to the value. |
+| `LET <name> = <value>`        | Bind a value, a type or code to a lowercase name. Evaluates to what it binds. |
 | `LET <TypeName> = <type>`     | Bind a type to a type name (capitalized + lowercase). |
 | `PRINT <value>`               | Print a value and a newline. Evaluates to the printed string. |
 
@@ -78,7 +78,10 @@ the link in each section to the relevant chapter.
 | Form                          | Meaning                                            |
 |-------------------------------|----------------------------------------------------|
 | `Number` `Str` `Bool` `Null`  | Built-in scalar types.                             |
-| `Any`                         | Accepts any value (opts a slot out of checking).   |
+| `Value`                       | Accepts any ordinary value.                        |
+| `Type`                        | Accepts any type.                                  |
+| `Code`                        | Accepts any quoted code.                           |
+| `Any`                         | Accepts any value, type or code (opts a slot out of checking). |
 | `:(LIST OF <Type>)`           | List type.                                         |
 | `:(MAP <Key> -> <Value>)`     | Map / dictionary type.                             |
 | `:(FN :{<params>} -> <Result>)`| Lambda type — the parameter list is a record type (`:{}` when nullary). |

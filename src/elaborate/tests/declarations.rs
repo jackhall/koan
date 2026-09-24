@@ -173,10 +173,16 @@ fn a_signature_declares_its_abstract_and_manifest_members() {
             let carrier = program.type_name("Carrier");
             let rigid =
                 member(schema.abstract_members, carrier).expect("the signature declares `Carrier`");
-            assert!(matches!(
-                program.types.node(rigid),
-                TypeNode::AbstractType { .. }
-            ));
+            assert!(
+                matches!(
+                    program.types.node(rigid),
+                    TypeNode::AbstractType {
+                        bound: KType::ANY,
+                        ..
+                    }
+                ),
+                "an unbounded `TYPE` member stands over `Any`"
+            );
             assert_eq!(
                 member(schema.manifest_members, program.type_name("Elem")),
                 Some(KType::NUMBER),

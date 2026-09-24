@@ -47,6 +47,8 @@ pub(super) static SIGILED_TYPE_EXPR_NAME: StaticName<TypeSymbol> =
 pub(super) static RECORD_TYPE_NAME: StaticName<TypeSymbol> =
     crate::static_name!(TypeSymbol, "RecordType");
 pub(super) static ANY_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Any");
+pub(super) static VALUE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Value");
+pub(super) static CODE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Code");
 pub(super) static NEVER_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Never");
 /// The empty signature's surface name — the `:Module` lattice top.
 pub(super) static MODULE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Module");
@@ -57,7 +59,7 @@ static SIGNATURE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, 
 impl KType {
     // --- Fixed handles ---
     //
-    // The twelve leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>` and the empty
+    // The fourteen leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>` and the empty
     // signature name content every registry pre-seeds (`TypeRegistry::in_region`), so their digests are
     // known at compile time and lowering a builtin type name needs no registry in hand. The
     // literals below are the digest recipe's output; `constants_match_freshly_interned_nodes` in
@@ -77,6 +79,10 @@ impl KType {
     pub const SIGILED_TYPE_EXPR: KType = KType(TypeDigest(0xf6d652dc_848e0f69_4a152496_ddd88b44));
     pub const RECORD_TYPE: KType = KType(TypeDigest(0x387dfced_dc0a5d96_da3b29a5_dde0f32e));
     pub const ANY: KType = KType(TypeDigest(0xd9f70f99_49f95b5c_44d7ce99_10aa1972));
+    /// The value family's top — what `Value` lowers to.
+    pub const ANY_VALUE: KType = KType(TypeDigest(0xf04a0d81_ff131a48_101bccdb_85dac271));
+    /// The code family's top — what `Code` lowers to.
+    pub const ANY_CODE: KType = KType(TypeDigest(0x0f08f916_c60a7048_8e16cfb3_f68069e7));
     /// The uninhabited bottom of the lattice — below every other type, admitted by no value, and
     /// the identity element of join and of union canonicalization.
     pub const NEVER: KType = KType(TypeDigest(0x59dd8c1f_71e395f4_77717ff5_a93c2600));
@@ -161,6 +167,8 @@ impl KType {
             TypeNode::SigiledTypeExpr => fixed(&SIGILED_TYPE_EXPR_NAME),
             TypeNode::RecordType => fixed(&RECORD_TYPE_NAME),
             TypeNode::Any => fixed(&ANY_NAME),
+            TypeNode::AnyValue => fixed(&VALUE_NAME),
+            TypeNode::AnyCode => fixed(&CODE_NAME),
             TypeNode::Never => fixed(&NEVER_NAME),
             TypeNode::OfKind(kind) => Some(kind.surface_symbol(symbols)),
             TypeNode::AbstractType { name, .. } => Some(*name),
@@ -205,8 +213,8 @@ impl KType {
 /// `Never` names the lattice bottom, so a slot written `:Never` is legal and admits nothing.
 ///
 /// Each name is a [`StaticName`], so its symbol is minted at first read and loaded thereafter:
-/// seeding a second run's root re-registers the same twelve names without hashing a spelling.
-pub fn builtin_types() -> [(&'static StaticName<TypeSymbol>, KType); 12] {
+/// seeding a second run's root re-registers the same fourteen names without hashing a spelling.
+pub fn builtin_types() -> [(&'static StaticName<TypeSymbol>, KType); 14] {
     [
         (&NUMBER_NAME, KType::NUMBER),
         (&STR_NAME, KType::STR),
@@ -219,6 +227,8 @@ pub fn builtin_types() -> [(&'static StaticName<TypeSymbol>, KType); 12] {
         (&MODULE_NAME, KType::EMPTY_SIGNATURE),
         (&SIGNATURE_NAME, KType::of_kind(KKind::Signature)),
         (&ANY_NAME, KType::ANY),
+        (&VALUE_NAME, KType::ANY_VALUE),
+        (&CODE_NAME, KType::ANY_CODE),
         (&NEVER_NAME, KType::NEVER),
     ]
 }
