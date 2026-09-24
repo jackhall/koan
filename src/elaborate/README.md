@@ -40,6 +40,11 @@ registry's own doors:
 - `EXPR (head) -> Ret`, with or without `FOR ALL (names)`, is the expression
   shape over the head's keywords and typed slots and the return;
 - `Union.Tag` is the member of the union whose tag it names;
+- `Record.field` is the type the record under `Record` declares `field` with,
+  read through every newtype layer above the record — a `NEWTYPE`'s
+  representation, a union variant's payload — so a field's type is reached the
+  way its value is. The read chains where a field is itself record-shaped:
+  `Outer.inner.x`, `Shape.Circle.r`;
 - `Pair {Key = Number}` is a declared type constructor applied to its arguments
   by the parameter names the family declares — every parameter named once and no
   name it does not declare — and `Number AS Wrap` is the same application spelled
@@ -167,8 +172,9 @@ handle the still-open window minted — a member's own sibling, or a binder's
 union of its variants' siblings — so `NEWTYPE Ring = :{next :Ring}` and a ring
 of mutually recursive declarations seal with no placeholder, and identity is the
 sealed SCC rather than the written group: two declarations of the same shape in
-different programs are one handle. A projection off a fellow union is
-`NoSuchMember` — until the group seals, the union declares no tag.
+different programs are one handle. A projection off a fellow is
+`NoSuchMember` — until the group seals, a union declares no tag and a newtype
+no field.
 
 **Only a nominal member can close a cycle.** A transparent alias and a signature
 name no fresh identity, so a cycle through one has no finite type: a cyclic
@@ -247,7 +253,9 @@ A type expression that does not elaborate is an [`Elaboration`](../elaborate.rs)
 never a panic and never a guess:
 
 - `NotAType` — a type name bound to something other than a type value;
-- `NoSuchMember` — a union projection naming a tag the union does not declare;
+- `NoSuchMember` — a projection naming a union tag or record field its owner
+  does not declare, or off an owner with neither — `Number.z`, or a ring of
+  newtypes with no record under it;
 - `Bound` — a bound that names a type variable or is `Never`;
 - `Unsupported` — any other spelling: a `_` field, an outer quantifier read
   under a nested group, an application whose arguments are not exactly the
@@ -283,7 +291,9 @@ retired lifetime name.
 [`tests/examples.rs`](tests/examples.rs) elaborates each production, each
 refusal, and a callable's type off each builtin shape that births one, over a
 program shaped and activated in a cell with every slot bound or left empty as
-the test asks. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
+the test asks; [`tests/projections.rs`](tests/projections.rs) reads a record
+field's declared type through an alias, a newtype layer and a chain, and each
+refusal. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
 door over the same harness: each form it elaborates, each group it seals — a
 ring, a union and a newtype in one component, a ring written in either order
 interning equal — the chaining record a bodyless `GROUP` head declares and the
@@ -306,7 +316,5 @@ interns as the union of its three members.
   bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
 - [Callables typed by function types](../../roadmap/rewrite/function-typed-callables.md)
   — a bare `EXPR` or `OP` typed by its function type, its shape carried beside.
-- [Record field types in type position](../../roadmap/rewrite/record-field-types.md)
-  — `:(Point.y)`.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates.

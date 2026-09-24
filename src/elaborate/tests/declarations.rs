@@ -7,35 +7,7 @@ use crate::type_lattice::{
 };
 
 use super::super::{Elaboration, callable_type};
-use super::{Held, Program, scalars, with_program};
-
-/// Shape and activate `source` with every slot empty, run the door over every component of type
-/// binders, and hand the result to `check`.
-fn declared<R>(
-    source: &str,
-    check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>, Result<(), Elaboration>) -> R,
-) -> R {
-    with_program(
-        source,
-        scalars,
-        |_, _, _| Held::Empty,
-        |program| {
-            let brought = program.declare();
-            check(program, brought)
-        },
-    )
-}
-
-/// `source` declares its types, or the test fails with the refusal.
-fn brought<R>(
-    source: &str,
-    check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
-) -> R {
-    declared(source, |program, brought| {
-        brought.unwrap_or_else(|refusal| panic!("`{source}` declares: {refusal:?}"));
-        check(program)
-    })
-}
+use super::{Program, brought, declared};
 
 /// The representation a newtype member wraps.
 fn representation(program: &Program<'_, '_, '_>, handle: KType) -> KType {

@@ -6,6 +6,7 @@ mod builtin;
 mod declarations;
 mod examples;
 mod module;
+mod projections;
 
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, ProgramBrand, ReleaseAbsorption, SlabHandle, Verdict, Writer,
@@ -221,6 +222,34 @@ pub(super) fn with_program<R>(
             .expect("a cell outside its step releases");
     }
     out
+}
+
+/// Shape and activate `source` with every slot empty, run the door over every component of type
+/// binders, and hand the result to `check`.
+pub(super) fn declared<R>(
+    source: &str,
+    check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>, Result<(), Elaboration>) -> R,
+) -> R {
+    with_program(
+        source,
+        scalars,
+        |_, _, _| Held::Empty,
+        |program| {
+            let brought = program.declare();
+            check(program, brought)
+        },
+    )
+}
+
+/// `source` declares its types, or the test fails with the refusal.
+pub(super) fn brought<R>(
+    source: &str,
+    check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
+) -> R {
+    declared(source, |program, brought| {
+        brought.unwrap_or_else(|refusal| panic!("`{source}` declares: {refusal:?}"));
+        check(program)
+    })
 }
 
 /// Every slot bound to `Null`.

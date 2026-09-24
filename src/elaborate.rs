@@ -14,11 +14,12 @@
 //!
 //! Elaborated: a bare type name, `LIST OF Elem`, `MAP Key -> Val`, `FN :{…} -> Ret`,
 //! `EXPR (head) -> Ret` with and without `FOR ALL`, a union `A | B` and a meet `A & B` of members,
-//! a record type `:{…}`, a union member `Union.Tag`, and a constructor application
-//! `Pair {Key = Number}` with its arity-one sugar `Number AS Wrap`. A name a `FOR ALL` group
-//! declares is that group's quantifier, bounded by what `(Name UNDER <bound>)` writes or else by
-//! `Any`, and is never a mention; a `SIG`'s `TYPE (Name UNDER <bound>)` bounds its abstract member
-//! the same way. Every other spelling is [`Unsupported`].
+//! a record type `:{…}`, a union member `Union.Tag`, the declared type of a record's field
+//! `Record.field`, and a constructor application `Pair {Key = Number}` with its arity-one sugar
+//! `Number AS Wrap`. A name a `FOR ALL` group declares is that group's quantifier, bounded by what
+//! `(Name UNDER <bound>)` writes or else by `Any`, and is never a mention; a `SIG`'s
+//! `TYPE (Name UNDER <bound>)` bounds its abstract member the same way. Every other spelling is
+//! [`Unsupported`].
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
 //! `crate::parse`, `crate::scope`, `crate::type_lattice` and `crate::values`, and nothing else in
@@ -54,8 +55,9 @@ pub enum Elaboration {
     NotAType { name: TypeSymbol, site: Site },
     /// A spelling this module does not elaborate, at `site`.
     Unsupported { site: Site },
-    /// A union member projection naming a tag the union does not declare.
-    NoSuchMember { union: KType, tag: Symbol },
+    /// A projection `Owner.name` naming a member `Owner` does not declare: a union's tag, or a
+    /// record's field.
+    NoSuchMember { owner: KType, name: Symbol },
     /// A bound at `site` that names a type variable — a `FOR ALL` name or a signature's abstract
     /// member — or is `Never`.
     Bound { site: Site },

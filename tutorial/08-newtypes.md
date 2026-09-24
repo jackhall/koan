@@ -105,7 +105,8 @@ north
 `:(Point.y)` is the field's declared `Str`, so the slot admits exactly what a slot
 spelled `:Str` admits. Change the declaration and the slot follows. The read chains
 where a field is itself record-shaped — `:(Outer.inner.x)` — and works through an
-alias of the type name.
+alias of the type name. Like field access on a value, it falls through a wrapping
+newtype: with `NEWTYPE Boxed = Point`, `:(Boxed.x)` is `Point`'s `x`.
 
 The sigil is not optional here. `x` and `y` are lowercase names, and a lowercase
 name never means a type in an ordinary expression — so the bare spelling asks for

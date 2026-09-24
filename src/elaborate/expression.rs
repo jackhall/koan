@@ -6,9 +6,10 @@ use crate::parse::builtin_shapes::binder::{bounded_name, quantifier_entries};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_name};
-use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
-    DispatchTokenElement, GroupIntern, KType, TypeRegistry, constructor_param_names, meet,
+    DispatchTokenElement, GroupIntern, KType, NodeSchema, TypeNode, TypeRegistry,
+    constructor_param_names, meet,
 };
 use crate::values::{KnottedFamily, Value};
 
@@ -239,15 +240,16 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                     self.shape(&group, part(4), part(6), groups)
                 }
                 BuiltinShapeId::Attribute => {
-                    let union = self.part(part(1), groups)?;
-                    let tag = match part(2) {
+                    let owner = self.part(part(1), groups)?;
+                    let name = match part(2) {
                         ExpressionPart::Type(name) => name.symbol(),
                         ExpressionPart::Identifier(name) => name.symbol(),
                         _ => return Err(unsupported),
                     };
                     self.types
-                        .union_member_named(union, tag)
-                        .ok_or(Elaboration::NoSuchMember { union, tag })
+                        .union_member_named(owner, name)
+                        .or_else(|| self.field(owner, name))
+                        .ok_or(Elaboration::NoSuchMember { owner, name })
                 }
                 _ => Err(unsupported),
             };
@@ -312,6 +314,28 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                 Ok(met)
             }
             _ => Err(unsupported),
+        }
+    }
+
+    /// The type the record under `owner` declares `name` with, read through every newtype layer
+    /// above it — a `NEWTYPE`'s representation, a union variant's payload. `None` when no record
+    /// lies under `owner` or it declares no `name`; a ring of newtypes with no record under it,
+    /// `NEWTYPE Loop = Loop`, is peeled once round and then refused.
+    fn field(&self, owner: KType, name: Symbol) -> Option<KType> {
+        let mut peeled = BumpVec::new_in(self.scratch);
+        let mut layer = owner;
+        loop {
+            match self.types.node(layer) {
+                TypeNode::Record { fields } => return fields.get(name),
+                TypeNode::SetMember {
+                    schema: NodeSchema::NewType(repr),
+                    ..
+                } if !peeled.contains(&repr) => {
+                    peeled.push(layer);
+                    layer = repr;
+                }
+                _ => return None,
+            }
         }
     }
 

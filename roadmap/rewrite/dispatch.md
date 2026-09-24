@@ -190,7 +190,6 @@ program runs on the rewritten stack.
 - [Binders nested in expressions](nested-binders.md) — a nested binder is hoisted before dispatch meets it.
 - [Callables typed by function types](function-typed-callables.md) — each candidate's shape, and one group solve.
 - [Lambdas born where they are written](lambdas-where-written.md) — the door the evaluator births a lambda through.
-- [Record field types in type position](record-field-types.md) — tutorial 08's `LABEL` snippet.
 - [Quotes resolve where they are written](eval-scope.md) — a quote's names and candidates resolve at the quote.
 
 **Unblocks:**

@@ -58,5 +58,4 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Lambdas born where they are written](rewrite/lambdas-where-written.md)
 - [Binders nested in expressions](rewrite/nested-binders.md)
 - [Parameterized unions](rewrite/parameterized-unions.md)
-- [Record field types in type position](rewrite/record-field-types.md)
 

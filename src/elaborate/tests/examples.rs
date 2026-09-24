@@ -194,7 +194,7 @@ LET Missing = :(Shape.Triangle)";
         ));
         assert!(matches!(
             elaborated(&program, 1),
-            Err(Elaboration::NoSuchMember { tag, .. }) if tag == program.type_name("Triangle").symbol()
+            Err(Elaboration::NoSuchMember { name, .. }) if name == program.type_name("Triangle").symbol()
         ));
     });
 }
