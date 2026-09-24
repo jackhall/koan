@@ -242,13 +242,19 @@ statements than the slab cap, a binding built in the root from the start, a
 frame's result crossing into the root at the verdict's price, a called body's
 evaluations as tenants of the frame, a component bound from one knot, eager
 parts supplied by site in one wake, a recursion deeper than the slab cap, a
-module body run inline, and one whole program with all of them.
+module body run inline, lambdas — born through the
+[lambda door](../knot/README.md#a-lambda) after a later binding they read,
+returned from a frame and called with their captures, held in a knot and
+reading their fellow through an edge, and supplied to a tie as an eager part —
+and one whole program with all of them.
 [`tests/substrate.rs`](tests/substrate.rs) loads two programs through a helper,
 moves them into a `Vec`, runs each, and reads a binding back in a separate call
 through a resumed root work; it also checks both load errors, an inspection
 before the program ran, and a stalled substrate. The two-program test,
-`a_whole_program` and `an_eager_part_is_supplied_by_site_in_one_wake` are on
-the [Miri slate](../../observe/miri_slate.md).
+`a_whole_program`, `an_eager_part_is_supplied_by_site_in_one_wake`,
+`a_call_binds_each_type_parameter_to_its_solution` and
+`a_lambda_returned_from_a_frame_keeps_its_captures` are on the
+[Miri slate](../../observe/miri_slate.md).
 
 ## Open work
 

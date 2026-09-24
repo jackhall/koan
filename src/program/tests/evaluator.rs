@@ -1,25 +1,27 @@
 //! The miniature evaluator the program suites supply as their [`Language`]: not dispatch, and kept
 //! small. Its builtin table is `origin = 0` and the scalar types, and it evaluates exactly a
 //! literal, a quote, a name, a list of literals and names, `(WHEN c THEN a ELSE b)`,
-//! `(a MINUS b)`, and a call `(f x)` of a function with one parameter. `WHEN`, `THEN`, `ELSE` and
-//! `MINUS` are no builtin shapes, so the shape builder walks them as plain calls; anything else is
-//! refused.
+//! `(a MINUS b)`, `(FIRST xs)` over a list data node whose first cell is an edge, a call `(f x)` of a function with one
+//! parameter, and a `FN`, born through the [lambda door](crate::knot::lambda). `WHEN`, `THEN`,
+//! `ELSE`, `MINUS` and `FIRST` are no builtin shapes, so the shape builder walks them as plain
+//! calls; anything else is refused.
 //!
 //! A step is a bare `fn`, so what it observes it records in a thread-local for the test around it.
 
 use std::cell::RefCell;
 
-use crate::knot::{KActivationView, KBuiltins, KValue, Knotted};
+use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda};
 use crate::memory::{Active, Bump, BumpAllocator, Writer};
-use crate::parse::{ExpressionPart, KLiteral, Spanned};
-use crate::program::{Evaluated, KBirth, KBundle, KState, Language, call};
+use crate::parse::builtin_shapes::BuiltinShapeId;
+use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
+use crate::program::{Evaluated, KBirth, KBundle, KState, Language, Program, call};
 use crate::scheduler::{
     Action, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{Builtins, Position, Site, Slot};
+use crate::scope::{Builtins, CaptureSlot, Position, Site, Slot};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
-use crate::values::{List, Record, TypeValue, Value};
+use crate::values::{Circular, Knotted as _, Link, List, Record, TypeValue, Value};
 
 thread_local! {
     static SEEN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -73,9 +75,10 @@ impl Language for Mini {
     }
 }
 
-/// What a node is to the evaluator: one part, or a formless call over several.
+/// What a node is to the evaluator: one part, a `FN`, or a formless call over several.
 enum Form<'graph> {
     Leaf(&'graph ExpressionPart<'graph>),
+    Lambda(&'graph KExpression<'graph>),
     Call(&'graph [Spanned<ExpressionPart<'graph>>]),
 }
 
@@ -85,6 +88,13 @@ fn form(node: Evaluated<'_>) -> Form<'_> {
         Evaluated::Part(part) => return Form::Leaf(part),
         Evaluated::Statement(expression) => expression,
     };
+    let shape = expression.cache().builtin_shape().map(|shape| shape.id);
+    if matches!(
+        shape,
+        Some(BuiltinShapeId::Lambda | BuiltinShapeId::QuantifiedLambda)
+    ) {
+        return Form::Lambda(expression);
+    }
     match expression.parts {
         [only] => form(Evaluated::Part(&only.value)),
         parts => Form::Call(parts),
@@ -102,6 +112,25 @@ fn read<'graph, 'here>(
 ) -> Option<KValue<'graph, 'here>> {
     let mention = view.shape().mention(Site::of(part))?;
     Some(view.read(mention.coordinate))
+}
+
+/// A lambda the door birthed, and each capture it was born with.
+fn born<'graph>(member: Knotted<'graph, '_>, program: &'graph Program<'graph>) -> String {
+    let closure = member
+        .function()
+        .expect("the door births a function")
+        .closure();
+    let captures: Vec<_> = (0..closure.len())
+        .map(|at| match closure.get(CaptureSlot(at as u32)) {
+            Link::Value(value) => super::describe(value, program),
+            Link::Edge(_) => unreachable!("the door lays no edge"),
+        })
+        .collect();
+    format!(
+        "{} capturing {}",
+        super::describe(Value::Knotted(member), program),
+        captures.join(" ")
+    )
 }
 
 /// Whether a condition's value takes the `THEN` branch.
@@ -200,6 +229,15 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             return step.finish(Value::List(list));
         }
         Form::Leaf(_) => return step.failed(StepError::Refused),
+        Form::Lambda(node) => {
+            let site = Site::of_body(node).expect("a lambda has a body");
+            let writer = step.writer();
+            let Ok(member) = lambda(writer, &view, site, types, &scratch) else {
+                return step.failed(StepError::Refused);
+            };
+            record(format!("born {}", born(member, program)));
+            return step.finish(Value::Knotted(member));
+        }
         Form::Call(parts) => parts,
     };
     match (parts, stage) {
@@ -235,6 +273,17 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 return step.failed(StepError::Refused);
             };
             step.finish_fresh(move |_, _| Active::new(Value::Number(left - right)))
+        }
+        ([first, operand], 0) if keyword(first, "FIRST") => {
+            let Some((holder, Circular::List(list))) =
+                read(&view, &operand.value).and_then(|value| value.as_circular())
+            else {
+                return step.failed(StepError::Refused);
+            };
+            match list.cells().first() {
+                Some(Link::Edge(edge)) => step.finish(Value::Knotted(holder.sibling(*edge))),
+                _ => step.failed(StepError::Refused),
+            }
         }
         ([_, argument], 0) => {
             let asked = ask(&mut step, birth, &argument.value, Use::Keeps);

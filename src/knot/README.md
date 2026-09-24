@@ -16,8 +16,8 @@ the node, the value and activation spelled at it, and the `Supplied` and
 `Untieable` a birth answers with. Each node kind owns its payload and its doors
 beside it:
 
-- [`function.rs`](function.rs) — a function node, and the staging a tie does for
-  a function member.
+- [`function.rs`](function.rs) — a function node, the staging a tie does for a
+  function node, and [the lambda door](#a-lambda).
 - [`data.rs`](data.rs) — a data node: staging, the memo derivation below, and
   the lay-down.
 - [`module/`](module/README.md) — a module node and a barrier node, and
@@ -85,11 +85,12 @@ fellow is a one-node knot, and a module always is: a mention reached from a
 module binder's root is eager whatever body it sits in, so a module is never in
 a cycle — with a fellow binder, which the shape refuses as an eager cycle, nor
 with itself, which is refused a step earlier, since an eager read at the
-binder's own position does not see that binder. So there is one representation,
-one birth path and one copy per kind of node. A node is region-resident, `Copy`
-and so `Drop`-free, and a node's fields are private to this module: a node
-exists only because the tie, the view door one layer up, or a copy of a tied
-knot, laid it down.
+binder's own position does not see that binder. So there is one representation
+and one copy per kind of node, and a function is staged and laid down the same
+way whichever door births it. A node is region-resident, `Copy` and so
+`Drop`-free, and a node's fields are private to this module: a node exists only
+because the tie, the lambda door, the view door one layer up, or a copy of a
+tied knot, laid it down.
 
 ## The tie
 
@@ -110,8 +111,11 @@ its right-hand side is a callable form at its root, through transparent groups
 nominal construction `(Head payload)`. It is a *module member* when it is a
 `MODULE` or `GROUP` binder — a member class of its own rather than `Opaque`.
 Anything else is `Opaque` and refuses the tie before a member is read. A
-callable form anywhere else — inside a list, or called where it is written — is
-not a binder's and is born by no tie.
+callable form anywhere else is no member. A `FN` a data member holds that
+captures a fellow member is a *function node* of the knot, below; any other —
+a body's last statement, the head of a call, an argument, a list item that
+captures no fellow — is born through [the lambda door](#a-lambda) where the
+evaluator meets it.
 
 **A module member is born body-first, and alone**, on the module layer's own
 path ([Birth](module/README.md#birth)): its binder's body has already run in an
@@ -136,9 +140,10 @@ scratch first.
 - A data member ([data.rs](data.rs)): its right-hand side walked part by part.
   A literal waits to be lowered; a mention of a fellow member is an edge; any
   other mention is the word the activation reads there. A part the walk cannot
-  build itself — a call, a keyword form, a `FN` — is asked of the caller's
-  evaluator by its `Site`, handed the part itself, so the caller evaluates the
-  eager parts and ties again with their values; a dict key is a scalar literal
+  build itself — a call, a keyword form, a `FN` that captures no fellow
+  member — is asked of the caller's evaluator by its `Site`, handed the part
+  itself, so the caller evaluates the eager parts and ties again with their
+  values; a dict key is a scalar literal
   or such a part. The walk asks for **every** such part in one attempt: a part
   the caller has no value for is staged as a placeholder and the walk goes on,
   and the staging is refused at its end, naming the first. A placeholder can
@@ -146,12 +151,20 @@ scratch first.
   A caller refused on several parts therefore learns them all at once, asks for
   them all at one park, and ties again once.
 - **A deferred mention below a nested constructor is written into the knot.**
-  Every constructor on the path from a member's root to a fellow mention is an
-  *anonymous* data node of the same knot, indexed after the members in the
-  order the walk meets it, and the cell that held it holds an edge to it. So in
+  Every constructor on the path from a member's root to a fellow mention, or to
+  a `FN` that captures one, is an *anonymous* data node of the same knot,
+  indexed after the members in the order the walk meets it, and the cell that
+  held it holds an edge to it. So in
   `LET a = {inner = [f], plain = [1 2]}` with `f` in `a`'s component, `inner`
   is an edge to an anonymous list node whose cell is an edge to `f`, while
   `plain`, which names no fellow, stays an ordinary value.
+- **A `FN` a data member holds that captures a fellow member is a function node
+  of the knot**, indexed after the members like an anonymous node, and the cell
+  that held it holds an edge to it. Its body is the one the shape keys at its
+  form's body site (`Site::of_body`), and it is staged as a function member is,
+  its captures of fellows minted by the same plan. So
+  `LET a = [(FN :{} -> Any = (a))]` ties two nodes: `a`, a list whose cell is an
+  edge to the function, whose capture is an edge back to `a`.
 
 Every mention of a fellow member becomes the edge the knot's plan mints for
 that node's index.
@@ -169,7 +182,8 @@ right-hand sides hold it. An ascription is no cut, since a retype stamps a
 structural type and no structural type names itself: `LET a = [1 a]` refuses,
 while `LET a = (Ring {next = a})` over `NEWTYPE Ring = :{next :Ring}` ties as a
 tagged node over an anonymous record node `{next: Ring}`, and `LET a = [f]`
-with `f` a function capturing `a` ties with `a : List` of `f`'s type.
+with `f` a function capturing `a` ties with `a : List` of `f`'s type. A
+function node a data member holds is a cut the same way.
 
 **Check constructions.** Every construction a data member holds is checked by
 [`values::construction`](../values/README.md#what-a-value-is), the one rule an
@@ -200,9 +214,27 @@ refusal writes nothing**. The refusal is an `Untieable`:
 - `TypeCycle` — a cycle of container nodes, with the members holding it.
 - `Type` — a member's signature did not elaborate.
 
-A `FN` under a data member's constructor slot is an eager part no evaluator can
-supply yet — a function value born outside a binder's root has no birth path —
-so it refuses `Eager`.
+## A lambda
+
+[`lambda`](function.rs) births a callable no binder names — a `FN` written as a
+body's last statement, at the head of a call, as an argument, or as a data
+member's part that captures no fellow — as a one-node knot in the region its
+caller's writer names. It is keyed by the `Site` of the callable's body part,
+which a caller finds from the form node with `Site::of_body`, since that is
+what the enclosing shape keys the nested body by; its signature is read off the
+form the body sits in. The evaluator calls it where it meets such a `FN`, and
+the value it hands back is that one member.
+
+Its captures are read through the activation view the evaluator reads in, and
+each finds its slot bound for the reason a tie's reads do: a mention inside a
+nested callable is a read of its statement, and the body runner performs a
+statement after every unit it reads — so a `FN` that captures a name declared
+after it is born once that name is bound. The door shares the tie's staging and
+lay-down for a function node, so a door-born function weighs exactly what the
+tie gives the same function in a one-node knot. No capture it reads is an edge:
+a callable that captures a fellow member is a node of its binder's knot, which
+the tie never asks the evaluator for. A signature that does not elaborate
+refuses `Type` and writes nothing.
 
 ## Closure bindings and edges
 
@@ -306,6 +338,11 @@ carries the scalar types alone.
   refusal.
 - [`module/tests/coerced.rs`](module/tests/coerced.rs) — what a barrier holds, and `values`
   seeing it as the function it stands for.
+- [`tests/lambda.rs`](tests/lambda.rs) — the door: a one-node knot capturing
+  the enclosing word, a later binding read at birth, the weight parity with a
+  tied function, and a quantified lambda's quantifier map; a `FN` capturing its
+  binder, a fellow function, or its binder below a nested constructor tied as a
+  function node of the knot; and a `FN` capturing no fellow asked of the caller.
 - [`tests/copy.rs`](tests/copy.rs) — a two-node knot crossed under a copy is the
   same knot rebuilt, and so is a tagged ring beside a function capturing it
   (`a_copied_ring_is_the_same_graph_rebuilt`) and a module whose members are
@@ -317,9 +354,10 @@ carries the scalar types alone.
   plans ([TEST.md](../../TEST.md#scope-property-laws)): a component of value
   binders that is cyclic or all callable ties iff the reads among its data
   members are acyclic, and refuses with `TypeCycle` naming data members
-  otherwise; a tied data node holds one link per planned read and a tied
-  function's closure follows its capture layout; and every tied knot copies
-  whole with each link's kind kept.
+  otherwise; a tied data node holds one link per planned read, a lambda item
+  capturing a fellow member an edge to a function node past the members; a tied
+  function's closure, a member's or such a node's, follows its capture layout;
+  and every tied knot copies whole with each link's kind kept.
 
 Four tests join the koan [Miri slate](../../observe/miri_slate.md), the paths
 only `knot` drives: `a_copied_knot_outlives_its_home` — a knot's node run
@@ -334,11 +372,10 @@ the node while the copy's node run is still being filled.
 
 ## Open work
 
-- [Dispatch](../../roadmap/rewrite/dispatch.md) — calling a function, and
+- [Dispatch](../../roadmap/rewrite/dispatch.md) — calling a function, the
+  evaluator that births a lambda through the door where it meets one, and
   builtins as function values with native bodies.
 - [Module programs](../../roadmap/rewrite/modules.md) — a call through a
   barrier node, which coerces its arguments inwards and its return outwards.
-- [Lambdas born where they are written](../../roadmap/rewrite/lambdas-where-written.md)
-  — a function value for a `FN` no binder names.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a `FN`
-  born inside a data binder's knot, and union-variant construction in a cycle.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) —
+  union-variant construction in a cycle.

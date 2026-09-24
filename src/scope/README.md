@@ -97,7 +97,9 @@ and arm nested in it as it meets them, and lays each finished shape down in
 program storage. A nested shape is found from its enclosing one by the address
 of the part that holds it, and a mention by the address of its own part — an
 identity any holder of the part recomputes, and which program storage never
-moves.
+moves. For a callable, the part that holds its body is its form's body-role
+part, and `Site::of_body` finds that site from the form node, so a caller that
+meets a `FN` no binder names finds its body shape.
 
 ## Resolution
 
@@ -121,8 +123,10 @@ holder's own knot.
 A name a callable body reads from outside is added to its capture layout once,
 however often the body reads it, with where the callable's birth reads it from:
 a coordinate of the enclosing activation, or — when the name is a fellow member
-of the component the callable's own binding belongs to — that member's place in
-the component, which the birth turns into a knot edge the caller mints.
+of the component the binder of the callable's statement belongs to — that
+member's place in the component, which the birth turns into a knot edge the
+caller mints. That covers a callable a binder births and a `FN` a data binder's
+constructor slot holds alike.
 
 **No reader sees a bare edge.** The scope layer is generic over the knot member
 a value holds — the parameter [`values`](../values/README.md#what-a-value-is)
@@ -241,7 +245,8 @@ data binder is an ordinary value, and a component of type binders goes through
 mixes the two channels: a definition names types only, so no mention leaves a
 type binder for a value binder. Tying is
 [`knot`](../knot/README.md#the-tie)'s, which writes a deferred mention
-below a nested constructor into the knot as an anonymous node.
+below a nested constructor into the knot as an anonymous node, and a `FN`
+there that captures a fellow member as a function node.
 
 A declaration's definition part is walked under the constructor state, so every
 type name it reads is a deferred mention — but a definition's own statements are

@@ -1,5 +1,6 @@
 //! Whole programs under the drain: unit order, where a value is built, the slab holding the root
-//! alone, calls and recursion, components, eager parts and module bodies.
+//! alone, calls and recursion, components, eager parts, module bodies, and lambdas: born where
+//! they are written, returned from a frame, and held in a knot.
 
 use crate::program::CellSubstrate;
 use crate::program::body::SUPPLIED_WAKES;
@@ -389,4 +390,127 @@ fn a_type_parameter_canonical_form_dropped_reads_as_its_bound() {
         2,
     );
     assert_eq!(run_and_read(&mut substrate, &["t"]), ["Value"]);
+}
+
+#[test]
+fn a_lambda_reads_a_later_binding_when_it_is_born() {
+    let mut substrate = loaded("(FN :{y :Number} -> Number = (later))\nLET later = 5", 2);
+    reset();
+    substrate.with(|running| running.run().expect("the program runs"));
+    let seen = recorded();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0], "literal 5", "the unit binding `later` runs first");
+    assert!(
+        seen[1].starts_with("born fn in ") && seen[1].ends_with(" capturing 5"),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn a_lambda_returned_from_a_frame_keeps_its_captures() {
+    // Each lambda is born as its frame's last statement, in its calling evaluation's region, and
+    // crosses into the root when that evaluation finishes. `constantly`'s region holds only what
+    // its lambda reaches, so the lambda pins and the region splices in; `wasteful`'s also holds a
+    // long list the lambda never reaches, so the lambda's knot copies, its capture deep-copied, and
+    // the region is reclaimed. Each is called after, reading its capture where it now lies.
+    let long = vec!["x"; 256].join(" ");
+    let source = format!(
+        "LET constantly = (FN :{{x :Any}} -> Any = (FN :{{y :Number}} -> Any = (x)))\n\
+         LET wasteful = (FN :{{x :Any}} -> Any = ((LET big = [{long}]) (FN :{{y :Number}} -> Any = (x))))\n\
+         LET pinned = (constantly [1 2])\nLET copied = (wasteful [3 4])\n\
+         LET r = (pinned 0)\nLET s = (copied 0)"
+    );
+    let mut substrate = loaded(&source, 2);
+    reset();
+    substrate.with(|running| running.run().expect("the program runs"));
+    let seen = recorded();
+    // Each birth's knot and captured list, in birth order: `pinned`'s, then `copied`'s.
+    let born: Vec<(String, String)> = seen
+        .iter()
+        .filter_map(|seen| {
+            let (knot, capture) = seen
+                .strip_prefix("born fn in ")?
+                .split_once(" capturing ")?;
+            Some((knot.to_string(), address(capture).to_string()))
+        })
+        .collect();
+    assert_eq!(born.len(), 2, "{seen:?}");
+    // Where each call's body found the list it reads: `r`'s call, then `s`'s.
+    let reads: Vec<&str> = seen
+        .iter()
+        .filter_map(|seen| seen.strip_prefix("read "))
+        .collect();
+    assert_eq!(reads.len(), 2, "{seen:?}");
+    assert_eq!(
+        reads[0], born[0].1,
+        "the pinned lambda reads its capture in place"
+    );
+    assert_ne!(
+        reads[1], born[1].1,
+        "the copied lambda reads its capture's copy"
+    );
+
+    let read = read_back(&mut substrate, &["pinned", "copied", "r", "s"]);
+    let knot = |described: &str| {
+        described
+            .strip_prefix("fn in ")
+            .expect("a lambda reads back as a function")
+            .to_string()
+    };
+    assert_eq!(
+        knot(&read[0]),
+        born[0].0,
+        "the pinned lambda's region splices into the root"
+    );
+    assert_ne!(
+        knot(&read[1]),
+        born[1].0,
+        "the copied lambda's knot is re-tied in the root"
+    );
+    assert!(read[2].starts_with("[1 2]@"), "{read:?}");
+    assert!(read[3].starts_with("[3 4]@"), "{read:?}");
+}
+
+#[test]
+fn a_lambda_in_a_knot_reads_its_fellow_through_an_edge() {
+    let mut substrate = loaded(
+        "LET a = [(FN :{y :Number} -> Any = (a))]\nLET g = (FIRST a)\nLET r = (g 0)",
+        2,
+    );
+    reset();
+    substrate.with(|running| running.run().expect("the program runs"));
+    assert!(
+        !recorded().iter().any(|seen| seen.starts_with("born ")),
+        "the tie never asks for the `FN`"
+    );
+    let read = read_back(&mut substrate, &["a", "g", "r"]);
+    let knot = read[0]
+        .strip_prefix("node in ")
+        .expect("`a` is a data node");
+    assert_eq!(read[1], format!("fn in {knot}"), "`g` sits in `a`'s knot");
+    assert_eq!(
+        read[2], read[0],
+        "the call reads `a` through its capture's edge"
+    );
+}
+
+#[test]
+fn a_lambda_part_is_supplied_to_a_tie() {
+    let mut substrate = loaded(
+        "LET k = 7\nLET a = [(FN :{} -> Number = (k)) f]\nLET f = (FN :{} -> Any = (a))",
+        2,
+    );
+    SUPPLIED_WAKES.with(|wakes| wakes.set(0));
+    reset();
+    substrate.with(|running| running.run().expect("the program runs"));
+    assert_eq!(SUPPLIED_WAKES.with(|wakes| wakes.get()), 1);
+    let born: Vec<String> = recorded()
+        .into_iter()
+        .filter(|seen| seen.starts_with("born "))
+        .collect();
+    assert_eq!(born.len(), 1, "{born:?}");
+    assert!(born[0].ends_with(" capturing 7"), "{born:?}");
+    let read = read_back(&mut substrate, &["a", "f"]);
+    assert!(read[0].starts_with("node in "), "{read:?}");
+    assert!(read[1].starts_with("fn in "), "{read:?}");
 }

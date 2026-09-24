@@ -211,15 +211,21 @@ shorter brand than the one it was bound at.
   a quantified lambda called twice: each frame reads the callee's quantifier map out of the knot's
   region, solves the group against the argument's carried type, and lays the solution down as a type
   value in its own region — a read across the two regions at every call.
+- `a_lambda_returned_from_a_frame_keeps_its_captures`
+  two lambdas born as a frame's last statement in their calling evaluation's region, each capturing
+  the list its frame was handed: one region holding only what its lambda reaches, spliced into the
+  root; one also holding a list its lambda never reaches, whose lambda's knot is re-tied in the root
+  with its capture deep-copied and the region reclaimed; each called after, reading its capture
+  where it now lies.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-24: 175s — 23 tests, 0 leaks, 0 UB
 - 2026-09-22: 106s — 22 tests, 0 leaks, 0 UB
 - 2026-09-22: 108s — 22 tests, 0 leaks, 0 UB
 - 2026-09-22: 79s — 21 tests, 0 leaks, 0 UB
 - 2026-09-21: 84s — 20 tests, 0 leaks, 0 UB
-- 2026-09-21: 52s — 18 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

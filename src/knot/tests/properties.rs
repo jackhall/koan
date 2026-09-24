@@ -1,8 +1,9 @@
 //! The law, over `scope`'s generated shape plans: a component of value binders that is cyclic or
 //! births only callables ties exactly when the reads between its data members are acyclic, to one
 //! knot whose closures follow its members' capture layouts and whose data nodes hold one link per
-//! planned read — an edge for a fellow member, the enclosing word otherwise, and `null` for a part
-//! the caller evaluates — and refuses naming data members otherwise; a copy of every knot is the
+//! planned read — an edge for a fellow member, the enclosing word otherwise, an edge to a function
+//! node past the members for a lambda capturing a fellow member, and `null` for any other part the
+//! caller evaluates — and refuses naming data members otherwise; a copy of every knot is the
 //! same knot rebuilt.
 //!
 //! The plans render a data binder of a cyclic component as a list literal: its deferred reads as
@@ -75,14 +76,24 @@ fn synthetic<'graph, 'cell>(
     }
 }
 
-/// The planned reads of the data member at `slot`, one per item of its list literal: the component
-/// index of a fellow member it reads, the coordinate of any other read, or `None` for a
-/// parenthesized item the caller evaluates.
-fn planned_items(
-    shape: &BodyShape<'_>,
+/// One planned item of a data member's list literal.
+enum Item<'graph> {
+    /// A read of fellow member `index`: an edge to it.
+    Fellow(u32),
+    /// Any other read: the enclosing word.
+    Read(Coordinate),
+    /// A lambda capturing a fellow member: an edge to a function node running `body`.
+    Function(&'graph BodyShape<'graph>),
+    /// Any other parenthesized item: what the caller evaluates, `null` here.
+    Evaluated,
+}
+
+/// The planned items of the data member at `slot`, one per item of its list literal.
+fn planned_items<'graph>(
+    shape: &BodyShape<'graph>,
     component: &Component<'_>,
     slot: Slot,
-) -> Vec<Option<Result<u32, Coordinate>>> {
+) -> Vec<Item<'graph>> {
     let Some(ExpressionPart::ListLiteral(items)) = shape.rhs(slot) else {
         panic!("a data binder of a tied component renders as a list literal");
     };
@@ -93,20 +104,54 @@ fn planned_items(
                 let mention = shape
                     .mention(Site::of(item))
                     .expect("a name item is a read");
-                Some(match mention.coordinate {
+                match mention.coordinate {
                     Coordinate::Activation {
                         hops: 0,
                         target: Target::Local(bound),
                     } if component.members.contains(&bound) => {
-                        Ok(component.members.binary_search(&bound).unwrap() as u32)
+                        Item::Fellow(component.members.binary_search(&bound).unwrap() as u32)
                     }
-                    coordinate => Err(coordinate),
-                })
+                    coordinate => Item::Read(coordinate),
+                }
             }
-            ExpressionPart::Expression(_) => None,
+            ExpressionPart::Expression(node) => Site::of_body(node.reference())
+                .and_then(|site| shape.nested(site))
+                .filter(|body| {
+                    body.kind() == ShapeKind::Callable
+                        && body
+                            .captures()
+                            .iter()
+                            .any(|capture| matches!(capture.source, CaptureSource::Member { .. }))
+                })
+                .map_or(Item::Evaluated, Item::Function),
             other => panic!("a planned list item is a name or a parenthesized node: {other:?}"),
         })
         .collect()
+}
+
+/// Whether `function`'s closure follows `body`'s capture layout: an edge for each fellow member,
+/// the word `activation` reads for any other capture.
+fn follows_layout<'graph, 'cell>(
+    function: &crate::knot::Function<'graph, 'cell, Knotted<'graph, 'cell>>,
+    body: &BodyShape<'graph>,
+    activation: &KActivation<'graph, 'cell>,
+) {
+    assert!(ptr::eq(function.shape(), body));
+    assert_eq!(function.closure().len(), body.captures().len());
+    for (at, spec) in body.captures().iter().enumerate() {
+        match (spec.source, function.closure().get(CaptureSlot(at as u32))) {
+            (CaptureSource::Member { index, .. }, Link::Edge(edge)) => {
+                assert_eq!(edge.index(), index)
+            }
+            (CaptureSource::Read(coordinate), Link::Value(value)) => {
+                let enclosing = activation.read(coordinate);
+                assert!(same(value, enclosing), "a capture is the enclosing word");
+            }
+            (source, _) => {
+                panic!("a closure binding does not follow its source {source:?}")
+            }
+        }
+    }
 }
 
 /// Every link `member` holds: a function's closure bindings, or a planned data node's cells.
@@ -152,6 +197,8 @@ fn run<'graph, 'cell>(
 ) {
     let shape = activation.shape();
     let mut born: Vec<(Slot, Knotted<'graph, 'cell>)> = Vec::new();
+    // The function nodes past a knot's members: lambdas a data member holds.
+    let mut lambdas_born: Vec<Knotted<'graph, 'cell>> = Vec::new();
     for component in shape.components() {
         let values = component
             .members
@@ -191,7 +238,7 @@ fn run<'graph, 'cell>(
                 None => planned_items(shape, component, *slot)
                     .into_iter()
                     .filter_map(|item| match item {
-                        Some(Ok(index)) => Some(index as usize),
+                        Item::Fellow(index) => Some(index as usize),
                         _ => None,
                     })
                     .collect(),
@@ -216,7 +263,17 @@ fn run<'graph, 'cell>(
             continue;
         }
         let knot = outcome.expect("a component whose data members read acyclically ties");
-        assert_eq!(knot.len() as usize, component.members.len());
+        let lambdas = data
+            .iter()
+            .flat_map(|index| planned_items(shape, component, component.members[*index]))
+            .filter(|item| matches!(item, Item::Function(_)))
+            .count();
+        assert_eq!(knot.len() as usize, component.members.len() + lambdas);
+        // Each lambda item's function node, in the walk's order: member order, then item order.
+        let mut next_lambda = component.members.len();
+        for index in component.members.len()..knot.len() as usize {
+            lambdas_born.push(Knotted::of(knot, index));
+        }
         for (index, slot) in component.members.iter().enumerate() {
             let member = Knotted::of(knot, index);
             born.push((*slot, member));
@@ -232,34 +289,27 @@ fn run<'graph, 'cell>(
                 assert_eq!(list.len(), items.len());
                 for (cell, item) in list.cells().iter().zip(items) {
                     match (item, cell) {
-                        (Some(Ok(index)), Link::Edge(edge)) => assert_eq!(edge.index(), index),
-                        (Some(Err(coordinate)), Link::Value(value)) => {
+                        (Item::Fellow(index), Link::Edge(edge)) => assert_eq!(edge.index(), index),
+                        (Item::Read(coordinate), Link::Value(value)) => {
                             let enclosing = activation.read(coordinate);
                             assert!(same(*value, enclosing), "a read cell is the enclosing word");
                         }
-                        (None, Link::Value(Value::Null)) => {}
-                        (item, _) => panic!("a data cell does not follow its read {item:?}"),
+                        (Item::Function(body), Link::Edge(edge)) => {
+                            assert_eq!(edge.index() as usize, next_lambda);
+                            next_lambda += 1;
+                            let node = member.sibling(*edge);
+                            let function =
+                                node.function().expect("a lambda item is a function node");
+                            follows_layout(function, body, activation);
+                        }
+                        (Item::Evaluated, Link::Value(Value::Null)) => {}
+                        (_, _) => panic!("a data cell does not follow its planned item"),
                     }
                 }
                 continue;
             };
             let function = member.function().expect("a birth is a function node");
-            assert!(ptr::eq(function.shape(), body));
-            assert_eq!(function.closure().len(), body.captures().len());
-            for (at, spec) in body.captures().iter().enumerate() {
-                match (spec.source, function.closure().get(CaptureSlot(at as u32))) {
-                    (CaptureSource::Member { index, .. }, Link::Edge(edge)) => {
-                        assert_eq!(edge.index(), index)
-                    }
-                    (CaptureSource::Read(coordinate), Link::Value(value)) => {
-                        let enclosing = activation.read(coordinate);
-                        assert!(same(value, enclosing), "a capture is the enclosing word");
-                    }
-                    (source, _) => {
-                        panic!("a closure binding does not follow its source {source:?}")
-                    }
-                }
-            }
+            follows_layout(function, body, activation);
         }
         for (slot, member) in &born[born.len() - component.members.len()..] {
             activation
@@ -272,12 +322,17 @@ fn run<'graph, 'cell>(
         let nested_activation = match nested.kind() {
             ShapeKind::Block => KActivation::of_block(writer, nested, activation),
             ShapeKind::Callable => {
-                let Some((_, callable)) = born.iter().find(|(_, member)| {
-                    member
-                        .function()
-                        .is_some_and(|function| ptr::eq(function.shape(), *nested))
-                }) else {
-                    // A function value that is no binder's right-hand side: born by no tie.
+                let Some(callable) = born
+                    .iter()
+                    .map(|(_, member)| member)
+                    .chain(&lambdas_born)
+                    .find(|member| {
+                        member
+                            .function()
+                            .is_some_and(|function| ptr::eq(function.shape(), *nested))
+                    })
+                else {
+                    // A function value no tie births: the door's.
                     continue;
                 };
                 let function = callable.function().expect("a function");

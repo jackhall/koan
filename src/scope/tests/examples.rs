@@ -5,7 +5,7 @@ use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     BodyShape, Builtins, CaptureSource, Coordinate, MentionClass, Position, ShapeError, ShapeKind,
-    Slot, Target,
+    Site, Slot, Target,
 };
 use crate::symbols::BinderSymbol;
 
@@ -798,4 +798,20 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
             assert_eq!(mention_of(shape, number).class, MentionClass::Deferred);
         },
     );
+}
+
+#[test]
+fn a_lambdas_body_is_found_by_its_forms_body_site() {
+    shaped("LET k = 1\n(FN :{} -> Number = (k))", |_, _, shape| {
+        let shape = shape.expect("the program shapes");
+        let node = shape.body()[1].statement_spine();
+        let body = shape
+            .nested(Site::of_body(node).expect("a `FN` has a body"))
+            .expect("the body has a shape");
+        assert_eq!(body.kind(), ShapeKind::Callable);
+        // The shape keeps a resident copy of the node, over the same parts.
+        let form = body.form().expect("a `FN` records its form");
+        assert!(std::ptr::eq(form.parts, node.parts));
+        assert_eq!(Site::of_body(&shape.body()[0]), None);
+    });
 }

@@ -110,8 +110,8 @@ statements and resolves its names through, closure bindings and activations — 
 [elaborate/](src/elaborate.rs) (type expressions elaborated into lattice handles
 where they are read — see [src/elaborate/README.md](src/elaborate/README.md)),
 [knot/](src/knot.rs) (functions, modules and circular data as values: the node
-each one is, the tie that births a component as one knot and the copy that
-re-ties it — see [src/knot/README.md](src/knot/README.md), and
+each one is, the tie that births a component as one knot, the door that births
+a lambda no binder names, and the copy that re-ties it — see [src/knot/README.md](src/knot/README.md), and
 [src/knot/module/README.md](src/knot/module/README.md) for the views `:|` and
 `:!` build, the coercion that births a view's members, and the binding a
 `USING … SCOPE` block enters on),

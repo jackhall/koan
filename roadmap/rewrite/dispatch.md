@@ -51,6 +51,11 @@ program runs on the rewritten stack.
   callable [its function type](../../src/elaborate/README.md#a-callables-type),
   quantified where the expression shape carries a `FOR ALL` group, so only a
   bucket registration carries an `ExpressionShape`.
+- A `FN` no binder names — a body's last statement, the head of a call, an
+  argument, a data member's part the tie asks for — is born where dispatch
+  evaluates it, through the [lambda door](../../src/knot/README.md#a-lambda):
+  tutorial 04's `CONSTANTLY` returns one, which is called afterward with the
+  captures it was born with.
 - A bucket-only definition — a bare `EXPR` or `OP` statement — is a bound member
   of the activation it is declared in, and a module's
   [self-signature](../../src/elaborate/README.md#a-modules-self-signature)
@@ -190,7 +195,6 @@ program runs on the rewritten stack.
 - [Code as values](code-values.md) — `ATTR`'s symbol label, `EVAL`'s operand, and code-typed parameters.
 - [Parameterized unions](parameterized-unions.md) — the family construction rule.
 - [Binders nested in expressions](nested-binders.md) — a nested binder is hoisted before dispatch meets it.
-- [Lambdas born where they are written](lambdas-where-written.md) — the door the evaluator births a lambda through.
 - [Quotes resolve where they are written](eval-scope.md) — a quote's names and candidates resolve at the quote.
 
 **Unblocks:**

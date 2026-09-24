@@ -6,7 +6,9 @@
 //! [function](crate::knot::function), a data node — a [`Circular`] over links — a [module](crate::knot::module), or a
 //! barrier over a function member of an opaque view. A function that names no fellow is a one-node
 //! knot, and so is every module and every barrier; a deferred-only component of value binders is
-//! born together as one knot by [`tie`], each mention of a fellow member an edge into it.
+//! born together as one knot by [`tie`], each mention of a fellow member an edge into it. A `FN` a data
+//! member holds that captures a fellow member is a node of that knot. Any other callable no binder
+//! names is born alone through [`lambda`], where the evaluator meets it.
 //!
 //! A module's node is the carrier, not a claim about cycles: `m.f` is not a knot edge but an index
 //! into the run, and the run holds members of knots the module does not own. A mention reached from
@@ -40,7 +42,7 @@ mod tie;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use function::Function;
+pub use function::{Function, lambda};
 pub use module::{Coerced, Module};
 pub use tie::tie;
 
@@ -185,7 +187,7 @@ pub enum Supplied<'graph, 'cell> {
 pub type Eager<'e, 'graph, 'cell> =
     dyn FnMut(Site, Option<&'graph ExpressionPart<'graph>>) -> Option<Supplied<'graph, 'cell>> + 'e;
 
-/// Why a component could not be tied.
+/// Why a birth refused: a component [`tie`] could not tie, or a lambda [`lambda`] could not birth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Untieable<'x> {
     /// A member's signature did not elaborate.

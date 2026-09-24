@@ -21,6 +21,7 @@ use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::builtin_shapes::BuiltinShapeId;
+use crate::parse::builtin_shapes::role::Role;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::DeclaredGroup;
@@ -139,6 +140,17 @@ pub struct Site(usize);
 impl Site {
     pub fn of(part: &ExpressionPart<'_>) -> Site {
         Site(std::ptr::from_ref(part) as usize)
+    }
+
+    /// The site of `form`'s body part — where the shape enclosing `form` records the body nested in
+    /// it — or `None` for a node whose builtin shape declares no body.
+    pub fn of_body(form: &KExpression<'_>) -> Option<Site> {
+        let shape = form.cache().builtin_shape()?;
+        shape
+            .roles()
+            .zip(form.parts)
+            .find(|(role, _)| matches!(role, Role::Body(_)))
+            .map(|(_, part)| Site::of(&part.value))
     }
 }
 

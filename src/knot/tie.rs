@@ -12,17 +12,17 @@
 //! memos are derived and every construction checked, and a part the caller has not evaluated, a
 //! cycle of containers or a construction that misfits refuses the tie before a byte is written.
 //! Only then are the closure runs and data nodes laid down, the knot's weight summed, and the nodes
-//! tied: member `i` is node `i`, and the anonymous data nodes follow.
+//! tied: member `i` is node `i`, and the anonymous nodes follow. A `FN` a data member holds that
+//! captures a fellow member is one of them, a function node staged like a function member.
 
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
-use crate::scope::{BodyShape, ClosureBindings, Component, ShapeKind};
+use crate::scope::{BodyShape, Component, ShapeKind};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::Weight;
 
 use super::data::{self, Stager};
-use super::function::Typing;
 use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, function, module};
 
 /// Tie `component` of `activation`'s shape as one knot in `writer`'s region: every member born
@@ -78,41 +78,38 @@ pub fn tie<'graph, 'cell, 'x>(
     }
     let nodes = Stager::nodes(activation, component, &roots, types, scratch, eager)?;
     let plan = KnotPlan::new(nodes.len() as u32);
-    let functions = function::stage(&plan, activation, component, types, scratch)?;
+    let mut bodies = BumpVec::with_capacity_in(nodes.len(), scratch);
+    bodies.extend(nodes.iter().enumerate().map(|(index, node)| match node {
+        None => shape.births(component.members[index]),
+        Some(node) => node.function(),
+    }));
+    let functions = function::stage(&plan, activation, &bodies, types, scratch)?;
 
     let mut memos: BumpVec<'x, Option<KType>> = BumpVec::with_capacity_in(nodes.len(), scratch);
-    memos.extend((0..nodes.len()).map(|index| {
+    memos.extend(
         functions
-            .get(index)
-            .and_then(|staged| staged.as_ref())
-            .map(|staged| staged.ktype)
-    }));
+            .iter()
+            .map(|staged| staged.as_ref().map(|staged| staged.ktype)),
+    );
     data::memos(&nodes, &mut memos, &names, types, scratch)?;
     data::check(&nodes, &memos, &names, types, scratch)?;
 
     let mut knot_weight = Weight::flat::<usize>();
-    let mut closures = BumpVec::with_capacity_in(functions.len(), scratch);
-    // Each function member's typing record (its quantifier map and registered shape) is laid down
+    // Each function node's typing record (its quantifier map and registered shape) is laid down
     // once, beside its closure: it lives in the region for the knot's life, and a copy re-homes it
-    // through the destination writer. A plain unquantified `FN` has neither and writes nothing.
-    let mut typings = BumpVec::with_capacity_in(functions.len(), scratch);
+    // through the destination writer.
+    let mut laid = BumpVec::with_capacity_in(functions.len(), scratch);
     for staged in functions.iter() {
-        closures.push(staged.as_ref().map(|staged| {
-            let closure = ClosureBindings::of(writer, &staged.captures);
-            knot_weight = knot_weight.plus(closure.weight());
-            closure
-        }));
-        typings.push(staged.as_ref().map(|staged| {
-            knot_weight = knot_weight.plus(Typing::weight(
-                staged.quantifier_map.len(),
-                staged.registered.is_some(),
-            ));
-            Typing::laid_down(writer, staged.quantifier_map, staged.registered)
+        laid.push(staged.as_ref().map(|staged| {
+            let (closure, typing, weight) = staged.laid_down(writer);
+            knot_weight = knot_weight.plus(weight);
+            (closure, typing)
         }));
     }
     let mut circulars = BumpVec::with_capacity_in(nodes.len(), scratch);
     for (index, node) in nodes.iter().enumerate() {
-        circulars.push(node.as_ref().map(|node| {
+        let data = node.as_ref().filter(|node| node.function().is_none());
+        circulars.push(data.map(|node| {
             let memo = memos[index].expect("every node's memo is derived");
             let circular = data::lay_down(writer, node, memo, &plan, types, scratch);
             knot_weight = knot_weight.plus(circular.weight());
@@ -124,15 +121,12 @@ pub fn tie<'graph, 'cell, 'x>(
     });
     Ok(plan.tie(writer, |edge| {
         let index = edge.index() as usize;
-        match (
-            functions.get(index).and_then(Option::as_ref),
-            circulars[index],
-        ) {
-            (Some(staged), _) => Node::Function(Function::new(
+        match (functions[index].as_ref().zip(laid[index]), circulars[index]) {
+            (Some((staged, (closure, typing))), _) => Node::Function(Function::new(
                 staged.ktype,
-                typings[index].expect("a function member staged its typing"),
+                typing,
                 staged.shape,
-                closures[index].expect("a function member has a closure"),
+                closure,
                 knot_weight,
             )),
             (None, Some(circular)) => Node::Data {

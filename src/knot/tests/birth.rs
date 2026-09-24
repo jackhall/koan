@@ -17,7 +17,7 @@ use super::{Fixture, bound, callable, circular, declared, follow, pin, with_fixt
 
 /// The component `name` belongs to, tied again with `eager` — a refusal the runner left for the
 /// test to see.
-fn tie_with<'f, 'graph, 'cell>(
+pub(super) fn tie_with<'f, 'graph, 'cell>(
     fixture: &'f Fixture<'_, 'graph>,
     writer: Writer<'cell>,
     activation: &KActivation<'graph, 'cell>,

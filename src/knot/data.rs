@@ -3,11 +3,13 @@
 //!
 //! **Staging** reads a member's right-hand side into scratch with no writer in reach. A literal waits
 //! to be lowered; a mention of a fellow member is an edge; any other mention is the word the
-//! activation reads, or a refusal while its binder runs; a part the walk cannot build itself — a
-//! call, a keyword form, a `FN` — is asked of the caller's evaluator by site. Every constructor on
-//! the path from a member's root to a fellow mention is an anonymous node of the same knot, indexed
-//! after the members in the order the walk meets it, and the cell that held it holds an edge; a
-//! nested constructor with no fellow mention below it stays an ordinary value.
+//! activation reads, or a refusal while its binder runs; a `FN` that captures a
+//! fellow member is a function node of the knot; a part the walk cannot build itself — a call, a
+//! keyword form, any other `FN` — is asked of the caller's evaluator by site. Every constructor on
+//! the path from a member's root to a fellow mention or such a `FN` is an anonymous node of the same
+//! knot; that node and the function node are indexed after the members in the order the walk meets
+//! them, and the cell that held each holds an edge. A nested constructor with no edge below it
+//! stays an ordinary value.
 //!
 //! **Memos** follow the nominal cut. A function's memo is its signature type and a tagged node's is
 //! the newtype its head names, both known before the knot exists; a container node's memo is what
@@ -20,7 +22,7 @@
 
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected_components};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
-use crate::scope::{BodyShape, Component, Coordinate, Site, Target};
+use crate::scope::{BodyShape, CaptureSource, Component, Coordinate, ShapeKind, Site, Target};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{
@@ -47,6 +49,9 @@ pub(super) enum Staged<'graph, 'cell, 'x> {
         site: Site,
         payload: &'x Staged<'graph, 'cell, 'x>,
     },
+    /// A `FN` that captures a fellow member: a function node of this knot, running `body`. Only
+    /// ever a node's shape, reached through an edge.
+    Function(&'graph BodyShape<'graph>),
 }
 
 /// A staged data node: the member whose right-hand side holds it, and its constructor.
@@ -55,8 +60,19 @@ pub(super) struct Node<'graph, 'cell, 'x> {
     pub shape: Staged<'graph, 'cell, 'x>,
 }
 
-/// Every knot node by index: a data node staged, or `None` for a function member.
+/// Every knot node by index: `None` for a function member, otherwise a data node or a function node
+/// a data member holds.
 pub(super) type Nodes<'graph, 'cell, 'x> = BumpVec<'x, Option<Node<'graph, 'cell, 'x>>>;
+
+impl<'graph> Node<'graph, '_, '_> {
+    /// The callable body this node runs, if it is a function node.
+    pub(super) fn function(&self) -> Option<&'graph BodyShape<'graph>> {
+        match self.shape {
+            Staged::Function(body) => Some(body),
+            _ => None,
+        }
+    }
+}
 
 /// The constructor a data member's right-hand side is rooted at, through one-part groups: a list,
 /// dict or record literal, or a nominal construction. `None` for anything else.
@@ -98,6 +114,21 @@ fn construction_parts<'graph>(
         }
         _ => None,
     }
+}
+
+/// The body of `node` when it is a callable that captures a fellow member — a node of the knot
+/// being tied. A capture is a `Member` source exactly when it names a fellow of the component its
+/// statement's binder sits in, which is the component the walk is tying.
+fn fellow_lambda<'graph>(
+    shape: &BodyShape<'graph>,
+    node: &KExpression<'graph>,
+) -> Option<&'graph BodyShape<'graph>> {
+    let body = shape.nested(Site::of_body(node)?)?;
+    let fellow = body
+        .captures()
+        .iter()
+        .any(|capture| matches!(capture.source, CaptureSource::Member { .. }));
+    (body.kind() == ShapeKind::Callable && fellow).then_some(body)
 }
 
 /// The walk over data members' right-hand sides.
@@ -203,6 +234,14 @@ impl<'stage, 'graph, 'cell, 'run> Stager<'stage, 'graph, 'cell, 'run> {
                     && node.cache().builtin_shape().is_none()
                 {
                     return self.part(&only.value, root);
+                }
+                if let Some(body) = fellow_lambda(shape, node) {
+                    let index = self.nodes.len() as u32;
+                    self.nodes.push(Some(Node {
+                        owner: self.owner,
+                        shape: Staged::Function(body),
+                    }));
+                    return Ok(Staged::Edge(index));
                 }
                 let Some((head, payload)) = construction_parts(shape, node) else {
                     return self.evaluate(part);
@@ -345,7 +384,7 @@ fn each_child<'a, 'graph, 'cell, 'x>(
         Staged::Dict(entries) => entries.iter().for_each(|(_, value)| visit(value)),
         Staged::Record(fields) => fields.iter().for_each(|(_, value)| visit(value)),
         Staged::Tagged { payload, .. } => visit(payload),
-        Staged::Literal(_) | Staged::Value(_) | Staged::Edge(_) => {}
+        Staged::Literal(_) | Staged::Value(_) | Staged::Edge(_) | Staged::Function(_) => {}
     }
 }
 
@@ -357,7 +396,7 @@ fn is_container(staged: &Staged<'_, '_, '_>) -> bool {
     )
 }
 
-/// Every node's memo: `memos[i]` is `Some` for a function member on entry, and on success every
+/// Every node's memo: `memos[i]` is `Some` for a function node on entry, and on success every
 /// node's memo is `Some`. A cycle of container nodes refuses with the members holding it.
 pub(super) fn memos<'x>(
     nodes: &Nodes<'_, '_, '_>,
@@ -449,6 +488,9 @@ fn staged_type(
             fields.iter().map(|(name, value)| (*name, of(value))),
         ),
         Staged::Tagged { head, .. } => head.handle(),
+        Staged::Function(_) => {
+            unreachable!("a function sits only at a node, reached through an edge")
+        }
     }
 }
 
@@ -530,6 +572,9 @@ fn write<'graph, 'cell>(
             Tagged::construct(writer, head, value(payload), types, scratch)
                 .expect("every construction is checked before the first write"),
         ),
+        Staged::Function(_) => {
+            unreachable!("a function sits only at a node, reached through an edge")
+        }
     }
 }
 
@@ -579,7 +624,7 @@ pub(super) fn lay_down<'graph, 'cell>(
         Staged::Tagged { payload, .. } => {
             Circular::Tagged(Tagged::linked(writer, cell(payload), memo))
         }
-        Staged::Literal(_) | Staged::Value(_) | Staged::Edge(_) => {
+        Staged::Literal(_) | Staged::Value(_) | Staged::Edge(_) | Staged::Function(_) => {
             unreachable!("a data node is a constructor")
         }
     }

@@ -12,6 +12,7 @@ mod birth;
 mod boundary;
 mod copy;
 mod equality;
+mod lambda;
 mod properties;
 
 use crate::elaborate::type_declarations;
