@@ -230,6 +230,32 @@ another cell at all is [its delivery](../scheduler/README.md#delivery). Both
 doors are generic in the graph's delivery bundle, so a step at any bundle —
 `NoDelivery` in a fixture, `KDelivery` under the drain — reaches them.
 
+## Views
+
+Data is immutable, so an edit builds a new value from slices of its source and
+the parts spliced between them. A slice, a concatenation or a splice of a list
+or a string is a **view**: it reads through its sources' runs rather than
+laying down cells or bytes of its own, and a view built from views is one view,
+not a chain.
+
+**A view is invisible.** It carries the type of the eager value it stands for,
+and equality, rendering and `satisfies` read through it, so a program tells a
+view from that value only by what it costs.
+
+**A crossing resolves a view.** A copy writes only the elements a view shows,
+as flat runs at the destination, and the copy holds nothing of its sources. A
+view weighs what that copy writes, so the [verdict](#crossing) copies a small
+view of a large source rather than pinning the source whole; a pinned view
+stays a view.
+
+**Only a structural transformation is a view.** A view remaps its sources'
+indices and runs no koan code. A transformation that runs code, as `map` and
+`filter` do, resolved at a crossing would run that code inside a copy, which
+could fail, never finish, or perform an effect wherever the value happens to
+cross, at a cost no weight measures. Such a transformation is lazy only as a
+stream, a value of its own type, and a copy of a stream copies its pending
+call without forcing it.
+
 ## Dict key order
 
 A dict is two aligned runs in the region — keys sorted, cells beside them — so a
@@ -367,3 +393,10 @@ the one path only `values` drives — a deep copy nesting `fill` inside `fill`
 with string writes between and a program node embedded, read after the region
 it was copied from is released. The pinned and kept paths it would otherwise
 pair with are `cellgraph`'s own slate.
+
+## Open work
+
+- [Slicing and splicing](../../roadmap/rewrite/slicing-and-splicing.md) — views
+  over lists and strings, resolved at a crossing.
+- [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,
+  the lazy transformations that run koan code.

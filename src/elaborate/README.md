@@ -286,5 +286,9 @@ interns as the union of its three members.
 
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
   bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
+- [Callables typed by function types](../../roadmap/rewrite/function-typed-callables.md)
+  — a bare `EXPR` or `OP` typed by its function type, its shape carried beside.
+- [Record field types in type position](../../roadmap/rewrite/record-field-types.md)
+  — `:(Point.y)`.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates.

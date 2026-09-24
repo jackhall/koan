@@ -22,6 +22,13 @@ program runs on the rewritten stack.
 - Dispatch keys a keyworded registration on its full bucket key, and a typed
   argument that does not satisfy a candidate is a non-match that falls through
   rather than a bind-time error.
+- A call runs the unique most specific admitting candidate; two admitting
+  candidates that are neither ordered nor resolved by the tie-breaks are an
+  ambiguity error, and no admitting candidate is a no-overload error naming the
+  arguments' types.
+- A keyworded use with no candidate at all — no builtin overload and no visible
+  registration at its key — is refused where its shape is built, as an unbound
+  name is.
 - An overload is a candidate only where the scopes' visibility predicate admits
   it.
 - A [`BUILTIN_SHAPES`](../../src/parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
@@ -33,36 +40,50 @@ program runs on the rewritten stack.
 - A shadowable builtin's bucket — equality, whose operands are `Any` — admits a
   user overload that is selected in the builtin's place.
 - A reference to a visible binder always reads it bound: the shape orders its
-  binder first, and rejects a body where an `EVAL` and a binder declared before
-  it read each other. A dispatch placeholder keys on the full bucket key.
-- A combined form — `LET f = FN EXPR …`, `LET plus = OP …` — binds a lambda to
-  its name and registers its expression shape under its bucket:
+  binder first. A dispatch placeholder keys on the full bucket key.
+- A combined expression shape — `LET f = FN EXPR …`, `LET plus = OP …` — binds
+  a lambda to its name and registers its expression shape under its bucket:
   [`callable_type`](../../src/elaborate/signature.rs) already hands a named
   callable [its function type](../../src/elaborate/README.md#a-callables-type),
-  quantified where the form carries a `FOR ALL` group, so only a bucket
-  registration carries an `ExpressionShape`.
-- A statement containing `EVAL` at any nesting depth, a callable body on its
-  right-hand side included, follows every unit binding a name or a bucket
-  registration declared before its position; the `EvalCycle` refusal covers a
-  binder that waits on such a statement.
+  quantified where the expression shape carries a `FOR ALL` group, so only a
+  bucket registration carries an `ExpressionShape`.
 - A bucket-only definition — a bare `EXPR` or `OP` statement — is a bound member
   of the activation it is declared in, and a module's
   [self-signature](../../src/elaborate/README.md#a-modules-self-signature)
-  carries it in its keyworded channel.
-- The old runtime's tutorial programs that use no feature beyond values,
-  scopes and functions run on the rewritten stack and print the same output,
-  and `tools/verify_snippets.py` reads the rewritten binary.
+  carries it in its keyworded channel; a combined expression shape's bucket is
+  carried there beside its named value slot.
+- A call in a body's tail position whose declared return satisfies the
+  caller's runs as a tail hop: a tail recursion N deep holds O(1) cells.
+- A frame's value satisfies its callee's declared return and carries it — a
+  container retyped to the declared type, a tagged value to the union member
+  naming its constructor — or the call yields an error.
+- A registration whose bucket key holds no keyword, anywhere in it, is
+  refused where its shape is built.
+- An evaluation or a frame that cannot proceed yields a koan error value, every
+  evaluation passes an error it receives through unchanged, and an uncaught one
+  ends the program with `error: <message>`.
+- Every runnable tutorial snippet that uses no `MATCH`, `TRY`, `CATCH`,
+  `Result`, `MODULE`, `SIG`, `VAL`, `TYPE`, `USING`, `:|`, `:!` or `CLOSE` runs
+  on the rewritten stack and prints the output its tutorial shows, and
+  `tools/verify_snippets.py` reads the rewritten binary, skipping
+  the snippets that use an expression shape on its pending list.
 - The module's design doc is the `README.md` in its source directory, and the
   module's top-of-file comment links it.
 
 **Directions.**
 
+- *What dispatch runs — decided.* Literals, names, containers, record access
+  (`.`, `ATTR`, `FROM`), newtype, type-constructor family and union-variant
+  construction, functions, keyword dispatch, the builtin library, quotes and
+  `$(…)`, and uncaught errors. [Control expression shapes and
+  errors](control-and-errors.md) owns `MATCH`, `TRY`, `CATCH` and `Result`, and
+  [modules](modules.md) owns the module expression shapes.
 - *Builtins as function values — decided.* A builtin registers through the same
   bucket a user function does, as a function value whose body is native.
 - *Newtype construction — decided.* An ordinary construction `(Head payload)`
   is `Tagged::construct`, the one construction rule the tie checks a knot's
   tagged nodes by too ([src/values/README.md](../../src/values/README.md#what-a-value-is)).
-- *The lambda a combined operator or a quantified combined form binds —
+- *The lambda a combined operator or a quantified combined expression shape binds —
   decided.* A binary `OP` body's parameters are `left` and `right`, so
   `LET plus = OP #(⊕) OVER Number` binds `FN :{left :Number, right :Number} ->
   Number`; a unary one's is `operands`, so it binds
@@ -76,21 +97,24 @@ program runs on the rewritten stack.
 - *Keyword reads resolved in the shape — decided.* A bucket key resolves when
   the shape is built, as a value or type name does
   ([src/scope/README.md](../../src/scope/README.md#resolution)), to a
-  **candidate list**: the union, over the reader's scope and every enclosing
-  one, of the registrations at that key whose position is below the reader's,
-  filtered by the visibility predicate and sorted by the selection rule below,
-  with the builtin's own overloads read off the builtin table. A keyworded use
-  is an eager context, so a registration declared after it is invisible, as a
-  function called before its `LET` is. The per-call residue is the type test
-  alone: the first candidate every typed argument satisfies runs. An `EVAL`
-  applies the same predicate at its own position when its block shape is built,
-  collecting from every enclosing shape rather than stopping at the first that
-  holds the key; a registration in evaluated code is a member of the `EVAL`'s
-  block shape, a candidate for the statements after it there, and never widens
-  a bucket around it, so no candidate list computed for a static site changes
-  after it is built. The closed-bucket and overlap checks run where a shape is
-  built, so evaluated code fails them at run time. [EVAL dynamic
-  dispatch](eval-dynamic-dispatch.md) relaxes this later.
+  **candidate list**: a fixed run of coordinates — the builtin's own overloads
+  read off the builtin table, then the registrations at that key visible to the
+  use in each enclosing scope, outermost first, filtered by the visibility
+  predicate. A keyworded use is a **mention of each candidate**, classified
+  eager or deferred as a name mention is: at a statement it reads at the
+  statement's position, so a registration declared after it is invisible, as a
+  function called before its `LET` is; inside a callable body it is deferred, so
+  the body sees its own registration and later ones, captures them, and
+  mutually recursive registrations tie as one knot. A candidate's slot types are
+  elaborated when its function is born, so no order is fixed where the shape is
+  built; the per-call residue is the type test and the selection rule below. A
+  keyworded use inside a quote resolves where the quote is written, as one in a
+  callable body does ([quotes resolve where they are written](eval-scope.md));
+  a registration in evaluated code is a member of the block shape it runs in, a
+  candidate for the statements after it there, and never widens a bucket around
+  it, so no candidate list computed for a static site changes after it is
+  built. The closed-bucket and overlap checks run where a shape is built, so
+  code composed at run time fails them when it is evaluated.
 - *Builtin buckets a user adds to — decided.* A `BUILTIN_SHAPES` entry is closed
   at its key because the body-shape builder walks a matching node by the entry's
   roles. An operator's bucket is open by type because its slots are eager
@@ -108,7 +132,33 @@ program runs on the rewritten stack.
   exactly where its operands are `Any`. A user's `==` returns `Bool` and `!=`
   is never declared: the [shape builder](../../src/scope/README.md#operator-groups)
   holds a program to both and rewrites `a != b` as `NOT (a == b)`, so `NOT` is
-  a builtin over `Bool` and `!=` has no bucket.
+  a builtin over `Bool` and `!=` has no bucket. `PRINT`'s operand is `Any`, so
+  a user overload of it is admitted and wins for its type; `PRINT` is a
+  stopgap until koan has effects.
+- *Selection — decided.* Each call keeps the candidates whose expression shape
+  admits the arguments' carried types and runs the unique most specific one,
+  ranked by the type lattice's shape order
+  ([`shape_specificity`](../../src/type_lattice/sig_relations.rs)), the order a
+  signature's bucket replay ranks by too; so a quantified candidate ranks below
+  a concrete one that admits the same arguments, and dispatch compares no slot
+  types of its own. Where several are maximal, a builtin among them wins;
+  otherwise equally specific candidates from different scopes resolve to the
+  outermost; anything else is an ambiguity error. The overlap check runs at load over the
+  operand types spelled from builtin names alone, so an operand type known only
+  at birth is never checked.
+- *Errors — decided.* A koan error is a tagged value of the builtin nominal
+  `Error` over `{message :Str}`, and a consumer checks the results it reads, per
+  the [scheduler](../../src/scheduler/README.md#the-drain). The program stops at
+  the first uncaught error. [Control expression shapes and
+  errors](control-and-errors.md) widens the payload when `CATCH` needs more.
+- *Tail calls — decided.* A frame evaluates its last statement in its own cell,
+  with its declared return as the contract; when that statement's selected call
+  returns a type satisfying the contract, the cell hops to the callee's frame
+  instead of spawning it, and otherwise it checks the value on finish.
+- *What the tutorial shows — decided.* A snippet whose output the rewrite
+  changes — an error's text, or a behaviour the rewrite's design changed — is
+  rewritten to the rewrite's output. `tools/verify_snippets.py` skips a snippet
+  that uses an expression shape on a pending list, which later items shrink.
 - *An overload that is never selected — decided.* A functor is a `FN` or
   `EXPR` returning a module, so an `OP #(+) OVER Elt` in its body learns its
   operand type per call: at `Elt = Number` the builtin is selected first,
@@ -129,11 +179,21 @@ program runs on the rewritten stack.
 
 ## Dependencies
 
-**Requires:** none — the lattice, the elaborator and the quantified lambda ship.
+**Requires:**
+
+- [Value, type and code tops](channel-tops.md) — admission keeps the families apart.
+- [Code as values](code-values.md) — `ATTR`'s symbol label, `EVAL`'s operand, and code-typed parameters.
+- [Parameterized unions](parameterized-unions.md) — the family construction rule.
+- [Binders nested in expressions](nested-binders.md) — a nested binder is hoisted before dispatch meets it.
+- [Callables typed by function types](function-typed-callables.md) — each candidate's shape, and one group solve.
+- [Lambdas born where they are written](lambdas-where-written.md) — the door the evaluator births a lambda through.
+- [Record field types in type position](record-field-types.md) — tutorial 08's `LABEL` snippet.
+- [Quotes resolve where they are written](eval-scope.md) — a quote's names and candidates resolve at the quote.
 
 **Unblocks:**
 
 - [Modules](modules.md) — a module program runs only under dispatch.
-- [EVAL dynamic dispatch](eval-dynamic-dispatch.md) — relaxes the shape-time candidate list for evaluated code.
 - [Yielding iterators](yielding-iterators.md) — a demand for an element is an ordinary dispatch.
 - [A compact type node table](compact-type-node-table.md) — its presize is calibrated on running programs.
+- [Control expression shapes and errors](control-and-errors.md) — arms run as blocks, and errors are values, here.
+- [Slicing and splicing](slicing-and-splicing.md) — slicing and splicing are builtins.

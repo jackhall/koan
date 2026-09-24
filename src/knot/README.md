@@ -330,6 +330,7 @@ the node while the copy's node run is still being filled.
   builtins as function values with native bodies.
 - [Module programs](../../roadmap/rewrite/modules.md) — a call through a
   barrier node, which coerces its arguments inwards and its return outwards.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a function
-  value born outside a binder's root, and union-variant construction in a
-  cycle.
+- [Lambdas born where they are written](../../roadmap/rewrite/lambdas-where-written.md)
+  — a function value for a `FN` no binder names.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a `FN`
+  born inside a data binder's knot, and union-variant construction in a cycle.

@@ -6,11 +6,11 @@ Module programs: the ascription and member-reading forms, running.
 value, its self-signature, and the doors `:|`, `:!` and `USING … SCOPE` name,
 each exercised over an activation whose members a test binds by hand. Nothing
 evaluates them. An ascription is an expression, a member read is an attribute
-form, and a name a `USING` surfaces resolves to a coordinate a running reader
+expression shape, and a name a `USING` surfaces resolves to a coordinate a running reader
 has to redeem — each of which waits on [dispatch](dispatch.md) to choose the
 callable a keyworded expression runs. No module program runs on the rewritten
 stack, and the old runtime's [`Module`](../../src/machine/model/values/module.rs)
-is the last of the language surface `machine` still owns.
+is the module surface `machine` still owns.
 
 **Acceptance criteria.**
 
@@ -42,5 +42,5 @@ is the last of the language surface `machine` still owns.
 
 **Unblocks:**
 
-- [Retire the old runtime](retire-the-old-runtime.md) — the last of the language
-  surface `machine` still owns.
+- [Retire the old runtime](retire-the-old-runtime.md) — the module surface
+  `machine` still owns.

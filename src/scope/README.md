@@ -536,6 +536,9 @@ type outside the one error that lists names, and on a retired lifetime name.
 ## Open work
 
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
+- [Binders nested in expressions](../../roadmap/rewrite/nested-binders.md) — a
+  name binder inside an expression, hoisted into a statement of its own.
+- [Quotes resolve where they are written](../../roadmap/rewrite/eval-scope.md)
+  — a quote's names resolved where it is written, wherever it is evaluated.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
-  OVER`, an `EVAL` retaining its defining scope across frames, and what an
-  `EVAL` behind a forward reference may read.
+  OVER`, and what an `EVAL` behind a forward reference may read.
