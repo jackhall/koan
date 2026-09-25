@@ -9,7 +9,7 @@ use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::ExpressionPart;
 use crate::source::Spanned;
-use crate::symbols::{BinderSymbol, SymbolInterner};
+use crate::symbols::{BinderSymbol, SymbolInterner, WILDCARD};
 
 pub(super) struct DictFrame<'a> {
     brand: ProgramBrand<'a>,
@@ -94,18 +94,22 @@ fn single_or_wrapped<'a>(
     }
 }
 
-/// Auto-commit trigger on the value side: any part that could be a fresh key on its own.
-/// Lets commas be optional — `{a: 1 b: 2}` parses identically to `{a: 1, b: 2}`.
+/// Auto-commit trigger on the value side: any part that could be a fresh key on its own, `_`
+/// included. Lets commas be optional — `{a: 1 b: 2}` parses identically to `{a: 1, b: 2}`.
 fn is_dict_key_start_part(part: &ExpressionPart<'_>) -> bool {
-    matches!(
-        part,
-        ExpressionPart::Identifier(_)
-            | ExpressionPart::Type(_)
-            | ExpressionPart::Literal(_)
-            | ExpressionPart::Expression(_)
-            | ExpressionPart::ListLiteral(_)
-            | ExpressionPart::DictLiteral(_)
-    )
+    match part {
+        ExpressionPart::Keyword(symbol) => *symbol == WILDCARD.symbol(),
+        _ => matches!(
+            part,
+            ExpressionPart::Identifier(_)
+                | ExpressionPart::Type(_)
+                | ExpressionPart::Literal(_)
+                | ExpressionPart::Expression(_)
+                | ExpressionPart::QuotedExpression(_)
+                | ExpressionPart::ListLiteral(_)
+                | ExpressionPart::DictLiteral(_)
+        ),
+    }
 }
 
 impl<'a> DictFrame<'a> {
@@ -116,6 +120,19 @@ impl<'a> DictFrame<'a> {
             state: DictPairState::Empty,
             mode: BraceMode::Unknown,
         }
+    }
+
+    /// Whether a `_` pushed now would open a key of its own: the frame is not a record, and the
+    /// part would start a key — no key is buffered, or a value is and would auto-commit. A `_`
+    /// before the first separator is admitted in either mode; if an `=` follows, `finish` refuses
+    /// it as a field name.
+    pub(super) fn admits_wildcard(&self) -> bool {
+        self.mode != BraceMode::Record
+            && match &self.state {
+                DictPairState::Empty => true,
+                DictPairState::Key(parts) => parts.is_empty(),
+                DictPairState::Value { value, .. } => !value.is_empty(),
+            }
     }
 
     /// When the value side already has content and the new part could start a fresh

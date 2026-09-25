@@ -424,7 +424,7 @@ fn a_group_surfaced_twice_is_held_once_and_a_second_chaining_is_refused() {
             "{first}
 {second}
 {module}
-USING (m :! Ops) SCOPE ((USING (m :! Peer) SCOPE (1 @ 2 % 3)))"
+USING (m :! Ops) SCOPE (USING (m :! Peer) SCOPE (1 @ 2 % 3))"
         )
     };
     let equal = nest(

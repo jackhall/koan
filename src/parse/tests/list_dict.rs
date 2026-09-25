@@ -320,3 +320,22 @@ fn a_dict_value_may_be_a_type_sigil() {
     );
     assert_eq!(top("{a: :Number}").unwrap(), vec!["[D{t(a): T(Number)}]"]);
 }
+
+/// `_` may be written as a dict's key, naming its default, and nowhere else in a literal.
+#[test]
+fn a_wildcard_is_a_dict_key_and_nothing_else_in_a_literal() {
+    assert_eq!(top("{_: 1}").unwrap(), vec!["[D{t(_): n(1)}]"]);
+    assert_eq!(
+        top("{1: 2, _: 3}").unwrap(),
+        vec!["[D{n(1): n(2), t(_): n(3)}]"]
+    );
+    // A `_` after a value opens the next entry, as any key does.
+    assert_eq!(
+        top("{1: (x) _: (y)}").unwrap(),
+        vec!["[D{n(1): [t(x)], t(_): [t(y)]}]"]
+    );
+    assert!(top("[_]").is_err());
+    assert!(top("{a: _}").is_err());
+    assert!(top("{_ = 1}").is_err());
+    assert!(top("{a _: 1}").is_err());
+}

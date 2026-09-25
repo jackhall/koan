@@ -20,6 +20,7 @@ use crate::parse::builtin_shapes::binder::{StoredBinderKey, binder_plan_for};
 use crate::parse::builtin_shapes::layout::SlotLayout;
 use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
+use crate::type_lattice::KType;
 
 pub mod program;
 pub mod shape;
@@ -372,16 +373,17 @@ impl<'a> KExpression<'a> {
         self.cache.binder_plan()
     }
 
-    /// The statement this node stands for. A redundant single-`Expression` paren wrapper
-    /// (`((…))`) is the same statement as its child, so it reads through; every other shape is its
-    /// own statement.
+    /// The statement this node stands for. A written paren around a statement (`((…))`) is the
+    /// same statement as its child, so it reads through every such wrapper; every other shape is
+    /// its own statement.
     pub(crate) fn statement_spine(&self) -> &KExpression<'a> {
-        if let [only] = self.parts
+        let mut spine = self;
+        while let [only] = spine.parts
             && let ExpressionPart::Expression(child) = only.value
         {
-            return child.reference();
+            spine = child.reference();
         }
-        self
+        spine
     }
 
     /// What this statement installs. The statement's *own* plan key, never anything its slots
@@ -413,6 +415,43 @@ impl<'a> KExpression<'a> {
             .chain(single)
             .enumerate()
             .map(|(i, statement)| (statement, i + 1))
+    }
+
+    /// The code kind of a quote whose body is this node, read off the body as written — see the
+    /// lattice [README.md](../type_lattice/README.md) § The code family. Two or more statements are
+    /// a `Block`; a statement of a member-declaring builtin shape a `Declaration`, and one that
+    /// installs a `Binder`; a lone scalar literal or nested quote a `Literal`; a lone name, keyword,
+    /// `:(…)` or `:{…}` its own kind; and every other statement an `Expression`. A written paren is
+    /// a part of its own, so `((y))` and `((LET x = 1))` are expressions.
+    pub fn code_kind(&self) -> KType {
+        if self.is_statement_block() {
+            return KType::BLOCK;
+        }
+        if self
+            .cache
+            .builtin_shape()
+            .is_some_and(|shape| shape.id.declares_member())
+        {
+            return KType::DECLARATION;
+        }
+        if self.binder_plan().is_some() {
+            return KType::BINDER;
+        }
+        let [only] = self.parts else {
+            return KType::EXPRESSION;
+        };
+        match only.value {
+            ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => KType::LITERAL,
+            ExpressionPart::Identifier(_) => KType::IDENTIFIER,
+            ExpressionPart::Type(_) => KType::TYPE_NAME_TOKEN,
+            ExpressionPart::Keyword(_) => KType::KEYWORD,
+            ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
+            ExpressionPart::RecordType(_) => KType::RECORD_TYPE,
+            ExpressionPart::Expression(_)
+            | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_) => KType::EXPRESSION,
+        }
     }
 
     /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates. Read by the

@@ -400,6 +400,29 @@ pub enum BuiltinShapeId {
     Eval,
 }
 
+impl BuiltinShapeId {
+    /// True for a shape that declares a signature member without installing it where it is
+    /// written: a `VAL`, a `TYPE` declarator, and every bodyless head. A statement of one of these
+    /// shapes is a `Declaration`, and so, beside the binders, is every member a `SIG` body holds.
+    pub const fn declares_member(self) -> bool {
+        matches!(
+            self,
+            BuiltinShapeId::Val
+                | BuiltinShapeId::TypeDeclaration
+                | BuiltinShapeId::ExpressionHead
+                | BuiltinShapeId::QuantifiedExpressionHead
+                | BuiltinShapeId::OperatorHead
+                | BuiltinShapeId::OperatorHeadReturning
+                | BuiltinShapeId::UnaryOperatorHead
+                | BuiltinShapeId::UnaryOperatorHeadReturning
+                | BuiltinShapeId::GroupHeadFoldLeft
+                | BuiltinShapeId::GroupHeadFoldRight
+                | BuiltinShapeId::GroupHeadPairwiseFoldLeft
+                | BuiltinShapeId::GroupHeadPairwiseFoldRight
+        )
+    }
+}
+
 /// The [`BUILTIN_SHAPES`] entry `key` matches, or `None` for every user-defined bucket. The one
 /// table probe: a node resolves its entry here at construction and caches it, and every later
 /// reader goes through the cache.

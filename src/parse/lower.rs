@@ -4,12 +4,13 @@
 //!
 //! Six rules cover it. A **run** of sibling items becomes a run of parts ([`Lower::lower_run`]),
 //! with the context (expression, list element, brace entry) deciding where each part lands. A
-//! **body** is a run that becomes a node ([`Lower::lower_body`]), and is where a redundant wrapper
-//! is peeled: `((a b))` and `(a b)` name the same expression, and so does the group a body line
-//! nests in. A **sigil** is `#`, `$` or `:` glued to the group after it, and a **sigil-led line**
-//! is a whole layout line whose first atom starts with `#` or `$` — the line's own body is what it
-//! quotes. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. Everything else is an
-//! atom, which [`super::atom`] classifies.
+//! **body** is a run that becomes a node ([`Lower::lower_body`]). A paren the program writes is
+//! kept, so `((a b))` is `(a b)` wrapped once more and `#((y))` is no `#(y)`; only a layout line
+//! that is a group's whole content comes off, since nobody wrote it as parens. A **sigil** is `#`,
+//! `$` or `:` glued to the group after it — `#` also to a `[…]` or `{…}` literal, quoting each
+//! element — and a **sigil-led line** is a whole layout line whose first atom starts with `#` or
+//! `$`: the line's own body is what it quotes. **Adjacency** rejects a `[` or `{` glued to a
+//! neighbouring token. Everything else is an atom, which [`super::atom`] classifies.
 //!
 //! See [README.md](README.md) § The division of labour with `sexlex`.
 
@@ -20,7 +21,7 @@ use crate::memory::{ProgramBrand, collect};
 use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
 use crate::parse::builtin_shapes::binder::admit_bare_type_slots;
 use crate::source::{FileId, Span, Spanned};
-use crate::symbols::{KeywordSymbol, SymbolInterner};
+use crate::symbols::{KeywordSymbol, SymbolInterner, WILDCARD};
 
 use super::atom;
 use super::brace::{BraceContents, DictFrame};
@@ -51,11 +52,10 @@ enum Context<'c, 'a> {
     Brace(&'c mut DictFrame<'a>),
 }
 
-/// Whether a group that wraps nothing but another group is redundant. In a value expression it
-/// is — `((a b))` and `(a b)` name the same call — so it peels. Inside `:(...)` it is not: a
-/// paren there is structure the dispatcher reads, and `(Function ((List Number)) -> Bool)` takes
-/// one argument whose own type is parenthesized. The mode carries into everything a type
-/// expression nests, since the whole payload reaches the dispatcher verbatim.
+/// Whether a layout line that is a body's whole content comes off. In a value expression it does:
+/// nobody wrote it as parens, so `#(⏎  x y⏎)` quotes `x y`. Inside `:(...)` nothing comes off,
+/// since the whole payload reaches the dispatcher verbatim, and the mode carries into everything a
+/// type expression nests.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Wrappers {
     Peel,
@@ -109,15 +109,15 @@ impl<'a, 's> Lower<'a, '_, 's> {
         }
     }
 
-    /// A run of items that becomes a node. A body that is exactly one group names the same
-    /// expression the group does, so the wrapper comes off the *tree* before anything is built —
-    /// `((a b))`, `(a b)` and a one-line paren body all reach the builder as the same run. The
-    /// peel stops at a sigil-led line, whose group is the quote's body rather than a wrapper.
+    /// A run of items that becomes a node. A body that is exactly one layout line is that line, so
+    /// the line comes off the *tree* before anything is built; a written paren never does, so
+    /// `((a b))` is a node holding `(a b)`. The peel stops at a sigil-led line, whose group is the
+    /// quote's body rather than a wrapper.
     ///
-    /// A compound atom reaches the same shape through classification rather than through a group
-    /// (`a.b` is one `ATTR` sub-expression), so a run that came out as a single sub-expression is
-    /// unwrapped too — a line reading `a.b` is that call, not a statement holding it. The
-    /// outermost span is stamped on the survivor so diagnostics point at what the user wrote.
+    /// A compound atom is one written token that classifies to a sub-expression (`a.b` is one
+    /// `ATTR` call), so a run of one atom that came out as a single sub-expression is unwrapped —
+    /// a line reading `a.b` is that call, not a statement holding it. The outermost span is
+    /// stamped on the survivor so diagnostics point at what the user wrote.
     fn lower_body(
         &self,
         mut items: &[Item<'s>],
@@ -133,8 +133,16 @@ impl<'a, 's> Lower<'a, '_, 's> {
         }
         let mut parts = self.lower_run(items.iter(), &mut Context::Expression, wrappers)?;
         admit_bare_type_slots(&mut parts);
+        let one_atom = matches!(
+            items,
+            [Item {
+                node: Node::Atom(_),
+                ..
+            }]
+        );
         let mut survivor: Option<KExpression<'a>> = None;
         while wrappers == Wrappers::Peel
+            && one_atom
             && let [
                 Spanned {
                     value: ExpressionPart::Expression(node),
@@ -224,8 +232,9 @@ impl<'a, 's> Lower<'a, '_, 's> {
 
     /// A list, dict or record literal holds values, and the only keyword-shaped things its syntax
     /// has are the `,` / `:` / `=` delimiters the run consumes itself — so a keyword reaching one
-    /// is refused here, the single funnel every part passes through. Every other run still admits
-    /// keywords, which is what `#(+)` bodies and `OP` declarations rest on.
+    /// is refused here, the single funnel every part passes through. The one exception is `_` as a
+    /// dict's key, naming the dict's default. Every other run still admits keywords, which is what
+    /// `#(+)` bodies and `OP` declarations rest on.
     fn push_part(
         &self,
         context: &mut Context<'_, 'a>,
@@ -234,11 +243,13 @@ impl<'a, 's> Lower<'a, '_, 's> {
     ) -> Result<(), ParseError> {
         if !matches!(context, Context::Expression)
             && let ExpressionPart::Keyword(symbol) = part.value
+            && !(symbol == WILDCARD.symbol()
+                && matches!(context, Context::Brace(dict) if dict.admits_wildcard()))
         {
             return Err(ParseError::new(
                 format!(
                     "`{}` is a keyword, so it cannot be an element of a list, dict, or record \
-                     literal",
+                     literal; only `_` may be written, as a dict's key",
                     self.symbols.display(symbol.symbol()),
                 ),
                 part.span,
@@ -343,9 +354,10 @@ impl<'a, 's> Lower<'a, '_, 's> {
         Ok(Spanned::at(part, item.span))
     }
 
-    /// A sigil glued to its group. `#` and `$` take an expression body; `:` takes a type
-    /// expression (`:(List Number)`) or a record type (`:{x :Number}`), both of which the parser
-    /// stores verbatim — reading a shape out of the payload is the dispatcher's job.
+    /// A sigil glued to its group. `#` and `$` take an expression body, and `#` a list, dict or
+    /// record literal whose elements it quotes; `:` takes a type expression (`:(List Number)`) or a
+    /// record type (`:{x :Number}`), both of which the parser stores verbatim — reading a shape out
+    /// of the payload is the dispatcher's job.
     fn glued_sigil_part(
         &self,
         sigil_kind: char,
@@ -359,6 +371,11 @@ impl<'a, 's> Lower<'a, '_, 's> {
             start: sigil.span.start,
             end: group.span.end,
         };
+        if sigil_kind == '#' && matches!(group_kind, Kind::Bracket | Kind::Brace) {
+            self.check_close_adjacency(group, group_kind)?;
+            let literal = self.collection_part(group, inner, group_kind, wrappers)?;
+            return Ok(Spanned::at(self.quote_elements(literal.value), outer));
+        }
         if sigil_kind != ':' {
             let body = self.lower_body(inner, group.span, wrappers)?;
             return Ok(self.sigil_part(Sigil {
@@ -406,7 +423,9 @@ impl<'a, 's> Lower<'a, '_, 's> {
 
     /// A layout line whose first atom starts with `#` or `$` quotes (or evaluates) the whole
     /// line, its child lines included: the sigil byte comes off the first atom and everything
-    /// left is the body.
+    /// left is the body. A line that is only a sigil glued to its group is that glued sigil: a
+    /// paren is the quote's own delimiter, and `#[…]` or `#{…}` is a statement holding the literal,
+    /// so it is no sigil-led line.
     fn sigil_led_line(
         &self,
         items: &[Item<'s>],
@@ -421,11 +440,34 @@ impl<'a, 's> Lower<'a, '_, 's> {
             unreachable!("sigil_lead matched an atom")
         };
         let text: &'s str = text;
+        let rest = &text[1..];
+        if rest.is_empty()
+            && first.glued
+            && let [_, group] = items
+            && let Node::Group {
+                kind: group_kind,
+                items: inner,
+            } = &group.node
+            && sigil_takes(kind, *group_kind)
+        {
+            if *group_kind != Kind::Paren {
+                return Ok(None);
+            }
+            return Ok(Some(Sigil {
+                kind,
+                body: self.lower_body(inner, group.span, wrappers)?,
+                body_span: group.span,
+                sigil_span: Span {
+                    start: first.span.start,
+                    end: first.span.start + 1,
+                },
+                outer: span,
+            }));
+        }
         let body_span = Span {
             start: first.span.start + 1,
             end: span.end,
         };
-        let rest = &text[1..];
         let body = if rest.is_empty() {
             self.lower_body(&items[1..], body_span, wrappers)?
         } else {
@@ -456,6 +498,50 @@ impl<'a, 's> Lower<'a, '_, 's> {
             },
             outer: span,
         }))
+    }
+
+    /// `#[…]`, `#{…}`: the literal, bare, with every element quoted. A paren-group element is
+    /// quoted as that group and any other element as a one-part quote; a `_` key and a record's
+    /// field names stay bare. A brace frame keeps no element spans, so a one-part quote has none.
+    fn quote_elements(&self, literal: ExpressionPart<'a>) -> ExpressionPart<'a> {
+        let writer = self.program.writer();
+        match literal {
+            ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(collect(
+                writer,
+                items.iter().map(|item| self.quoted(*item)),
+            )),
+            ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(collect(
+                writer,
+                pairs.iter().map(|(key, value)| {
+                    let key = match key {
+                        ExpressionPart::Keyword(symbol) if *symbol == WILDCARD.symbol() => *key,
+                        _ => self.quoted(*key),
+                    };
+                    (key, self.quoted(*value))
+                }),
+            )),
+            ExpressionPart::RecordLiteral(fields) => ExpressionPart::RecordLiteral(collect(
+                writer,
+                fields
+                    .iter()
+                    .map(|(name, value)| (*name, self.quoted(*value))),
+            )),
+            _ => unreachable!("a bracket or brace lowers to a container literal"),
+        }
+    }
+
+    /// One element of a `#[…]` or `#{…}` literal, quoted.
+    fn quoted(&self, element: ExpressionPart<'a>) -> ExpressionPart<'a> {
+        match element {
+            ExpressionPart::Expression(node) => ExpressionPart::QuotedExpression(node),
+            other => ExpressionPart::QuotedExpression(
+                self.program.alloc_node(self.program.build_expression(
+                    &[Spanned::bare(other)],
+                    None,
+                    self.file,
+                )),
+            ),
+        }
     }
 
     fn sigil_part(&self, sigil: Sigil<'a>) -> Spanned<ExpressionPart<'a>> {
@@ -538,13 +624,21 @@ impl<'a, 's> Lower<'a, '_, 's> {
         }
     }
 
-    /// `#` and `$` take a `(...)` group and nothing else. The message names what was found in its
-    /// place, which is the character right after the sigil byte.
+    /// `#` takes a `(...)`, `[...]` or `{...}` group, and `$` a `(...)` group. The message names
+    /// what was found in its place, which is the character right after the sigil byte.
     fn missing_sigil_group(&self, sigil: char, at: u32) -> ParseError {
+        let expected = if sigil == '#' {
+            "'(', '[' or '{'"
+        } else {
+            "'('"
+        };
         match self.source[at as usize..].chars().nth(1) {
-            Some(c) => ParseError::new(format!("expected '(' after '{sigil}', found '{c}'"), None),
+            Some(c) => ParseError::new(
+                format!("expected {expected} after '{sigil}', found '{c}'"),
+                None,
+            ),
             None => ParseError::new(
-                format!("trailing '{sigil}' sigil at end of input; expected '('"),
+                format!("trailing '{sigil}' sigil at end of input; expected {expected}"),
                 None,
             ),
         }
@@ -559,11 +653,12 @@ impl<'a, 's> Lower<'a, '_, 's> {
     }
 }
 
-/// The group kinds a sigil may take: `#` and `$` capture an expression, `:` a type expression or
-/// a record type.
+/// The group kinds a sigil may take: `#` captures an expression or quotes a literal's elements,
+/// `$` captures an expression, and `:` a type expression or a record type.
 fn sigil_takes(sigil: char, kind: Kind) -> bool {
     match sigil {
         ':' => matches!(kind, Kind::Paren | Kind::Brace),
+        '#' => matches!(kind, Kind::Paren | Kind::Bracket | Kind::Brace),
         _ => kind == Kind::Paren,
     }
 }
@@ -589,14 +684,11 @@ fn sigil_lead(items: &[Item<'_>]) -> Option<char> {
     }
 }
 
-/// The items a single-group body collapses to, when the group is a wrapper rather than a
-/// quote's own body. A bracket or brace is a literal, never a wrapper.
+/// The items a single-group body collapses to: a layout line nobody wrote as parens, unless it is
+/// sigil-led, when the group is the quote's own body. A written paren is never a wrapper, and a
+/// bracket or brace is a literal.
 fn peelable<'r, 's>(item: &'r Item<'s>) -> Option<&'r [Item<'s>]> {
     match &item.node {
-        Node::Group {
-            kind: Kind::Paren,
-            items,
-        } => Some(items),
         Node::Group {
             kind: Kind::Layout,
             items,

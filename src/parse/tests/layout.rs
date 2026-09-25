@@ -31,11 +31,17 @@ fn comma_continuation_overrides_paren_guard() {
 #[test]
 fn comma_continuation_with_bare_sigil() {
     let error = top("add 1,\n  #2").unwrap_err();
-    assert!(error.contains("expected '(' after '#'"), "got: {error}");
+    assert!(
+        error.contains("expected '(', '[' or '{' after '#'"),
+        "got: {error}"
+    );
 }
 
 #[test]
 fn bracket_continuation_with_bare_sigil() {
     let error = top("LET xs = [\n  #3\n]").unwrap_err();
-    assert!(error.contains("expected '(' after '#'"), "got: {error}");
+    assert!(
+        error.contains("expected '(', '[' or '{' after '#'"),
+        "got: {error}"
+    );
 }

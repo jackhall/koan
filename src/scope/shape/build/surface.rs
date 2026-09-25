@@ -251,6 +251,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     ) -> Result<(), ()> {
         let body = body_of(definition).ok_or(())?;
         for (line, _) in body.body_statements() {
+            let line = line.statement_spine();
             match line.cache().builtin_shape().map(|shape| shape.id) {
                 Some(BuiltinShapeId::TypeDeclaration | BuiltinShapeId::LetValue) => {
                     out.names.push(

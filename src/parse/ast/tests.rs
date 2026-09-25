@@ -434,3 +434,50 @@ proptest! {
         prop_assert_eq!(a.ktype(), KType::EXPRESSION);
     }
 }
+
+/// A quote's code kind is read off its body as written: each source here is one quote, and its
+/// body's kind is the one beside it.
+#[test]
+fn a_quote_is_typed_by_its_body_as_written() {
+    use crate::type_lattice::KType as Kind;
+    let cases: &[(&str, Kind)] = &[
+        ("#(y)", Kind::IDENTIFIER),
+        ("#(Carrier)", Kind::TYPE_NAME_TOKEN),
+        ("#(+)", Kind::KEYWORD),
+        ("#(NOOP)", Kind::KEYWORD),
+        ("#(42)", Kind::LITERAL),
+        ("#('y')", Kind::LITERAL),
+        ("#(#(x))", Kind::LITERAL),
+        ("#(:(LIST OF Number))", Kind::SIGILED_TYPE_EXPR),
+        ("#(:{x :Number})", Kind::RECORD_TYPE),
+        ("#((y))", Kind::EXPRESSION),
+        ("#(f x)", Kind::EXPRESSION),
+        ("#((LET x = 1))", Kind::EXPRESSION),
+        ("#([1 2])", Kind::EXPRESSION),
+        ("#({a: 1})", Kind::EXPRESSION),
+        ("#({x = 1})", Kind::EXPRESSION),
+        ("#((f x) (g y))", Kind::BLOCK),
+        ("#(\n  f x\n  g y\n)", Kind::BLOCK),
+        ("#(LET x = 1)", Kind::BINDER),
+        ("#(VAL x :Str)", Kind::DECLARATION),
+        ("#(TYPE Carrier)", Kind::DECLARATION),
+        ("#(TYPE (Carrier UNDER Number))", Kind::DECLARATION),
+        ("#(EXPR #(FOO _ :Number) -> Number)", Kind::DECLARATION),
+    ];
+    let program = program_storage();
+    let symbols = SymbolInterner::new();
+    for (source, kind) in cases {
+        let statements = crate::parse::parse(program.brand(), &symbols, source)
+            .unwrap_or_else(|error| panic!("{source:?}: {error}"));
+        let [statement] = statements.as_slice() else {
+            panic!("{source:?} is one statement");
+        };
+        let [part] = statement.parts else {
+            panic!("{source:?} is one part");
+        };
+        let ExpressionPart::QuotedExpression(body) = part.value else {
+            panic!("{source:?} is a quote");
+        };
+        assert_eq!(body.reference().code_kind(), *kind, "{source}");
+    }
+}

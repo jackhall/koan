@@ -3,8 +3,8 @@
 //! A [`Tree`] is a generated koan expression: the surface forms a parse produces a part from,
 //! drawn from the three token classes and constrained to what the surface admits. The renderer
 //! writes source for one — how many spaces separate two items, whether a trailing group becomes an
-//! indented child line, where a comma the surface ignores is sprinkled, and how many redundant
-//! `(…)` layers wrap a group are the choices a [`Tape`] of random bytes makes — and
+//! indented child line, and where a comma the surface ignores is sprinkled are the choices a
+//! [`Tape`] of random bytes makes — and
 //! [`expected_program`] writes the same tree in the harness's [`describe`](super::describe)
 //! notation. Each law reads a rendered tree back and compares against that oracle, so it is stated
 //! once rather than pinned one input at a time; the pins that fix a diagnostic message or a
@@ -49,15 +49,6 @@ enum Tree {
     List(Vec<Tree>),
     Dict(Vec<(Tree, Tree)>),
     Record(Vec<(String, Tree)>),
-}
-
-/// Whether a redundant `(…)` layer around a group is invisible. A value expression peels it, a
-/// type expression keeps it, and the mode carries into everything a type expression nests — so
-/// the renderer and the oracle thread the same flag.
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum Mode {
-    Peel,
-    Keep,
 }
 
 /// A statement is a run of parts; a program is a run of statements.
@@ -292,7 +283,7 @@ fn render_line(items: &[Tree], indent: usize, layout: Layout, tape: &mut Tape, o
     let first_child = items.len() - children;
 
     spaces(out, indent);
-    render_run(&items[..first_child], Mode::Peel, layout, tape, out);
+    render_run(&items[..first_child], layout, tape, out);
     if tape.pick(3) == 1 {
         out.push_str("  ");
     }
@@ -307,9 +298,9 @@ fn render_line(items: &[Tree], indent: usize, layout: Layout, tape: &mut Tape, o
     }
 }
 
-fn render_run(items: &[Tree], mode: Mode, layout: Layout, tape: &mut Tape, out: &mut String) {
+fn render_run(items: &[Tree], layout: Layout, tape: &mut Tape, out: &mut String) {
     for (index, item) in items.iter().enumerate() {
-        render_item(item, mode, layout, tape, out);
+        render_item(item, layout, tape, out);
         if index + 1 == items.len() {
             continue;
         }
@@ -322,7 +313,7 @@ fn render_run(items: &[Tree], mode: Mode, layout: Layout, tape: &mut Tape, out: 
     }
 }
 
-fn render_item(item: &Tree, mode: Mode, layout: Layout, tape: &mut Tape, out: &mut String) {
+fn render_item(item: &Tree, layout: Layout, tape: &mut Tape, out: &mut String) {
     match item {
         Tree::Keyword(text) | Tree::Identifier(text) => out.push_str(text),
         // A type name reaches a type position either bare or through a glued `:`.
@@ -341,38 +332,33 @@ fn render_item(item: &Tree, mode: Mode, layout: Layout, tape: &mut Tape, out: &m
         Tree::Boolean(value) => out.push_str(if *value { "true" } else { "false" }),
         Tree::Null => out.push_str("null"),
         Tree::Group(items) => {
-            let redundant = if mode == Mode::Peel { tape.pick(3) } else { 0 };
-            for _ in 0..=redundant {
-                out.push('(');
-            }
-            render_run(items, mode, layout, tape, out);
-            for _ in 0..=redundant {
-                out.push(')');
-            }
+            out.push('(');
+            render_run(items, layout, tape, out);
+            out.push(')');
         }
         Tree::TypeSigil(items) => {
             out.push_str(":(");
-            render_run(items, Mode::Keep, layout, tape, out);
+            render_run(items, layout, tape, out);
             out.push(')');
         }
         Tree::RecordType(pairs) => {
             out.push_str(":{");
-            render_run(&flatten(pairs), Mode::Keep, layout, tape, out);
+            render_run(&flatten(pairs), layout, tape, out);
             out.push('}');
         }
         Tree::Quote(items) => {
             out.push_str("#(");
-            render_run(items, mode, layout, tape, out);
+            render_run(items, layout, tape, out);
             out.push(')');
         }
         Tree::Eval(items) => {
             out.push_str("$(");
-            render_run(items, mode, layout, tape, out);
+            render_run(items, layout, tape, out);
             out.push(')');
         }
         Tree::List(items) => {
             out.push('[');
-            render_run(items, mode, layout, tape, out);
+            render_run(items, layout, tape, out);
             if !items.is_empty() && tape.pick(3) == 1 && layout.commas {
                 out.push_str(" ,");
             }
@@ -383,7 +369,7 @@ fn render_item(item: &Tree, mode: Mode, layout: Layout, tape: &mut Tape, out: &m
             for (index, (key, value)) in pairs.iter().enumerate() {
                 render_key(key, out);
                 spaces(out, 1 + tape.pick(3));
-                render_item(value, mode, layout, tape, out);
+                render_item(value, layout, tape, out);
                 if index + 1 < pairs.len() {
                     // A pair commits on its own when the next key arrives, so the comma is a
                     // separator the surface admits rather than one it needs.
@@ -405,7 +391,7 @@ fn render_item(item: &Tree, mode: Mode, layout: Layout, tape: &mut Tape, out: &m
                 spaces(out, 1 + tape.pick(3));
                 out.push('=');
                 spaces(out, 1 + tape.pick(3));
-                render_item(value, mode, layout, tape, out);
+                render_item(value, layout, tape, out);
                 if index + 1 < fields.len() {
                     if tape.pick(2) == 1 {
                         out.push_str(" ,");
@@ -452,43 +438,29 @@ fn expected_program(statements: &[Statement]) -> Vec<String> {
     statements.iter().map(|s| expected_statement(s)).collect()
 }
 
+/// A line's statement. A line that is exactly `$(…)` *is* the `EVAL` call it asks for rather than
+/// a node holding it; every other line is the node of its run.
 fn expected_statement(items: &[Tree]) -> String {
-    body_describe(items, Mode::Peel)
-}
-
-/// A run that is exactly one group names what the group names, however many layers deep.
-fn peeled(items: &[Tree]) -> &[Tree] {
-    let mut items = items;
-    while let [Tree::Group(inner)] = items {
-        items = inner;
-    }
-    items
-}
-
-/// A node's own `[…]` rendering. Where a redundant wrapper is invisible, a run that is exactly
-/// one group names what the group names, and a run that is exactly one sub-expression *is* that
-/// expression — which is what a `$(…)` lowers to, so an eval sigil alone names the `EVAL` call it
-/// asks for rather than a node holding it.
-fn body_describe(items: &[Tree], mode: Mode) -> String {
-    if mode == Mode::Keep {
-        return format!("[{}]", run_describe(items, mode));
-    }
-    let items = peeled(items);
     if let [Tree::Eval(body)] = items {
-        return format!("[t(EVAL) {}]", body_describe(body, Mode::Peel));
+        return format!("[t(EVAL) {}]", body_describe(body));
     }
-    format!("[{}]", run_describe(items, Mode::Peel))
+    body_describe(items)
 }
 
-fn run_describe(items: &[Tree], mode: Mode) -> String {
+/// A node's own `[…]` rendering. A written paren is a node of its own, so nothing peels.
+fn body_describe(items: &[Tree]) -> String {
+    format!("[{}]", run_describe(items))
+}
+
+fn run_describe(items: &[Tree]) -> String {
     items
         .iter()
-        .map(|item| describe_tree(item, mode))
+        .map(describe_tree)
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-fn describe_tree(item: &Tree, mode: Mode) -> String {
+fn describe_tree(item: &Tree) -> String {
     match item {
         Tree::Keyword(text) | Tree::Identifier(text) => format!("t({text})"),
         Tree::Type(text) => format!("T({text})"),
@@ -496,23 +468,17 @@ fn describe_tree(item: &Tree, mode: Mode) -> String {
         Tree::Str(body) => format!("s({body})"),
         Tree::Boolean(value) => format!("b({value})"),
         Tree::Null => "null".to_string(),
-        Tree::Group(items) => body_describe(items, mode),
-        Tree::TypeSigil(items) => format!(":({})", run_describe(items, Mode::Keep)),
-        Tree::RecordType(pairs) => {
-            format!(":{{{}}}", run_describe(&flatten(pairs), Mode::Keep))
-        }
-        Tree::Quote(items) => format!("#{}", body_describe(items, mode)),
-        Tree::Eval(items) => format!("[t(EVAL) {}]", body_describe(items, mode)),
-        Tree::List(items) => format!("L[{}]", run_describe(items, mode)),
+        Tree::Group(items) => body_describe(items),
+        Tree::TypeSigil(items) => format!(":({})", run_describe(items)),
+        Tree::RecordType(pairs) => format!(":{{{}}}", run_describe(&flatten(pairs))),
+        Tree::Quote(items) => format!("#{}", body_describe(items)),
+        Tree::Eval(items) => format!("[t(EVAL) {}]", body_describe(items)),
+        Tree::List(items) => format!("L[{}]", run_describe(items)),
         Tree::Dict(pairs) => format!(
             "D{{{}}}",
             pairs
                 .iter()
-                .map(|(key, value)| format!(
-                    "{}: {}",
-                    describe_tree(key, mode),
-                    describe_tree(value, mode)
-                ))
+                .map(|(key, value)| format!("{}: {}", describe_tree(key), describe_tree(value)))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -520,7 +486,7 @@ fn describe_tree(item: &Tree, mode: Mode) -> String {
             "R{{{}}}",
             fields
                 .iter()
-                .map(|(name, value)| format!("{name} = {}", describe_tree(value, mode)))
+                .map(|(name, value)| format!("{name} = {}", describe_tree(value)))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -539,9 +505,10 @@ fn read_back(source: &str) -> Vec<String> {
     top(source).unwrap_or_else(|error| panic!("{source:?}: {error}"))
 }
 
-/// What a statement carries beyond its shape string: the cache a node fills at construction, and
-/// the extent it claims in the source.
+/// What a statement carries: how many one-part wrappers stand around its spine, the spine's shape
+/// string and the cache it filled at construction, and the extent the outermost node claims.
 struct StatementFacts {
+    wrappers: usize,
     shape_string: String,
     key: Vec<KeyElement>,
     shape: DispatchShape,
@@ -556,10 +523,24 @@ fn statement_facts(source: &str) -> StatementFacts {
     let [statement] = statements.as_slice() else {
         panic!("{source:?}: expected exactly one statement")
     };
+    let spine = statement.statement_spine();
+    let mut wrappers = 0;
+    let mut node = statement;
+    while !std::ptr::eq(node, spine) {
+        let [only] = node.parts else {
+            unreachable!("a wrapper is one part")
+        };
+        let ExpressionPart::Expression(child) = only.value else {
+            unreachable!("a wrapper holds a node")
+        };
+        node = child.reference();
+        wrappers += 1;
+    }
     StatementFacts {
-        shape_string: super::describe(statement, &symbols),
-        key: statement.stored_key().to_vec(),
-        shape: statement.shape(),
+        wrappers,
+        shape_string: super::describe(spine, &symbols),
+        key: spine.stored_key().to_vec(),
+        shape: spine.shape(),
         span: statement.span,
     }
 }
@@ -871,35 +852,45 @@ proptest! {
 
     /// **Law 1.** Any layout the surface admits reads back as the tree it was rendered from:
     /// how wide a gap separates two items, whether a trailing group is written inline or as an
-    /// indented child line, where a comma the surface ignores falls, and how many redundant
-    /// `(…)` layers wrap a group are all layout, not structure.
+    /// indented child line, and where a comma the surface ignores falls are all layout, not
+    /// structure.
     #[test]
     fn a_rendered_tree_reads_back_as_itself(statements in program(), bytes in tape_bytes()) {
         let source = render(&statements, bytes);
         prop_assert_eq!(read_back(&source), expected_program(&statements), "source:\n{}", source);
     }
 
-    /// **Law 2.** A group that wraps nothing but the statement is redundant: peeling it leaves
-    /// the same parts and the same cache, and the survivor claims the outermost wrapper's extent.
+    /// **Law 2.** A written paren is kept: a statement wrapped in `n` parens is `n` nested
+    /// one-part nodes around it, the outermost claiming the whole extent, and its statement spine
+    /// has the same parts, key and dispatch shape as the bare statement's.
     #[test]
-    fn a_redundant_wrapper_peels_to_the_same_statement(
+    fn a_written_wrapper_is_kept_around_the_same_statement(
         statement in statement(),
         bytes in tape_bytes(),
     ) {
         let mut tape = Tape::new(bytes);
         let mut inner = String::new();
-        render_run(&statement, Mode::Peel, COMMAS, &mut tape, &mut inner);
+        render_run(&statement, COMMAS, &mut tape, &mut inner);
         let bare = statement_facts(&inner);
+        // A line that is exactly `$(…)` is the `EVAL` call; inside a paren it is a sub-expression
+        // part, one node more.
+        let lone_eval = usize::from(matches!(statement.as_slice(), [Tree::Eval(_)]));
         for layers in 1..3 {
             let wrapped = format!("{}{inner}{}", "(".repeat(layers), ")".repeat(layers));
             let facts = statement_facts(&wrapped);
+            prop_assert_eq!(
+                facts.wrappers,
+                bare.wrappers + layers + lone_eval,
+                "source: {}",
+                wrapped
+            );
             prop_assert_eq!(&facts.shape_string, &bare.shape_string, "source: {}", wrapped);
             prop_assert_eq!(&facts.key, &bare.key);
             prop_assert_eq!(facts.shape, bare.shape);
             prop_assert_eq!(
                 facts.span,
                 Some(Span { start: 0, end: wrapped.len() as u32 }),
-                "the survivor takes the outermost wrapper's span",
+                "the outermost wrapper takes the whole extent",
             );
         }
     }
@@ -992,7 +983,7 @@ proptest! {
             other => unreachable!("{other:?}"),
         };
         let mut source = String::new();
-        render_item(&container, Mode::Peel, COMMAS, &mut Tape::new(bytes), &mut source);
+        render_item(&container, COMMAS, &mut Tape::new(bytes), &mut source);
         let program = program_storage();
         let symbols = SymbolInterner::new();
         let parsed = parse(program.brand(), &symbols, &source)
