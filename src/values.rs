@@ -200,15 +200,15 @@ pub enum Value<'graph, 'cell, X = Nothing> {
 const _: () = assert!(size_of::<Value<'static, 'static>>() == 24);
 
 impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
-    /// The value's type: a constant for a leaf, the stored handle for everything else. Reads no
-    /// registry and walks nothing.
+    /// The value's type: a constant for a leaf, a quote's code kind, and the stored handle for
+    /// everything else. Reads no registry and walks nothing.
     pub fn ktype(&self) -> KType {
         match self {
             Value::Number(_) => KType::NUMBER,
             Value::Bool(_) => KType::BOOL,
             Value::Null => KType::NULL,
             Value::Str(_) => KType::STR,
-            Value::Expression(_) => KType::EXPRESSION,
+            Value::Expression(node) => node.reference().code_kind(),
             Value::Type(value) => value.ktype(),
             Value::List(list) => list.ktype(),
             Value::Dict(dict) => dict.ktype(),

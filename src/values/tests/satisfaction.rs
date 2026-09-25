@@ -179,3 +179,117 @@ fn a_value_a_type_and_a_quote_each_satisfy_their_family_alone() {
         })
     });
 }
+
+/// A quote satisfies its own code kind and every kind above it in the code family's tree, and no
+/// other.
+#[test]
+fn a_quote_satisfies_its_own_kind_and_every_kind_above_it() {
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let kinds = [
+            KType::IDENTIFIER,
+            KType::TYPE_NAME_TOKEN,
+            KType::NAME,
+            KType::KEYWORD,
+            KType::SYMBOL,
+            KType::LITERAL,
+            KType::BINDER,
+            KType::DECLARATION,
+            KType::EXPRESSION,
+            KType::BLOCK,
+            KType::ANY_CODE,
+        ];
+        let cases: [(&str, &[KType]); 7] = [
+            (
+                "#(y)",
+                &[
+                    KType::IDENTIFIER,
+                    KType::NAME,
+                    KType::SYMBOL,
+                    KType::EXPRESSION,
+                    KType::BLOCK,
+                    KType::ANY_CODE,
+                ],
+            ),
+            (
+                "#(+)",
+                &[
+                    KType::KEYWORD,
+                    KType::SYMBOL,
+                    KType::EXPRESSION,
+                    KType::BLOCK,
+                    KType::ANY_CODE,
+                ],
+            ),
+            (
+                "#((y))",
+                &[KType::EXPRESSION, KType::BLOCK, KType::ANY_CODE],
+            ),
+            (
+                "#(LET x = 1)",
+                &[
+                    KType::BINDER,
+                    KType::DECLARATION,
+                    KType::EXPRESSION,
+                    KType::BLOCK,
+                    KType::ANY_CODE,
+                ],
+            ),
+            (
+                "#(VAL x :Str)",
+                &[
+                    KType::DECLARATION,
+                    KType::EXPRESSION,
+                    KType::BLOCK,
+                    KType::ANY_CODE,
+                ],
+            ),
+            (
+                "#(TYPE Carrier)",
+                &[
+                    KType::DECLARATION,
+                    KType::EXPRESSION,
+                    KType::BLOCK,
+                    KType::ANY_CODE,
+                ],
+            ),
+            ("#((f x) (g y))", &[KType::BLOCK, KType::ANY_CODE]),
+        ];
+        let parts: Vec<_> = cases
+            .iter()
+            .map(|(source, _)| fixture.part(source))
+            .collect();
+        fixture.in_cell(pin, |context| {
+            for ((source, above), part) in cases.iter().zip(&parts) {
+                let quote = Value::lower_part(context.writer(), part, types, scratch)
+                    .expect("a quote lowers");
+                for kind in kinds {
+                    assert_eq!(
+                        satisfies(kind, &quote, types, scratch),
+                        above.contains(&kind),
+                        "{source} against {kind:?}"
+                    );
+                }
+            }
+        })
+    });
+}
+
+/// A name slot takes no string, and a code slot no number: the table half of `ATTR`'s and `EVAL`'s
+/// slot types.
+#[test]
+fn a_code_slot_takes_no_value() {
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let string = text(context.writer(), "y");
+            assert!(!satisfies(KType::NAME, &string, types, scratch));
+            assert!(!satisfies(
+                KType::ANY_CODE,
+                &Value::Number(1.0),
+                types,
+                scratch
+            ));
+        })
+    });
+}
