@@ -67,7 +67,7 @@ fn classifies(text: &str, want: fn(&ExpressionPart<'_>) -> bool) -> bool {
     let program = program_storage();
     let symbols = SymbolInterner::new();
     matches!(
-        classify_token(program.brand(), &symbols, text, 0),
+        classify_token(program.brand(), &symbols, text, 0, crate::tests::source().file),
         Ok(part) if want(&part.value)
     )
 }
@@ -512,7 +512,7 @@ struct StatementFacts {
     shape_string: String,
     key: Vec<KeyElement>,
     shape: DispatchShape,
-    span: Option<Span>,
+    span: Span,
 }
 
 fn statement_facts(source: &str) -> StatementFacts {
@@ -541,7 +541,7 @@ fn statement_facts(source: &str) -> StatementFacts {
         shape_string: super::describe(spine, &symbols),
         key: spine.stored_key().to_vec(),
         shape: spine.shape(),
-        span: statement.span,
+        span: statement.source.span,
     }
 }
 
@@ -562,7 +562,7 @@ fn check_expression(
     symbols: &SymbolInterner,
     parent: Option<Span>,
 ) {
-    let span = expr.span.expect("a parsed node carries its span");
+    let span = expr.source.span;
     within(span, parent);
     let mut previous_end = span.start;
     for part in expr.parts {
@@ -889,7 +889,7 @@ proptest! {
             prop_assert_eq!(facts.shape, bare.shape);
             prop_assert_eq!(
                 facts.span,
-                Some(Span { start: 0, end: wrapped.len() as u32 }),
+                Span { start: 0, end: wrapped.len() as u32 },
                 "the outermost wrapper takes the whole extent",
             );
         }
@@ -908,7 +908,7 @@ proptest! {
         );
         let program = program_storage();
         let symbols = SymbolInterner::new();
-        let classified = classify_token(program.brand(), &symbols, &token, 0);
+        let classified = classify_token(program.brand(), &symbols, &token, 0, crate::tests::source().file);
         let part = classified.as_ref().map(|spanned| &spanned.value);
         match reference_class(&token) {
             TokenClass::Literal => {
@@ -957,7 +957,7 @@ proptest! {
             .unwrap_or_else(|error| panic!("{source:?}: {error}"));
         let mut previous_end = 0;
         for statement in &parsed {
-            let span = statement.span.expect("a parsed statement carries its span");
+            let span = statement.source.span;
             prop_assert!(span.start >= previous_end, "statements are ordered and disjoint");
             check_expression(statement, &source, &symbols, None);
             previous_end = span.end;

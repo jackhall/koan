@@ -215,11 +215,12 @@ proptest! {
             }
 
             // The redundant wrapper carries the child's plan through, with no aggregation.
-            let wrapped = KExpression::new(
+            let wrapped = KExpression::build(
                 brand.writer(),
                 &[Spanned::bare(ExpressionPart::Expression(
-                    brand.nested_node(statement.parts),
+                    brand.nested_node(statement.parts, statement.source),
                 ))],
+                statement.source,
             );
             prop_assert!(wrapped.binder_plan().is_none());
             let ExpressionPart::Expression(child) = wrapped.parts[0].value else {
@@ -238,9 +239,10 @@ proptest! {
                 .iter()
                 .map(|name| identifier_part(name)),
         );
-        let user = KExpression::new_from_iter(
+        let user = KExpression::build_from_iter(
             brand.writer(),
             run.into_iter().map(Spanned::bare),
+            crate::tests::source(),
         );
         prop_assume!(builtin_shape_for(user.stored_key().iter().copied()).is_none());
         prop_assert!(user.cache().builtin_shape().is_none());

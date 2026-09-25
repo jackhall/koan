@@ -8,7 +8,7 @@ use crate::parse::{parse, parse_with_path};
 use crate::source::{self, SourceFile, Span, Spanned};
 
 fn span_of(expr: &KExpression<'_>) -> Option<Span> {
-    expr.span
+    Some(expr.source.span)
 }
 
 fn s(start: u32, end: u32) -> Span {
@@ -100,10 +100,8 @@ fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
         ExpressionPart::Expression(e) => &**e,
         other => panic!("expected nested Expression part, got {other:?}"),
     };
-    let file_id = nested
-        .file
-        .expect("file should be populated by parse_with_path");
-    let span = nested.span.expect("span should be populated");
+    let file_id = nested.source.file;
+    let span = nested.source.span;
     let (line, col) = source::with(file_id, |f| {
         assert_eq!(&*f.path, "lib.koan");
         f.resolve(span.start)

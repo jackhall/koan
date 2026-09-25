@@ -146,16 +146,16 @@ fn build_part<'a>(
         PartShape::Boolean(b) => ExpressionPart::Literal(KLiteral::Boolean(*b)),
         PartShape::Null => ExpressionPart::Literal(KLiteral::Null),
         PartShape::Nested(items) => ExpressionPart::Expression(
-            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
         ),
         PartShape::Sigil(items) => ExpressionPart::SigiledTypeExpr(
-            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
         ),
         PartShape::RecordType(items) => ExpressionPart::RecordType(
-            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
         ),
         PartShape::Quote(items) => ExpressionPart::QuotedExpression(
-            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
         ),
         PartShape::List(items) => ExpressionPart::ListLiteral(collect(
             writer,
@@ -182,7 +182,7 @@ fn build_part<'a>(
     }
 }
 
-/// The spanless parts run `shapes` names.
+/// The unspanned parts run `shapes` names.
 fn build_run<'a>(
     brand: ProgramBrand<'a>,
     shapes: &[PartShape],
@@ -200,7 +200,11 @@ fn build<'a>(
     shapes: &[PartShape],
     symbols: &SymbolInterner,
 ) -> KExpression<'a> {
-    KExpression::new_from_iter(brand.writer(), build_run(brand, shapes, symbols))
+    KExpression::build_from_iter(
+        brand.writer(),
+        build_run(brand, shapes, symbols),
+        crate::tests::source(),
+    )
 }
 
 /// The bucket key a parts run spells, recomputed from the parts rather than read off the cache.
@@ -423,7 +427,10 @@ proptest! {
         let symbols = &registries.labels;
 
         let make = |shapes: &[PartShape]| {
-            KObject::KExpression(brand.new_expression_from_iter(build_run(brand, shapes, symbols)))
+            KObject::KExpression(brand.build_expression_from_iter(
+                build_run(brand, shapes, symbols),
+                crate::tests::source(),
+            ))
         };
         let a = make(&left);
         let b = make(&left);

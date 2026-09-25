@@ -13,7 +13,7 @@
 //! region, so nothing here has a reach to describe. Lowering a literal part to a value is
 //! [`Value::lower_part`](crate::values::Value::lower_part).
 
-use crate::source::{FileId, Span, Spanned};
+use crate::source::{SourceRef, Spanned};
 
 use crate::memory::{ProgramBrand, Writer, collect, resident};
 use crate::parse::builtin_shapes::binder::{StoredBinderKey, binder_plan_for};
@@ -145,17 +145,22 @@ impl<'a> ExpressionPart<'a> {
     pub fn expression(
         brand: ProgramBrand<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
+        source: SourceRef,
     ) -> ExpressionPart<'a> {
-        ExpressionPart::Expression(brand.nested_node(parts))
+        ExpressionPart::Expression(brand.nested_node(parts, source))
     }
 
     /// [`expression`](Self::expression)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn expression_from_iter<I>(brand: ProgramBrand<'a>, parts: I) -> ExpressionPart<'a>
+    pub fn expression_from_iter<I>(
+        brand: ProgramBrand<'a>,
+        parts: I,
+        source: SourceRef,
+    ) -> ExpressionPart<'a>
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        ExpressionPart::Expression(brand.nested_node_from_iter(parts))
+        ExpressionPart::Expression(brand.nested_node_from_iter(parts, source))
     }
 
     /// Per-part subset of [`KExpression::write_summary`], written straight into `f`.
@@ -249,7 +254,8 @@ impl<'a> ExpressionPart<'a> {
 /// A parsed Koan expression: an ordered run of [`ExpressionPart`]s borrowed from the storage that
 /// parsed them.
 ///
-/// `span` and `file` are `None` for hand-built ASTs.
+/// Every node carries a [`SourceRef`]: code always comes from somewhere, so no door builds a node
+/// without one.
 ///
 /// [`cache`](Self::cache) is the structural cache the construction doors fill once the parts run is
 /// complete — the bucket key, the dispatch shape, the matched builtin shape and the binder plan —
@@ -264,50 +270,31 @@ impl<'a> ExpressionPart<'a> {
 #[derive(Clone, Copy)]
 pub struct KExpression<'a> {
     pub parts: &'a [Spanned<ExpressionPart<'a>>],
-    pub span: Option<Span>,
-    pub file: Option<FileId>,
+    /// Where this node's code came from: its own text, or, for a node built from other code, the
+    /// code it was built from or where it was generated.
+    pub source: SourceRef,
     cache: NodeCache<'a>,
     body_layout: &'a SlotLayout<'a>,
 }
 
 impl<'a> KExpression<'a> {
-    /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.
-    pub fn new(writer: Writer<'a>, parts: &[Spanned<ExpressionPart<'a>>]) -> Self {
-        Self::build(writer, parts, None, None)
-    }
-
-    /// [`new`](Self::new)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn new_from_iter<I>(writer: Writer<'a>, parts: I) -> Self
-    where
-        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
-        RunIter<I>: ExactSizeIterator,
-    {
-        Self::build_from_iter(writer, parts, None, None)
-    }
-
     /// Construction door for a borrowed run: copy it into `writer`'s store, then fill the
     /// structural cache.
     pub fn build(
         writer: Writer<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
-        span: Option<Span>,
-        file: Option<FileId>,
+        source: SourceRef,
     ) -> Self {
-        Self::from_run(writer, collect(writer, parts.iter().copied()), span, file)
+        Self::from_run(writer, collect(writer, parts.iter().copied()), source)
     }
 
     /// [`build`](Self::build)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn build_from_iter<I>(
-        writer: Writer<'a>,
-        parts: I,
-        span: Option<Span>,
-        file: Option<FileId>,
-    ) -> Self
+    pub fn build_from_iter<I>(writer: Writer<'a>, parts: I, source: SourceRef) -> Self
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        Self::from_run(writer, collect(writer, parts.into_iter()), span, file)
+        Self::from_run(writer, collect(writer, parts.into_iter()), source)
     }
 
     /// Construction chokepoint, over a parts run **already resident** in `writer`'s store: fills the
@@ -317,15 +304,13 @@ impl<'a> KExpression<'a> {
     fn from_run(
         writer: Writer<'a>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
-        span: Option<Span>,
-        file: Option<FileId>,
+        source: SourceRef,
     ) -> Self {
         let key = stored_untyped_key(writer, parts.iter().map(|part| part.value.key_element()));
         Self::seal(
             writer,
             parts,
-            span,
-            file,
+            source,
             NodeCache::build(key, parts.first().map(|part| part.value.class())),
         )
     }
@@ -336,14 +321,12 @@ impl<'a> KExpression<'a> {
     fn seal(
         writer: Writer<'a>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
-        span: Option<Span>,
-        file: Option<FileId>,
+        source: SourceRef,
         cache: NodeCache<'a>,
     ) -> Self {
         let mut expression = KExpression {
             parts,
-            span,
-            file,
+            source,
             cache,
             body_layout: SlotLayout::EMPTY,
         };
@@ -366,17 +349,22 @@ impl<'a> KExpression<'a> {
     pub fn nested(
         writer: Writer<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
+        source: SourceRef,
     ) -> &'a KExpression<'a> {
-        resident(writer, Self::new(writer, parts))
+        resident(writer, Self::build(writer, parts, source))
     }
 
     /// [`nested`](Self::nested)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn nested_from_iter<I>(writer: Writer<'a>, parts: I) -> &'a KExpression<'a>
+    pub fn nested_from_iter<I>(
+        writer: Writer<'a>,
+        parts: I,
+        source: SourceRef,
+    ) -> &'a KExpression<'a>
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        resident(writer, Self::new_from_iter(writer, parts))
+        resident(writer, Self::build_from_iter(writer, parts, source))
     }
 
     /// The [`SlotLayout`] of this node **as a body**: the value binders its statements declare,

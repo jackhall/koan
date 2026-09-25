@@ -14,7 +14,7 @@ use crate::parse::ast::RunIter;
 use crate::parse::{
     DispatchShape, ExpressionPart, KExpression, KeyElement, NodeCache, PartClass, StoredBinderKey,
 };
-use crate::source::{FileId, SourceRef, Span, Spanned};
+use crate::source::{SourceRef, Span, Spanned};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{TypeRegistry, display_name};
 
@@ -128,8 +128,9 @@ impl<'graph, 'cell, X: Knotted> WorkingPart<'graph, 'cell, X> {
 #[derive(Clone, Copy)]
 pub struct WorkingExpression<'graph, 'cell, X = Nothing> {
     pub parts: &'cell [Spanned<WorkingPart<'graph, 'cell, X>>],
-    pub span: Option<Span>,
-    pub file: Option<FileId>,
+    /// Where this node's code came from: the AST node's own source for a working copy, or the
+    /// origin's file and its parts' extent for a node the scheduler synthesized.
+    pub source: SourceRef,
     /// At `'cell`: a cache carried over from the AST shortens from `'graph`, one built here borrows
     /// the region.
     cache: NodeCache<'cell>,
@@ -148,8 +149,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
                     span: part.span,
                 }),
             ),
-            span: ast.span,
-            file: ast.file,
+            source: ast.source,
             cache: *ast.cache(),
             under_type_sigil: false,
         }
@@ -159,24 +159,18 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     pub fn build(
         writer: Writer<'cell>,
         parts: &[Spanned<WorkingPart<'graph, 'cell, X>>],
-        span: Option<Span>,
-        file: Option<FileId>,
+        source: SourceRef,
     ) -> Self {
-        Self::from_run(writer, collect(writer, parts.iter().copied()), span, file)
+        Self::from_run(writer, collect(writer, parts.iter().copied()), source)
     }
 
     /// [`build`](Self::build) over a run whose slots are computed — see [`RunIter`].
-    pub fn build_from_iter<I>(
-        writer: Writer<'cell>,
-        parts: I,
-        span: Option<Span>,
-        file: Option<FileId>,
-    ) -> Self
+    pub fn build_from_iter<I>(writer: Writer<'cell>, parts: I, source: SourceRef) -> Self
     where
         I: IntoIterator<Item = Spanned<WorkingPart<'graph, 'cell, X>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        Self::from_run(writer, collect(writer, parts.into_iter()), span, file)
+        Self::from_run(writer, collect(writer, parts.into_iter()), source)
     }
 
     /// A run synthesized out of `origin` — a chain reduction, an extracted head. It takes `origin`'s
@@ -193,7 +187,11 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
                 start: left.start.min(right.start),
                 end: left.end.max(right.end),
             });
-        Self::build(writer, parts, extent.or(origin.span), origin.file)
+        let source = SourceRef {
+            span: extent.unwrap_or(origin.source.span),
+            file: origin.source.file,
+        };
+        Self::build(writer, parts, source)
     }
 
     /// The node over a run already resident in the region: the key laid down beside it and the
@@ -201,14 +199,12 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
     fn from_run(
         writer: Writer<'cell>,
         parts: &'cell [Spanned<WorkingPart<'graph, 'cell, X>>],
-        span: Option<Span>,
-        file: Option<FileId>,
+        source: SourceRef,
     ) -> Self {
         let key = writer.fill(parts.len(), |at| parts[at].value.key_element());
         WorkingExpression {
             parts,
-            span,
-            file,
+            source,
             cache: NodeCache::build(key, parts.first().map(|part| part.value.class())),
             under_type_sigil: false,
         }
@@ -225,8 +221,7 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
         let parts = collect(writer, parts.into_iter());
         WorkingExpression {
             parts,
-            span: self.span,
-            file: self.file,
+            source: self.source,
             cache: self
                 .cache
                 .resplice(parts.first().map(|part| part.value.class())),
@@ -265,13 +260,6 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
 
     pub fn stored_key(&self) -> &'cell [KeyElement] {
         self.cache.stored_key()
-    }
-
-    /// This node's source extent, when both span and file are known.
-    pub fn source_ref(&self) -> Option<SourceRef> {
-        self.span
-            .zip(self.file)
-            .map(|(span, file)| SourceRef { span, file })
     }
 
     /// The whole node as a diagnostic names it: each slot by the type dispatch matched it on, and a

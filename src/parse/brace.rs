@@ -3,16 +3,18 @@
 //! selects the mode (`accept_colon` / `accept_equals`); mixing the two is an error, and an empty
 //! `{}` is the empty record. The lowering delegates to `accept_colon`, `accept_equals`,
 //! `accept_comma`, and `finish`; multi-part keys/values collapse into a sub-expression via
-//! `single_or_wrapped`.
+//! `single_or_wrapped`, sourced at the whole brace group.
 
 use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::ExpressionPart;
-use crate::source::Spanned;
+use crate::source::{SourceRef, Spanned};
 use crate::symbols::{BinderSymbol, SymbolInterner, WILDCARD};
 
 pub(super) struct DictFrame<'a> {
     brand: ProgramBrand<'a>,
+    /// The whole brace group's source, which a multi-part key or value's wrapper carries.
+    source: SourceRef,
     pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
     state: DictPairState<'a>,
     mode: BraceMode,
@@ -80,17 +82,20 @@ enum DictPairState<'a> {
 }
 
 /// Single part stays as-is; multiple parts wrap as a sub-expression so the scheduler
-/// dispatches them. The wrapper is spanless: a brace frame stores bare parts, so no span
-/// survives to stamp on it.
+/// dispatches them. A brace frame stores bare parts, so no span of their own survives: the
+/// wrapper is sourced at the whole brace group, `source`.
 fn single_or_wrapped<'a>(
     brand: ProgramBrand<'a>,
+    source: SourceRef,
     parts: Vec<ExpressionPart<'a>>,
 ) -> ExpressionPart<'a> {
     match <[ExpressionPart<'a>; 1]>::try_from(parts) {
         Ok([single]) => single,
-        Err(parts) => {
-            ExpressionPart::expression_from_iter(brand, parts.into_iter().map(Spanned::bare))
-        }
+        Err(parts) => ExpressionPart::expression_from_iter(
+            brand,
+            parts.into_iter().map(Spanned::bare),
+            source,
+        ),
     }
 }
 
@@ -113,9 +118,10 @@ fn is_dict_key_start_part(part: &ExpressionPart<'_>) -> bool {
 }
 
 impl<'a> DictFrame<'a> {
-    pub(super) fn new(brand: ProgramBrand<'a>) -> Self {
+    pub(super) fn new(brand: ProgramBrand<'a>, source: SourceRef) -> Self {
         Self {
             brand,
+            source,
             pairs: Vec::new(),
             state: DictPairState::Empty,
             mode: BraceMode::Unknown,
@@ -148,7 +154,8 @@ impl<'a> DictFrame<'a> {
                 if !value.is_empty() && is_dict_key_start_part(&part) {
                     let prev = std::mem::replace(&mut self.state, DictPairState::Empty);
                     if let DictPairState::Value { key, value } = prev {
-                        self.pairs.push((key, single_or_wrapped(brand, value)));
+                        self.pairs
+                            .push((key, single_or_wrapped(brand, self.source, value)));
                     }
                     self.state = DictPairState::Key(vec![part]);
                 } else {
@@ -178,7 +185,7 @@ impl<'a> DictFrame<'a> {
             DictPairState::Key(parts) if parts.is_empty() => Err(ParseError::new(missing, None)),
             DictPairState::Key(parts) => {
                 self.state = DictPairState::Value {
-                    key: single_or_wrapped(self.brand, parts),
+                    key: single_or_wrapped(self.brand, self.source, parts),
                     value: Vec::new(),
                 };
                 Ok(())
@@ -228,7 +235,8 @@ impl<'a> DictFrame<'a> {
                 None,
             )),
             DictPairState::Value { key, value } => {
-                self.pairs.push((key, single_or_wrapped(self.brand, value)));
+                self.pairs
+                    .push((key, single_or_wrapped(self.brand, self.source, value)));
                 Ok(())
             }
         }
@@ -261,7 +269,8 @@ impl<'a> DictFrame<'a> {
                 ));
             }
             DictPairState::Value { key, value } => {
-                self.pairs.push((key, single_or_wrapped(self.brand, value)));
+                self.pairs
+                    .push((key, single_or_wrapped(self.brand, self.source, value)));
             }
         }
         if is_record {

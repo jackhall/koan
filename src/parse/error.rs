@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use crate::source::{self, FileId, Span};
+use crate::source::{self, FileId, SourceRef, Span};
 
 /// A parse failure. `file` is the source the span indexes; both are `None` when the failure has
 /// no location to point at, and the rendering drops the `at path:line:col` clause with them.
@@ -32,18 +32,12 @@ impl ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let loc = match (self.span, self.file) {
-            (Some(sp), Some(fid)) => source::with(fid, |sf| {
-                let (line, col_utf16) = sf.resolve(sp.start);
-                Some((sf.path.clone(), line, col_utf16))
-            }),
-            _ => None,
-        };
-        match loc {
-            Some((path, line, col)) => {
-                write!(f, "parse error at {path}:{line}:{col}: {}", self.message)
+        match (self.span, self.file) {
+            (Some(span), Some(file)) => {
+                let at = SourceRef { span, file };
+                write!(f, "parse error at {at}: {}", self.message)
             }
-            None => write!(f, "parse error: {}", self.message),
+            _ => write!(f, "parse error: {}", self.message),
         }
     }
 }

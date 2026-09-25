@@ -26,8 +26,7 @@ fn a_working_copy_carries_the_parsed_cache() {
             ));
             assert_eq!(working.binder_name_slot(), ast.binder_name_slot());
             assert_eq!(working.shape(), ast.shape());
-            assert_eq!(working.span, ast.span);
-            assert_eq!(working.file, ast.file);
+            assert_eq!(working.source, ast.source);
             assert!(matches!(
                 working.parts[1].value,
                 WorkingPart::Ast(ExpressionPart::Identifier(_))
@@ -66,7 +65,7 @@ fn a_splice_keeps_the_key_and_reads_the_head_again() {
                 classify_dispatch_shape(working.stored_key(), Some(PartClass::Spliced))
             );
             assert!(spliced.parts[0].value.as_value().is_some());
-            assert_eq!(spliced.span, working.span);
+            assert_eq!(spliced.source, working.source);
         })
     });
 }
@@ -85,13 +84,13 @@ fn a_built_node_computes_its_key_and_a_synthesized_one_takes_its_origin() {
                 spanned(WorkingPart::StagedSlot, 7, 9),
             ];
             let synthesized = WorkingExpression::synthesized(writer, &parts, &origin);
-            assert_eq!(synthesized.span, Some(Span { start: 3, end: 9 }));
-            assert_eq!(synthesized.file, origin.file);
+            assert_eq!(synthesized.source.span, Span { start: 3, end: 9 });
+            assert_eq!(synthesized.source.file, origin.source.file);
             assert_eq!(synthesized.stored_key(), origin.stored_key());
             assert!(synthesized.binder_plan().is_none());
             let bare = [Spanned::bare(WorkingPart::StagedSlot)];
             let fallback = WorkingExpression::synthesized(writer, &bare, &origin);
-            assert_eq!(fallback.span, origin.span);
+            assert_eq!(fallback.source, origin.source);
             assert_eq!(fallback.stored_key(), [KeyElement::Slot]);
             assert!(fallback.in_type_context().under_type_sigil());
         })

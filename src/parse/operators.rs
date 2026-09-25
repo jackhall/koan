@@ -1,14 +1,14 @@
 //! Operator table driving compound-atom desugaring. Each entry pairs a
 //! trigger character with an arity-typed builder.
 //!
-//! Builders receive their operand(s) plus the trigger's span and return a
+//! Builders receive their operand(s) plus the trigger's span and the file it indexes, and return a
 //! `Spanned<ExpressionPart>` covering the full operand range. The inner
 //! synthetic `Keyword("ATTR"|"TRY")` carries the 1-codepoint trigger
 //! span so diagnostics can point at the exact operator character.
 
 use crate::memory::ProgramBrand;
 use crate::parse::ast::ExpressionPart;
-use crate::source::{self, Span, Spanned};
+use crate::source::{FileId, SourceRef, Span, Spanned};
 use crate::symbols::{KeywordSymbol, SymbolInterner};
 
 pub type UnaryBuild = for<'a> fn(
@@ -16,6 +16,7 @@ pub type UnaryBuild = for<'a> fn(
     &SymbolInterner,
     Spanned<ExpressionPart<'a>>,
     Span,
+    FileId,
 ) -> Spanned<ExpressionPart<'a>>;
 pub type BinaryBuild = for<'a> fn(
     ProgramBrand<'a>,
@@ -23,6 +24,7 @@ pub type BinaryBuild = for<'a> fn(
     Spanned<ExpressionPart<'a>>,
     Spanned<ExpressionPart<'a>>,
     Span,
+    FileId,
 ) -> Spanned<ExpressionPart<'a>>;
 
 pub enum OperatorKind {
@@ -56,6 +58,7 @@ fn build_attr<'a>(
     lhs: Spanned<ExpressionPart<'a>>,
     rhs: Spanned<ExpressionPart<'a>>,
     trigger: Span,
+    file: FileId,
 ) -> Spanned<ExpressionPart<'a>> {
     let start = lhs.span.map(|s| s.start).unwrap_or(trigger.start);
     let end = rhs.span.map(|s| s.end).unwrap_or(trigger.end);
@@ -70,7 +73,7 @@ fn build_attr<'a>(
         ),
         trigger,
     );
-    let kexp = brand.build_expression(&[kw, lhs, rhs], Some(outer), source::current());
+    let kexp = brand.build_expression(&[kw, lhs, rhs], SourceRef { span: outer, file });
     let part = if type_context {
         ExpressionPart::SigiledTypeExpr(brand.alloc_node(kexp))
     } else {
@@ -84,6 +87,7 @@ fn build_try<'a>(
     symbols: &SymbolInterner,
     lhs: Spanned<ExpressionPart<'a>>,
     trigger: Span,
+    file: FileId,
 ) -> Spanned<ExpressionPart<'a>> {
     let start = lhs.span.map(|s| s.start).unwrap_or(trigger.start);
     let outer = Span {
@@ -96,7 +100,7 @@ fn build_try<'a>(
         ),
         trigger,
     );
-    let kexp = brand.build_expression(&[kw, lhs], Some(outer), source::current());
+    let kexp = brand.build_expression(&[kw, lhs], SourceRef { span: outer, file });
     Spanned::at(ExpressionPart::Expression(brand.alloc_node(kexp)), outer)
 }
 

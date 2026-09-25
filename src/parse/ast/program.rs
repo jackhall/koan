@@ -17,7 +17,7 @@
 use std::ops::Deref;
 
 use crate::memory::{ProgramBrand, Writer, resident};
-use crate::source::{FileId, Span, Spanned};
+use crate::source::{SourceRef, Spanned};
 
 use super::{ExpressionPart, KExpression, RunIter};
 
@@ -32,8 +32,11 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// ```compile_fail
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
+/// # use koan::source::{register, SourceFile, SourceRef, Span};
+/// # let file = register(SourceFile::new("<doc>", String::new()));
+/// # let source = SourceRef { span: Span { start: 0, end: 0 }, file };
 /// // A bare `KExpression`, whatever brand built it, is not a `ProgramExpression`.
-/// let node = koan::parse::KExpression::new(program.writer(), &[]);
+/// let node = koan::parse::KExpression::build(program.writer(), &[], source);
 /// let _cell = koan::machine::model::KObject::KExpression(node);
 /// ```
 ///
@@ -42,7 +45,10 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// ```compile_fail
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
-/// let node = koan::parse::KExpression::new(program.writer(), &[]);
+/// # use koan::source::{register, SourceFile, SourceRef, Span};
+/// # let file = register(SourceFile::new("<doc>", String::new()));
+/// # let source = SourceRef { span: Span { start: 0, end: 0 }, file };
+/// let node = koan::parse::KExpression::build(program.writer(), &[], source);
 /// let _marked = koan::parse::ProgramExpression(node);
 /// ```
 ///
@@ -51,7 +57,10 @@ use super::{ExpressionPart, KExpression, RunIter};
 /// ```
 /// let storage = koan::memory::program_storage();
 /// let program = storage.brand();
-/// let _marked: koan::parse::ProgramExpression<'_> = program.new_expression(&[]);
+/// # use koan::source::{register, SourceFile, SourceRef, Span};
+/// # let file = register(SourceFile::new("<doc>", String::new()));
+/// # let source = SourceRef { span: Span { start: 0, end: 0 }, file };
+/// let _marked: koan::parse::ProgramExpression<'_> = program.build_expression(&[], source);
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct ProgramExpression<'a>(KExpression<'a>);
@@ -125,12 +134,13 @@ impl<'a> Deref for ProgramExpression<'a> {
 /// ```compile_fail
 /// use koan::memory::ProgramBrand;
 /// use koan::machine::model::ast::{ExpressionPart, ProgramExpression};
-/// use koan::source::Spanned;
+/// use koan::source::{SourceRef, Spanned};
 /// fn mint_step_part<'program: 'step, 'step>(
 ///     program: ProgramBrand<'program>,
 ///     part: Spanned<ExpressionPart<'step>>,
+///     source: SourceRef,
 /// ) -> ProgramExpression<'step> {
-///     program.new_expression(&[part])
+///     program.build_expression(&[part], source)
 /// }
 /// ```
 ///
@@ -138,49 +148,23 @@ impl<'a> Deref for ProgramExpression<'a> {
 /// rejection: a covariant brand would shorten to `'step`, accept the part, and mint. Only the
 /// brand's invariance refuses it.
 impl<'a> ProgramBrand<'a> {
-    /// Spanless mint — [`KExpression::new`] with the tier proof attached.
-    pub fn new_expression(self, parts: &[Spanned<ExpressionPart<'a>>]) -> ProgramExpression<'a> {
-        ProgramExpression(KExpression::new(self.writer(), parts))
-    }
-
-    /// [`new_expression`](Self::new_expression)'s peer for a computed run —
-    /// [`KExpression::new_from_iter`] with the tier proof attached.
-    pub fn new_expression_from_iter<I>(self, parts: I) -> ProgramExpression<'a>
-    where
-        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
-        RunIter<I>: ExactSizeIterator,
-    {
-        ProgramExpression(KExpression::new_from_iter(self.writer(), parts))
-    }
-
-    /// Full mint — [`KExpression::build`] with the tier proof attached.
+    /// Mint — [`KExpression::build`] with the tier proof attached.
     pub fn build_expression(
         self,
         parts: &[Spanned<ExpressionPart<'a>>],
-        span: Option<Span>,
-        file: Option<FileId>,
+        source: SourceRef,
     ) -> ProgramExpression<'a> {
-        ProgramExpression(KExpression::build(self.writer(), parts, span, file))
+        ProgramExpression(KExpression::build(self.writer(), parts, source))
     }
 
     /// [`build_expression`](Self::build_expression)'s peer for a computed run —
     /// [`KExpression::build_from_iter`] with the tier proof attached.
-    pub fn build_expression_from_iter<I>(
-        self,
-        parts: I,
-        span: Option<Span>,
-        file: Option<FileId>,
-    ) -> ProgramExpression<'a>
+    pub fn build_expression_from_iter<I>(self, parts: I, source: SourceRef) -> ProgramExpression<'a>
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        ProgramExpression(KExpression::build_from_iter(
-            self.writer(),
-            parts,
-            span,
-            file,
-        ))
+        ProgramExpression(KExpression::build_from_iter(self.writer(), parts, source))
     }
 
     /// Write a marked node into program storage, yielding the reference an arm payload holds.
@@ -190,17 +174,21 @@ impl<'a> ProgramBrand<'a> {
 
     /// Build and write in one step — the [`ExpressionPart::Expression`] analogue of
     /// [`KExpression::nested`], for the arm constructions that mint a fresh child node.
-    pub fn nested_node(self, parts: &[Spanned<ExpressionPart<'a>>]) -> ProgramNode<'a> {
-        ProgramNode(KExpression::nested(self.writer(), parts))
+    pub fn nested_node(
+        self,
+        parts: &[Spanned<ExpressionPart<'a>>],
+        source: SourceRef,
+    ) -> ProgramNode<'a> {
+        ProgramNode(KExpression::nested(self.writer(), parts, source))
     }
 
     /// [`nested_node`](Self::nested_node)'s peer for a computed run —
     /// [`KExpression::nested_from_iter`] with the tier proof attached.
-    pub fn nested_node_from_iter<I>(self, parts: I) -> ProgramNode<'a>
+    pub fn nested_node_from_iter<I>(self, parts: I, source: SourceRef) -> ProgramNode<'a>
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        ProgramNode(KExpression::nested_from_iter(self.writer(), parts))
+        ProgramNode(KExpression::nested_from_iter(self.writer(), parts, source))
     }
 }

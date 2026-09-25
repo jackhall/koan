@@ -10,7 +10,9 @@
 //! Every node the rewrite builds goes through [`parse`](crate::parse)'s node constructor, so it
 //! carries a real structural cache and reads like any other node. A subtree nothing changed is
 //! returned as `None` and keeps its own part addresses, so a statement holding no operator run is
-//! the statement the parser produced.
+//! the statement the parser produced. Every node and part the rewrite builds carries a span of the
+//! source it was built from: a chained node spans its operands, a keyword the operator it came from,
+//! a hoist its operand, and a synthesized block and its last statement the whole run.
 //!
 //! The four rewrites, over operands `o0 … on` and operators `k1 … kn`:
 //!
@@ -30,6 +32,7 @@ use crate::parse::builtin_shapes::binder::bounded_run;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, ProgramNode, Spanned};
+use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{KeywordSymbol, ValueSymbol};
 use crate::type_lattice::{FoldDirection, ReductionMode};
 
@@ -42,6 +45,32 @@ use super::Builder;
 
 /// A part run under construction, in scratch.
 type Run<'x, 'graph> = BumpVec<'x, Spanned<ExpressionPart<'graph>>>;
+
+/// An operator of a run, beside the extent it is written at.
+#[derive(Clone, Copy)]
+struct Operator {
+    symbol: KeywordSymbol,
+    span: Span,
+}
+
+/// The extent from `first`'s start to `last`'s end, or `fallback` when either is unspanned.
+fn cover(first: Option<Span>, last: Option<Span>, fallback: Span) -> Span {
+    match (first, last) {
+        (Some(first), Some(last)) => Span {
+            start: first.start,
+            end: last.end,
+        },
+        _ => fallback,
+    }
+}
+
+/// A part holding the built `node`, spanned as the node is.
+fn holding<'graph>(node: ProgramNode<'graph>) -> Spanned<ExpressionPart<'graph>> {
+    Spanned::at(
+        ExpressionPart::Expression(node),
+        node.reference().source.span,
+    )
+}
 
 impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// One statement with every operator run in it chained, or `None` when it holds none.
@@ -59,8 +88,11 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         };
         if self.is_block(rewritten) {
             let mut run: Run<'x, 'graph> = BumpVec::new_in(self.scratch);
-            run.push(Spanned::bare(ExpressionPart::Expression(rewritten)));
-            return Ok(Some(*self.brand.nested_node(&run).reference()));
+            run.push(Spanned::at(
+                ExpressionPart::Expression(rewritten),
+                node.source.span,
+            ));
+            return Ok(Some(*self.brand.nested_node(&run, node.source).reference()));
         }
         Ok(Some(*rewritten.reference()))
     }
@@ -134,18 +166,24 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     });
                 }
                 if node.shape() == DispatchShape::OperatorChain {
-                    return self.chain(at, &run).map(Some);
+                    return self.chain(at, &run, node.source).map(Some);
                 }
                 // `a != b` written alone is the same rewrite one pair of a pairwise run takes.
                 if let [left, separator, right] = &run[..]
                     && let ExpressionPart::Keyword(symbol) = separator.value
                     && is_unequal(symbol)
                 {
-                    return self.infix(at, *left, symbol, *right).map(Some);
+                    let op = Operator {
+                        symbol,
+                        span: separator.span.unwrap_or(node.source.span),
+                    };
+                    return self
+                        .infix(at, node.source.file, *left, op, *right)
+                        .map(Some);
                 }
             }
         }
-        Ok(changed.then(|| self.brand.nested_node(&run)))
+        Ok(changed.then(|| self.brand.nested_node(&run, node.source)))
     }
 
     /// One part with every operator run under it chained. A quote is data and is never rewritten.
@@ -248,7 +286,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             }
             index += if typed { 2 } else { 1 };
         }
-        Ok(changed.then(|| self.brand.nested_node(&parts)))
+        Ok(changed.then(|| self.brand.nested_node(&parts, run.source)))
     }
 
     /// A `TYPE` declarator with its bound's operator runs chained: the third part of a
@@ -272,7 +310,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         parts.extend_from_slice(run.parts);
         parts[2].value = rewritten;
         Ok(Some(ExpressionPart::Expression(
-            self.brand.nested_node(&parts),
+            self.brand.nested_node(&parts, run.source),
         )))
     }
 
@@ -344,59 +382,67 @@ enum Quotes {
 
 impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// One operator run, already rewritten part by part, chained under the one chaining its symbols
-    /// share.
+    /// share. `source` is the run's own node's.
     fn chain(
         &mut self,
         at: Position,
         parts: &[Spanned<ExpressionPart<'graph>>],
+        source: SourceRef,
     ) -> Result<ProgramNode<'graph>, ShapeError> {
-        let mut operators: BumpVec<'x, KeywordSymbol> = BumpVec::new_in(self.scratch);
+        let mut operators: BumpVec<'x, Operator> = BumpVec::new_in(self.scratch);
         operators.extend(
             parts
                 .iter()
                 .skip(1)
                 .step_by(2)
                 .map(|part| match part.value {
-                    ExpressionPart::Keyword(symbol) => symbol,
+                    ExpressionPart::Keyword(symbol) => Operator {
+                        symbol,
+                        span: part.span.unwrap_or(source.span),
+                    },
                     _ => unreachable!("an operator run's odd positions are keywords"),
                 }),
         );
         let mut operands: Run<'x, 'graph> = BumpVec::new_in(self.scratch);
         operands.extend(parts.iter().step_by(2).copied());
 
+        let file = source.file;
         let mode = self.chaining(at, &operators)?;
         match mode {
             ReductionMode::FoldLeft | ReductionMode::FoldRight => {
-                self.fold(at, &operands, &operators, mode)
+                self.fold(at, file, &operands, &operators, mode)
             }
             ReductionMode::Unary => {
                 let items = collect(
                     self.brand.writer(),
                     operands.iter().map(|operand| operand.value),
                 );
+                let last = operands.last().expect("an operator run has operands");
                 let run = [
-                    Spanned::bare(ExpressionPart::Keyword(operators[0])),
-                    Spanned::bare(ExpressionPart::ListLiteral(items)),
+                    Spanned::at(
+                        ExpressionPart::Keyword(operators[0].symbol),
+                        operators[0].span,
+                    ),
+                    Spanned::at(
+                        ExpressionPart::ListLiteral(items),
+                        cover(operands[0].span, last.span, source.span),
+                    ),
                 ];
-                self.built(at, operators[0], &run)
+                self.built(at, file, operators[0], &run, source.span)
             }
             ReductionMode::Pairwise {
                 combiner,
                 direction,
-            } => self.pairwise(at, &operands, &operators, combiner, direction),
+            } => self.pairwise(at, source, &operands, &operators, combiner, direction),
         }
     }
 
     /// How an operator run of `operators` reduces where this frame is: every symbol but `==` and
     /// `!=` must agree, and an equality symbol beside them joins only a pairwise group.
-    fn chaining(
-        &self,
-        at: Position,
-        operators: &[KeywordSymbol],
-    ) -> Result<ReductionMode, ShapeError> {
+    fn chaining(&self, at: Position, operators: &[Operator]) -> Result<ReductionMode, ShapeError> {
         let mut chosen: Option<(KeywordSymbol, Cover<'graph>)> = None;
         let mut equality = None;
-        for symbol in operators {
+        for Operator { symbol, .. } in operators {
             if is_equality(*symbol) {
                 equality.get_or_insert(*symbol);
                 continue;
@@ -442,15 +488,16 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn fold(
         &mut self,
         at: Position,
+        file: FileId,
         operands: &[Spanned<ExpressionPart<'graph>>],
-        operators: &[KeywordSymbol],
+        operators: &[Operator],
         mode: ReductionMode,
     ) -> Result<ProgramNode<'graph>, ShapeError> {
         let direction = match mode {
             ReductionMode::FoldRight => FoldDirection::Right,
             _ => FoldDirection::Left,
         };
-        self.fold_run(at, operands, operators, direction)
+        self.fold_run(at, file, operands, operators, direction)
     }
 
     /// The fold itself: `operands` has one more element than `operators`, and both a fold rewrite
@@ -458,8 +505,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn fold_run(
         &mut self,
         at: Position,
+        file: FileId,
         operands: &[Spanned<ExpressionPart<'graph>>],
-        operators: &[KeywordSymbol],
+        operators: &[Operator],
         direction: FoldDirection,
     ) -> Result<ProgramNode<'graph>, ShapeError> {
         debug_assert_eq!(operands.len(), operators.len() + 1);
@@ -467,17 +515,17 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         match direction {
             FoldDirection::Left => {
                 let mut left = operands[0];
-                for (index, symbol) in operators.iter().enumerate() {
-                    let built = self.infix(at, left, *symbol, operands[index + 1])?;
-                    left = Spanned::bare(ExpressionPart::Expression(built));
+                for (index, op) in operators.iter().enumerate() {
+                    let built = self.infix(at, file, left, *op, operands[index + 1])?;
+                    left = holding(built);
                     node = Some(built);
                 }
             }
             FoldDirection::Right => {
                 let mut right = operands[operands.len() - 1];
-                for (index, symbol) in operators.iter().enumerate().rev() {
-                    let built = self.infix(at, operands[index], *symbol, right)?;
-                    right = Spanned::bare(ExpressionPart::Expression(built));
+                for (index, op) in operators.iter().enumerate().rev() {
+                    let built = self.infix(at, file, operands[index], *op, right)?;
+                    right = holding(built);
                     node = Some(built);
                 }
             }
@@ -487,15 +535,17 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
 
     /// The pairwise rewrite: each adjacent pair through its own operator, the pair results folded
     /// through `combiner`. An operand that would be evaluated twice is hoisted, in source order,
-    /// into an anonymous slot of a synthesized block.
+    /// into an anonymous slot of a synthesized block, which is sourced at the whole run, `source`.
     fn pairwise(
         &mut self,
         at: Position,
+        source: SourceRef,
         operands: &[Spanned<ExpressionPart<'graph>>],
-        operators: &[KeywordSymbol],
+        operators: &[Operator],
         combiner: KeywordSymbol,
         direction: FoldDirection,
     ) -> Result<ProgramNode<'graph>, ShapeError> {
+        let file = source.file;
         let mut hoisted: Run<'x, 'graph> = BumpVec::new_in(self.scratch);
         let mut named: Run<'x, 'graph> = BumpVec::with_capacity_in(operands.len(), self.scratch);
         for (index, operand) in operands.iter().enumerate() {
@@ -503,26 +553,37 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 named.push(*operand);
                 continue;
             }
+            // A hoist and every name it binds are written where the operand is.
+            let written = operand.span.unwrap_or(source.span);
             let name = anonymous_operand(index);
             let binding = [
-                Spanned::bare(ExpressionPart::Keyword(KEYWORDS.let_.symbol())),
-                Spanned::bare(ExpressionPart::Identifier(name)),
-                Spanned::bare(ExpressionPart::Keyword(KEYWORDS.equals.symbol())),
+                Spanned::at(ExpressionPart::Keyword(KEYWORDS.let_.symbol()), written),
+                Spanned::at(ExpressionPart::Identifier(name), written),
+                Spanned::at(ExpressionPart::Keyword(KEYWORDS.equals.symbol()), written),
                 *operand,
             ];
-            let binding = self.brand.nested_node(&binding);
-            hoisted.push(Spanned::bare(ExpressionPart::Expression(binding)));
-            named.push(Spanned::bare(ExpressionPart::Identifier(name)));
+            let binding = self.brand.nested_node(
+                &binding,
+                SourceRef {
+                    span: written,
+                    file,
+                },
+            );
+            hoisted.push(holding(binding));
+            named.push(Spanned::at(ExpressionPart::Identifier(name), written));
         }
 
         let mut pairs: Run<'x, 'graph> = BumpVec::with_capacity_in(operators.len(), self.scratch);
-        let mut combiners: BumpVec<'x, KeywordSymbol> =
+        let mut combiners: BumpVec<'x, Operator> =
             BumpVec::with_capacity_in(operators.len(), self.scratch);
-        for (index, symbol) in operators.iter().enumerate() {
-            let pair = self.infix(at, named[index], *symbol, named[index + 1])?;
-            pairs.push(Spanned::bare(ExpressionPart::Expression(pair)));
+        for (index, op) in operators.iter().enumerate() {
+            let pair = self.infix(at, file, named[index], *op, named[index + 1])?;
+            pairs.push(holding(pair));
             if index > 0 {
-                combiners.push(combiner);
+                combiners.push(Operator {
+                    symbol: combiner,
+                    span: op.span,
+                });
             }
         }
         let folded = if let [only] = &pairs[..] {
@@ -531,13 +592,13 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             };
             node
         } else {
-            self.fold_run(at, &pairs, &combiners, direction)?
+            self.fold_run(at, file, &pairs, &combiners, direction)?
         };
         if hoisted.is_empty() {
             return Ok(folded);
         }
-        hoisted.push(Spanned::bare(ExpressionPart::Expression(folded)));
-        let block = self.brand.nested_node(&hoisted);
+        hoisted.push(Spanned::at(ExpressionPart::Expression(folded), source.span));
+        let block = self.brand.nested_node(&hoisted, source);
         self.blocks
             .insert(block.reference().parts.as_ptr() as usize, ());
         Ok(block)
@@ -545,28 +606,35 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
 
     /// One infix node `left <symbol> right`. `a != b` is never built: it becomes `NOT (a == b)`, so
     /// `!=` reaches no bucket.
+    /// The node spans its operands, and each keyword the operator it came from.
     fn infix(
         &mut self,
         at: Position,
+        file: FileId,
         left: Spanned<ExpressionPart<'graph>>,
-        symbol: KeywordSymbol,
+        op: Operator,
         right: Spanned<ExpressionPart<'graph>>,
     ) -> Result<ProgramNode<'graph>, ShapeError> {
-        if is_unequal(symbol) {
+        let span = cover(left.span, right.span, op.span);
+        if is_unequal(op.symbol) {
             let equal = [
                 left,
-                Spanned::bare(ExpressionPart::Keyword(equal_symbol())),
+                Spanned::at(ExpressionPart::Keyword(equal_symbol()), op.span),
                 right,
             ];
-            let equal = self.built(at, symbol, &equal)?;
+            let equal = self.built(at, file, op, &equal, span)?;
             let negated = [
-                Spanned::bare(ExpressionPart::Keyword(not_symbol())),
-                Spanned::bare(ExpressionPart::Expression(equal)),
+                Spanned::at(ExpressionPart::Keyword(not_symbol()), op.span),
+                Spanned::at(ExpressionPart::Expression(equal), span),
             ];
-            return self.built(at, symbol, &negated);
+            return self.built(at, file, op, &negated, span);
         }
-        let run = [left, Spanned::bare(ExpressionPart::Keyword(symbol)), right];
-        self.built(at, symbol, &run)
+        let run = [
+            left,
+            Spanned::at(ExpressionPart::Keyword(op.symbol), op.span),
+            right,
+        ];
+        self.built(at, file, op, &run, span)
     }
 
     /// One node of the rewrite, refused when its run spells a builtin form — an operator symbol
@@ -574,12 +642,17 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn built(
         &self,
         at: Position,
-        symbol: KeywordSymbol,
+        file: FileId,
+        op: Operator,
         run: &[Spanned<ExpressionPart<'graph>>],
+        span: Span,
     ) -> Result<ProgramNode<'graph>, ShapeError> {
-        let node = self.brand.nested_node(run);
+        let node = self.brand.nested_node(run, SourceRef { span, file });
         if node.reference().cache().builtin_shape().is_some() {
-            return Err(ShapeError::SpellsForm { symbol, at });
+            return Err(ShapeError::SpellsForm {
+                symbol: op.symbol,
+                at,
+            });
         }
         Ok(node)
     }

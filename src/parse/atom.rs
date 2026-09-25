@@ -23,7 +23,7 @@ use super::error::ParseError;
 use crate::memory::ProgramBrand;
 use crate::parse::ast::{ExpressionPart, KLiteral};
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
-use crate::source::{Span, Spanned};
+use crate::source::{FileId, Span, Spanned};
 use crate::symbols::{
     KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol, is_keyword_token, is_type_name,
 };
@@ -51,10 +51,11 @@ pub(super) fn classify<'a>(
     symbols: &SymbolInterner,
     text: &str,
     span: Span,
+    file: FileId,
 ) -> Result<Classified<'a>, ParseError> {
     let Some(first_colon) = text.find(':') else {
         return Ok(Classified {
-            parts: smallvec::smallvec![classify_token(brand, symbols, text, span.start)?],
+            parts: smallvec::smallvec![classify_token(brand, symbols, text, span.start, file)?],
             trailing_colon: false,
         });
     };
@@ -77,6 +78,7 @@ pub(super) fn classify<'a>(
             symbols,
             &text[..first_colon],
             span.start,
+            file,
         )?);
     }
     let mut at = first_colon;
@@ -104,6 +106,7 @@ pub(super) fn classify<'a>(
             symbols,
             name,
             span.start + name_start as u32,
+            file,
         )?);
         at = name_end;
     }
@@ -124,7 +127,7 @@ pub(super) fn not_a_type_name(got: char) -> String {
 
 /// Whole-token literal match runs first so e.g. `3.14` stays a number rather than
 /// being desugared as `(attr 3 14)`. `start` is the token's original-source byte
-/// offset, used to compute absolute spans for atoms and operator triggers. Every name the
+/// offset in `file`, used to compute absolute spans for atoms and operator triggers. Every name the
 /// classification keeps is written into `brand`'s program storage, so the part borrows nothing from
 /// `tok`.
 pub fn classify_token<'a>(
@@ -132,6 +135,7 @@ pub fn classify_token<'a>(
     symbols: &SymbolInterner,
     tok: &str,
     start: u32,
+    file: FileId,
 ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
     let token_span = Span {
         start,
@@ -141,7 +145,7 @@ pub fn classify_token<'a>(
         return Ok(Spanned::at(part, token_span));
     }
     let mut chars = tok.char_indices().peekable();
-    let part = parse_compound(brand, symbols, tok, &mut chars, start, token_span)?;
+    let part = parse_compound(brand, symbols, tok, &mut chars, start, token_span, file)?;
     if let Some(&(_, c)) = chars.peek() {
         return Err(ParseError::new(
             format!("unexpected {:?} in token {:?}", c, tok),
@@ -284,6 +288,7 @@ fn parse_compound<'a>(
     chars: &mut Peekable<CharIndices>,
     start: u32,
     token_span: Span,
+    file: FileId,
 ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
     let mut expr = read_atom(symbols, tok, chars, start, token_span)?;
 
@@ -294,9 +299,9 @@ fn parse_compound<'a>(
         expr = match op {
             SuffixOp::Infix(build) => {
                 let rhs = read_atom(symbols, tok, chars, start, token_span)?;
-                build(brand, symbols, expr, rhs, trigger)
+                build(brand, symbols, expr, rhs, trigger, file)
             }
-            SuffixOp::Suffix(build) => build(brand, symbols, expr, trigger),
+            SuffixOp::Suffix(build) => build(brand, symbols, expr, trigger, file),
         };
     }
 
@@ -431,9 +436,15 @@ mod tests {
     fn classify(tok: &str) -> Result<String, String> {
         let program = program_storage();
         let symbols = SymbolInterner::new();
-        classify_token(program.brand(), &symbols, tok, 0)
-            .map(|s| describe(&s.value, &symbols))
-            .map_err(|e| e.to_string())
+        classify_token(
+            program.brand(),
+            &symbols,
+            tok,
+            0,
+            crate::tests::source().file,
+        )
+        .map(|s| describe(&s.value, &symbols))
+        .map_err(|e| e.to_string())
     }
 
     #[test]

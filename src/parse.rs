@@ -97,7 +97,5 @@ pub fn parse_with_source<'a>(
     id: FileId,
 ) -> Result<Vec<KExpression<'a>>, ParseError> {
     let _guard = CurrentFileGuard::push(id);
-    source::with(id, |f| {
-        lower::lower_source(program, symbols, &f.text, Some(id))
-    })
+    source::with(id, |f| lower::lower_source(program, symbols, &f.text, id))
 }

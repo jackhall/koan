@@ -20,19 +20,19 @@ use super::error::ParseError;
 use crate::memory::{ProgramBrand, collect};
 use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
 use crate::parse::builtin_shapes::binder::admit_bare_type_slots;
-use crate::source::{FileId, Span, Spanned};
+use crate::source::{FileId, SourceRef, Span, Spanned};
 use crate::symbols::{KeywordSymbol, SymbolInterner, WILDCARD};
 
 use super::atom;
 use super::brace::{BraceContents, DictFrame};
 
-/// Read `source` into its layout tree and lower every top-level line. `file` is read once by the
-/// caller and stamped on every node this produces.
+/// Read `source` into its layout tree and lower every top-level line. `file` is the registered
+/// source `source` is the text of, and every node this produces is sourced in it.
 pub(super) fn lower_source<'a>(
     program: ProgramBrand<'a>,
     symbols: &SymbolInterner,
     source: &str,
-    file: Option<FileId>,
+    file: FileId,
 ) -> Result<Vec<KExpression<'a>>, ParseError> {
     let lines = sexlex::read(source).map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
     let lower = Lower {
@@ -78,11 +78,19 @@ struct Sigil<'a> {
 struct Lower<'a, 'l, 's> {
     program: ProgramBrand<'a>,
     symbols: &'l SymbolInterner,
-    file: Option<FileId>,
+    file: FileId,
     source: &'s str,
 }
 
 impl<'a, 's> Lower<'a, '_, 's> {
+    /// The source of the text at `span`.
+    fn at(&self, span: Span) -> SourceRef {
+        SourceRef {
+            span,
+            file: self.file,
+        }
+    }
+
     /// One top-level line. A `#`-led line is a statement that holds a quote; a `$`-led line *is*
     /// the `EVAL` call, since evaluation is what the line asks for.
     fn statement(&self, line: &Item<'s>) -> Result<KExpression<'a>, ParseError> {
@@ -102,7 +110,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 let quoted = self.sigil_part(sigil);
                 Ok(self
                     .program
-                    .build_expression(&[quoted], Some(line.span), self.file)
+                    .build_expression(&[quoted], self.at(line.span))
                     .node())
             }
             None => Ok(self.lower_body(items, line.span, Wrappers::Peel)?.node()),
@@ -153,14 +161,12 @@ impl<'a, 's> Lower<'a, '_, 's> {
             survivor = Some(**node);
         }
         Ok(match survivor {
-            Some(expression) => self.program.build_expression_from_iter(
-                expression.parts.iter().copied(),
-                Some(span),
-                self.file,
-            ),
+            Some(expression) => self
+                .program
+                .build_expression_from_iter(expression.parts.iter().copied(), self.at(span)),
             None => self
                 .program
-                .build_expression_from_iter(parts, Some(span), self.file),
+                .build_expression_from_iter(parts, self.at(span)),
         })
     }
 
@@ -292,7 +298,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         {
             return dict.accept_equals();
         }
-        let classified = atom::classify(self.program, self.symbols, text, item.span)?;
+        let classified = atom::classify(self.program, self.symbols, text, item.span, self.file)?;
         for part in classified.parts {
             self.push_part(context, parts, part)?;
         }
@@ -341,7 +347,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
             let items = collect(writer, parts.into_iter().map(|part| part.value));
             return Ok(Spanned::at(ExpressionPart::ListLiteral(items), item.span));
         }
-        let mut dict = DictFrame::new(self.program);
+        let mut dict = DictFrame::new(self.program, self.at(item.span));
         self.lower_run(inner.iter(), &mut Context::Brace(&mut dict), wrappers)?;
         let part = match dict.finish(self.symbols)? {
             BraceContents::Dict(pairs) => {
@@ -374,7 +380,10 @@ impl<'a, 's> Lower<'a, '_, 's> {
         if sigil_kind == '#' && matches!(group_kind, Kind::Bracket | Kind::Brace) {
             self.check_close_adjacency(group, group_kind)?;
             let literal = self.collection_part(group, inner, group_kind, wrappers)?;
-            return Ok(Spanned::at(self.quote_elements(literal.value), outer));
+            return Ok(Spanned::at(
+                self.quote_elements(literal.value, outer),
+                outer,
+            ));
         }
         if sigil_kind != ':' {
             let body = self.lower_body(inner, group.span, wrappers)?;
@@ -405,12 +414,10 @@ impl<'a, 's> Lower<'a, '_, 's> {
         {
             return Ok(Spanned::at(ExpressionPart::SigiledTypeExpr(node), outer));
         }
-        let node = self
-            .program
-            .alloc_node(
-                self.program
-                    .build_expression_from_iter(parts, Some(outer), self.file),
-            );
+        let node = self.program.alloc_node(
+            self.program
+                .build_expression_from_iter(parts, self.at(outer)),
+        );
         let part = if group_kind == Kind::Paren {
             ExpressionPart::SigiledTypeExpr(node)
         } else {
@@ -486,7 +493,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
             )?;
             admit_bare_type_slots(&mut parts);
             self.program
-                .build_expression_from_iter(parts, Some(body_span), self.file)
+                .build_expression_from_iter(parts, self.at(body_span))
         };
         Ok(Some(Sigil {
             kind,
@@ -502,44 +509,44 @@ impl<'a, 's> Lower<'a, '_, 's> {
 
     /// `#[…]`, `#{…}`: the literal, bare, with every element quoted. A paren-group element is
     /// quoted as that group and any other element as a one-part quote; a `_` key and a record's
-    /// field names stay bare. A brace frame keeps no element spans, so a one-part quote has none.
-    fn quote_elements(&self, literal: ExpressionPart<'a>) -> ExpressionPart<'a> {
+    /// field names stay bare. A brace frame keeps no element spans, so a one-part quote is sourced
+    /// at the whole literal, `span`.
+    fn quote_elements(&self, literal: ExpressionPart<'a>, span: Span) -> ExpressionPart<'a> {
         let writer = self.program.writer();
         match literal {
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(collect(
                 writer,
-                items.iter().map(|item| self.quoted(*item)),
+                items.iter().map(|item| self.quoted(*item, span)),
             )),
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(collect(
                 writer,
                 pairs.iter().map(|(key, value)| {
                     let key = match key {
                         ExpressionPart::Keyword(symbol) if *symbol == WILDCARD.symbol() => *key,
-                        _ => self.quoted(*key),
+                        _ => self.quoted(*key, span),
                     };
-                    (key, self.quoted(*value))
+                    (key, self.quoted(*value, span))
                 }),
             )),
             ExpressionPart::RecordLiteral(fields) => ExpressionPart::RecordLiteral(collect(
                 writer,
                 fields
                     .iter()
-                    .map(|(name, value)| (*name, self.quoted(*value))),
+                    .map(|(name, value)| (*name, self.quoted(*value, span))),
             )),
             _ => unreachable!("a bracket or brace lowers to a container literal"),
         }
     }
 
-    /// One element of a `#[…]` or `#{…}` literal, quoted.
-    fn quoted(&self, element: ExpressionPart<'a>) -> ExpressionPart<'a> {
+    /// One element of a `#[…]` or `#{…}` literal, quoted; a one-part quote is sourced at `span`.
+    fn quoted(&self, element: ExpressionPart<'a>, span: Span) -> ExpressionPart<'a> {
         match element {
             ExpressionPart::Expression(node) => ExpressionPart::QuotedExpression(node),
             other => ExpressionPart::QuotedExpression(
-                self.program.alloc_node(self.program.build_expression(
-                    &[Spanned::bare(other)],
-                    None,
-                    self.file,
-                )),
+                self.program.alloc_node(
+                    self.program
+                        .build_expression(&[Spanned::bare(other)], self.at(span)),
+                ),
             ),
         }
     }
@@ -565,8 +572,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
                     sigil.body_span,
                 ),
             ],
-            Some(sigil.outer),
-            self.file,
+            self.at(sigil.outer),
         )
     }
 
@@ -708,8 +714,16 @@ pub(super) fn lower_run_for_tests<'a>(
     source: &str,
 ) -> Result<KExpression<'a>, ParseError> {
     let lines = sexlex::read(source).map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
+    let file =
+        crate::source::register(crate::source::SourceFile::new("<test>", source.to_string()));
     let line = match lines.as_slice() {
-        [] => return Ok(program.build_expression(&[], None, None).node()),
+        [] => {
+            let source = SourceRef {
+                span: Span { start: 0, end: 0 },
+                file,
+            };
+            return Ok(program.build_expression(&[], source).node());
+        }
         [line] => line,
         _ => return Err(ParseError::new("this helper reads exactly one line", None)),
     };
@@ -723,11 +737,11 @@ pub(super) fn lower_run_for_tests<'a>(
     let lower = Lower {
         program,
         symbols,
-        file: None,
+        file,
         source,
     };
     let parts = lower.lower_run(items.iter(), &mut Context::Expression, Wrappers::Peel)?;
     Ok(program
-        .build_expression_from_iter(parts, Some(line.span), None)
+        .build_expression_from_iter(parts, lower.at(line.span))
         .node())
 }
