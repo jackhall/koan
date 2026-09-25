@@ -36,11 +36,12 @@ fn shaped<R>(
     })
 }
 
-/// The error building `source` refuses with.
-fn refusal(source: &str) -> ShapeError {
+/// The error building `source` refuses with, handed to `check`: it borrows the program storage the
+/// build wrote to.
+fn refused<R>(source: &str, check: impl for<'graph> FnOnce(ShapeError<'graph>) -> R) -> R {
     shaped(source, |_, _, shape| match shape {
         Ok(_) => panic!("`{source}` is refused"),
-        Err(error) => error,
+        Err(error) => check(error),
     })
 }
 
@@ -279,9 +280,10 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
         ),
     ];
     for (source, expected, text) in cases {
-        let error = refusal(source);
-        assert_eq!(located(error.at()), text, "{source}");
-        assert_eq!(unlocated(error), expected, "{source}");
+        refused(source, |error| {
+            assert_eq!(located(error.at()), text, "{source}");
+            assert_eq!(unlocated(error), expected, "{source}");
+        });
     }
     shaped(
         "MATCH 1 -> :Number WITH #{:(Number | Str): (it), :{x :Number} : (0)}",
@@ -413,11 +415,12 @@ fn an_arm_is_in_tail_position_exactly_where_its_match_is() {
 
 #[test]
 fn a_unions_payloads_are_type_expressions_and_its_tags_name_nothing() {
-    let undefined = refusal("UNION Mb = #{Some: Undefined}");
-    assert!(
-        matches!(undefined, ShapeError::Unbound { .. }),
-        "{undefined:?}"
-    );
+    refused("UNION Mb = #{Some: Undefined}", |undefined| {
+        assert!(
+            matches!(undefined, ShapeError::Unbound { .. }),
+            "{undefined:?}"
+        );
+    });
     shaped(
         "UNION Mb = #{Some: Number, None: Null}",
         |fixture, _, shape| {
@@ -451,11 +454,12 @@ fn a_value_dicts_default_is_refused_and_an_arm_sets_is_not() {
         "LET f = (FN :{} -> Any = #({1: 2, _: 3}))",
         "LET q = #{_: (3)}",
     ] {
-        let error = refusal(source);
-        assert!(matches!(error, ShapeError::DictDefault { .. }), "{source}");
-        if source == "LET d = {1: 2, _: 3}" {
-            assert_eq!(located(error.at()), "{1: 2, _: 3}");
-        }
+        refused(source, |error| {
+            assert!(matches!(error, ShapeError::DictDefault { .. }), "{source}");
+            if source == "LET d = {1: 2, _: 3}" {
+                assert_eq!(located(error.at()), "{1: 2, _: 3}");
+            }
+        });
     }
     shaped("MATCH 1 -> :Number WITH #{_: (3)}", |_, _, shape| {
         assert!(shape.is_ok(), "an arm set's `_` is its default arm");

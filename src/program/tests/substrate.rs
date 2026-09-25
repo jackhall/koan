@@ -2,7 +2,6 @@
 
 use crate::program::{CellSubstrate, KBirth, KBundle, LoadError};
 use crate::scheduler::{Action, DrainStalled, Placement, Step, StepError, Work};
-use crate::scope::ShapeError;
 
 use super::evaluator::Mini;
 use super::{loaded, read_back, run_and_read};
@@ -36,10 +35,7 @@ fn load_reports_a_parse_error_and_a_shape_error() {
     ));
     assert!(matches!(
         CellSubstrate::load::<Mini>("LET a = nowhere", "<test>", 2),
-        Err(LoadError::Shape {
-            error: ShapeError::Unbound { .. },
-            ..
-        })
+        Err(LoadError::Shape { .. })
     ));
 }
 

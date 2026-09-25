@@ -65,10 +65,11 @@ does: it parses the source into program storage, lays the registry in the owner'
 bump, has
 `L` lay the builtin table down, builds the program's shape over that table,
 takes the root, and lays the record down. It returns a `Result`, and
-`LoadError` carries the parse error, or the `ShapeError` that stopped it beside
-its rendering. A shape error names symbols and types through the interner and
-registry that a refused builder drops with its owner, so it is rendered on the
-error branch, while they stand; a load that succeeds renders nothing. The
+`LoadError` carries the parse error, or the rendering of the `ShapeError` that
+stopped it. A shape error borrows program storage and names symbols and types
+through the interner and registry, all of which a refused builder drops with
+its owner, so it is rendered on the error branch, while they stand; a load that
+succeeds renders nothing. The
 `LoadError`'s `Display` is the whole diagnostic, led by `path:line:col`. The
 table comes before the shape because a shape resolves a builtin name to an
 index into it.

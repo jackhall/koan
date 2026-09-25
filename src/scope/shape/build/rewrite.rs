@@ -80,7 +80,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     pub(super) fn rewrite_statement(
         &mut self,
         node: &KExpression<'graph>,
-    ) -> Result<Option<KExpression<'graph>>, ShapeError> {
+    ) -> Result<Option<KExpression<'graph>>, ShapeError<'graph>> {
         let Some(rewritten) = self.rewrite_node(node)? else {
             return Ok(None);
         };
@@ -107,7 +107,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn rewrite_node(
         &mut self,
         node: &KExpression<'graph>,
-    ) -> Result<Option<ProgramNode<'graph>>, ShapeError> {
+    ) -> Result<Option<ProgramNode<'graph>>, ShapeError<'graph>> {
         let mut run: Run<'x, 'graph> = BumpVec::with_capacity_in(node.parts.len(), self.scratch);
         let mut changed = false;
         match node.cache().builtin_shape() {
@@ -185,7 +185,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn rewrite_part(
         &mut self,
         part: &ExpressionPart<'graph>,
-    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
+    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError<'graph>> {
         match part {
             ExpressionPart::Expression(node) => Ok(self
                 .rewrite_node(node.reference())?
@@ -247,7 +247,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn rewrite_signature(
         &mut self,
         part: &ExpressionPart<'graph>,
-    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
+    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError<'graph>> {
         let Some(run) = signature_run(part) else {
             return self.rewrite_part(part);
         };
@@ -264,7 +264,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn rewrite_fields(
         &mut self,
         run: &KExpression<'graph>,
-    ) -> Result<Option<ProgramNode<'graph>>, ShapeError> {
+    ) -> Result<Option<ProgramNode<'graph>>, ShapeError<'graph>> {
         let mut parts: Run<'x, 'graph> = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
         parts.extend_from_slice(run.parts);
         let mut changed = false;
@@ -286,7 +286,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn rewrite_bounds(
         &mut self,
         part: &ExpressionPart<'graph>,
-    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
+    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError<'graph>> {
         let ExpressionPart::Expression(node) = part else {
             return Ok(None);
         };
@@ -312,7 +312,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         &mut self,
         part: &ExpressionPart<'graph>,
         quotes: Quotes,
-    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
+    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError<'graph>> {
         let writer = self.brand.writer();
         match (quotes, part) {
             (Quotes::Items, ExpressionPart::ListLiteral(items)) => {
@@ -348,7 +348,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn rewrite_quote(
         &mut self,
         part: &ExpressionPart<'graph>,
-    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
+    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError<'graph>> {
         let ExpressionPart::QuotedExpression(node) = part else {
             return Ok(None);
         };
@@ -376,7 +376,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         &mut self,
         parts: &[Spanned<ExpressionPart<'graph>>],
         source: SourceRef,
-    ) -> Result<ProgramNode<'graph>, ShapeError> {
+    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
         let mut operators: BumpVec<'x, Operator> = BumpVec::new_in(self.scratch);
         operators.extend(
             parts
@@ -428,7 +428,11 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// How an operator run of `operators`, written in `file`, reduces where this frame is: every
     /// symbol but `==` and `!=` must agree, and an equality symbol beside them joins only a pairwise
     /// group. A refusal points at the operator that breaks the run.
-    fn chaining(&self, file: FileId, operators: &[Operator]) -> Result<ReductionMode, ShapeError> {
+    fn chaining(
+        &self,
+        file: FileId,
+        operators: &[Operator],
+    ) -> Result<ReductionMode, ShapeError<'graph>> {
         let at = |op: &Operator| SourceRef {
             span: op.span,
             file,
@@ -482,7 +486,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         operands: &[Spanned<ExpressionPart<'graph>>],
         operators: &[Operator],
         mode: ReductionMode,
-    ) -> Result<ProgramNode<'graph>, ShapeError> {
+    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
         let direction = match mode {
             ReductionMode::FoldRight => FoldDirection::Right,
             _ => FoldDirection::Left,
@@ -498,7 +502,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         operands: &[Spanned<ExpressionPart<'graph>>],
         operators: &[Operator],
         direction: FoldDirection,
-    ) -> Result<ProgramNode<'graph>, ShapeError> {
+    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
         debug_assert_eq!(operands.len(), operators.len() + 1);
         let mut node = None;
         match direction {
@@ -532,7 +536,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         operators: &[Operator],
         combiner: KeywordSymbol,
         direction: FoldDirection,
-    ) -> Result<ProgramNode<'graph>, ShapeError> {
+    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
         let file = source.file;
         let mut hoisted: Run<'x, 'graph> = BumpVec::new_in(self.scratch);
         let mut named: Run<'x, 'graph> = BumpVec::with_capacity_in(operands.len(), self.scratch);
@@ -601,7 +605,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         left: Spanned<ExpressionPart<'graph>>,
         op: Operator,
         right: Spanned<ExpressionPart<'graph>>,
-    ) -> Result<ProgramNode<'graph>, ShapeError> {
+    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
         let span = cover(left.span, right.span, op.span);
         if is_unequal(op.symbol) {
             let equal = [
@@ -632,7 +636,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         op: Operator,
         run: &[Spanned<ExpressionPart<'graph>>],
         span: Span,
-    ) -> Result<ProgramNode<'graph>, ShapeError> {
+    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
         let node = self.brand.nested_node(run, SourceRef { span, file });
         if node.reference().cache().builtin_shape().is_some() {
             return Err(ShapeError::SpellsForm {

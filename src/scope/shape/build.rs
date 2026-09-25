@@ -77,7 +77,7 @@ pub(super) fn program<'graph, X: Knotted>(
     builtins: &Builtins<'_, '_, X>,
     types: &TypeRegistry<'graph>,
     scratch: BumpAllocator<'_>,
-) -> Result<&'graph BodyShape<'graph>, ShapeError> {
+) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
     let lookup = |name| builtins.lookup(name);
     // Every claim the program makes over an operator symbol is collected before the first draft, so
     // how a symbol chains never depends on where its declarations sit.
@@ -107,7 +107,7 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
     at: Position,
     types: &TypeRegistry<'graph>,
     scratch: BumpAllocator<'_>,
-) -> Result<&'graph BodyShape<'graph>, ShapeError> {
+) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
     let lookup = |name| site.builtins().lookup(name);
     let outer = |name, position| site.through_chain(name, position);
     // Evaluated code is held to the program's declarations, and its operator runs chain under the
@@ -152,11 +152,11 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
 /// declarator group for `TYPE`, `UNION` and `NEWTYPE`. Code written where a quote or a container of
 /// quotes is wanted is `Unquoted`, a quote where bare syntax is wanted `Malformed`, and a part
 /// whose syntax fills no slot type `Inadmissible`. The readers after it assume a well-formed part.
-fn written_as_read(
+fn written_as_read<'e>(
     form: &'static BuiltinShape,
     node: &KExpression<'_>,
     types: &TypeRegistry<'_>,
-) -> Result<(), ShapeError> {
+) -> Result<(), ShapeError<'e>> {
     let declarator = matches!(
         form.id,
         BuiltinShapeId::TypeDeclaration
@@ -490,7 +490,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         parameters: &[(BinderSymbol, SourceRef)],
         held: &[&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
-    ) -> Result<Draft<'graph, 'x>, ShapeError>
+    ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>>
     where
         'graph: 'n,
     {
@@ -517,7 +517,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         parameters: &[(BinderSymbol, SourceRef)],
         held: &'graph [&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
-    ) -> Result<Draft<'graph, 'x>, ShapeError>
+    ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>>
     where
         'graph: 'n,
     {
@@ -563,7 +563,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         parent_statement: u32,
         parameters: &[(BinderSymbol, SourceRef)],
         nodes: &[&KExpression<'graph>],
-    ) -> Result<Draft<'graph, 'x>, ShapeError> {
+    ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>> {
         let scratch = self.scratch;
         let declared = parameters
             .iter()
@@ -648,7 +648,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         statement: u32,
         node: &KExpression<'graph>,
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         let Some(form) = node.cache().builtin_shape() else {
             if let [only] = node.parts {
                 return self.walk_part(level, statement, &only.value, state);
@@ -757,7 +757,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         form: &'static BuiltinShape,
         parameters: &[BinderSymbol],
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         for (role, part) in form.roles().zip(node.parts) {
             let part = &part.value;
             match role {
@@ -814,7 +814,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         statement: u32,
         part: &ExpressionPart<'graph>,
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         match part {
             ExpressionPart::Identifier(name) => {
                 self.mention(level, statement, part, BinderSymbol::Value(*name), state)
@@ -891,7 +891,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         statement: u32,
         run: &KExpression<'graph>,
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         let mut index = 0;
         while index < run.parts.len() {
             if pair_name(run, index).is_some() {
@@ -910,7 +910,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         level: usize,
         statement: u32,
         part: &ExpressionPart<'graph>,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         match signature_run(part) {
             Some(run) => self.walk_fields(level, statement, run, State::Eager),
             None => self.walk_part(level, statement, part, State::Eager),
@@ -928,7 +928,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         part: &ExpressionPart<'graph>,
         kind: DefinitionKind,
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         match (kind, part) {
             // A tag names a variant and is no mention; a payload is a type expression.
             (DefinitionKind::Union, ExpressionPart::DictLiteral(variants)) => {
@@ -983,7 +983,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         node: &KExpression<'graph>,
         form: &'static BuiltinShape,
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         if !form.supported() {
             return Err(ShapeError::Unsupported {
                 form: form.id,
@@ -1017,7 +1017,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         node: &KExpression<'graph>,
         form: &'static BuiltinShape,
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         for (role, part) in form.roles().zip(node.parts) {
             let part = &part.value;
             match role {
@@ -1068,7 +1068,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         statement: u32,
         part: &ExpressionPart<'graph>,
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         let run = match part {
             ExpressionPart::Type(name) if !self.skips(name) => {
                 return self.mention(level, statement, part, BinderSymbol::Type(*name), state);
@@ -1117,7 +1117,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         kind: BodyKind,
         signature: &[BinderSymbol],
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         // A callable's body is a written quote; an in-place body is a bare group. The static check
         // has already refused any other spelling.
         let written = match Role::Body(kind).reading() {
@@ -1233,7 +1233,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         part: &ExpressionPart<'graph>,
         heads: Heads,
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         let ExpressionPart::DictLiteral(arms) = part else {
             unreachable!("the static check admits only a dict of quotes")
         };
@@ -1287,7 +1287,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         (parameters, declared_at): (&[BinderSymbol], SourceRef),
         held: &[&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
-    ) -> Result<(), ShapeError>
+    ) -> Result<(), ShapeError<'graph>>
     where
         'graph: 'n,
     {
@@ -1316,7 +1316,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         part: &ExpressionPart<'graph>,
         name: BinderSymbol,
         state: State,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         let class = state.class();
         let at = match class {
             MentionClass::Eager => Position::statement(statement as usize),
@@ -1408,7 +1408,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// The components pass: condense, refuse an eager cycle, settle each nested draft's captures
     /// of a fellow member as edges, and seal the nested drafts.
-    fn components(&mut self, draft: &mut Draft<'graph, 'x>) -> Result<(), ShapeError> {
+    fn components(&mut self, draft: &mut Draft<'graph, 'x>) -> Result<(), ShapeError<'graph>> {
         let scratch = self.scratch;
         let count = draft.channels().len();
         // Compressed rows: `offsets[i]..offsets[i + 1]` of `targets` are the slots binder `i` reads.
@@ -1483,12 +1483,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 .0
                 .checked_sub(1)
                 .expect("a cyclic member binds a statement");
+            // The member names are written to program storage, where the shape would have gone.
             return Err(ShapeError::EagerCycle {
-                members: draft
-                    .members_of(component)
-                    .iter()
-                    .map(|slot| draft.channels().name(slot.index()))
-                    .collect(),
+                members: collect(
+                    self.brand.writer(),
+                    draft
+                        .members_of(component)
+                        .iter()
+                        .map(|slot| draft.channels().name(slot.index())),
+                ),
                 at: draft.nodes[statement as usize].source,
             });
         }
@@ -1526,7 +1529,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// emitted in the smallest-key order that respects every wait, so independent units come out
     /// as they are written. Every read, wait and
     /// count is scratch: the shape keeps only the order.
-    fn units(&self, draft: &mut Draft<'graph, 'x>) -> Result<(), ShapeError> {
+    fn units(&self, draft: &mut Draft<'graph, 'x>) -> Result<(), ShapeError<'graph>> {
         let scratch = self.scratch;
         let statements = draft.statements as usize;
         let channels = draft.channels();

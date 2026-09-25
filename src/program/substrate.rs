@@ -136,7 +136,6 @@ impl CellSubstrate {
             let shape = BodyShape::of_program(brand, &parsed, builtins, types, &scratch).map_err(
                 |error| LoadError::Shape {
                     rendered: error.display(&owner.symbols, types).to_string(),
-                    error,
                 },
             )?;
             let program = resident(

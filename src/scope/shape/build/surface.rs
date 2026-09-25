@@ -58,7 +58,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         statement: u32,
         node: &KExpression<'graph>,
         out: &mut Surfaced<'x, 'graph>,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         let operand = &node
             .parts
             .get(1)
@@ -194,7 +194,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         &self,
         at: SourceRef,
         surfaced: &Surfaced<'x, 'graph>,
-    ) -> Result<BumpVec<'x, &'graph DeclaredGroup<'graph>>, ShapeError> {
+    ) -> Result<BumpVec<'x, &'graph DeclaredGroup<'graph>>, ShapeError<'graph>> {
         let mut kept = BumpVec::new_in(self.scratch);
         for group in surfaced.groups.iter() {
             if builtin_equal(group) {

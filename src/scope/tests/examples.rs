@@ -186,9 +186,10 @@ fn a_cycle_through_a_call_is_an_eager_cycle() {
     shaped(
         "LET f = (FN :{} -> Number = #(x))\nLET x = (f 1)",
         |fixture, _, shape| {
-            let Err(ShapeError::EagerCycle { mut members, .. }) = shape else {
+            let Err(ShapeError::EagerCycle { members, .. }) = shape else {
                 panic!("an eager cycle, got {:?}", shape.map(|_| ()));
             };
+            let mut members = members.to_vec();
             members.sort();
             let mut expected = vec![value(fixture, "f"), value(fixture, "x")];
             expected.sort();
@@ -326,9 +327,15 @@ fn each_error_names_what_a_user_needs() {
 
 #[test]
 fn each_error_points_at_what_it_is_about() {
+    // Where the error `source` is refused with was found, and, for a rebind, its first binding.
     let refused = |source: &str| {
         shaped(source, |_, _, shape| {
-            shape.err().expect("the program is refused")
+            let error = shape.err().expect("the program is refused");
+            let first = match error {
+                ShapeError::Rebind { first, .. } => Some(located(first)),
+                _ => None,
+            };
+            (located(error.at()), first)
         })
     };
     for (source, text) in [
@@ -343,7 +350,7 @@ fn each_error_points_at_what_it_is_about() {
         ("LET v = 1\nUSING v SCOPE (x)", "v"),
         ("LET d = {1: 2, _: 3}", "{1: 2, _: 3}"),
     ] {
-        assert_eq!(located(refused(source).at()), text, "{source}");
+        assert_eq!(refused(source).0, text, "{source}");
     }
     // A rebind names both declarations; a parameter is declared where its node is written.
     for (source, first, second) in [
@@ -354,16 +361,9 @@ fn each_error_points_at_what_it_is_about() {
             "(LET x = 1)",
         ),
     ] {
-        let ShapeError::Rebind {
-            first: at_first,
-            second: at_second,
-            ..
-        } = refused(source)
-        else {
-            panic!("`{source}` rebinds");
-        };
-        assert_eq!(located(at_first), first, "{source}");
-        assert_eq!(located(at_second), second, "{source}");
+        let (at_second, at_first) = refused(source);
+        assert_eq!(at_first.as_deref(), Some(first), "{source}: a rebind");
+        assert_eq!(at_second, second, "{source}");
     }
 }
 
@@ -534,9 +534,10 @@ fn a_nominal_construction_reads_its_head_eagerly_and_its_payload_as_a_constructo
     shaped(
         "LET f = 1\nLET b = [a]\nLET a = (f {next = b})",
         |fixture, _, shape| {
-            let Err(ShapeError::EagerCycle { mut members, .. }) = shape else {
+            let Err(ShapeError::EagerCycle { members, .. }) = shape else {
                 panic!("a call headed by a name reads every part eagerly");
             };
+            let mut members = members.to_vec();
             members.sort();
             let mut expected = vec![value(fixture, "a"), value(fixture, "b")];
             expected.sort();

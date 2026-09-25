@@ -7,7 +7,7 @@ use crate::knot::{KActivationView, KBuiltins};
 use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, ShapeError, Slot};
+use crate::scope::{BodyShape, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::TypeRegistry;
 
@@ -116,10 +116,10 @@ impl<'graph> Program<'graph> {
 #[derive(Debug)]
 pub enum LoadError {
     Parse(ParseError),
-    /// The shape error beside its rendering. It names symbols and types through the interner and
-    /// registry a refused load drops, so it is rendered while they stand.
+    /// The shape error, rendered. The error borrows program storage and names symbols and types
+    /// through the interner and registry, all of which a refused load drops, so it is rendered
+    /// while they stand.
     Shape {
-        error: ShapeError,
         rendered: String,
     },
 }
@@ -128,7 +128,7 @@ impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoadError::Parse(error) => write!(f, "{error}"),
-            LoadError::Shape { rendered, .. } => f.write_str(rendered),
+            LoadError::Shape { rendered } => f.write_str(rendered),
         }
     }
 }

@@ -514,7 +514,7 @@ pub(crate) fn claims<'graph, 'n, 'x>(
     scratch: BumpAllocator<'x>,
     statements: impl Iterator<Item = &'n KExpression<'graph>>,
     outer: Option<&'graph Claims<'graph>>,
-) -> Result<&'graph Claims<'graph>, ShapeError>
+) -> Result<&'graph Claims<'graph>, ShapeError<'graph>>
 where
     'graph: 'n,
 {
@@ -558,7 +558,7 @@ impl<'graph> Scan<'graph, '_> {
     }
 
     /// One node: what it declares, then everything its parts reach.
-    fn node(&mut self, node: &KExpression<'graph>) -> Result<(), ShapeError> {
+    fn node(&mut self, node: &KExpression<'graph>) -> Result<(), ShapeError<'graph>> {
         if let Some(form) = node.cache().builtin_shape() {
             if let Some(group) =
                 declared_group(node, self.scratch).map_err(|()| ShapeError::Malformed {
@@ -616,7 +616,7 @@ impl<'graph> Scan<'graph, '_> {
         Ok(())
     }
 
-    fn part(&mut self, part: &ExpressionPart<'graph>) -> Result<(), ShapeError> {
+    fn part(&mut self, part: &ExpressionPart<'graph>) -> Result<(), ShapeError<'graph>> {
         match part {
             ExpressionPart::Expression(node)
             | ExpressionPart::SigiledTypeExpr(node)
@@ -652,7 +652,11 @@ impl<'graph> Scan<'graph, '_> {
 
     /// Record a `GROUP` statement's claim over each of its members; the statement is written at
     /// `at`.
-    fn claim_group(&mut self, group: &DeclaredGroup<'_>, at: SourceRef) -> Result<(), ShapeError> {
+    fn claim_group(
+        &mut self,
+        group: &DeclaredGroup<'_>,
+        at: SourceRef,
+    ) -> Result<(), ShapeError<'graph>> {
         let refused = |symbol| ShapeError::RedeclaresGroup { symbol, at };
         if let Some(symbol) = group.members.iter().find(|symbol| is_equality(**symbol)) {
             return Err(refused(*symbol));
@@ -699,7 +703,7 @@ impl<'graph> Scan<'graph, '_> {
         form: BuiltinShapeId,
         symbol: KeywordSymbol,
         at: SourceRef,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         if is_unequal(symbol) {
             return Err(ShapeError::Derived { symbol, at });
         }

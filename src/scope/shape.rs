@@ -290,7 +290,7 @@ impl<'graph> BodyShape<'graph> {
         builtins: &Builtins<'_, '_, X>,
         types: &TypeRegistry<'graph>,
         scratch: BumpAllocator<'_>,
-    ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
+    ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
         build::program(brand, statements, builtins, types, scratch)
     }
 
@@ -303,7 +303,7 @@ impl<'graph> BodyShape<'graph> {
         at: Position,
         types: &TypeRegistry<'graph>,
         scratch: BumpAllocator<'_>,
-    ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
+    ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
         build::eval(brand, body, site, at, types, scratch)
     }
 
@@ -503,7 +503,7 @@ fn resolve_here(
 /// the part it is about when that part carries a span, else the nearest spanned part or node
 /// around it.
 #[derive(Debug, PartialEq, Eq)]
-pub enum ShapeError {
+pub enum ShapeError<'graph> {
     /// A name declared twice in one shape, at where each declaration is written.
     Rebind {
         name: BinderSymbol,
@@ -521,7 +521,7 @@ pub enum ShapeError {
     /// A component containing an eager mention of one of its own members, found at the statement
     /// of the member declared first.
     EagerCycle {
-        members: Vec<BinderSymbol>,
+        members: &'graph [BinderSymbol],
         at: SourceRef,
     },
     /// An `EVAL` statement at `at` that may read `name`, declared before it, whose binding waits on
@@ -626,7 +626,7 @@ impl QuotedPart {
     }
 }
 
-impl ShapeError {
+impl ShapeError<'_> {
     /// Where the error was found: a rebind's second declaration, every other error's `at`.
     pub fn at(&self) -> SourceRef {
         match self {
@@ -668,7 +668,7 @@ impl ShapeError {
 /// A [`ShapeError`] beside the interner its names render through and the registry its types
 /// render through.
 pub struct ShapeErrorDisplay<'x, 'run> {
-    error: &'x ShapeError,
+    error: &'x ShapeError<'x>,
     symbols: &'x SymbolInterner,
     types: &'x TypeRegistry<'run>,
 }
@@ -692,7 +692,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
             }
             ShapeError::EagerCycle { members, .. } => {
                 f.write_str("these bindings need each other's values before any of them exists:")?;
-                for member in members {
+                for member in members.iter() {
                     write!(f, " `{}`", name(member))?;
                 }
                 Ok(())
