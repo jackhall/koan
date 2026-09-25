@@ -112,6 +112,10 @@ impl CellSubstrate {
     /// Parse `source` into fresh program storage and stand the program up beside it, over a slab of
     /// `cap` cells, one of which is its root: `language`'s builtin table at `'graph`, the program's
     /// shape over it, the root, and the [`Program`] record. `cap` is at least one.
+    ///
+    /// A refused shape is rendered into its [`LoadError`] on the way out, while the interner and
+    /// registry its names and types render through still stand; a load that succeeds renders
+    /// nothing.
     pub fn load<L: Language>(source: &str, path: &str, cap: u32) -> Result<Self, LoadError> {
         let owner = Owner {
             storage: program_storage(),
@@ -129,8 +133,12 @@ impl CellSubstrate {
                 .alloc(TypeRegistry::in_region(&owner.registry));
             let scratch = Bump::new();
             let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
-            let shape = BodyShape::of_program(brand, &parsed, builtins, types, &scratch)
-                .map_err(LoadError::Shape)?;
+            let shape = BodyShape::of_program(brand, &parsed, builtins, types, &scratch).map_err(
+                |error| LoadError::Shape {
+                    rendered: error.display(&owner.symbols, types).to_string(),
+                    error,
+                },
+            )?;
             let program = resident(
                 brand.writer(),
                 Program::new(shape, builtins, types, &owner.symbols, L::evaluator()),

@@ -9,7 +9,7 @@ use crate::scope::{
 };
 use crate::symbols::BinderSymbol;
 
-use super::{Fixture, builtins, type_name, value_name, with_fixture};
+use super::{Fixture, NOWHERE, builtins, located, type_name, unlocated, value_name, with_fixture};
 
 fn value(fixture: &Fixture<'_, '_>, text: &str) -> BinderSymbol {
     BinderSymbol::Value(value_name(text, fixture.symbols))
@@ -129,7 +129,7 @@ fn a_root_mention_is_eager_and_a_forward_one_is_unbound() {
         assert!(matches!(
             shape,
             Err(ShapeError::Unbound { name, at, .. })
-                if name == value(fixture, "b") && at == Position::statement(0)
+                if name == value(fixture, "b") && located(at) == "b"
         ));
     });
 }
@@ -186,7 +186,7 @@ fn a_cycle_through_a_call_is_an_eager_cycle() {
     shaped(
         "LET f = (FN :{} -> Number = #(x))\nLET x = (f 1)",
         |fixture, _, shape| {
-            let Err(ShapeError::EagerCycle { mut members }) = shape else {
+            let Err(ShapeError::EagerCycle { mut members, .. }) = shape else {
                 panic!("an eager cycle, got {:?}", shape.map(|_| ()));
             };
             members.sort();
@@ -248,7 +248,7 @@ fn an_arm_binds_it_and_its_names_are_gone_after_it() {
             assert!(matches!(
                 shape,
                 Err(ShapeError::Unbound { name, at, .. })
-                    if name == value(fixture, "w") && at == Position::statement(1)
+                    if name == value(fixture, "w") && located(at) == "w"
             ));
         },
     );
@@ -281,35 +281,35 @@ fn each_error_names_what_a_user_needs() {
     let cases: &[(&str, &str)] = &[
         (
             "LET a = 1\nLET a = 2",
-            "`a` is bound twice: at statement 1 and again at statement 2",
+            "<input>:2:1: `a` is bound twice; first at <input>:1:1",
         ),
         (
             "LET origin = 1",
-            "`origin` at statement 1 names a builtin, which cannot be rebound",
+            "<input>:1:1: `origin` names a builtin, which cannot be rebound",
         ),
         (
             "LET a = b",
-            "`b` in statement 1 names no binding visible there",
+            "<input>:1:9: `b` names no binding visible here",
         ),
         (
             "LET f = (FN :{} -> Number = #(x))\nLET x = (f 1)",
-            "these bindings need each other's values before any of them exists:",
+            "<input>:1:1: these bindings need each other's values before any of them exists:",
         ),
         (
             "LET v = 1\nUSING v SCOPE (x)",
-            "`USING` in statement 2 cannot tell which names this module surfaces;",
+            "<input>:2:7: `USING` cannot tell which names this module surfaces;",
         ),
         (
             "MATCH 1 -> :Number WITH (Number (1))",
-            "`Match` in statement 1 takes its arms as a dict of quotes: write #{…}",
+            "<input>:1:25: `Match` takes its arms as a dict of quotes: write #{…}",
         ),
         (
             "SIG Sg = #[(PRINT 1)]",
-            "`Sig` in statement 1 takes :(LIST OF Declaration) as its part 3",
+            "<input>:1:10: `Sig` takes :(LIST OF Declaration) as its part 3",
         ),
         (
             "UNION Empty = #{}",
-            "`Union` in statement 1 takes :(MAP Name -> :(",
+            "<input>:1:15: `Union` takes :(MAP Name -> :(",
         ),
     ];
     for (source, message) in cases {
@@ -325,6 +325,49 @@ fn each_error_names_what_a_user_needs() {
 }
 
 #[test]
+fn each_error_points_at_what_it_is_about() {
+    let refused = |source: &str| {
+        shaped(source, |_, _, shape| {
+            shape.err().expect("the program is refused")
+        })
+    };
+    for (source, text) in [
+        ("LET a = nowhere", "nowhere"),
+        // A list's items carry no span, so an error about one points at the list.
+        ("LET a = [1 nowhere]", "[1 nowhere]"),
+        (
+            "LET f = (FN :{} -> Number = #(x))\nLET x = (f 1)",
+            "LET f = (FN :{} -> Number = #(x))",
+        ),
+        ("CLOSE (x)", "CLOSE (x)"),
+        ("LET v = 1\nUSING v SCOPE (x)", "v"),
+        ("LET d = {1: 2, _: 3}", "{1: 2, _: 3}"),
+    ] {
+        assert_eq!(located(refused(source).at()), text, "{source}");
+    }
+    // A rebind names both declarations; a parameter is declared where its node is written.
+    for (source, first, second) in [
+        ("LET a = 1\nLET a = 2", "LET a = 1", "LET a = 2"),
+        (
+            "LET f = (FN :{x :Number} -> Number = #(LET x = 1))",
+            "(FN :{x :Number} -> Number = #(LET x = 1))",
+            "(LET x = 1)",
+        ),
+    ] {
+        let ShapeError::Rebind {
+            first: at_first,
+            second: at_second,
+            ..
+        } = refused(source)
+        else {
+            panic!("`{source}` rebinds");
+        };
+        assert_eq!(located(at_first), first, "{source}");
+        assert_eq!(located(at_second), second, "{source}");
+    }
+}
+
+#[test]
 fn every_capture_limiting_form_is_unsupported() {
     let cases: &[(&str, BuiltinShapeId)] = &[
         ("CLOSE OVER (x) (x)", BuiltinShapeId::CloseOver),
@@ -332,12 +375,14 @@ fn every_capture_limiting_form_is_unsupported() {
     ];
     for (source, form) in cases {
         shaped(source, |_, _, shape| {
+            let error = shape.err().expect("the program is refused");
+            assert_eq!(located(error.at()), *source, "the form node");
             assert_eq!(
-                shape.err(),
-                Some(ShapeError::Unsupported {
+                unlocated(error),
+                ShapeError::Unsupported {
                     form: *form,
-                    at: Position::statement(0),
-                })
+                    at: NOWHERE,
+                }
             );
         });
     }
@@ -368,7 +413,7 @@ fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
             assert!(matches!(
                 shape,
                 Err(ShapeError::Unbound { name: BinderSymbol::Type(name), at, .. })
-                    if name == type_name("Nat", fixture.symbols) && at == Position::statement(0)
+                    if name == type_name("Nat", fixture.symbols) && located(at) == "Nat"
             ));
         },
     );
@@ -489,7 +534,7 @@ fn a_nominal_construction_reads_its_head_eagerly_and_its_payload_as_a_constructo
     shaped(
         "LET f = 1\nLET b = [a]\nLET a = (f {next = b})",
         |fixture, _, shape| {
-            let Err(ShapeError::EagerCycle { mut members }) = shape else {
+            let Err(ShapeError::EagerCycle { mut members, .. }) = shape else {
                 panic!("a call headed by a name reads every part eagerly");
             };
             members.sort();

@@ -1187,17 +1187,15 @@ const INJECTIONS: [Injection; 5] = [
     Injection::ShadowsBuiltin,
 ];
 
-/// The refusal a refused plan must be refused with.
+/// The refusal a refused plan must be refused with. Where each is found is read off the rendered
+/// source's declared offsets.
 #[derive(Clone, Debug)]
 pub(super) enum Refusal {
     Rebind {
         name: Name,
-        first: u32,
-        second: u32,
     },
     ShadowsBuiltin {
         name: Name,
-        at: u32,
     },
     /// The read landing [`Lands::Nowhere`].
     Unbound {
@@ -1242,14 +1240,10 @@ impl Generator<'_> {
             }
         }
         let (place, later) = pairs[self.pick(pairs.len())];
-        let (name, first) = declared[place];
+        let name = declared[place].0;
         let second = declared[later].1;
         binders[second as usize - 1] = Some(name);
-        self.refusal = Some(Refusal::Rebind {
-            name,
-            first,
-            second,
-        });
+        self.refusal = Some(Refusal::Rebind { name });
     }
 
     /// Name a binder or parameter of a scope after a builtin of its channel.
@@ -1274,7 +1268,7 @@ impl Generator<'_> {
             }
             _ => binders[at as usize - 1] = Some(name),
         }
-        self.refusal = Some(Refusal::ShadowsBuiltin { name, at });
+        self.refusal = Some(Refusal::ShadowsBuiltin { name });
     }
 }
 
@@ -1381,6 +1375,8 @@ pub(super) struct Placed<'p> {
     pub read: &'p Read,
     pub scope: usize,
     pub statement: u32,
+    /// Where in the source the read's name is written.
+    pub offset: u32,
 }
 
 pub(super) struct Rendered<'p> {
@@ -1397,6 +1393,8 @@ pub(super) struct Rendering<'p> {
     pub tokens: Vec<Token>,
     pub reads: Vec<Placed<'p>>,
     pub scopes: Vec<Rendered<'p>>,
+    /// Every binder and parameter name, beside where in the source it is written.
+    pub declared: Vec<(Name, u32)>,
 }
 
 struct Renderer<'p> {
@@ -1443,6 +1441,7 @@ impl<'p> Renderer<'p> {
                     statement: 0,
                     level,
                 }],
+                declared: Vec::new(),
             },
             scope: 0,
             statement: 0,
@@ -1454,6 +1453,7 @@ impl<'p> Renderer<'p> {
     }
 
     fn other(&mut self, name: Name) {
+        self.out.declared.push((name, self.out.source.len() as u32));
         self.text(&name.text());
         self.out.tokens.push(Token::Other);
     }
@@ -1464,6 +1464,7 @@ impl<'p> Renderer<'p> {
             read,
             scope: self.scope,
             statement: self.statement,
+            offset: self.out.source.len() as u32,
         });
         self.text(&read.name.text());
     }

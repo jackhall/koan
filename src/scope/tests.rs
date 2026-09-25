@@ -16,13 +16,14 @@ use crate::memory::{
     covariant, program_storage, reattachable,
 };
 use crate::parse::{KExpression, parse};
+use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{
     DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
 
-use super::Builtins;
+use super::{Builtins, ShapeError};
 
 /// A continuation family for a graph whose cells only store.
 struct Step;
@@ -167,4 +168,52 @@ pub(super) fn builtins<'graph, 'cell, X: Knotted>(
         })
         .collect();
     Builtins::new(writer, fixture.scratch, &values, &types)
+}
+
+/// The location [`unlocated`] writes, which no registered source has.
+pub(super) const NOWHERE: SourceRef = SourceRef {
+    span: Span { start: 0, end: 0 },
+    file: FileId(u32::MAX),
+};
+
+/// `error` with every location it holds replaced by [`NOWHERE`], so a suite compares the rest of it
+/// structurally and pins the locations by [`located`].
+pub(super) fn unlocated(error: ShapeError) -> ShapeError {
+    use ShapeError as E;
+    let at = NOWHERE;
+    match error {
+        E::Rebind { name, .. } => E::Rebind {
+            name,
+            first: at,
+            second: at,
+        },
+        E::ShadowsBuiltin { name, .. } => E::ShadowsBuiltin { name, at },
+        E::Unbound { name, site, .. } => E::Unbound { name, site, at },
+        E::EagerCycle { members, .. } => E::EagerCycle { members, at },
+        E::EvalCycle { name, .. } => E::EvalCycle { name, at },
+        E::Unsupported { form, .. } => E::Unsupported { form, at },
+        E::Malformed { form, .. } => E::Malformed { form, at },
+        E::Unsurfaced { site, .. } => E::Unsurfaced { at, site },
+        E::Unchained { symbol, .. } => E::Unchained { symbol, at },
+        E::MixedGroups { first, second, .. } => E::MixedGroups { first, second, at },
+        E::RedeclaresGroup { symbol, .. } => E::RedeclaresGroup { symbol, at },
+        E::ResultOutsidePairwise { symbol, .. } => E::ResultOutsidePairwise { symbol, at },
+        E::SpellsForm { symbol, .. } => E::SpellsForm { symbol, at },
+        E::Derived { symbol, .. } => E::Derived { symbol, at },
+        E::Unquoted { form, part, .. } => E::Unquoted { form, part, at },
+        E::Inadmissible {
+            form, index, slot, ..
+        } => E::Inadmissible {
+            form,
+            index,
+            slot,
+            at,
+        },
+        E::DictDefault { site, .. } => E::DictDefault { site, at },
+    }
+}
+
+/// The source text a location covers.
+pub(super) fn located(at: SourceRef) -> String {
+    at.text()
 }

@@ -33,7 +33,8 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{KeywordSymbol, StaticName};
 use crate::type_lattice::{DeclaredGroup, FoldDirection, ReductionMode};
 
-use super::shape::{Position, ShapeError};
+use super::shape::ShapeError;
+use crate::source::SourceRef;
 
 /// The operator symbols the builtin groups and the rewrite are spelled with, each declared once and
 /// minted once — the same discipline the surface keywords keep.
@@ -562,7 +563,7 @@ impl<'graph> Scan<'graph, '_> {
             if let Some(group) =
                 declared_group(node, self.scratch).map_err(|()| ShapeError::Malformed {
                     form: form.id,
-                    at: Position::PARAMETER,
+                    at: node.source,
                 })?
             {
                 // A `SIG` body's bodyless `GROUP` declares in the signature's operator channel and
@@ -574,7 +575,7 @@ impl<'graph> Scan<'graph, '_> {
                         | BuiltinShapeId::GroupHeadPairwiseFoldLeft
                         | BuiltinShapeId::GroupHeadPairwiseFoldRight
                 ) {
-                    self.claim_group(&group)?;
+                    self.claim_group(&group, node.source)?;
                 }
             }
             if form
@@ -582,7 +583,7 @@ impl<'graph> Scan<'graph, '_> {
                 .is_some_and(|binder| binder.surface == crate::parse::BinderSurface::OperatorDef)
                 && let Ok(symbol) = declaration_symbol(node)
             {
-                self.claim_declaration(form.id, symbol)?;
+                self.claim_declaration(form.id, symbol, node.source)?;
             }
             // The quotes the shape builder reads where they are written — a callable's body, a
             // head, an arm, a signature's members — are code of this program; every other quote
@@ -649,12 +650,10 @@ impl<'graph> Scan<'graph, '_> {
         }
     }
 
-    /// Record a `GROUP` statement's claim over each of its members.
-    fn claim_group(&mut self, group: &DeclaredGroup<'_>) -> Result<(), ShapeError> {
-        let refused = |symbol| ShapeError::RedeclaresGroup {
-            symbol,
-            at: Position::PARAMETER,
-        };
+    /// Record a `GROUP` statement's claim over each of its members; the statement is written at
+    /// `at`.
+    fn claim_group(&mut self, group: &DeclaredGroup<'_>, at: SourceRef) -> Result<(), ShapeError> {
+        let refused = |symbol| ShapeError::RedeclaresGroup { symbol, at };
         if let Some(symbol) = group.members.iter().find(|symbol| is_equality(**symbol)) {
             return Err(refused(*symbol));
         }
@@ -693,25 +692,21 @@ impl<'graph> Scan<'graph, '_> {
     }
 
     /// Record what one operator declaration says about its symbol: `!=` is nobody's to declare, a
-    /// `UNARY OP` marks its symbol unary, and a bare `OP` declares an overload and nothing else.
+    /// `UNARY OP` marks its symbol unary, and a bare `OP` declares an overload and nothing else. The
+    /// declaration is written at `at`.
     fn claim_declaration(
         &mut self,
         form: BuiltinShapeId,
         symbol: KeywordSymbol,
+        at: SourceRef,
     ) -> Result<(), ShapeError> {
         if is_unequal(symbol) {
-            return Err(ShapeError::Derived {
-                symbol,
-                at: Position::PARAMETER,
-            });
+            return Err(ShapeError::Derived { symbol, at });
         }
         if !is_unary_declaration(form) {
             return Ok(());
         }
-        let refused = Err(ShapeError::RedeclaresGroup {
-            symbol,
-            at: Position::PARAMETER,
-        });
+        let refused = Err(ShapeError::RedeclaresGroup { symbol, at });
         if BuiltinGroup::of(symbol).is_some_and(|group| group.mode() != ReductionMode::Unary) {
             return refused;
         }

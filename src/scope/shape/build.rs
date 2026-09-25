@@ -24,6 +24,7 @@ use crate::memory::{
 use crate::parse::builtin_shapes::binder::bounded;
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement};
 use crate::parse::{ExpressionPart, KExpression};
+use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, StaticName, TypeSymbol, ValueSymbol};
 use crate::values::{Knotted, KnottedFamily, admits_part};
 
@@ -44,6 +45,7 @@ use super::{
 };
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
 
+mod locate;
 mod rewrite;
 mod surface;
 
@@ -152,11 +154,9 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
 /// whose syntax fills no slot type `Inadmissible`. The readers after it assume a well-formed part.
 fn written_as_read(
     form: &'static BuiltinShape,
-    statement: u32,
     node: &KExpression<'_>,
     types: &TypeRegistry<'_>,
 ) -> Result<(), ShapeError> {
-    let at = Position::statement(statement as usize);
     let declarator = matches!(
         form.id,
         BuiltinShapeId::TypeDeclaration
@@ -173,6 +173,10 @@ fn written_as_read(
             continue;
         };
         let reading = role.reading();
+        let at = part.span.map_or(node.source, |span| SourceRef {
+            span,
+            file: node.source.file,
+        });
         let part = &part.value;
         let written = match reading {
             Reading::Quote => quoted(part),
@@ -483,7 +487,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         kind: ShapeKind,
         entry: Entry<'graph>,
         entered_at: Position,
-        parameters: &[BinderSymbol],
+        parameters: &[(BinderSymbol, SourceRef)],
         held: &[&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
     ) -> Result<Draft<'graph, 'x>, ShapeError>
@@ -510,7 +514,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         kind: ShapeKind,
         entry: Entry<'graph>,
         entered_at: Position,
-        parameters: &[BinderSymbol],
+        parameters: &[(BinderSymbol, SourceRef)],
         held: &'graph [&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
     ) -> Result<Draft<'graph, 'x>, ShapeError>
@@ -521,7 +525,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut nodes: BumpVec<'x, &'n KExpression<'graph>> = BumpVec::new_in(self.scratch);
         nodes.extend(statements.map(|(node, _)| node));
         for index in 0..nodes.len() {
-            if let Some(rewritten) = self.rewrite_statement(index, nodes[index])? {
+            if let Some(rewritten) = self.rewrite_statement(nodes[index])? {
                 nodes[index] = resident(writer, rewritten);
             }
         }
@@ -550,37 +554,38 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     /// The binders pass: every parameter at `0` and every statement's binder at its position, a
-    /// repeated name and a builtin's name refused in that order.
+    /// repeated name and a builtin's name refused in that order. Each parameter comes paired with
+    /// where the node declaring it is written, which an error about it points at.
     fn binders(
         &self,
         kind: ShapeKind,
         entered_at: Position,
         parent_statement: u32,
-        parameters: &[BinderSymbol],
+        parameters: &[(BinderSymbol, SourceRef)],
         nodes: &[&KExpression<'graph>],
     ) -> Result<Draft<'graph, 'x>, ShapeError> {
         let scratch = self.scratch;
         let declared = parameters
             .iter()
-            .map(|name| (Some(*name), Position::PARAMETER))
+            .map(|(name, source)| (Some(*name), Position::PARAMETER, *source))
             .chain(nodes.iter().enumerate().map(|(index, node)| {
                 let name = node.statement_binder_plan().and_then(|plan| plan.name);
-                (name, Position::statement(index))
+                (name, Position::statement(index), node.source)
             }));
-        let mut seen: BumpBackedMap<BinderSymbol, Position> = bump_table(scratch);
+        let mut seen: BumpBackedMap<BinderSymbol, SourceRef> = bump_table(scratch);
         let mut values = BumpVec::new_in(scratch);
         let mut types = BumpVec::new_in(scratch);
-        for (name, position) in declared {
+        for (name, position, source) in declared {
             let Some(name) = name else { continue };
-            if let Some(first) = seen.insert(name, position) {
+            if let Some(first) = seen.insert(name, source) {
                 return Err(ShapeError::Rebind {
                     name,
                     first,
-                    second: position,
+                    second: source,
                 });
             }
             if (self.builtins)(name).is_some() {
-                return Err(ShapeError::ShadowsBuiltin { name, at: position });
+                return Err(ShapeError::ShadowsBuiltin { name, at: source });
             }
             match name {
                 BinderSymbol::Value(name) => values.push((name, position)),
@@ -663,7 +668,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         if !form.supported() {
             return Err(ShapeError::Unsupported {
                 form: form.id,
-                at: Position::statement(statement as usize),
+                at: node.source,
             });
         }
         debug_assert_eq!(
@@ -671,7 +676,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             node.parts.len(),
             "a builtin shape's parts match its run"
         );
-        written_as_read(form, statement, node, self.types)?;
+        written_as_read(form, node, self.types)?;
         // A binary operator declaring a result type of its own is admitted only where its symbol
         // chains pairwise: a fold hands its own result back as the next operand.
         if matches!(
@@ -682,7 +687,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         {
             return Err(ShapeError::ResultOutsidePairwise {
                 symbol,
-                at: Position::statement(statement as usize),
+                at: node.source,
             });
         }
         if form.id == BuiltinShapeId::Eval {
@@ -791,7 +796,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Role::Body(kind) => {
                     self.enter_body(level, statement, node, part, kind, parameters, state)?
                 }
-                Role::Branches(heads) => self.enter_arms(level, statement, part, heads, state)?,
+                Role::Branches(heads) => {
+                    self.enter_arms(level, statement, node, part, heads, state)?
+                }
                 Role::Definition(kind) => {
                     self.walk_definition(level, statement, part, kind, state.constructor())?
                 }
@@ -829,7 +836,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         Site::of(part),
                         ShapeKind::Block,
                         Entry::PLAIN,
-                        &[],
+                        (&[], node.reference().source),
                         &[],
                         node.reference().body_statements(),
                     );
@@ -854,7 +861,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 if pairs.iter().any(|(key, _)| key.is_wildcard()) {
                     return Err(ShapeError::DictDefault {
                         site: Site::of(part),
-                        at: Position::statement(statement as usize),
+                        at: self.part_source(level, statement, Site::of(part)),
                     });
                 }
                 for (key, value) in pairs.iter() {
@@ -980,10 +987,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         if !form.supported() {
             return Err(ShapeError::Unsupported {
                 form: form.id,
-                at: Position::statement(statement as usize),
+                at: node.source,
             });
         }
-        written_as_read(form, statement, node, self.types)?;
+        written_as_read(form, node, self.types)?;
         let mut parameters = BumpVec::new_in(self.scratch);
         for (role, part) in form.roles().zip(node.parts) {
             match role {
@@ -1034,7 +1041,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Role::Body(_) | Role::Branches(_) | Role::Unsupported => {
                     return Err(ShapeError::Unsupported {
                         form: form.id,
-                        at: Position::statement(statement as usize),
+                        at: node.source,
                     });
                 }
                 // A bare name is the label itself; any other label is evaluated.
@@ -1124,7 +1131,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .builtin_shape()
                     .expect("a body role is a form's")
                     .id,
-                at: Position::statement(statement as usize),
+                at: node.source,
             });
         };
         // A module body has no callable type, so it records no form; it is still what its binder
@@ -1156,7 +1163,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             BinderSymbol::Value(IMPLICIT.right.symbol()),
         ];
         let unary = [BinderSymbol::Value(IMPLICIT.operands.symbol())];
-        let at = Position::statement(statement as usize);
+        let at = node.source;
         let mut surfaced = Surfaced::new(self.scratch);
         let kept;
         let mut held: &[&'graph DeclaredGroup<'graph>] = &[];
@@ -1207,7 +1214,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             Site::of(part),
             shape_kind,
             entry,
-            parameters,
+            (parameters, node.source),
             held,
             body.body_statements(),
         )
@@ -1222,6 +1229,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         &mut self,
         level: usize,
         statement: u32,
+        node: &KExpression<'graph>,
         part: &ExpressionPart<'graph>,
         heads: Heads,
         state: State,
@@ -1256,7 +1264,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Site::of(body_part),
                 ShapeKind::Block,
                 entry,
-                &it,
+                (&it, node.source),
                 &[],
                 body.body_statements(),
             )?;
@@ -1265,7 +1273,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     /// Build a nested draft under the statement being walked at `level`, entered with `class`, and
-    /// hold it under `site` until this draft's components settle its captures.
+    /// hold it under `site` until this draft's components settle its captures. `parameters` come
+    /// beside where the node declaring them is written.
     #[allow(clippy::too_many_arguments)]
     fn enter_child<'n>(
         &mut self,
@@ -1275,18 +1284,20 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         site: Site,
         kind: ShapeKind,
         entry: Entry<'graph>,
-        parameters: &[BinderSymbol],
+        (parameters, declared_at): (&[BinderSymbol], SourceRef),
         held: &[&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
     ) -> Result<(), ShapeError>
     where
         'graph: 'n,
     {
+        let mut paired = BumpVec::with_capacity_in(parameters.len(), self.scratch);
+        paired.extend(parameters.iter().map(|name| (*name, declared_at)));
         let parent = &mut self.chain[level];
         parent.current = (statement, class);
         let entered_at = parent.boundary();
         let floor = std::mem::replace(&mut self.skip_floor, self.skip.len());
-        let child = self.draft(kind, entry, entered_at, parameters, held, statements);
+        let child = self.draft(kind, entry, entered_at, &paired, held, statements);
         self.skip_floor = floor;
         self.chain[level].children.push((site, child?));
         Ok(())
@@ -1321,10 +1332,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             Some(index) => Coordinate::Builtin(index),
             None => self
                 .resolve(level, name, at, reader)
-                .ok_or(ShapeError::Unbound {
+                .ok_or_else(|| ShapeError::Unbound {
                     name,
                     site,
-                    at: Position::statement(statement as usize),
+                    at: self.part_source(level, statement, site),
                 })?,
         };
         self.chain[level].mentions.push(Mention {
@@ -1461,12 +1472,24 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     .min()
             });
         if let Some(component) = refused {
+            let first = draft
+                .members_of(component)
+                .iter()
+                .map(|slot| draft.channels().get(slot.index()))
+                .min()
+                .expect("a component has members");
+            // A parameter reads nothing, so it is never on a cycle.
+            let statement = first
+                .0
+                .checked_sub(1)
+                .expect("a cyclic member binds a statement");
             return Err(ShapeError::EagerCycle {
                 members: draft
                     .members_of(component)
                     .iter()
                     .map(|slot| draft.channels().name(slot.index()))
                     .collect(),
+                at: draft.nodes[statement as usize].source,
             });
         }
 
@@ -1602,7 +1625,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 let (slot, statement) = eval_cycle(&waits, &emitted);
                 return Err(ShapeError::EvalCycle {
                     name: draft.channels().name(slot.index()),
-                    eval: Position::statement(statement as usize),
+                    at: draft.nodes[statement as usize].source,
                 });
             };
             emitted[unit] = true;

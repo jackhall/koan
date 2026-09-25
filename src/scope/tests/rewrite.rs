@@ -5,9 +5,12 @@
 use crate::memory::resident;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{Activation, BodyShape, Builtins, Position, ShapeError, ShapeKind, Site};
+use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 
-use super::{Fixture, Probe, ProbeFamily, builtins, value_name, with_fixture};
+use super::{
+    Fixture, NOWHERE, Probe, ProbeFamily, builtins, located, unlocated, value_name, with_fixture,
+};
 
 /// Build `source` against the suites' builtins and hand the result to `check`.
 fn shaped<R>(
@@ -36,6 +39,14 @@ fn shaped<R>(
             check(fixture, shape)
         })
     })
+}
+
+/// The refusal `shape` carries, compared with `expected` everywhere but its location, which covers
+/// `text`.
+fn refused_at(shape: Result<&BodyShape<'_>, ShapeError>, expected: ShapeError, text: &str) {
+    let error = shape.err().expect("the program is refused");
+    assert_eq!(located(error.at()), text);
+    assert_eq!(unlocated(error), expected);
 }
 
 /// A rewritten statement's surface with every nested node parenthesized, so how the rewrite nested
@@ -288,60 +299,153 @@ GROUP cmp PAIRWISE FOLD #(AND) LEFT = (\
     });
 }
 
+/// Every part of `node` and of every node under it carries a span, and every node lies within
+/// `statement`'s extent, in its file.
+fn spanned_within(node: &KExpression<'_>, statement: SourceRef, source: &str) {
+    assert_eq!(node.source.file, statement.file, "{source}");
+    assert!(
+        statement.span.start <= node.source.span.start
+            && node.source.span.end <= statement.span.end,
+        "{source}: `{}` lies within `{}`",
+        node.source.text(),
+        statement.text()
+    );
+    for part in node.parts {
+        assert!(
+            part.span.is_some(),
+            "{source}: a part of `{}`",
+            node.source.text()
+        );
+        if let ExpressionPart::Expression(inner)
+        | ExpressionPart::SigiledTypeExpr(inner)
+        | ExpressionPart::RecordType(inner)
+        | ExpressionPart::QuotedExpression(inner) = part.value
+        {
+            spanned_within(inner.reference(), statement, source);
+        }
+    }
+}
+
+/// [`spanned_within`] over every statement of `shape` and of every shape nested in it.
+fn every_statement_spanned(shape: &BodyShape<'_>, source: &str) {
+    for statement in shape.body() {
+        spanned_within(statement, statement.source, source);
+    }
+    for (_, nested) in shape.nested_shapes() {
+        every_statement_spanned(nested, source);
+    }
+}
+
+#[test]
+fn every_node_the_rewrite_builds_is_spanned() {
+    for source in [
+        "1 + 2 - 3",
+        "GROUP ring FOLD RIGHT = ((OP #(@) OVER Ring = #(left)) (LET x = (1 @ 2 @ 3)))",
+        "LET Either = :(Number | Str | Null)",
+        "LET zz = 1\n1 < (zz) <= 3",
+        "1 < 2 != 3",
+    ] {
+        shaped(source, |_, shape| {
+            every_statement_spanned(shape.expect("the program shapes"), source);
+        });
+    }
+}
+
+#[test]
+fn a_synthesized_block_names_its_source() {
+    shaped("LET zz = 1\n1 < (zz) <= 3", |_, shape| {
+        let shape = shape.expect("the program shapes");
+        let statement = &shape.body()[1];
+        assert_eq!(located(statement.source), "1 < (zz) <= 3");
+        let block = nested(shape, statement, 0);
+        let [hoist, folded] = block.body() else {
+            panic!("the hoist, then the comparison");
+        };
+        assert_eq!(
+            located(hoist.source),
+            "(zz)",
+            "a hoist is written where its operand is"
+        );
+        assert_eq!(located(folded.source), "1 < (zz) <= 3");
+    });
+}
+
+#[test]
+fn an_error_in_rewritten_code_points_into_the_source() {
+    // A hoisted operand, and a name in the block's folded statement.
+    for (source, prefix) in [
+        ("1 < (nowhere) <= 3", "<input>:1:6: "),
+        ("nowhere < (1) <= 3", "<input>:1:1: "),
+    ] {
+        shaped(source, |fixture, shape| {
+            let error = shape.err().expect("the program is refused");
+            assert!(matches!(error, ShapeError::Unbound { .. }), "{source}");
+            assert_eq!(located(error.at()), "nowhere", "{source}");
+            let rendered = error.display(fixture.symbols, fixture.types).to_string();
+            assert!(rendered.starts_with(prefix), "{source}: {rendered}");
+        });
+    }
+}
+
 #[test]
 fn an_operator_run_no_one_chaining_covers_is_refused() {
     let unchained = "\
 GROUP ring FOLD LEFT = ((OP #(@) OVER Ring = #(left)))
 LET x = (1 @ 2 @ 3)";
     shaped(unchained, |fixture, shape| {
-        assert_eq!(
-            shape.err(),
-            Some(ShapeError::Unchained {
+        refused_at(
+            shape,
+            ShapeError::Unchained {
                 symbol: keyword("@", fixture.symbols),
-                at: Position::statement(1),
-            })
+                at: NOWHERE,
+            },
+            "@",
         );
     });
     shaped("1 + 2 * 3", |fixture, shape| {
-        assert_eq!(
-            shape.err(),
-            Some(ShapeError::MixedGroups {
+        refused_at(
+            shape,
+            ShapeError::MixedGroups {
                 first: keyword("+", fixture.symbols),
                 second: keyword("*", fixture.symbols),
-                at: Position::statement(0),
-            })
+                at: NOWHERE,
+            },
+            "*",
         );
     });
     shaped("1 + 2 == 3", |_, shape| {
         assert!(matches!(shape.err(), Some(ShapeError::MixedGroups { .. })));
     });
     shaped("(OP #(@) OVER Ring -> Ring = #(left))", |fixture, shape| {
-        assert_eq!(
-            shape.err(),
-            Some(ShapeError::ResultOutsidePairwise {
+        refused_at(
+            shape,
+            ShapeError::ResultOutsidePairwise {
                 symbol: keyword("@", fixture.symbols),
-                at: Position::statement(0),
-            })
+                at: NOWHERE,
+            },
+            "(OP #(@) OVER Ring -> Ring = #(left))",
         );
     });
     shaped("LET x = (origin :| origin :| origin)", |fixture, shape| {
-        assert_eq!(
-            shape.err(),
-            Some(ShapeError::SpellsForm {
+        refused_at(
+            shape,
+            ShapeError::SpellsForm {
                 symbol: keyword(":|", fixture.symbols),
-                at: Position::statement(0),
-            })
+                at: NOWHERE,
+            },
+            ":|",
         );
     });
     shaped(
         "(OP #(!=) OVER Ring -> Bool = #(left))",
         |fixture, shape| {
-            assert_eq!(
-                shape.err(),
-                Some(ShapeError::Derived {
+            refused_at(
+                shape,
+                ShapeError::Derived {
                     symbol: keyword("!=", fixture.symbols),
-                    at: Position::PARAMETER,
-                })
+                    at: NOWHERE,
+                },
+                "(OP #(!=) OVER Ring -> Bool = #(left))",
             );
         },
     );
@@ -482,7 +586,8 @@ USING (m :! Ops) SCOPE (USING (m :! Peer) SCOPE (1 @ 2 % 3))"
             matches!(
                 shape.err(),
                 Some(ShapeError::RedeclaresGroup { symbol, at })
-                    if members.contains(&symbol) && at == Position::statement(0)
+                    if members.contains(&symbol)
+                        && located(at) == "(USING (m :! Peer) SCOPE (1 @ 2 % 3))"
             ),
             "a group over one member's other chaining is refused where it is surfaced"
         );
@@ -496,12 +601,13 @@ USING (m :! Ops) SCOPE (1)",
         signature("Ops", "FOLD LEFT", &["+"])
     );
     shaped(&over_builtin, |fixture, shape| {
-        assert_eq!(
-            shape.err(),
-            Some(ShapeError::RedeclaresGroup {
+        refused_at(
+            shape,
+            ShapeError::RedeclaresGroup {
                 symbol: keyword("+", fixture.symbols),
-                at: Position::statement(2),
-            })
+                at: NOWHERE,
+            },
+            "USING (m :! Ops) SCOPE (1)",
         );
     });
 }
@@ -519,12 +625,13 @@ USING g SCOPE (1)",
     });
     // The same operator run outside that body has no group to chain under.
     evaluated(&source, "#(1 @ 2 % 3)", false, |fixture, shape| {
-        assert_eq!(
-            shape.err(),
-            Some(ShapeError::Unchained {
+        refused_at(
+            shape,
+            ShapeError::Unchained {
                 symbol: keyword("@", fixture.symbols),
-                at: Position::statement(0),
-            })
+                at: NOWHERE,
+            },
+            "@",
         );
     });
     // Evaluated code declares against the program's claims, so it may not re-chain a symbol.
@@ -554,12 +661,13 @@ fn a_result_typed_operator_is_admitted_wherever_its_group_chains_pairwise() {
     shaped(
         &format!("{sig}\n{module}\n{declaration}"),
         |fixture, shape| {
-            assert_eq!(
-                shape.err(),
-                Some(ShapeError::ResultOutsidePairwise {
+            refused_at(
+                shape,
+                ShapeError::ResultOutsidePairwise {
                     symbol: keyword("~", fixture.symbols),
-                    at: Position::statement(2),
-                })
+                    at: NOWHERE,
+                },
+                "(OP #(~) OVER Number -> Bool = #(left))",
             );
         },
     );

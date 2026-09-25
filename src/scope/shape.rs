@@ -23,6 +23,7 @@ use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
 use crate::parse::{ExpressionPart, KExpression};
+use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredGroup, KType, TypeRegistry, display_name};
 use crate::values::{Knotted, KnottedFamily};
@@ -498,56 +499,78 @@ fn resolve_here(
         .map(|index| Target::Capture(CaptureSlot(index as u32)))
 }
 
-/// Why a shape could not be built.
+/// Why a shape could not be built. Every error carries where it was found, as a [`SourceRef`]:
+/// the part it is about when that part carries a span, else the nearest spanned part or node
+/// around it.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ShapeError {
-    /// A name declared twice in one shape; the positions are where each declaration writes.
+    /// A name declared twice in one shape, at where each declaration is written.
     Rebind {
         name: BinderSymbol,
-        first: Position,
-        second: Position,
+        first: SourceRef,
+        second: SourceRef,
     },
     /// A binding under a builtin's name, declared at `at`.
-    ShadowsBuiltin { name: BinderSymbol, at: Position },
-    /// A name read where no binding of it is visible.
+    ShadowsBuiltin { name: BinderSymbol, at: SourceRef },
+    /// A name read at `at`, where no binding of it is visible.
     Unbound {
         name: BinderSymbol,
         site: Site,
-        at: Position,
+        at: SourceRef,
     },
-    /// A component containing an eager mention of one of its own members.
-    EagerCycle { members: Vec<BinderSymbol> },
-    /// An `EVAL` at `eval` that may read `name`, declared before it, whose binding waits on the
-    /// `EVAL`'s statement.
-    EvalCycle { name: BinderSymbol, eval: Position },
+    /// A component containing an eager mention of one of its own members, found at the statement
+    /// of the member declared first.
+    EagerCycle {
+        members: Vec<BinderSymbol>,
+        at: SourceRef,
+    },
+    /// An `EVAL` statement at `at` that may read `name`, declared before it, whose binding waits on
+    /// the `EVAL`'s statement.
+    EvalCycle { name: BinderSymbol, at: SourceRef },
     /// A form the shape builder does not resolve.
-    Unsupported { form: BuiltinShapeId, at: Position },
+    Unsupported { form: BuiltinShapeId, at: SourceRef },
     /// A form whose body or branches are not the shape it declares.
-    Malformed { form: BuiltinShapeId, at: Position },
-    /// A `USING` whose operand does not say, where the shape is built, which names it surfaces.
-    Unsurfaced { at: Position, site: Site },
-    /// An operator run naming a symbol whose group no enclosing body holds.
-    Unchained { symbol: KeywordSymbol, at: Position },
-    /// An operator run whose symbols chain under two different groups.
+    Malformed { form: BuiltinShapeId, at: SourceRef },
+    /// A `USING` whose operand, at `at`, does not say where the shape is built which names it
+    /// surfaces.
+    Unsurfaced { at: SourceRef, site: Site },
+    /// An operator run naming a symbol, at `at`, whose group no enclosing body holds.
+    Unchained {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
+    /// An operator run whose symbols chain under two different groups; `at` is the second's.
     MixedGroups {
         first: KeywordSymbol,
         second: KeywordSymbol,
-        at: Position,
+        at: SourceRef,
     },
     /// A `GROUP` — or a `USING` surfacing one — over a symbol another group already covers, or
     /// over one a `UNARY OP` has marked unary.
-    RedeclaresGroup { symbol: KeywordSymbol, at: Position },
+    RedeclaresGroup {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
     /// A binary `OP` declaring a result type of its own whose symbol does not chain pairwise.
-    ResultOutsidePairwise { symbol: KeywordSymbol, at: Position },
-    /// An operator run whose chained node would spell a builtin form.
-    SpellsForm { symbol: KeywordSymbol, at: Position },
+    ResultOutsidePairwise {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
+    /// An operator run whose chained node would spell a builtin form; `at` is the operator's.
+    SpellsForm {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
     /// A declaration naming `!=`, which is always the opposite of `==` and is declared by nobody.
-    Derived { symbol: KeywordSymbol, at: Position },
+    Derived {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
     /// A part read as a quote, or as a container of quotes, written some other way.
     Unquoted {
         form: BuiltinShapeId,
         part: QuotedPart,
-        at: Position,
+        at: SourceRef,
     },
     /// A part read as written whose syntax admits none of its slot's types; `index` counts the
     /// form's elements from zero, and `slot` is the first overload's type there.
@@ -555,10 +578,10 @@ pub enum ShapeError {
         form: BuiltinShapeId,
         index: usize,
         slot: KType,
-        at: Position,
+        at: SourceRef,
     },
     /// A value dict written with a `_` key, whose default has no reading yet.
-    DictDefault { site: Site, at: Position },
+    DictDefault { site: Site, at: SourceRef },
 }
 
 /// Which part of a form a quote, or a container of quotes, was wanted for.
@@ -604,7 +627,31 @@ impl QuotedPart {
 }
 
 impl ShapeError {
-    /// The error rendered with its names spelled through `symbols` and its types through `types`.
+    /// Where the error was found: a rebind's second declaration, every other error's `at`.
+    pub fn at(&self) -> SourceRef {
+        match self {
+            ShapeError::Rebind { second, .. } => *second,
+            ShapeError::ShadowsBuiltin { at, .. }
+            | ShapeError::Unbound { at, .. }
+            | ShapeError::EagerCycle { at, .. }
+            | ShapeError::EvalCycle { at, .. }
+            | ShapeError::Unsupported { at, .. }
+            | ShapeError::Malformed { at, .. }
+            | ShapeError::Unsurfaced { at, .. }
+            | ShapeError::Unchained { at, .. }
+            | ShapeError::MixedGroups { at, .. }
+            | ShapeError::RedeclaresGroup { at, .. }
+            | ShapeError::ResultOutsidePairwise { at, .. }
+            | ShapeError::SpellsForm { at, .. }
+            | ShapeError::Derived { at, .. }
+            | ShapeError::Unquoted { at, .. }
+            | ShapeError::Inadmissible { at, .. }
+            | ShapeError::DictDefault { at, .. } => *at,
+        }
+    }
+
+    /// The error rendered, led by where it was found (`path:line:col: `), with its names spelled
+    /// through `symbols` and its types through `types`.
     pub fn display<'x, 'run>(
         &'x self,
         symbols: &'x SymbolInterner,
@@ -630,106 +677,87 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
+        write!(f, "{}: ", self.error.at())?;
         match self.error {
             ShapeError::Rebind {
-                name: bound,
-                first,
-                second,
-            } => write!(
+                name: bound, first, ..
+            } => write!(f, "`{}` is bound twice; first at {first}", name(bound)),
+            ShapeError::ShadowsBuiltin { name: bound, .. } => write!(
                 f,
-                "`{}` is bound twice: at {first} and again at {second}",
+                "`{}` names a builtin, which cannot be rebound",
                 name(bound)
             ),
-            ShapeError::ShadowsBuiltin { name: bound, at } => write!(
-                f,
-                "`{}` at {at} names a builtin, which cannot be rebound",
-                name(bound)
-            ),
-            ShapeError::Unbound { name: read, at, .. } => {
-                write!(f, "`{}` in {at} names no binding visible there", name(read))
+            ShapeError::Unbound { name: read, .. } => {
+                write!(f, "`{}` names no binding visible here", name(read))
             }
-            ShapeError::EagerCycle { members } => {
+            ShapeError::EagerCycle { members, .. } => {
                 f.write_str("these bindings need each other's values before any of them exists:")?;
                 for member in members {
                     write!(f, " `{}`", name(member))?;
                 }
                 Ok(())
             }
-            ShapeError::EvalCycle { name: read, eval } => write!(
+            ShapeError::EvalCycle { name: read, .. } => write!(
                 f,
-                "the `EVAL` in {eval} may read `{}`, which needs that statement's value first",
+                "this `EVAL` may read `{}`, which needs its statement's value first",
                 name(read)
             ),
-            ShapeError::Unsupported { form, at } => {
-                write!(f, "`{form:?}` in {at} is not supported here yet")
+            ShapeError::Unsupported { form, .. } => {
+                write!(f, "`{form:?}` is not supported here yet")
             }
-            ShapeError::Malformed { form, at } => {
-                write!(f, "`{form:?}` in {at} is not the shape it declares")
+            ShapeError::Malformed { form, .. } => {
+                write!(f, "`{form:?}` is not the shape it declares")
             }
-            ShapeError::Unsurfaced { at, .. } => write!(
-                f,
-                "`USING` in {at} cannot tell which names this module surfaces; \
-                 ascribe it here: `USING (m :! Sig) SCOPE (…)`"
+            ShapeError::Unsurfaced { .. } => f.write_str(
+                "`USING` cannot tell which names this module surfaces; \
+                 ascribe it here: `USING (m :! Sig) SCOPE (…)`",
             ),
-            ShapeError::Unchained { symbol, at } => write!(
+            ShapeError::Unchained { symbol, .. } => write!(
                 f,
-                "`{}` in {at} chains under a group no body around it holds; \
+                "`{}` chains under a group no body around it holds; \
                  surface it here: `USING <group> SCOPE (…)`",
                 operator(symbol)
             ),
-            ShapeError::MixedGroups { first, second, at } => write!(
+            ShapeError::MixedGroups { first, second, .. } => write!(
                 f,
-                "`{}` and `{}` in {at} chain under different groups, so this run has no one \
-                 shape; parenthesize it",
+                "`{}` and `{}` chain under different groups, so this run has no one shape; \
+                 parenthesize it",
                 operator(first),
                 operator(second)
             ),
-            ShapeError::RedeclaresGroup { symbol, at } => write!(
+            ShapeError::RedeclaresGroup { symbol, .. } => write!(
                 f,
-                "`{}` in {at} already chains another way; a symbol chains one way in one program",
+                "`{}` already chains another way; a symbol chains one way in one program",
                 operator(symbol)
             ),
-            ShapeError::ResultOutsidePairwise { symbol, at } => write!(
+            ShapeError::ResultOutsidePairwise { symbol, .. } => write!(
                 f,
-                "`{}` in {at} declares a result of its own, which only a pairwise operator may do",
+                "`{}` declares a result of its own, which only a pairwise operator may do",
                 operator(symbol)
             ),
-            ShapeError::SpellsForm { symbol, at } => write!(
+            ShapeError::SpellsForm { symbol, .. } => write!(
                 f,
-                "a run of `{}` in {at} chains into a node spelling a builtin form",
+                "a run of `{}` chains into a node spelling a builtin form",
                 operator(symbol)
             ),
-            ShapeError::Derived { symbol, at } => write!(
+            ShapeError::Derived { symbol, .. } => write!(
                 f,
-                "`{}` in {at} is always the opposite of `==` and is declared by nobody",
+                "`{}` is always the opposite of `==` and is declared by nobody",
                 operator(symbol)
             ),
-            ShapeError::Unquoted { form, part, at } => {
-                write!(f, "`{form:?}` in {at} takes its {}", part.spelling())
+            ShapeError::Unquoted { form, part, .. } => {
+                write!(f, "`{form:?}` takes its {}", part.spelling())
             }
             ShapeError::Inadmissible {
-                form,
-                index,
-                slot,
-                at,
+                form, index, slot, ..
             } => write!(
                 f,
-                "`{form:?}` in {at} takes {} as its part {index}",
+                "`{form:?}` takes {} as its part {index}",
                 display_name(*slot, self.types, self.symbols)
             ),
-            ShapeError::DictDefault { at, .. } => {
-                write!(f, "a dict's `_` default in {at} is not supported yet")
+            ShapeError::DictDefault { .. } => {
+                f.write_str("a dict's `_` default is not supported yet")
             }
-        }
-    }
-}
-
-/// A position as a diagnostic names it: a parameter, or a statement counted from one.
-impl fmt::Display for Position {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            0 => f.write_str("a parameter"),
-            statement => write!(f, "statement {statement}"),
         }
     }
 }

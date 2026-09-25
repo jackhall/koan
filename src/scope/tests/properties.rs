@@ -12,12 +12,13 @@ use crate::scope::{
     Activation, BodyShape, Builtins, CaptureSource, ClosureBindings, Coordinate, MentionClass,
     Position, ShapeError, ShapeKind, Site, Slot, Target, UnitWork,
 };
+use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
 use crate::values::{Link, Value};
 
 use super::plan::{self, Class, Generator, Kind, Lands, Refusal, Rendering, Token};
-use super::{Probe, ProbeFamily, builtins, with_fixture};
+use super::{NOWHERE, Probe, ProbeFamily, builtins, unlocated, with_fixture};
 
 // ---------- reading the rendering back ----------
 
@@ -590,6 +591,11 @@ fn activate<'g, 'c>(
     }
 }
 
+/// Whether `at` covers the source offset `offset`.
+fn covers(at: SourceRef, offset: u32) -> bool {
+    at.span.start <= offset && offset < at.span.end
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: crate::tests::case_share(1, 1), ..ProptestConfig::default() })]
 
@@ -601,7 +607,8 @@ proptest! {
         shaped_plan(&program, |shaped| check(shaped.symbols, shaped.rendering, &shaped.located, &[]));
     }
 
-    /// A plan with one refusal injected is refused with exactly that refusal.
+    /// A plan with one refusal injected is refused with exactly that refusal, found where the
+    /// declaration or read it is about is written.
     #[test]
     fn an_injected_refusal_is_the_one_reported(
         choices in plan::choices(),
@@ -619,16 +626,43 @@ proptest! {
                     .err()
                     .unwrap_or_else(|| panic!("`{source}` is refused with {refusal:?}"));
                 let symbols = fixture.symbols;
+                let declared = |name: &plan::Name| -> Vec<u32> {
+                    rendering
+                        .declared
+                        .iter()
+                        .filter(|(held, _)| held == name)
+                        .map(|(_, offset)| *offset)
+                        .collect()
+                };
+                let at = error.at();
                 let expected = match &refusal {
-                    Refusal::Rebind { name, first, second } => ShapeError::Rebind {
-                        name: name.symbol(symbols),
-                        first: Position(*first),
-                        second: Position(*second),
-                    },
-                    Refusal::ShadowsBuiltin { name, at } => ShapeError::ShadowsBuiltin {
-                        name: name.symbol(symbols),
-                        at: Position(*at),
-                    },
+                    Refusal::Rebind { name, .. } => {
+                        let offsets = declared(name);
+                        let ShapeError::Rebind { first, second, .. } = &error else {
+                            panic!("`{source}` is refused with {refusal:?}, not {error:?}");
+                        };
+                        let written = |at: SourceRef| offsets.iter().any(|offset| covers(at, *offset));
+                        assert!(written(*second), "`{source}`: the second declaration");
+                        assert!(first.span.start < second.span.start, "`{source}`");
+                        // An arm's `it` is unwritten: it is declared where its arm set is.
+                        if *name != plan::Name::It {
+                            assert!(written(*first), "`{source}`: the first declaration");
+                        }
+                        ShapeError::Rebind {
+                            name: name.symbol(symbols),
+                            first: NOWHERE,
+                            second: NOWHERE,
+                        }
+                    }
+                    Refusal::ShadowsBuiltin { name, .. } => {
+                        let offsets = declared(name);
+                        assert_eq!(offsets.len(), 1, "`{source}`: a builtin's name is bound once");
+                        assert!(covers(at, offsets[0]), "`{source}`");
+                        ShapeError::ShadowsBuiltin {
+                            name: name.symbol(symbols),
+                            at: NOWHERE,
+                        }
+                    }
                     Refusal::Unbound { name } => {
                         let nodes: Vec<_> = lines.iter().collect();
                         let located = locate(&rendering, None, &nodes);
@@ -637,23 +671,30 @@ proptest! {
                             .iter()
                             .position(|placed| placed.read.lands == Lands::Nowhere)
                             .expect("the refused read is placed");
+                        assert!(covers(at, rendering.reads[read].offset), "`{source}`");
                         ShapeError::Unbound {
                             name: name.symbol(symbols),
                             site: located.sites[read],
-                            at: Position::statement(rendering.reads[read].statement as usize),
+                            at: NOWHERE,
                         }
                     }
                     Refusal::EagerCycle(members) => {
-                        let ShapeError::EagerCycle { members: built } = &error else {
+                        let ShapeError::EagerCycle { members: built, .. } = &error else {
                             panic!("`{source}` is refused with {refusal:?}, not {error:?}");
                         };
                         let built: BTreeSet<_> = built.iter().copied().collect();
+                        let first = members
+                            .iter()
+                            .flat_map(declared)
+                            .min()
+                            .expect("a cycle's members are declared");
                         let members = members.iter().map(|name| name.symbol(symbols)).collect();
                         assert_eq!(built, members, "`{source}`");
+                        assert!(covers(at, first), "`{source}`: the member declared first");
                         return;
                     }
                 };
-                assert_eq!(error, expected, "`{source}`");
+                assert_eq!(unlocated(error), expected, "`{source}`");
             })
         });
     }

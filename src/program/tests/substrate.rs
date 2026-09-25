@@ -36,8 +36,31 @@ fn load_reports_a_parse_error_and_a_shape_error() {
     ));
     assert!(matches!(
         CellSubstrate::load::<Mini>("LET a = nowhere", "<test>", 2),
-        Err(LoadError::Shape(ShapeError::Unbound { .. }))
+        Err(LoadError::Shape {
+            error: ShapeError::Unbound { .. },
+            ..
+        })
     ));
+}
+
+#[test]
+fn a_refused_load_renders_its_shape_error_alone() {
+    for (source, rendered) in [
+        (
+            "LET a = nowhere",
+            "main.koan:1:9: `nowhere` names no binding visible here",
+        ),
+        (
+            "SIG Sg = #[(PRINT 1)]",
+            "main.koan:1:10: `Sig` takes :(LIST OF Declaration) as its part 3",
+        ),
+    ] {
+        // The substrate, and with it the interner and registry, is gone once `load` returns.
+        let Err(error) = CellSubstrate::load::<Mini>(source, "main.koan", 2) else {
+            panic!("`{source}` is refused");
+        };
+        assert_eq!(error.to_string(), rendered, "{source}");
+    }
 }
 
 #[test]

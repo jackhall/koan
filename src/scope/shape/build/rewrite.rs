@@ -40,7 +40,7 @@ use super::super::super::groups::{
     Cover, equal_symbol, equality_mode, is_equality, is_unequal, not_symbol,
 };
 use super::super::super::signature::{pair_name, signature_run};
-use super::super::{Position, ShapeError};
+use super::super::ShapeError;
 use super::Builder;
 
 /// A part run under construction, in scratch.
@@ -79,11 +79,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// around its block, so the block is held by an `Expression` part wherever it lands.
     pub(super) fn rewrite_statement(
         &mut self,
-        statement: usize,
         node: &KExpression<'graph>,
     ) -> Result<Option<KExpression<'graph>>, ShapeError> {
-        let at = Position::statement(statement);
-        let Some(rewritten) = self.rewrite_node(at, node)? else {
+        let Some(rewritten) = self.rewrite_node(node)? else {
             return Ok(None);
         };
         if self.is_block(rewritten) {
@@ -108,7 +106,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// own frame — and a formless one part by part, and is chained when it is an operator run.
     fn rewrite_node(
         &mut self,
-        at: Position,
         node: &KExpression<'graph>,
     ) -> Result<Option<ProgramNode<'graph>>, ShapeError> {
         let mut run: Run<'x, 'graph> = BumpVec::with_capacity_in(node.parts.len(), self.scratch);
@@ -122,25 +119,25 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         | Role::InPlace
                         | Role::TypeExpression
                         | Role::Definition(DefinitionKind::Plain) => {
-                            self.rewrite_part(at, &part.value)?
+                            self.rewrite_part(&part.value)?
                         }
                         // A bare label is the label itself; any other is evaluated.
                         Role::Field => match part.value {
                             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => None,
-                            _ => self.rewrite_part(at, &part.value)?,
+                            _ => self.rewrite_part(&part.value)?,
                         },
-                        Role::Signature | Role::Head => self.rewrite_signature(at, &part.value)?,
+                        Role::Signature | Role::Head => self.rewrite_signature(&part.value)?,
                         Role::Branches(Heads::Types) => {
-                            self.rewrite_quotes(at, &part.value, Quotes::Keys)?
+                            self.rewrite_quotes(&part.value, Quotes::Keys)?
                         }
                         Role::Definition(DefinitionKind::Union) | Role::Quantifiers => {
-                            self.rewrite_quotes(at, &part.value, Quotes::Values)?
+                            self.rewrite_quotes(&part.value, Quotes::Values)?
                         }
                         Role::Definition(DefinitionKind::Members) => {
-                            self.rewrite_quotes(at, &part.value, Quotes::Items)?
+                            self.rewrite_quotes(&part.value, Quotes::Items)?
                         }
                         Role::Name if form.id == BuiltinShapeId::TypeDeclaration => {
-                            self.rewrite_bounds(at, &part.value)?
+                            self.rewrite_bounds(&part.value)?
                         }
                         Role::Keyword
                         | Role::Name
@@ -158,7 +155,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             }
             None => {
                 for part in node.parts {
-                    let rewritten = self.rewrite_part(at, &part.value)?;
+                    let rewritten = self.rewrite_part(&part.value)?;
                     changed |= rewritten.is_some();
                     run.push(Spanned {
                         value: rewritten.unwrap_or(part.value),
@@ -166,7 +163,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     });
                 }
                 if node.shape() == DispatchShape::OperatorChain {
-                    return self.chain(at, &run, node.source).map(Some);
+                    return self.chain(&run, node.source).map(Some);
                 }
                 // `a != b` written alone is the same rewrite one pair of a pairwise run takes.
                 if let [left, separator, right] = &run[..]
@@ -177,9 +174,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         symbol,
                         span: separator.span.unwrap_or(node.source.span),
                     };
-                    return self
-                        .infix(at, node.source.file, *left, op, *right)
-                        .map(Some);
+                    return self.infix(node.source.file, *left, op, *right).map(Some);
                 }
             }
         }
@@ -189,24 +184,23 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// One part with every operator run under it chained. A quote is data and is never rewritten.
     fn rewrite_part(
         &mut self,
-        at: Position,
         part: &ExpressionPart<'graph>,
     ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
         match part {
             ExpressionPart::Expression(node) => Ok(self
-                .rewrite_node(at, node.reference())?
+                .rewrite_node(node.reference())?
                 .map(ExpressionPart::Expression)),
             ExpressionPart::SigiledTypeExpr(node) => Ok(self
-                .rewrite_node(at, node.reference())?
+                .rewrite_node(node.reference())?
                 .map(ExpressionPart::SigiledTypeExpr)),
             ExpressionPart::RecordType(node) => Ok(self
-                .rewrite_fields(at, node.reference())?
+                .rewrite_fields(node.reference())?
                 .map(ExpressionPart::RecordType)),
             ExpressionPart::ListLiteral(items) => {
                 let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
                 let mut changed = false;
                 for item in items.iter() {
-                    let rewritten = self.rewrite_part(at, item)?;
+                    let rewritten = self.rewrite_part(item)?;
                     changed |= rewritten.is_some();
                     run.push(rewritten.unwrap_or(*item));
                 }
@@ -218,7 +212,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let mut run = BumpVec::with_capacity_in(pairs.len(), self.scratch);
                 let mut changed = false;
                 for (key, value) in pairs.iter() {
-                    let rewritten = (self.rewrite_part(at, key)?, self.rewrite_part(at, value)?);
+                    let rewritten = (self.rewrite_part(key)?, self.rewrite_part(value)?);
                     changed |= rewritten.0.is_some() || rewritten.1.is_some();
                     run.push((rewritten.0.unwrap_or(*key), rewritten.1.unwrap_or(*value)));
                 }
@@ -230,7 +224,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let mut run = BumpVec::with_capacity_in(pairs.len(), self.scratch);
                 let mut changed = false;
                 for (name, value) in pairs.iter() {
-                    let rewritten = self.rewrite_part(at, value)?;
+                    let rewritten = self.rewrite_part(value)?;
                     changed |= rewritten.is_some();
                     run.push((*name, rewritten.unwrap_or(*value)));
                 }
@@ -252,13 +246,12 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// for an operator run.
     fn rewrite_signature(
         &mut self,
-        at: Position,
         part: &ExpressionPart<'graph>,
     ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
         let Some(run) = signature_run(part) else {
-            return self.rewrite_part(at, part);
+            return self.rewrite_part(part);
         };
-        let Some(rewritten) = self.rewrite_fields(at, run)? else {
+        let Some(rewritten) = self.rewrite_fields(run)? else {
             return Ok(None);
         };
         Ok(Some(match part {
@@ -270,7 +263,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// A field list's type halves, rewritten in place.
     fn rewrite_fields(
         &mut self,
-        at: Position,
         run: &KExpression<'graph>,
     ) -> Result<Option<ProgramNode<'graph>>, ShapeError> {
         let mut parts: Run<'x, 'graph> = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
@@ -280,7 +272,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         while index < run.parts.len() {
             let typed = pair_name(run, index).is_some();
             let position = if typed { index + 1 } else { index };
-            if let Some(rewritten) = self.rewrite_part(at, &run.parts[position].value)? {
+            if let Some(rewritten) = self.rewrite_part(&run.parts[position].value)? {
                 changed = true;
                 parts[position].value = rewritten;
             }
@@ -293,7 +285,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// `<Name> UNDER <bound>` run.
     fn rewrite_bounds(
         &mut self,
-        at: Position,
         part: &ExpressionPart<'graph>,
     ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
         let ExpressionPart::Expression(node) = part else {
@@ -303,7 +294,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         if bounded_run(run).is_none() {
             return Ok(None);
         }
-        let Some(rewritten) = self.rewrite_part(at, &run.parts[2].value)? else {
+        let Some(rewritten) = self.rewrite_part(&run.parts[2].value)? else {
             return Ok(None);
         };
         let mut parts: Run<'x, 'graph> = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
@@ -319,7 +310,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// arm's block is a shape of its own and is rewritten by its own draft.
     fn rewrite_quotes(
         &mut self,
-        at: Position,
         part: &ExpressionPart<'graph>,
         quotes: Quotes,
     ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
@@ -329,7 +319,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
                 let mut changed = false;
                 for item in items.iter() {
-                    let rewritten = self.rewrite_quote(at, item)?;
+                    let rewritten = self.rewrite_quote(item)?;
                     changed |= rewritten.is_some();
                     run.push(rewritten.unwrap_or(*item));
                 }
@@ -341,8 +331,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let mut changed = false;
                 for (key, value) in pairs.iter() {
                     let (new_key, new_value) = match quotes {
-                        Quotes::Keys => (self.rewrite_quote(at, key)?, None),
-                        _ => (None, self.rewrite_quote(at, value)?),
+                        Quotes::Keys => (self.rewrite_quote(key)?, None),
+                        _ => (None, self.rewrite_quote(value)?),
                     };
                     changed |= new_key.is_some() || new_value.is_some();
                     run.push((new_key.unwrap_or(*key), new_value.unwrap_or(*value)));
@@ -357,14 +347,13 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// One quote the builder reads, its body's operator runs chained.
     fn rewrite_quote(
         &mut self,
-        at: Position,
         part: &ExpressionPart<'graph>,
     ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
         let ExpressionPart::QuotedExpression(node) = part else {
             return Ok(None);
         };
         Ok(self
-            .rewrite_node(at, node.reference())?
+            .rewrite_node(node.reference())?
             .map(ExpressionPart::QuotedExpression))
     }
 }
@@ -385,7 +374,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// share. `source` is the run's own node's.
     fn chain(
         &mut self,
-        at: Position,
         parts: &[Spanned<ExpressionPart<'graph>>],
         source: SourceRef,
     ) -> Result<ProgramNode<'graph>, ShapeError> {
@@ -407,10 +395,10 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         operands.extend(parts.iter().step_by(2).copied());
 
         let file = source.file;
-        let mode = self.chaining(at, &operators)?;
+        let mode = self.chaining(file, &operators)?;
         match mode {
             ReductionMode::FoldLeft | ReductionMode::FoldRight => {
-                self.fold(at, file, &operands, &operators, mode)
+                self.fold(file, &operands, &operators, mode)
             }
             ReductionMode::Unary => {
                 let items = collect(
@@ -428,39 +416,42 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         cover(operands[0].span, last.span, source.span),
                     ),
                 ];
-                self.built(at, file, operators[0], &run, source.span)
+                self.built(file, operators[0], &run, source.span)
             }
             ReductionMode::Pairwise {
                 combiner,
                 direction,
-            } => self.pairwise(at, source, &operands, &operators, combiner, direction),
+            } => self.pairwise(source, &operands, &operators, combiner, direction),
         }
     }
 
-    /// How an operator run of `operators` reduces where this frame is: every symbol but `==` and
-    /// `!=` must agree, and an equality symbol beside them joins only a pairwise group.
-    fn chaining(&self, at: Position, operators: &[Operator]) -> Result<ReductionMode, ShapeError> {
+    /// How an operator run of `operators`, written in `file`, reduces where this frame is: every
+    /// symbol but `==` and `!=` must agree, and an equality symbol beside them joins only a pairwise
+    /// group. A refusal points at the operator that breaks the run.
+    fn chaining(&self, file: FileId, operators: &[Operator]) -> Result<ReductionMode, ShapeError> {
+        let at = |op: &Operator| SourceRef {
+            span: op.span,
+            file,
+        };
         let mut chosen: Option<(KeywordSymbol, Cover<'graph>)> = None;
-        let mut equality = None;
-        for Operator { symbol, .. } in operators {
-            if is_equality(*symbol) {
-                equality.get_or_insert(*symbol);
+        let mut equality: Option<Operator> = None;
+        for op in operators {
+            let symbol = op.symbol;
+            if is_equality(symbol) {
+                equality.get_or_insert(*op);
                 continue;
             }
             let cover = self
                 .frame
-                .cover(*symbol)
-                .map_err(|()| ShapeError::Unchained {
-                    symbol: *symbol,
-                    at,
-                })?;
+                .cover(symbol)
+                .map_err(|()| ShapeError::Unchained { symbol, at: at(op) })?;
             match chosen {
-                None => chosen = Some((*symbol, cover)),
+                None => chosen = Some((symbol, cover)),
                 Some((first, held)) if !held.agrees(cover) => {
                     return Err(ShapeError::MixedGroups {
                         first,
-                        second: *symbol,
-                        at,
+                        second: symbol,
+                        at: at(op),
                     });
                 }
                 Some(_) => {}
@@ -476,8 +467,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         {
             return Err(ShapeError::MixedGroups {
                 first: symbol,
-                second,
-                at,
+                second: second.symbol,
+                at: at(&second),
             });
         }
         Ok(mode)
@@ -487,7 +478,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// operator.
     fn fold(
         &mut self,
-        at: Position,
         file: FileId,
         operands: &[Spanned<ExpressionPart<'graph>>],
         operators: &[Operator],
@@ -497,14 +487,13 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             ReductionMode::FoldRight => FoldDirection::Right,
             _ => FoldDirection::Left,
         };
-        self.fold_run(at, file, operands, operators, direction)
+        self.fold_run(file, operands, operators, direction)
     }
 
     /// The fold itself: `operands` has one more element than `operators`, and both a fold rewrite
     /// and a pairwise rewrite's combiner pass run through here.
     fn fold_run(
         &mut self,
-        at: Position,
         file: FileId,
         operands: &[Spanned<ExpressionPart<'graph>>],
         operators: &[Operator],
@@ -516,7 +505,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             FoldDirection::Left => {
                 let mut left = operands[0];
                 for (index, op) in operators.iter().enumerate() {
-                    let built = self.infix(at, file, left, *op, operands[index + 1])?;
+                    let built = self.infix(file, left, *op, operands[index + 1])?;
                     left = holding(built);
                     node = Some(built);
                 }
@@ -524,7 +513,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             FoldDirection::Right => {
                 let mut right = operands[operands.len() - 1];
                 for (index, op) in operators.iter().enumerate().rev() {
-                    let built = self.infix(at, file, operands[index], *op, right)?;
+                    let built = self.infix(file, operands[index], *op, right)?;
                     right = holding(built);
                     node = Some(built);
                 }
@@ -538,7 +527,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// into an anonymous slot of a synthesized block, which is sourced at the whole run, `source`.
     fn pairwise(
         &mut self,
-        at: Position,
         source: SourceRef,
         operands: &[Spanned<ExpressionPart<'graph>>],
         operators: &[Operator],
@@ -577,7 +565,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         let mut combiners: BumpVec<'x, Operator> =
             BumpVec::with_capacity_in(operators.len(), self.scratch);
         for (index, op) in operators.iter().enumerate() {
-            let pair = self.infix(at, file, named[index], *op, named[index + 1])?;
+            let pair = self.infix(file, named[index], *op, named[index + 1])?;
             pairs.push(holding(pair));
             if index > 0 {
                 combiners.push(Operator {
@@ -592,7 +580,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             };
             node
         } else {
-            self.fold_run(at, file, &pairs, &combiners, direction)?
+            self.fold_run(file, &pairs, &combiners, direction)?
         };
         if hoisted.is_empty() {
             return Ok(folded);
@@ -609,7 +597,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// The node spans its operands, and each keyword the operator it came from.
     fn infix(
         &mut self,
-        at: Position,
         file: FileId,
         left: Spanned<ExpressionPart<'graph>>,
         op: Operator,
@@ -622,26 +609,25 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 Spanned::at(ExpressionPart::Keyword(equal_symbol()), op.span),
                 right,
             ];
-            let equal = self.built(at, file, op, &equal, span)?;
+            let equal = self.built(file, op, &equal, span)?;
             let negated = [
                 Spanned::at(ExpressionPart::Keyword(not_symbol()), op.span),
                 Spanned::at(ExpressionPart::Expression(equal), span),
             ];
-            return self.built(at, file, op, &negated, span);
+            return self.built(file, op, &negated, span);
         }
         let run = [
             left,
             Spanned::at(ExpressionPart::Keyword(op.symbol), op.span),
             right,
         ];
-        self.built(at, file, op, &run, span)
+        self.built(file, op, &run, span)
     }
 
     /// One node of the rewrite, refused when its run spells a builtin form — an operator symbol
     /// whose chained node a later reader would walk as a form rather than as a call.
     fn built(
         &self,
-        at: Position,
         file: FileId,
         op: Operator,
         run: &[Spanned<ExpressionPart<'graph>>],
@@ -651,7 +637,10 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         if node.reference().cache().builtin_shape().is_some() {
             return Err(ShapeError::SpellsForm {
                 symbol: op.symbol,
-                at,
+                at: SourceRef {
+                    span: op.span,
+                    file,
+                },
             });
         }
         Ok(node)

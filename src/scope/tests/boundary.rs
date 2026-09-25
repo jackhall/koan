@@ -23,10 +23,7 @@ const PREFIXES: &[&str] = &[
 
 /// The one owning type outside the tests: an eager cycle's member names, reported once and never
 /// stored.
-const OWNING_ALLOWED: &[(&str, &str)] = &[(
-    "src/scope/shape.rs",
-    "EagerCycle { members: Vec<BinderSymbol> }",
-)];
+const OWNING_ALLOWED: &[(&str, &str)] = &[("src/scope/shape.rs", "members: Vec<BinderSymbol>")];
 
 #[test]
 fn scope_names_only_its_four_modules_holds_no_heap_and_spells_the_stack_lifetimes() {

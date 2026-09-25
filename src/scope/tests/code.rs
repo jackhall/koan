@@ -9,7 +9,7 @@ use crate::scope::{BodyShape, Builtins, Position, QuotedPart, ShapeError, ShapeK
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 
-use super::{Fixture, builtins, type_name, value_name, with_fixture};
+use super::{Fixture, NOWHERE, builtins, located, type_name, unlocated, value_name, with_fixture};
 
 /// Build `source` against the suites' builtins and hand the result to `check`.
 fn shaped<R>(
@@ -104,44 +104,53 @@ fn a_quoted_body_is_its_callables_body_shape() {
 
 #[test]
 fn a_part_not_written_as_its_role_reads_it_is_refused() {
-    let at = Position::statement(0);
+    let at = NOWHERE;
     let unquoted = |form, part| ShapeError::Unquoted { form, part, at };
     let cases = [
         (
             "LET f = (FN :{} -> Number = (1))",
             unquoted(BuiltinShapeId::Lambda, QuotedPart::Body),
+            "(1)",
         ),
         (
             "LET f = (FN :{} -> Number = x)",
             unquoted(BuiltinShapeId::Lambda, QuotedPart::Body),
+            "x",
         ),
         (
             "EXPR (FOO a :Number) -> Number = #(a)",
             unquoted(BuiltinShapeId::ExpressionDefinition, QuotedPart::Head),
+            "(FOO a :Number)",
         ),
         (
             "MATCH 1 -> :Number WITH (Number -> (1))",
             unquoted(BuiltinShapeId::Match, QuotedPart::Arms),
+            "(Number -> (1))",
         ),
         (
             "MATCH 1 -> :Number WITH {Number: (1)}",
             unquoted(BuiltinShapeId::Match, QuotedPart::Arms),
+            "{Number: (1)}",
         ),
         (
             "MATCH 1 -> :Number WITH #(x)",
             unquoted(BuiltinShapeId::Match, QuotedPart::Arms),
+            "#(x)",
         ),
         (
             "UNION Mb = (Some :Number)",
             unquoted(BuiltinShapeId::Union, QuotedPart::Variants),
+            "(Some :Number)",
         ),
         (
             "LET f = (FN FOR ALL (Elt) :{x :Elt} -> Elt = #(x))",
             unquoted(BuiltinShapeId::QuantifiedLambda, QuotedPart::Quantifiers),
+            "(Elt)",
         ),
         (
             "SIG Sg = (VAL x :Str)",
             unquoted(BuiltinShapeId::Sig, QuotedPart::Members),
+            "(VAL x :Str)",
         ),
         (
             "MODULE m = #(LET x = 1)",
@@ -149,6 +158,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 form: BuiltinShapeId::Module,
                 at,
             },
+            "#(LET x = 1)",
         ),
         (
             "LET #(x) = 1",
@@ -156,6 +166,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 form: BuiltinShapeId::LetValue,
                 at,
             },
+            "#(x)",
         ),
         (
             "LET f = (FN :{} -> Number = 42)",
@@ -165,6 +176,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 slot: KType::BLOCK,
                 at,
             },
+            "42",
         ),
         (
             "MODULE m = 42",
@@ -174,6 +186,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 slot: KType::BLOCK,
                 at,
             },
+            "42",
         ),
         // A type guard is type code, and a value is none.
         (
@@ -184,6 +197,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 slot: KType::DICT_TYPE_CODE_BLOCK,
                 at,
             },
+            "#{1: (a)}",
         ),
         // A label guard is a name, and a compound type is none.
         (
@@ -192,8 +206,9 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 form: BuiltinShapeId::MatchOver,
                 index: 7,
                 slot: KType::DICT_NAME_BLOCK,
-                at: Position::statement(1),
+                at,
             },
+            "#{:(Number | Str): (it)}",
         ),
         // A type expression and a `TRY` or `CATCH` operand are bare: a quote there is refused.
         (
@@ -202,6 +217,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 form: BuiltinShapeId::Match,
                 at,
             },
+            "#(Number)",
         ),
         (
             "TRY #(1) -> :Number WITH #{_: (0)}",
@@ -209,6 +225,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 form: BuiltinShapeId::Try,
                 at,
             },
+            "#(1)",
         ),
         (
             "CATCH #(1)",
@@ -216,6 +233,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 form: BuiltinShapeId::Catch,
                 at,
             },
+            "#(1)",
         ),
         (
             "SIG Sg = #[(PRINT 1)]",
@@ -225,6 +243,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 slot: KType::LIST_OF_DECLARATION,
                 at,
             },
+            "#[(PRINT 1)]",
         ),
         // A `FOR ALL` element that quotes no lone name, in a type expression as anywhere.
         (
@@ -235,6 +254,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 slot: KType::QUANTIFIER_CODE,
                 at,
             },
+            "#[(Elt OVER Value)]",
         ),
         // `{}` is the empty record, so a union with no variant cannot be written.
         (
@@ -245,6 +265,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 slot: KType::DICT_NAME_TYPE_CODE,
                 at,
             },
+            "#{}",
         ),
         (
             "NEWTYPE Dist = (LIST OF Number)",
@@ -254,10 +275,13 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 slot: KType::TYPE_CODE,
                 at,
             },
+            "(LIST OF Number)",
         ),
     ];
-    for (source, expected) in cases {
-        assert_eq!(refusal(source), expected, "{source}");
+    for (source, expected, text) in cases {
+        let error = refusal(source);
+        assert_eq!(located(error.at()), text, "{source}");
+        assert_eq!(unlocated(error), expected, "{source}");
     }
     shaped(
         "MATCH 1 -> :Number WITH #{:(Number | Str): (it), :{x :Number} : (0)}",
@@ -427,10 +451,11 @@ fn a_value_dicts_default_is_refused_and_an_arm_sets_is_not() {
         "LET f = (FN :{} -> Any = #({1: 2, _: 3}))",
         "LET q = #{_: (3)}",
     ] {
-        assert!(
-            matches!(refusal(source), ShapeError::DictDefault { .. }),
-            "{source}"
-        );
+        let error = refusal(source);
+        assert!(matches!(error, ShapeError::DictDefault { .. }), "{source}");
+        if source == "LET d = {1: 2, _: 3}" {
+            assert_eq!(located(error.at()), "{1: 2, _: 3}");
+        }
     }
     shaped("MATCH 1 -> :Number WITH #{_: (3)}", |_, _, shape| {
         assert!(shape.is_ok(), "an arm set's `_` is its default arm");

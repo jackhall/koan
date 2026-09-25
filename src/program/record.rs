@@ -1,6 +1,8 @@
 //! The program record: what a loaded program's steps read at `'graph`, and what the embedder above
 //! `program` supplies for it — the builtin table and the step every evaluation runs.
 
+use std::fmt;
+
 use crate::knot::{KActivationView, KBuiltins};
 use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
@@ -110,9 +112,23 @@ impl<'graph> Program<'graph> {
     }
 }
 
-/// Why a program did not load.
+/// Why a program did not load. Its `Display` is the whole diagnostic, with nothing else in hand.
 #[derive(Debug)]
 pub enum LoadError {
     Parse(ParseError),
-    Shape(ShapeError),
+    /// The shape error beside its rendering. It names symbols and types through the interner and
+    /// registry a refused load drops, so it is rendered while they stand.
+    Shape {
+        error: ShapeError,
+        rendered: String,
+    },
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoadError::Parse(error) => write!(f, "{error}"),
+            LoadError::Shape { rendered, .. } => f.write_str(rendered),
+        }
+    }
 }

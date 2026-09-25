@@ -30,6 +30,7 @@ use super::super::super::groups::{
 };
 use super::super::{Position, ShapeError, ShapeKind, Site};
 use super::{Builder, body_of, quoted_body};
+use crate::source::SourceRef;
 
 /// What one operand surfaces: its names, in the order the spine gives them, and the operator groups
 /// the body may chain under. The binders pass sorts the names into layout order, so the reader owes
@@ -63,7 +64,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             .get(1)
             .ok_or(ShapeError::Malformed {
                 form: BuiltinShapeId::UsingScope,
-                at: Position::statement(statement as usize),
+                at: node.source,
             })?
             .value;
         // One rule applied per unit of fuel, so an alias that names itself terminates.
@@ -76,7 +77,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         let at = Position::statement(statement as usize);
         self.value_names(level, at, operand, out, &mut fuel)
             .map_err(|()| ShapeError::Unsurfaced {
-                at,
+                at: self.part_source(level, statement, Site::of(operand)),
                 site: Site::of(operand),
             })
     }
@@ -191,7 +192,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// refused, since a symbol chains one way for the whole build.
     pub(super) fn surfaced_groups(
         &self,
-        at: Position,
+        at: SourceRef,
         surfaced: &Surfaced<'x, 'graph>,
     ) -> Result<BumpVec<'x, &'graph DeclaredGroup<'graph>>, ShapeError> {
         let mut kept = BumpVec::new_in(self.scratch);

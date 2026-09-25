@@ -3,11 +3,11 @@
 //! is refused — and the last statement's unit marked.
 
 use crate::parse::KExpression;
-use crate::scope::{BodyShape, Builtins, Position, ShapeError, ShapeKind, Unit, UnitWork};
+use crate::scope::{BodyShape, Builtins, ShapeError, ShapeKind, Unit, UnitWork};
 
 use crate::symbols::BinderSymbol;
 
-use super::{Fixture, builtins, value_name, with_fixture};
+use super::{Fixture, builtins, located, value_name, with_fixture};
 
 /// Shape `source` and hand `check` the program shape.
 fn shaped<R>(
@@ -134,13 +134,13 @@ fn an_eval_a_binder_before_it_waits_on_is_refused() {
                     fixture.types,
                     fixture.scratch(),
                 );
-                let Err(ShapeError::EvalCycle { name, eval }) = shape else {
+                let Err(ShapeError::EvalCycle { name, at }) = shape else {
                     panic!(
                         "`{source}` is refused as an `EVAL` cycle: {:?}",
                         shape.map(|_| ())
                     );
                 };
-                assert_eq!(eval, Position::statement(lines.len() - 1));
+                assert_eq!(located(at), "LET g = (EVAL #(origin))");
                 let named =
                     ["f", "h"].map(|text| BinderSymbol::Value(value_name(text, fixture.symbols)));
                 assert!(

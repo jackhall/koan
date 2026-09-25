@@ -6,7 +6,7 @@ use crate::scope::{ShapeError, is_equality};
 use crate::symbols::{KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{FoldDirection, ReductionMode};
 
-use super::{Fixture, with_fixture};
+use super::{Fixture, NOWHERE, located, unlocated, with_fixture};
 
 fn keyword(text: &str, symbols: &SymbolInterner) -> KeywordSymbol {
     KeywordSymbol::declared(text, symbols).expect("a keyword token")
@@ -136,12 +136,17 @@ fn a_group_equal_to_a_builtin_one_is_that_group_and_a_partial_one_is_refused() {
     claimed(
         "GROUP partial FOLD LEFT = ((OP #(+) OVER Number = #(left)))",
         |fixture, claims| {
+            let error = claims.err().expect("the claims are refused");
             assert_eq!(
-                claims.err(),
-                Some(ShapeError::RedeclaresGroup {
+                located(error.at()),
+                "GROUP partial FOLD LEFT = ((OP #(+) OVER Number = #(left)))"
+            );
+            assert_eq!(
+                unlocated(error),
+                ShapeError::RedeclaresGroup {
                     symbol: keyword("+", fixture.symbols),
-                    at: crate::scope::Position::PARAMETER,
-                })
+                    at: NOWHERE,
+                },
             );
         },
     );
@@ -204,12 +209,17 @@ fn a_unary_mark_and_a_group_never_claim_one_symbol_in_either_order() {
     let group = "GROUP g FOLD LEFT = ((OP #(~) OVER Ring = #(left)))";
     for source in [format!("{unary}\n{group}"), format!("{group}\n{unary}")] {
         claimed(&source, |fixture, claims| {
+            let error = claims.err().expect("the claims are refused");
             assert_eq!(
-                claims.err(),
-                Some(ShapeError::RedeclaresGroup {
+                located(error.at()),
+                source.lines().last().expect("two lines")
+            );
+            assert_eq!(
+                unlocated(error),
+                ShapeError::RedeclaresGroup {
                     symbol: keyword("~", fixture.symbols),
-                    at: crate::scope::Position::PARAMETER,
-                })
+                    at: NOWHERE,
+                },
             );
         });
     }
@@ -227,12 +237,14 @@ fn a_unary_mark_and_a_group_never_claim_one_symbol_in_either_order() {
 #[test]
 fn a_declaration_naming_the_derived_symbol_is_refused_and_a_quoted_group_is_data() {
     claimed("OP #(!=) OVER Ring -> Bool = #(left)", |fixture, claims| {
+        let error = claims.err().expect("the claims are refused");
+        assert_eq!(located(error.at()), "OP #(!=) OVER Ring -> Bool = #(left)");
         assert_eq!(
-            claims.err(),
-            Some(ShapeError::Derived {
+            unlocated(error),
+            ShapeError::Derived {
                 symbol: keyword("!=", fixture.symbols),
-                at: crate::scope::Position::PARAMETER,
-            })
+                at: NOWHERE,
+            },
         );
     });
     claimed(
