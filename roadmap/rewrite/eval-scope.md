@@ -35,6 +35,11 @@ on that statement refuses the body with `EvalCycle`.
   and lays no shape down.
 - An `EVAL`'s operand is an eager mention like any other, so an `EVAL` inside
   its own quote's cycle is the ordinary eager-cycle refusal.
+- Code equality follows bindings as a bisimulation: a quote equals its copy,
+  `LET echo = #(PRINT echo)` compared with a copy of itself terminates equal,
+  and two quotes of the same text whose names bind different values are
+  unequal.
+- Printing code never follows a binding.
 
 **Directions.**
 
@@ -52,6 +57,22 @@ on that statement refuses the body with `EvalCycle`.
   resolve where the `EVAL` is written — a deliberate escape, like Racket's
   `datum->syntax` — which needs a hold on the `EVAL`'s frame and orders the
   `EVAL` after the binders declared before it.
+- *When a written quote resolves — open.* Where it is written, when the
+  program loads, as the first criterion states; or only where an explicit
+  `RESOLVE` asks, so a program can assemble fragments before any name in them
+  resolves.
+- *Code equality — decided.* Code compares by structure and follows its
+  bindings as a bisimulation, as circular data does
+  ([equality](../../src/values/README.md#equality-and-rendering)). Ignoring
+  bindings would make two quotes that evaluate differently equal, and comparing
+  them by node identity would make a copy unequal to its source.
+- *A binding that holds a function — open.* A function compares `Incomparable`
+  ([equality and rendering](../../src/knot/README.md#equality-and-rendering)),
+  and every called name and keyworded use binds one, so a bisimulation reaching
+  a function makes nearly all code incomparable. The alternatives: accept that;
+  pair function nodes by body shape and bisimilar captures, giving functions a
+  structural equality inside code only; or compare a function binding by node
+  identity, so code that calls a function is unequal to its copy.
 
 ## Dependencies
 
@@ -62,3 +83,5 @@ on that statement refuses the body with `EvalCycle`.
 **Unblocks:**
 
 - [Dispatch](dispatch.md) — a quote's keyworded uses resolve where it is written.
+- [Code names](code-names.md) — a sigiled name inside a quote resolves beside the quote's bindings.
+- [Code splicing](code-splicing.md) — a quote's bindings and knot edges.

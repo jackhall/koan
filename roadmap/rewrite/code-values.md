@@ -1,13 +1,13 @@
 # Code as values
 
 Quoted code typed by what it is — a literal, a symbol, an expression, a block
-or an arm — named in a channel of its own, and the shape builder's own
-representation of it.
+or a set of arms — and written as a quote wherever a builtin takes code.
 
 **Problem.** Every quote and every raw group is typed `KExpression`, and a raw
 identifier `Identifier` ([values/admission.rs](../../src/values/admission.rs)),
-so no type tells a symbol from an expression or a block. The same raw-part
-types are also how a
+so no type tells a symbol from an expression or a block. The raw-part types
+`Identifier`, `NameToken`, `TypeNameToken`, `KExpression`, `SigiledTypeExpr`
+and `RecordType` are unordered, each only under `Code`. They are also how a
 [builtin shape](../../src/parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
 says what to capture raw: `lazy_kinds_at` keeps a `(…)` group raw because its
 slot is typed `KExpression`, and a table law pins every `Body`, `Branches`,
@@ -16,53 +16,45 @@ and require code": `EVAL`'s operand is typed `Any`
 ([builtin_shapes.rs](../../src/parse/builtin_shapes.rs)) and checked for a
 quote when it runs. `UNARY OP <symbol> OVER <operand>` types both its slots
 `Any` and keeps neither raw, while its `…Returning` twin keeps its symbol raw.
-A builtin's raw parts — a `FN` or `EXPR` body, an `EXPR`'s signature, an arm —
-are written unquoted, while a user function's code argument is quoted at the
-call, so a reader cannot tell from a builtin's call which of its parts run.
-`ATTR`'s label is typed `NameToken | Str`, so a field named at run time is named
-by a string. Code has no name class of its own: a module exports it only as a
-value. And `Shape::for_eval` lays a fresh block shape down in program storage,
-which is never released during a run, so an `EVAL` evaluated in a loop grows it
-without bound.
+A builtin's raw parts — a `FN` or `EXPR` body, an `EXPR`'s head, a `MATCH` or
+`TRY` arm — are written unquoted, while a user function's code argument is
+quoted at the call, so a reader cannot tell from a builtin's call which of its
+parts run. `ATTR`'s label is typed `NameToken | Str`, so a field named at run
+time is named by a string. And the parser peels every redundant paren, so
+`#((y))` and `#(y)` are the same quote.
 
 **Acceptance criteria.**
 
-- Five kinds of code lie under `Code`: literal, symbol, expression, block
-  and arm.
+- The code family is ordered: a value name (`Identifier`) and a type name
+  (`TypeNameToken`) lie under `Symbol`; `Literal`, `Symbol`, a quoted `:(…)`
+  (`SigiledTypeExpr`), a quoted `:{…}` (`RecordType`) and `Arms` lie under
+  `Expression`; `Expression` lies under `Block`, and `Block` under `Code`. The
+  type spelled `KExpression` is spelled `Expression`, and `NameToken` is
+  spelled `Symbol`.
 - A quote is typed by its body as written: `#(y)` is a symbol, `#(42)` and
-  `#("y")` are literals, and `#((y))` and `#(f x)` are expressions.
-- No slot captures its part raw: every slot evaluates its part, and a part meant
-  as code is written as a quote, a `FN` or `EXPR` body and an `EXPR`'s signature
-  included. A binder name is written bare.
-- A quote in a callable's body slot is built as that callable's body shape.
-- The tutorial's snippets write quoted bodies and signatures.
-- `ATTR`'s label is a symbol. `ATTR p y` and `LET which = #(y)` followed by
-  `ATTR p (which)` read the same field, a `Str` label is a no-overload miss, and
-  tutorial 07's field read named at run time is spelled this way.
-- `EVAL`'s operand is typed `Code`, so `$(n)` over a number is a no-overload
-  miss rather than a check of its own.
-- An arm is a guard type and a block binding `it`. The scope builder builds each
-  `MATCH` and `TRY` arm as one, and reads from it that its block's last
-  statement is in tail position wherever the `MATCH` or `TRY` is, that `it` is
-  narrowed to the guard, and that a `TRY` body's error goes to its arms rather
-  than to the enclosing frame.
-- A block value carries its shape, laid down where the value lives rather than
-  in program storage, so an `EVAL` evaluated in a loop does not grow program
-  storage.
-- A sigiled name holds only code and resolves to a coordinate where the shape is
-  built; a sigiled parameter binds per call.
-- A shape is built from code only where it traces that code back to written
-  quotes, as `USING … SCOPE` traces its operand; code it cannot trace is shaped
-  when it is evaluated.
-- A `SIG` declares a code member with `VAL`, as a slot, or with `LET`, as
-  manifest code.
-- A fragment taken out of a quote holds each fellow knot member it names as that
-  member's value word, and no code value outside a knot holds an edge.
-- Code equality follows bindings as a bisimulation: a quote equals its copy,
-  `LET echo = #(PRINT echo)` compared with a copy of itself terminates equal,
-  and two quotes of the same text whose names bind different values are
-  unequal.
-- Printing code never follows a binding.
+  `#("y")` are literals, `#((y))` and `#(f x)` are expressions, a quote of two
+  or more statements is a block, and `#{Some: (…)}` is arms. A parenthesis the
+  program writes is never peeled.
+- A callable's body, an `EXPR`'s head and a `MATCH` or `TRY` arm set are
+  written as quotes, and the shape builder builds each where it is written: a
+  body as that callable's body shape, a head as its parameters, each arm as a
+  block. A bare group or a name in one of those positions is refused where the
+  shape is built.
+- A binder name, a label, a type expression, a definition (`SIG`, `UNION`,
+  `NEWTYPE`) and a body that runs where it is written (`MODULE`, `GROUP`,
+  `USING … SCOPE`, `TRY`, `CATCH`) are written bare; every other slot evaluates
+  its part, and no slot keeps a part raw.
+- The tutorial's snippets write quoted bodies, heads and arms.
+- `ATTR`'s label is a symbol: a bare name is the label itself and any other
+  part is evaluated, so `ATTR p y` names the field `y` and `ATTR p (which)`
+  reads `which`. No overload takes a `Str` label, and tutorial 07's field read
+  named at run time is spelled `LET which = #(y)`.
+- `EVAL`'s operand is typed `Code`.
+- Arms are written `#{<guard>: <body>, …}`, each entry a guard and a block
+  binding `it`, and a `_` key is the default arm. The scope builder builds each
+  `MATCH` and `TRY` arm as one, and records its guard as the type of `it` and
+  that its block's last statement is in tail position exactly where the `MATCH`
+  or `TRY` is.
 
 **Directions.**
 
@@ -74,73 +66,40 @@ without bound.
   builder's own, as the pairwise rewrite is, since a user's rewrite rule acts at
   a distance; and code generated per argument type, as Julia's `@generated`
   does, solves too narrow a problem.
-- *Raw operands are quoted at the call — decided.* Every raw operand is visible
-  where it is written, a builtin's included. A binder name is special and stays
-  bare.
-- *Arms and the other raw parts — open.* Whether a `MATCH` or `TRY` arm is
-  quoted, and each other part a builtin reads raw: an `OP` body, a `MODULE`,
-  `GROUP` or `SIG` body, a `USING … SCOPE` body. Recommended: quote arms.
+- *What is quoted — decided.* A part that runs later, conditionally or never
+  is quoted: a callable's body, an `EXPR` head, an arm set. A bare part runs
+  where it is written, once, or declares — so a reader tells from a builtin's
+  call which of its parts run. A binder name is special and stays bare.
+- *Arms are a quoted dict — decided.* Guards map to blocks, `#{Some: (…),
+  None: (…)}`. Selection is by specificity, as dispatch selects a candidate
+  ([control expression shapes and errors](control-and-errors.md)), so written
+  order does not matter and a dict's reading is honest.
+- *`_` names a dict's default — decided.* Every dict literal may write `_` as
+  a key; in an arm set it is the default arm. A value dict's default is
+  [dict defaults](dict-defaults.md)'s, and until it ships a value dict holding
+  `_` is refused where its shape is built.
 - *One representation — decided.* The code kinds are the shape builder's own
   categories, not a reflective model beside them. Code is built through
-  `parse`'s node constructor, whose anonymous-slot naming gives a fresh name —
-  the doors the [pairwise rewrite](../../src/scope/README.md#operator-groups)
-  and the [nested-binder hoist](nested-binders.md) use — so a block value's
-  shape is the shape the builder builds.
-- *How the kinds are ordered — open.* Disjoint, or a symbol and a literal each
-  also an expression of one part, so an expression slot admits them.
-- *The binder-slot raw-part types — open.* Whether `NameToken`,
-  `TypeNameToken`, `SigiledTypeExpr` and `RecordType` become code kinds or stay
-  beside them. Recommended: they become code kinds, so one family types every
-  part the shape builder reads raw.
-- *A code naming channel — decided.* A name class of its own, marked by a sigil
-  since case is spent, holding only code. A sigiled parameter binds per call as
-  a type parameter does: a quote's shape travels with its value, so running
-  code needs nothing from the shape that runs it, and only building a new shape
-  from code needs the code where the shape is built. Elaboration may evaluate
-  code, as a subdispatch does, provided that code is deterministic, since what
-  elaboration builds is interned. A `VAL` code member is sealed as a value is
-  behind its type: a holder can run the code but not see which code it is.
-- *The sigil's character — open.* `#` reads as code, but `#y` sits one pair of
-  parens from `#(y)`, the quote of the symbol `y`.
-- *What a sigiled name resolves to — open.* Narrowing the family alone is
-  admission's job, so the sigil needs a resolution rule of its own. One
-  candidate: inside a quote, a sigiled name splices its code, while a lowercase
-  name stays a captured reference.
-- *Splicing one part or many — open.* A splice into a quote puts in one part or
-  a run of parts. Lisp spells the two `,x` and `,@xs`, Julia `$x` and
-  `$(xs...)`, and Rust's `quote!` adds a separator with `#(#xs),*`. Koan could
-  instead let the spliced code's kind decide, at the risk of a list of
-  expressions meant as one literal part. Taking a fragment out of a quote and
-  splicing one in are code's slice and splice, as they are a list's
-  ([slicing and splicing](slicing-and-splicing.md)).
-- *A code binder in a module's self-signature — open.* A slot at its code kind,
-  as a value binder is, or a manifest member, as a type binder is.
-- *Manifest code in a `SIG` — open.* Two textually identical `SIG`s are one
-  type, so manifest code that captures from its surroundings would make
-  identical text differ. Code equality follows bindings, so either manifest code
-  captures nothing, or a `SIG`'s identity compares its code by something other
-  than equality.
-- *Taking code apart — decided.* A quote born in a knot holds edges among its
-  bindings, and an edge means nothing outside its knot. A fragment taken out of
-  one resolves each edge through its source member, as a nested function
-  captures a fellow member as a value
-  ([closure bindings and edges](../../src/knot/README.md#closure-bindings-and-edges)).
-  So only a quote node is knot-aware; a fragment naming a member weighs its
-  whole knot, and a crossing copies that knot whole.
-- *Code equality — decided.* Code compares by structure and follows its
-  bindings as a bisimulation, as circular data does
-  ([equality](../../src/values/README.md#equality-and-rendering)). Ignoring
-  bindings would make two quotes that evaluate differently equal, and comparing
-  them by node identity would make a copy unequal to its source.
-- *A binding that holds a function — open.* A function compares `Incomparable`
-  ([equality and rendering](../../src/knot/README.md#equality-and-rendering)),
-  and every called name and keyworded use binds one, so a bisimulation reaching
-  a function makes nearly all code incomparable. The alternatives: accept that;
-  pair function nodes by body shape and bisimilar captures, giving functions a
-  structural equality inside code only; or compare a function binding by node
-  identity, so code that calls a function is unequal to its copy.
+  `parse`'s node constructor — the door the
+  [pairwise rewrite](../../src/scope/README.md#operator-groups) uses — and its
+  anonymous-slot naming gives a fresh name.
+- *A block is syntax — decided.* A block is two or more statements, so a
+  quote's type is fixed where it is written. Code that carries a built shape is
+  a different thing, and [code splicing](code-splicing.md) owns it.
+- *How the kinds are ordered — decided.* A smaller syntax lies under a larger
+  one wherever it can stand in its place: a literal or a symbol is an
+  expression of one part, and an expression is a block of one statement, so a
+  body slot typed `Block` takes `#(x)`. A block is no expression, since a slot
+  wanting one statement cannot take several.
+- *The binder-slot raw-part types — decided.* They stay and become code kinds:
+  whatever a program can write, it can hold as a value. `NameToken` is the
+  symbol, with the value and type names under it.
 
 ## Dependencies
+
+The sigiled code channel is [code names](code-names.md)'s; code equality
+through bindings is [eval-scope](eval-scope.md)'s; fragments, splicing and a
+run-time block's shape are [code splicing](code-splicing.md)'s.
 
 **Requires:** none.
 
@@ -148,3 +107,6 @@ without bound.
 
 - [Dispatch](dispatch.md) — `ATTR`'s symbol label, `EVAL`'s operand, and code-typed parameters.
 - [Quotes resolve where they are written](eval-scope.md) — the code representation a quote's bindings ride in.
+- [Code names](code-names.md) — the code kinds a sigiled name holds.
+- [Code splicing](code-splicing.md) — the code kinds a fragment and a splice are typed by.
+- [Dict defaults](dict-defaults.md) — `_` parses as a dict key.

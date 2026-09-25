@@ -70,10 +70,12 @@ elements cost O(kn).
 
 ## Dependencies
 
-Splicing into code is [code as values](code-values.md)'s.
+Splicing into code is [code splicing](code-splicing.md)'s.
 
 **Requires:**
 
 - [Dispatch](dispatch.md) — slicing and splicing are builtins, and a view is observable only through them.
 
-**Unblocks:** none — a leaf.
+**Unblocks:**
+
+- [Code splicing](code-splicing.md) — slice and splice as builtins, and views.

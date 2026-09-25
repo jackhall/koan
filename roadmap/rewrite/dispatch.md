@@ -15,7 +15,9 @@ has dispatched but not yet bound parks through name placeholders
 ([name-placeholders.md](../../old_design/execution/name-placeholders.md)). The
 rewrite's [scopes](../../src/scope/README.md) resolve value and type names
 only: nothing selects a callable for a keyworded expression, so no koan
-program runs on the rewritten stack.
+program runs on the rewritten stack. The shape builder records a binder only at
+a statement's root, so a binder nested in an expression,
+`PRINT (LET doubled = 42)`, declares nothing and is not refused.
 
 **Acceptance criteria.**
 
@@ -45,6 +47,8 @@ program runs on the rewritten stack.
   a seal its bound does not reveal stays wrapped.
 - A reference to a visible binder always reads it bound: the shape orders its
   binder first. A dispatch placeholder keys on the full bucket key.
+- A binder nested among an expression's eager parts, as in
+  `PRINT (LET doubled = 42)`, is refused where the shape is built.
 - A combined expression shape — `LET f = FN EXPR …`, `LET plus = OP …` — binds
   a lambda to its name and registers its expression shape under its bucket:
   [`callable_type`](../../src/elaborate/signature.rs) already hands a named
@@ -70,6 +74,9 @@ program runs on the rewritten stack.
   naming its constructor — or the call yields an error.
 - A registration whose bucket key holds no keyword, anywhere in it, is
   refused where its shape is built.
+- `ATTR p y`, and `LET which = #(y)` followed by `ATTR p (which)`, read the
+  same field, and `ATTR` over a `Str` label is a no-overload miss.
+- `$(n)` over a number is a no-overload miss, not a check of `EVAL`'s own.
 - An evaluation or a frame that cannot proceed yields a koan error value, every
   evaluation passes an error it receives through unchanged, and an uncaught one
   ends the program with `error: <message>`.
@@ -193,7 +200,6 @@ program runs on the rewritten stack.
 **Requires:**
 
 - [Code as values](code-values.md) — `ATTR`'s symbol label, `EVAL`'s operand, and code-typed parameters.
-- [Binders nested in expressions](nested-binders.md) — a nested binder is hoisted before dispatch meets it.
 - [Quotes resolve where they are written](eval-scope.md) — a quote's names and candidates resolve at the quote.
 
 **Unblocks:**
@@ -203,3 +209,4 @@ program runs on the rewritten stack.
 - [A compact type node table](compact-type-node-table.md) — its presize is calibrated on running programs.
 - [Control expression shapes and errors](control-and-errors.md) — arms run as blocks, and errors are values, here.
 - [Slicing and splicing](slicing-and-splicing.md) — slicing and splicing are builtins.
+- [Dict defaults](dict-defaults.md) — a dict lookup, which is what observes a default.
