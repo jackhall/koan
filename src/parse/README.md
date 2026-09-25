@@ -186,20 +186,21 @@ syntax fills it — a code kind, or a container of code kinds, for a part read a
 written, and a value type for one evaluated — and no slot keeps a part raw. A
 type expression and an in-place operand are the exceptions: they are bare, but
 their slot type is the value they denote, so the builder checks their spelling
-alone.
-[`SlotType::admits_written`](builtin_shapes.rs) admits a written part against
-those code types with no registry in hand, which is what the shape builder's
-static check asks.
+alone. The table only states those types: the shape builder's static check
+([scope](../scope/README.md#three-tiers)) admits a written part against them
+through [`admits_part`](../values/admission.rs) over the program's registry, the
+one admission rule, so no rule here restates a container's elements.
 
 A slot type rests in the table as a [`KType`](../type_lattice/handle.rs), whose
 handle is a `const` content digest, so an entry states its types with no registry
-in hand and its erasure and laws are computed at build time. The code containers
-a slot is typed by — `List(Name)`, `List(Declaration)`, `Dict(TypeCode, Block)`,
-`Dict(Name, Block)`, `Dict(Name, TypeCode)` — are pinned constants of the same
-kind. The two other
-compounds a builtin slot uses — a union of leaves, the empty record — rest as a
-small recipe instead, since no `const` computes a compound's digest; interning
-them is [`elaborate`](../elaborate/README.md#builtin-shapes)'s.
+in hand and its erasure and laws are computed at build time. Every compound a
+slot is typed by is a pinned constant of the same kind: the code containers
+`List(Name)`, `List(Declaration)`, `Dict(TypeCode, Block)`, `Dict(Name, Block)`
+and `Dict(Name, TypeCode)`, the union `TypeCode`, a `FOR ALL` group's union
+`List(Name) | Dict(Name, TypeCode)` (`KType::QUANTIFIER_CODE`), and the empty
+record. Each is stated once, in the registry's seeding, which every registry
+runs; a test asks a fresh registry for every slot type and return, so a table
+type no registry seeds fails there.
 
 **Two laws hold the table together at build time**, asserted over the spec as
 `const` and so a compile error rather than a test failure:
@@ -214,7 +215,7 @@ them is [`elaborate`](../elaborate/README.md#builtin-shapes)'s.
   guards (`MATCH … WITH`) and `Dict(Name, Block)` under labels
   (`MATCH … OVER`, `TRY`), a union's variants `Dict(Name, TypeCode)`, a member
   list `List(Declaration)`, `NEWTYPE`'s representation `TypeCode`, a `FOR ALL` group
-  `List(Name)` or `Dict(Name, TypeCode)`, and a binder name a code kind within
+  the union `List(Name) | Dict(Name, TypeCode)`, and a binder name a code kind within
   `Expression`; and an `Rhs` slot is `Any`, since a binding's right-hand side is
   classified where it lands.
 
@@ -287,9 +288,3 @@ The runtime is this module's consumer, and the runtime is behind the
 `cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))` — or an
 `unused_imports` twin on a crate-visible re-export — has no caller in a default
 build until the rewrite adopts it, and the marker comes off with the adoption.
-
-## Open work
-
-- [One statement of the fixed types' structure](../../roadmap/rewrite/fixed-type-structure.md)
-  — `SlotType::admits_written` restates `admits_part`'s rules for the pinned
-  code containers.

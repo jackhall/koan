@@ -109,9 +109,12 @@ variants, a `FOR ALL` group and a `SIG` body are a list or dict of quotes; a
 binder name, an in-place body, a type expression and a `TRY` or `CATCH` operand
 are bare; and each admits one of its slot's code types. A type expression's and
 an in-place operand's slot type is the value it denotes, so only their spelling
-is checked. One static check does it, against the table's own types, so no
-position list sits beside the table; the readers after it assume a well-formed
-part. A callable's body shape is built over its quote's body and keyed by the
+is checked. One static check does it, against the table's own types through
+[`admits_part`](../values/admission.rs) over the program's registry — the one
+rule a raw part is admitted by anywhere — so no position list and no second
+admission rule sits beside the table; the readers after it assume a well-formed
+part. A part no slot type admits is `Inadmissible`, which names the slot's type
+through the lattice's renderer. A callable's body shape is built over its quote's body and keyed by the
 quote part, so `Site::of_body` finds it as it finds any body. An `EXPR` head's
 names are read through its quote. An arm set is a dict of guard quotes to arm
 quotes, and each arm is a block shape binding `it`. A `MATCH … WITH` guard is a
@@ -555,7 +558,8 @@ is about:
 - **derived** — a declaration naming `!=`, which is always the opposite of `==`.
 
 Each renders with the names and positions a user needs, spelled through the
-symbol interner.
+symbol interner, and an inadmissible part's slot type through the type
+registry's renderer — `:(LIST OF Declaration)` for a signature's members.
 
 ## Memory
 

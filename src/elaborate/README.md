@@ -299,12 +299,12 @@ per overload, in overload order. A reserved bucket interns nothing — its slot
 types exist to keep its parts raw so its miss stays a miss, not to name a callable
 anything can reach.
 
-The door is where a slot type stops being a recipe. A leaf slot already rests in
-the table as its own `const` handle and passes straight through; the two compounds
-a builtin slot uses — a union of leaves, the empty record — are interned here,
-which is the whole reason the door exists, since no `const` computes a compound's
-digest. Nothing here reads a name, so nothing here fails: an entry is not a type
-expression, and a `NotAType` has no meaning over `static` data.
+Every slot type and return already rests in the table as a `const` handle the
+registry pre-seeds ([the type lattice](../type_lattice/README.md#the-boundary-and-why-it-is-a-test)),
+so the door interns no slot type: it assembles an overload's handles and keywords
+into one `ExpressionShape`. Nothing here reads a name, so nothing here fails: an
+entry is not a type expression, and a `NotAType` has no meaning over `static`
+data.
 
 Every handle the door interns erases to the entry's own bucket key, so the typed
 shape and the untyped bucket a node probes with cannot drift apart.

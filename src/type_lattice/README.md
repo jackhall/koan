@@ -27,11 +27,13 @@ property suite below is only possible because nothing here has a runtime.
 
 The edge runs the other way too, for constants alone: `parse`'s builtin shape
 table types each slot by a `KType`, and since a builtin leaf's handle is a `const`
-content digest the table states a type with no registry in hand. The few
-composites the table spells — the code containers `List(Name)`,
+content digest the table states a type with no registry in hand. Every
+composite the table spells — the code containers `List(Name)`,
 `List(Declaration)`, `Dict(TypeCode, Block)`, `Dict(Name, Block)` and
-`Dict(Name, TypeCode)`, and the union
-`TypeCode` — are pinned the same way, and every registry pre-seeds them.
+`Dict(Name, TypeCode)`, the unions `TypeCode` and `List(Name) | Dict(Name,
+TypeCode)` (`QUANTIFIER_CODE`, a `FOR ALL` group), and the empty record — is
+pinned the same way, and every registry pre-seeds them, so the table's static
+data names no type a registry must first intern.
 `KType::same_as` is the equality that comparison uses, handle against handle in
 `const` context, where the derived `PartialEq` cannot go. Nothing but the handles,
 that comparison and the code order's walk over them ([The code
