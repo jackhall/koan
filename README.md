@@ -272,7 +272,8 @@ src/
 ├── scope/
 │   ├── shape.rs          BodyShape — one body's own statements rewritten, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the form a callable body sits in, the body each binder births and each LET binder's right-hand side, in program storage; Position / Coordinate / Site and ShapeError
 │   ├── shape/build.rs    the one shape builder: the claims pre-scan and group frames, the rewrite pre-pass, the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies and arms, the components pass, and the units pass that orders a body's units
-│   ├── shape/build/rewrite.rs  the operator-run rewrite — fold left, fold right, unary and pairwise, the pairwise hoist into a synthesized block, and a != b as NOT (a == b), every node built through parse's own constructor
+│   ├── shape/build/rewrite.rs  the operator-run rewrite — fold left, fold right, unary and pairwise, the pairwise hoist into a synthesized block, and a != b as NOT (a == b), every node built through parse's own constructor and spanned at the source it was built from
+│   ├── shape/build/locate.rs   where an error found in a statement points — the part it is about, else the nearest spanned part or node — searched for on the error path only
 │   ├── groups.rs         operator groups — the four builtin groups, the position-blind claims pre-scan over all the code being built, the GroupFrame chain deciding where a declared group is visible, and the cover one symbol chains under
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
 │   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types

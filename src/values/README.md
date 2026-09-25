@@ -402,8 +402,9 @@ parsed node does. `from_ast` carries the parsed node's cache over whole — at
 slots one for one and writes no keyword. `respliced` keeps the key and reads
 only the head class again. A node the scheduler builds from scratch computes
 its cache from its own key and has no binder plan, because a binder is always
-parsed AST. A synthesized node takes its origin's file and the extent its own
-parts span.
+parsed AST. Every working expression carries a `SourceRef`: a working copy the
+AST node's own, and a synthesized node its origin's file and the extent its own
+parts span, or the origin's extent when none of them is spanned.
 
 A working expression is never a value and never crosses a cell: a continuation
 captures it at the cell's own lifetime. That is what keeps the AST splice-free —

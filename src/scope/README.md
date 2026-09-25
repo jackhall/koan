@@ -503,6 +503,11 @@ opposite of `==` by construction — which is also why a declaration naming it i
 builds, bar the synthesized hoists, must spell no builtin bucket: an operator
 whose chained node a later reader would walk as a form is `SpellsForm`.
 
+Every node and part the rewrite builds carries a span of the source it was
+built from, so an error in rewritten code points into the program as written: a
+chained node spans its operands, a keyword the operator it came from, a hoist
+its operand, and the synthesized block and its last statement the whole run.
+
 A statement holding no operator run is returned unchanged, keeping its own part
 addresses, so the shape of untouched code is the shape of the parse.
 
@@ -557,9 +562,23 @@ is about:
   bucket;
 - **derived** — a declaration naming `!=`, which is always the opposite of `==`.
 
-Each renders with the names and positions a user needs, spelled through the
-symbol interner, and an inadmissible part's slot type through the type
-registry's renderer — `:(LIST OF Declaration)` for a signature's members.
+Every error carries the [`SourceRef`](../source.rs) it was found at, and
+renders led by it as `path:line:col`. That is the part the error is about when
+the part carries a span — the unbound name, the operator, the inadmissible
+part — else the nearest spanned part or node around it, so an error about a
+list's item points at the list. A node-level error — an unsupported or
+malformed form, a group claim — points at the node. A rebind points at the
+second binding and names the first. A parameter is bound where the node
+declaring it is written: the `FN`, `EXPR` or `OP`, the `MATCH` or `TRY` whose
+arm binds `it`, the `USING` that surfaces it. An eager cycle is found at the
+statement of the member declared first, and an `EVAL` cycle at the `EVAL`'s
+statement. The walk records a part by its address, so a part's location is
+found by searching its statement, on the error path only
+([build/locate.rs](shape/build/locate.rs)): a shape that builds locates nothing.
+
+Each renders with the names a user needs spelled through the symbol interner,
+and an inadmissible part's slot type through the type registry's renderer —
+`:(LIST OF Declaration)` for a signature's members.
 
 ## Memory
 
@@ -585,8 +604,7 @@ components, nested shapes — rest in program storage and are `Copy`. An
 ## The import rule
 
 `scope` names `crate::values`, `crate::type_lattice`, `crate::symbols`,
-`crate::memory` and
-`crate::parse`, and no scheduler type. From `type_lattice` it names the
+`crate::memory`, `crate::parse` and `crate::source`, and no scheduler type. From `type_lattice` it names the
 operator-group vocabulary — `DeclaredGroup` and its `ReductionMode` — so a
 signature's operator channel and a body's held group are one record rather than
 two that must be kept in step. The scheduler reaches scopes through its

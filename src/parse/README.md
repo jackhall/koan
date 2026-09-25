@@ -82,6 +82,16 @@ type names as classified symbols; nested expressions; the two type sigils
 (`:(…)` and `:{…}`); list, dict and record literals; scalar literals; and
 `QuotedExpression`, the `#(…)` body captured at parse time as data.
 
+**Every node carries a source.** Code always comes from somewhere, so a node
+holds the [`SourceRef`](../source.rs) — extent and registered file — of the text
+it was lowered from, and every construction door takes one. A part's span stays
+optional: the parts a brace frame collects keep none, so the sub-expression
+wrapping a multi-part key or value is sourced at the whole brace group, and the
+one-part quote made for an element of a `#[…]` or `#{…}` literal at the whole
+literal. A node built from other code, such as the shape builder's
+[operator-run rewrite](../scope/README.md#the-four-rewrites), carries the source
+of the code it was built from.
+
 **Quoting is static syntax.** The parser folds the sigil and its group into one
 part, so there is no runtime quoting operation and the body never dispatches — a
 quote behaves as a literal everywhere.

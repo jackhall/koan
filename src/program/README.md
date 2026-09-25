@@ -65,7 +65,11 @@ does: it parses the source into program storage, lays the registry in the owner'
 bump, has
 `L` lay the builtin table down, builds the program's shape over that table,
 takes the root, and lays the record down. It returns a `Result`, and
-`LoadError` carries the parse error or the `ShapeError` that stopped it. The
+`LoadError` carries the parse error, or the `ShapeError` that stopped it beside
+its rendering. A shape error names symbols and types through the interner and
+registry that a refused builder drops with its owner, so it is rendered on the
+error branch, while they stand; a load that succeeds renders nothing. The
+`LoadError`'s `Display` is the whole diagnostic, led by `path:line:col`. The
 table comes before the shape because a shape resolves a builtin name to an
 index into it.
 
@@ -260,5 +264,7 @@ before the program ran, and a stalled substrate. The two-program test,
 
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the evaluator itself, and a
   runner refusal turned into a koan error value rather than a stalled drain.
+- [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
+  — a refused load kept, so its shape error renders on demand rather than once.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a `Call`
   birth copied by a tail hop, and a receipt run laid down anew per park.
