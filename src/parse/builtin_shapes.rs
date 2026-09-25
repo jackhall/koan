@@ -6,7 +6,7 @@
 //! marks [`reserved`](BuiltinShape::reserved) is refused to user registration for the same reason.
 //!
 //! [`BUILTIN_SHAPES`] is the one table, and an entry is a **typed** run: keywords in position, and
-//! at each slot a [`Role`] beside one [`SlotType`] per overload of the bucket, with one return per
+//! at each slot a [`Role`] beside one [`KType`] per overload of the bucket, with one return per
 //! overload. The bucket key a probe compares against is an erasure of that run — the elements with
 //! their types dropped ([`BuiltinShape::matches`]). A slot's role says how the shape builder reads
 //! its part ([`Role::reading`]): as a written quote, as bare syntax, as a container of quotes, or
@@ -31,7 +31,7 @@ pub mod binder;
 pub mod layout;
 pub mod role;
 
-use crate::parse::ast::{ExpressionPart, KeyElement};
+use crate::parse::ast::KeyElement;
 use crate::parse::builtin_shapes::binder::{
     BinderFacts, BinderSurface, fn_def_binder_bucket, identifier_part_binder_name,
     op_def_binder_bucket, type_decl_binder_name, type_part_binder_name,
@@ -124,72 +124,6 @@ pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
     transparent: crate::static_name!(KeywordSymbol, ":!"),
 };
 
-/// A slot's declared type, as it rests in a `static`.
-///
-/// A leaf is its own `const` handle. A compound's handle is a digest over its members, which no
-/// `const` computes, so the two compounds a builtin slot uses rest as the recipe the `elaborate`
-/// door interns.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SlotType {
-    /// A type whose handle is a `const`.
-    Leaf(KType),
-    /// The canonical union of these leaves.
-    Union(&'static [KType]),
-    /// The empty record type.
-    EmptyRecord,
-}
-
-impl SlotType {
-    /// Whether `part`, written where this slot is read as written, admits the slot's type. Needs
-    /// no registry: every such slot is typed by a code kind, [`KType::TYPE_CODE`] or a pinned
-    /// container of code kinds ([`roles_agree_with_code_types`]), each answered by its shape.
-    pub fn admits_written(self, part: &ExpressionPart<'_>) -> bool {
-        match self {
-            SlotType::Leaf(slot) => admits_code(slot, part),
-            SlotType::Union(members) => members.iter().any(|member| admits_code(*member, part)),
-            SlotType::EmptyRecord => false,
-        }
-    }
-}
-
-/// Whether `part` is written as code of type `slot`: a code kind by the code order, and a pinned
-/// container by its elements, a `_` key admitting any key type.
-fn admits_code(slot: KType, part: &ExpressionPart<'_>) -> bool {
-    let each = |items: &[ExpressionPart<'_>], element: KType| {
-        items.iter().all(|item| admits_code(element, item))
-    };
-    let entries = |pairs: &[(ExpressionPart<'_>, ExpressionPart<'_>)], key: KType, value: KType| {
-        pairs.iter().all(|(guard, held)| {
-            (guard.is_wildcard() || admits_code(key, guard)) && admits_code(value, held)
-        })
-    };
-    match *part {
-        ExpressionPart::ListLiteral(items) if slot == KType::LIST_OF_NAME => {
-            each(items, KType::NAME)
-        }
-        ExpressionPart::ListLiteral(items) if slot == KType::LIST_OF_DECLARATION => {
-            each(items, KType::DECLARATION)
-        }
-        ExpressionPart::DictLiteral(pairs) if slot == KType::DICT_NAME_BLOCK => {
-            entries(pairs, KType::NAME, KType::BLOCK)
-        }
-        ExpressionPart::DictLiteral(pairs) if slot == KType::DICT_TYPE_CODE_BLOCK => {
-            entries(pairs, KType::TYPE_CODE, KType::BLOCK)
-        }
-        ExpressionPart::DictLiteral(pairs) if slot == KType::DICT_NAME_TYPE_CODE => {
-            entries(pairs, KType::NAME, KType::TYPE_CODE)
-        }
-        _ if slot == KType::TYPE_CODE => [
-            KType::TYPE_NAME_TOKEN,
-            KType::SIGILED_TYPE_EXPR,
-            KType::RECORD_TYPE,
-        ]
-        .into_iter()
-        .any(|kind| admits_code(kind, part)),
-        _ => part.code_kind().is_some_and(|kind| kind.within_code(slot)),
-    }
-}
-
 /// One position of a builtin bucket: a fixed keyword token, or a slot under a role typed once per
 /// overload. [`BUILTIN_SHAPES`] is `static`, so a keyword rests as one of the [`KEYWORDS`] names and
 /// matching compares its memoized symbol against the symbol a stored key carries — a table probe is
@@ -200,7 +134,7 @@ pub enum ShapeElement {
     /// under one keyword run and cannot disagree about the key they erase to.
     Slot {
         role: Role,
-        types: &'static [SlotType],
+        types: &'static [KType],
     },
 }
 
@@ -224,7 +158,7 @@ pub struct BuiltinShape {
     /// per overload.
     pub elements: &'static [ShapeElement],
     /// `returns[n]` is overload `n`'s return; its length is the bucket's overload count.
-    pub returns: &'static [SlotType],
+    pub returns: &'static [KType],
     /// What the shape installs when submitted as a statement. `None` for a shape that binds nothing.
     pub binder: Option<BinderFacts>,
     /// True when nothing registers under this key: the shape is a diagnosable mistake, and the
@@ -297,13 +231,12 @@ const fn overload_counts_agree(table: &[BuiltinShape]) -> bool {
     true
 }
 
-/// Whether every overload types a slot as the one leaf `want`.
-const fn every_overload_is(types: &[SlotType], want: KType) -> bool {
+/// Whether every overload types a slot as `want`.
+const fn every_overload_is(types: &[KType], want: KType) -> bool {
     let mut overload = 0;
     while overload < types.len() {
-        match types[overload] {
-            SlotType::Leaf(leaf) if leaf.same_as(want) => {}
-            _ => return false,
+        if !types[overload].same_as(want) {
+            return false;
         }
         overload += 1;
     }
@@ -311,28 +244,11 @@ const fn every_overload_is(types: &[SlotType], want: KType) -> bool {
 }
 
 /// Whether every overload types a slot as a code kind at or under `kind`.
-const fn every_overload_within(types: &[SlotType], kind: KType) -> bool {
+const fn every_overload_within(types: &[KType], kind: KType) -> bool {
     let mut overload = 0;
     while overload < types.len() {
-        match types[overload] {
-            SlotType::Leaf(leaf) if leaf.within_code(kind) => {}
-            _ => return false,
-        }
-        overload += 1;
-    }
-    true
-}
-
-/// Whether a `FOR ALL` slot takes exactly its two spellings: a list of names, or a dict of names to
-/// the code of their bounds.
-const fn is_quantifier_type(types: &[SlotType]) -> bool {
-    let mut overload = 0;
-    while overload < types.len() {
-        match types[overload] {
-            SlotType::Union(&[list, dict])
-                if list.same_as(KType::LIST_OF_NAME)
-                    && dict.same_as(KType::DICT_NAME_TYPE_CODE) => {}
-            _ => return false,
+        if !types[overload].within_code(kind) {
+            return false;
         }
         overload += 1;
     }
@@ -373,7 +289,7 @@ const fn roles_agree_with_code_types(table: &[BuiltinShape]) -> bool {
                     Role::Definition(DefinitionKind::Plain) => {
                         every_overload_is(types, KType::TYPE_CODE)
                     }
-                    Role::Quantifiers => is_quantifier_type(types),
+                    Role::Quantifiers => every_overload_is(types, KType::QUANTIFIER_CODE),
                     Role::Name => every_overload_within(types, KType::EXPRESSION),
                     Role::Rhs => every_overload_is(types, KType::ANY),
                     _ => true,
@@ -488,7 +404,7 @@ pub fn builtin_shape_for(
 use ShapeElement::Keyword as Kw;
 
 /// A slot under `role`, typed once per overload of its bucket.
-const fn slot(role: Role, types: &'static [SlotType]) -> ShapeElement {
+const fn slot(role: Role, types: &'static [KType]) -> ShapeElement {
     ShapeElement::Slot { role, types }
 }
 
@@ -497,32 +413,32 @@ use Role::{
     Signature, TypeExpression as Te, Unsupported,
 };
 
-// The slot types the table spells, each a `const` handle or a recipe over them. Their names are the
-// lattice's own, so an entry reads as the types its overloads declare.
-const ANY: SlotType = SlotType::Leaf(KType::ANY);
-const NEVER: SlotType = SlotType::Leaf(KType::NEVER);
-const IDENTIFIER: SlotType = SlotType::Leaf(KType::IDENTIFIER);
-const TYPE_NAME: SlotType = SlotType::Leaf(KType::TYPE_NAME_TOKEN);
-const NAME: SlotType = SlotType::Leaf(KType::NAME);
-const KEYWORD: SlotType = SlotType::Leaf(KType::KEYWORD);
-const EXPRESSION: SlotType = SlotType::Leaf(KType::EXPRESSION);
-const BLOCK: SlotType = SlotType::Leaf(KType::BLOCK);
-const ANY_CODE: SlotType = SlotType::Leaf(KType::ANY_CODE);
+// The slot types the table spells, each a `const` handle named as the lattice names it, so an
+// entry reads as the types its overloads declare.
+const ANY: KType = KType::ANY;
+const NEVER: KType = KType::NEVER;
+const IDENTIFIER: KType = KType::IDENTIFIER;
+const TYPE_NAME: KType = KType::TYPE_NAME_TOKEN;
+const NAME: KType = KType::NAME;
+const KEYWORD: KType = KType::KEYWORD;
+const EXPRESSION: KType = KType::EXPRESSION;
+const BLOCK: KType = KType::BLOCK;
+const ANY_CODE: KType = KType::ANY_CODE;
 /// The code a type is written as: a type name, a `:(…)` or a `:{…}`.
-const TYPE_CODE: SlotType = SlotType::Leaf(KType::TYPE_CODE);
-const LIST_OF_NAME: SlotType = SlotType::Leaf(KType::LIST_OF_NAME);
-const LIST_OF_DECLARATION: SlotType = SlotType::Leaf(KType::LIST_OF_DECLARATION);
-const DICT_NAME_BLOCK: SlotType = SlotType::Leaf(KType::DICT_NAME_BLOCK);
-const DICT_TYPE_CODE_BLOCK: SlotType = SlotType::Leaf(KType::DICT_TYPE_CODE_BLOCK);
-const DICT_NAME_TYPE_CODE: SlotType = SlotType::Leaf(KType::DICT_NAME_TYPE_CODE);
+const TYPE_CODE: KType = KType::TYPE_CODE;
+const LIST_OF_NAME: KType = KType::LIST_OF_NAME;
+const LIST_OF_DECLARATION: KType = KType::LIST_OF_DECLARATION;
+const DICT_NAME_BLOCK: KType = KType::DICT_NAME_BLOCK;
+const DICT_TYPE_CODE_BLOCK: KType = KType::DICT_TYPE_CODE_BLOCK;
+const DICT_NAME_TYPE_CODE: KType = KType::DICT_NAME_TYPE_CODE;
 /// A `FOR ALL` group: a list of names, or a dict of names to the code of their bounds.
-const QUANTIFIERS: SlotType = SlotType::Union(&[KType::LIST_OF_NAME, KType::DICT_NAME_TYPE_CODE]);
-const PROPER_TYPE: SlotType = SlotType::Leaf(KType::PROPER_TYPE);
-const SIGNATURE_KIND: SlotType = SlotType::Leaf(KType::SIGNATURE_KIND);
-const ANY_TYPE: SlotType = SlotType::Leaf(KType::ANY_TYPE);
+const QUANTIFIER_CODE: KType = KType::QUANTIFIER_CODE;
+const PROPER_TYPE: KType = KType::PROPER_TYPE;
+const SIGNATURE_KIND: KType = KType::SIGNATURE_KIND;
+const ANY_TYPE: KType = KType::ANY_TYPE;
 /// The empty signature: the type a module value is declared at, `:Module`'s own handle.
-const MODULE: SlotType = SlotType::Leaf(KType::EMPTY_SIGNATURE);
-const EMPTY_RECORD: SlotType = SlotType::EmptyRecord;
+const MODULE: KType = KType::EMPTY_SIGNATURE;
+const EMPTY_RECORD: KType = KType::EMPTY_RECORD;
 
 /// The single source of truth for the builtin shapes. One entry per distinct bucket key, in
 /// [`BuiltinShapeId`] order; the keys are pinned against the live builtin registration table by the
@@ -841,7 +757,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.fn_),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[QUANTIFIERS]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
             slot(Signature, &[PROPER_TYPE]),
             Kw(&KEYWORDS.arrow),
             slot(Te, &[ANY_TYPE]),
@@ -866,7 +782,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.fn_),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[QUANTIFIERS]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
             slot(Signature, &[PROPER_TYPE]),
             Kw(&KEYWORDS.arrow),
             slot(Te, &[ANY_TYPE]),
@@ -941,7 +857,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.expr),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[QUANTIFIERS]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
             slot(Head, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
             slot(Te, &[ANY_TYPE]),
@@ -967,7 +883,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.expr),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[QUANTIFIERS]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
             slot(Head, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
             slot(Te, &[ANY_TYPE]),
@@ -1014,7 +930,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.expr),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[QUANTIFIERS]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
             slot(Head, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
             slot(Te, &[ANY_TYPE]),

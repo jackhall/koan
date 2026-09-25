@@ -132,6 +132,16 @@ fn constants_match_freshly_interned_nodes() {
             KType::DICT_NAME_TYPE_CODE,
             types.dict(KType::NAME, type_code),
         ),
+        (
+            "QUANTIFIER_CODE",
+            KType::QUANTIFIER_CODE,
+            types.union_of(region, &[KType::LIST_OF_NAME, KType::DICT_NAME_TYPE_CODE]),
+        ),
+        (
+            "EMPTY_RECORD",
+            KType::EMPTY_RECORD,
+            types.record(region, &[]),
+        ),
     ];
     for (name, pinned, minted) in composites {
         assert_eq!(

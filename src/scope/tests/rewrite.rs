@@ -26,7 +26,13 @@ fn shaped<R>(
         let lines = fixture.parse(source);
         fixture.in_cell(|writer| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch());
+            let shape = BodyShape::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.scratch(),
+            );
             check(fixture, shape)
         })
     })
@@ -364,8 +370,14 @@ fn evaluated<R>(
         let quote = quote.reference();
         fixture.in_cell(|writer| {
             let table: &Builtins<'_, '_, Probe> = builtins(fixture, writer);
-            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
-                .expect("the program shapes");
+            let shape = BodyShape::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.scratch(),
+            )
+            .expect("the program shapes");
             let program: &Activation<'_, '_, ProbeFamily> =
                 resident(writer, Activation::of_program(writer, shape, table));
             let (site, at) = if inside_using {
@@ -378,7 +390,14 @@ fn evaluated<R>(
             };
             check(
                 fixture,
-                BodyShape::for_eval(fixture.program, quote, site, at, fixture.scratch()),
+                BodyShape::for_eval(
+                    fixture.program,
+                    quote,
+                    site,
+                    at,
+                    fixture.types,
+                    fixture.scratch(),
+                ),
             )
         })
     })

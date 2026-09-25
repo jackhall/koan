@@ -258,6 +258,11 @@ impl<'run> TypeRegistry<'run> {
         self.dict(KType::NAME, KType::BLOCK);
         self.dict(KType::NAME, type_code);
         self.dict(type_code, KType::BLOCK);
+        self.union_of(
+            self.bump,
+            &[KType::LIST_OF_NAME, KType::DICT_NAME_TYPE_CODE],
+        );
+        self.record(self.bump, &[]);
     }
 
     /// `test`-only: how many verdicts were recorded, and how many of those evicted another.

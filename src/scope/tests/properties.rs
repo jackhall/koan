@@ -404,14 +404,20 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
         let lines = fixture.parse(&rendering.source);
         fixture.in_cell(|writer| {
             let table = builtins(fixture, writer);
-            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "`{}` shapes: {}",
-                        rendering.source,
-                        error.display(fixture.symbols)
-                    )
-                });
+            let shape = BodyShape::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.scratch(),
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "`{}` shapes: {}",
+                    rendering.source,
+                    error.display(fixture.symbols, fixture.types)
+                )
+            });
             let nodes: Vec<_> = lines.iter().collect();
             let located = locate(&rendering, Some(shape), &nodes);
             test(ShapedPlan {
@@ -609,7 +615,7 @@ proptest! {
             fixture.in_cell(|writer| {
                 let table: &Builtins = builtins(fixture, writer);
                 let source = &rendering.source;
-                let error = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
+                let error = BodyShape::of_program(fixture.program, &lines, table, fixture.types, fixture.scratch())
                     .err()
                     .unwrap_or_else(|| panic!("`{source}` is refused with {refusal:?}"));
                 let symbols = fixture.symbols;
@@ -738,7 +744,7 @@ proptest! {
             fixture.in_cell(|writer| {
                 let table = builtins(fixture, writer);
                 let program_shape =
-                    BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
+                    BodyShape::of_program(fixture.program, &lines, table, fixture.types, fixture.scratch())
                         .expect("a planned program shapes");
                 let nodes: Vec<_> = lines.iter().collect();
                 let located = locate(&rendering, Some(program_shape), &nodes);
@@ -766,12 +772,12 @@ proptest! {
                 }
                 let site = site.expect("the chain holds the program");
                 let position = Position::statement(at as usize);
-                let shape = BodyShape::for_eval(fixture.program, quote, site, position, fixture.scratch())
+                let shape = BodyShape::for_eval(fixture.program, quote, site, position, fixture.types, fixture.scratch())
                     .unwrap_or_else(|error| panic!(
                         "`{}` over `{}` shapes: {}",
                         quoted.source,
                         rendering.source,
-                        error.display(fixture.symbols),
+                        error.display(fixture.symbols, fixture.types),
                     ));
                 let located = locate(&quoted, Some(shape), &[quote]);
                 check(fixture.symbols, &quoted, &located, &shapes);

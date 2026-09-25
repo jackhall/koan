@@ -66,7 +66,7 @@ impl KType {
     // --- Fixed handles ---
     //
     // The twenty leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>`, the code
-    // composites and the empty signature name content every registry pre-seeds
+    // composites, the empty record and the empty signature name content every registry pre-seeds
     // (`TypeRegistry::in_region`), so their digests are known at compile time and lowering a
     // builtin type name needs no registry in hand. The literals below are the digest recipe's
     // output; `constants_match_freshly_interned_nodes` in the golden module recomputes each one
@@ -136,6 +136,11 @@ impl KType {
         KType(TypeDigest(0xf1066a0f_f0fe9f2f_9ba1351a_fb9f479f));
     /// `Dict<Name, TypeCode>` — a union's variants.
     pub const DICT_NAME_TYPE_CODE: KType = KType(TypeDigest(0x34fd5145_6f54557d_3aeab867_9093541d));
+    /// `List<Name> | Dict<Name, TypeCode>` — the code a `FOR ALL` group is written as: a list of
+    /// names, or a dict of names to the code of their bounds.
+    pub const QUANTIFIER_CODE: KType = KType(TypeDigest(0xf2388522_88d6156a_8a8a6e23_acdbbf30));
+    /// The empty record type — `FROM`'s argument and return.
+    pub const EMPTY_RECORD: KType = KType(TypeDigest(0xe7e914e1_0d893b27_988dbbdf_9ae2e427));
 
     /// The type-accepting slot admitting `kind` — one of the pre-seeded `OfKind` handles.
     pub const fn of_kind(kind: KKind) -> KType {

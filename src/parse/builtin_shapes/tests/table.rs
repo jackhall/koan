@@ -1,11 +1,13 @@
 //! BuiltinShape-table shape: the invariants every reader of [`BUILTIN_SHAPES`] depends on.
 
+use crate::memory::Bump;
 use crate::parse::builtin_shapes::binder::{BinderFacts, BinderSurface};
 use crate::parse::builtin_shapes::role::Reading;
 use crate::parse::builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, render_key,
 };
 use crate::parse::{DispatchShape, KeyElement, PartClass, classify_dispatch_shape};
+use crate::type_lattice::TypeRegistry;
 
 /// Every form the table gives binder facts, with those facts beside it.
 fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
@@ -278,5 +280,29 @@ fn every_binder_form_key_classifies_keyworded() {
             "form key {:?} does not classify Keyworded",
             render_key(form.elements)
         );
+    }
+}
+
+/// Every slot type and return the table states names a node every registry pre-seeds, so a
+/// container-typed slot whose handle no registry seeds fails here, not at every program that
+/// writes it.
+#[test]
+fn every_slot_type_names_a_seeded_node() {
+    let region = Bump::new();
+    let types = TypeRegistry::in_region(&region);
+    for shape in BUILTIN_SHAPES {
+        for element in shape.elements {
+            if let ShapeElement::Slot {
+                types: slot_types, ..
+            } = element
+            {
+                for handle in *slot_types {
+                    let _ = types.node(*handle);
+                }
+            }
+        }
+        for handle in shape.returns {
+            let _ = types.node(*handle);
+        }
     }
 }

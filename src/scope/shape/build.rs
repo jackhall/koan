@@ -25,9 +25,9 @@ use crate::parse::builtin_shapes::binder::bounded;
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, StaticName, TypeSymbol, ValueSymbol};
-use crate::values::{Knotted, KnottedFamily};
+use crate::values::{Knotted, KnottedFamily, admits_part};
 
-use crate::type_lattice::DeclaredGroup;
+use crate::type_lattice::{DeclaredGroup, TypeRegistry};
 
 use super::super::activation::ActivationView;
 use super::super::builtins::Builtins;
@@ -73,6 +73,7 @@ pub(super) fn program<'graph, X: Knotted>(
     brand: ProgramBrand<'graph>,
     statements: &[KExpression<'graph>],
     builtins: &Builtins<'_, '_, X>,
+    types: &TypeRegistry<'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
     let lookup = |name| builtins.lookup(name);
@@ -80,7 +81,7 @@ pub(super) fn program<'graph, X: Knotted>(
     // how a symbol chains never depends on where its declarations sit.
     let claims = groups::claims(brand, scratch, statements.iter(), None)?;
     let frame = resident(brand.writer(), GroupFrame::new(&[], None, claims));
-    let mut builder = Builder::new(brand, scratch, &lookup, None, claims, frame);
+    let mut builder = Builder::new(brand, scratch, &lookup, types, None, claims, frame);
     let statements = statements
         .iter()
         .enumerate()
@@ -102,6 +103,7 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
     body: &KExpression<'graph>,
     site: &ActivationView<'graph, '_, XF>,
     at: Position,
+    types: &TypeRegistry<'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
     let lookup = |name| site.builtins().lookup(name);
@@ -120,7 +122,15 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
         brand.writer(),
         GroupFrame::new(&[], Some(enclosing), claims),
     );
-    let mut builder = Builder::new(brand, scratch, &lookup, Some((&outer, at)), claims, frame);
+    let mut builder = Builder::new(
+        brand,
+        scratch,
+        &lookup,
+        types,
+        Some((&outer, at)),
+        claims,
+        frame,
+    );
     let draft = builder.draft(
         ShapeKind::Block,
         Entry::PLAIN,
@@ -134,7 +144,8 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
 
 /// The static check of a builtin node, before any part is walked: each part its role reads as
 /// written — as a quote, as bare syntax or as a container of quotes — is written as the reading
-/// says, and admits one of its slot's types — a type expression's and an in-place operand's type is
+/// says, and admits one of its slot's types by [`admits_part`], the one admission rule — a type
+/// expression's and an in-place operand's type is
 /// the value it denotes, so only their spelling is checked. A binder name is a bare name, or a bare
 /// declarator group for `TYPE`, `UNION` and `NEWTYPE`. Code written where a quote or a container of
 /// quotes is wanted is `Unquoted`, a quote where bare syntax is wanted `Malformed`, and a part
@@ -143,6 +154,7 @@ fn written_as_read(
     form: &'static BuiltinShape,
     statement: u32,
     node: &KExpression<'_>,
+    types: &TypeRegistry<'_>,
 ) -> Result<(), ShapeError> {
     let at = Position::statement(statement as usize);
     let declarator = matches!(
@@ -153,7 +165,11 @@ fn written_as_read(
     );
     let quoted = |part: &ExpressionPart<'_>| matches!(part, ExpressionPart::QuotedExpression(_));
     for (index, (element, part)) in form.elements.iter().zip(node.parts).enumerate() {
-        let ShapeElement::Slot { role, types } = element else {
+        let ShapeElement::Slot {
+            role,
+            types: slot_types,
+        } = element
+        else {
             continue;
         };
         let reading = role.reading();
@@ -183,7 +199,7 @@ fn written_as_read(
         let inadmissible = ShapeError::Inadmissible {
             form: form.id,
             index,
-            slot: types[0],
+            slot: slot_types[0],
             at,
         };
         if !written {
@@ -200,7 +216,11 @@ fn written_as_read(
         // A type expression and an in-place operand are typed by the value they denote, so only
         // their spelling is checked here.
         let typed_by_code = !matches!(role, Role::TypeExpression | Role::InPlace);
-        if typed_by_code && !types.iter().any(|slot| slot.admits_written(part)) {
+        if typed_by_code
+            && !slot_types
+                .iter()
+                .any(|slot| admits_part(*slot, part, types))
+        {
             return Err(inadmissible);
         }
     }
@@ -405,6 +425,8 @@ struct Builder<'graph, 'x, 'e> {
     brand: ProgramBrand<'graph>,
     scratch: BumpAllocator<'x>,
     builtins: Lookup<'e>,
+    /// The program's type registry, which the static check admits written parts through.
+    types: &'e TypeRegistry<'graph>,
     /// For an `EVAL` body: the by-name resolver over the site's chain, and `EVAL`'s position.
     outer: Option<(Outer<'e>, Position)>,
     /// Every claim the code being built makes over an operator symbol, collected once up front.
@@ -431,6 +453,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         brand: ProgramBrand<'graph>,
         scratch: BumpAllocator<'x>,
         builtins: Lookup<'e>,
+        types: &'e TypeRegistry<'graph>,
         outer: Option<(Outer<'e>, Position)>,
         claims: &'graph Claims<'graph>,
         frame: &'graph GroupFrame<'graph>,
@@ -439,6 +462,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             brand,
             scratch,
             builtins,
+            types,
             outer,
             claims,
             frame,
@@ -647,7 +671,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             node.parts.len(),
             "a builtin shape's parts match its run"
         );
-        written_as_read(form, statement, node)?;
+        written_as_read(form, statement, node, self.types)?;
         // A binary operator declaring a result type of its own is admitted only where its symbol
         // chains pairwise: a fold hands its own result back as the next operand.
         if matches!(
@@ -959,7 +983,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 at: Position::statement(statement as usize),
             });
         }
-        written_as_read(form, statement, node)?;
+        written_as_read(form, statement, node, self.types)?;
         let mut parameters = BumpVec::new_in(self.scratch);
         for (role, part) in form.roles().zip(node.parts) {
             match role {

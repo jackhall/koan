@@ -376,8 +376,8 @@ proptest! {
                 .enter(home, |context| {
                     let writer = context.writer();
                     let builtins = fixture.builtins(writer);
-                    let shape = crate::scope::BodyShape::of_program(fixture.program, &lines, builtins, fixture.scratch())
-                        .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(fixture.symbols)));
+                    let shape = crate::scope::BodyShape::of_program(fixture.program, &lines, builtins, fixture.types, fixture.scratch())
+                        .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(fixture.symbols, fixture.types)));
                     let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
                     let mut tied = Vec::new();
                     run(fixture, writer, activation, &mut 0.0, &mut tied);

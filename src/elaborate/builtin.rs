@@ -1,10 +1,10 @@
 //! A builtin shape's overloads, interned as lattice handles, and the builtin `Result` family.
 //!
 //! [`BUILTIN_SHAPES`](crate::parse::builtin_shapes::BUILTIN_SHAPES) states each bucket's overloads
-//! as `static` data — a [`SlotType`] per slot per overload, and one return apiece — because the
-//! parser probes the table before any registry exists. This is the one door that turns such an
-//! entry into [`ExpressionShape`](crate::type_lattice::TypeNode::ExpressionShape) handles: one per
-//! overload, in overload order, each erasing to the entry's own bucket key.
+//! as `static` data — a `const` [`KType`] per slot per overload, and one return apiece — because
+//! the parser probes the table before any registry exists. This is the one door that assembles
+//! such an entry's handles into [`ExpressionShape`](crate::type_lattice::TypeNode::ExpressionShape)
+//! handles: one per overload, in overload order, each erasing to the entry's own bucket key.
 //!
 //! [`builtin_result`] seals the union its own declaration would, so the builtin and a declared
 //! `Result` are one handle.
@@ -12,7 +12,7 @@
 //! Nothing here reads a name, so nothing here fails.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::builtin_shapes::{BuiltinShape, ShapeElement, SlotType};
+use crate::parse::builtin_shapes::{BuiltinShape, ShapeElement};
 use crate::symbols::{StaticName, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
@@ -36,24 +36,14 @@ pub fn builtin_shape_types<'x>(
             elements.push(match element {
                 ShapeElement::Keyword(name) => DispatchTokenElement::Keyword(name.symbol()),
                 ShapeElement::Slot { types: slot, .. } => {
-                    DispatchTokenElement::Slot(slot_type(slot[overload], types, scratch))
+                    DispatchTokenElement::Slot(slot[overload])
                 }
             });
         }
-        let ret = slot_type(shape.returns[overload], types, scratch);
+        let ret = shape.returns[overload];
         handles.push(types.shape_type(scratch, &[], &elements, ret).handle);
     }
     handles.leak()
-}
-
-/// One static slot type as a handle: a leaf is already one, and the two compounds are interned
-/// here, which is the whole reason this door exists.
-fn slot_type(spec: SlotType, types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>) -> KType {
-    match spec {
-        SlotType::Leaf(handle) => handle,
-        SlotType::Union(members) => types.union_of(scratch, members),
-        SlotType::EmptyRecord => types.record(scratch, &[]),
-    }
 }
 
 static RESULT: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Result");

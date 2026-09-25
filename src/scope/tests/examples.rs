@@ -28,7 +28,13 @@ fn shaped<R>(
         let lines = fixture.parse(source);
         fixture.in_cell(|writer| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch());
+            let shape = BodyShape::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.scratch(),
+            );
             check(fixture, &lines, shape)
         })
     })
@@ -297,11 +303,19 @@ fn each_error_names_what_a_user_needs() {
             "MATCH 1 -> :Number WITH (Number (1))",
             "`Match` in statement 1 takes its arms as a dict of quotes: write #{…}",
         ),
+        (
+            "SIG Sg = #[(PRINT 1)]",
+            "`Sig` in statement 1 takes :(LIST OF Declaration) as its part 3",
+        ),
+        (
+            "UNION Empty = #{}",
+            "`Union` in statement 1 takes :(MAP Name -> :(",
+        ),
     ];
     for (source, message) in cases {
         shaped(source, |fixture, _, shape| {
             let error = shape.err().expect("the program is refused");
-            let rendered = error.display(fixture.symbols).to_string();
+            let rendered = error.display(fixture.symbols, fixture.types).to_string();
             assert!(
                 rendered.starts_with(message),
                 "`{source}` rendered `{rendered}`"
@@ -547,7 +561,10 @@ fn a_signature_body_declares_its_own_members() {
     ] {
         shaped(source, |fixture, _, shape| {
             let shape = shape.unwrap_or_else(|error| {
-                panic!("`{source}` shapes: {}", error.display(fixture.symbols))
+                panic!(
+                    "`{source}` shapes: {}",
+                    error.display(fixture.symbols, fixture.types)
+                )
             });
             assert_eq!(shape.slots(), 1, "`{source}` declares the signature alone");
             for name in own {
@@ -577,7 +594,10 @@ fn a_parameterized_union_declares_its_parameters() {
     ] {
         shaped(source, |fixture, _, shape| {
             let shape = shape.unwrap_or_else(|error| {
-                panic!("`{source}` shapes: {}", error.display(fixture.symbols))
+                panic!(
+                    "`{source}` shapes: {}",
+                    error.display(fixture.symbols, fixture.types)
+                )
             });
             assert_eq!(shape.slots(), 1, "`{source}` declares the union alone");
             for name in own {
@@ -717,7 +737,10 @@ fn a_using_body_takes_its_operands_surfaced_names_as_parameters() {
     for (source, expected) in cases {
         shaped(source, |fixture, _, shape| {
             let shape = shape.unwrap_or_else(|error| {
-                panic!("`{source}` shapes: {}", error.display(fixture.symbols))
+                panic!(
+                    "`{source}` shapes: {}",
+                    error.display(fixture.symbols, fixture.types)
+                )
             });
             let mut names = parameters_of(fixture, only_block(shape));
             let mut want: Vec<String> = expected.iter().map(|name| name.to_string()).collect();

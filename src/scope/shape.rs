@@ -20,11 +20,11 @@
 use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
+use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
-use crate::parse::builtin_shapes::{BuiltinShapeId, SlotType};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
-use crate::type_lattice::{DeclaredGroup, KType};
+use crate::type_lattice::{DeclaredGroup, KType, TypeRegistry, display_name};
 use crate::values::{Knotted, KnottedFamily};
 
 use super::activation::ActivationView;
@@ -287,9 +287,10 @@ impl<'graph> BodyShape<'graph> {
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
         builtins: &Builtins<'_, '_, X>,
+        types: &TypeRegistry<'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
-        build::program(brand, statements, builtins, scratch)
+        build::program(brand, statements, builtins, types, scratch)
     }
 
     /// The block shape of `body` evaluated by an `EVAL` reading at `at` in `site`: every free name
@@ -299,9 +300,10 @@ impl<'graph> BodyShape<'graph> {
         body: &KExpression<'graph>,
         site: &ActivationView<'graph, '_, XF>,
         at: Position,
+        types: &TypeRegistry<'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
-        build::eval(brand, body, site, at, scratch)
+        build::eval(brand, body, site, at, types, scratch)
     }
 
     pub fn kind(&self) -> ShapeKind {
@@ -552,7 +554,7 @@ pub enum ShapeError {
     Inadmissible {
         form: BuiltinShapeId,
         index: usize,
-        slot: SlotType,
+        slot: KType,
         at: Position,
     },
     /// A value dict written with a `_` key, whose default has no reading yet.
@@ -601,47 +603,30 @@ impl QuotedPart {
     }
 }
 
-/// A read-as-written slot's type, as a diagnostic names it.
-fn slot_spelling(slot: SlotType) -> &'static str {
-    let SlotType::Leaf(slot) = slot else {
-        return "a list or dict of names";
-    };
-    [
-        (KType::BLOCK, "a block"),
-        (KType::EXPRESSION, "an expression"),
-        (KType::NAME, "a name"),
-        (KType::KEYWORD, "a keyword"),
-        (KType::IDENTIFIER, "a value name"),
-        (KType::TYPE_NAME_TOKEN, "a type name"),
-        (KType::TYPE_CODE, "a type"),
-        (KType::LIST_OF_NAME, "a list of names"),
-        (KType::LIST_OF_DECLARATION, "a list of declarations"),
-        (KType::DICT_NAME_BLOCK, "a dict of names to blocks"),
-        (KType::DICT_TYPE_CODE_BLOCK, "a dict of types to blocks"),
-        (KType::DICT_NAME_TYPE_CODE, "a dict of names to types"),
-    ]
-    .into_iter()
-    .find_map(|(kind, spelling)| (kind == slot).then_some(spelling))
-    .unwrap_or("code")
-}
-
 impl ShapeError {
-    /// The error rendered with its names spelled through `symbols`.
-    pub fn display<'x>(&'x self, symbols: &'x SymbolInterner) -> ShapeErrorDisplay<'x> {
+    /// The error rendered with its names spelled through `symbols` and its types through `types`.
+    pub fn display<'x, 'run>(
+        &'x self,
+        symbols: &'x SymbolInterner,
+        types: &'x TypeRegistry<'run>,
+    ) -> ShapeErrorDisplay<'x, 'run> {
         ShapeErrorDisplay {
             error: self,
             symbols,
+            types,
         }
     }
 }
 
-/// A [`ShapeError`] beside the interner its names render through.
-pub struct ShapeErrorDisplay<'x> {
+/// A [`ShapeError`] beside the interner its names render through and the registry its types
+/// render through.
+pub struct ShapeErrorDisplay<'x, 'run> {
     error: &'x ShapeError,
     symbols: &'x SymbolInterner,
+    types: &'x TypeRegistry<'run>,
 }
 
-impl fmt::Display for ShapeErrorDisplay<'_> {
+impl fmt::Display for ShapeErrorDisplay<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
@@ -730,7 +715,7 @@ impl fmt::Display for ShapeErrorDisplay<'_> {
             } => write!(
                 f,
                 "`{form:?}` in {at} takes {} as its part {index}",
-                slot_spelling(*slot)
+                display_name(*slot, self.types, self.symbols)
             ),
             ShapeError::DictDefault { at, .. } => {
                 write!(f, "a dict's `_` default in {at} is not supported yet")

@@ -2,8 +2,8 @@
 //! passes, a callable's quoted body and head, an arm set as a dict of quotes, a union's variants, a
 //! `FOR ALL` group, a signature's member list, a field label, and a value dict's `_` key.
 
+use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::Heads;
-use crate::parse::builtin_shapes::{BuiltinShapeId, SlotType};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{BodyShape, Builtins, Position, QuotedPart, ShapeError, ShapeKind, Site};
 use crate::symbols::BinderSymbol;
@@ -24,7 +24,13 @@ fn shaped<R>(
         let lines = fixture.parse(source);
         fixture.in_cell(|writer| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch());
+            let shape = BodyShape::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.scratch(),
+            );
             check(fixture, &lines, shape)
         })
     })
@@ -156,7 +162,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             ShapeError::Inadmissible {
                 form: BuiltinShapeId::Lambda,
                 index: 5,
-                slot: SlotType::Leaf(KType::BLOCK),
+                slot: KType::BLOCK,
                 at,
             },
         ),
@@ -165,7 +171,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             ShapeError::Inadmissible {
                 form: BuiltinShapeId::Module,
                 index: 3,
-                slot: SlotType::Leaf(KType::BLOCK),
+                slot: KType::BLOCK,
                 at,
             },
         ),
@@ -175,7 +181,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             ShapeError::Inadmissible {
                 form: BuiltinShapeId::Match,
                 index: 5,
-                slot: SlotType::Leaf(KType::DICT_TYPE_CODE_BLOCK),
+                slot: KType::DICT_TYPE_CODE_BLOCK,
                 at,
             },
         ),
@@ -185,7 +191,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             ShapeError::Inadmissible {
                 form: BuiltinShapeId::MatchOver,
                 index: 7,
-                slot: SlotType::Leaf(KType::DICT_NAME_BLOCK),
+                slot: KType::DICT_NAME_BLOCK,
                 at: Position::statement(1),
             },
         ),
@@ -216,7 +222,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             ShapeError::Inadmissible {
                 form: BuiltinShapeId::Sig,
                 index: 3,
-                slot: SlotType::Leaf(KType::LIST_OF_DECLARATION),
+                slot: KType::LIST_OF_DECLARATION,
                 at,
             },
         ),
@@ -226,7 +232,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             ShapeError::Inadmissible {
                 form: BuiltinShapeId::QuantifiedLambdaType,
                 index: 3,
-                slot: SlotType::Union(&[KType::LIST_OF_NAME, KType::DICT_NAME_TYPE_CODE]),
+                slot: KType::QUANTIFIER_CODE,
                 at,
             },
         ),
@@ -236,7 +242,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             ShapeError::Inadmissible {
                 form: BuiltinShapeId::Union,
                 index: 3,
-                slot: SlotType::Leaf(KType::DICT_NAME_TYPE_CODE),
+                slot: KType::DICT_NAME_TYPE_CODE,
                 at,
             },
         ),
@@ -245,7 +251,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             ShapeError::Inadmissible {
                 form: BuiltinShapeId::NewTypeDefinition,
                 index: 3,
-                slot: SlotType::Leaf(KType::TYPE_CODE),
+                slot: KType::TYPE_CODE,
                 at,
             },
         ),
@@ -332,7 +338,10 @@ fn an_arm_is_in_tail_position_exactly_where_its_match_is() {
         let source = format!("LET f = (FN :{{x :Number}} -> Number = #({body}))");
         shaped(&source, |fixture, lines, shape| {
             let shape = shape.unwrap_or_else(|error| {
-                panic!("`{source}` shapes: {}", error.display(fixture.symbols))
+                panic!(
+                    "`{source}` shapes: {}",
+                    error.display(fixture.symbols, fixture.types)
+                )
             });
             let body = lambda_body(shape, &lines[0]);
             let mut tails = Vec::new();

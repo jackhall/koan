@@ -3,9 +3,7 @@
 
 use crate::memory::Bump;
 use crate::parse::KeyElement;
-use crate::parse::builtin_shapes::{
-    BUILTIN_SHAPES, BuiltinShapeId, ShapeElement, builtin_shape_for,
-};
+use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShapeId, builtin_shape_for};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, TypeRegistry};
 
 use super::super::builtin_shape_types;
@@ -90,31 +88,4 @@ fn a_bucket_interns_one_handle_per_overload() {
     assert_eq!(count(BuiltinShapeId::Attribute), 3);
     assert_eq!(count(BuiltinShapeId::CombinedLambda), 0);
     assert_eq!(count(BuiltinShapeId::CombinedQuantifiedLambda), 0);
-}
-
-/// The one union a builtin slot names — a `FOR ALL` group, a list of names or a dict of names to
-/// bounds — interns as the union of its two members, the compound the static spec exists for, since
-/// no `const` computes a union's digest.
-#[test]
-fn the_quantifier_slot_interns_as_the_two_member_union() {
-    let arena = Bump::new();
-    let bump = &arena;
-    let types = &TypeRegistry::in_region(bump);
-
-    let shape = &BUILTIN_SHAPES[BuiltinShapeId::QuantifiedExpressionHead as usize];
-    let handle = builtin_shape_types(shape, types, bump)[0];
-    let group = types.with_node(handle, |node| {
-        let TypeNode::ExpressionShape { elements, .. } = node else {
-            panic!("the door interns an expression shape");
-        };
-        let DispatchTokenElement::Slot(slot) = elements[3] else {
-            panic!("`EXPR FOR ALL <names> <head> -> <return type>` types its group slot");
-        };
-        slot
-    });
-    assert_eq!(
-        group,
-        types.union_of(bump, &[KType::LIST_OF_NAME, KType::DICT_NAME_TYPE_CODE])
-    );
-    assert!(matches!(shape.elements[3], ShapeElement::Slot { .. }));
 }

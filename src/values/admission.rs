@@ -4,7 +4,8 @@
 //! kind's memo is derived by.
 //!
 //! A value is checked by the one lattice relation over its memoized type, never by walking its
-//! contents. A raw part is checked by shape, since an unevaluated literal has no value yet.
+//! contents. A raw part is checked by shape, since an unevaluated literal has no value yet;
+//! [`admits_part`] is also the one rule the shape builder's static check admits a written part by.
 //!
 //! [`unsealed`] is the one peel: a value sealed behind an opaque view read through each seal whose
 //! bound reveals the payload's kind.

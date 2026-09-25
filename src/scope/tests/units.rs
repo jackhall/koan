@@ -18,8 +18,14 @@ fn shaped<R>(
         let lines: Vec<KExpression<'_>> = fixture.parse(source);
         fixture.in_cell(|writer| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
-                .unwrap_or_else(|error| panic!("`{source}` shapes: {error:?}"));
+            let shape = BodyShape::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.scratch(),
+            )
+            .unwrap_or_else(|error| panic!("`{source}` shapes: {error:?}"));
             check(fixture, shape)
         })
     })
@@ -121,8 +127,13 @@ fn an_eval_a_binder_before_it_waits_on_is_refused() {
             let lines: Vec<KExpression<'_>> = fixture.parse(source);
             fixture.in_cell(|writer| {
                 let table: &Builtins = builtins(fixture, writer);
-                let shape =
-                    BodyShape::of_program(fixture.program, &lines, table, fixture.scratch());
+                let shape = BodyShape::of_program(
+                    fixture.program,
+                    &lines,
+                    table,
+                    fixture.types,
+                    fixture.scratch(),
+                );
                 let Err(ShapeError::EvalCycle { name, eval }) = shape else {
                     panic!(
                         "`{source}` is refused as an `EVAL` cycle: {:?}",
