@@ -55,5 +55,4 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 
 - [Code as values](rewrite/code-values.md)
 - [Binders nested in expressions](rewrite/nested-binders.md)
-- [Parameterized unions](rewrite/parameterized-unions.md)
 

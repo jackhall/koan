@@ -55,7 +55,6 @@ use super::handle::KType;
 use super::kind::KKind;
 use super::node::NodeSchema;
 use super::registry::TypeRegistry;
-use super::schema::Members;
 use super::substitute::{collect_siblings, rewrite_siblings};
 
 /// A member's schema while its window is open: the same shape as [`NodeSchema`], but its handles
@@ -65,32 +64,31 @@ use super::substitute::{collect_siblings, rewrite_siblings};
 pub enum RelativeSchema<'w> {
     /// Fresh nominal over a transparent representation.
     NewType(KType),
-    /// Higher-kinded constructor: erased-parameter variant schema plus parameter names, the
-    /// Type-class symbols the declaration interned — both symbol-sorted, as a sealed member stores
-    /// them. Built through [`RelativeSchema::constructor`].
+    /// Higher-kinded constructor: the representation a construction wraps, over the parameters'
+    /// quantifiers, and the parameter names symbol-sorted, as a sealed member stores them. Built
+    /// through [`RelativeSchema::constructor`].
     TypeConstructor {
-        schema: Members<'w, TypeSymbol>,
+        representation: Option<KType>,
         param_names: &'w [TypeSymbol],
     },
 }
 
 impl<'w> RelativeSchema<'w> {
-    /// A constructor's relative schema in `host` — the window's region: the variant schema and the
-    /// parameter names each symbol-sorted with one entry per name (a later schema entry replaces an
-    /// earlier one of the same name), sorted in `scratch` and then copied in.
+    /// A constructor's relative schema in `host` — the window's region: the parameter names
+    /// symbol-sorted with one entry per name, sorted in `scratch` and then copied in, and the
+    /// representation as given, over quantifiers indexing the sorted names.
     pub fn constructor(
         host: BumpAllocator<'w>,
         scratch: BumpAllocator<'_>,
-        schema: &[(TypeSymbol, KType)],
+        representation: Option<KType>,
         param_names: &[TypeSymbol],
     ) -> Self {
-        let schema = Members::from_pairs(scratch, schema.iter().copied());
         let mut names = BumpVec::with_capacity_in(param_names.len(), scratch);
         names.extend_from_slice(param_names);
         names.sort_unstable();
         names.dedup();
         RelativeSchema::TypeConstructor {
-            schema: schema.copied_into(host),
+            representation,
             param_names: host.alloc_slice_copy(&names),
         }
     }
@@ -103,8 +101,7 @@ impl<'w> RelativeSchema<'w> {
         }
     }
 
-    /// Rewrite every sibling handle through `resolve`, yielding the same shape with its rewritten
-    /// schema table in `scratch`.
+    /// Rewrite every sibling handle through `resolve`, yielding the same shape.
     fn map_handles<'x>(
         self,
         types: &TypeRegistry<'_>,
@@ -119,11 +116,11 @@ impl<'w> RelativeSchema<'w> {
                 RelativeSchema::NewType(rewrite_siblings(types, scratch, repr, resolve))
             }
             RelativeSchema::TypeConstructor {
-                schema,
+                representation,
                 param_names,
             } => RelativeSchema::TypeConstructor {
-                schema: schema
-                    .map_types(scratch, |kt| rewrite_siblings(types, scratch, kt, resolve)),
+                representation: representation
+                    .map(|kt| rewrite_siblings(types, scratch, kt, resolve)),
                 param_names,
             },
         }
@@ -134,10 +131,10 @@ impl<'w> RelativeSchema<'w> {
         match self {
             RelativeSchema::NewType(repr) => NodeSchema::NewType(repr),
             RelativeSchema::TypeConstructor {
-                schema,
+                representation,
                 param_names,
             } => NodeSchema::TypeConstructor {
-                schema,
+                representation,
                 param_names,
             },
         }
@@ -152,9 +149,9 @@ impl<'w> RelativeSchema<'w> {
     ) {
         match self {
             RelativeSchema::NewType(repr) => collect_siblings(types, scratch, repr, out),
-            RelativeSchema::TypeConstructor { schema, .. } => {
-                for (_, value) in schema {
-                    collect_siblings(types, scratch, *value, out);
+            RelativeSchema::TypeConstructor { representation, .. } => {
+                if let Some(representation) = representation {
+                    collect_siblings(types, scratch, representation, out);
                 }
             }
         }

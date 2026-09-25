@@ -620,18 +620,19 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
-    // UNION <name> = <schema>.
+    // UNION <name> = <schema> and UNION (<P>… AS <Name>) = <schema> (the parameterized union shares
+    // the key).
     BuiltinShape {
         id: BuiltinShapeId::Union,
         elements: &[
             Kw(&KEYWORDS.union),
-            slot(Name, &[TYPE_NAME]),
+            slot(Name, &[TYPE_NAME, CODE]),
             Kw(&KEYWORDS.equals),
-            slot(Definition(DefinitionKind::Union), &[CODE]),
+            slot(Definition(DefinitionKind::Union), &[CODE, CODE]),
         ],
-        returns: &[ANY_TYPE],
+        returns: &[ANY_TYPE, ANY_TYPE],
         binder: Some(BinderFacts {
-            names: &[type_part_binder_name],
+            names: &[type_decl_binder_name],
             bucket: None,
             surface: BinderSurface::UnionDef,
             name_slot: Some(1),

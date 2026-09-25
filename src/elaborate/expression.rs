@@ -113,6 +113,14 @@ impl Groups<'_> {
     }
 }
 
+/// A member of the component being declared, named by its relative handle until the group seals,
+/// with the parameter names it takes when it is a family — symbol-sorted, empty otherwise.
+pub(super) struct Fellow<'f> {
+    pub(super) slot: Slot,
+    pub(super) handle: KType,
+    pub(super) params: &'f [TypeSymbol],
+}
+
 /// What elaborating one expression reads through.
 pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, XF: KnottedFamily<'graph>> {
     pub(super) reader: &'e ActivationView<'graph, 'cell, XF>,
@@ -121,7 +129,7 @@ pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, XF: KnottedFamily<'gra
     /// Fellow members of the component being declared, each at the relative handle it is named by
     /// until the group seals: a member's own sibling, or a `UNION` binder's union of its variants'
     /// siblings. Empty for an ordinary type expression.
-    pub(super) fellows: &'e [(Slot, KType)],
+    pub(super) fellows: &'e [Fellow<'e>],
     /// Names declared inside the definition being elaborated and holding no slot of the enclosing
     /// shape — a `SIG` body's abstract and manifest members, and a higher-kinded declarator's
     /// parameters. Empty outside a definition.
@@ -185,9 +193,9 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
             hops: 0,
             target: Target::Local(slot),
         } = mention.coordinate
-            && let Some((_, handle)) = self.fellows.iter().find(|(fellow, _)| *fellow == slot)
+            && let Some(fellow) = self.fellows.iter().find(|fellow| fellow.slot == slot)
         {
-            return Ok(*handle);
+            return Ok(fellow.handle);
         }
         match self.reader.read(mention.coordinate) {
             Value::Type(value) => Ok(value.handle()),
@@ -262,9 +270,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
             // `Type AS Ctor` — the arity-one sugar for the application above.
             3 if keyword(1, &CONNECTORS.as_) => {
                 let constructor = self.part(&parts[2].value, groups)?;
-                let [param] =
-                    constructor_param_names(constructor, self.types).ok_or(unsupported)?
-                else {
+                let [param] = self.param_names(constructor).ok_or(unsupported)? else {
                     return Err(unsupported);
                 };
                 let argument = self.part(&parts[0].value, groups)?;
@@ -386,8 +392,31 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         Ok(bound)
     }
 
+    /// The parameter names a constructor head takes: a fellow family's while its group is open, a
+    /// declared family's or a higher-kinded abstract member's, or — for a union every member of
+    /// which takes one parameter set — that set, since applying the union applies each member.
+    fn param_names(&self, constructor: KType) -> Option<&[TypeSymbol]> {
+        if let Some(fellow) = self
+            .fellows
+            .iter()
+            .find(|fellow| fellow.handle == constructor && !fellow.params.is_empty())
+        {
+            return Some(fellow.params);
+        }
+        if let TypeNode::Union { members } = self.types.node(constructor) {
+            let (first, rest) = members.split_first()?;
+            let names = constructor_param_names(*first, self.types)?;
+            return rest
+                .iter()
+                .all(|member| constructor_param_names(*member, self.types) == Some(names))
+                .then_some(names);
+        }
+        constructor_param_names(constructor, self.types)
+    }
+
     /// A declared type constructor applied to `arguments`, keyed by the parameter names the
-    /// family declares: every parameter named once, and no name the family does not declare.
+    /// family declares: every parameter named once, and no name the family does not declare. A
+    /// parameterized union's head applies each of its variants at the same arguments.
     fn apply(
         &self,
         site: Site,
@@ -395,7 +424,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         arguments: &[(BinderSymbol, KType)],
     ) -> Result<KType, Elaboration> {
         let unsupported = Elaboration::Unsupported { site };
-        let declared = constructor_param_names(constructor, self.types).ok_or(unsupported)?;
+        let declared = self.param_names(constructor).ok_or(unsupported)?;
         if arguments.len() != declared.len()
             || !arguments.iter().all(
                 |(name, _)| matches!(name, BinderSymbol::Type(name) if declared.contains(name)),
@@ -406,6 +435,14 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                 .any(|(index, (name, _))| arguments[..index].iter().any(|(seen, _)| seen == name))
         {
             return Err(unsupported);
+        }
+        if let TypeNode::Union { members } = self.types.node(constructor) {
+            let mut applied = BumpVec::with_capacity_in(members.len(), self.scratch);
+            applied.extend(members.iter().map(|member| {
+                self.types
+                    .constructor_apply(self.scratch, *member, arguments)
+            }));
+            return Ok(self.types.union_of(self.scratch, &applied));
         }
         Ok(self
             .types

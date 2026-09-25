@@ -574,14 +574,15 @@ pub(super) fn component_digest(
                 h.byte(0).digest(repr.digest());
             }
             NodeSchema::TypeConstructor {
-                schema,
+                representation,
                 param_names,
             } => {
-                // Both lists are stored symbol-sorted, so each feeds in its stored order.
-                h.byte(1).count(schema.len());
-                for (name, kt) in schema {
-                    h.symbol(name.symbol()).digest(kt.digest());
-                }
+                h.byte(1);
+                match representation {
+                    Some(representation) => h.byte(1).digest(representation.digest()),
+                    None => h.byte(0),
+                };
+                // Stored symbol-sorted, so the names feed in their stored order.
                 h.count(param_names.len());
                 for p in param_names {
                     h.symbol(p.symbol());

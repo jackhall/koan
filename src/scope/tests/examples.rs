@@ -558,6 +558,46 @@ fn a_signature_body_declares_its_own_members() {
 }
 
 #[test]
+fn a_parameterized_union_declares_its_parameters() {
+    // A parameterized union's declarator declares the names its variants' payloads read: none is a
+    // mention of the enclosing shape, while any other type a payload names still is.
+    for (source, own) in [
+        (
+            "UNION (Elem AS Option) = (Some :Elem None :Null)",
+            &["Elem"][..],
+        ),
+        (
+            "UNION (Ok Error AS Result) = (Ok :Ok Error :Error)",
+            &["Ok", "Error"],
+        ),
+    ] {
+        shaped(source, |fixture, _, shape| {
+            let shape = shape.unwrap_or_else(|error| {
+                panic!("`{source}` shapes: {}", error.display(fixture.symbols))
+            });
+            assert_eq!(shape.slots(), 1, "`{source}` declares the union alone");
+            for name in own {
+                let name = BinderSymbol::Type(type_name(name, fixture.symbols));
+                assert!(
+                    !shape.mentions().iter().any(|mention| mention.name == name),
+                    "`{source}` declares `{name:?}` in its declarator"
+                );
+            }
+        });
+    }
+    shaped(
+        "UNION (Elem AS Option) = (Some :Elem None :Null)",
+        |fixture, _, shape| {
+            let shape = shape.expect("the program shapes");
+            mention_of(
+                shape,
+                BinderSymbol::Type(type_name("Null", fixture.symbols)),
+            );
+        },
+    );
+}
+
+#[test]
 fn a_signature_body_reads_the_types_it_does_not_declare() {
     shaped(
         "NEWTYPE Distance = Number\nSIG Far = (VAL how_far :Distance)",

@@ -11,6 +11,10 @@
 //! So `(f _ :Elt _ :Elt)` admits `(1, 2)` with `Elt = Number` and `(1, (1 | "x"))` with
 //! `Elt = (Number | Str)`, and rejects `(1, "x")`. A caller who wants mixed arguments writes the
 //! union in the slot type or in the bound.
+//!
+//! A construction collects through [`Collector::least`], whose unreached variables solve to `Never`
+//! rather than their bound: a family is covariant in its parameters, so its least instance is the
+//! one the payload asks for.
 
 use crate::memory::{BumpAllocator, BumpVec};
 
@@ -93,6 +97,16 @@ impl<'s> Collector<'s> {
             bounds,
             trail: BumpVec::new_in(scratch),
         }
+    }
+
+    /// One empty cell per quantifier, each bounded by [`KType::NEVER`] until a contribution reaches
+    /// it — what a construction collects a payload into. A family is covariant in its parameters,
+    /// so its least instance is the one the payload asks for, and a parameter the payload never
+    /// reaches solves to `Never`.
+    pub fn least(scratch: BumpAllocator<'s>, arity: usize) -> Self {
+        let mut collector = Self::new(scratch, arity);
+        collector.bounds.fill(KType::NEVER);
+        collector
     }
 
     /// Where the history stands now.

@@ -214,6 +214,36 @@ impl<'graph> Fixture<'_, 'graph> {
         )
     }
 
+    /// A family `name` over `params`, sealed as a singleton recursive group: `representation` is
+    /// handed the declared names symbol-sorted, the order its quantifiers index, and answers the
+    /// representation a construction wraps.
+    pub fn family(
+        &self,
+        name: &str,
+        params: &[&str],
+        representation: impl FnOnce(&[TypeSymbol]) -> Option<KType>,
+    ) -> KType {
+        let mut names: Vec<TypeSymbol> = params
+            .iter()
+            .map(|param| TypeSymbol::declared(param, self.symbols).unwrap())
+            .collect();
+        names.sort_unstable();
+        let schema = RelativeSchema::constructor(
+            self.scratch(),
+            self.scratch(),
+            representation(&names),
+            &names,
+        );
+        RecursiveGroupWindow::seal_singleton(
+            self.scratch(),
+            TypeSymbol::declared(name, self.symbols).unwrap(),
+            schema,
+            None,
+            self.types,
+            self.scratch(),
+        )
+    }
+
     /// `NEWTYPE <name> = <representation>`, sealed as a singleton recursive group.
     pub fn newtype(&self, name: &str, representation: KType) -> KType {
         RecursiveGroupWindow::seal_singleton(

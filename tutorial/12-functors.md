@@ -216,6 +216,37 @@ constructor with two or more parameters has to use the brace form, and it can on
 used in *type* position: `Boxed (7)` wraps one value and infers one type argument, so
 there is nothing for a second parameter to be inferred from.
 
+## Unions over type parameters: `UNION (Elem AS Option)`
+
+A union can take type parameters too. List them before the `AS`, as for
+`NEWTYPE`, and name them in the variants' payload types:
+
+```koan
+UNION (Elem AS Option) = (Some :Elem None :Null)
+UNION (Elem AS Tree) = (Leaf :Null Node :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)})
+```
+
+Each variant is a type constructor over *all* of the union's parameters, and a
+payload may apply the union itself, as `Tree`'s `Node` does. Applying the union
+applies every variant at once: `:(Number AS Option)` admits a `Some` holding a
+number and a `None`, and `:(Result {Ok = Number, Error = Str})` either variant of
+the built-in `Result`, which is declared this way:
+`UNION (Ok Error AS Result) = (Ok :Ok Error :Error)`.
+
+A value built through a variant infers each parameter from its payload, and a
+parameter the payload says nothing about is `Never`. `Option.Some 1` has type
+`:(Option.Some {Elem = Number})`, and `Option.None null` has type
+`:(Option.None {Elem = Never})`. An applied constructor accepts anything built at
+narrower arguments, so that `None` fits `:(Number AS Option)` and
+`:(Str AS Option)` alike, and every one of these values fits the bare `Option`.
+A payload that can't be read as the variant's type — a `Tree.Node` whose record
+has no `left` field, or whose `value` is a number while its `left` holds strings
+— is an error naming the variant and the payload's type.
+
+Two things a parameterized union can't do: bound a parameter with `UNDER`, and
+use a parameter inside a function type's parameter list — `(Take :(FN :{x :Elem}
+-> Null))` is an error, while a function *returning* an `Elem` is fine.
+
 ## One definition at every type: `FOR ALL`
 
 The `OPEN` overloads above name one boxed type each. When an operation works the

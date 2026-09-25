@@ -93,6 +93,7 @@ the link in each section to the relevant chapter.
 | `:(<Type> & <Type>)`          | Meet — a value of both types; mixes with `\|` only through parentheses. |
 | `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |
 | `NEWTYPE (Key Val AS Pair)`   | A type constructor with one or more parameters.    |
+| `UNION (Elem AS Option) = (<Tag> :<Type> ...)` | A union over type parameters; each variant is a constructor over all of them. See [12](12-functors.md#unions-over-type-parameters-union-elem-as-option). |
 | `:(Pair {Key = Number, Val = Str})` | Apply a type constructor, binding each parameter by name. |
 | `:(Number AS Wrap)`           | Shorthand for applying a one-parameter constructor.|
 

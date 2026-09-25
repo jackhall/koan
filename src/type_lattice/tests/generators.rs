@@ -124,6 +124,7 @@ fn arb_type_in(
     let (record_world, function_world) = (world.clone(), world.clone());
     let (union_world, apply_world) = (world.clone(), world.clone());
     let (shape_world, sig_world, group_world) = (world.clone(), world.clone(), world.clone());
+    let (family_world, applied_world) = (world.clone(), world.clone());
     let (shape_members, function_members) = (members.clone(), members.clone());
     prop_oneof![
         6 => leaf,
@@ -149,6 +150,15 @@ fn arb_type_in(
         3 => arb_shape(shape_world, depth, shape_members),
         2 => arb_signature(sig_world, depth),
         1 => arb_sealed_member(group_world, depth),
+        1 => arb_family(family_world.clone(), depth),
+        1 => (arb_family(family_world, depth), inner()).prop_map(move |(family, argument)| {
+            let parameter = BinderSymbol::Type(applied_world.type_names[0]);
+            with_scratch(|scratch| {
+                applied_world
+                    .types
+                    .constructor_apply(scratch, family, &[(parameter, argument)])
+            })
+        }),
     ]
     .boxed()
 }
@@ -497,6 +507,33 @@ fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
             })
         })
         .boxed()
+}
+
+/// A freshly sealed one-parameter family, whose representation is a generated type unioned with
+/// its parameter's quantifier, so the parameter occurs. The quantifier sits at a covariant
+/// position only, as a declared family's must.
+fn arb_family(world: World, depth: u32) -> BoxedStrategy<KType> {
+    arb_type_in(
+        world.clone(),
+        depth.saturating_sub(1),
+        Rc::new(Vec::new()),
+        Rc::new(Vec::new()),
+    )
+    .prop_map(move |repr| {
+        let (parameter, name) = (world.type_names[0], world.type_names[2]);
+        with_scratch(|scratch| {
+            let body = world
+                .types
+                .union_of(scratch, &[repr, world.types.quantified(0, KType::ANY)]);
+            let window = RecursiveGroupWindow::new(scratch, &[(name, KKind::TypeConstructor)]);
+            let schema = RelativeSchema::constructor(scratch, scratch, Some(body), &[parameter]);
+            window
+                .fill_member(0, schema, &world.types, scratch)
+                .and_then(|sealed| sealed.member(0))
+                .expect("a singleton window seals on its fill")
+        })
+    })
+    .boxed()
 }
 
 /// A generated expression shape, for the laws whose subject is a shape and which a draw from the

@@ -111,7 +111,14 @@ subtree.
   this one node, distinguished only by the schema. It carries no binder and no
   label: two textually identical declarations are one type.
 - **`Sibling` and `SetMember`** — the pre-seal and post-seal forms of a
-  co-declared nominal group. See *Recursive groups*, below.
+  co-declared nominal group. See *Recursive groups*, below. A member's schema
+  is a newtype's representation, or a type-constructor family's: the type a
+  construction through it wraps, written over one `Quantified` per parameter —
+  indexed in the symbol order the member stores its parameter names in — or
+  none, for a family that constructs nothing. A sealed member is a leaf to
+  interning's probes and to every rebuild, so those quantifiers never reach a
+  type outside it. A
+  `ConstructorApply` applies a family to a symbol-keyed argument record.
 
 ### `KKind` is the order on the type channel
 
@@ -168,6 +175,13 @@ verdict, the signature relation's value-slot rule — reaches it through
 `is_subtype_of`, so there is no second descent to keep in step with this one.
 `is_more_specific_than` is its strict version and `satisfied_by` the same
 question read from a slot's side.
+
+**An application lies under its family.** Two applications of one family are
+ordered argument by argument, covariantly, and an application lies strictly
+under the bare family it applies, which stands for every application of it.
+Covariance is sound because a family's representation is covariant in its
+parameters: the elaborator refuses one placing a parameter at a contravariant
+position, which [`quantifies_contravariantly`](registry.rs) finds.
 
 [`join`](lattice.rs) **is not a walk.** It is the larger operand when the two are
 ordered and their canonical union otherwise, which is what makes it associative —
@@ -270,6 +284,11 @@ mints a union nobody wrote, and admission cannot depend on the order the slots
 are read. So `(f _ :Elt _ :Elt)` admits `(1, 2)` with `Elt = Number` and
 `(1, (1 | "x"))` with `Elt = (Number | Str)`, and rejects `(1, "x")`. A caller
 who wants mixed arguments writes the union in the slot type or in the bound.
+
+A **construction** collects through `Collector::least`, under which a variable
+no contribution reaches solves to `Never` rather than its bound: a family is
+covariant in its parameters, so its least instance is the one the payload asks
+for.
 
 ## Records and schemas
 
@@ -390,7 +409,8 @@ interned into a live registry ([tests/properties.rs](tests/properties.rs)). The
 order's reflexivity, antisymmetry and transitivity; join and meet's four laws;
 substitution's fixpoints; the digest's agreement with structural equality.
 Hand-written tests remain only where a law cannot express the shape
-([tests/residue.rs](tests/residue.rs)), and each says which.
+([tests/residue.rs](tests/residue.rs), and a family's in
+[tests/families.rs](tests/families.rs)), and each says which.
 
 Beside them the suite pins three things a law would not catch: the import
 boundary ([tests/boundary.rs](tests/boundary.rs)), golden digests for the builtin

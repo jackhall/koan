@@ -345,8 +345,10 @@ pub fn children(
             if set_member == Step::Through {
                 match schema {
                     NodeSchema::NewType(repr) => out(repr, false),
-                    NodeSchema::TypeConstructor { schema, .. } => {
-                        schema.iter().for_each(|(_, kt)| out(*kt, false))
+                    NodeSchema::TypeConstructor { representation, .. } => {
+                        if let Some(representation) = representation {
+                            out(representation, false)
+                        }
                     }
                 }
             }

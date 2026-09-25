@@ -162,11 +162,17 @@ fn interning_and_relations_touch_no_heap() {
         );
     }
     let back = window.sibling(elt, KKind::NewType, &types);
-    let constructor = RelativeSchema::constructor(host, scratch, &[(elt, back)], &[item]);
+    let constructor = RelativeSchema::constructor(host, scratch, Some(back), &[item]);
     let sealed = window
         .fill_member(2, constructor, &types, scratch)
         .expect("the last fill seals");
     let group_member = sealed.member(0).expect("every member seals");
+    let group_family = sealed.member(2).expect("every member seals");
+    let applied = types.constructor_apply(
+        scratch,
+        group_family,
+        &[(BinderSymbol::Type(item), KType::NUMBER)],
+    );
 
     let TypeNode::Signature { schema, .. } = types.node(interface) else {
         unreachable!("the signature door interns a signature");
@@ -181,6 +187,11 @@ fn interning_and_relations_touch_no_heap() {
     let _ = is_subtype_of(&types, scratch, quantified_function, function);
     let _ = join(&types, scratch, group_member, KType::NUMBER);
     let _ = meet(&types, scratch, record, narrow);
+    assert!(is_subtype_of(&types, scratch, applied, group_family));
+    let sink = types
+        .function_type(scratch, &[], &[(x, variable)], KType::NUMBER)
+        .handle;
+    assert!(types.quantifies_contravariantly(scratch, sink, 1));
     let _ = meet(&types, scratch, union, record);
     // Two signatures meet member for member; two manifest bindings for one name have no meet.
     assert_ne!(meet(&types, scratch, interface, module), KType::NEVER);
@@ -199,6 +210,19 @@ fn interning_and_relations_touch_no_heap() {
         .is_ok()
     );
     assert!(collector.solve(&types).is_ok());
+    let mut least = Collector::least(scratch, 2);
+    assert!(
+        admits_with(
+            &types,
+            scratch,
+            variable,
+            KType::NUMBER,
+            Variance::Co,
+            &mut least
+        )
+        .is_ok()
+    );
+    assert!(least.solve(&types).is_ok());
     let mut split = Collector::new(scratch, 1);
     for argument in [KType::NUMBER, KType::STR] {
         assert!(

@@ -210,8 +210,9 @@ pub enum Untieable<'x> {
         site: Site,
         refused: ConstructionRefused,
     },
-    /// Container nodes that reach one another with no function or tagged node between them, so no
-    /// finite type memoizes them: the members whose right-hand sides hold them, in component order.
+    /// Derived nodes — containers and constructions through a family — that reach one another with
+    /// no function node or cut between them, so no finite type memoizes them: the members whose
+    /// right-hand sides hold them, in component order.
     TypeCycle { names: &'x [BinderSymbol] },
 }
 

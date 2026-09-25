@@ -8,9 +8,10 @@
 //! Everything a member needs is then read into scratch with no writer in reach — a function's
 //! body, its type elaborated from its signature and its captures; a data member's cells, with a
 //! part only the caller can evaluate asked of its evaluator by site —
-//! every mention of a fellow member minted as an edge into the knot about to be tied. Container
-//! memos are derived and every construction checked, and a part the caller has not evaluated, a
-//! cycle of containers or a construction that misfits refuses the tie before a byte is written.
+//! every mention of a fellow member minted as an edge into the knot about to be tied. Derived
+//! memos are computed and every construction checked, and a part the caller has not evaluated, a
+//! cycle of derived nodes or a construction the rule refuses stops the tie before a byte is
+//! written.
 //! Only then are the closure runs and data nodes laid down, the knot's weight summed, and the nodes
 //! tied: member `i` is node `i`, and the anonymous nodes follow. A `FN` a data member holds that
 //! captures a fellow member is one of them, a function node staged like a function member.

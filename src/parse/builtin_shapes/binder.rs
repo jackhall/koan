@@ -85,7 +85,7 @@ pub struct StoredBinderKey<'a> {
 
 // ---------- extractors (pure structural readers) ----------
 
-/// Shared [`BinderNameFn`] for typed-binder builtins (SIG / UNION / NEWTYPE):
+/// Shared [`BinderNameFn`] for typed-binder builtins (SIG / NEWTYPE, and LET's type overload):
 /// the binder name is `parts[1]`'s `Type(t)` token. A free function (not the
 /// `KExpression::binder_name_from_type_part` method reference) so it wraps the symbol in the
 /// channel tag [`BinderNameFn`] hands back.
@@ -104,10 +104,10 @@ pub(crate) fn identifier_part_binder_name(expr: &KExpression<'_>) -> Option<Bind
     }
 }
 
-/// Placeholder extractor covering both `TYPE` overloads: the bare form's name is the `Type` part at
-/// `parts[1]`; the higher-kinded form's name is the *last* inner part of the parenthesized
-/// `(Param AS Name)` expression. A bounded declarator, `(<declarator> UNDER <bound>)`, names what
-/// its declarator names.
+/// Placeholder extractor for a name slot that takes a bare name or a declarator — `TYPE`, a
+/// `NEWTYPE` family and `UNION`: the bare form's name is the `Type` part at `parts[1]`; the
+/// declarator's is the *last* inner part of the parenthesized `(Param AS Name)` expression. A
+/// bounded declarator, `(<declarator> UNDER <bound>)`, names what its declarator names.
 pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<BinderSymbol> {
     let part = &expr.parts.get(1)?.value;
     let declarator = bounded(part).map_or(part, |(declarator, _)| declarator);
@@ -119,6 +119,25 @@ pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<BinderSymb
         },
         _ => None,
     }
+}
+
+/// The parameter names a `(<P>… AS <Name>)` declarator writes, in written order: every `Type`
+/// part before the last. Nothing for any other part.
+pub(crate) fn declarator_parameters<'g>(
+    part: &ExpressionPart<'g>,
+) -> impl Iterator<Item = TypeSymbol> + 'g {
+    let parts: &'g [Spanned<ExpressionPart<'g>>] = match part {
+        ExpressionPart::Expression(run) => run
+            .reference()
+            .parts
+            .split_last()
+            .map_or(&[], |(_, before)| before),
+        _ => &[],
+    };
+    parts.iter().filter_map(|part| match part.value {
+        ExpressionPart::Type(name) => Some(name),
+        _ => None,
+    })
 }
 
 /// The declarator and bound of a `<declarator> UNDER <bound>` run: exactly three parts, the middle

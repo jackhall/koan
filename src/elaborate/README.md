@@ -48,7 +48,11 @@ registry's own doors:
 - `Pair {Key = Number}` is a declared type constructor applied to its arguments
   by the parameter names the family declares — every parameter named once and no
   name it does not declare — and `Number AS Wrap` is the same application spelled
-  as arity-one sugar, reading the family's sole parameter name off the family.
+  as arity-one sugar, reading the family's sole parameter name off the family. A
+  union whose members all take one parameter set — a
+  [parameterized union](#families)'s binder — applies member by member:
+  `Result {Ok = Number, Error = Str}` is the union of both variants applied at
+  those arguments.
 
 **Quantifiers are positions, not mentions.** A name a `FOR ALL` group declares
 is that group's quantifier at its written position, elaborated as
@@ -153,12 +157,14 @@ its members are declared in, and hands back one handle per member, in member
 order:
 
 - `NEWTYPE Distance = Number` — a newtype over its representation;
-- `NEWTYPE (Key Val AS Pair)` — a constructor family: an empty-schema
-  `TypeConstructor` member over its declared parameter names, the identity
-  wrapper over its argument, so an application has a declared referent a koan
-  program can write;
+- `NEWTYPE (Key Val AS Pair)` — a constructor family: a `TypeConstructor`
+  member over its declared parameter names, so an application has a declared
+  referent a koan program can write. A one-parameter family wraps a payload of
+  its parameter's type; a wider one constructs nothing;
 - `UNION Maybe = (Some :Number None :Null)` — the canonical union of one member
   per variant, the binder owning them all;
+- `UNION (Elem AS Option) = (Some :Elem None :Null)` — the same, each variant a
+  [family](#families) over the declarator's parameters;
 - `SIG HasLabel = (VAL label :Str)` — a signature;
 - `LET Alias = Number` in the type channel — its right-hand side's type.
 
@@ -195,6 +201,39 @@ component holding a `LET` or a `SIG` member is refused at that member. A
 non-nominal member is therefore only ever reached alone, and answers outside any
 window. This is the type channel's restatement of the nominal cut
 [the tie](../knot/README.md#the-tie) already makes for values.
+
+### Families
+
+A family member's schema is the type a construction through it wraps — its
+**representation** — written over one quantifier per parameter, the parameters
+indexed in symbol order, which is the order the member stores them in. A
+`NEWTYPE (Type AS Boxed)` family's representation is its one quantifier; a wider
+`NEWTYPE` family has none, since a payload would have nothing to infer a second
+argument from.
+
+A parameterized `UNION` declares one family per variant, each over **all** of
+the union's parameters, so `Result.Ok` takes `Error` too. Each payload is read
+with the parameters as the innermost quantifier group, bounded by `Any`, so a
+nested `FN FOR ALL` or `EXPR` group shadows them like any other outer group.
+Parameters take no bound. An application is covariant in its arguments
+([the order](../type_lattice/README.md#the-relations)), so a payload placing a
+parameter at a contravariant position — inside a function type's parameter
+list — is refused rather than given an unsound order.
+
+A fellow carries the parameter names of the family it names, so a family
+applies itself or a fellow family inside its own component while the window is
+still open: `UNION (Elem AS Tree) = (Leaf :Null Node :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)})`
+and a `Tree`/`Forest` ring both declare. Applying a union binder per member is
+the elaborator's alone: the lattice's own `constructor_param_names` answers
+nothing for a union, so a parameterized union is no witness for a signature's
+higher-kinded `TYPE (… AS …)` member.
+
+[`builtin_result`](builtin.rs) seals the builtin `Result` through the window
+`UNION (Ok Error AS Result) = (Ok :Ok Error :Error)` seals through, so the
+builtin and a declared `Result` are one handle.
+
+What a construction through a family carries is the construction rule's
+([values](../values/README.md#what-a-value-is)).
 
 ### What a signature declares
 
@@ -274,10 +313,11 @@ never a panic and never a guess:
 - `Unsupported` — any other spelling: a `_` field, an outer quantifier read
   under a nested group, an application whose arguments are not exactly the
   parameters its constructor declares, a bound on a higher-kinded `TYPE` member
-  or a `NEWTYPE` family, and every declaration the door refuses —
-  a cyclic component through a non-nominal member, a bare `TYPE` outside a
-  `SIG`, a repeated union tag or family parameter, a union
-  with no variant, and a forward reference inside a `SIG` body. An operator
+  or a `NEWTYPE` family or a parameterized union, and every declaration the
+  door refuses — a cyclic component through a non-nominal member, a bare `TYPE`
+  outside a `SIG`, a repeated union tag or family parameter, a union
+  with no variant, a family parameter at a contravariant position, and a
+  forward reference inside a `SIG` body. An operator
   declaration or head naming `!=`, and an `==` whose result is not `Bool`, are
   `Unsupported` for the same reason a group head that would chain a symbol twice
   is: [`!=` is rewritten, never declared](../scope/README.md#operator-groups).
@@ -321,6 +361,11 @@ signature, two bodies binding the same members in either order interning equal,
 a member carrying the type its value carries rather than one walked from its
 contents, a `GROUP` body's self-signature carrying the group it declares and
 and satisfying the signature stating it.
+[`tests/families.rs`](tests/families.rs) declares parameterized unions: a
+family per variant, the builtin `Result` equal to the declared one, a union head
+applied per variant, constructions through a variant ordered against
+applications and the bare family, a recursive family and a ring of two, and
+each family refusal.
 [`tests/builtin.rs`](tests/builtin.rs) holds the door's own laws: each
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names
@@ -331,4 +376,6 @@ interns as the union of its three members.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
   bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
-  a signature, which the lattice specializes but no type expression elaborates.
+  a signature, which the lattice specializes but no type expression elaborates;
+  a family's variance, which no declaration states; and a parameterized union
+  as a higher-kinded witness.

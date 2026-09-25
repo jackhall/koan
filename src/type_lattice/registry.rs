@@ -546,10 +546,10 @@ impl<'run> TypeRegistry<'run> {
                 schema: match schema {
                     NodeSchema::NewType(repr) => NodeSchema::NewType(repr),
                     NodeSchema::TypeConstructor {
-                        schema,
+                        representation,
                         param_names,
                     } => NodeSchema::TypeConstructor {
-                        schema: schema.copied_into(self.bump),
+                        representation,
                         param_names: self.rehome(param_names),
                     },
                 },
@@ -953,6 +953,21 @@ impl<'run> TypeRegistry<'run> {
                     _ => Visit::Descend,
                 }
             })
+    }
+
+    /// Whether any of quantifiers `0..arity` occurs free in `kt` at a contravariant position — what
+    /// a family's representation may not do, since an application is covariant in its arguments.
+    pub fn quantifies_contravariantly(
+        &self,
+        scratch: BumpAllocator<'_>,
+        kt: KType,
+        arity: usize,
+    ) -> bool {
+        self.contains_quantified(kt)
+            && self
+                .quantifier_census(scratch, std::iter::once((kt, Variance::Co)), arity)
+                .iter()
+                .any(|occurrences| occurrences.contravariant > 0)
     }
 
     /// Whether every free `Quantified` position reachable from `kt` names an index below `arity` —

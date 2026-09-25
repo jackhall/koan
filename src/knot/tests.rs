@@ -12,6 +12,7 @@ mod birth;
 mod boundary;
 mod copy;
 mod equality;
+mod families;
 mod lambda;
 mod properties;
 

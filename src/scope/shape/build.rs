@@ -34,7 +34,8 @@ use super::super::builtins::Builtins;
 use super::super::channels::Channels;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::signature::{
-    body_of, declare_parameters, declare_quantifiers, pair_name, quantifier_bounds, signature_run,
+    body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_name,
+    quantifier_bounds, signature_run,
 };
 use super::{
     BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex,
@@ -570,16 +571,20 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
 
         // A callable's parameters are declared before any part is read, so a type parameter a
-        // signature names is never taken for a mention of the enclosing shape.
-        let declares = form
-            .roles()
-            .any(|role| matches!(role, Role::Signature | Role::Quantifiers));
+        // signature names is never taken for a mention of the enclosing shape. A parameterized
+        // union's declarator declares the parameters its variants' payloads read.
+        let union = form.id == BuiltinShapeId::Union;
+        let declares = union
+            || form
+                .roles()
+                .any(|role| matches!(role, Role::Signature | Role::Quantifiers));
         let mut parameters = BumpVec::new_in(self.scratch);
         if declares {
             for (role, part) in form.roles().zip(node.parts) {
                 match role {
                     Role::Signature => declare_parameters(&part.value, &mut parameters),
                     Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
+                    Role::Name if union => declare_family_parameters(&part.value, &mut parameters),
                     _ => {}
                 }
             }

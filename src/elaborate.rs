@@ -39,7 +39,7 @@ mod signature;
 #[cfg(test)]
 mod tests;
 
-pub use builtin::builtin_shape_types;
+pub use builtin::{builtin_result, builtin_shape_types};
 pub use declaration::type_declarations;
 pub use expression::type_expression;
 pub use module::self_signature;

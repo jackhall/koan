@@ -355,7 +355,7 @@ fn a_newtype_construction_is_checked_against_its_representation() {
 
             assert_eq!(
                 Tagged::construct(writer, head(KType::NUMBER), fitting, types, scratch).err(),
-                Some(ConstructionRefused::NotNewType(KType::NUMBER))
+                Some(ConstructionRefused::NotConstructible(KType::NUMBER))
             );
             let misfit = Value::Record(Record::new(writer, &[(other, inner)], types, scratch));
             let Err(ConstructionRefused::Misfit { identity, .. }) =
@@ -369,6 +369,102 @@ fn a_newtype_construction_is_checked_against_its_representation() {
                 Err(ConstructionRefused::Misfit { .. })
             ));
         })
+    });
+}
+
+#[test]
+fn a_family_construction_takes_the_application_its_payload_solves() {
+    use crate::values::{ConstructionRefused, construction};
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let field = |name| BinderSymbol::declared(name, symbols).unwrap();
+        let (a, b, key, value) = (field("a"), field("b"), field("key"), field("value"));
+        let parameter = |names: &[TypeSymbol], name| {
+            let index = names
+                .iter()
+                .position(|found| *found == TypeSymbol::declared(name, symbols).unwrap())
+                .expect("a declared parameter");
+            types.quantified(index, KType::ANY)
+        };
+        let applied = |family, arguments: &[(&str, KType)]| {
+            let arguments: Vec<_> = arguments
+                .iter()
+                .map(|(name, ktype)| {
+                    let name = TypeSymbol::declared(name, symbols).unwrap();
+                    (BinderSymbol::Type(name), *ktype)
+                })
+                .collect();
+            types.constructor_apply(scratch, family, &arguments)
+        };
+
+        let boxed = fixture.family("Boxed", &["Type"], |names| Some(parameter(names, "Type")));
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let head = TypeValue::new(writer, boxed, types);
+            let built = Tagged::construct(writer, head, Value::Number(7.0), types, scratch);
+            assert_eq!(
+                built.map(|tagged| tagged.ktype()),
+                Ok(applied(boxed, &[("Type", KType::NUMBER)]))
+            );
+        });
+
+        let pair = fixture.family("Pair", &["Key", "Val"], |names| {
+            Some(types.record(
+                scratch,
+                &[
+                    (key, parameter(names, "Key")),
+                    (value, parameter(names, "Val")),
+                ],
+            ))
+        });
+        let entry = types.record(scratch, &[(key, KType::STR), (value, KType::NUMBER)]);
+        assert_eq!(
+            construction(types, scratch, pair, entry),
+            Ok(applied(
+                pair,
+                &[("Key", KType::STR), ("Val", KType::NUMBER)]
+            ))
+        );
+
+        // A parameter the payload does not reach takes `Never`.
+        let listed = fixture.family("Listed", &["Elem"], |names| {
+            Some(types.list(parameter(names, "Elem")))
+        });
+        assert_eq!(
+            construction(types, scratch, listed, types.list(KType::NEVER)),
+            Ok(applied(listed, &[("Elem", KType::NEVER)]))
+        );
+        let option = fixture.family("Option", &["Elem"], |names| {
+            Some(types.union_of(scratch, &[parameter(names, "Elem"), KType::NULL]))
+        });
+        assert_eq!(
+            construction(types, scratch, option, KType::NULL),
+            Ok(applied(option, &[("Elem", KType::NEVER)]))
+        );
+
+        let same = fixture.family("Same", &["Elem"], |names| {
+            let elem = parameter(names, "Elem");
+            Some(types.record(scratch, &[(a, elem), (b, elem)]))
+        });
+        let mixed = types.record(scratch, &[(a, KType::NUMBER), (b, KType::STR)]);
+        assert_eq!(
+            construction(types, scratch, same, mixed),
+            Err(ConstructionRefused::Unsolved {
+                family: same,
+                payload: mixed
+            })
+        );
+
+        let silent = fixture.family("Silent", &["Key", "Val"], |_| None);
+        assert_eq!(
+            construction(types, scratch, silent, KType::NUMBER),
+            Err(ConstructionRefused::NotConstructible(silent))
+        );
+        let number_box = applied(boxed, &[("Type", KType::NUMBER)]);
+        assert_eq!(
+            construction(types, scratch, number_box, KType::NUMBER),
+            Err(ConstructionRefused::NotConstructible(number_box))
+        );
     });
 }
 

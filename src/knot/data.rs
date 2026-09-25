@@ -12,10 +12,12 @@
 //! stays an ordinary value.
 //!
 //! **Memos** follow the nominal cut. A function's memo is its signature type and a tagged node's is
-//! the newtype its head names, both known before the knot exists; a container node's memo is what
-//! the plain door of its kind would memoize, an edge contributing its target's memo. So container
-//! memos are derived in reverse topological order over the edges between container nodes, and a
-//! cycle of containers alone has no finite type and refuses the tie.
+//! the head it names, both known before the knot exists. A *derived* node's memo is read
+//! off its cells, an edge contributing its target's memo: a container's is what the plain door of
+//! its kind would memoize, and a construction through a family's is the application the
+//! construction rule solves from its payload. So derived memos are computed in reverse topological
+//! order over the edges between derived nodes, and a cycle of derived nodes alone has no finite
+//! type and refuses the tie.
 //!
 //! **Constructions** are checked by [`values::construction`](crate::values::construction), the one
 //! rule an ordinary construction goes through too, before anything is written.
@@ -27,7 +29,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{
     Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged, TypeValue, Value,
-    construction, dict_type, kept_entries, list_type, part_ktype, record_type,
+    construction, dict_type, kept_entries, list_type, part_ktype, record_type, solves_identity,
 };
 
 use super::{Eager, KActivationView, KValue, Knotted, Supplied, Untieable};
@@ -255,7 +257,7 @@ impl<'stage, 'graph, 'cell, 'run> Stager<'stage, 'graph, 'cell, 'run> {
                         return Err(Untieable::Construction {
                             name: self.name(),
                             site: Site::of(part),
-                            refused: ConstructionRefused::NotNewType(other.ktype()),
+                            refused: ConstructionRefused::NotConstructible(other.ktype()),
                         });
                     }
                     _ => unreachable!(
@@ -388,16 +390,19 @@ fn each_child<'a, 'graph, 'cell, 'x>(
     }
 }
 
-/// Whether a staged node is a container, whose memo is derived from its cells.
-fn is_container(staged: &Staged<'_, '_, '_>) -> bool {
-    matches!(
-        staged,
-        Staged::List(_) | Staged::Dict(_) | Staged::Record(_)
-    )
+/// Whether a staged node's memo is derived from its cells: a container, or a construction whose
+/// head solves its identity from its payload. Any other tagged node is a cut.
+fn is_derived(staged: &Staged<'_, '_, '_>, types: &TypeRegistry<'_>) -> bool {
+    match staged {
+        Staged::List(_) | Staged::Dict(_) | Staged::Record(_) => true,
+        Staged::Tagged { head, .. } => solves_identity(types, head.handle()),
+        _ => false,
+    }
 }
 
 /// Every node's memo: `memos[i]` is `Some` for a function node on entry, and on success every
-/// node's memo is `Some`. A cycle of container nodes refuses with the members holding it.
+/// node's memo is `Some`. A cycle of derived nodes refuses with the members holding it, and a
+/// construction the rule refuses while its memo is derived refuses as it would at the check.
 pub(super) fn memos<'x>(
     nodes: &Nodes<'_, '_, '_>,
     memos: &mut [Option<KType>],
@@ -405,11 +410,16 @@ pub(super) fn memos<'x>(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<(), Untieable<'x>> {
+    let derived = |node: &Option<Node<'_, '_, '_>>| {
+        node.as_ref()
+            .is_some_and(|node| is_derived(&node.shape, types))
+    };
     for (index, node) in nodes.iter().enumerate() {
         if let Some(Node {
             shape: Staged::Tagged { head, .. },
             ..
         }) = node
+            && !derived(node)
         {
             memos[index] = Some(head.handle());
         }
@@ -417,12 +427,10 @@ pub(super) fn memos<'x>(
     let mut rows: BumpVec<'x, BumpVec<'x, usize>> = BumpVec::with_capacity_in(nodes.len(), scratch);
     for node in nodes.iter() {
         let mut row = BumpVec::new_in(scratch);
-        if let Some(node) = node.as_ref().filter(|node| is_container(&node.shape)) {
+        if let Some(node) = node.as_ref().filter(|node| is_derived(&node.shape, types)) {
             each_child(&node.shape, |child| {
                 if let Staged::Edge(target) = child
-                    && nodes[*target as usize]
-                        .as_ref()
-                        .is_some_and(|target| is_container(&target.shape))
+                    && derived(&nodes[*target as usize])
                 {
                     row.push(*target as usize);
                 }
@@ -439,7 +447,7 @@ pub(super) fn memos<'x>(
             owners.extend(component.iter().map(|node| {
                 nodes[*node]
                     .as_ref()
-                    .expect("a container is a data node")
+                    .expect("a derived node is a data node")
                     .owner
             }));
             owners.sort_unstable();
@@ -452,9 +460,17 @@ pub(super) fn memos<'x>(
         }
         if let Some(node) = nodes[first]
             .as_ref()
-            .filter(|node| is_container(&node.shape))
+            .filter(|node| is_derived(&node.shape, types))
         {
-            memos[first] = Some(staged_type(&node.shape, memos, types, scratch));
+            let memo =
+                staged_type(&node.shape, memos, types, scratch).map_err(|(site, refused)| {
+                    Untieable::Construction {
+                        name: names(node.owner),
+                        site,
+                        refused,
+                    }
+                })?;
+            memos[first] = Some(memo);
         }
     }
     Ok(())
@@ -462,36 +478,55 @@ pub(super) fn memos<'x>(
 
 /// The type a staged part's value memoizes, by the rule the plain door of its kind derives its memo
 /// by — so a nested construction checked here is the one [`write`] builds — an edge its target's
-/// memo, which is derived first.
+/// memo, which is derived first. A construction through a family takes the application the rule
+/// solves, and one the rule refuses comes back with its site.
 fn staged_type(
     staged: &Staged<'_, '_, '_>,
     memos: &[Option<KType>],
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> KType {
+) -> Result<KType, (Site, ConstructionRefused)> {
     let of = |staged| staged_type(staged, memos, types, scratch);
-    match staged {
+    Ok(match staged {
         Staged::Literal(part) => part_ktype(part, types, scratch).expect("a literal has a type"),
         Staged::Value(value) => value.ktype(),
         Staged::Edge(target) => {
             memos[*target as usize].expect("a referent's memo is derived first")
         }
-        Staged::List(items) => list_type(types, scratch, items.iter().map(of)),
-        Staged::Dict(entries) => dict_type(
-            types,
-            scratch,
-            entries.iter().map(|(key, value)| (key.ktype(), of(value))),
-        ),
-        Staged::Record(fields) => record_type(
-            types,
-            scratch,
-            fields.iter().map(|(name, value)| (*name, of(value))),
-        ),
+        Staged::List(items) => {
+            let mut cells = BumpVec::with_capacity_in(items.len(), scratch);
+            for item in items.iter() {
+                cells.push(of(item)?);
+            }
+            list_type(types, scratch, cells.iter().copied())
+        }
+        Staged::Dict(entries) => {
+            let mut cells = BumpVec::with_capacity_in(entries.len(), scratch);
+            for (key, value) in entries.iter() {
+                cells.push((key.ktype(), of(value)?));
+            }
+            dict_type(types, scratch, cells.iter().copied())
+        }
+        Staged::Record(fields) => {
+            let mut cells = BumpVec::with_capacity_in(fields.len(), scratch);
+            for (name, value) in fields.iter() {
+                cells.push((*name, of(value)?));
+            }
+            record_type(types, scratch, cells.iter().copied())
+        }
+        Staged::Tagged {
+            head,
+            site,
+            payload,
+        } if solves_identity(types, head.handle()) => {
+            construction(types, scratch, head.handle(), of(payload)?)
+                .map_err(|refused| (*site, refused))?
+        }
         Staged::Tagged { head, .. } => head.handle(),
         Staged::Function(_) => {
             unreachable!("a function sits only at a node, reached through an edge")
         }
-    }
+    })
 }
 
 /// Check every construction the nodes hold — a tagged node over its payload's memo, and every
@@ -516,14 +551,14 @@ pub(super) fn check(
             payload,
         } = staged
         {
-            let payload = staged_type(payload, memos, types, scratch);
-            construction(types, scratch, head.handle(), payload).map_err(|refused| {
-                Untieable::Construction {
-                    name,
-                    site: *site,
-                    refused,
-                }
-            })?;
+            let refusal = |(site, refused)| Untieable::Construction {
+                name,
+                site,
+                refused,
+            };
+            let payload = staged_type(payload, memos, types, scratch).map_err(refusal)?;
+            construction(types, scratch, head.handle(), payload)
+                .map_err(|refused| refusal((*site, refused)))?;
         }
         let mut refused = Ok(());
         each_child(staged, |child| {

@@ -11,7 +11,9 @@
 
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
 use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::binder::{bounded, symbol_from_quote_body};
+use crate::parse::builtin_shapes::binder::{
+    bounded, declarator_parameters, symbol_from_quote_body,
+};
 use crate::parse::builtin_shapes::role::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ActivationView, BuiltinGroup, Component, Site, is_equality};
@@ -23,12 +25,13 @@ use crate::type_lattice::{
 use crate::values::KnottedFamily;
 
 use super::Elaboration;
-use super::expression::{Elaborator, Groups};
+use super::expression::{Elaborator, Fellow, Groups};
 use super::signature::operator_shape;
 
 /// One `KType` per member of `component`, in member order: a `NEWTYPE`'s newtype over its
 /// representation, a `NEWTYPE (Key Val AS Pair)`'s constructor family, a `UNION`'s canonical union
-/// over its variants, a `SIG`'s signature, and a `LET` of a type name's type expression.
+/// over its variants — each variant a family over the union's parameters when its declarator names
+/// any — a `SIG`'s signature, and a `LET` of a type name's type expression.
 ///
 /// Every member is read and every schema elaborated before the group seals, so a member of a
 /// sealed group reads its fellows as siblings and a ring of declarations needs no placeholder. A
@@ -76,21 +79,38 @@ pub fn type_declarations<'graph, 'x, XF: KnottedFamily<'graph>>(
         match member.kind {
             Declared::NewType { .. } => {
                 members.push((member.name, None, KKind::NewType));
-                fellows.push((*slot, types.sibling(first)));
+                fellows.push(Fellow {
+                    slot: *slot,
+                    handle: types.sibling(first),
+                    params: &[],
+                });
             }
-            Declared::Family { .. } => {
+            Declared::Family { params } => {
                 members.push((member.name, None, KKind::TypeConstructor));
-                fellows.push((*slot, types.sibling(first)));
+                fellows.push(Fellow {
+                    slot: *slot,
+                    handle: types.sibling(first),
+                    params,
+                });
             }
-            Declared::Union { variants } => {
+            Declared::Union { variants, params } => {
+                let kind = if params.is_empty() {
+                    KKind::NewType
+                } else {
+                    KKind::TypeConstructor
+                };
                 for (tag, _) in variants {
-                    members.push((*tag, Some(member.name), KKind::NewType));
+                    members.push((*tag, Some(member.name), kind));
                 }
                 let owned: &[usize] = scratch.alloc_slice_fill_iter(first..members.len());
                 binders.push((member.name, owned));
                 let mut siblings = BumpVec::with_capacity_in(owned.len(), scratch);
                 siblings.extend(owned.iter().map(|index| types.sibling(*index)));
-                fellows.push((*slot, types.union_of(scratch, &siblings)));
+                fellows.push(Fellow {
+                    slot: *slot,
+                    handle: types.union_of(scratch, &siblings),
+                    params,
+                });
             }
             Declared::Signature(_) | Declared::Alias(_) => {
                 unreachable!("a non-nominal member is answered alone above")
@@ -115,16 +135,44 @@ pub fn type_declarations<'graph, 'x, XF: KnottedFamily<'graph>>(
                 sealed = window.fill_member(index, RelativeSchema::NewType(repr), types, scratch);
                 index += 1;
             }
+            // A one-parameter family wraps a payload of its parameter's type; a wider one is
+            // type-position only.
             Declared::Family { params } => {
-                let schema = RelativeSchema::constructor(scratch, scratch, &[], params);
+                let representation = (params.len() == 1).then(|| types.quantified(0, KType::ANY));
+                let schema = RelativeSchema::constructor(scratch, scratch, representation, params);
                 sealed = window.fill_member(index, schema, types, scratch);
                 index += 1;
             }
-            Declared::Union { variants } => {
+            Declared::Union {
+                variants,
+                params: [],
+            } => {
                 for (_, payload) in variants {
                     let payload = elaborator.part(payload, &TOP)?;
                     sealed =
                         window.fill_member(index, RelativeSchema::NewType(payload), types, scratch);
+                    index += 1;
+                }
+            }
+            // Each variant is a family over all of the union's parameters, its payload read with
+            // them as the innermost group. An application is covariant in its arguments, so a
+            // parameter at a contravariant position is refused.
+            Declared::Union { variants, params } => {
+                let family = Groups {
+                    names: params,
+                    bounds: scratch.alloc_slice_fill_copy(params.len(), KType::ANY),
+                    outer: None,
+                };
+                for (_, payload) in variants {
+                    let representation = elaborator.part(payload, &family)?;
+                    if types.quantifies_contravariantly(scratch, representation, params.len()) {
+                        return Err(Elaboration::Unsupported {
+                            site: Site::of(payload),
+                        });
+                    }
+                    let schema =
+                        RelativeSchema::constructor(scratch, scratch, Some(representation), params);
+                    sealed = window.fill_member(index, schema, types, scratch);
                     index += 1;
                 }
             }
@@ -142,7 +190,7 @@ pub fn type_declarations<'graph, 'x, XF: KnottedFamily<'graph>>(
                 index += 1;
                 handle
             }
-            Declared::Union { variants } => {
+            Declared::Union { variants, .. } => {
                 index += variants.len();
                 sealed
                     .binder_type(member.name)
@@ -179,13 +227,15 @@ enum Declared<'graph, 'x> {
         repr: &'graph ExpressionPart<'graph>,
     },
     /// `UNION <Name> = (<Tag> :<payload> …)`: one window member per variant, the binder itself
-    /// denoting their union.
+    /// denoting their union. `UNION (<P>… AS <Name>) = …` declares `params`, symbol-sorted, and
+    /// makes each variant a family over them; a bare name declares none.
     Union {
         variants: &'x [(TypeSymbol, &'graph ExpressionPart<'graph>)],
+        params: &'x [TypeSymbol],
     },
-    /// `NEWTYPE (<P>… AS <Name>)`: one window member, an empty-schema constructor family over its
-    /// declared parameter names — the identity wrapper over its argument, so a constructor
-    /// application has a declared referent a koan program can write.
+    /// `NEWTYPE (<P>… AS <Name>)`: one window member, a constructor family over its declared
+    /// parameter names, symbol-sorted — the identity wrapper over its argument, which a
+    /// construction builds only when there is one parameter.
     Family { params: &'x [TypeSymbol] },
     /// `SIG <Name> = <body>`: a signature, which no `Sibling` can stand for and so takes part in
     /// no cycle.
@@ -214,16 +264,26 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
             }
         }
         let name_part = name_part.ok_or(unsupported)?;
-        // A constructor family declares no bound.
-        if form.id == BuiltinShapeId::NewTypeDeclaration && bounded(name_part).is_some() {
+        // A constructor family declares no bound, and neither does a parameterized union.
+        if matches!(
+            form.id,
+            BuiltinShapeId::NewTypeDeclaration | BuiltinShapeId::Union
+        ) && bounded(name_part).is_some()
+        {
             return Err(unsupported);
         }
+        let declarator = matches!(name_part, ExpressionPart::Expression(_));
         let kind = match form.id {
             BuiltinShapeId::NewTypeDefinition => Declared::NewType {
                 repr: declared.ok_or(unsupported)?,
             },
             BuiltinShapeId::Union => Declared::Union {
                 variants: variants(declared.ok_or(unsupported)?, scratch).ok_or(unsupported)?,
+                params: if declarator {
+                    parameters(name_part, scratch).ok_or(unsupported)?
+                } else {
+                    &[]
+                },
             },
             BuiltinShapeId::NewTypeDeclaration => Declared::Family {
                 params: parameters(name_part, scratch).ok_or(unsupported)?,
@@ -235,6 +295,7 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
         };
         let name = match form.id {
             BuiltinShapeId::NewTypeDeclaration => last_type_name(name_part),
+            BuiltinShapeId::Union if declarator => last_type_name(name_part),
             _ => match name_part {
                 ExpressionPart::Type(name) => Some(*name),
                 _ => None,
@@ -303,27 +364,20 @@ fn variants<'graph, 'x>(
     Some(pairs.leak())
 }
 
-/// The parameter names of a `(<P>… AS <Name>)` declarator, in written order: every `Type` part
-/// before the trailing name. A repeated name is refused.
+/// The parameter names of a `(<P>… AS <Name>)` declarator, symbol-sorted — the order a family's
+/// quantifiers index. A repeated name, or none, is refused.
 fn parameters<'x>(
     part: &ExpressionPart<'_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<&'x [TypeSymbol]> {
-    let ExpressionPart::Expression(run) = part else {
-        return None;
-    };
-    let run = run.reference();
-    let (_, declared) = run.parts.split_last()?;
-    let mut names = BumpVec::with_capacity_in(declared.len(), scratch);
-    for part in declared {
-        let ExpressionPart::Type(name) = part.value else {
-            continue;
-        };
+    let mut names = BumpVec::new_in(scratch);
+    for name in declarator_parameters(part) {
         if names.contains(&name) {
             return None;
         }
         names.push(name);
     }
+    names.sort_unstable();
     (!names.is_empty()).then(|| &*names.leak())
 }
 

@@ -193,7 +193,6 @@ program runs on the rewritten stack.
 **Requires:**
 
 - [Code as values](code-values.md) — `ATTR`'s symbol label, `EVAL`'s operand, and code-typed parameters.
-- [Parameterized unions](parameterized-unions.md) — the family construction rule.
 - [Binders nested in expressions](nested-binders.md) — a nested binder is hoisted before dispatch meets it.
 - [Quotes resolve where they are written](eval-scope.md) — a quote's names and candidates resolve at the quote.
 

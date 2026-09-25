@@ -257,8 +257,10 @@ therefore declares `Pair`, and `Key` and `Val` sit in its `Name` part, which no
 walk reads; `TYPE (Carrier UNDER Number)` declares `Carrier`, and its bound is a
 deferred mention like the rest of the definition; a `FOR ALL` group inside one of
 its heads declares its quantifiers, bounded or not;
-and a manifest `LET` member declares its name, so a later `VAL` naming it is no
-mention either. Every name a definition declares is the definition's own, and
+a manifest `LET` member declares its name, so a later `VAL` naming it is no
+mention either; and a parameterized `UNION (Elem AS Option) = (Some :Elem …)`
+declares `Elem` in its declarator, so a variant payload naming it is no
+mention. Every name a definition declares is the definition's own, and
 the declaration door resolves it against the definition it is elaborating.
 
 ### Units

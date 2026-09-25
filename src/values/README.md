@@ -74,17 +74,34 @@ struct down through `memory`'s `resident` and its runs through `collect`, the
 two shapes derived from `Writer::fill`; `text` is the one helper here, a string
 value over `Writer::text`.
 
-A tagged value is the one nominal wrap — a newtype construction, a union
-variant, a lowered error — and its identity *is* its type, so no tag symbol
-rides beside the payload. `Tagged::hold` keeps every layer of a payload that is
-itself tagged; `Tagged::peel` replaces one, so a re-tag never nests.
+A tagged value is the one nominal wrap — a newtype construction, a
+construction through a family, a union variant, a lowered error — and its
+identity *is* its type, so no tag symbol rides beside the payload.
+`Tagged::hold` keeps every layer of a payload that is itself tagged;
+`Tagged::peel` replaces one, so a re-tag never nests.
 
-**A newtype construction has one rule.** [`construction`](admission.rs) takes
-the handle a construction's head names and the type of its payload, and answers
-the identity the tagged value takes — the head itself — or a
-`ConstructionRefused`: `NotNewType` when the head is not a newtype (a scalar
-type, or a type constructor), `Misfit` when the payload's type does not satisfy
-the newtype's representation. `Tagged::construct` is the checked door over it;
+**A construction has one rule.** [`construction`](admission.rs) takes the
+handle a construction's head names and the type of its payload, and answers the
+identity the tagged value takes, or a `ConstructionRefused`:
+
+- a **newtype** gives the head itself, or `Misfit` when the payload's type does
+  not satisfy its representation;
+- a **family with a representation** — a one-parameter `NEWTYPE` family, or a
+  parameterized union's variant ([families](../elaborate/README.md#families)) —
+  solves the representation's parameters against the payload's type and gives
+  the family applied at the solution: `Boxed` over a number gives
+  `:(Boxed {Type = Number})`. The solve takes the least solution, so a
+  parameter the payload does not reach is `Never`, and a construction of
+  `Result.Ok` over a number carries `:(Result.Ok {Ok = Number, Error = Never})`,
+  which lies under every `Result` whose `Ok` admits a number. A payload the
+  representation cannot be solved against — a structural misfit, or two
+  contributions to one parameter with no maximum — is `Unsolved`, naming the
+  family and the payload's type;
+- any other head is `NotConstructible`: a scalar type, a family that constructs
+  nothing, and an applied family, whose arguments a construction does not take
+  from its head.
+
+`Tagged::construct` is the checked door over it;
 `hold` stays the raw wrap for a union variant, a lowered error and a retype.
 Every construction goes through the rule — an ordinary one through `construct`,
 a knot's tagged node by the tie over the payload type it derived — so there is

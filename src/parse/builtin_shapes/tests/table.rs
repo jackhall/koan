@@ -44,7 +44,7 @@ const RECORDED_RAW_SLOTS: &[(BuiltinShapeId, &[(usize, LazyKinds)])] = &[
         &[(4, CODE), (7, CODE)],
     ),
     (BuiltinShapeId::Sig, &[(3, CODE)]),
-    (BuiltinShapeId::Union, &[(3, CODE)]),
+    (BuiltinShapeId::Union, &[(1, CODE), (3, CODE)]),
     (BuiltinShapeId::NewTypeDefinition, &[(3, RAW_TYPE)]),
     (BuiltinShapeId::NewTypeDeclaration, &[(1, CODE)]),
     (BuiltinShapeId::Val, &[]),

@@ -9,7 +9,9 @@ and nothing can. `MATCH`, `MATCH … OVER`, `TRY` and `CATCH` each have a
 [builtin expression shape](../../src/parse/builtin_shapes.rs) and arm shapes the
 [scope builder](../../src/scope/README.md#three-tiers) already builds, but the
 evaluator answers each with an error saying it does not run yet. The builtin
-`Result` union has no declaration, and `CATCH`'s declared return is `Any`.
+`Result` union has a declaration
+([`builtin_result`](../../src/elaborate/builtin.rs)) but no builtin-table entry,
+and `CATCH`'s declared return is `Any`.
 
 **Acceptance criteria.**
 
@@ -48,7 +50,6 @@ evaluator answers each with an error saying it does not run yet. The builtin
 **Requires:**
 
 - [Dispatch](dispatch.md) — the evaluator, block evaluation and error values.
-- [Parameterized unions](parameterized-unions.md) — `Result` is one.
 - [Binders nested in expressions](nested-binders.md) — `TRY` and `CATCH` operands are block shapes.
 
 **Unblocks:**

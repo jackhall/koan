@@ -19,7 +19,7 @@ use super::digest::TypeDigest;
 use super::handle::KType;
 use super::kind::KKind;
 use super::record::Record;
-use super::schema::{Members, SigSchema};
+use super::schema::SigSchema;
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 
 /// The content of one interned type. Every child position is a [`KType`] handle and every run is a
@@ -230,12 +230,12 @@ impl TypeNode<'_> {
 pub enum NodeSchema<'run> {
     /// Fresh nominal over a transparent representation.
     NewType(KType),
-    /// Higher-kinded constructor: erased-parameter variant schema plus parameter names. Both the
-    /// schema's keys and the parameter names are Type-class symbols, interned at the declaration
-    /// that mints the family, and both are stored symbol-sorted — the schema so it is read in one
-    /// order, the parameter names because a constructor's identity is their set.
+    /// Higher-kinded constructor: the representation a construction through the family wraps,
+    /// written over `Quantified { index, bound: Any }` for `param_names[index]`, or `None` for a
+    /// family that constructs nothing; plus its parameter names, Type-class symbols interned at
+    /// the declaration, stored symbol-sorted because a constructor's identity is their set.
     TypeConstructor {
-        schema: Members<'run, TypeSymbol>,
+        representation: Option<KType>,
         param_names: &'run [TypeSymbol],
     },
 }

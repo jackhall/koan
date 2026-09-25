@@ -1,5 +1,5 @@
 //! Slot admission: whether a type slot takes a value, a raw AST part, or a working part — the type
-//! dispatch reads off a raw part — the one rule a newtype construction is checked by, the one rule
+//! dispatch reads off a raw part — the one rule a construction is checked by, the one rule
 //! a member sealed behind an opaque view's barrier is checked by, and the one rule each container
 //! kind's memo is derived by.
 //!
@@ -37,43 +37,101 @@ pub fn satisfies<X: Knotted>(
     satisfied_by(types, scratch, slot, carried)
 }
 
-/// What a newtype construction `(Head payload)` refuses.
+/// What a construction `(Head payload)` refuses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConstructionRefused {
-    /// The head names no newtype: not a declared nominal, or one whose schema is a type constructor.
-    NotNewType(KType),
+    /// The head names nothing a construction builds: no newtype, no family with a representation.
+    /// An application of a family is no head either.
+    NotConstructible(KType),
     /// The payload's type does not satisfy the newtype's representation.
     Misfit {
         identity: KType,
         representation: KType,
     },
+    /// The payload's type cannot be solved against the family's representation: a structural
+    /// mismatch, or contributions to one parameter with no maximum.
+    Unsolved { family: KType, payload: KType },
 }
 
-/// The identity a construction whose head denotes `head` produces over a payload of type `payload`:
-/// `head` itself, when it is a newtype whose representation `payload` satisfies. Every construction
-/// is checked here — an ordinary one through [`Tagged::construct`](super::Tagged::construct), a
-/// knot's tagged node by the tie over its derived payload type.
+/// The identity a construction whose head denotes `head` produces over a payload of type `payload`.
+/// Every construction is checked here — an ordinary one through
+/// [`Tagged::construct`](super::Tagged::construct), a knot's tagged node by the tie over its derived
+/// payload type.
+///
+/// A newtype gives `head` itself, when `payload` satisfies its representation. A family with a
+/// representation gives its application at the least arguments `payload` solves the representation
+/// to, a parameter the payload does not reach taking `Never`: `Boxed` over a number gives
+/// `:(Boxed {Type = Number})`.
 pub fn construction(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     head: KType,
     payload: KType,
 ) -> Result<KType, ConstructionRefused> {
-    let TypeNode::SetMember {
-        schema: NodeSchema::NewType(representation),
-        ..
-    } = types.node(head)
-    else {
-        return Err(ConstructionRefused::NotNewType(head));
-    };
-    if satisfied_by(types, scratch, representation, payload) {
-        Ok(head)
-    } else {
-        Err(ConstructionRefused::Misfit {
-            identity: head,
-            representation,
-        })
+    match types.node(head) {
+        TypeNode::SetMember {
+            schema: NodeSchema::NewType(representation),
+            ..
+        } => {
+            if satisfied_by(types, scratch, representation, payload) {
+                Ok(head)
+            } else {
+                Err(ConstructionRefused::Misfit {
+                    identity: head,
+                    representation,
+                })
+            }
+        }
+        TypeNode::SetMember {
+            schema:
+                NodeSchema::TypeConstructor {
+                    representation: Some(representation),
+                    param_names,
+                },
+            ..
+        } => {
+            let mut collector = Collector::least(scratch, param_names.len());
+            let solved = admits_with(
+                types,
+                scratch,
+                representation,
+                payload,
+                Variance::Co,
+                &mut collector,
+            )
+            .ok()
+            .and_then(|()| collector.solve(types).ok())
+            .ok_or(ConstructionRefused::Unsolved {
+                family: head,
+                payload,
+            })?;
+            let mut arguments = BumpVec::with_capacity_in(param_names.len(), scratch);
+            arguments.extend(
+                param_names
+                    .iter()
+                    .zip(solved.iter())
+                    .map(|(name, ktype)| (BinderSymbol::Type(*name), *ktype)),
+            );
+            Ok(types.constructor_apply(scratch, head, &arguments))
+        }
+        _ => Err(ConstructionRefused::NotConstructible(head)),
     }
+}
+
+/// Whether a construction through `head` solves its identity from its payload — `head` names a
+/// family with a representation — rather than taking `head` itself: a newtype, or a head that
+/// constructs nothing, which the check then refuses. The tie reads the latter two as a cut.
+pub fn solves_identity(types: &TypeRegistry<'_>, head: KType) -> bool {
+    matches!(
+        types.node(head),
+        TypeNode::SetMember {
+            schema: NodeSchema::TypeConstructor {
+                representation: Some(_),
+                ..
+            },
+            ..
+        }
+    )
 }
 
 /// What sealing a payload under an opaque mint refuses.

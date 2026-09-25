@@ -26,7 +26,8 @@ use super::walk::binary::{Arm, Lockstep, lockstep};
 ///   ([`family_top`]); `Type` is the kind order's top.
 /// - `OfKind(x) ≤ OfKind(y)` when `y` admits `x`; the kind lattice is the whole story on the type
 ///   channel.
-/// - Lists, dicts and constructor applications are covariant in every child. Records are covariant
+/// - Lists, dicts and constructor applications are covariant in every child. An application lies
+///   under the family it applies, and not the reverse. Records are covariant
 ///   and width-superset. Functions are contravariant in their parameters and width-subset there,
 ///   and covariant in the return. A monomorphic expression shape pairs positionally under equal
 ///   keywords, contravariant in its slots and covariant in its return.
@@ -168,6 +169,12 @@ impl Lockstep for Order {
             (TypeNode::KFunction { .. }, TypeNode::KFunction { .. }) => {
                 admits_function(types, scratch, a, b)
             }
+            // An application lies under the family it applies: a bare family stands for every
+            // application of it. A pre-seal sibling has the profile of the member it becomes.
+            (
+                TypeNode::ConstructorApply { constructor, .. },
+                TypeNode::SetMember { .. } | TypeNode::Sibling(_),
+            ) => constructor == b,
             // A family top is above every type whose own family it is.
             (_, TypeNode::AnyValue | TypeNode::AnyCode) => family_top(&na) == Some(b),
             _ => false,

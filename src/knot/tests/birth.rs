@@ -37,7 +37,7 @@ pub(super) fn tie_with<'f, 'graph, 'cell>(
 }
 
 /// [`tie_with`] under an evaluator that supplies nothing.
-fn tie_of<'f, 'graph, 'cell>(
+pub(super) fn tie_of<'f, 'graph, 'cell>(
     fixture: &'f Fixture<'_, 'graph>,
     writer: Writer<'cell>,
     activation: &KActivation<'graph, 'cell>,
@@ -478,7 +478,7 @@ fn a_construction_the_rule_refuses_refuses_the_tie() {
             assert!(matches!(
                 tie_of(fixture, writer, activation, "b"),
                 Err(Untieable::Construction {
-                    refused: ConstructionRefused::NotNewType(KType::NUMBER),
+                    refused: ConstructionRefused::NotConstructible(KType::NUMBER),
                     ..
                 })
             ));

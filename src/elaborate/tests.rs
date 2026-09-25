@@ -5,6 +5,7 @@ mod boundary;
 mod builtin;
 mod declarations;
 mod examples;
+mod families;
 mod module;
 mod projections;
 

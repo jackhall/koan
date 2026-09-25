@@ -5,7 +5,9 @@
 //! they are mentions of the enclosing shape; only the names are the body's.
 
 use crate::memory::BumpVec;
-use crate::parse::builtin_shapes::binder::{bounded_name, quantifier_entries};
+use crate::parse::builtin_shapes::binder::{
+    bounded_name, declarator_parameters, quantifier_entries,
+};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, WILDCARD};
 
@@ -68,6 +70,15 @@ pub(crate) fn declare_quantifiers(part: &ExpressionPart<'_>, into: &mut BumpVec<
             .filter_map(bounded_name)
             .map(|(name, _)| BinderSymbol::Type(name)),
     );
+}
+
+/// Push every type parameter a `(<P>… AS <Name>)` declarator names onto `into` — a parameterized
+/// `UNION`'s, which its variants' payloads read.
+pub(crate) fn declare_family_parameters(
+    part: &ExpressionPart<'_>,
+    into: &mut BumpVec<'_, BinderSymbol>,
+) {
+    into.extend(declarator_parameters(part).map(BinderSymbol::Type));
 }
 
 /// The bound parts a `FOR ALL` group writes, in written order. A bound is a type expression read

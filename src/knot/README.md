@@ -170,15 +170,21 @@ Every mention of a fellow member becomes the edge the knot's plan mints for
 that node's index.
 
 **Derive memos: the nominal cut.** A function node's memo is its signature
-type and a tagged node's is the newtype its head names; both are declared, and
-exist before the knot does. A container node's memo is derived by the rule the plain door of
+type and a tagged node's is the head it names; both are declared, and
+exist before the knot does. A *derived* node's memo is read off its cells, with
+an edge contributing its target's memo. A container's is derived by the rule the plain door of
 its kind uses (`values::list_type`, `dict_type`, `record_type`) — the join of its cells for a list, the key and value
-joins for a dict, the record type of its fields — with an edge contributing
-its target's memo. So the tie derives container memos over the strongly
-connected components of the edges between container nodes, referents first,
-reading a declared memo at every cut. A cycle of container nodes alone has no
+joins for a dict, the record type of its fields. A tagged node whose head is a
+family with a representation is derived too, and is no cut: its memo is the
+application the [construction rule](../values/README.md#what-a-value-is)
+solves from its payload's memo. So the tie derives memos over the strongly
+connected components of the edges between derived nodes, referents first,
+reading a declared memo at every cut. A cycle of derived nodes alone has no
 finite type and refuses the tie as `TypeCycle`, naming the members whose
-right-hand sides hold it. An ascription is no cut, since a retype stamps a
+right-hand sides hold it: `LET a = (Boxed [a])` over `NEWTYPE (Type AS Boxed)`
+refuses, while `LET a = (Boxed [f])` with `f` a function capturing `a` ties
+with `a : :(Boxed {Type = LIST OF <f's type>})`. A construction the rule
+refuses while a memo is derived refuses the tie as `Construction`. An ascription is no cut, since a retype stamps a
 structural type and no structural type names itself: `LET a = [1 a]` refuses,
 while `LET a = (Ring {next = a})` over `NEWTYPE Ring = :{next :Ring}` ties as a
 tagged node over an anonymous record node `{next: Ring}`, and `LET a = [f]`
@@ -211,7 +217,7 @@ refusal writes nothing**. The refusal is an `Untieable`:
 - `Key` — a dict key in a data member that evaluated to something no key can
   be.
 - `Construction` — a construction the rule refuses, with its site.
-- `TypeCycle` — a cycle of container nodes, with the members holding it.
+- `TypeCycle` — a cycle of derived nodes, with the members holding it.
 - `Type` — a member's signature did not elaborate.
 
 ## A lambda
@@ -331,6 +337,10 @@ carries the scalar types alone.
   container sharing a knot with the function that captures it, an anonymous
   node on a sibling path, a nested construction built through the checked
   door, an eager part supplied by site; and each refusal.
+- [`tests/families.rs`](tests/families.rs) — a construction through a family:
+  a nested one built through the checked door at its solved application, a
+  tagged node deriving its memo from its payload, a cycle of such nodes alone
+  refusing `TypeCycle`, and the refusals the rule gives.
 - [`module/tests/birth.rs`](module/tests/birth.rs) — a module node's signature
   and its members in layout order, a `GROUP` binder birthing one the same way, a module
   capturing an outer value and holding a module of its own, a body that ties a
@@ -378,4 +388,5 @@ the node while the copy's node run is still being filled.
 - [Module programs](../../roadmap/rewrite/modules.md) — a call through a
   barrier node, which coerces its arguments inwards and its return outwards.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) —
-  union-variant construction in a cycle.
+  union-variant construction in a cycle, and a cycle through a family
+  construction, which has no cut.

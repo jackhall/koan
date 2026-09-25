@@ -23,8 +23,8 @@ pub struct Tagged<'graph, 'cell, X = Nothing, C = Value<'graph, 'cell, X>> {
 }
 
 impl<'graph, 'cell, X: Knotted> Tagged<'graph, 'cell, X> {
-    /// The newtype construction `(head payload)`: [`construction`] checks the head names a newtype
-    /// whose representation the payload's type satisfies, and the payload is held under it.
+    /// A construction `(head payload)`: [`construction`] checks the payload against what the head
+    /// names — a newtype or a family — and the payload is held under the identity it answers.
     pub fn construct(
         writer: Writer<'cell>,
         head: &TypeValue,
