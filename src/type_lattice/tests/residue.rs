@@ -366,11 +366,17 @@ fn each_node_kind_lies_under_its_family_top() {
     }
     let codes = [
         KType::IDENTIFIER,
-        KType::NAME_TOKEN,
+        KType::SYMBOL,
         KType::TYPE_NAME_TOKEN,
-        KType::KEXPRESSION,
+        KType::EXPRESSION,
         KType::SIGILED_TYPE_EXPR,
         KType::RECORD_TYPE,
+        KType::LITERAL,
+        KType::BLOCK,
+        KType::DECLARATION,
+        KType::BINDER,
+        KType::NAME,
+        KType::KEYWORD,
         KType::ANY_CODE,
     ];
     for code in codes {
@@ -412,6 +418,97 @@ fn each_node_kind_lies_under_its_family_top() {
         join(&types, region, KType::ANY_VALUE, KType::ANY_TYPE),
         pair_top
     );
+}
+
+/// The code family is a tree: each kind lies under its parent and, transitively, every kind above
+/// it, and under nothing beside. The meets and joins that matter follow from the tree alone.
+#[test]
+fn the_code_kinds_form_a_tree_under_code() {
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let below = |a: KType, b: KType| is_subtype_of(&types, region, a, b);
+    let edges = [
+        (KType::BLOCK, KType::ANY_CODE),
+        (KType::EXPRESSION, KType::BLOCK),
+        (KType::DECLARATION, KType::EXPRESSION),
+        (KType::LITERAL, KType::EXPRESSION),
+        (KType::SYMBOL, KType::EXPRESSION),
+        (KType::SIGILED_TYPE_EXPR, KType::EXPRESSION),
+        (KType::RECORD_TYPE, KType::EXPRESSION),
+        (KType::BINDER, KType::DECLARATION),
+        (KType::NAME, KType::SYMBOL),
+        (KType::KEYWORD, KType::SYMBOL),
+        (KType::IDENTIFIER, KType::NAME),
+        (KType::TYPE_NAME_TOKEN, KType::NAME),
+    ];
+    for (child, parent) in edges {
+        assert!(below(child, parent), "{child:?} under {parent:?}");
+        assert!(!below(parent, child), "{parent:?} not under {child:?}");
+    }
+    let chain = [
+        KType::IDENTIFIER,
+        KType::NAME,
+        KType::SYMBOL,
+        KType::EXPRESSION,
+        KType::BLOCK,
+        KType::ANY_CODE,
+    ];
+    for (index, lower) in chain.iter().enumerate() {
+        for upper in &chain[index..] {
+            assert!(below(*lower, *upper), "{lower:?} under {upper:?}");
+        }
+    }
+    assert!(below(KType::BINDER, KType::EXPRESSION));
+    for (a, b) in [
+        (KType::KEYWORD, KType::NAME),
+        (KType::LITERAL, KType::SYMBOL),
+        (KType::BINDER, KType::SYMBOL),
+        (KType::DECLARATION, KType::BINDER),
+        (KType::BLOCK, KType::EXPRESSION),
+        (KType::EXPRESSION, KType::SYMBOL),
+        (KType::IDENTIFIER, KType::KEYWORD),
+    ] {
+        assert!(!below(a, b), "{a:?} not under {b:?}");
+    }
+    for kind in [KType::BLOCK, KType::NAME, KType::KEYWORD, KType::BINDER] {
+        assert!(!below(kind, KType::ANY_VALUE), "{kind:?} not a value");
+        assert!(!below(kind, KType::ANY_TYPE), "{kind:?} not a type");
+    }
+
+    assert_eq!(
+        meet(&types, region, KType::EXPRESSION, KType::BLOCK),
+        KType::EXPRESSION
+    );
+    assert_eq!(
+        meet(&types, region, KType::NAME, KType::KEYWORD),
+        KType::NEVER
+    );
+    assert_eq!(
+        meet(&types, region, KType::LITERAL, KType::BINDER),
+        KType::NEVER
+    );
+    assert_eq!(
+        meet(&types, region, KType::DECLARATION, KType::SYMBOL),
+        KType::NEVER
+    );
+    assert_eq!(
+        types.union_of(region, &[KType::LITERAL, KType::EXPRESSION]),
+        KType::EXPRESSION
+    );
+
+    let list_of_code = types.list(KType::ANY_CODE);
+    assert!(below(KType::LIST_OF_NAME, list_of_code));
+    assert!(below(list_of_code, KType::ANY_VALUE));
+    assert!(below(
+        KType::LIST_OF_DECLARATION,
+        types.list(KType::EXPRESSION)
+    ));
+    assert!(below(
+        KType::DICT_NAME_BLOCK,
+        types.dict(KType::SYMBOL, KType::ANY_CODE)
+    ));
+    assert!(below(KType::TYPE_CODE, KType::EXPRESSION));
 }
 
 /// No law: the order's laws hold over union-bounded variables without naming one. These pin the

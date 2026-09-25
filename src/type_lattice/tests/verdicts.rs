@@ -71,12 +71,14 @@ fn the_table_is_laid_once_and_never_grows() {
     let bump = Bump::new();
     drop(BumpVec::<u8>::with_capacity_in(1 << 12, &bump));
     let types = TypeRegistry::in_region_with_verdict_slots(&bump, 2);
+    // Seeding the code composites records verdicts of its own; only the loop's are counted.
+    let seeded = types.verdict_tally().0;
     let before = allocation_count();
     for n in 0..100 {
         types.record_verdict(key(n), key(n + 1), Relation::Subtype, n % 2 == 0);
     }
     assert_eq!(allocation_count() - before, 0);
-    assert_eq!(types.verdict_tally().0, 100);
+    assert_eq!(types.verdict_tally().0 - seeded, 100);
 }
 
 /// Digests are content hashes, so which relations collide is fixed and the bound is deterministic.

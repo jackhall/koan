@@ -120,7 +120,7 @@ fn admission_reads_each_part_kind() {
             let nested = WorkingPart::Expression(crate::memory::resident(writer, working));
             for unfilled in [WorkingPart::StagedSlot, nested] {
                 assert!(admits(KType::ANY, &unfilled, types, scratch));
-                assert!(!admits(KType::KEXPRESSION, &unfilled, types, scratch));
+                assert!(!admits(KType::EXPRESSION, &unfilled, types, scratch));
             }
         })
     });

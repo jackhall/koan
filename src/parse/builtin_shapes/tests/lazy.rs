@@ -11,7 +11,7 @@ use crate::type_lattice::KType;
 /// raw-capture leaves, and three that stage nothing. A name-token carrier keeps nothing raw — a
 /// bare token is not an eager shape, so it never stages and needs no kind.
 const MEMBERS: &[(KType, LazyKinds)] = &[
-    (KType::KEXPRESSION, LazyKinds::CODE),
+    (KType::EXPRESSION, LazyKinds::CODE),
     (KType::SIGILED_TYPE_EXPR, LazyKinds::TYPE_EXPR),
     (KType::RECORD_TYPE, LazyKinds::RECORD_TYPE),
     (KType::TYPE_NAME_TOKEN, LazyKinds::EMPTY),

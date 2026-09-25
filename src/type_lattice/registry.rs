@@ -215,11 +215,17 @@ impl<'run> TypeRegistry<'run> {
             TypeNode::Bool,
             TypeNode::Null,
             TypeNode::Identifier,
-            TypeNode::NameToken,
+            TypeNode::Symbol,
             TypeNode::TypeNameToken,
-            TypeNode::KExpression,
+            TypeNode::Expression,
             TypeNode::SigiledTypeExpr,
             TypeNode::RecordType,
+            TypeNode::Literal,
+            TypeNode::Block,
+            TypeNode::Declaration,
+            TypeNode::Binder,
+            TypeNode::Name,
+            TypeNode::Keyword,
             TypeNode::Any,
             TypeNode::AnyValue,
             TypeNode::AnyCode,
@@ -239,6 +245,18 @@ impl<'run> TypeRegistry<'run> {
         self.list(KType::ANY);
         self.dict(KType::ANY, KType::ANY);
         self.intern_schema(SigSchema::EMPTY);
+        let type_code = self.union_of(
+            self.bump,
+            &[
+                KType::TYPE_NAME_TOKEN,
+                KType::SIGILED_TYPE_EXPR,
+                KType::RECORD_TYPE,
+            ],
+        );
+        self.list(KType::NAME);
+        self.list(KType::DECLARATION);
+        self.dict(KType::NAME, KType::BLOCK);
+        self.dict(KType::NAME, type_code);
     }
 
     /// `test`-only: how many verdicts were recorded, and how many of those evicted another.

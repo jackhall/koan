@@ -211,7 +211,7 @@ fn kind_of<X: Knotted>(
         Value::Bool(_) => KType::BOOL,
         Value::Null => KType::NULL,
         Value::Str(_) => KType::STR,
-        Value::Expression(_) => KType::KEXPRESSION,
+        Value::Expression(_) => KType::EXPRESSION,
         Value::Type(_) => KType::ANY_TYPE,
         Value::List(_) => KType::LIST_OF_ANY,
         Value::Dict(_) => KType::DICT_ANY_ANY,
@@ -253,7 +253,7 @@ pub fn part_ktype(
             fields.iter().map(|(name, value)| (*name, element(value))),
         ),
         ExpressionPart::Identifier(_) => KType::IDENTIFIER,
-        ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_) => KType::KEXPRESSION,
+        ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_) => KType::EXPRESSION,
         ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
         ExpressionPart::RecordType(_) => KType::RECORD_TYPE,
         ExpressionPart::Type(_) => KType::PROPER_TYPE,
@@ -342,19 +342,25 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
         TypeNode::Dict { .. } => matches!(part, ExpressionPart::DictLiteral(_)),
         TypeNode::Record { .. } => matches!(part, ExpressionPart::RecordLiteral(_)),
         TypeNode::Identifier => matches!(part, ExpressionPart::Identifier(_)),
-        TypeNode::NameToken => {
+        TypeNode::Symbol => {
             matches!(
                 part,
                 ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
             )
         }
         TypeNode::TypeNameToken => matches!(part, ExpressionPart::Type(_)),
-        TypeNode::KExpression => matches!(
+        TypeNode::Expression => matches!(
             part,
             ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_)
         ),
         TypeNode::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
         TypeNode::RecordType => matches!(part, ExpressionPart::RecordType(_)),
+        TypeNode::Literal
+        | TypeNode::Block
+        | TypeNode::Declaration
+        | TypeNode::Binder
+        | TypeNode::Name
+        | TypeNode::Keyword => false,
         TypeNode::OfKind(kind) => {
             matches!(part, ExpressionPart::Type(_))
                 && matches!(kind, KKind::ProperType | KKind::AnyType)

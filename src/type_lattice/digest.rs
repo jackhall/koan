@@ -57,7 +57,7 @@ const TAG_STR: u8 = 0x02;
 const TAG_BOOL: u8 = 0x03;
 const TAG_NULL: u8 = 0x04;
 const TAG_IDENTIFIER: u8 = 0x05;
-const TAG_KEXPRESSION: u8 = 0x06;
+const TAG_EXPRESSION: u8 = 0x06;
 const TAG_SIGILED_TYPE_EXPR: u8 = 0x07;
 const TAG_RECORD_TYPE: u8 = 0x08;
 const TAG_ANY: u8 = 0x09;
@@ -79,13 +79,19 @@ const TAG_RECURSIVE_SET: u8 = 0x1B;
 const TAG_SIG_CONTENT: u8 = 0x1C;
 // 0x1D is retired: it tagged the deep canonicalizing walk's self-reference leaf, which no longer
 // exists — projection's sentinel re-sourcing makes an own-member reference content-determined.
-const TAG_NAME_TOKEN: u8 = 0x1E;
+const TAG_SYMBOL: u8 = 0x1E;
 const TAG_TYPE_NAME_TOKEN: u8 = 0x1F;
 const TAG_NEVER: u8 = 0x20;
 const TAG_EXPRESSION_SHAPE: u8 = 0x21;
 const TAG_QUANTIFIED: u8 = 0x22;
 const TAG_ANY_VALUE: u8 = 0x23;
 const TAG_ANY_CODE: u8 = 0x24;
+const TAG_LITERAL: u8 = 0x25;
+const TAG_BLOCK: u8 = 0x26;
+const TAG_BINDER: u8 = 0x27;
+const TAG_NAME: u8 = 0x28;
+const TAG_KEYWORD: u8 = 0x29;
+const TAG_DECLARATION: u8 = 0x2A;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -173,11 +179,17 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::Bool => leaf_digest(TAG_BOOL),
         TypeNode::Null => leaf_digest(TAG_NULL),
         TypeNode::Identifier => leaf_digest(TAG_IDENTIFIER),
-        TypeNode::NameToken => leaf_digest(TAG_NAME_TOKEN),
+        TypeNode::Symbol => leaf_digest(TAG_SYMBOL),
         TypeNode::TypeNameToken => leaf_digest(TAG_TYPE_NAME_TOKEN),
-        TypeNode::KExpression => leaf_digest(TAG_KEXPRESSION),
+        TypeNode::Expression => leaf_digest(TAG_EXPRESSION),
         TypeNode::SigiledTypeExpr => leaf_digest(TAG_SIGILED_TYPE_EXPR),
         TypeNode::RecordType => leaf_digest(TAG_RECORD_TYPE),
+        TypeNode::Literal => leaf_digest(TAG_LITERAL),
+        TypeNode::Block => leaf_digest(TAG_BLOCK),
+        TypeNode::Declaration => leaf_digest(TAG_DECLARATION),
+        TypeNode::Binder => leaf_digest(TAG_BINDER),
+        TypeNode::Name => leaf_digest(TAG_NAME),
+        TypeNode::Keyword => leaf_digest(TAG_KEYWORD),
         TypeNode::Any => leaf_digest(TAG_ANY),
         TypeNode::AnyValue => leaf_digest(TAG_ANY_VALUE),
         TypeNode::AnyCode => leaf_digest(TAG_ANY_CODE),

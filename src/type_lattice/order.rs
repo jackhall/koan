@@ -175,6 +175,9 @@ impl Lockstep for Order {
                 TypeNode::ConstructorApply { constructor, .. },
                 TypeNode::SetMember { .. } | TypeNode::Sibling(_),
             ) => constructor == b,
+            // A code kind below `Code` is above exactly the code kinds under it in the code
+            // family's tree.
+            _ if b.code_parent().is_some() => a.within_code(b),
             // A family top is above every type whose own family it is.
             (_, TypeNode::AnyValue | TypeNode::AnyCode) => family_top(&na) == Some(b),
             _ => false,
@@ -231,11 +234,17 @@ fn family_top(node: &TypeNode<'_>) -> Option<KType> {
         | TypeNode::Sibling(_)
         | TypeNode::AnyValue => Some(KType::ANY_VALUE),
         TypeNode::Identifier
-        | TypeNode::NameToken
+        | TypeNode::Symbol
         | TypeNode::TypeNameToken
-        | TypeNode::KExpression
+        | TypeNode::Expression
         | TypeNode::SigiledTypeExpr
         | TypeNode::RecordType
+        | TypeNode::Literal
+        | TypeNode::Block
+        | TypeNode::Declaration
+        | TypeNode::Binder
+        | TypeNode::Name
+        | TypeNode::Keyword
         | TypeNode::AnyCode => Some(KType::ANY_CODE),
         TypeNode::OfKind(_) => Some(KType::ANY_TYPE),
         TypeNode::Any

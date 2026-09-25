@@ -208,7 +208,7 @@ impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
             Value::Bool(_) => KType::BOOL,
             Value::Null => KType::NULL,
             Value::Str(_) => KType::STR,
-            Value::Expression(_) => KType::KEXPRESSION,
+            Value::Expression(_) => KType::EXPRESSION,
             Value::Type(value) => value.ktype(),
             Value::List(list) => list.ktype(),
             Value::Dict(dict) => dict.ktype(),

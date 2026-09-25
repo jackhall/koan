@@ -13,9 +13,10 @@ use crate::symbols::{KeywordSymbol, Symbol, SymbolDisplay, SymbolInterner, TypeS
 
 use super::digest::empty_schema_digest;
 use super::handle::{
-    ANY_NAME, BOOL_NAME, CODE_NAME, IDENTIFIER_NAME, KEXPRESSION_NAME, KType, MODULE_NAME,
-    NAME_TOKEN_NAME, NEVER_NAME, NULL_NAME, NUMBER_NAME, RECORD_TYPE_NAME, SIGILED_TYPE_EXPR_NAME,
-    STR_NAME, TYPE_NAME_TOKEN_NAME, VALUE_NAME,
+    ANY_NAME, BINDER_NAME, BLOCK_NAME, BOOL_NAME, CODE_NAME, DECLARATION_NAME, EXPRESSION_NAME,
+    IDENTIFIER_NAME, KEYWORD_NAME, KType, LITERAL_NAME, MODULE_NAME, NAME_NAME, NEVER_NAME,
+    NULL_NAME, NUMBER_NAME, RECORD_TYPE_NAME, SIGILED_TYPE_EXPR_NAME, STR_NAME, SYMBOL_NAME,
+    TYPE_NAME_TOKEN_NAME, VALUE_NAME,
 };
 use super::node::TypeNode;
 use super::operators::{FoldDirection, ReductionMode};
@@ -56,11 +57,17 @@ fn write_name_in(
         TypeNode::Bool => f.write_str(BOOL_NAME.text()),
         TypeNode::Null => f.write_str(NULL_NAME.text()),
         TypeNode::Identifier => f.write_str(IDENTIFIER_NAME.text()),
-        TypeNode::NameToken => f.write_str(NAME_TOKEN_NAME.text()),
+        TypeNode::Symbol => f.write_str(SYMBOL_NAME.text()),
         TypeNode::TypeNameToken => f.write_str(TYPE_NAME_TOKEN_NAME.text()),
-        TypeNode::KExpression => f.write_str(KEXPRESSION_NAME.text()),
+        TypeNode::Expression => f.write_str(EXPRESSION_NAME.text()),
         TypeNode::SigiledTypeExpr => f.write_str(SIGILED_TYPE_EXPR_NAME.text()),
         TypeNode::RecordType => f.write_str(RECORD_TYPE_NAME.text()),
+        TypeNode::Literal => f.write_str(LITERAL_NAME.text()),
+        TypeNode::Block => f.write_str(BLOCK_NAME.text()),
+        TypeNode::Declaration => f.write_str(DECLARATION_NAME.text()),
+        TypeNode::Binder => f.write_str(BINDER_NAME.text()),
+        TypeNode::Name => f.write_str(NAME_NAME.text()),
+        TypeNode::Keyword => f.write_str(KEYWORD_NAME.text()),
         TypeNode::Any => f.write_str(ANY_NAME.text()),
         TypeNode::AnyValue => f.write_str(VALUE_NAME.text()),
         TypeNode::AnyCode => f.write_str(CODE_NAME.text()),

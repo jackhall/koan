@@ -431,6 +431,6 @@ proptest! {
 
         prop_assert_eq!(a.value_equal(&b, &registries), Ok(true));
         prop_assert_eq!(a.value_equal(&c, &registries), Ok(left == right));
-        prop_assert_eq!(a.ktype(), KType::KEXPRESSION);
+        prop_assert_eq!(a.ktype(), KType::EXPRESSION);
     }
 }

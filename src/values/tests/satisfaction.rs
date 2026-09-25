@@ -163,7 +163,7 @@ fn a_value_a_type_and_a_quote_each_satisfy_their_family_alone() {
             let families = [
                 (&number, [KType::ANY_VALUE, KType::NUMBER]),
                 (&type_value, [KType::ANY_TYPE, KType::PROPER_TYPE]),
-                (&quote, [KType::ANY_CODE, KType::KEXPRESSION]),
+                (&quote, [KType::ANY_CODE, KType::EXPRESSION]),
             ];
             for (value, own) in &families {
                 assert!(satisfies(KType::ANY, value, types, scratch));

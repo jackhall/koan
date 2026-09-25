@@ -167,7 +167,7 @@ const fn raw_kinds_over(members: &[KType]) -> LazyKinds {
 /// The kind one raw-capture leaf stands for, empty for every other type: `KExpression` captures an
 /// `(…)` group or a `#(…)` quote, `SigiledTypeExpr` a `:(…)`, `RecordType` a `:{…}`.
 const fn raw_kind_of(leaf: KType) -> LazyKinds {
-    if leaf.same_as(KType::KEXPRESSION) {
+    if leaf.same_as(KType::EXPRESSION) {
         LazyKinds::CODE
     } else if leaf.same_as(KType::SIGILED_TYPE_EXPR) {
         LazyKinds::TYPE_EXPR
@@ -321,7 +321,7 @@ const fn roles_agree_with_raw_kinds(table: &[BuiltinShape]) -> bool {
                             let SlotType::Leaf(leaf) = types[overload] else {
                                 return false;
                             };
-                            if !leaf.same_as(KType::KEXPRESSION) {
+                            if !leaf.same_as(KType::EXPRESSION) {
                                 return false;
                             }
                             overload += 1;
@@ -427,9 +427,9 @@ use Role::{
 // lattice's own, so an entry reads as the types its overloads declare.
 const ANY: SlotType = SlotType::Leaf(KType::ANY);
 const NEVER: SlotType = SlotType::Leaf(KType::NEVER);
-const CODE: SlotType = SlotType::Leaf(KType::KEXPRESSION);
+const CODE: SlotType = SlotType::Leaf(KType::EXPRESSION);
 const IDENTIFIER: SlotType = SlotType::Leaf(KType::IDENTIFIER);
-const NAME_TOKEN: SlotType = SlotType::Leaf(KType::NAME_TOKEN);
+const NAME_TOKEN: SlotType = SlotType::Leaf(KType::SYMBOL);
 const TYPE_NAME: SlotType = SlotType::Leaf(KType::TYPE_NAME_TOKEN);
 const SIGILED_TYPE: SlotType = SlotType::Leaf(KType::SIGILED_TYPE_EXPR);
 const RECORD_TYPE: SlotType = SlotType::Leaf(KType::RECORD_TYPE);

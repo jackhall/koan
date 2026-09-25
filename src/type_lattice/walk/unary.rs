@@ -281,11 +281,17 @@ pub fn children(
         | TypeNode::Bool
         | TypeNode::Null
         | TypeNode::Identifier
-        | TypeNode::NameToken
+        | TypeNode::Symbol
         | TypeNode::TypeNameToken
-        | TypeNode::KExpression
+        | TypeNode::Expression
         | TypeNode::SigiledTypeExpr
         | TypeNode::RecordType
+        | TypeNode::Literal
+        | TypeNode::Block
+        | TypeNode::Declaration
+        | TypeNode::Binder
+        | TypeNode::Name
+        | TypeNode::Keyword
         | TypeNode::Any
         | TypeNode::AnyValue
         | TypeNode::AnyCode

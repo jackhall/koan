@@ -31,26 +31,39 @@ pub enum TypeNode<'run> {
     Str,
     Bool,
     Null,
+    /// A lone value name of code (`#(y)`), under [`Self::Name`].
     Identifier,
-    /// Binder-position slot: captures a bare name token of either class raw. Never resolves.
-    NameToken,
-    /// Binder-position slot for a Type-class name only, captured raw. Never resolves — unlike
+    /// A lone token of code — spelled `Symbol`: a [`Self::Name`] or a [`Self::Keyword`].
+    Symbol,
+    /// A lone type name of code (`#(Carrier)`), under [`Self::Name`]. Never resolves — unlike
     /// `OfKind(ProperType)`, which is a type *reference* slot and lowers builtin names.
     TypeNameToken,
-    /// Lazy slot: accepts an unevaluated expression, so the builtin chooses when (or whether) to
-    /// run it.
-    KExpression,
-    /// Lazy slot for a `:(...)` type expression — captured raw so a builtin can defer a
-    /// param-referencing dotted/sigil return to per-call elaboration.
+    /// One statement of code — spelled `Expression`: a lone part or a run of parts.
+    Expression,
+    /// A lone `:(…)` type expression of code, under [`Self::Expression`].
     SigiledTypeExpr,
-    /// Lazy slot for a `:{…}` record type — captured raw so the NEWTYPE record-repr declarator
-    /// owns its elaboration and threads its own binder name.
+    /// A lone `:{…}` record type of code, under [`Self::Expression`].
     RecordType,
+    /// A lone scalar literal or nested quote of code (`#(42)`, `#(#(x))`), under
+    /// [`Self::Expression`].
+    Literal,
+    /// Statements of code — the kind every body slot takes; written, it is two or more statements.
+    /// The one code kind directly under [`Self::AnyCode`].
+    Block,
+    /// One statement that declares a name or a shape: a `VAL`, a `TYPE` declarator, a bodyless
+    /// head, or a [`Self::Binder`].
+    Declaration,
+    /// One statement that declares and installs where it is written, as `LET x = 1` does.
+    Binder,
+    /// A lone value or type name of code — what a declaration binds.
+    Name,
+    /// A lone keyword of code, as an operator's symbol (`#(+)`).
+    Keyword,
     /// The lattice top: above the three family tops, and the default bound of a rigid variable.
     Any,
     /// The value family's top, spelled `Value`: above every type whose values are ordinary values.
     AnyValue,
-    /// The code family's top, spelled `Code`: above every raw-part type.
+    /// The code family's top, spelled `Code`: above every code kind.
     AnyCode,
     /// The uninhabited bottom: admitted by no value, below every other type, and the identity
     /// element of both [`join`](super::lattice::join) and union canonicalization. Spellable as
