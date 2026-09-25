@@ -126,9 +126,11 @@ wrapper — a scalar carries no type of its own, so the mint rides on the wrappe
 the mint layer exactly where the mint lies under the representation it reads,
 which is where the member's declared bound reveals it. [`unsealed`](admission.rs)
 is that one reading for equality and dict keys, under the payload's own kind —
-`Number` for a number, `LIST OF Any` for a list: a 5 sealed behind a member
+`Number` for a number, `LIST OF Any` for a list, `Code` for a quote, since every
+quote is one representation whatever its code kind: a 5 sealed behind a member
 bounded by `Number` equals 5, equals another view's sealed 5, and keys a dict as
-5. Behind a member bounded by `Value`, or by `Number | Str`, the mint lies under
+5, and a quote sealed behind a member bounded by any code kind is read through.
+Behind a member bounded by `Value`, or by `Number | Str`, the mint lies under
 no one kind, so the seal stays opaque to both. A reader reached through a slot
 typed `T` reads through a mint lying under `T` by the same rule. A seal takes
 one layer, so there is one layer to read through.

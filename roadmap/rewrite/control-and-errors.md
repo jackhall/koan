@@ -54,9 +54,15 @@ and `CATCH`'s declared return is `Any`.
   builder already builds for it, with `it` its one parameter, through the same
   block evaluation dispatch uses for a synthesized block.
 - *Arms select by specificity — decided.* Arms are written as a dict of
-  quotes, guards to blocks, typed `Dict(Name, Block)`
-  ([code as values](code-values.md)), so their written order says nothing; the most specific admitting guard is chosen, by the order
-  dispatch ranks candidates by.
+  quotes, guards to blocks — typed `Dict(TypeCode, Block)` under `MATCH`'s type
+  guards and `Dict(Name, Block)` under `MATCH … UNDER`'s and `TRY`'s labels
+  ([the builtin shape table](../../src/parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact))
+  — so their written order says nothing; the most specific admitting guard is
+  chosen, by the order dispatch ranks candidates by.
+- *`MATCH` on values — open.* `MATCH` is to branch on a scrutinee's value as
+  well as its type. Today a `MATCH … WITH` guard is a type, and a value guard
+  (`true`, `1`) is refused `Inadmissible` where the shape is built. How a value
+  guard is written, typed and ranked against a type guard is undecided.
 
 ## Dependencies
 

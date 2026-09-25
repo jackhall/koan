@@ -134,11 +134,11 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
 
 /// The static check of a builtin node, before any part is walked: each part its role reads as
 /// written — as a quote, as bare syntax or as a container of quotes — is written as the reading
-/// says, and admits one of its slot's types — a type expression's and an in-place operand's type
-/// is the value it denotes, so only their spelling is checked. A binder name is a bare name, or a
-/// bare declarator group for `TYPE`, `UNION` and `NEWTYPE`. Code written where a quote or a container of quotes is
-/// wanted is `Unquoted`, a quote where bare syntax is wanted `Malformed`, and a part whose syntax
-/// fills no slot type `Inadmissible`. The readers after it assume a well-formed part.
+/// says, and admits one of its slot's types — a type expression's and an in-place operand's type is
+/// the value it denotes, so only their spelling is checked. A binder name is a bare name, or a bare
+/// declarator group for `TYPE`, `UNION` and `NEWTYPE`. Code written where a quote or a container of
+/// quotes is wanted is `Unquoted`, a quote where bare syntax is wanted `Malformed`, and a part
+/// whose syntax fills no slot type `Inadmissible`. The readers after it assume a well-formed part.
 fn written_as_read(
     form: &'static BuiltinShape,
     statement: u32,

@@ -199,7 +199,6 @@ a statement's root, so a binder nested in an expression,
 
 **Requires:**
 
-- [Code as values](code-values.md) — `ATTR`'s symbol label, `EVAL`'s operand, and code-typed parameters.
 - [Quotes resolve where they are written](eval-scope.md) — a quote's names and candidates resolve at the quote.
 
 **Unblocks:**

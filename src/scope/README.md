@@ -106,15 +106,20 @@ parts it checks each part the node's roles read as written
 ([the builtin shape table](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)):
 a callable's body and an `EXPR` head are a quote; an arm set, a union's
 variants, a `FOR ALL` group and a `SIG` body are a list or dict of quotes; a
-binder name and an in-place body are bare; and each admits one of its slot's
-code types. One static check does it, against the table's own types, so no
+binder name, an in-place body, a type expression and a `TRY` or `CATCH` operand
+are bare; and each admits one of its slot's code types. A type expression's and
+an in-place operand's slot type is the value it denotes, so only their spelling
+is checked. One static check does it, against the table's own types, so no
 position list sits beside the table; the readers after it assume a well-formed
 part. A callable's body shape is built over its quote's body and keyed by the
 quote part, so `Site::of_body` finds it as it finds any body. An `EXPR` head's
 names are read through its quote. An arm set is a dict of guard quotes to arm
-quotes, and each arm is a block shape binding `it`. A `SIG` body's members and a
-bodyless `GROUP`'s heads are the statements of a list's quotes, each walked by
-its own builtin shape's roles.
+quotes, and each arm is a block shape binding `it`. A `MATCH … WITH` guard is a
+type — a type name, a `:(…)` or a `:{…}`, typed `Dict(TypeCode, Block)`, whose
+names are mentions read where the match runs — and a `MATCH … OVER` or `TRY`
+guard a label, typed `Dict(Name, Block)`; a value guard is `Inadmissible`. A
+`SIG` body's members and a bodyless `GROUP`'s heads are the statements of a
+list's quotes, each walked by its own builtin shape's roles.
 
 **An arm knows it is one.** An arm's block shape carries an `Arm`
 (`BodyShape::arm`): its guard as written — the key quote, a type under
@@ -524,10 +529,12 @@ error in walk order:
   quotes, written otherwise: a bare function body, a bare arm set, a bare `SIG`
   body. The message says how the part is written;
 - an **inadmissible** part — one read as written whose syntax fills none of its
-  slot's types: `42` as a body, `#{1: (a)}` as arms, `#[(PRINT 1)]` as a
-  signature's members, `#{}` as a union's variants;
+  slot's types: `42` as a body, a value guard such as `#{1: (a)}` as a
+  `MATCH … WITH`'s arms, `#[(PRINT 1)]` as a signature's members, `#{}` as a
+  union's variants;
 - a **malformed** form — a quote where bare syntax is read (`LET #(x) = 1`,
-  `MODULE m = #(…)`), or a body that is not the shape its form declares;
+  `MODULE m = #(…)`, `MATCH x -> #(Number) WITH …`, `CATCH #(x)`), or a body
+  that is not the shape its form declares;
 - a **dict default** — a value dict holding a `_` key, refused until its default
   has a reading (see [Open work](#open-work)); an arm set's `_` is its default
   arm;

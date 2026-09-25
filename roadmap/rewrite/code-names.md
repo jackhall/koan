@@ -6,8 +6,9 @@ named once can be built where it is used.
 **Problem.** Code has no name class of its own. A quote bound by `LET` sits in
 a value name, and the [shape builder](../../src/scope/README.md#three-tiers)
 reads no value where it builds a shape, so a callable's body can only be a
-quote written in place ([code as values](code-values.md)); code named once
-cannot be the body of two callables. A module exports code only as a value,
+quote written in place
+([what is quoted](../../tutorial/10-quoting.md#what-is-quoted-and-what-is-bare));
+code named once cannot be the body of two callables. A module exports code only as a value,
 and a `SIG` has no member for code.
 
 **Acceptance criteria.**
@@ -49,7 +50,6 @@ and a `SIG` has no member for code.
 
 **Requires:**
 
-- [Code as values](code-values.md) — the code kinds a sigiled name holds.
 - [Quotes resolve where they are written](eval-scope.md) — a sigiled name inside a quote resolves beside the quote's bindings.
 - [Code splicing](code-splicing.md) — a shape built at run time for code the builder cannot trace.
 

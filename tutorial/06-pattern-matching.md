@@ -4,8 +4,8 @@
 write decides how the branch heads are read. `MATCH … OVER <Union> WITH` reads
 every head as a **variant of that union** and hands the branch the payload —
 this is the [tagged-union](05-tagged-unions.md) form. Plain `MATCH … WITH` reads
-every head as a **type**, branching on the value's runtime type (a boolean, a
-plain `Number`, an untagged `:(Number | Str)`), and binds the value unchanged.
+every head as a **type**, branching on the value's runtime type (a plain
+`Number`, a `Str`, an untagged `:(Number | Str)`), and binds the value unchanged.
 Unlike [variant dispatch](05-tagged-unions.md#dispatching-on-a-variant), a match
 over a union gives you the payload to work with.
 
@@ -48,16 +48,20 @@ Here the result type is `:Number`, the `Some` branch returns the unwrapped
 payload `it`, and because the whole `MATCH` is a `Number` it slots straight into
 `PRINT`.
 
-Without `OVER`, `MATCH` branches on the value's runtime type instead — on a
-boolean, the two heads are `true` and `false`:
+Without `OVER`, `MATCH` branches on the value's runtime type instead. Each
+head is a type — a type name such as `Number`, or a sigiled type such as
+`:(Number | Str)`:
 
 ```koan
-MATCH true -> :Str WITH #{true: (PRINT "yes"), false: (PRINT "no")}
+MATCH 42 -> :Str WITH #{Number: (PRINT "a number"), Str: (PRINT "a string")}
 ```
 
 ```text
-yes
+a number
 ```
+
+A head is always a type, never a value: `#{true: (…)}` is refused before the
+program runs.
 
 ## Every case must be covered
 

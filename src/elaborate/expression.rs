@@ -346,8 +346,9 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
     }
 
     /// A `FOR ALL` group's names and bounds, in written order: a list of name quotes, or a dict of
-    /// name quotes to bound quotes; an entry naming no lone type is unsupported. Every bound is read under the group
-    /// with no bounds of its own, so a bound naming one of the group's names is refused.
+    /// name quotes to bound quotes; an entry naming no lone type is unsupported. Every bound is
+    /// read under the group with no bounds of its own, so a bound naming one of the group's names
+    /// is refused.
     pub(super) fn group(
         &self,
         part: &ExpressionPart<'graph>,

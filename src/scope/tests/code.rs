@@ -253,14 +253,14 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
     for (source, expected) in cases {
         assert_eq!(refusal(source), expected, "{source}");
     }
-    // A manifest value member is a declaration by type, refused only where the signature is
-    // elaborated.
     shaped(
         "MATCH 1 -> :Number WITH #{:(Number | Str): (it), :{x :Number} : (0)}",
         |_, _, shape| {
             assert!(shape.is_ok(), "a compound type is a type guard");
         },
     );
+    // A manifest value member is a declaration by type, refused only where the signature is
+    // elaborated.
     shaped("SIG Sg = #[(LET x = 1)]", |_, _, shape| {
         assert!(shape.is_ok(), "a binder is a declaration");
     });

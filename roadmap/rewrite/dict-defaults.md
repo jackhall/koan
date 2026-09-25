@@ -33,12 +33,8 @@ lowering.
 
 ## Dependencies
 
-[Code as values](code-values.md) admits `_` as a key of every dict literal, and
-refuses a value dict holding one where its shape is built, until this item.
-
 **Requires:**
 
-- [Code as values](code-values.md) — `_` parses as a dict key.
 - [Dispatch](dispatch.md) — a dict lookup, which is what observes a default.
 
 **Unblocks:** none — a leaf.

@@ -29,7 +29,8 @@ The edge runs the other way too, for constants alone: `parse`'s builtin shape
 table types each slot by a `KType`, and since a builtin leaf's handle is a `const`
 content digest the table states a type with no registry in hand. The few
 composites the table spells — the code containers `List(Name)`,
-`List(Declaration)`, `Dict(Name, Block)` and `Dict(Name, TypeCode)`, and the union
+`List(Declaration)`, `Dict(TypeCode, Block)`, `Dict(Name, Block)` and
+`Dict(Name, TypeCode)`, and the union
 `TypeCode` — are pinned the same way, and every registry pre-seeds them.
 `KType::same_as` is the equality that comparison uses, handle against handle in
 `const` context, where the derived `PartialEq` cannot go. Nothing but the handles,
@@ -442,7 +443,10 @@ current position.
 
 [Rendering](render.rs) is exempt, and for a stated reason: it spells syntax
 *between* children and inherits the quantifier binder from above, which neither
-driver expresses. Every entry point takes the registry and the symbol interner,
+driver expresses. It spells a type as a program writes it: a quantifier group
+as `FOR ALL #[Elt Key]`, or as a dict of each name to its bound,
+`FOR ALL #{Elt: Number, Key: Any}`, once any bound is not `Any`; and an
+expression shape's head quoted, `#(PURE _ :Elt)`. Every entry point takes the registry and the symbol interner,
 never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Laws, not shapes

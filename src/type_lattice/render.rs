@@ -318,8 +318,9 @@ fn write_quantifier_group(
     f.write_str(if bounded { "} " } else { "] " })
 }
 
-/// `#(<keyword> _ :<Type> …)` — an expression shape's head, quoted as an `EXPR` head is written. Every argument position is the wildcard
-/// `_`: the type carries no argument names, so there is none to print.
+/// `#(<keyword> _ :<Type> …)` — an expression shape's head, quoted as an `EXPR` head is written.
+/// Every argument position is the wildcard `_`: the type carries no argument names, so there is
+/// none to print.
 fn write_shape_head(
     f: &mut std::fmt::Formatter<'_>,
     elements: &[DispatchTokenElement],

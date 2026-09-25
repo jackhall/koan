@@ -37,13 +37,12 @@ without bound.
 - *A kind for built code — open.* A block value carrying its shape is code and
   a shape. It is typed by its syntax's kind, or by a kind of its own that an
   explicit `BUILD` returns, beside the syntactic kinds
-  ([code as values](code-values.md)).
+  ([the code family](../../src/type_lattice/README.md#the-code-family)).
 
 ## Dependencies
 
 **Requires:**
 
-- [Code as values](code-values.md) — the code kinds a fragment and a splice are typed by.
 - [Quotes resolve where they are written](eval-scope.md) — a quote's bindings and knot edges.
 - [Slicing and splicing](slicing-and-splicing.md) — slice and splice as builtins, and views.
 

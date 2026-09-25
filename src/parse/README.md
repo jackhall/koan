@@ -86,6 +86,13 @@ type names as classified symbols; nested expressions; the two type sigils
 part, so there is no runtime quoting operation and the body never dispatches — a
 quote behaves as a literal everywhere.
 
+**Code is taken as a quote.** A callee takes code through a slot typed by a
+[code kind](../type_lattice/README.md#the-code-family), and its caller quotes
+it, as a builtin's caller quotes a part that runs later: hygienic fexprs, with
+no expansion system and no global execution phase. Rewriting stays the shape
+builder's own, as its [pairwise rewrite](../scope/README.md#operator-groups) is,
+since a user's rewrite rule would act at a distance.
+
 **A quote is typed by its body as written.** `KExpression::code_kind` reads the
 body's [code kind](../type_lattice/README.md#the-code-family): two or more
 statements are a `Block`; a statement of a member-declaring builtin shape a
@@ -169,13 +176,17 @@ the shape builder reads its part (`Role::reading`), one of four ways: as a writt
 body, an `EXPR` head (`Role::Head`), an `OP` symbol or a `PAIRWISE` combiner
 (`Data`); as **bare** syntax, for a part that declares or runs where it is
 written, once — a binder name, an in-place `MODULE`, `GROUP` or `USING` body,
-`NEWTYPE`'s representation; as a **container** of quotes, for a part that names
-things as data — an arm set, a union's variants, a `FOR ALL` group, and a `SIG`
+`NEWTYPE`'s representation, a type expression (`Role::TypeExpression`), a `TRY`
+or `CATCH` operand (`Role::InPlace`); as a **container** of quotes, for a part
+that names things as data — an arm set, a union's variants, a `FOR ALL` group, and a `SIG`
 body or the heads a bodyless `GROUP` declares (`DefinitionKind::Members`); or
 **evaluated**. `ATTR`'s label (`Role::Field`) is the one hybrid: a bare name is
 the label itself, and any other part is evaluated. The slot's type says what
 syntax fills it — a code kind, or a container of code kinds, for a part read as
-written, and a value type for one evaluated — and no slot keeps a part raw.
+written, and a value type for one evaluated — and no slot keeps a part raw. A
+type expression and an in-place operand are the exceptions: they are bare, but
+their slot type is the value they denote, so the builder checks their spelling
+alone.
 [`SlotType::admits_written`](builtin_shapes.rs) admits a written part against
 those code types with no registry in hand, which is what the shape builder's
 static check asks.
@@ -183,8 +194,9 @@ static check asks.
 A slot type rests in the table as a [`KType`](../type_lattice/handle.rs), whose
 handle is a `const` content digest, so an entry states its types with no registry
 in hand and its erasure and laws are computed at build time. The code containers
-a slot is typed by — `List(Name)`, `List(Declaration)`, `Dict(Name, Block)`,
-`Dict(Name, TypeCode)` — are pinned constants of the same kind. The two other
+a slot is typed by — `List(Name)`, `List(Declaration)`, `Dict(TypeCode, Block)`,
+`Dict(Name, Block)`, `Dict(Name, TypeCode)` — are pinned constants of the same
+kind. The two other
 compounds a builtin slot uses — a union of leaves, the empty record — rest as a
 small recipe instead, since no `const` computes a compound's digest; interning
 them is [`elaborate`](../elaborate/README.md#builtin-shapes)'s.
@@ -195,11 +207,13 @@ them is [`elaborate`](../elaborate/README.md#builtin-shapes)'s.
 - every slot of an entry types exactly as many overloads as the entry returns, and
   every bucket has at least one — a slot one type short would leave an overload
   untyped there, and nothing downstream could say which;
-- every slot the builder reads as written is typed by its reading's code type in
-  every overload (`roles_agree_with_code_types`): a body `Block`, a head
-  `Expression`, a symbol `Keyword`, a label `Name`, an arm set
-  `Dict(Name, Block)`, a union's variants `Dict(Name, TypeCode)`, a member list
-  `List(Declaration)`, `NEWTYPE`'s representation `TypeCode`, a `FOR ALL` group
+- every slot the builder reads as written, save a type expression and an
+  in-place operand, is typed by its reading's code type in every overload
+  (`roles_agree_with_code_types`): a body `Block`, a head `Expression`, a symbol
+  `Keyword`, a label `Name`, an arm set `Dict(TypeCode, Block)` under type
+  guards (`MATCH … WITH`) and `Dict(Name, Block)` under labels
+  (`MATCH … OVER`, `TRY`), a union's variants `Dict(Name, TypeCode)`, a member
+  list `List(Declaration)`, `NEWTYPE`'s representation `TypeCode`, a `FOR ALL` group
   `List(Name)` or `Dict(Name, TypeCode)`, and a binder name a code kind within
   `Expression`; and an `Rhs` slot is `Any`, since a binding's right-hand side is
   classified where it lands.
@@ -273,3 +287,9 @@ The runtime is this module's consumer, and the runtime is behind the
 `cfg_attr(not(feature = "pending_rewrite"), allow(dead_code))` — or an
 `unused_imports` twin on a crate-visible re-export — has no caller in a default
 build until the rewrite adopts it, and the marker comes off with the adoption.
+
+## Open work
+
+- [One statement of the fixed types' structure](../../roadmap/rewrite/fixed-type-structure.md)
+  — `SlotType::admits_written` restates `admits_part`'s rules for the pinned
+  code containers.

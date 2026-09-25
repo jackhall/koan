@@ -341,10 +341,11 @@ const fn is_quantifier_type(types: &[SlotType]) -> bool {
 
 /// The roles whose reading fixes the syntax that fills them, and so the slot's type: every body is
 /// a `Block`, an `EXPR` head an `Expression`, a quoted symbol a `Keyword`, a field label a `Name`,
-/// an arm set a `Dict(TypeCode, Block)` under type guards and a `Dict(Name, Block)` under labels, a union's variants a `Dict(Name, TypeCode)`, a signature's
-/// members a `List(Declaration)`, a representation `TypeCode`, a `FOR ALL` group a list of names or a dict of names to bounds,
-/// and a binder name a code kind no larger than an expression. A binding's right-hand side is
-/// classified where it lands, so it is `Any`.
+/// an arm set a `Dict(TypeCode, Block)` under type guards and a `Dict(Name, Block)` under labels, a
+/// union's variants a `Dict(Name, TypeCode)`, a signature's members a `List(Declaration)`, a
+/// representation `TypeCode`, a `FOR ALL` group a list of names or a dict of names to bounds, and a
+/// binder name a code kind no larger than an expression. A binding's right-hand side is classified
+/// where it lands, so it is `Any`.
 const fn roles_agree_with_code_types(table: &[BuiltinShape]) -> bool {
     let mut entry = 0;
     while entry < table.len() {

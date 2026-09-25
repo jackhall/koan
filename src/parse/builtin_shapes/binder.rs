@@ -327,9 +327,9 @@ pub(crate) enum SymbolError {
     Reserved(KeywordSymbol),
 }
 
-/// The operator symbol a quote body carries: exactly one `Keyword` part. The `symbol` slot is
-/// typed `Keyword` and read as a written quote, so its body is read here as data. A multi-part body, a non-keyword token, or
-/// a reserved symbol is a shape error.
+/// The operator symbol a quote body carries: exactly one `Keyword` part. The `symbol` slot is typed
+/// `Keyword` and read as a written quote, so its body is read here as data. A multi-part body, a
+/// non-keyword token, or a reserved symbol is a shape error.
 pub(crate) fn symbol_from_quote_body(
     inner: &KExpression<'_>,
 ) -> Result<KeywordSymbol, SymbolError> {

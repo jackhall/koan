@@ -44,7 +44,7 @@ the link in each section to the relevant chapter.
 | Form                                              | Meaning                           |
 |---------------------------------------------------|-----------------------------------|
 | `MATCH (<value>) OVER <Union> -> :<Type> WITH #{<Tag>: (<body>), ...}` | Branch on a union's variants; every variant needs an arm unless a `_` arm defaults the rest, and `it` is the payload. |
-| `MATCH (<value>) -> :<Type> WITH #{<Type>: (<body>), ...}` | Branch on the value's runtime type or on `true` / `false`; `it` is the value unchanged. |
+| `MATCH (<value>) -> :<Type> WITH #{<Type>: (<body>), ...}` | Branch on the value's runtime type; each head is a type, and `it` is the value unchanged. |
 | `TRY (<expr>) -> :<Type> WITH #{<Tag>: (<body>), ...}`    | Catch errors; arms are `Ok`, error-kind names, and `_`. Uncaught kinds re-raise. |
 | `CATCH (<expr>)`                                   | Run an expression, returning a `Result` value. |
 | `Result.Ok <value>`, `Result.Error <value>`       | Built-in result union's variants, reached by projection. |

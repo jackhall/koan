@@ -78,7 +78,6 @@ on that statement refuses the body with `EvalCycle`.
 
 **Requires:**
 
-- [Code as values](code-values.md) — the code representation a quote's bindings ride in.
 
 **Unblocks:**
 

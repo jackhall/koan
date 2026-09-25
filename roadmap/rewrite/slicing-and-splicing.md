@@ -65,7 +65,8 @@ elements cost O(kn).
 - *String templates — open.* JavaScript's tagged templates and Python's
   t-strings keep a template's literal parts and its interpolated values apart
   until a consumer, such as an SQL escaper, splices them. That is the shape of a
-  quote with its bindings ([code as values](code-values.md)), and it would give
+  quote with its bindings
+  ([quotes resolve where they are written](eval-scope.md)), and it would give
   strings a splicing surface for construction as well as editing.
 
 ## Dependencies
