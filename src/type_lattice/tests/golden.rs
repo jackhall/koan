@@ -123,6 +123,11 @@ fn constants_match_freshly_interned_nodes() {
             types.dict(KType::NAME, KType::BLOCK),
         ),
         (
+            "DICT_TYPE_CODE_BLOCK",
+            KType::DICT_TYPE_CODE_BLOCK,
+            types.dict(type_code, KType::BLOCK),
+        ),
+        (
             "DICT_NAME_TYPE_CODE",
             KType::DICT_NAME_TYPE_CODE,
             types.dict(KType::NAME, type_code),

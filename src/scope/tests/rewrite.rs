@@ -73,6 +73,14 @@ fn expression<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'gra
     node.reference()
 }
 
+/// The node a part holds, which must be a quote.
+fn quote<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'graph> {
+    let ExpressionPart::QuotedExpression(node) = part else {
+        panic!("the part is a quote");
+    };
+    node.reference()
+}
+
 /// The shape nested at part `index` of `node`.
 fn nested<'graph>(
     shape: &BodyShape<'graph>,
@@ -101,7 +109,7 @@ fn a_builtin_group_folds_left_and_a_declared_one_folds_the_way_it_says() {
     // A declared group is visible inside its own body, and nests the way its mode says.
     let source = "\
 GROUP ring FOLD RIGHT = (\
- (OP #(@) OVER Ring = (left))\
+ (OP #(@) OVER Ring = #(left))\
  (LET x = (1 @ 2 @ 3)))";
     shaped(source, |fixture, shape| {
         let shape = shape.expect("the program shapes");
@@ -127,7 +135,7 @@ fn a_unary_group_calls_one_keyword_over_a_list_of_operands() {
 #[test]
 fn a_symbol_no_group_claims_folds_left_alone_in_every_body_that_declares_it() {
     shaped(
-        "(OP #(@) OVER Ring = (left))\nLET x = (1 @ 2 @ 3)",
+        "(OP #(@) OVER Ring = #(left))\nLET x = (1 @ 2 @ 3)",
         |fixture, shape| {
             let shape = shape.expect("the program shapes");
             assert_eq!(
@@ -138,8 +146,8 @@ fn a_symbol_no_group_claims_folds_left_alone_in_every_body_that_declares_it() {
     );
     // A bare `OP` declares no group, so two siblings over one symbol never collide.
     let siblings = "\
-MODULE first = ((OP #(@) OVER Ring = (left)) (LET a = (1 @ 2 @ 3)))
-MODULE second = ((OP #(@) OVER Ring = (left)) (LET b = (1 @ 2 @ 3)))";
+MODULE first = ((OP #(@) OVER Ring = #(left)) (LET a = (1 @ 2 @ 3)))
+MODULE second = ((OP #(@) OVER Ring = #(left)) (LET b = (1 @ 2 @ 3)))";
     shaped(siblings, |fixture, shape| {
         let shape = shape.expect("the program shapes");
         for statement in 0..2 {
@@ -160,7 +168,7 @@ LET b = (1 + 2 - 3)
 LET c = (origin (1 + 2 - 3))
 LET d = (1 + (2 * 3 * 4) - 5)
 LET e = #(1 + 2 - 3)
-LET f = (FN :{} -> Number = (1 + 2 - 3))";
+LET f = (FN :{} -> Number = #(1 + 2 - 3))";
     shaped(source, |fixture, shape| {
         let shape = shape.expect("the program shapes");
         let rendered: Vec<String> = shape
@@ -220,7 +228,7 @@ fn a_pairwise_group_compares_adjacent_operands_and_hoists_the_shared_ones() {
     // Pairs fold through the group's combiner, in the group's direction.
     let source = "\
 GROUP cmp PAIRWISE FOLD #(AND) RIGHT = (\
- (OP #(~) OVER Ring -> Bool = (left))\
+ (OP #(~) OVER Ring -> Bool = #(left))\
  (LET x = (1 ~ 2 ~ 3 ~ 4)))";
     shaped(source, |fixture, shape| {
         let shape = shape.expect("the program shapes");
@@ -262,7 +270,7 @@ fn equality_joins_a_pairwise_group_and_the_unequal_symbol_is_never_built() {
     // Beside a declared pairwise group's member, equality folds through that group's combiner.
     let source = "\
 GROUP cmp PAIRWISE FOLD #(AND) LEFT = (\
- (OP #(~) OVER Ring -> Bool = (left))\
+ (OP #(~) OVER Ring -> Bool = #(left))\
  (LET x = (1 ~ 2 == 3)))";
     shaped(source, |fixture, shape| {
         let shape = shape.expect("the program shapes");
@@ -277,7 +285,7 @@ GROUP cmp PAIRWISE FOLD #(AND) LEFT = (\
 #[test]
 fn an_operator_run_no_one_chaining_covers_is_refused() {
     let unchained = "\
-GROUP ring FOLD LEFT = ((OP #(@) OVER Ring = (left)))
+GROUP ring FOLD LEFT = ((OP #(@) OVER Ring = #(left)))
 LET x = (1 @ 2 @ 3)";
     shaped(unchained, |fixture, shape| {
         assert_eq!(
@@ -301,7 +309,7 @@ LET x = (1 @ 2 @ 3)";
     shaped("1 + 2 == 3", |_, shape| {
         assert!(matches!(shape.err(), Some(ShapeError::MixedGroups { .. })));
     });
-    shaped("(OP #(@) OVER Ring -> Ring = (left))", |fixture, shape| {
+    shaped("(OP #(@) OVER Ring -> Ring = #(left))", |fixture, shape| {
         assert_eq!(
             shape.err(),
             Some(ShapeError::ResultOutsidePairwise {
@@ -319,15 +327,18 @@ LET x = (1 @ 2 @ 3)";
             })
         );
     });
-    shaped("(OP #(!=) OVER Ring -> Bool = (left))", |fixture, shape| {
-        assert_eq!(
-            shape.err(),
-            Some(ShapeError::Derived {
-                symbol: keyword("!=", fixture.symbols),
-                at: Position::PARAMETER,
-            })
-        );
-    });
+    shaped(
+        "(OP #(!=) OVER Ring -> Bool = #(left))",
+        |fixture, shape| {
+            assert_eq!(
+                shape.err(),
+                Some(ShapeError::Derived {
+                    symbol: keyword("!=", fixture.symbols),
+                    at: Position::PARAMETER,
+                })
+            );
+        },
+    );
 }
 
 /// Shape `quoted` as the body of an `EVAL`, at the program of `source` or — when `inside_using` —
@@ -375,7 +386,7 @@ fn evaluated<R>(
 
 /// A `GROUP` whose members are `@` and `%`, under `mode`, named `name`.
 fn group(name: &str, mode: &str) -> String {
-    format!("GROUP {name} {mode} = ((OP #(@) OVER Ring = (left)) (OP #(%) OVER Ring = (right)))")
+    format!("GROUP {name} {mode} = ((OP #(@) OVER Ring = #(left)) (OP #(%) OVER Ring = #(right)))")
 }
 
 /// A `SIG` named `name` whose body is one bodyless `GROUP` head over `members`, under `mode`.
@@ -384,7 +395,7 @@ fn signature(name: &str, mode: &str, members: &[&str]) -> String {
         .iter()
         .map(|symbol| format!("(OP #({symbol}) OVER Ring)"))
         .collect();
-    format!("SIG {name} = ((GROUP {mode} = ({})))", heads.join(" "))
+    format!("SIG {name} = #[(GROUP {mode} = #[{}])]", heads.join(" "))
 }
 
 #[test]
@@ -402,7 +413,7 @@ USING g SCOPE (1 @ 2 % 3)",
     });
 
     // A signature's bodyless `GROUP` head is a group too, reached through an ascription.
-    let module = "MODULE m = ((OP #(@) OVER Ring = (left)) (OP #(%) OVER Ring = (right)))";
+    let module = "MODULE m = ((OP #(@) OVER Ring = #(left)) (OP #(%) OVER Ring = #(right)))";
     let source = format!(
         "{}
 {module}
@@ -418,7 +429,7 @@ USING (m :! Ops) SCOPE (1 @ 2 % 3)",
 
 #[test]
 fn a_group_surfaced_twice_is_held_once_and_a_second_chaining_is_refused() {
-    let module = "MODULE m = ((OP #(@) OVER Ring = (left)) (OP #(%) OVER Ring = (right)))";
+    let module = "MODULE m = ((OP #(@) OVER Ring = #(left)) (OP #(%) OVER Ring = #(right)))";
     let nest = |first: &str, second: &str| {
         format!(
             "{first}
@@ -511,9 +522,9 @@ USING g SCOPE (1)",
 fn a_result_typed_operator_is_admitted_wherever_its_group_chains_pairwise() {
     // A signature's bodyless `GROUP` claims nothing — it reaches a body only as a group a `USING`
     // surfaces — so the frame is the only place this declaration's admission can be read off.
-    let sig = "SIG Cmp = ((GROUP PAIRWISE FOLD #(AND) LEFT = ((OP #(~) OVER Ring -> Bool))))";
+    let sig = "SIG Cmp = #[(GROUP PAIRWISE FOLD #(AND) LEFT = #[(OP #(~) OVER Ring -> Bool)])]";
     let module = "MODULE m = ((LET x = 1))";
-    let declaration = "(OP #(~) OVER Number -> Bool = (left))";
+    let declaration = "(OP #(~) OVER Number -> Bool = #(left))";
     shaped(
         &format!("{sig}\n{module}\nUSING (m :! Cmp) SCOPE ({declaration})"),
         |_, shape| {
@@ -538,22 +549,24 @@ fn a_result_typed_operator_is_admitted_wherever_its_group_chains_pairwise() {
 #[test]
 fn an_operator_run_in_a_bound_is_chained() {
     shaped(
-        "LET f = (FN FOR ALL ((Elt UNDER :(Number | Str | Bool)) Key) :{x :Elt y :Key} -> Elt = (x))",
+        "LET f = (FN FOR ALL #{Elt: :(Number | Str | Bool), Key: Any} :{x :Elt y :Key} -> Elt = #(x))",
         |fixture, shape| {
             let shape = shape.expect("the program shapes");
             let lambda = expression(&shape.body()[0].parts[3].value);
             assert_eq!(
                 part_tree(&lambda.parts[3].value, fixture.symbols),
-                "((Elt UNDER :(| [Number Str Bool])) Key)"
+                "{#(Elt): #(:(| [Number Str Bool])), #(Key): #(Any)}"
             );
         },
     );
     shaped(
-        "SIG Shown = ((TYPE (Carrier UNDER :(Number & Str & Bool))) (VAL zero :Carrier))",
+        "SIG Shown = #[(TYPE (Carrier UNDER :(Number & Str & Bool))) (VAL zero :Carrier)]",
         |fixture, shape| {
             let shape = shape.expect("the program shapes");
-            let body = expression(&shape.body()[0].parts[3].value);
-            let declaration = expression(&body.parts[0].value);
+            let ExpressionPart::ListLiteral(members) = &shape.body()[0].parts[3].value else {
+                panic!("a SIG body is a container of quotes");
+            };
+            let declaration = quote(&members[0]);
             assert_eq!(
                 part_tree(&declaration.parts[1].value, fixture.symbols),
                 "(Carrier UNDER :(& [Number Str Bool]))"

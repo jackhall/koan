@@ -2,7 +2,7 @@
 //! the handles its parts elaborate to.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::builtin_shapes::binder::{bounded_name, quantifier_entries};
+use crate::parse::builtin_shapes::binder::quantifier_entries;
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_name};
@@ -345,8 +345,8 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         }
     }
 
-    /// A `FOR ALL` group's names and bounds, in written order. Each entry is a bare name or
-    /// `(<Name> UNDER <bound>)`; anything else is unsupported. Every bound is read under the group
+    /// A `FOR ALL` group's names and bounds, in written order: a list of name quotes, or a dict of
+    /// name quotes to bound quotes; an entry naming no lone type is unsupported. Every bound is read under the group
     /// with no bounds of its own, so a bound naming one of the group's names is refused.
     pub(super) fn group(
         &self,
@@ -356,11 +356,11 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let mut group = QuantifierGroup::empty(self.scratch);
         let mut written = BumpVec::new_in(self.scratch);
         for entry in quantifier_entries(part) {
-            let (name, bound) = bounded_name(entry).ok_or(Elaboration::Unsupported {
-                site: Site::of(entry),
+            let name = entry.name.ok_or(Elaboration::Unsupported {
+                site: Site::of(entry.written),
             })?;
             group.names.push(name);
-            written.push(bound);
+            written.push(entry.bound);
         }
         let unbounded = Groups {
             names: &group.names,
@@ -511,7 +511,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let unsupported = Elaboration::Unsupported {
             site: Site::of(head),
         };
-        let ExpressionPart::Expression(run) = head else {
+        let ExpressionPart::QuotedExpression(run) = head else {
             return Err(unsupported);
         };
         let run = run.reference();
@@ -545,7 +545,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let unsupported = Elaboration::Unsupported {
             site: Site::of(head),
         };
-        let ExpressionPart::Expression(run) = head else {
+        let ExpressionPart::QuotedExpression(run) = head else {
             return Err(unsupported);
         };
         let run = run.reference();

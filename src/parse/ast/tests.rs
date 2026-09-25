@@ -459,6 +459,7 @@ fn a_quote_is_typed_by_its_body_as_written() {
         ("#((f x) (g y))", Kind::BLOCK),
         ("#(\n  f x\n  g y\n)", Kind::BLOCK),
         ("#(LET x = 1)", Kind::BINDER),
+        ("#(EXPR #(FOO a :Number) -> Number = #(a))", Kind::BINDER),
         ("#(VAL x :Str)", Kind::DECLARATION),
         ("#(TYPE Carrier)", Kind::DECLARATION),
         ("#(TYPE (Carrier UNDER Number))", Kind::DECLARATION),

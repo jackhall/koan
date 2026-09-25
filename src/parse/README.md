@@ -38,15 +38,23 @@ Lowering is where koan's vocabulary enters, and six rules cover it
 
 - A **run** of sibling items becomes a run of parts, with the context —
   expression, list element, brace entry — deciding where each part lands.
-- A **body** is a run that becomes a node, and is where a redundant wrapper is
-  peeled: `((a b))` and `(a b)` name the same expression, and so does the group a
-  body line nests in.
+- A **body** is a run that becomes a node. A paren the program writes is kept:
+  `((a b))` is `(a b)` wrapped once more, and `#((y))` is no `#(y)`. Only a layout
+  line that is a group's whole content comes off, since nobody wrote it as parens.
+  A compound atom that classifies to one sub-expression (`a.b`) is that
+  sub-expression, not a statement holding it.
 - A **sigil** is `#`, `$` or `:` glued to the group after it. Because `sexlex`
   recorded the glue and kept the atom whole, a sigil needs no table and adding
-  one changes nothing below.
+  one changes nothing below. `#` also glues to a `[…]` or `{…}` literal and
+  quotes each element: a paren-group element is quoted as that group, any other
+  element as a one-part quote, and a `_` key or a record's field name stays bare,
+  so `#{Some: (x), _: (y)}` is `{#(Some): #(x), _: #(y)}`. The result is the bare
+  literal — a container of quotes, not a quote.
 - A **sigil-led line** is a whole layout line whose first atom starts with `#` or
-  `$`; the line's own body is what it quotes.
-- **Adjacency** rejects a `[` or `{` glued to a neighbouring token.
+  `$`; the line's own body is what it quotes. A line that is only a sigil glued to
+  its group is that glued sigil.
+- **Adjacency** rejects a `[` or `{` glued to a neighbouring token, and a closer
+  followed by anything but whitespace, another closer or a `,`.
 - Everything else is an **atom**, which [atom.rs](atom.rs) classifies.
 
 Atom classification is the one place text is read closely: literals; a split on
@@ -60,7 +68,8 @@ knowing it exists.
 Brace literals get their own sub-state-machine ([brace.rs](brace.rs)) because
 one `{…}` frame serves two containers: a **dict** (`{k: v}`) and a **record**
 (`{x = 1}`). The first pairing operator selects the mode, mixing the two is an
-error, and an empty `{}` is the empty record.
+error, and an empty `{}` is the empty record. No keyword enters a literal but `_`
+as a dict's key, which names the dict's default.
 
 ## The AST: borrowed, `Copy`, and splice-free
 
@@ -76,6 +85,17 @@ type names as classified symbols; nested expressions; the two type sigils
 **Quoting is static syntax.** The parser folds the sigil and its group into one
 part, so there is no runtime quoting operation and the body never dispatches — a
 quote behaves as a literal everywhere.
+
+**A quote is typed by its body as written.** `KExpression::code_kind` reads the
+body's [code kind](../type_lattice/README.md#the-code-family): two or more
+statements are a `Block`; a statement of a member-declaring builtin shape a
+`Declaration`, and one that installs a `Binder`; a lone scalar literal or nested
+quote a `Literal`; a lone name, keyword, `:(…)` or `:{…}` its own kind; and every
+other statement an `Expression`. The declaration test is a table fact,
+`BuiltinShapeId::declares_member`, asked before the binder plan, since a `TYPE`
+declarator carries a plan yet installs nothing. A written paren is a part of its
+own, so `#((LET x = 1))` is an `Expression`. `ExpressionPart::code_kind` answers
+the same for a bare part: a bare group is code of its own kind, as a quote is.
 
 The node here is structurally **splice-free**: an AST node names no producer
 region, so nothing in it has a reach to describe. The scheduler's per-dispatch
@@ -105,8 +125,8 @@ structural question — the bucket key it spells and the class of the head part 
 and the cache holds all the answers derived from them: the `ExpressionKey`, the
 dispatch shape, the matched builtin shape, and the binder plan.
 
-So every later reader — the dispatch driver, the scheduler's laziness decision,
-the close-inference walk, the miss diagnosis — **reads a cached fact rather than
+So every later reader — the dispatch driver, the shape builder, the
+close-inference walk, the miss diagnosis — **reads a cached fact rather than
 re-walking the run**. Both expression families carry the same cache and answer
 these questions the same way, so there is one classifier rather than two.
 
@@ -140,23 +160,34 @@ and every later reader indexes by the `BuiltinShapeId` tag — the close-inferen
 rules and the miss diagnostics are `(BuiltinShapeId, …)` pairs and hold no key of
 their own.
 
-**The untyped facts are erasures of that run**, not columns of their own:
+**The bucket key is an erasure of that run**, not a column of its own: the
+elements with their types dropped, which is what `BuiltinShape::matches` walks.
 
-- the **bucket key** a probe compares against is the elements with their types
-  dropped, which is what `BuiltinShape::matches` walks;
-- the **part kinds a slot keeps raw** are the raw-capture leaves among that slot's
-  overload types, which is what `BuiltinShape::lazy_kinds_at` computes: a
-  `KExpression` slot keeps an `(…)` group or a `#(…)` quote raw, a
-  `SigiledTypeExpr` slot a `:(…)`, a `RecordType` slot a `:{…}`, and a union-typed
-  slot keeps each member's kind raw, because it admits every carrier spelling it
-  lists.
+**The role says the reading; the type says the syntax.** A slot's role says how
+the shape builder reads its part (`Role::reading`), one of four ways: as a written
+**quote**, for a part that runs later, conditionally or never — a callable's
+body, an `EXPR` head (`Role::Head`), an `OP` symbol or a `PAIRWISE` combiner
+(`Data`); as **bare** syntax, for a part that declares or runs where it is
+written, once — a binder name, an in-place `MODULE`, `GROUP` or `USING` body,
+`NEWTYPE`'s representation; as a **container** of quotes, for a part that names
+things as data — an arm set, a union's variants, a `FOR ALL` group, and a `SIG`
+body or the heads a bodyless `GROUP` declares (`DefinitionKind::Members`); or
+**evaluated**. `ATTR`'s label (`Role::Field`) is the one hybrid: a bare name is
+the label itself, and any other part is evaluated. The slot's type says what
+syntax fills it — a code kind, or a container of code kinds, for a part read as
+written, and a value type for one evaluated — and no slot keeps a part raw.
+[`SlotType::admits_written`](builtin_shapes.rs) admits a written part against
+those code types with no registry in hand, which is what the shape builder's
+static check asks.
 
 A slot type rests in the table as a [`KType`](../type_lattice/handle.rs), whose
 handle is a `const` content digest, so an entry states its types with no registry
-in hand and both erasures are computed at build time. The two compounds a builtin
-slot uses — a union of leaves, the empty record — rest as a small recipe instead,
-since no `const` computes a compound's digest; interning them is
-[`elaborate`](../elaborate/README.md#builtin-shapes)'s.
+in hand and its erasure and laws are computed at build time. The code containers
+a slot is typed by — `List(Name)`, `List(Declaration)`, `Dict(Name, Block)`,
+`Dict(Name, TypeCode)` — are pinned constants of the same kind. The two other
+compounds a builtin slot uses — a union of leaves, the empty record — rest as a
+small recipe instead, since no `const` computes a compound's digest; interning
+them is [`elaborate`](../elaborate/README.md#builtin-shapes)'s.
 
 **Two laws hold the table together at build time**, asserted over the spec as
 `const` and so a compile error rather than a test failure:
@@ -164,9 +195,13 @@ since no `const` computes a compound's digest; interning them is
 - every slot of an entry types exactly as many overloads as the entry returns, and
   every bucket has at least one — a slot one type short would leave an overload
   untyped there, and nothing downstream could say which;
-- a `Body`, `Branches`, `Quantifiers` or `Data` slot is typed `KExpression` in
-  every overload, and an `Rhs` slot keeps nothing raw — a part the machine reads
-  as code must reach its reader unevaluated, and a binding's right-hand side is
+- every slot the builder reads as written is typed by its reading's code type in
+  every overload (`roles_agree_with_code_types`): a body `Block`, a head
+  `Expression`, a symbol `Keyword`, a label `Name`, an arm set
+  `Dict(Name, Block)`, a union's variants `Dict(Name, TypeCode)`, a member list
+  `List(Declaration)`, `NEWTYPE`'s representation `TypeCode`, a `FOR ALL` group
+  `List(Name)` or `Dict(Name, TypeCode)`, and a binder name a code kind within
+  `Expression`; and an `Rhs` slot is `Any`, since a binding's right-hand side is
   classified where it lands.
 
 The table is spelled as a `const` and read through a `static` of the same
@@ -174,12 +209,13 @@ contents, because a `const` is what those laws can be evaluated over — a `cons
 cannot read a `static`. Every reader takes the `static`, so each
 `&'static BuiltinShape` a node caches names one address.
 
-Four readers hang off the table:
+Three readers hang off the table:
 
 - **Roles** ([builtin_shapes/role.rs](builtin_shapes/role.rs)) — what each part of
   an entry is to name resolution: a keyword, a declared name, a right-hand side, a
-  body that opens a shape of its own, an arm run, a type declaration's definition,
-  data, a label. A part's role decides whether a name in it is a mention at all,
+  head, a body that opens a shape of its own, an arm set, a type declaration's
+  definition, data, a field label. A part's role decides how it is read and
+  whether a name in it is a mention at all,
   and how the mention's class moves on the way down (see
   [scope § Visibility](../scope/README.md#visibility)). A body slot also says
   *which kind* of body it opens — a lambda, an operator, a unary operator, a
@@ -192,15 +228,6 @@ Four readers hang off the table:
   pure structural readers plus the facts that ride an entry. A shape is a binder
   *because* its entry carries them, and nothing else declares it. What a binder
   then *does* is the machine's.
-- **Raw-capture kinds** ([builtin_shapes/lazy.rs](builtin_shapes/lazy.rs)) — which
-  child slots a shape captures raw instead of evaluating. This is a **seal-time**
-  fact, not a dispatch-time one: a bare `(…)` evaluates before its parent
-  dispatches everywhere except a raw slot of a fixed builtin shape, the node's
-  entry is the single source of truth, and the scheduler reads the derivation off
-  it to decide child submission. So dispatch selects among overloads over values
-  that have already landed, and a reader can tell locally whether a group runs.
-  Raw capture is available only to builtin registration — a user `FN` signature
-  never receives a raw unquoted group.
 - **Slot layout** ([builtin_shapes/layout.rs](builtin_shapes/layout.rs)) — a body's
   value binders as a symbol-sorted run, computed once where the shape is lexically
   fixed and read by every activation of that body, so an activation allocates one

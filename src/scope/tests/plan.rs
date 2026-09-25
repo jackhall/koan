@@ -242,9 +242,9 @@ impl Statement {
 pub(super) enum BuiltinShape {
     /// `LET x = <carriers>`.
     Let(Vec<Carrier>),
-    /// `LET x = FN EXPR (ZZ <signature>) -> <returns> = <body>`.
+    /// `LET x = FN EXPR #(ZZ <signature>) -> <returns> = #<body>`.
     Function(Callable),
-    /// `UNION Tx = (<tag> :<read> …)`, every read deferred.
+    /// `UNION Tx = #{<tag>: <read> …}`, every read deferred.
     Union(Vec<Read>),
     /// `(<carriers>)`.
     Bare(Vec<Carrier>),
@@ -1512,7 +1512,7 @@ impl<'p> Renderer<'p> {
             BuiltinShape::Function(callable) => {
                 self.text("LET ");
                 self.other(statement.binder.expect("a function binds"));
-                self.text(" = FN EXPR (ZZ");
+                self.text(" = FN EXPR #(ZZ");
                 for (parameter, ty) in callable.body.parameters.iter().zip(&callable.types) {
                     self.text(" ");
                     self.other(*parameter);
@@ -1521,20 +1521,20 @@ impl<'p> Renderer<'p> {
                 }
                 self.text(") -> ");
                 self.read(&callable.returns);
-                self.text(" = ");
+                self.text(" = #");
                 self.body(&callable.body);
             }
             BuiltinShape::Union(reads) => {
                 self.text("UNION ");
                 self.other(statement.binder.expect("a UNION binds"));
-                self.text(" = (");
+                self.text(" = #{");
                 for (tag, read) in reads.iter().enumerate() {
                     let tag = char::from(b'a' + tag as u8);
-                    self.text(&format!("{}K{tag} :", if tag == 'a' { "" } else { " " }));
+                    self.text(&format!("{}K{tag}: ", if tag == 'a' { "" } else { ", " }));
                     self.out.tokens.push(Token::Other);
                     self.read(read);
                 }
-                self.text(")");
+                self.text("}");
             }
             BuiltinShape::Bare(carriers) => {
                 self.text("(");
@@ -1623,16 +1623,16 @@ impl<'p> Renderer<'p> {
                 }
                 self.text(" -> :");
                 self.read(ty);
-                self.text(" WITH (");
+                self.text(" WITH #{");
                 for (index, (head, body)) in arms.iter().enumerate() {
                     if index > 0 {
-                        self.text(" ");
+                        self.text(", ");
                     }
                     self.read(head);
-                    self.text(" -> ");
+                    self.text(": ");
                     self.body(body);
                 }
-                self.text("))");
+                self.text("})");
             }
         }
     }
@@ -1655,7 +1655,7 @@ impl<'p> Renderer<'p> {
         }
         self.text("} -> ");
         self.read(&callable.returns);
-        self.text(" = ");
+        self.text(" = #");
         self.body(&callable.body);
         self.text(")");
     }

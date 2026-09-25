@@ -164,8 +164,12 @@ cells, a record the record type of its fields in written order, a type value
 `OfKind` of the kind of the type it names, a tagged value its identity, and a
 knot member reports its own. A join across families is their union, so a list
 holding a number and a type memoizes `List<(Number | ProperType)>`.
-`Value::ktype` copies that handle or names a leaf constant; it reads no registry
-and walks nothing.
+`Value::ktype` copies that handle or names a leaf constant, and a quote's type
+is its [code kind](../type_lattice/README.md#the-code-family), read off its body
+as written ([`KExpression::code_kind`](../parse/README.md#the-ast-borrowed-copy-and-splice-free)):
+`#(y)` is a `Name`, `#((y))` an `Expression`, a two-statement quote a `Block`.
+It reads no registry and walks nothing. A container of quotes is an ordinary
+container, typed by the join of its elements' kinds as any other is.
 
 **A data node's memo is exact and finite.** The lattice has no structural
 recursive type, so recursion in a value's type goes through a declared memo: a
@@ -193,8 +197,11 @@ contents' incidental precision.
 
 The same module answers the question for what is not yet a value.
 `admits_part` checks a raw AST part by shape, since an unevaluated literal has
-no type memo: a container literal admits on its kind alone, a union on any
-member, a family top — `Value` or `Code` — on any concrete type of its family,
+no type memo: a container literal admits by its elements — a list by each item, a
+dict by each key and value, a `_` key admitting any key type, a record by each
+field the slot names — a code kind on a part whose own code kind lies under it,
+a bare group being code of its own kind as a quote is, a union on any member, a
+family top — `Value` or `Code` — on any concrete type of its family,
 a kind slot takes a type token only for `ProperType` and `AnyType`, a
 quantified slot takes what its bound takes — a slot bounded by `Value` refuses a
 quote — and a nominal, function, signature or shape

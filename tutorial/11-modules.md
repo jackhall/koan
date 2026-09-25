@@ -76,21 +76,22 @@ error: shape error: module `Geometry` is named with a Type token, but a module i
 ## Signatures
 
 A signature is the *type* of a module — it describes the members a module must
-provide, without supplying them. `SIG <Name> = (<body>)` declares one, with
-`VAL <name> :<Type>` for each required value member:
+provide, without supplying them. `SIG <Name> = #[(<member>) …]` declares one:
+its members are a list of [quoted](10-quoting.md#quoting-each-element-of-a-list-or-dict)
+declarations, with `VAL <name> :<Type>` for each required value member:
 
 ```koan
-SIG HasLabel = (VAL label :Str)
+SIG HasLabel = #[(VAL label :Str)]
 ```
 
 `VAL` names a member you reach by name. The other half of a module's surface is
 the shapes it defines, and those are declared with a **bodyless `EXPR` head** —
-the definition form from [chapter 4](04-functions.md) with the `= (<body>)`
+the definition form from [chapter 4](04-functions.md) with the `= #(<body>)`
 dropped. Write `_` where a declaration has no use for a parameter name:
 
 ```koan
-SIG Doubler = (EXPR (DOUBLE _ :Number) -> Number)
-MODULE doubling = (EXPR (DOUBLE x :Number) -> Number = (x * 2))
+SIG Doubler = #[(EXPR #(DOUBLE _ :Number) -> Number)]
+MODULE doubling = (EXPR #(DOUBLE x :Number) -> Number = #(x * 2))
 LET doubles = (doubling :| Doubler)
 PRINT
   USING doubles SCOPE (DOUBLE 21)
@@ -115,7 +116,7 @@ signature's members and gives back a module viewed through that signature. There
 are two forms, written with the `:!` and `:|` operators:
 
 ```koan
-SIG HasLabel = (VAL label :Str)
+SIG HasLabel = #[(VAL label :Str)]
 MODULE widget = (LET label = "button")
 LET named = (widget :! HasLabel)
 PRINT named.label
@@ -136,7 +137,7 @@ members, the two behave the same.
 If the module is missing a required member, ascription fails:
 
 ```koan
-SIG HasLabel = (VAL label :Str)
+SIG HasLabel = #[(VAL label :Str)]
 MODULE plain = (LET other = 1)
 plain :! HasLabel
 ```
@@ -170,7 +171,7 @@ inside the block:
 ```koan
 MODULE doubling =
   LET dbl = ,
-    FN EXPR (DOUBLE x :Number) -> Number = (x)
+    FN EXPR #(DOUBLE x :Number) -> Number = #(x)
 PRINT
   USING doubling SCOPE (DOUBLE 21)
 ```
@@ -185,10 +186,10 @@ annotation, a return type, or the right-hand side of a type alias:
 
 ```koan
 MODULE palette =
-  UNION Color = (Red :Null Blue :Null)
+  UNION Color = #{Red: Null, Blue: Null}
 PRINT
   USING palette SCOPE (
-    (EXPR (DESCRIBE c :Color) -> Str = ("a color"))
+    (EXPR #(DESCRIBE c :Color) -> Str = #("a color"))
     (DESCRIBE (Color.Red null)))
 ```
 

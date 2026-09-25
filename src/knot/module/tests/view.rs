@@ -12,7 +12,7 @@ use super::{member, module, schema};
 /// `Ord` names two of `m`'s four members. `m` binds `Carrier` itself — a signature's abstract
 /// member is satisfied by a *declaration* in the module, not by a type the checker infers.
 const PROGRAM: &str = "\
-SIG Ord = ((TYPE Carrier) (VAL zero :Carrier))
+SIG Ord = #[(TYPE Carrier) (VAL zero :Carrier)]
 MODULE m = ((LET Carrier = Number) (LET zero = 0) (LET name = \"m\") (NEWTYPE Dist = Number))";
 
 #[test]
@@ -164,10 +164,10 @@ fn a_mint_is_sourced_at_its_own_nonce() {
 #[test]
 fn a_view_refuses_what_it_cannot_be() {
     let source = "\
-SIG Ord = ((TYPE Carrier) (VAL zero :Carrier))
-SIG Wider = ((TYPE Carrier) (VAL zero :Carrier) (VAL one :Carrier))
+SIG Ord = #[(TYPE Carrier) (VAL zero :Carrier)]
+SIG Wider = #[(TYPE Carrier) (VAL zero :Carrier) (VAL one :Carrier)]
 MODULE m = (LET zero = 0)
-LET f = (FN :{} -> Number = (1))";
+LET f = (FN :{} -> Number = #(1))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
@@ -251,9 +251,9 @@ fn a_view_copies_across_a_cell_like_any_module() {
 fn a_bounded_member_bounds_its_mint_and_what_is_sealed_behind_it() {
     use crate::type_lattice::SigSubtypeFailure;
     let source = "\
-SIG Ord = ((TYPE (Carrier UNDER Value)) (VAL zero :Carrier))
-SIG Loose = ((TYPE Carrier) (VAL zero :Carrier))
-SIG Counted = ((TYPE (Carrier UNDER Number)) (VAL zero :Carrier))
+SIG Ord = #[(TYPE (Carrier UNDER Value)) (VAL zero :Carrier)]
+SIG Loose = #[(TYPE Carrier) (VAL zero :Carrier)]
+SIG Counted = #[(TYPE (Carrier UNDER Number)) (VAL zero :Carrier)]
 MODULE m = ((LET Carrier = Number) (LET zero = 0))
 MODULE s = ((LET Carrier = Str) (LET zero = \"\"))";
     with_fixture(|fixture| {

@@ -35,10 +35,11 @@ registry's own doors:
   two members, and `& [Left Right …]` its chained form — a meet that comes out
   `Never` is a type like any other;
 - `:{x :Elem, …}` is the record type of its fields in written order;
-- `FN :{x :Elem, …} -> Ret`, with or without `FOR ALL (names)`, is the function
+- `FN :{x :Elem, …} -> Ret`, with or without a `FOR ALL` group, is the function
   type over the schema's fields and the return;
-- `EXPR (head) -> Ret`, with or without `FOR ALL (names)`, is the expression
-  shape over the head's keywords and typed slots and the return;
+- `EXPR #(head) -> Ret`, with or without a `FOR ALL` group, is the expression
+  shape over the keywords and typed slots of the head its quote holds, and the
+  return;
 - `Union.Tag` is the member of the union whose tag it names;
 - `Record.field` is the type the record under `Record` declares `field` with,
   read through every newtype layer above the record — a `NEWTYPE`'s
@@ -57,9 +58,11 @@ registry's own doors:
 **Quantifiers are positions, not mentions.** A name a `FOR ALL` group declares
 is that group's quantifier at its written position, elaborated as
 `quantified(index, bound)`, so two heads that differ only in what they call their
-quantifiers intern to one shape. The bound is what `(Elt UNDER <bound>)` writes —
-one type part, `Value` or `:(Number | Str)` — and `Any` for a name written bare;
-a group of one bounded name is `FOR ALL (Elt UNDER Value)`. Groups nest: an `EXPR` type inside a signature
+quantifiers intern to one shape. A group is a list of name quotes,
+`FOR ALL #[Elt Key]`, or a dict of name quotes to bound quotes,
+`FOR ALL #{Elt: Value, Key: Any}`. A bound is the one type part its quote holds —
+a type name such as `Value`, or a sigiled `:(Number | Str)` — and a name in a
+list is bounded by `Any`. Groups nest: an `EXPR` type inside a signature
 opens its own group, as does a `FN FOR ALL` type, and a name the innermost group
 declares shadows the rest. A name only an *outer* group declares, read under a
 nested group, is refused. A **bare** `FN` type opens no group at all, so a
@@ -161,11 +164,12 @@ order:
   member over its declared parameter names, so an application has a declared
   referent a koan program can write. A one-parameter family wraps a payload of
   its parameter's type; a wider one constructs nothing;
-- `UNION Maybe = (Some :Number None :Null)` — the canonical union of one member
-  per variant, the binder owning them all;
-- `UNION (Elem AS Option) = (Some :Elem None :Null)` — the same, each variant a
+- `UNION Maybe = #{Some: Number, None: Null}` — the canonical union of one
+  member per variant, the binder owning them all: each key quotes a tag, and each
+  value the payload's type;
+- `UNION (Elem AS Option) = #{Some: Elem, None: Null}` — the same, each variant a
   [family](#families) over the declarator's parameters;
-- `SIG HasLabel = (VAL label :Str)` — a signature;
+- `SIG HasLabel = #[(VAL label :Str)]` — a signature;
 - `LET Alias = Number` in the type channel — its right-hand side's type.
 
 Which declaration a member is, and where its declared part sits, is read off the
@@ -222,14 +226,14 @@ list — is refused rather than given an unsound order.
 
 A fellow carries the parameter names of the family it names, so a family
 applies itself or a fellow family inside its own component while the window is
-still open: `UNION (Elem AS Tree) = (Leaf :Null Node :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)})`
+still open: `UNION (Elem AS Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)}}`
 and a `Tree`/`Forest` ring both declare. Applying a union binder per member is
 the elaborator's alone: the lattice's own `constructor_param_names` answers
 nothing for a union, so a parameterized union is no witness for a signature's
 higher-kinded `TYPE (… AS …)` member.
 
 [`builtin_result`](builtin.rs) seals the builtin `Result` through the window
-`UNION (Ok Error AS Result) = (Ok :Ok Error :Error)` seals through, so the
+`UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}` seals through, so the
 builtin and a declared `Result` are one handle.
 
 What a construction through a family carries is the construction rule's
@@ -237,8 +241,9 @@ What a construction through a family carries is the construction rule's
 
 ### What a signature declares
 
-A `SIG` body's statements are its members, read in source order by their own
-builtin shapes' roles:
+A `SIG` body is a list of member quotes, `#[(TYPE Carrier) (VAL x :Carrier)]`.
+Each quote's statement is a member, read in list order by its own builtin
+shape's roles:
 
 - `TYPE Carrier`, `TYPE (Held AS Boxed)` — an abstract member, bare or
   higher-kinded, and the only place a bare `TYPE` binds: outside a `SIG` it is
@@ -247,12 +252,16 @@ builtin shapes' roles:
   manifest one stands for its type and an abstract one is refused. A
   higher-kinded member, and a `NEWTYPE` family, take no bound;
 - `LET Elem = Number` — a manifest member, fixed to its type;
-- `VAL x :Elem` — a value slot;
+- `VAL x :Elem` — a value slot, named by its `Name` part;
 - a bodyless `EXPR`, `OP` or `UNARY OP` head — a keyworded member, the shape
   the definition satisfying it registers. An operator head is built by the same
   door as that definition's registered shape; an `EXPR` head, which may write
-  `_` for a slot's name, is read as the type expression `:(EXPR …)`, which spells
-  the same shape.
+  `_` for a slot's name, is read through its quote as the type expression
+  `:(EXPR #(…) -> …)`, which spells the same shape.
+
+Every shape `BuiltinShapeId::declares_member` names is one of these, and so is a
+`LET` of a type name; a `LET` of a value name is a declaration by its code kind
+but no member a signature can hold, and is refused.
 
 A signature's scope id is the sentinel, stamped here rather than round-tripped
 through the declaring scope, which is what makes two textually identical `SIG`
@@ -264,7 +273,7 @@ forward reference nothing has filled yet, and is refused.
 
 A bodyless **`GROUP` head** is the signature's **operator channel**: one
 [operator group](../scope/README.md#operator-groups) over the binary operator
-heads its body states, under the mode its own form id names and, for a pairwise
+heads its list of head quotes states, under the mode its own form id names and, for a pairwise
 head, the combiner it quotes. Each of those heads is a keyworded member like any
 other, so a group declares both what its operators are and how a run of them
 chains; two signatures differing only in that chaining are two types. An
@@ -273,7 +282,7 @@ about chaining.
 
 A group head is refused when it would give a symbol a second chaining — a member
 an earlier group of the same body holds, or a member of a builtin group the
-declared group is not — and when its body is anything but binary operator heads,
+declared group is not — and when its heads are anything but binary operator heads,
 when a member states a result of its own outside a pairwise group, or when it
 names `==` or `!=`, which belong to no group. A binary head stating a result of
 its own is admitted only where its symbol chains pairwise, read off the groups

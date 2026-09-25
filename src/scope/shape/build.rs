@@ -22,7 +22,7 @@ use crate::memory::{
     strongly_connected_components,
 };
 use crate::parse::builtin_shapes::binder::bounded;
-use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, KEYWORDS};
+use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, StaticName, TypeSymbol, ValueSymbol};
 use crate::values::{Knotted, KnottedFamily};
@@ -35,14 +35,14 @@ use super::super::channels::Channels;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::signature::{
     body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_name,
-    quantifier_bounds, signature_run,
+    quantifier_bounds, quoted_body, signature_run,
 };
 use super::{
-    BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex,
-    Coordinate, Mention, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target, Unit,
-    UnitWork, resolve_here,
+    Arm, BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component,
+    ComponentIndex, Coordinate, Mention, MentionClass, Position, QuotedPart, ShapeError, ShapeKind,
+    Site, Slot, Target, Unit, UnitWork, resolve_here,
 };
-use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Role};
+use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
 
 mod rewrite;
 mod surface;
@@ -87,6 +87,7 @@ pub(super) fn program<'graph, X: Knotted>(
         .map(|(index, statement)| (statement, index + 1));
     let draft = builder.draft(
         ShapeKind::Program,
+        Entry::PLAIN,
         Position::PARAMETER,
         &[],
         &[],
@@ -120,8 +121,90 @@ pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
         GroupFrame::new(&[], Some(enclosing), claims),
     );
     let mut builder = Builder::new(brand, scratch, &lookup, Some((&outer, at)), claims, frame);
-    let draft = builder.draft(ShapeKind::Block, at, &[], &[], body.body_statements())?;
+    let draft = builder.draft(
+        ShapeKind::Block,
+        Entry::PLAIN,
+        at,
+        &[],
+        &[],
+        body.body_statements(),
+    )?;
     Ok(builder.seal(draft, None))
+}
+
+/// The static check of a builtin node, before any part is walked: each part its role reads as
+/// written — as a quote, as bare syntax or as a container of quotes — is written as the reading
+/// says, and admits one of its slot's types — a type expression's and an in-place operand's type
+/// is the value it denotes, so only their spelling is checked. A binder name is a bare name, or a
+/// bare declarator group for `TYPE`, `UNION` and `NEWTYPE`. Code written where a quote or a container of quotes is
+/// wanted is `Unquoted`, a quote where bare syntax is wanted `Malformed`, and a part whose syntax
+/// fills no slot type `Inadmissible`. The readers after it assume a well-formed part.
+fn written_as_read(
+    form: &'static BuiltinShape,
+    statement: u32,
+    node: &KExpression<'_>,
+) -> Result<(), ShapeError> {
+    let at = Position::statement(statement as usize);
+    let declarator = matches!(
+        form.id,
+        BuiltinShapeId::TypeDeclaration
+            | BuiltinShapeId::Union
+            | BuiltinShapeId::NewTypeDeclaration
+    );
+    let quoted = |part: &ExpressionPart<'_>| matches!(part, ExpressionPart::QuotedExpression(_));
+    for (index, (element, part)) in form.elements.iter().zip(node.parts).enumerate() {
+        let ShapeElement::Slot { role, types } = element else {
+            continue;
+        };
+        let reading = role.reading();
+        let part = &part.value;
+        let written = match reading {
+            Reading::Quote => quoted(part),
+            Reading::Bare if *role == Role::Name => match part {
+                ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => true,
+                ExpressionPart::Expression(_) => declarator,
+                _ => false,
+            },
+            Reading::Bare => !quoted(part),
+            Reading::Container => match part {
+                ExpressionPart::ListLiteral(items) => items.iter().all(quoted),
+                ExpressionPart::DictLiteral(pairs) => pairs
+                    .iter()
+                    .all(|(key, value)| (key.is_wildcard() || quoted(key)) && quoted(value)),
+                _ => false,
+            },
+            Reading::Label | Reading::Evaluated => continue,
+        };
+        let code = part.code_kind().is_some()
+            || matches!(
+                part,
+                ExpressionPart::ListLiteral(_) | ExpressionPart::DictLiteral(_)
+            );
+        let inadmissible = ShapeError::Inadmissible {
+            form: form.id,
+            index,
+            slot: types[0],
+            at,
+        };
+        if !written {
+            return Err(match reading {
+                Reading::Quote | Reading::Container if code => ShapeError::Unquoted {
+                    form: form.id,
+                    part: QuotedPart::of(*role),
+                    at,
+                },
+                Reading::Quote | Reading::Container => inadmissible,
+                _ => ShapeError::Malformed { form: form.id, at },
+            });
+        }
+        // A type expression and an in-place operand are typed by the value they denote, so only
+        // their spelling is checked here.
+        let typed_by_code = !matches!(role, Role::TypeExpression | Role::InPlace);
+        if typed_by_code && !types.iter().any(|slot| slot.admits_written(part)) {
+            return Err(inadmissible);
+        }
+    }
+    Ok(())
 }
 
 /// One unit's wait on another, by unit: the unit waited on, the waiter, and for an `EVAL`'s wait
@@ -195,6 +278,28 @@ struct Reader {
     class: MentionClass,
 }
 
+/// What a nested body is to the statement it is entered from: whether its last statement is in
+/// tail position, and, for a `MATCH` or `TRY` arm, the arm's facts.
+#[derive(Clone, Copy)]
+struct Entry<'graph> {
+    tail: bool,
+    arm: Option<Arm<'graph>>,
+}
+
+impl Entry<'_> {
+    /// A body that is no tail and no arm: the program, a module, a `USING` or synthesized block.
+    const PLAIN: Entry<'static> = Entry {
+        tail: false,
+        arm: None,
+    };
+
+    /// A callable's body, whose last statement is its value.
+    const CALLABLE: Entry<'static> = Entry {
+        tail: true,
+        arm: None,
+    };
+}
+
 type Lookup<'e> = &'e dyn Fn(BinderSymbol) -> Option<BuiltinIndex>;
 type Outer<'e> = &'e dyn Fn(BinderSymbol, Position) -> Option<Coordinate>;
 
@@ -242,6 +347,10 @@ struct Draft<'graph, 'x> {
     /// and whether it is cyclic.
     components: BumpVec<'x, DraftComponent>,
     keeps_defining_scope: bool,
+    /// Whether this body's last statement is in tail position.
+    tail: bool,
+    /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
+    arm: Option<Arm<'graph>>,
     /// The statement being walked when a nested draft was entered, and the class that path takes
     /// at this level.
     current: (u32, MentionClass),
@@ -348,6 +457,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     fn draft<'n>(
         &mut self,
         kind: ShapeKind,
+        entry: Entry<'graph>,
         entered_at: Position,
         parameters: &[BinderSymbol],
         held: &[&'graph DeclaredGroup<'graph>],
@@ -364,7 +474,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         if !held.is_empty() {
             self.frame = resident(writer, GroupFrame::new(held, Some(outer), self.claims));
         }
-        let built = self.body(kind, entered_at, parameters, held, statements);
+        let built = self.body(kind, entry, entered_at, parameters, held, statements);
         self.frame = outer;
         built
     }
@@ -374,6 +484,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     fn body<'n>(
         &mut self,
         kind: ShapeKind,
+        entry: Entry<'graph>,
         entered_at: Position,
         parameters: &[BinderSymbol],
         held: &'graph [&'graph DeclaredGroup<'graph>],
@@ -397,6 +508,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut draft = self.binders(kind, entered_at, parent_statement, parameters, &nodes)?;
         draft.frame = self.frame;
         draft.held = held;
+        draft.tail = entry.tail;
+        draft.arm = entry.arm;
         draft.nodes.extend(nodes.iter().map(|node| **node));
         self.chain.push(draft);
         let level = self.chain.len() - 1;
@@ -489,6 +602,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             members: BumpVec::new_in(scratch),
             components: BumpVec::new_in(scratch),
             keeps_defining_scope: false,
+            tail: false,
+            arm: None,
             current: (0, MentionClass::Eager),
         })
     }
@@ -532,6 +647,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             node.parts.len(),
             "a builtin shape's parts match its run"
         );
+        written_as_read(form, statement, node)?;
         // A binary operator declaring a result type of its own is admitted only where its symbol
         // chains pairwise: a fold hands its own result back as the next operand.
         if matches!(
@@ -577,12 +693,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let declares = union
             || form
                 .roles()
-                .any(|role| matches!(role, Role::Signature | Role::Quantifiers));
+                .any(|role| matches!(role, Role::Signature | Role::Head | Role::Quantifiers));
         let mut parameters = BumpVec::new_in(self.scratch);
         if declares {
             for (role, part) in form.roles().zip(node.parts) {
                 match role {
-                    Role::Signature => declare_parameters(&part.value, &mut parameters),
+                    Role::Signature | Role::Head => {
+                        declare_parameters(&part.value, &mut parameters)
+                    }
                     Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
                     Role::Name if union => declare_family_parameters(&part.value, &mut parameters),
                     _ => {}
@@ -614,7 +732,16 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         for (role, part) in form.roles().zip(node.parts) {
             let part = &part.value;
             match role {
-                Role::Keyword | Role::Name | Role::Data | Role::Label => {}
+                Role::Keyword | Role::Name | Role::Data => {}
+                // A bare name is the label itself; any other label is evaluated.
+                Role::Field => {
+                    if !matches!(
+                        part,
+                        ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
+                    ) {
+                        self.walk_part(level, statement, part, State::Eager)?
+                    }
+                }
                 // A group's names are the body's; its bounds are read where the form runs, as the
                 // signature's types are. The group's own names are already skipped, so a bound
                 // naming one records nothing and the elaborator refuses it.
@@ -633,14 +760,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     }
                     self.walk_part(level, statement, part, state)?
                 }
-                Role::Argument | Role::TypeExpression => {
+                Role::Argument | Role::TypeExpression | Role::InPlace => {
                     self.walk_part(level, statement, part, State::Eager)?
                 }
-                Role::Signature => self.walk_signature(level, statement, part)?,
+                Role::Signature | Role::Head => self.walk_signature(level, statement, part)?,
                 Role::Body(kind) => {
                     self.enter_body(level, statement, node, part, kind, parameters, state)?
                 }
-                Role::Branches(heads) => self.enter_arms(level, statement, form.id, part, heads)?,
+                Role::Branches(heads) => self.enter_arms(level, statement, part, heads, state)?,
                 Role::Definition(kind) => {
                     self.walk_definition(level, statement, part, kind, state.constructor())?
                 }
@@ -677,6 +804,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         MentionClass::Eager,
                         Site::of(part),
                         ShapeKind::Block,
+                        Entry::PLAIN,
                         &[],
                         &[],
                         node.reference().body_statements(),
@@ -697,6 +825,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Ok(())
             }
             ExpressionPart::DictLiteral(pairs) => {
+                // A value dict's `_` default has no reading yet; an arm set's `_` never reaches
+                // here, since arms are read as a container.
+                if pairs.iter().any(|(key, _)| key.is_wildcard()) {
+                    return Err(ShapeError::DictDefault {
+                        site: Site::of(part),
+                        at: Position::statement(statement as usize),
+                    });
+                }
                 for (key, value) in pairs.iter() {
                     self.walk_part(level, statement, key, State::Eager)?;
                     self.walk_part(level, statement, value, state.constructor())?;
@@ -751,7 +887,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     /// A type declaration's definition, under the constructor state: symbols and every name the
-    /// definition itself declares are not mentions, and every other type name is.
+    /// definition itself declares are not mentions, and every other type name is. A union's
+    /// variants are a dict of tag quotes to payload quotes, and a signature's members a list of
+    /// member quotes; each quote is read where it is written.
     fn walk_definition(
         &mut self,
         level: usize,
@@ -760,23 +898,47 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         kind: DefinitionKind,
         state: State,
     ) -> Result<(), ShapeError> {
-        // A definition declares its own names — a `SIG` body's abstract `TYPE` members and its
-        // manifest `LET` members alike — so a later statement naming one is no mention of the
-        // enclosing shape. The door resolves them against the definition it is elaborating.
-        let mut own = BumpVec::new_in(self.scratch);
-        if let ExpressionPart::Expression(run) = part {
-            own.extend(run.body_statements().filter_map(|(node, _)| {
-                match node.statement_binder_plan()?.name? {
-                    BinderSymbol::Type(name) => Some(name),
-                    BinderSymbol::Value(_) => None,
+        match (kind, part) {
+            // A tag names a variant and is no mention; a payload is a type expression.
+            (DefinitionKind::Union, ExpressionPart::DictLiteral(variants)) => {
+                for (_, payload) in variants.iter() {
+                    if let Some(payload) = quoted_body(payload) {
+                        for inner in payload.parts {
+                            self.walk_definition_part(level, statement, &inner.value, state)?;
+                        }
+                    }
                 }
-            }));
+                Ok(())
+            }
+            (DefinitionKind::Members, ExpressionPart::ListLiteral(members)) => {
+                // A signature declares its own names — its abstract `TYPE` members and its manifest
+                // `LET` members alike — so a later member naming one is no mention of the enclosing
+                // shape. The door resolves them against the definition it is elaborating.
+                let mut own = BumpVec::new_in(self.scratch);
+                own.extend(members.iter().filter_map(quoted_body).filter_map(|member| {
+                    match member.statement_binder_plan()?.name? {
+                        BinderSymbol::Type(name) => Some(name),
+                        BinderSymbol::Value(_) => None,
+                    }
+                }));
+                let mark = self.skip.len();
+                self.skip.extend_from_slice(&own);
+                let mut walked = Ok(());
+                for member in members.iter().filter_map(quoted_body) {
+                    let member = member.statement_spine();
+                    if let Some(form) = member.cache().builtin_shape() {
+                        walked =
+                            self.walk_definition_statement(level, statement, member, form, state);
+                        if walked.is_err() {
+                            break;
+                        }
+                    }
+                }
+                self.skip.truncate(mark);
+                walked
+            }
+            _ => self.walk_definition_part(level, statement, part, state),
         }
-        let mark = self.skip.len();
-        self.skip.extend_from_slice(&own);
-        let walked = self.walk_definition_part(level, statement, part, kind, state);
-        self.skip.truncate(mark);
-        walked
     }
 
     /// One statement of a definition, by its own builtin shape's roles — the same authority the
@@ -797,10 +959,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 at: Position::statement(statement as usize),
             });
         }
+        written_as_read(form, statement, node)?;
         let mut parameters = BumpVec::new_in(self.scratch);
         for (role, part) in form.roles().zip(node.parts) {
             match role {
-                Role::Signature => declare_parameters(&part.value, &mut parameters),
+                Role::Signature | Role::Head => declare_parameters(&part.value, &mut parameters),
                 Role::Quantifiers => declare_quantifiers(&part.value, &mut parameters),
                 _ => {}
             }
@@ -827,16 +990,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         for (role, part) in form.roles().zip(node.parts) {
             let part = &part.value;
             match role {
-                Role::Keyword | Role::Data | Role::Label => {}
+                Role::Keyword | Role::Data => {}
                 Role::Quantifiers => {
                     for bound in quantifier_bounds(part) {
-                        self.walk_definition_part(
-                            level,
-                            statement,
-                            bound,
-                            DefinitionKind::Plain,
-                            state,
-                        )?;
+                        self.walk_definition_part(level, statement, bound, state)?;
                     }
                 }
                 // A `TYPE` member's bound is read where the `SIG` runs; its name is the body's.
@@ -844,13 +1001,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     if form.id == BuiltinShapeId::TypeDeclaration
                         && let Some((_, bound)) = bounded(part)
                     {
-                        self.walk_definition_part(
-                            level,
-                            statement,
-                            bound,
-                            DefinitionKind::Plain,
-                            state,
-                        )?;
+                        self.walk_definition_part(level, statement, bound, state)?;
                     }
                 }
                 Role::Definition(inner) => {
@@ -862,9 +1013,19 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         at: Position::statement(statement as usize),
                     });
                 }
-                Role::Rhs | Role::Argument | Role::TypeExpression | Role::Signature => {
-                    self.walk_definition_part(level, statement, part, DefinitionKind::Plain, state)?
-                }
+                // A bare name is the label itself; any other label is evaluated.
+                Role::Field
+                    if matches!(
+                        part,
+                        ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
+                    ) => {}
+                Role::Rhs
+                | Role::Argument
+                | Role::InPlace
+                | Role::Field
+                | Role::TypeExpression
+                | Role::Signature
+                | Role::Head => self.walk_definition_part(level, statement, part, state)?,
             }
         }
         Ok(())
@@ -875,16 +1036,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         level: usize,
         statement: u32,
         part: &ExpressionPart<'graph>,
-        kind: DefinitionKind,
         state: State,
     ) -> Result<(), ShapeError> {
         let run = match part {
             ExpressionPart::Type(name) if !self.skips(name) => {
                 return self.mention(level, statement, part, BinderSymbol::Type(*name), state);
             }
-            // A statement of the definition, and a type expression written inside one, are nodes
-            // with builtin shapes of their own: read their parts by their roles rather than
-            // descending into them blind.
+            // A type expression written inside a definition, and a quoted head, are nodes with
+            // builtin shapes of their own: read their parts by their roles rather than descending
+            // into them blind.
             ExpressionPart::Expression(run) | ExpressionPart::SigiledTypeExpr(run)
                 if let Some(form) = run.statement_spine().cache().builtin_shape() =>
             {
@@ -898,7 +1058,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
             ExpressionPart::Expression(run)
             | ExpressionPart::SigiledTypeExpr(run)
-            | ExpressionPart::RecordType(run) => run.reference(),
+            | ExpressionPart::RecordType(run)
+            | ExpressionPart::QuotedExpression(run) => run.reference(),
             ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => {
@@ -907,21 +1068,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::Type(_)
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Keyword(_)
-            | ExpressionPart::Literal(_)
-            | ExpressionPart::QuotedExpression(_) => return Ok(()),
+            | ExpressionPart::Literal(_) => return Ok(()),
         };
-        for (index, inner) in run.parts.iter().enumerate() {
-            let tag = kind == DefinitionKind::Union && index % 2 == 0;
-            if tag && matches!(inner.value, ExpressionPart::Type(_)) {
-                continue;
-            }
-            self.walk_definition_part(
-                level,
-                statement,
-                &inner.value,
-                DefinitionKind::Plain,
-                state,
-            )?;
+        for inner in run.parts {
+            self.walk_definition_part(level, statement, &inner.value, state)?;
         }
         Ok(())
     }
@@ -937,7 +1087,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         signature: &[BinderSymbol],
         state: State,
     ) -> Result<(), ShapeError> {
-        let Some(body) = body_of(part) else {
+        // A callable's body is a written quote; an in-place body is a bare group. The static check
+        // has already refused any other spelling.
+        let written = match Role::Body(kind).reading() {
+            Reading::Quote => quoted_body(part),
+            _ => body_of(part),
+        };
+        let Some(body) = written else {
             return Err(ShapeError::Malformed {
                 form: node
                     .cache()
@@ -962,12 +1118,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 draft.births.push((binder, site));
             }
         }
-        let (shape_kind, class) = match kind {
-            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => {
-                (ShapeKind::Callable, state.constructor().class())
-            }
-            BodyKind::Module => (ShapeKind::Module, MentionClass::Eager),
-            BodyKind::Surfaced => (ShapeKind::Block, MentionClass::Eager),
+        let (shape_kind, class, entry) = match kind {
+            BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => (
+                ShapeKind::Callable,
+                state.constructor().class(),
+                Entry::CALLABLE,
+            ),
+            BodyKind::Module => (ShapeKind::Module, MentionClass::Eager, Entry::PLAIN),
+            BodyKind::Surfaced => (ShapeKind::Block, MentionClass::Eager, Entry::PLAIN),
         };
         let operator = [
             BinderSymbol::Value(IMPLICIT.left.symbol()),
@@ -1024,51 +1182,56 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             class,
             Site::of(part),
             shape_kind,
+            entry,
             parameters,
             held,
             body.body_statements(),
         )
     }
 
+    /// An arm set: a dict of guard quotes to arm quotes, each arm a block binding `it`. A guard
+    /// written under `MATCH … WITH` is a type read where the match runs; a label names a variant
+    /// or an error kind and is no mention; `_` is the default arm. An arm's last statement is in
+    /// tail position exactly where the `MATCH` or `TRY` is: at the root of a body's last statement
+    /// that binds nothing, in a tail body.
     fn enter_arms(
         &mut self,
         level: usize,
         statement: u32,
-        form: BuiltinShapeId,
         part: &ExpressionPart<'graph>,
         heads: Heads,
+        state: State,
     ) -> Result<(), ShapeError> {
-        let malformed = ShapeError::Malformed {
-            form,
-            at: Position::statement(statement as usize),
+        let ExpressionPart::DictLiteral(arms) = part else {
+            unreachable!("the static check admits only a dict of quotes")
         };
-        let Some(branches) = body_of(part) else {
-            return Err(malformed);
-        };
-        let parts = branches.parts;
-        let arrow = KEYWORDS.arrow.symbol();
-        if !parts.len().is_multiple_of(3) {
-            return Err(malformed);
-        }
-        for arm in parts.chunks_exact(3) {
-            let (head, separator, body_part) = (&arm[0].value, &arm[1].value, &arm[2].value);
-            let (ExpressionPart::Keyword(symbol), Some(body)) = (separator, body_of(body_part))
-            else {
-                return Err(malformed);
-            };
-            if *symbol != arrow {
-                return Err(malformed);
+        let draft = &self.chain[level];
+        let tail = state == State::Root
+            && draft.tail
+            && draft.statement_binder[statement as usize].is_none()
+            && statement + 1 == draft.statements;
+        for (guard, body_part) in arms.iter() {
+            let guard = (!guard.is_wildcard()).then_some(guard);
+            if heads == Heads::Types
+                && let Some(written) = guard.and_then(quoted_body)
+            {
+                for inner in written.parts {
+                    self.walk_part(level, statement, &inner.value, State::Eager)?;
+                }
             }
-            if heads == Heads::Types {
-                self.walk_part(level, statement, head, State::Eager)?;
-            }
+            let body = quoted_body(body_part).expect("the static check admits only quotes");
             let it = [BinderSymbol::Value(IMPLICIT.it.symbol())];
+            let entry = Entry {
+                tail,
+                arm: Some(Arm { guard, heads, tail }),
+            };
             self.enter_child(
                 level,
                 statement,
                 MentionClass::Eager,
                 Site::of(body_part),
                 ShapeKind::Block,
+                entry,
                 &it,
                 &[],
                 body.body_statements(),
@@ -1087,6 +1250,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         class: MentionClass,
         site: Site,
         kind: ShapeKind,
+        entry: Entry<'graph>,
         parameters: &[BinderSymbol],
         held: &[&'graph DeclaredGroup<'graph>],
         statements: impl Iterator<Item = (&'n KExpression<'graph>, usize)>,
@@ -1098,7 +1262,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         parent.current = (statement, class);
         let entered_at = parent.boundary();
         let floor = std::mem::replace(&mut self.skip_floor, self.skip.len());
-        let child = self.draft(kind, entered_at, parameters, held, statements);
+        let child = self.draft(kind, entry, entered_at, parameters, held, statements);
         self.skip_floor = floor;
         self.chain[level].children.push((site, child?));
         Ok(())
@@ -1503,6 +1667,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 declarations: collect(writer, declarations.iter().copied()),
                 units: collect(writer, draft.units.iter().copied()),
                 keeps_defining_scope: draft.keeps_defining_scope,
+                arm: draft.arm,
             },
         )
     }

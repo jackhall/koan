@@ -257,6 +257,7 @@ impl<'run> TypeRegistry<'run> {
         self.list(KType::DECLARATION);
         self.dict(KType::NAME, KType::BLOCK);
         self.dict(KType::NAME, type_code);
+        self.dict(type_code, KType::BLOCK);
     }
 
     /// `test`-only: how many verdicts were recorded, and how many of those evicted another.

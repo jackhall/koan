@@ -95,7 +95,7 @@ pub(super) fn describe(e: &KExpression<'_>, symbols: &SymbolInterner) -> String 
 }
 
 /// One line's parts, without the peel a statement gets: the run as written, so an expectation
-/// here names the parts a paren or sigil produced rather than what a redundant wrapper collapses
+/// here names the parts a paren or sigil produced rather than what a layout wrapper collapses
 /// to. Rejects an input that is not exactly one line.
 pub(super) fn tree(input: &str) -> Result<String, String> {
     let program = program_storage();

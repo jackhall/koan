@@ -4,9 +4,11 @@ A dict literal's `_` key naming the value a lookup of any other key yields.
 
 **Problem.** A dict holds only the keys written in it
 ([dict key order](../../src/values/README.md#dict-key-order)), so a lookup of
-any other key has no answer. A dict literal refuses `_` as a key: `push_part`
-([parse/lower.rs](../../src/parse/lower.rs)) refuses every keyword in a list,
-dict or record literal.
+any other key has no answer. A dict literal may write `_` as a key, but only
+an arm set reads it: the shape builder refuses a value dict holding one
+(`ShapeError::DictDefault`, [scope/shape.rs](../../src/scope/shape.rs)), since
+nothing gives its default a lookup, a type, an equality, a rendering or a
+lowering.
 
 **Acceptance criteria.**
 

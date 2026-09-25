@@ -7,11 +7,12 @@ failure, a node or a leaf.
 
 ## Declaring a union
 
-`UNION <Name> = (<variants>)` declares the type. Each variant is a tag paired
-with its payload type:
+`UNION <Name> = #{<variants>}` declares the type. Each variant is a tag paired
+with its payload type, in a dict of quotes (see
+[Quoting each element](10-quoting.md#quoting-each-element-of-a-list-or-dict)):
 
 ```koan
-UNION Maybe = (Some :Number None :Null)
+UNION Maybe = #{Some: Number, None: Null}
 PRINT (Maybe.Some 42)
 PRINT (Maybe.None null)
 ```
@@ -23,7 +24,7 @@ None(null)
 
 A tag is a **type-name** token — capitalized with at least one lowercase letter
 (`Some`, `None`), never a lone capital. The variant list pairs each tag with a
-payload type, separated by whitespace or commas. A variant is reached by
+payload type, `<Tag>: <Type>`, the entries separated by commas. A variant is reached by
 **projecting it off its union** — `Maybe.Some` — and you construct a value by
 applying that projection to the payload, as above. A union value prints as its
 bare tag and payload (`Some(42)`), since the tag already identifies it.
@@ -42,7 +43,7 @@ A union type can be given another name, as long as that name is a type name
 type:
 
 ```koan
-UNION Maybe = (Some :Number None :Null)
+UNION Maybe = #{Some: Number, None: Null}
 LET Option = Maybe
 PRINT (Option.Some 7)
 ```
@@ -62,9 +63,9 @@ while a slot typed `:Maybe` admits any variant. That lets two functions sharing
 a keyword dispatch on which variant they're handed:
 
 ```koan
-UNION Maybe = (Some :Number None :Null)
-EXPR (DESCRIBE x :(Maybe.Some)) -> Str = ("has a value")
-EXPR (DESCRIBE x :(Maybe.None)) -> Str = ("empty")
+UNION Maybe = #{Some: Number, None: Null}
+EXPR #(DESCRIBE x :(Maybe.Some)) -> Str = #("has a value")
+EXPR #(DESCRIBE x :(Maybe.None)) -> Str = #("empty")
 PRINT (DESCRIBE (Maybe.Some 1))
 PRINT (DESCRIBE (Maybe.None null))
 ```

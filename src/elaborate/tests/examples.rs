@@ -41,7 +41,7 @@ LET Mapped = :(MAP Str -> (LIST OF Number))
 LET Either = :(Number | Str | Null)
 LET Fields = :{x :Number, y :Alias}
 LET Function = :(FN :{x :Number} -> Bool)
-LET Headed = :(EXPR (TWICE x :Number) -> Number)
+LET Headed = :(EXPR #(TWICE x :Number) -> Number)
 LET Bare = Alias";
     with_program(
         source,
@@ -93,9 +93,9 @@ LET Bare = Alias";
 #[test]
 fn a_quantified_head_interns_by_shape_whatever_its_names() {
     let source = "\
-LET Named = :(EXPR FOR ALL (Elt) (ID x :Elt) -> Elt)
-LET Renamed = :(EXPR FOR ALL (Other) (ID x :Other) -> Other)
-LET Fixed = :(EXPR (ID x :Number) -> Number)";
+LET Named = :(EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt)
+LET Renamed = :(EXPR FOR ALL #[Other] #(ID x :Other) -> Other)
+LET Fixed = :(EXPR #(ID x :Number) -> Number)";
     with_program(source, scalars, nulls, |program| {
         let named = elaborated(&program, 0).unwrap();
         assert_eq!(elaborated(&program, 1), Ok(named));
@@ -106,8 +106,8 @@ LET Fixed = :(EXPR (ID x :Number) -> Number)";
 #[test]
 fn a_quantified_lambda_type_interns_by_shape_whatever_its_names() {
     let source = "\
-LET Named = :(FN FOR ALL (Elt) :{x :Elt} -> Elt)
-LET Renamed = :(FN FOR ALL (Other) :{x :Other} -> Other)
+LET Named = :(FN FOR ALL #[Elt] :{x :Elt} -> Elt)
+LET Renamed = :(FN FOR ALL #[Other] :{x :Other} -> Other)
 LET Fixed = :(FN :{x :Number} -> Number)";
     with_program(source, scalars, nulls, |program| {
         let named = elaborated(&program, 0).unwrap();
@@ -120,7 +120,7 @@ LET Fixed = :(FN :{x :Number} -> Number)";
 fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
     // A bare `FN` type opens no group, so its field and return keep reading the head's `Elt`.
     let source =
-        "LET Applied = :(EXPR FOR ALL (Elt) (APPLY f :(FN :{x :Elt} -> Elt) TO v :Elt) -> Elt)";
+        "LET Applied = :(EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO v :Elt) -> Elt)";
     with_program(source, scalars, nulls, |program| {
         let (types, scratch) = (program.types, program.scratch);
         let quantified = types.quantified(0, KType::ANY);
@@ -151,8 +151,8 @@ fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
 #[test]
 fn an_outer_quantifier_read_under_a_nested_function_group_is_refused() {
     // The nested `FN FOR ALL` opens a group of its own, which shadows the head's `Elt`.
-    let source = "LET Shadowed = :(EXPR FOR ALL (Elt) \
-                    (APPLY f :(FN FOR ALL (Other) :{x :Elt} -> Other) TO v :Elt) -> Elt)";
+    let source = "LET Shadowed = :(EXPR FOR ALL #[Elt] \
+                    #(APPLY f :(FN FOR ALL #[Other] :{x :Elt} -> Other) TO v :Elt) -> Elt)";
     with_program(source, scalars, nulls, |program| {
         assert!(matches!(
             elaborated(&program, 0),
@@ -227,13 +227,13 @@ LET Applied = :(Number AS Wrap)";
 #[test]
 fn a_callable_type_is_read_off_the_form_that_births_it() {
     let source = "\
-LET f = (FN :{x :Number, ys :(LIST OF Str)} -> Bool = (x))
-LET twice = FN EXPR (TWICE x :Number) -> Number = (x)
-LET id = FN EXPR FOR ALL (Elt) (ID x :Elt) -> Elt = (x)
-LET lambda_id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))
-LET plus = OP #(+) OVER Number = (left)
-LET less = OP #(<) OVER Number -> Bool = (left)
-LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
+LET f = (FN :{x :Number, ys :(LIST OF Str)} -> Bool = #(x))
+LET twice = FN EXPR #(TWICE x :Number) -> Number = #(x)
+LET id = FN EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)
+LET lambda_id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))
+LET plus = OP #(+) OVER Number = #(left)
+LET less = OP #(<) OVER Number -> Bool = #(left)
+LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
     with_program(source, scalars, nulls, |program| {
         let (types, scratch, symbols) = (program.types, program.scratch, program.symbols);
         let typed = |name| {
@@ -396,14 +396,14 @@ fn parameters(body: &BodyShape<'_>) -> Vec<BinderSymbol> {
 #[test]
 fn a_bare_definition_is_typed_as_its_combined_twin_is() {
     let source = "\
-EXPR FOR ALL (Elt) (WHICH x :Elt ys :(LIST OF Elt)) -> Elt = (x)
-LET which = FN EXPR FOR ALL (Elt) (WHICH x :Elt ys :(LIST OF Elt)) -> Elt = (x)
-EXPR (TWICE x :Number) -> Number = (x)
-LET twice = FN EXPR (TWICE x :Number) -> Number = (x)
-OP #(*) OVER Number = (left)
-LET times = OP #(*) OVER Number = (left)
-UNARY OP #(~) OVER Number -> Number = (operands)
-LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
+EXPR FOR ALL #[Elt] #(WHICH x :Elt ys :(LIST OF Elt)) -> Elt = #(x)
+LET which = FN EXPR FOR ALL #[Elt] #(WHICH x :Elt ys :(LIST OF Elt)) -> Elt = #(x)
+EXPR #(TWICE x :Number) -> Number = #(x)
+LET twice = FN EXPR #(TWICE x :Number) -> Number = #(x)
+OP #(*) OVER Number = #(left)
+LET times = OP #(*) OVER Number = #(left)
+UNARY OP #(~) OVER Number -> Number = #(operands)
+LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
     with_program(source, scalars, nulls, |program| {
         let (types, scratch) = (program.types, program.scratch);
         // A bare definition has no binder, so its body is reached by the site of its last part.
@@ -485,12 +485,11 @@ fn sorted_bounds(types: &TypeRegistry<'_>, handle: KType) -> Vec<KType> {
 #[test]
 fn a_bounded_quantifier_carries_its_bound() {
     let source = "\
-LET Pair = :(FN FOR ALL ((Elt UNDER Value) Key) :{a :Elt b :Key c :Elt d :Key} -> Elt)
-LET Shape = :(EXPR FOR ALL ((Elt UNDER Value) Key) (PAIR a :Elt b :Key c :Elt d :Key) -> Elt)
-LET Lone = :(FN FOR ALL (Elt UNDER Value) :{x :Elt y :Elt} -> Elt)
-LET Doubled = :(FN FOR ALL ((Elt UNDER Value)) :{x :Elt y :Elt} -> Elt)
-LET Free = :(FN FOR ALL (Elt) :{x :Elt y :Elt} -> Elt)
-LET Spanning = :(FN FOR ALL (Elt UNDER :(Number | Str | Bool)) :{x :Elt y :Elt} -> Elt)";
+LET Pair = :(FN FOR ALL #{Elt: Value, Key: Any} :{a :Elt b :Key c :Elt d :Key} -> Elt)
+LET Shape = :(EXPR FOR ALL #{Elt: Value, Key: Any} #(PAIR a :Elt b :Key c :Elt d :Key) -> Elt)
+LET Lone = :(FN FOR ALL #{Elt: Value} :{x :Elt y :Elt} -> Elt)
+LET Free = :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Elt)
+LET Spanning = :(FN FOR ALL #{Elt: :(Number | Str | Bool)} :{x :Elt y :Elt} -> Elt)";
     with_program(source, with_value, nulls, |program| {
         let (types, scratch) = (program.types, program.scratch);
         let mut expected = vec![KType::ANY_VALUE, KType::ANY];
@@ -501,13 +500,8 @@ LET Spanning = :(FN FOR ALL (Elt UNDER :(Number | Str | Bool)) :{x :Elt y :Elt} 
         }
         let lone = elaborated(&program, 2).expect("the type elaborates");
         assert_eq!(sorted_bounds(types, lone), vec![KType::ANY_VALUE]);
-        assert_eq!(
-            elaborated(&program, 3),
-            Ok(lone),
-            "one bounded name, however parenthesized"
-        );
-        assert_ne!(elaborated(&program, 4), Ok(lone), "a bound is identity");
-        let spanning = elaborated(&program, 5).expect("the type elaborates");
+        assert_ne!(elaborated(&program, 3), Ok(lone), "a bound is identity");
+        let spanning = elaborated(&program, 4).expect("the type elaborates");
         assert_eq!(
             sorted_bounds(types, spanning),
             vec![types.union_of(scratch, &[KType::NUMBER, KType::STR, KType::BOOL])]
@@ -539,10 +533,9 @@ LET Disjoint = :(Number & Str)";
 #[test]
 fn a_bound_naming_a_variable_or_never_is_refused() {
     let source = "\
-LET Own = :(FN FOR ALL ((Elt UNDER Key) Key) :{x :Elt y :Key} -> Elt)
-LET Empty = :(FN FOR ALL (Elt UNDER :(Number & Str)) :{x :Elt y :Elt} -> Elt)
-LET Over = :(FN FOR ALL ((Elt OVER Value)) :{x :Number} -> Number)
-LET Nested = :(FN FOR ALL (Outer) :{f :(FN FOR ALL (Elt UNDER Outer) :{x :Elt y :Elt} -> Elt) g :Outer} -> Outer)";
+LET Own = :(FN FOR ALL #{Elt: Key, Key: Any} :{x :Elt y :Key} -> Elt)
+LET Empty = :(FN FOR ALL #{Elt: :(Number & Str)} :{x :Elt y :Elt} -> Elt)
+LET Nested = :(FN FOR ALL #[Outer] :{f :(FN FOR ALL #{Elt: Outer} :{x :Elt y :Elt} -> Elt) g :Outer} -> Outer)";
     with_program(source, with_value, nulls, |program| {
         assert!(matches!(
             elaborated(&program, 0),
@@ -556,20 +549,16 @@ LET Nested = :(FN FOR ALL (Outer) :{f :(FN FOR ALL (Elt UNDER Outer) :{x :Elt y 
             elaborated(&program, 2),
             Err(Elaboration::Unsupported { .. })
         ));
-        assert!(matches!(
-            elaborated(&program, 3),
-            Err(Elaboration::Unsupported { .. })
-        ));
     });
 }
 
 #[test]
 fn a_callable_carries_its_bounds_and_maps_a_dropped_name_to_its_bound() {
     let source = "\
-LET lambda = (FN FOR ALL (Elt UNDER Number) :{x :Elt y :Elt} -> Elt = (x))
-LET id = FN EXPR FOR ALL (Elt UNDER Number) (ID x :Elt) -> Elt = (x)
-EXPR FOR ALL (Elt UNDER Number) (TWICE x :Elt y :Elt) -> Elt = (x)
-LET which = (FN FOR ALL ((Unused UNDER Value) Held) :{x :(LIST OF Held)} -> Held = (Unused))";
+LET lambda = (FN FOR ALL #{Elt: Number} :{x :Elt y :Elt} -> Elt = #(x))
+LET id = FN EXPR FOR ALL #{Elt: Number} #(ID x :Elt) -> Elt = #(x)
+EXPR FOR ALL #{Elt: Number} #(TWICE x :Elt y :Elt) -> Elt = #(x)
+LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held = #(Unused))";
     with_program(source, with_value, nulls, |program| {
         let (types, scratch) = (program.types, program.scratch);
         let twice = program

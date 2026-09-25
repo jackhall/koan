@@ -41,7 +41,7 @@ fn a_lone_newtype_mints_a_fresh_nominal_over_its_representation() {
 
 #[test]
 fn a_union_binds_the_canonical_union_of_its_variants() {
-    brought("UNION Maybe = (Some :Number None :Null)", |program| {
+    brought("UNION Maybe = #{Some: Number, None: Null}", |program| {
         let maybe = program.bound("Maybe");
         let TypeNode::Union { members } = program.types.node(maybe) else {
             panic!("a UNION binds a union");
@@ -58,7 +58,7 @@ fn a_union_binds_the_canonical_union_of_its_variants() {
 #[test]
 fn an_alias_and_a_signature_are_each_their_own_member() {
     brought(
-        "LET Alias = Number\nSIG HasLabel = (VAL label :Str)",
+        "LET Alias = Number\nSIG HasLabel = #[(VAL label :Str)]",
         |program| {
             assert_eq!(program.bound("Alias"), KType::NUMBER);
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("HasLabel"))
@@ -77,8 +77,8 @@ fn two_declarations_of_the_same_shape_intern_equal() {
     // order — reaches one handle.
     let sig = |source| brought(source, |program| program.bound("HasLabel"));
     assert_eq!(
-        sig("SIG HasLabel = (VAL label :Str)"),
-        sig("SIG HasLabel = (VAL label :Str)")
+        sig("SIG HasLabel = #[(VAL label :Str)]"),
+        sig("SIG HasLabel = #[(VAL label :Str)]")
     );
     let ring = |source| brought(source, |program| program.bound("Aa"));
     assert_eq!(
@@ -102,7 +102,7 @@ fn a_member_of_a_sealed_group_reads_its_fellows() {
             "the field names the member"
         );
     });
-    brought("UNION Tree = (Node :Tree Leaf :Null)", |program| {
+    brought("UNION Tree = #{Node: Tree, Leaf: Null}", |program| {
         let tree = program.bound("Tree");
         let node = program
             .types
@@ -119,7 +119,7 @@ fn a_member_of_a_sealed_group_reads_its_fellows() {
 #[test]
 fn a_union_and_a_newtype_seal_in_one_group() {
     brought(
-        "UNION Nat = (Zero :Null Succ :Nat)\nNEWTYPE Wrap = :{n :Nat}",
+        "UNION Nat = #{Zero: Null, Succ: Nat}\nNEWTYPE Wrap = :{n :Nat}",
         |program| {
             let nat = program.bound("Nat");
             let wrap = program.bound("Wrap");
@@ -136,7 +136,7 @@ fn a_union_and_a_newtype_seal_in_one_group() {
 #[test]
 fn a_signature_declares_its_abstract_and_manifest_members() {
     brought(
-        "SIG Fixed = ((TYPE Carrier) (LET Elem = Number) (VAL x :Elem) (VAL c :Carrier))",
+        "SIG Fixed = #[(TYPE Carrier) (LET Elem = Number) (VAL x :Elem) (VAL c :Carrier)]",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Fixed"))
             else {
@@ -175,7 +175,7 @@ fn a_signature_declares_its_abstract_and_manifest_members() {
 #[test]
 fn a_signatures_bodyless_heads_are_keyworded_members() {
     brought(
-        "SIG Ring = ((TYPE Carrier) (OP #(+) OVER Carrier) (UNARY OP #(~) OVER Carrier -> Carrier))",
+        "SIG Ring = #[(TYPE Carrier) (OP #(+) OVER Carrier) (UNARY OP #(~) OVER Carrier -> Carrier)]",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Ring"))
             else {
@@ -199,20 +199,20 @@ fn a_bodyless_head_spells_the_shape_its_definition_spells() {
     // copied the function type's numbering fails on it. `first` drops a variable that occurs once,
     // and `least` carries a bound.
     brought(
-        "SIG Arith = ((OP #(+) OVER Number) \
+        "SIG Arith = #[(OP #(+) OVER Number) \
                       (UNARY OP #(~) OVER Number -> Number) \
-                      (EXPR (TWICE _ :Number) -> Number) \
-                      (EXPR FOR ALL (Elt Key) (PAIR _ :Elt _ :Key _ :Elt _ :Key) -> Elt) \
-                      (EXPR FOR ALL (Elt Key) (SWAP _ :Elt _ :Key _ :Elt _ :Key) -> Elt) \
-                      (EXPR FOR ALL (Elt) (FIRST _ :Elt _ :Number) -> Number) \
-                      (EXPR FOR ALL (Elt UNDER Number) (LEAST _ :Elt _ :Elt) -> Elt))\n\
-         LET plus = OP #(+) OVER Number = (left)\n\
-         LET negate = UNARY OP #(~) OVER Number -> Number = (operands)\n\
-         LET twice = FN EXPR (TWICE x :Number) -> Number = (x)\n\
-         LET pair = FN EXPR FOR ALL (Elt Key) (PAIR p :Elt q :Key r :Elt s :Key) -> Elt = (p)\n\
-         LET swap = FN EXPR FOR ALL (Elt Key) (SWAP q :Elt p :Key s :Elt r :Key) -> Elt = (q)\n\
-         LET first = FN EXPR FOR ALL (Elt) (FIRST x :Elt n :Number) -> Number = (n)\n\
-         LET least = FN EXPR FOR ALL (Elt UNDER Number) (LEAST x :Elt y :Elt) -> Elt = (x)",
+                      (EXPR #(TWICE _ :Number) -> Number) \
+                      (EXPR FOR ALL #[Elt Key] #(PAIR _ :Elt _ :Key _ :Elt _ :Key) -> Elt) \
+                      (EXPR FOR ALL #[Elt Key] #(SWAP _ :Elt _ :Key _ :Elt _ :Key) -> Elt) \
+                      (EXPR FOR ALL #[Elt] #(FIRST _ :Elt _ :Number) -> Number) \
+                      (EXPR FOR ALL #{Elt: Number} #(LEAST _ :Elt _ :Elt) -> Elt)]\n\
+         LET plus = OP #(+) OVER Number = #(left)\n\
+         LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)\n\
+         LET twice = FN EXPR #(TWICE x :Number) -> Number = #(x)\n\
+         LET pair = FN EXPR FOR ALL #[Elt Key] #(PAIR p :Elt q :Key r :Elt s :Key) -> Elt = #(p)\n\
+         LET swap = FN EXPR FOR ALL #[Elt Key] #(SWAP q :Elt p :Key s :Elt r :Key) -> Elt = #(q)\n\
+         LET first = FN EXPR FOR ALL #[Elt] #(FIRST x :Elt n :Number) -> Number = #(n)\n\
+         LET least = FN EXPR FOR ALL #{Elt: Number} #(LEAST x :Elt y :Elt) -> Elt = #(x)",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Arith"))
             else {
@@ -277,7 +277,7 @@ fn a_declared_family_is_applied_by_member_name() {
 #[test]
 fn a_signatures_higher_kinded_member_has_a_use_site() {
     brought(
-        "SIG Boxy = ((TYPE (Held AS Boxed)) (VAL unbox :(FN :{x :(Number AS Boxed)} -> Number)))",
+        "SIG Boxy = #[(TYPE (Held AS Boxed)) (VAL unbox :(FN :{x :(Number AS Boxed)} -> Number))]",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Boxy"))
             else {
@@ -317,14 +317,14 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
         // cycle through a transparent alias does not reach the door at all: a `LET`'s right-hand
         // side is eager, so the shape refuses it as an eager cycle first.
         (
-            "SIG Holder = (VAL n :Nat)\nNEWTYPE Nat = :{s :Holder}",
+            "SIG Holder = #[(VAL n :Nat)]\nNEWTYPE Nat = :{s :Holder}",
             "Nat",
         ),
         // A bare `TYPE` names an abstract member only a signature can bind.
         ("TYPE Loose", "Loose"),
         // `{+}` alone is not the builtin additive group, so it would chain `+` a second way.
         (
-            "SIG Chained = ((TYPE Carrier) (GROUP FOLD LEFT = ((OP #(+) OVER Carrier))))",
+            "SIG Chained = #[(TYPE Carrier) (GROUP FOLD LEFT = #[(OP #(+) OVER Carrier)])]",
             "Chained",
         ),
         // A repeated parameter name gives a family two slots under one label.
@@ -340,9 +340,7 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
             "Bad",
         ),
         // A repeated tag gives a union two variants under one name.
-        ("UNION Twice = (Tag :Number Tag :Str)", "Twice"),
-        // A union with no variant declares nothing.
-        ("UNION Empty = ()", "Empty"),
+        ("UNION Twice = #{Tag: Number, Tag: Str}", "Twice"),
     ] {
         declared(source, |program, brought| {
             assert!(
@@ -357,7 +355,7 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
 #[test]
 fn a_projection_off_a_fellow_union_names_no_tag_yet() {
     declared(
-        "UNION Maybe = (Some :Peek None :Null)\nNEWTYPE Peek = :{it :(Maybe.Some)}",
+        "UNION Maybe = #{Some: Peek, None: Null}\nNEWTYPE Peek = :{it :(Maybe.Some)}",
         |_, brought| {
             assert!(
                 matches!(brought, Err(Elaboration::NoSuchMember { .. })),
@@ -389,8 +387,8 @@ fn operator(text: &str, program: &Program<'_, '_, '_>) -> KeywordSymbol {
 #[test]
 fn a_bodyless_group_head_declares_a_chaining_record_over_its_heads() {
     brought(
-        "SIG Ring = ((TYPE Carrier) \
-         (GROUP FOLD RIGHT = ((OP #(@) OVER Carrier) (OP #(%) OVER Carrier))))",
+        "SIG Ring = #[(TYPE Carrier) \
+         (GROUP FOLD RIGHT = #[(OP #(@) OVER Carrier) (OP #(%) OVER Carrier)])]",
         |program| {
             let mut members = vec![operator("@", &program), operator("%", &program)];
             members.sort_unstable();
@@ -411,8 +409,8 @@ fn a_bodyless_group_head_declares_a_chaining_record_over_its_heads() {
     );
     // A pairwise group takes its combiner from the quote, and its members may state a result.
     brought(
-        "SIG Cmp = ((TYPE Carrier) \
-         (GROUP PAIRWISE FOLD #(AND) LEFT = ((OP #(~) OVER Carrier -> Bool))))",
+        "SIG Cmp = #[(TYPE Carrier) \
+         (GROUP PAIRWISE FOLD #(AND) LEFT = #[(OP #(~) OVER Carrier -> Bool)])]",
         |program| {
             assert_eq!(
                 operators(&program, "Cmp"),
@@ -429,7 +427,7 @@ fn a_bodyless_group_head_declares_a_chaining_record_over_its_heads() {
     // A group written out equal to a builtin one says what the language already says, and is one
     // signature member like any other.
     brought(
-        "SIG Sum = ((GROUP FOLD LEFT = ((OP #(+) OVER Number) (OP #(-) OVER Number))))",
+        "SIG Sum = #[(GROUP FOLD LEFT = #[(OP #(+) OVER Number) (OP #(-) OVER Number)])]",
         |program| {
             assert_eq!(operators(&program, "Sum").len(), 1);
         },
@@ -440,7 +438,9 @@ fn a_bodyless_group_head_declares_a_chaining_record_over_its_heads() {
 fn two_signatures_differing_only_in_a_groups_direction_are_two_handles() {
     let sig = |mode: &str| {
         brought(
-            &format!("SIG Ring = ((GROUP {mode} = ((OP #(@) OVER Number) (OP #(%) OVER Number))))"),
+            &format!(
+                "SIG Ring = #[(GROUP {mode} = #[(OP #(@) OVER Number) (OP #(%) OVER Number)])]"
+            ),
             |program| program.bound("Ring"),
         )
     };
@@ -458,16 +458,16 @@ fn a_group_head_the_door_cannot_read_refuses() {
     // them, or no operator at all — never reaches the door: the shape's own member scan refuses it.
     for source in [
         // One symbol, two chainings.
-        "SIG Bad = ((GROUP FOLD LEFT = ((OP #(@) OVER Number))) \
-         (GROUP FOLD RIGHT = ((OP #(@) OVER Number))))",
+        "SIG Bad = #[(GROUP FOLD LEFT = #[(OP #(@) OVER Number)]) \
+         (GROUP FOLD RIGHT = #[(OP #(@) OVER Number)])]",
         // A fold carries its operand type forward, so a member of one states no result.
-        "SIG Bad = ((GROUP FOLD LEFT = ((OP #(@) OVER Number -> Bool))))",
+        "SIG Bad = #[(GROUP FOLD LEFT = #[(OP #(@) OVER Number -> Bool)])]",
         // `==` and `!=` belong to no group.
-        "SIG Bad = ((GROUP FOLD LEFT = ((OP #(==) OVER Number -> Bool))))",
+        "SIG Bad = #[(GROUP FOLD LEFT = #[(OP #(==) OVER Number -> Bool)])]",
         // A result of its own, on a symbol that folds.
-        "SIG Bad = ((OP #(@) OVER Number -> Bool))",
+        "SIG Bad = #[(OP #(@) OVER Number -> Bool)]",
         // A user's `==` answers `Bool`, since `!=` is its negation by construction.
-        "SIG Bad = ((OP #(==) OVER Number))",
+        "SIG Bad = #[(OP #(==) OVER Number)]",
     ] {
         declared(source, |program, brought| {
             assert!(
@@ -479,7 +479,7 @@ fn a_group_head_the_door_cannot_read_refuses() {
     }
     // The same returning head over a symbol that chains pairwise is admitted.
     brought(
-        "SIG Cmp = ((OP #(<) OVER Number -> Bool) (OP #(==) OVER Number -> Bool))",
+        "SIG Cmp = #[(OP #(<) OVER Number -> Bool) (OP #(==) OVER Number -> Bool)]",
         |program| {
             let TypeNode::Signature { schema, .. } = program.types.node(program.bound("Cmp"))
             else {
@@ -506,9 +506,9 @@ fn member_bound(program: &Program<'_, '_, '_>, sig: &str, name: &str) -> KType {
 #[test]
 fn a_bounded_type_member_carries_its_bound() {
     let source = "\
-SIG Plain = ((TYPE (Carrier UNDER Number)) (VAL c :Carrier))
-SIG Either = ((TYPE (Carrier UNDER :(Number | Str))) (VAL c :Carrier))
-SIG Based = ((LET Base = Number) (TYPE (Carrier UNDER Base)) (VAL c :Carrier))";
+SIG Plain = #[(TYPE (Carrier UNDER Number)) (VAL c :Carrier)]
+SIG Either = #[(TYPE (Carrier UNDER :(Number | Str))) (VAL c :Carrier)]
+SIG Based = #[(LET Base = Number) (TYPE (Carrier UNDER Base)) (VAL c :Carrier)]";
     brought(source, |program| {
         let (types, scratch) = (program.types, program.scratch);
         assert_eq!(member_bound(&program, "Plain", "Carrier"), KType::NUMBER);
@@ -527,14 +527,71 @@ SIG Based = ((LET Base = Number) (TYPE (Carrier UNDER Base)) (VAL c :Carrier))";
 #[test]
 fn a_bound_on_an_abstract_or_higher_kinded_member_or_a_family_is_refused() {
     declared(
-        "SIG Chained = ((TYPE Key) (TYPE (Elt UNDER Key)))",
+        "SIG Chained = #[(TYPE Key) (TYPE (Elt UNDER Key))]",
         |_, brought| assert!(matches!(brought, Err(Elaboration::Bound { .. }))),
     );
     declared(
-        "SIG Kinded = (TYPE ((Elem AS Wrap) UNDER Number))",
+        "SIG Kinded = #[(TYPE ((Elem AS Wrap) UNDER Number))]",
         |_, brought| assert!(matches!(brought, Err(Elaboration::Unsupported { .. }))),
     );
     declared("NEWTYPE (Elt UNDER Number)", |_, brought| {
         assert!(matches!(brought, Err(Elaboration::Unsupported { .. })))
     });
+}
+
+/// A signature elaborates a member of every shape the table says declares one, and a `LET` of a
+/// type name besides: `declares_member` and the signature door name one set.
+#[test]
+fn every_member_declaring_shape_is_a_signature_member() {
+    use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShapeId};
+    let members = [
+        (BuiltinShapeId::TypeDeclaration, "TYPE Carrier"),
+        (BuiltinShapeId::Val, "VAL x :Str"),
+        (
+            BuiltinShapeId::ExpressionHead,
+            "EXPR #(FOO _ :Number) -> Number",
+        ),
+        (
+            BuiltinShapeId::QuantifiedExpressionHead,
+            "EXPR FOR ALL #[Elt] #(FOO _ :Elt) -> Elt",
+        ),
+        (BuiltinShapeId::OperatorHead, "OP #(@) OVER Number"),
+        (
+            BuiltinShapeId::OperatorHeadReturning,
+            "OP #(==) OVER Number -> Bool",
+        ),
+        (
+            BuiltinShapeId::UnaryOperatorHeadReturning,
+            "UNARY OP #(~) OVER Number -> Number",
+        ),
+        (
+            BuiltinShapeId::GroupHeadFoldLeft,
+            "GROUP FOLD LEFT = #[(OP #(@) OVER Number)]",
+        ),
+        (
+            BuiltinShapeId::GroupHeadFoldRight,
+            "GROUP FOLD RIGHT = #[(OP #(@) OVER Number)]",
+        ),
+        (
+            BuiltinShapeId::GroupHeadPairwiseFoldLeft,
+            "GROUP PAIRWISE FOLD #(AND) LEFT = #[(OP #(~) OVER Number -> Bool)]",
+        ),
+        (
+            BuiltinShapeId::GroupHeadPairwiseFoldRight,
+            "GROUP PAIRWISE FOLD #(AND) RIGHT = #[(OP #(~) OVER Number -> Bool)]",
+        ),
+    ];
+    let declaring: Vec<BuiltinShapeId> = BUILTIN_SHAPES
+        .iter()
+        .filter(|shape| shape.id.declares_member() && !shape.reserved)
+        .map(|shape| shape.id)
+        .collect();
+    let listed: Vec<BuiltinShapeId> = members.iter().map(|(id, _)| *id).collect();
+    assert_eq!(listed, declaring, "every member-declaring shape is listed");
+    for (_, member) in members
+        .iter()
+        .chain([&(BuiltinShapeId::LetValue, "LET Elem = Number")])
+    {
+        brought(&format!("SIG Sg = #[({member})]"), |_| {});
+    }
 }

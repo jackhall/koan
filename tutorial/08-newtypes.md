@@ -25,8 +25,8 @@ representation. A slot typed `Number` rejects a `Distance`, and a slot typed
 
 ```koan
 NEWTYPE Distance = Number
-EXPR (SHOW x :Number) -> Str = ("a plain number")
-EXPR (SHOW x :Distance) -> Str = ("a distance")
+EXPR #(SHOW x :Number) -> Str = #("a plain number")
+EXPR #(SHOW x :Distance) -> Str = #("a distance")
 PRINT (SHOW 3.0)
 PRINT (SHOW (Distance 3.0))
 ```
@@ -94,7 +94,7 @@ restating it:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Str}
-EXPR (LABEL v :(Point.y)) -> Str = (v)
+EXPR #(LABEL v :(Point.y)) -> Str = #(v)
 PRINT (LABEL "north")
 ```
 

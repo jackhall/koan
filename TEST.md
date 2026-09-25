@@ -121,14 +121,14 @@ beside its sibling unit tests. Seven files hold the twenty-nine properties:
 - [`src/symbols/tests.rs`](src/symbols/tests.rs) — interning laws, beside
   the four fixed-name pins described under [Symbol mints](#symbol-mints).
 - [`src/parse/builtin_shapes/tests/`](src/parse/builtin_shapes/tests.rs) — the builtin shape
-  table, split four ways: static table-shape walks including the
-  `BuiltinShapeId`-equals-index pin and the pin holding the derived raw-capture
-  kinds to the column they replaced (`table.rs`), the caching and binder-plan laws
-  (`binder.rs`), the raw-kind derivation's distribution over union members
-  (`lazy.rs`), and the table⟺registration law pinning every `BUILTIN_SHAPES` key
+  table, split three ways: static table-shape walks including the
+  `BuiltinShapeId`-equals-index pin and the pin holding every slot's reading to a
+  column written out by hand (`table.rs`), the caching and binder-plan laws
+  (`binder.rs`), and the table⟺registration law pinning every `BUILTIN_SHAPES` key
   against the live builtin registration set, which is derived once, here
-  (`registration.rs`). The two laws relating a slot's role to its type are build-time
-  `const` assertions in `builtin_shapes.rs`, not tests.
+  (`registration.rs`). The two table laws — every slot typed once per overload,
+  and each role's slot typed by its reading's code type — are build-time `const`
+  assertions in `builtin_shapes.rs`, not tests.
 - [`src/parse/builtin_shapes/layout/tests.rs`](src/parse/builtin_shapes/layout/tests.rs) —
   slot-layout laws: symbol order, the lexical position beside each entry, parameter merge.
 - [`src/machine/model/close_inference/tests.rs`](src/machine/model/close_inference/tests.rs)

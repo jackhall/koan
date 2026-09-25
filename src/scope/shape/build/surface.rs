@@ -29,7 +29,7 @@ use super::super::super::groups::{
     BuiltinGroup, Claim, builtin_equal, declared_group, groups_equal,
 };
 use super::super::{Position, ShapeError, ShapeKind, Site};
-use super::{Builder, body_of};
+use super::{Builder, body_of, quoted_body};
 
 /// What one operand surfaces: its names, in the order the spine gives them, and the operator groups
 /// the body may chain under. The binders pass sorts the names into layout order, so the reader owes
@@ -165,7 +165,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         let definition = role_part(
                             statement,
                             Role::Definition(
-                                crate::parse::builtin_shapes::role::DefinitionKind::Plain,
+                                crate::parse::builtin_shapes::role::DefinitionKind::Members,
                             ),
                         )
                         .ok_or(())?;
@@ -249,9 +249,11 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         definition: &ExpressionPart<'graph>,
         out: &mut Surfaced<'x, 'graph>,
     ) -> Result<(), ()> {
-        let body = body_of(definition).ok_or(())?;
-        for (line, _) in body.body_statements() {
-            let line = line.statement_spine();
+        let ExpressionPart::ListLiteral(members) = definition else {
+            return Err(());
+        };
+        for member in members.iter() {
+            let line = quoted_body(member).ok_or(())?.statement_spine();
             match line.cache().builtin_shape().map(|shape| shape.id) {
                 Some(BuiltinShapeId::TypeDeclaration | BuiltinShapeId::LetValue) => {
                     out.names.push(

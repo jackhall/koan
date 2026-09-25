@@ -47,15 +47,15 @@ and `CATCH`'s declared return is `Any`.
   heads are written, against the tutorial's `TRY` snippets.
 - *`MATCH … UNDER` — decided.* The union clause claims the scrutinee's type
   lies under the union, the relation
-  [a bound's `UNDER`](../../tutorial/12-functors.md#bounding-a-type-parameter-under)
+  [a bound's `UNDER`](../../tutorial/12-functors.md#bounding-a-type-parameter)
   names. `OVER` is left naming
   a domain: an operator's operand type, and the captures `CLOSE OVER` copies.
 - *An arm is a block — decided.* An arm runs as the block shape the scope
   builder already builds for it, with `it` its one parameter, through the same
   block evaluation dispatch uses for a synthesized block.
-- *Arms select by specificity — decided.* Arms are written as a quoted dict of
-  guards to blocks ([code as values](code-values.md)), so their written order
-  says nothing; the most specific admitting guard is chosen, by the order
+- *Arms select by specificity — decided.* Arms are written as a dict of
+  quotes, guards to blocks, typed `Dict(Name, Block)`
+  ([code as values](code-values.md)), so their written order says nothing; the most specific admitting guard is chosen, by the order
   dispatch ranks candidates by.
 
 ## Dependencies

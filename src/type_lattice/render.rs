@@ -92,7 +92,7 @@ fn write_name_in(
             write_param_record(f, *fields, types, symbols, binder)?;
             f.write_str("}")
         }
-        // `:(FN FOR ALL (Elt) :{x :Elt} -> Elt)`, and without the group where it binds none — the
+        // `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)`, and without the group where it binds none — the
         // group writer emits its own trailing space and nothing at all for an empty group, so the
         // monomorphic surface is unchanged. Params and return read against the function's own
         // group where it has one, and against the enclosing binder's where it has none.
@@ -267,7 +267,7 @@ fn write_param_record(
     Ok(())
 }
 
-/// `FOR ALL (Elt UNDER Number) (PURE _ :Elt) -> :(Elt AS Wrap)` — an expression shape's surface below
+/// `FOR ALL #{Elt: Number} #(PURE _ :Elt) -> :(Elt AS Wrap)` — an expression shape's surface below
 /// the `:(EXPR …)` wrapper. The one spelling of a shape, shared by the type surface and by the head
 /// a signature's rendered member is named with, so a declaration and the error naming it read
 /// alike.
@@ -288,11 +288,10 @@ pub(super) fn write_shape_surface(
     write_name_in(ret, f, types, symbols, quantifiers)
 }
 
-/// `FOR ALL (<names>) ` — the quantifier group a binder's surface opens with, or nothing at all
-/// when it quantifies over nothing. A variable whose bound is not `Any` spells it:
-/// `FOR ALL ((Elt UNDER Number) Key) `, and a group of one bounded name drops its own parentheses,
-/// `FOR ALL (Elt UNDER Number) `. The trailing space is the group's, so the head that follows
-/// spells the same either way.
+/// `FOR ALL #[<names>] ` — the quantifier group a binder's surface opens with, or nothing at all
+/// when it quantifies over nothing. A group where some variable's bound is not `Any` is a dict of
+/// each name to its bound, `FOR ALL #{Elt: Number, Key: Any} `. The trailing space is the group's,
+/// so the head that follows spells the same either way.
 fn write_quantifier_group(
     f: &mut std::fmt::Formatter<'_>,
     quantifiers: &[TypeSymbol],
@@ -303,27 +302,23 @@ fn write_quantifier_group(
     if quantifiers.is_empty() {
         return Ok(());
     }
-    let bound_of = |index: usize| bounds.get(index).copied().filter(|b| *b != KType::ANY);
-    let lone = quantifiers.len() == 1 && bound_of(0).is_some();
-    f.write_str(if lone { "FOR ALL " } else { "FOR ALL (" })?;
+    let bound_of = |index: usize| bounds.get(index).copied().unwrap_or(KType::ANY);
+    let bounded = (0..quantifiers.len()).any(|index| bound_of(index) != KType::ANY);
+    f.write_str(if bounded { "FOR ALL #{" } else { "FOR ALL #[" })?;
     for (index, name) in quantifiers.iter().enumerate() {
         if index > 0 {
-            f.write_str(" ")?;
+            f.write_str(if bounded { ", " } else { " " })?;
         }
-        let name = display_symbol(name.symbol(), symbols);
-        match bound_of(index) {
-            Some(bound) => {
-                write!(f, "({name} UNDER ")?;
-                write_name_in(bound, f, types, symbols, &[])?;
-                f.write_str(")")?;
-            }
-            None => write!(f, "{name}")?,
+        write!(f, "{}", display_symbol(name.symbol(), symbols))?;
+        if bounded {
+            f.write_str(": ")?;
+            write_name_in(bound_of(index), f, types, symbols, &[])?;
         }
     }
-    f.write_str(if lone { " " } else { ") " })
+    f.write_str(if bounded { "} " } else { "] " })
 }
 
-/// `(<keyword> _ :<Type> …)` — an expression shape's head. Every argument position is the wildcard
+/// `#(<keyword> _ :<Type> …)` — an expression shape's head, quoted as an `EXPR` head is written. Every argument position is the wildcard
 /// `_`: the type carries no argument names, so there is none to print.
 fn write_shape_head(
     f: &mut std::fmt::Formatter<'_>,
@@ -332,7 +327,7 @@ fn write_shape_head(
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
 ) -> std::fmt::Result {
-    f.write_str("(")?;
+    f.write_str("#(")?;
     for (index, element) in elements.iter().enumerate() {
         if index > 0 {
             f.write_str(" ")?;
@@ -420,7 +415,7 @@ fn write_sig_schema(
     f.write_str(")")
 }
 
-/// Render a keyworded member as the head declaring it — `(PURE _ :Number) -> Number`, the `EXPR`
+/// Render a keyworded member as the head declaring it — `#(PURE _ :Number) -> Number`, the `EXPR`
 /// head minus its keyword and its type sigil.
 ///
 /// The one diagnostic currency for a keyworded member: the subtyping failures name a head with it,

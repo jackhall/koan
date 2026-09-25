@@ -15,6 +15,7 @@ use smallvec::SmallVec;
 
 use crate::memory::{Writer, collect};
 use crate::parse::ast::{ExpressionPart, KExpression, KeyElement};
+use crate::parse::builtin_shapes::role::Role;
 use crate::parse::builtin_shapes::{BuiltinShape, KEYWORDS, builtin_shape_for};
 use crate::source::Spanned;
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol, WILDCARD};
@@ -163,37 +164,59 @@ pub(crate) fn bounded<'g>(
     }
 }
 
-/// One `FOR ALL` entry: a bare type name, or `(<Name> UNDER <bound>)` — the name and its bound
-/// part. `None` for anything else, a higher-kinded declarator included.
-pub(crate) fn bounded_name<'g>(
-    part: &ExpressionPart<'g>,
-) -> Option<(TypeSymbol, Option<&'g ExpressionPart<'g>>)> {
-    if let ExpressionPart::Type(name) = part {
-        return Some((*name, None));
-    }
-    match bounded(part)? {
-        (ExpressionPart::Type(name), bound) => Some((*name, Some(bound))),
+/// The body a written quote holds, or `None` for any other part.
+pub(crate) fn quoted_body<'g>(part: &ExpressionPart<'g>) -> Option<&'g KExpression<'g>> {
+    match part {
+        ExpressionPart::QuotedExpression(node) => Some(node.reference()),
         _ => None,
     }
 }
 
-/// The entries a `FOR ALL` group declares, in written order: the group itself when its run is one
-/// bounded name (`(Elt UNDER Value)` — also what `((Elt UNDER Value))` peels to), otherwise each of
-/// its parts. A group that is not a parenthesized run declares nothing.
-pub(crate) fn quantifier_entries<'p, 'g>(
-    group: &'p ExpressionPart<'g>,
-) -> impl Iterator<Item = &'p ExpressionPart<'g>> {
-    let (lone, parts): (
-        Option<&'p ExpressionPart<'g>>,
-        &'p [Spanned<ExpressionPart<'g>>],
-    ) = match group {
-        ExpressionPart::Expression(node) if bounded_run(node.reference()).is_some() => {
-            (Some(group), &[])
-        }
-        ExpressionPart::Expression(node) => (None, node.reference().parts),
-        _ => (None, &[]),
+/// The one part a quote of one part holds — the name or type code `#[…]` and `#{…}` quote an
+/// element as.
+pub(crate) fn quoted_part<'g>(part: &ExpressionPart<'g>) -> Option<&'g ExpressionPart<'g>> {
+    match quoted_body(part)?.parts {
+        [only] => Some(&only.value),
+        _ => None,
+    }
+}
+
+/// One `FOR ALL` entry: the name quote as written, the type name it declares — `None` for a quote
+/// of anything but a lone type name — and, for a dict entry, the part its bound quote holds.
+#[derive(Clone, Copy)]
+pub(crate) struct QuantifierEntry<'g> {
+    pub(crate) written: &'g ExpressionPart<'g>,
+    pub(crate) name: Option<TypeSymbol>,
+    pub(crate) bound: Option<&'g ExpressionPart<'g>>,
+}
+
+/// The entries a `FOR ALL` group declares, in written order: each name quote of a `#[…]` list, or
+/// each name quote of a `#{…}` dict beside its bound quote. A group written any other way declares
+/// nothing; the shape builder refuses it.
+pub(crate) fn quantifier_entries<'g>(
+    group: &ExpressionPart<'g>,
+) -> impl Iterator<Item = QuantifierEntry<'g>> {
+    let entry = |written: &'g ExpressionPart<'g>, bound| QuantifierEntry {
+        written,
+        name: match quoted_part(written) {
+            Some(ExpressionPart::Type(name)) => Some(*name),
+            _ => None,
+        },
+        bound,
     };
-    lone.into_iter().chain(parts.iter().map(|part| &part.value))
+    let (items, pairs): (
+        &'g [ExpressionPart<'g>],
+        &'g [(ExpressionPart<'g>, ExpressionPart<'g>)],
+    ) = match *group {
+        ExpressionPart::ListLiteral(items) => (items, &[]),
+        ExpressionPart::DictLiteral(pairs) => (&[], pairs),
+        _ => (&[], &[]),
+    };
+    items.iter().map(move |item| entry(item, None)).chain(
+        pairs
+            .iter()
+            .map(move |(key, bound)| entry(key, Some(quoted_part(bound).unwrap_or(bound)))),
+    )
 }
 
 /// Bucket-key extractor for FN. The key must match what a future call would compute via
@@ -265,16 +288,12 @@ fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> boo
 /// form and the combined `LET <name> = FN EXPR …` statement share one extractor. Anything but a
 /// parenthesized group there is no head, so it keys no bucket.
 fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
-    let head_keyword = |name: &StaticName<KeywordSymbol>| {
-        expr.parts.iter().position(
-            |part| matches!(part.value, ExpressionPart::Keyword(symbol) if symbol == name.symbol()),
-        )
-    };
-    let head_index = head_keyword(&KEYWORDS.all).or_else(|| head_keyword(&KEYWORDS.expr))?;
-    match expr.parts.get(head_index + 1)?.value {
-        ExpressionPart::Expression(inner) => Some(inner.reference()),
-        _ => None,
-    }
+    let form = expr.cache().builtin_shape()?;
+    let (_, head) = form
+        .roles()
+        .zip(expr.parts)
+        .find(|(role, _)| *role == Role::Head)?;
+    quoted_body(&head.value)
 }
 
 /// Symbols the `OP` / `GROUP` surface spells with, plus the two ascription sigils. Declaring an
@@ -309,8 +328,7 @@ pub(crate) enum SymbolError {
 }
 
 /// The operator symbol a quote body carries: exactly one `Keyword` part. The `symbol` slot is
-/// typed `:KExpression`, and a quote is data already — it never stages — so the part arrives raw
-/// and un-dispatched, and its body is read here as data. A multi-part body, a non-keyword token, or
+/// typed `Keyword` and read as a written quote, so its body is read here as data. A multi-part body, a non-keyword token, or
 /// a reserved symbol is a shape error.
 pub(crate) fn symbol_from_quote_body(
     inner: &KExpression<'_>,
@@ -469,11 +487,9 @@ impl BinderFacts {
 /// `:(LIST OF Str)` in exactly those positions and nowhere else.
 ///
 /// A variant change is the whole of it, and everything downstream follows by construction: the
-/// statement's bucket key is unchanged (both variants are slots), the shape's
-/// [`lazy_kinds_at`](crate::parse::builtin_shapes::BuiltinShape::lazy_kinds_at) already answers
-/// `TYPE_EXPR` at each masked index — the type carrier those slots are typed with lists
-/// `SigiledTypeExpr` — so the part is captured raw instead of staged. The two spellings are the same part by the time
-/// anything semantic looks at them, so parity is exact.
+/// statement's bucket key is unchanged (both variants are slots), and the part reads as a type
+/// expression wherever it is walked. The two spellings are the same part by the time anything
+/// semantic looks at them, so parity is exact.
 ///
 /// Any other part kind at a masked index — a `Type` token, a `:(…)`, a `:{…}`, an identifier — is
 /// left alone, and a run matching no builtin shape is untouched. Idempotent.

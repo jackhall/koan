@@ -39,9 +39,12 @@ fn walk<'g>(
         ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
             met.push(Met::Name(Site::of(part)))
         }
+        // A body, an arm or a variant the builder reads is a quote; the walk enters it as the
+        // builder does.
         ExpressionPart::Expression(node)
         | ExpressionPart::SigiledTypeExpr(node)
-        | ExpressionPart::RecordType(node) => {
+        | ExpressionPart::RecordType(node)
+        | ExpressionPart::QuotedExpression(node) => {
             let nested = shapes.last().and_then(|shape| shape.nested(Site::of(part)));
             if let Some(nested) = nested {
                 met.push(Met::Open(nested));
@@ -71,9 +74,7 @@ fn walk<'g>(
                 walk(value, shapes, met);
             }
         }
-        ExpressionPart::Keyword(_)
-        | ExpressionPart::Literal(_)
-        | ExpressionPart::QuotedExpression(_) => {}
+        ExpressionPart::Keyword(_) | ExpressionPart::Literal(_) => {}
     }
 }
 

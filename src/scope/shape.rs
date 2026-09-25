@@ -20,11 +20,11 @@
 use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
-use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::role::Role;
+use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
+use crate::parse::builtin_shapes::{BuiltinShapeId, SlotType};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
-use crate::type_lattice::DeclaredGroup;
+use crate::type_lattice::{DeclaredGroup, KType};
 use crate::values::{Knotted, KnottedFamily};
 
 use super::activation::ActivationView;
@@ -264,6 +264,19 @@ pub struct BodyShape<'graph> {
     /// The body's units in the order they are performed.
     units: &'graph [Unit],
     keeps_defining_scope: bool,
+    /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
+    arm: Option<Arm<'graph>>,
+}
+
+/// What a `MATCH` or `TRY` arm's block is to the expression shape holding it.
+#[derive(Clone, Copy, Debug)]
+pub struct Arm<'graph> {
+    /// The guard's quote as written — `it`'s type or label — or `None` for the `_` default.
+    pub guard: Option<&'graph ExpressionPart<'graph>>,
+    /// Whether a type (`MATCH … WITH`) or a label (`MATCH … OVER`, `TRY`) is written there.
+    pub heads: Heads,
+    /// Whether the block's last statement is in tail position.
+    pub tail: bool,
 }
 
 const _: () = assert!(!std::mem::needs_drop::<BodyShape<'static>>());
@@ -396,6 +409,11 @@ impl<'graph> BodyShape<'graph> {
         self.nested
     }
 
+    /// What this body is to the `MATCH` or `TRY` holding it: `Some` exactly for an arm.
+    pub fn arm(&self) -> Option<Arm<'graph>> {
+        self.arm
+    }
+
     /// The `FN`, `EXPR` or `OP` node whose body this shape is — where a callable's signature and
     /// return type are read. `None` for every other kind.
     pub fn form(&self) -> Option<&'graph KExpression<'graph>> {
@@ -523,6 +541,88 @@ pub enum ShapeError {
     SpellsForm { symbol: KeywordSymbol, at: Position },
     /// A declaration naming `!=`, which is always the opposite of `==` and is declared by nobody.
     Derived { symbol: KeywordSymbol, at: Position },
+    /// A part read as a quote, or as a container of quotes, written some other way.
+    Unquoted {
+        form: BuiltinShapeId,
+        part: QuotedPart,
+        at: Position,
+    },
+    /// A part read as written whose syntax admits none of its slot's types; `index` counts the
+    /// form's elements from zero, and `slot` is the first overload's type there.
+    Inadmissible {
+        form: BuiltinShapeId,
+        index: usize,
+        slot: SlotType,
+        at: Position,
+    },
+    /// A value dict written with a `_` key, whose default has no reading yet.
+    DictDefault { site: Site, at: Position },
+}
+
+/// Which part of a form a quote, or a container of quotes, was wanted for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QuotedPart {
+    Body,
+    Head,
+    Symbol,
+    Arms,
+    Variants,
+    Quantifiers,
+    Members,
+}
+
+impl QuotedPart {
+    /// The part a slot under `role` holds, for a role read as a quote or a container.
+    pub(crate) fn of(role: Role) -> QuotedPart {
+        match role {
+            Role::Head => QuotedPart::Head,
+            Role::Data => QuotedPart::Symbol,
+            Role::Branches(_) => QuotedPart::Arms,
+            Role::Definition(DefinitionKind::Union) => QuotedPart::Variants,
+            Role::Definition(DefinitionKind::Members) => QuotedPart::Members,
+            Role::Quantifiers => QuotedPart::Quantifiers,
+            _ => QuotedPart::Body,
+        }
+    }
+
+    /// How the part is written, as a diagnostic tells the writer to write it.
+    fn spelling(self) -> &'static str {
+        match self {
+            QuotedPart::Body => "body as a quote: write #(…)",
+            QuotedPart::Head => "head as a quote: write #(…)",
+            QuotedPart::Symbol => "symbol as a quote: write #(…)",
+            QuotedPart::Arms => "arms as a dict of quotes: write #{…}",
+            QuotedPart::Variants => "variants as a dict of quotes: write #{…}",
+            QuotedPart::Quantifiers => {
+                "quantifiers as a list or dict of quotes: write #[…] or #{…}"
+            }
+            QuotedPart::Members => "members as a list of quotes: write #[…]",
+        }
+    }
+}
+
+/// A read-as-written slot's type, as a diagnostic names it.
+fn slot_spelling(slot: SlotType) -> &'static str {
+    let SlotType::Leaf(slot) = slot else {
+        return "a list or dict of names";
+    };
+    [
+        (KType::BLOCK, "a block"),
+        (KType::EXPRESSION, "an expression"),
+        (KType::NAME, "a name"),
+        (KType::KEYWORD, "a keyword"),
+        (KType::IDENTIFIER, "a value name"),
+        (KType::TYPE_NAME_TOKEN, "a type name"),
+        (KType::TYPE_CODE, "a type"),
+        (KType::LIST_OF_NAME, "a list of names"),
+        (KType::LIST_OF_DECLARATION, "a list of declarations"),
+        (KType::DICT_NAME_BLOCK, "a dict of names to blocks"),
+        (KType::DICT_TYPE_CODE_BLOCK, "a dict of types to blocks"),
+        (KType::DICT_NAME_TYPE_CODE, "a dict of names to types"),
+    ]
+    .into_iter()
+    .find_map(|(kind, spelling)| (kind == slot).then_some(spelling))
+    .unwrap_or("code")
 }
 
 impl ShapeError {
@@ -619,6 +719,22 @@ impl fmt::Display for ShapeErrorDisplay<'_> {
                 "`{}` in {at} is always the opposite of `==` and is declared by nobody",
                 operator(symbol)
             ),
+            ShapeError::Unquoted { form, part, at } => {
+                write!(f, "`{form:?}` in {at} takes its {}", part.spelling())
+            }
+            ShapeError::Inadmissible {
+                form,
+                index,
+                slot,
+                at,
+            } => write!(
+                f,
+                "`{form:?}` in {at} takes {} as its part {index}",
+                slot_spelling(*slot)
+            ),
+            ShapeError::DictDefault { at, .. } => {
+                write!(f, "a dict's `_` default in {at} is not supported yet")
+            }
         }
     }
 }

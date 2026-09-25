@@ -593,14 +593,14 @@ impl<'a, 's> Lower<'a, '_, 's> {
     fn check_close_adjacency(&self, item: &Item<'s>, kind: Kind) -> Result<(), ParseError> {
         let closer = kind.delimiters().expect("bracket kinds carry delimiters").1;
         let next = self.source[item.span.end as usize..].chars().next();
-        if matches!(next, None | Some(')' | ']' | '}'))
+        if matches!(next, None | Some(')' | ']' | '}' | ','))
             || matches!(next, Some(c) if c.is_whitespace())
         {
             return Ok(());
         }
         Err(ParseError::new(
             format!(
-                "'{closer}' must be followed by whitespace, ')', ']', or '}}' \
+                "'{closer}' must be followed by whitespace, ',', ')', ']', or '}}' \
                  (got {next:?}); collection literals can't be glued to a token",
             ),
             Some(item.span),
@@ -698,7 +698,7 @@ fn peelable<'r, 's>(item: &'r Item<'s>) -> Option<&'r [Item<'s>]> {
 }
 
 /// One line's parts run, built straight from [`Lower::lower_run`] — the shape the tests assert
-/// against, where a redundant wrapper is still visible. It skips what [`Lower::lower_body`] adds
+/// against, where a layout wrapper is still visible. It skips what [`Lower::lower_body`] adds
 /// around that run, the peel and `admit_bare_type_slots`, so an expectation here names the parts
 /// a paren or sigil produced. Rejects input that is not exactly one line.
 #[cfg(test)]

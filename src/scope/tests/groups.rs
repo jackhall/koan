@@ -74,8 +74,8 @@ fn a_group_body_declares_its_binary_operators_and_nothing_else() {
         let scratch = fixture.scratch();
         let fold = fixture.parse(
             "GROUP ring FOLD RIGHT = (\
-             (OP #(@) OVER Ring = (left))\
-             (OP #(%) OVER Ring = (right)))",
+             (OP #(@) OVER Ring = #(left))\
+             (OP #(%) OVER Ring = #(right)))",
         );
         let group = declared_group(&fold[0], scratch)
             .expect("the body is a run of binary operators")
@@ -85,8 +85,9 @@ fn a_group_body_declares_its_binary_operators_and_nothing_else() {
         expected.sort_unstable();
         assert_eq!(group.members, expected);
 
-        let pairwise = fixture
-            .parse("GROUP cmp PAIRWISE FOLD #(AND) LEFT = ((OP #(~~) OVER Ring -> Bool = (left)))");
+        let pairwise = fixture.parse(
+            "GROUP cmp PAIRWISE FOLD #(AND) LEFT = ((OP #(~~) OVER Ring -> Bool = #(left)))",
+        );
         let group = declared_group(&pairwise[0], scratch)
             .expect("the body is a run of binary operators")
             .expect("the statement is a `GROUP`");
@@ -99,8 +100,8 @@ fn a_group_body_declares_its_binary_operators_and_nothing_else() {
         );
 
         // A `UNARY OP` is no member, and a body declaring no operator declares no group.
-        let unary =
-            fixture.parse("GROUP bad FOLD LEFT = ((UNARY OP #(@) OVER Ring -> Ring = (operands)))");
+        let unary = fixture
+            .parse("GROUP bad FOLD LEFT = ((UNARY OP #(@) OVER Ring -> Ring = #(operands)))");
         assert!(declared_group(&unary[0], scratch).is_err());
         let empty = fixture.parse("GROUP bad FOLD LEFT = ((LET x = 1))");
         assert!(declared_group(&empty[0], scratch).is_err());
@@ -108,14 +109,14 @@ fn a_group_body_declares_its_binary_operators_and_nothing_else() {
         // The scan reads a body directly, sorted and deduped.
         let twice = fixture.parse(
             "GROUP ring FOLD LEFT = (\
-             (OP #(@) OVER Ring = (left))\
-             (OP #(@) OVER Ring -> Ring = (right)))",
+             (OP #(@) OVER Ring = #(left))\
+             (OP #(@) OVER Ring -> Ring = #(right)))",
         );
         let group = declared_group(&twice[0], scratch).unwrap().unwrap();
         assert_eq!(group.members, [keyword("@", fixture.symbols)]);
-        let body = fixture.parse("(OP #(@) OVER Ring = (left))");
+        let body = fixture.parse("OP #(@) OVER Ring = #(left)");
         assert_eq!(
-            &*scan_members(&body[0], scratch).expect("one member"),
+            &*scan_members(body.iter(), scratch).expect("one member"),
             [keyword("@", fixture.symbols)]
         );
     });
@@ -125,15 +126,15 @@ fn a_group_body_declares_its_binary_operators_and_nothing_else() {
 fn a_group_equal_to_a_builtin_one_is_that_group_and_a_partial_one_is_refused() {
     claimed(
         "GROUP additive FOLD LEFT = (\
-         (OP #(+) OVER Number = (left))\
-         (OP #(-) OVER Number = (right)))",
+         (OP #(+) OVER Number = #(left))\
+         (OP #(-) OVER Number = #(right)))",
         |fixture, claims| {
             let claims = claims.expect("an equal group declares nothing new");
             assert!(claims.get(keyword("+", fixture.symbols)).is_none());
         },
     );
     claimed(
-        "GROUP partial FOLD LEFT = ((OP #(+) OVER Number = (left)))",
+        "GROUP partial FOLD LEFT = ((OP #(+) OVER Number = #(left)))",
         |fixture, claims| {
             assert_eq!(
                 claims.err(),
@@ -151,8 +152,8 @@ fn two_equal_groups_are_one_record_and_two_unequal_ones_are_refused() {
     let body = |name: &str, mode: &str| {
         format!(
             "MODULE {name} = (GROUP g {mode} = (\
-             (OP #(@) OVER Ring = (left))\
-             (OP #(%) OVER Ring = (right))))"
+             (OP #(@) OVER Ring = #(left))\
+             (OP #(%) OVER Ring = #(right))))"
         )
     };
     let equal = format!(
@@ -186,7 +187,7 @@ fn two_equal_groups_are_one_record_and_two_unequal_ones_are_refused() {
     });
 
     let narrower = format!(
-        "{}\nMODULE second = (GROUP g FOLD LEFT = ((OP #(@) OVER Ring = (left))))",
+        "{}\nMODULE second = (GROUP g FOLD LEFT = ((OP #(@) OVER Ring = #(left))))",
         body("first", "FOLD LEFT")
     );
     claimed(&narrower, |_, claims| {
@@ -199,8 +200,8 @@ fn two_equal_groups_are_one_record_and_two_unequal_ones_are_refused() {
 
 #[test]
 fn a_unary_mark_and_a_group_never_claim_one_symbol_in_either_order() {
-    let unary = "UNARY OP #(~) OVER Ring -> Ring = (operands)";
-    let group = "GROUP g FOLD LEFT = ((OP #(~) OVER Ring = (left)))";
+    let unary = "UNARY OP #(~) OVER Ring -> Ring = #(operands)";
+    let group = "GROUP g FOLD LEFT = ((OP #(~) OVER Ring = #(left)))";
     for source in [format!("{unary}\n{group}"), format!("{group}\n{unary}")] {
         claimed(&source, |fixture, claims| {
             assert_eq!(
@@ -225,7 +226,7 @@ fn a_unary_mark_and_a_group_never_claim_one_symbol_in_either_order() {
 
 #[test]
 fn a_declaration_naming_the_derived_symbol_is_refused_and_a_quoted_group_is_data() {
-    claimed("OP #(!=) OVER Ring -> Bool = (left)", |fixture, claims| {
+    claimed("OP #(!=) OVER Ring -> Bool = #(left)", |fixture, claims| {
         assert_eq!(
             claims.err(),
             Some(ShapeError::Derived {
@@ -235,7 +236,7 @@ fn a_declaration_naming_the_derived_symbol_is_refused_and_a_quoted_group_is_data
         );
     });
     claimed(
-        "LET quoted = #(GROUP g FOLD LEFT = ((OP #(+) OVER Number = (left))))",
+        "LET quoted = #(GROUP g FOLD LEFT = ((OP #(+) OVER Number = #(left))))",
         |fixture, claims| {
             let claims = claims.expect("a quote is data");
             assert!(claims.get(keyword("+", fixture.symbols)).is_none());

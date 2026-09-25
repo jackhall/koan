@@ -59,8 +59,8 @@ fn captured_sibling<'graph, 'cell>(
 const KNOT: &str = "\
 LET greeting = \"hi\"
 LET words = [\"alpha\" \"beta\"]
-LET f = FN EXPR (GREET n :Number) -> Str = (greeting words g)
-LET g = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (words f x))";
+LET f = FN EXPR #(GREET n :Number) -> Str = #(greeting words g)
+LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(words f x))";
 
 #[test]
 fn a_copied_knot_is_the_same_knot_rebuilt() {
@@ -186,7 +186,7 @@ const RING: &str = "\
 NEWTYPE Ring = :{next :Ring}
 LET a = (Ring {next = b})
 LET b = (Ring {next = a})
-LET f = (FN :{} -> Any = (a))";
+LET f = (FN :{} -> Any = #(a))";
 
 /// The member `next` of a ring node names: its tagged payload's record node, then that record's
 /// `next` field.
@@ -319,8 +319,8 @@ const MODULE: &str = "\
 LET greeting = \"hi\"
 MODULE m = (\
 (LET words = [\"alpha\" \"beta\"]) \
-(LET f = (FN :{} -> Str = (greeting g))) \
-(LET g = (FN :{} -> Str = (f))) \
+(LET f = (FN :{} -> Str = #(greeting g))) \
+(LET g = (FN :{} -> Str = #(f))) \
 (NEWTYPE Dist = Number))";
 
 /// The slot each named member of `m`'s body takes — the body shape lives in program storage, so
@@ -461,7 +461,7 @@ fn a_copied_module_outlives_its_home() {
 #[test]
 fn a_copied_barrier_outlives_its_home() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET greeting = \"hi\"\nLET f = (FN :{} -> Str = (greeting))");
+        let lines = fixture.parse("LET greeting = \"hi\"\nLET f = (FN :{} -> Str = #(greeting))");
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();

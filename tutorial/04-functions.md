@@ -6,14 +6,16 @@ the main way you extend Koan.
 
 ## Defining and calling
 
-`EXPR (<head>) -> <ReturnType> = (<body>)` registers a function. The head is a
-parenthesized mix of fixed keywords and typed parameter slots; the body is a
-parenthesized expression evaluated each time the function is called. (`EXPR` is
+`EXPR #(<head>) -> <ReturnType> = #(<body>)` registers a function. The head is a
+quoted mix of fixed keywords and typed parameter slots; the body is a quoted
+expression evaluated each time the function is called. Both are quoted with
+`#(…)` because neither runs where it is written — see
+[Quoting and evaluating](10-quoting.md#what-is-quoted-and-what-is-bare). (`EXPR` is
 one of koan's two function words — the other, `FN`, writes an anonymous lambda;
 [Two kinds of function](#two-kinds-of-function) below covers the split.)
 
 ```koan
-EXPR (ECHO x :Number) -> Number = (x)
+EXPR #(ECHO x :Number) -> Number = #(x)
 PRINT (ECHO 21)
 ```
 
@@ -37,7 +39,7 @@ The keyword doesn't have to come first. Putting it between two slots gives an
 infix shape:
 
 ```koan
-EXPR (a :Str OR b :Str) -> Str = (a)
+EXPR #(a :Str OR b :Str) -> Str = #(a)
 PRINT ("first" OR "second")
 ```
 
@@ -48,7 +50,7 @@ first
 Functions can take several parameters, and commas between slots are optional:
 
 ```koan
-EXPR (BETWEEN a :Number AND b :Number) -> Number = (a)
+EXPR #(BETWEEN a :Number AND b :Number) -> Number = #(a)
 PRINT (BETWEEN 3 AND 9)
 ```
 
@@ -62,7 +64,7 @@ identifiers. A signature must contain at least one keyword — there has to be a
 fixed word for the shape to dispatch on:
 
 ```koan
-EXPR (x :Number) -> Number = (x)
+EXPR #(x :Number) -> Number = #(x)
 ```
 
 ```text
@@ -75,7 +77,7 @@ The declared return type is checked against the body's value every time the
 function runs. A mismatch is an error:
 
 ```koan
-EXPR (WRONG x :Number) -> Str = (x)
+EXPR #(WRONG x :Number) -> Str = #(x)
 WRONG 5
 ```
 
@@ -92,7 +94,7 @@ string it printed**, not to null. So a function whose body is a `PRINT` returns
 a `Str`:
 
 ```koan
-EXPR (ANNOUNCE msg :Str) -> Str = (PRINT msg)
+EXPR #(ANNOUNCE msg :Str) -> Str = #(PRINT msg)
 ANNOUNCE "starting up"
 ```
 
@@ -111,7 +113,7 @@ A return type is not always one word. `LIST OF Str`, `MAP Str -> Number` and
 parentheses:
 
 ```koan
-EXPR (WORDS text :Str) -> (LIST OF Str) = ([text])
+EXPR #(WORDS text :Str) -> (LIST OF Str) = #([text])
 PRINT (WORDS "hi")
 ```
 
@@ -133,8 +135,8 @@ as long as their slots differ. The most specific match wins, and a more precise
 container type beats a looser one:
 
 ```koan
-EXPR (SIZE xs :(LIST OF Number)) -> Str = ("numbers")
-EXPR (SIZE xs :Any) -> Str = ("something else")
+EXPR #(SIZE xs :(LIST OF Number)) -> Str = #("numbers")
+EXPR #(SIZE xs :Any) -> Str = #("something else")
 PRINT (SIZE [1, 2, 3])
 PRINT (SIZE "hi")
 ```
@@ -166,13 +168,13 @@ compete — a call either spells a shape or names a value.
 There are three forms, and which one you write is the choice of how the function
 can be reached:
 
-- **`EXPR (<head>) -> <Type> = (<body>)`** — the bare shape definition above. It
+- **`EXPR #(<head>) -> <Type> = #(<body>)`** — the bare shape definition above. It
   registers a shape, so it is reached by writing that shape (`ECHO 21`). It binds
   no name.
-- **`FN :{<fields>} -> <Type> = (<body>)`** — the lambda. No keyword, so no shape
+- **`FN :{<fields>} -> <Type> = #(<body>)`** — the lambda. No keyword, so no shape
   is registered; the function is only the value the expression produces, and you
   bind that value with `LET`.
-- **`LET <name> = FN EXPR (<head>) -> <Type> = (<body>)`** — the combined form.
+- **`LET <name> = FN EXPR #(<head>) -> <Type> = #(<body>)`** — the combined form.
   One statement, one definition, reached *both* ways: the shape dispatches and
   the name holds the same function. It spells both words because it installs both
   channels — `FN` for the name, which is lambda-typed, and `EXPR` for the shape.
@@ -189,7 +191,7 @@ order is independent of the declaration:
 
 ```koan
 LET pick = ,
-  FN EXPR (a :Str OR b :Str) -> Str = (a)
+  FN EXPR #(a :Str OR b :Str) -> Str = #(a)
 PRINT (pick {a = "first", b = "second"})
 PRINT (pick {b = "second", a = "first"})
 ```
@@ -203,7 +205,7 @@ Leaving out a required name is an error:
 
 ```koan
 LET pick = ,
-  FN EXPR (a :Str OR b :Str) -> Str = (a)
+  FN EXPR #(a :Str OR b :Str) -> Str = #(a)
 pick {a = "only"}
 ```
 
@@ -218,7 +220,7 @@ A function whose signature is just a record schema — `FN :{<fields>} -> Type`
 way to call it, always by named record:
 
 ```koan
-LET label = (FN :{text :Str} -> Str = (text))
+LET label = (FN :{text :Str} -> Str = #(text))
 PRINT (label {text = "hi"})
 ```
 
@@ -233,8 +235,9 @@ including a parameter of an enclosing function. The inner function carries those
 captures with it:
 
 ```koan
-EXPR (CONSTANTLY value :Str) -> :(FN :{} -> Str) =
-  FN :{} -> Str = (value)
+EXPR #(CONSTANTLY value :Str) -> :(FN :{} -> Str) = #(
+  FN :{} -> Str = #(value)
+)
 LET always_hi = (CONSTANTLY "hi")
 PRINT (always_hi {})
 ```
@@ -259,10 +262,11 @@ the values you name into it, so what escapes carries copies rather than a
 handle on the call that built it:
 
 ```koan
-EXPR (GREETER text :Str) -> :(FN :{} -> Str) =
+EXPR #(GREETER text :Str) -> :(FN :{} -> Str) = #(
   CLOSE OVER (text) (
-    FN :{} -> Str = (text)
+    FN :{} -> Str = #(text)
   )
+)
 LET hi = (GREETER "hi")
 PRINT (hi {})
 ```
@@ -292,10 +296,11 @@ with no list infers one: koan reads the block and captures exactly the names it
 uses from the enclosing call.
 
 ```koan
-EXPR (GREETER text :Str) -> :(FN :{} -> Str) =
+EXPR #(GREETER text :Str) -> :(FN :{} -> Str) = #(
   CLOSE (
-    FN :{} -> Str = (text)
+    FN :{} -> Str = #(text)
   )
+)
 LET hi = (GREETER "hi")
 PRINT (hi {})
 ```

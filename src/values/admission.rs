@@ -11,7 +11,7 @@
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KLiteral};
-use crate::symbols::{BinderSymbol, WILDCARD};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     Collector, KKind, KType, NodeSchema, TypeNode, TypeRegistry, Variance, admits_with,
     is_subtype_of, join, satisfied_by,
@@ -200,8 +200,8 @@ pub fn unsealed<'graph, 'cell, X: Knotted>(
 }
 
 /// The top of `value`'s own kind — `Number` for a number, `LIST OF Any` for a list, the empty
-/// record for a record, a quote's code kind — or `None` for a knot member, which no seal reads
-/// through.
+/// record for a record, `Code` for a quote, since every quote is one representation whatever its
+/// kind — or `None` for a knot member, which no seal reads through.
 fn kind_of<X: Knotted>(
     value: &Value<'_, '_, X>,
     types: &TypeRegistry<'_>,
@@ -212,7 +212,7 @@ fn kind_of<X: Knotted>(
         Value::Bool(_) => KType::BOOL,
         Value::Null => KType::NULL,
         Value::Str(_) => KType::STR,
-        Value::Expression(node) => node.reference().code_kind(),
+        Value::Expression(_) => KType::ANY_CODE,
         Value::Type(_) => KType::ANY_TYPE,
         Value::List(_) => KType::LIST_OF_ANY,
         Value::Dict(_) => KType::DICT_ANY_ANY,
@@ -340,7 +340,7 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
         | TypeNode::Binder
         | TypeNode::Name
         | TypeNode::Keyword
-        | TypeNode::AnyCode => part_code_kind(part).is_some_and(|kind| kind.within_code(slot)),
+        | TypeNode::AnyCode => part.code_kind().is_some_and(|kind| kind.within_code(slot)),
         TypeNode::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),
         TypeNode::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
         TypeNode::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),
@@ -353,7 +353,7 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
         TypeNode::Dict { key, value } => matches!(
             part,
             ExpressionPart::DictLiteral(pairs) if pairs.iter().all(|(k, v)| {
-                (is_default_key(k) || admits_part(key, k, types)) && admits_part(value, v, types)
+                (k.is_wildcard() || admits_part(key, k, types)) && admits_part(value, v, types)
             })
         ),
         TypeNode::Record { fields } => match part {
@@ -381,30 +381,6 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
         | TypeNode::DeferredReturn(_)
         | TypeNode::Sibling(_) => false,
     }
-}
-
-/// The code kind a raw part is written as, or `None` for a part that is no code: a bare literal is
-/// a value, and a keyword fills no slot. A bare group is code of its own kind, as a quote is.
-fn part_code_kind(part: &ExpressionPart<'_>) -> Option<KType> {
-    match part {
-        ExpressionPart::Identifier(_) => Some(KType::IDENTIFIER),
-        ExpressionPart::Type(_) => Some(KType::TYPE_NAME_TOKEN),
-        ExpressionPart::Expression(node) | ExpressionPart::QuotedExpression(node) => {
-            Some(node.reference().code_kind())
-        }
-        ExpressionPart::SigiledTypeExpr(_) => Some(KType::SIGILED_TYPE_EXPR),
-        ExpressionPart::RecordType(_) => Some(KType::RECORD_TYPE),
-        ExpressionPart::Keyword(_)
-        | ExpressionPart::Literal(_)
-        | ExpressionPart::ListLiteral(_)
-        | ExpressionPart::DictLiteral(_)
-        | ExpressionPart::RecordLiteral(_) => None,
-    }
-}
-
-/// Whether a dict literal's key is `_`, the dict's default, which admits no key type.
-fn is_default_key(key: &ExpressionPart<'_>) -> bool {
-    matches!(key, ExpressionPart::Keyword(symbol) if *symbol == WILDCARD.symbol())
 }
 
 /// Whether `slot` takes a working part: an AST part by shape, a spliced value by its type. A node

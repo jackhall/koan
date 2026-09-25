@@ -49,7 +49,7 @@ pub(super) fn tie_of<'f, 'graph, 'cell>(
 #[test]
 fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET f = (FN :{x :Number} -> Number = (x))");
+        let lines = fixture.parse("LET f = (FN :{x :Number} -> Number = #(x))");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let f = callable(fixture, activation, "f");
@@ -86,9 +86,9 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
 fn a_function_born_for_a_registration_carries_its_shape() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
-            "LET twice = FN EXPR (TWICE x :Number) -> Number = (x)\n\
-             LET plus = OP #(+) OVER Number = (left)\n\
-             LET f = (FN :{x :Number} -> Number = (x))",
+            "LET twice = FN EXPR #(TWICE x :Number) -> Number = #(x)\n\
+             LET plus = OP #(+) OVER Number = #(left)\n\
+             LET f = (FN :{x :Number} -> Number = #(x))",
         );
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
@@ -148,7 +148,7 @@ fn a_function_born_for_a_registration_carries_its_shape() {
 #[test]
 fn a_closure_captures_the_enclosing_value_word() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET k = \"kept\"\nLET f = (FN :{} -> Str = (k))");
+        let lines = fixture.parse("LET k = \"kept\"\nLET f = (FN :{} -> Str = #(k))");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let f = callable(fixture, activation, "f");
@@ -205,7 +205,7 @@ fn capture_read<'graph, 'cell>(
 fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
     with_fixture(|fixture| {
         let lines =
-            fixture.parse("LET f = (FN :{} -> Number = (g))\nLET g = (FN :{} -> Number = (f))");
+            fixture.parse("LET f = (FN :{} -> Number = #(g))\nLET g = (FN :{} -> Number = #(f))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -241,7 +241,7 @@ fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
 #[test]
 fn a_self_recursive_function_edges_itself() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET loop = (FN :{} -> Number = (loop))");
+        let lines = fixture.parse("LET loop = (FN :{} -> Number = #(loop))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -260,8 +260,9 @@ fn a_self_recursive_function_edges_itself() {
 #[test]
 fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
     with_fixture(|fixture| {
-        let lines = fixture
-            .parse("LET f = (FN :{} -> Number = (\n    LET h = (FN :{} -> Number = (f))\n    h))");
+        let lines = fixture.parse(
+            "LET f = (FN :{} -> Number = #(\n    LET h = (FN :{} -> Number = #(f))\n    h))",
+        );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -295,7 +296,7 @@ fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
 #[test]
 fn an_unsupported_signature_is_a_type_refusal() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET f = (FN :{x :(Number AS Any)} -> Number = (x))");
+        let lines = fixture.parse("LET f = (FN :{x :(Number AS Any)} -> Number = #(x))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &["f"]);
@@ -370,7 +371,7 @@ fn a_tagged_ring_of_two_members_is_one_knot() {
 #[test]
 fn a_container_and_the_function_that_captures_it_share_a_knot() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET a = [f]\nLET f = (FN :{} -> Any = (a))");
+        let lines = fixture.parse("LET a = [f]\nLET f = (FN :{} -> Any = #(a))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -400,7 +401,7 @@ fn a_container_and_the_function_that_captures_it_share_a_knot() {
 fn a_nested_constructor_on_a_sibling_path_is_an_anonymous_node() {
     with_fixture(|fixture| {
         let lines =
-            fixture.parse("LET a = {inner = [f] plain = [1 2]}\nLET f = (FN :{} -> Any = (a))");
+            fixture.parse("LET a = {inner = [f] plain = [1 2]}\nLET f = (FN :{} -> Any = #(a))");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let f = callable(fixture, activation, "f");
@@ -491,8 +492,8 @@ fn a_nested_construction_is_built_through_the_checked_door() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
             "NEWTYPE Distance = Number\n\
-             LET a = [(Distance 3) f]\nLET f = (FN :{} -> Any = (a))\n\
-             LET b = [(Distance \"x\") g]\nLET g = (FN :{} -> Any = (b))",
+             LET a = [(Distance 3) f]\nLET f = (FN :{} -> Any = #(a))\n\
+             LET b = [(Distance \"x\") g]\nLET g = (FN :{} -> Any = #(b))",
         );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
@@ -520,7 +521,7 @@ fn a_nested_construction_is_built_through_the_checked_door() {
 fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
-            "LET g = (FN :{x :Number} -> Any = (x))\nLET a = [(g 1) f]\nLET f = (FN :{} -> Any = (a))",
+            "LET g = (FN :{x :Number} -> Any = #(x))\nLET a = [(g 1) f]\nLET f = (FN :{} -> Any = #(a))",
         );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
@@ -561,8 +562,8 @@ fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
 fn every_eager_part_is_asked_for_in_one_attempt() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
-            "LET g = (FN :{x :Number} -> Any = (x))\n\
-             LET a = [(g 1) {(g 2): f} (g 4)]\nLET f = (FN :{} -> Any = (a))",
+            "LET g = (FN :{x :Number} -> Any = #(x))\n\
+             LET a = [(g 1) {(g 2): f} (g 4)]\nLET f = (FN :{} -> Any = #(a))",
         );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
@@ -593,7 +594,7 @@ fn every_eager_part_is_asked_for_in_one_attempt() {
 #[test]
 fn a_dict_key_that_is_no_scalar_refuses() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET k = [1]\nLET a = {(k): f}\nLET f = (FN :{} -> Any = (a))");
+        let lines = fixture.parse("LET k = [1]\nLET a = {(k): f}\nLET f = (FN :{} -> Any = #(a))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &["a"]);

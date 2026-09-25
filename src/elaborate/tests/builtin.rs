@@ -86,41 +86,35 @@ fn a_bucket_interns_one_handle_per_overload() {
 
     let count =
         |id: BuiltinShapeId| builtin_shape_types(&BUILTIN_SHAPES[id as usize], types, bump).len();
-    assert_eq!(count(BuiltinShapeId::NewTypeDefinition), 3);
-    assert_eq!(count(BuiltinShapeId::Attribute), 6);
+    assert_eq!(count(BuiltinShapeId::NewTypeDefinition), 1);
+    assert_eq!(count(BuiltinShapeId::Attribute), 3);
     assert_eq!(count(BuiltinShapeId::CombinedLambda), 0);
     assert_eq!(count(BuiltinShapeId::CombinedQuantifiedLambda), 0);
 }
 
-/// The one union a builtin slot names interns as the union of its three members — the compound the
-/// static spec exists for, since no `const` computes a union's digest.
+/// The one union a builtin slot names — a `FOR ALL` group, a list of names or a dict of names to
+/// bounds — interns as the union of its two members, the compound the static spec exists for, since
+/// no `const` computes a union's digest.
 #[test]
-fn the_type_carrier_interns_as_the_three_member_union() {
+fn the_quantifier_slot_interns_as_the_two_member_union() {
     let arena = Bump::new();
     let bump = &arena;
     let types = &TypeRegistry::in_region(bump);
 
-    let shape = &BUILTIN_SHAPES[BuiltinShapeId::ExpressionDefinition as usize];
+    let shape = &BUILTIN_SHAPES[BuiltinShapeId::QuantifiedExpressionHead as usize];
     let handle = builtin_shape_types(shape, types, bump)[0];
-    let carrier = types.with_node(handle, |node| {
+    let group = types.with_node(handle, |node| {
         let TypeNode::ExpressionShape { elements, .. } = node else {
             panic!("the door interns an expression shape");
         };
         let DispatchTokenElement::Slot(slot) = elements[3] else {
-            panic!("`EXPR <head> -> <return type> = <body>` types its return slot");
+            panic!("`EXPR FOR ALL <names> <head> -> <return type>` types its group slot");
         };
         slot
     });
     assert_eq!(
-        carrier,
-        types.union_of(
-            bump,
-            &[
-                KType::TYPE_NAME_TOKEN,
-                KType::SIGILED_TYPE_EXPR,
-                KType::RECORD_TYPE
-            ]
-        )
+        group,
+        types.union_of(bump, &[KType::LIST_OF_NAME, KType::DICT_NAME_TYPE_CODE])
     );
     assert!(matches!(shape.elements[3], ShapeElement::Slot { .. }));
 }

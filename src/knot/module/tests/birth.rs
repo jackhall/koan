@@ -104,7 +104,7 @@ LET outside = 1";
 fn a_module_captures_an_outer_value_and_holds_a_module_of_its_own() {
     let source = "\
 LET greeting = \"hi\"
-MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = (greeting))))";
+MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = #(greeting))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
@@ -151,7 +151,7 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = (greeting
 
 #[test]
 fn a_group_binder_births_a_module_the_same_way() {
-    let source = "GROUP g FOLD LEFT = ((LET step = 1) (OP #(@) OVER Number = (left)))";
+    let source = "GROUP g FOLD LEFT = ((LET step = 1) (OP #(@) OVER Number = #(left)))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
@@ -165,7 +165,7 @@ fn a_group_binder_births_a_module_the_same_way() {
 #[test]
 fn a_module_whose_body_ties_a_knot_holds_each_member_callable() {
     let source = "\
-MODULE m = ((LET f = (FN :{} -> Number = (g))) (LET g = (FN :{} -> Number = (f))))";
+MODULE m = ((LET f = (FN :{} -> Number = #(g))) (LET g = (FN :{} -> Number = #(f))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {

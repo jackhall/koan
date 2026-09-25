@@ -26,8 +26,8 @@
 //! See [README.md § Operator groups](../../README.md#operator-groups).
 
 use crate::memory::{BumpVec, collect};
-use crate::parse::builtin_shapes::binder::{bounded, bounded_run};
-use crate::parse::builtin_shapes::role::Role;
+use crate::parse::builtin_shapes::binder::bounded_run;
+use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, ProgramNode, Spanned};
 use crate::symbols::{KeywordSymbol, ValueSymbol};
@@ -85,19 +85,35 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             Some(form) => {
                 for (role, part) in form.roles().zip(node.parts) {
                     let rewritten = match role {
-                        Role::Rhs | Role::Argument | Role::TypeExpression | Role::Definition(_) => {
+                        Role::Rhs
+                        | Role::Argument
+                        | Role::InPlace
+                        | Role::TypeExpression
+                        | Role::Definition(DefinitionKind::Plain) => {
                             self.rewrite_part(at, &part.value)?
                         }
-                        Role::Signature => self.rewrite_signature(at, &part.value)?,
-                        Role::Branches(_) => self.rewrite_branches(at, &part.value)?,
-                        Role::Quantifiers => self.rewrite_bounds(at, &part.value)?,
+                        // A bare label is the label itself; any other is evaluated.
+                        Role::Field => match part.value {
+                            ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => None,
+                            _ => self.rewrite_part(at, &part.value)?,
+                        },
+                        Role::Signature | Role::Head => self.rewrite_signature(at, &part.value)?,
+                        Role::Branches(Heads::Types) => {
+                            self.rewrite_quotes(at, &part.value, Quotes::Keys)?
+                        }
+                        Role::Definition(DefinitionKind::Union) | Role::Quantifiers => {
+                            self.rewrite_quotes(at, &part.value, Quotes::Values)?
+                        }
+                        Role::Definition(DefinitionKind::Members) => {
+                            self.rewrite_quotes(at, &part.value, Quotes::Items)?
+                        }
                         Role::Name if form.id == BuiltinShapeId::TypeDeclaration => {
                             self.rewrite_bounds(at, &part.value)?
                         }
                         Role::Keyword
                         | Role::Name
                         | Role::Data
-                        | Role::Label
+                        | Role::Branches(Heads::Labels)
                         | Role::Body(_)
                         | Role::Unsupported => None,
                     };
@@ -192,8 +208,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         }
     }
 
-    /// A signature part: a `:{…}` schema's field list or an `EXPR` head, whose type halves are
-    /// rewritten and whose spine — its keywords and declared names — is left alone. Read through
+    /// A signature part: a `:{…}` schema's field list or a quoted `EXPR` head, whose type halves
+    /// are rewritten and whose spine — its keywords and declared names — is left alone. Read through
     /// the same pair walk the mention pass reads it through, so a head's keyword run is never taken
     /// for an operator run.
     fn rewrite_signature(
@@ -209,7 +225,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         };
         Ok(Some(match part {
             ExpressionPart::RecordType(_) => ExpressionPart::RecordType(rewritten),
-            _ => ExpressionPart::Expression(rewritten),
+            _ => ExpressionPart::QuotedExpression(rewritten),
         }))
     }
 
@@ -235,9 +251,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         Ok(changed.then(|| self.brand.nested_node(&parts)))
     }
 
-    /// A `FOR ALL` group or a `TYPE` declarator with every bound's operator runs chained. A bound
-    /// is the third part of a `<Name> UNDER <bound>` run; a group that is not one such run holds its
-    /// entries as its parts, each a bare name or one such run.
+    /// A `TYPE` declarator with its bound's operator runs chained: the third part of a
+    /// `<Name> UNDER <bound>` run.
     fn rewrite_bounds(
         &mut self,
         at: Position,
@@ -247,53 +262,84 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             return Ok(None);
         };
         let run = node.reference();
+        if bounded_run(run).is_none() {
+            return Ok(None);
+        }
+        let Some(rewritten) = self.rewrite_part(at, &run.parts[2].value)? else {
+            return Ok(None);
+        };
         let mut parts: Run<'x, 'graph> = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
         parts.extend_from_slice(run.parts);
-        let mut changed = false;
-        if bounded_run(run).is_some() {
-            if let Some(rewritten) = self.rewrite_part(at, &run.parts[2].value)? {
-                changed = true;
-                parts[2].value = rewritten;
-            }
-        } else {
-            for (index, entry) in run.parts.iter().enumerate() {
-                if bounded(&entry.value).is_some()
-                    && let Some(rewritten) = self.rewrite_bounds(at, &entry.value)?
-                {
-                    changed = true;
-                    parts[index].value = rewritten;
-                }
-            }
-        }
-        Ok(changed.then(|| ExpressionPart::Expression(self.brand.nested_node(&parts))))
+        parts[2].value = rewritten;
+        Ok(Some(ExpressionPart::Expression(
+            self.brand.nested_node(&parts),
+        )))
     }
 
-    /// The arm heads of a branches part. An arm's body is a block shape of its own and is rewritten
-    /// by its own draft.
-    fn rewrite_branches(
+    /// The quotes of a container the shape builder reads where it is written — a list's items, or
+    /// a dict's keys or values — each with its operator runs chained. Every other quote is data. An
+    /// arm's block is a shape of its own and is rewritten by its own draft.
+    fn rewrite_quotes(
+        &mut self,
+        at: Position,
+        part: &ExpressionPart<'graph>,
+        quotes: Quotes,
+    ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
+        let writer = self.brand.writer();
+        match (quotes, part) {
+            (Quotes::Items, ExpressionPart::ListLiteral(items)) => {
+                let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
+                let mut changed = false;
+                for item in items.iter() {
+                    let rewritten = self.rewrite_quote(at, item)?;
+                    changed |= rewritten.is_some();
+                    run.push(rewritten.unwrap_or(*item));
+                }
+                Ok(changed
+                    .then(|| ExpressionPart::ListLiteral(collect(writer, run.iter().copied()))))
+            }
+            (Quotes::Keys | Quotes::Values, ExpressionPart::DictLiteral(pairs)) => {
+                let mut run = BumpVec::with_capacity_in(pairs.len(), self.scratch);
+                let mut changed = false;
+                for (key, value) in pairs.iter() {
+                    let (new_key, new_value) = match quotes {
+                        Quotes::Keys => (self.rewrite_quote(at, key)?, None),
+                        _ => (None, self.rewrite_quote(at, value)?),
+                    };
+                    changed |= new_key.is_some() || new_value.is_some();
+                    run.push((new_key.unwrap_or(*key), new_value.unwrap_or(*value)));
+                }
+                Ok(changed
+                    .then(|| ExpressionPart::DictLiteral(collect(writer, run.iter().copied()))))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// One quote the builder reads, its body's operator runs chained.
+    fn rewrite_quote(
         &mut self,
         at: Position,
         part: &ExpressionPart<'graph>,
     ) -> Result<Option<ExpressionPart<'graph>>, ShapeError> {
-        let ExpressionPart::Expression(branches) = part else {
+        let ExpressionPart::QuotedExpression(node) = part else {
             return Ok(None);
         };
-        let branches = branches.reference();
-        let mut parts: Run<'x, 'graph> =
-            BumpVec::with_capacity_in(branches.parts.len(), self.scratch);
-        parts.extend_from_slice(branches.parts);
-        let mut changed = false;
-        for (index, arm) in branches.parts.iter().enumerate() {
-            if !index.is_multiple_of(3) {
-                continue;
-            }
-            if let Some(rewritten) = self.rewrite_part(at, &arm.value)? {
-                changed = true;
-                parts[index].value = rewritten;
-            }
-        }
-        Ok(changed.then(|| ExpressionPart::Expression(self.brand.nested_node(&parts))))
+        Ok(self
+            .rewrite_node(at, node.reference())?
+            .map(ExpressionPart::QuotedExpression))
     }
+}
+
+/// Which quotes of a container [`Builder::rewrite_quotes`] enters.
+#[derive(Clone, Copy)]
+enum Quotes {
+    /// A list's items: a signature's members.
+    Items,
+    /// A dict's keys: an arm set's type guards.
+    Keys,
+    /// A dict's values: a union's payloads, a `FOR ALL` group's bounds.
+    Values,
 }
 
 impl<'graph, 'x> Builder<'graph, 'x, '_> {

@@ -101,6 +101,30 @@ moves. For a callable, the part that holds its body is its form's body-role
 part, and `Site::of_body` finds that site from the form node, so a caller that
 meets a `FN` no binder names finds its body shape.
 
+**Code is read where it is written.** Before the builder walks a builtin node's
+parts it checks each part the node's roles read as written
+([the builtin shape table](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)):
+a callable's body and an `EXPR` head are a quote; an arm set, a union's
+variants, a `FOR ALL` group and a `SIG` body are a list or dict of quotes; a
+binder name and an in-place body are bare; and each admits one of its slot's
+code types. One static check does it, against the table's own types, so no
+position list sits beside the table; the readers after it assume a well-formed
+part. A callable's body shape is built over its quote's body and keyed by the
+quote part, so `Site::of_body` finds it as it finds any body. An `EXPR` head's
+names are read through its quote. An arm set is a dict of guard quotes to arm
+quotes, and each arm is a block shape binding `it`. A `SIG` body's members and a
+bodyless `GROUP`'s heads are the statements of a list's quotes, each walked by
+its own builtin shape's roles.
+
+**An arm knows it is one.** An arm's block shape carries an `Arm`
+(`BodyShape::arm`): its guard as written — the key quote, a type under
+`MATCH … WITH` and a label under `MATCH … OVER` or `TRY` — or none for the `_`
+default arm, and whether the arm's last statement is in tail position. It is
+exactly where the `MATCH` or `TRY` is: at the root of a body's last statement,
+binding nothing, in a tail body. A callable's body is a tail body and an arm's
+is when its own tail is; the program, a module, a `USING` body and a
+synthesized block are not.
+
 ## Resolution
 
 Every name a body reads resolves when its shape is built, to one of three
@@ -258,9 +282,10 @@ walk reads; `TYPE (Carrier UNDER Number)` declares `Carrier`, and its bound is a
 deferred mention like the rest of the definition; a `FOR ALL` group inside one of
 its heads declares its quantifiers, bounded or not;
 a manifest `LET` member declares its name, so a later `VAL` naming it is no
-mention either; and a parameterized `UNION (Elem AS Option) = (Some :Elem …)`
-declares `Elem` in its declarator, so a variant payload naming it is no
-mention. Every name a definition declares is the definition's own, and
+mention either; a union's tags name its variants and are no mentions, while
+each payload quote is read as a type expression; and a parameterized
+`UNION (Elem AS Option) = #{Some: Elem, …}` declares `Elem` in its declarator,
+so a variant payload naming it is no mention. Every name a definition declares is the definition's own, and
 the declaration door resolves it against the definition it is elaborating.
 
 ### Units
@@ -402,8 +427,10 @@ A second `GROUP` over a claimed symbol is admitted only when its group is
 *equal*, and is then the same record; a `GROUP` written out equal to a builtin
 group says what the language already says and claims nothing. Any other overlap
 — with a builtin group, with another statement's group, with a unary mark, in
-either order — is `RedeclaresGroup`. The scan never enters a quote: the code
-inside one is data until an `EVAL` builds it.
+either order — is `RedeclaresGroup`. The scan enters exactly the quotes the
+builder reads where they are written — a callable's body, a head, an arm, a
+signature's members — since those are this program's code; any other quote is
+data until an `EVAL` builds it.
 
 A **group frame** decides where an operator run may chain under a declared
 group. Only two kinds of body hold a group, both the way a parameter is held, so
@@ -444,9 +471,10 @@ Over operands `o0 … on` and operators `k1 … kn`, each operand already rewrit
 - **unary** — `k1 [o0 … on]`, one keyword-first call over a list literal. This
   is the form a union and a meet type take: `A | B | C` elaborates as that call,
   and only `A | B` is read as an infix pair. Koan has no precedence, so
-  `A | B & C` is `MixedGroups`. An operator run inside a bound — the third part
-  of a `FOR ALL` entry's or a `TYPE` declarator's `<Name> UNDER <bound>` — is
-  rewritten too;
+  `A | B & C` is `MixedGroups`. An operator run inside a quote the builder
+  reads — a head, a type guard, a union's payload, a `FOR ALL` bound, a
+  signature's member — or inside a `TYPE` declarator's `<Name> UNDER <bound>` is
+  rewritten too, and the quote rebuilt around it;
 - **pairwise** — the adjacent pairs `o(i-1) ki oi`, folded through the group's
   combiner written infix, in the group's direction.
 
@@ -476,8 +504,8 @@ The code an `EVAL` runs is rewritten where its own block shape is built, when
 the `EVAL` runs. Its claims chain to the program's, so a `GROUP` inside
 evaluated code is held to the program's declarations and chains that code's runs
 only, and its frame is rooted at the frame of the shape the `EVAL` sits in —
-found by a walk over shapes that reads no activation slot. A quoted operator run
-is data and is rewritten by nobody until then.
+found by a walk over shapes that reads no activation slot. An operator run in a
+quote no builtin reads as written is data and is rewritten by nobody until then.
 
 ## Errors
 
@@ -492,8 +520,17 @@ error in walk order:
   built, which names it surfaces;
 - an **unsupported** form — `CLOSE` and `CLOSE OVER`, whose resolution has no
   rewrite home yet, and the reserved forms that exist only to diagnose a miss;
-- a **malformed** form — a body or a branch list that is not the shape its form
-  declares;
+- an **unquoted** part — one its role reads as a quote or a container of
+  quotes, written otherwise: a bare function body, a bare arm set, a bare `SIG`
+  body. The message says how the part is written;
+- an **inadmissible** part — one read as written whose syntax fills none of its
+  slot's types: `42` as a body, `#{1: (a)}` as arms, `#[(PRINT 1)]` as a
+  signature's members, `#{}` as a union's variants;
+- a **malformed** form — a quote where bare syntax is read (`LET #(x) = 1`,
+  `MODULE m = #(…)`), or a body that is not the shape its form declares;
+- a **dict default** — a value dict holding a `_` key, refused until its default
+  has a reading (see [Open work](#open-work)); an arm set's `_` is its default
+  arm;
 
 and six more from [operator groups](#operator-groups), each naming the symbol it
 is about:
@@ -550,6 +587,8 @@ type outside the one error that lists names, and on a retired lifetime name.
 ## Open work
 
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
+- [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
+  default, which lifts the dict-default refusal.
 - [Quotes resolve where they are written](../../roadmap/rewrite/eval-scope.md)
   — a quote's names resolved where it is written, wherever it is evaluated.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE

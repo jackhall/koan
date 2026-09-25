@@ -14,7 +14,7 @@
 //! reads a module's own signature off the activation its body ran in.
 //!
 //! Elaborated: a bare type name, `LIST OF Elem`, `MAP Key -> Val`, `FN :{…} -> Ret`,
-//! `EXPR (head) -> Ret` with and without `FOR ALL`, a union `A | B` and a meet `A & B` of members,
+//! `EXPR #(head) -> Ret` with and without `FOR ALL`, a union `A | B` and a meet `A & B` of members,
 //! a record type `:{…}`, a union member `Union.Tag`, the declared type of a record's field
 //! `Record.field`, and a constructor application `Pair {Key = Number}` with its arity-one sugar
 //! `Number AS Wrap`. A name a `FOR ALL` group declares is that group's quantifier, bounded by what

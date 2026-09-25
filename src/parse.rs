@@ -54,7 +54,6 @@ pub use ast::{
     PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
 };
 pub use builtin_shapes::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinderKey};
-pub use builtin_shapes::lazy::LazyKinds;
 
 #[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
 pub(crate) use builtin_shapes::binder::{

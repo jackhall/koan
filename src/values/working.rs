@@ -12,8 +12,7 @@ use std::fmt;
 use crate::memory::{BumpAllocator, Writer, collect};
 use crate::parse::ast::RunIter;
 use crate::parse::{
-    DispatchShape, ExpressionPart, KExpression, KeyElement, LazyKinds, NodeCache, PartClass,
-    StoredBinderKey,
+    DispatchShape, ExpressionPart, KExpression, KeyElement, NodeCache, PartClass, StoredBinderKey,
 };
 use crate::source::{FileId, SourceRef, Span, Spanned};
 use crate::symbols::{BinderSymbol, SymbolInterner};
@@ -262,10 +261,6 @@ impl<'graph, 'cell, X: Knotted> WorkingExpression<'graph, 'cell, X> {
 
     pub fn binder_name_slot(&self) -> Option<usize> {
         self.cache.binder_name_slot()
-    }
-
-    pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
-        self.cache.lazy_kinds_at(index)
     }
 
     pub fn stored_key(&self) -> &'cell [KeyElement] {

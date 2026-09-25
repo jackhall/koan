@@ -66,8 +66,8 @@ fn nested_at<'graph>(
 #[test]
 fn the_design_documents_classification_examples() {
     let source = "\
-LET compute = (FN :{p :Number} -> Number = (p))
-LET f = (FN :{} -> Number = (g))
+LET compute = (FN :{p :Number} -> Number = #(p))
+LET f = (FN :{} -> Number = #(g))
 LET x = [f (compute 5)]
 LET y = (compute [f])
 LET g = 1";
@@ -131,7 +131,7 @@ fn a_root_mention_is_eager_and_a_forward_one_is_unbound() {
 #[test]
 fn a_called_body_is_eager() {
     shaped(
-        "LET z = ((FN :{} -> Number = (z)) 1)",
+        "LET z = ((FN :{} -> Number = #(z)) 1)",
         |fixture, _, shape| {
             assert!(matches!(
                 shape,
@@ -144,7 +144,7 @@ fn a_called_body_is_eager() {
 #[test]
 fn a_self_recursive_function_captures_itself_as_an_edge() {
     shaped(
-        "LET f = (FN :{} -> Number = (f))",
+        "LET f = (FN :{} -> Number = #(f))",
         |fixture, lines, shape| {
             let shape = shape.expect("the program shapes");
             let (slot, _) = shape.slot(value(fixture, "f")).unwrap();
@@ -178,7 +178,7 @@ fn a_ring_of_containers_is_one_deferred_component() {
 #[test]
 fn a_cycle_through_a_call_is_an_eager_cycle() {
     shaped(
-        "LET f = (FN :{} -> Number = (x))\nLET x = (f 1)",
+        "LET f = (FN :{} -> Number = #(x))\nLET x = (f 1)",
         |fixture, _, shape| {
             let Err(ShapeError::EagerCycle { mut members }) = shape else {
                 panic!("an eager cycle, got {:?}", shape.map(|_| ()));
@@ -194,7 +194,7 @@ fn a_cycle_through_a_call_is_an_eager_cycle() {
 #[test]
 fn a_function_recursive_with_one_inside_a_module_is_an_eager_cycle() {
     shaped(
-        "LET f = (FN :{} -> Number = (m))\nMODULE m = ((LET g = (FN :{} -> Number = (f))))",
+        "LET f = (FN :{} -> Number = #(m))\nMODULE m = (LET g = (FN :{} -> Number = #(f)))",
         |_, _, shape| {
             assert!(matches!(shape, Err(ShapeError::EagerCycle { .. })));
         },
@@ -204,14 +204,15 @@ fn a_function_recursive_with_one_inside_a_module_is_an_eager_cycle() {
 #[test]
 fn an_arm_binds_it_and_its_names_are_gone_after_it() {
     shaped(
-        "LET q = 1\nMATCH q -> :Number WITH (Number -> ((LET w = it) (q)))",
+        "LET q = 1\nMATCH q -> :Number WITH #{Number: ((LET w = it) (q))}",
         |fixture, lines, shape| {
             let shape = shape.expect("the program shapes");
-            let ExpressionPart::Expression(branches) = lines[1].parts[5].value else {
-                panic!("the branches are a node");
+            let ExpressionPart::DictLiteral(pairs) = lines[1].parts[5].value else {
+                panic!("the arms are a dict");
             };
+            let (_, arm_part) = &pairs[0];
             let arm = shape
-                .nested(crate::scope::Site::of(&branches.parts[2].value))
+                .nested(crate::scope::Site::of(arm_part))
                 .expect("the arm has a shape");
             assert_eq!(arm.kind(), ShapeKind::Block);
             assert_eq!(arm.entered_at(), Position::statement(1));
@@ -236,7 +237,7 @@ fn an_arm_binds_it_and_its_names_are_gone_after_it() {
         },
     );
     shaped(
-        "MATCH 1 -> :Number WITH (Number -> ((LET w = it) (w)))\nLET u = w",
+        "MATCH 1 -> :Number WITH #{Number: ((LET w = it) (w))}\nLET u = w",
         |fixture, _, shape| {
             assert!(matches!(
                 shape,
@@ -250,7 +251,7 @@ fn an_arm_binds_it_and_its_names_are_gone_after_it() {
 #[test]
 fn a_union_may_name_itself_and_types_take_slots_after_values() {
     shaped(
-        "UNION Nat = (Zero :Null Succ :Nat)\nLET one = 1",
+        "UNION Nat = #{Zero: Null, Succ: Nat}\nLET one = 1",
         |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
             let nat = BinderSymbol::Type(type_name("Nat", fixture.symbols));
@@ -285,7 +286,7 @@ fn each_error_names_what_a_user_needs() {
             "`b` in statement 1 names no binding visible there",
         ),
         (
-            "LET f = (FN :{} -> Number = (x))\nLET x = (f 1)",
+            "LET f = (FN :{} -> Number = #(x))\nLET x = (f 1)",
             "these bindings need each other's values before any of them exists:",
         ),
         (
@@ -294,7 +295,7 @@ fn each_error_names_what_a_user_needs() {
         ),
         (
             "MATCH 1 -> :Number WITH (Number (1))",
-            "`Match` in statement 1 is not the shape it declares",
+            "`Match` in statement 1 takes its arms as a dict of quotes: write #{…}",
         ),
     ];
     for (source, message) in cases {
@@ -331,7 +332,7 @@ fn every_capture_limiting_form_is_unsupported() {
 #[test]
 fn eval_marks_its_shape_and_every_enclosing_one() {
     shaped(
-        "LET d = #(origin)\nLET f = (FN :{} -> Number = ((EVAL d)))\nLET g = 1",
+        "LET d = #(origin)\nLET f = (FN :{} -> Number = #(EVAL d))\nLET g = 1",
         |fixture, lines, shape| {
             let shape = shape.expect("the program shapes");
             assert!(shape.keeps_defining_scope());
@@ -348,7 +349,7 @@ fn eval_marks_its_shape_and_every_enclosing_one() {
 #[test]
 fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
     shaped(
-        "LET f = (FN :{n :Nat} -> Number = (n))\nUNION Nat = (Zero :Null)",
+        "LET f = (FN :{n :Nat} -> Number = #(n))\nUNION Nat = #{Zero: Null}",
         |fixture, _, shape| {
             assert!(matches!(
                 shape,
@@ -358,7 +359,7 @@ fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
         },
     );
     shaped(
-        "EXPR FOR ALL (Elt) (HEAD xs :(LIST OF Elt)) -> Elt = (xs)",
+        "EXPR FOR ALL #[Elt] #(HEAD xs :(LIST OF Elt)) -> Elt = #(xs)",
         |fixture, lines, shape| {
             let shape = shape.expect("a quantifier names nothing in the enclosing shape");
             let body = shape
@@ -377,7 +378,7 @@ fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
 #[test]
 fn a_quantifier_read_in_its_body_is_a_mention_of_the_body_parameter() {
     shaped(
-        "EXPR FOR ALL (Elt) (HEAD xs :(LIST OF Elt)) -> Elt = (Elt)",
+        "EXPR FOR ALL #[Elt] #(HEAD xs :(LIST OF Elt)) -> Elt = #(Elt)",
         |fixture, lines, shape| {
             let shape = shape.expect("the body reads its own type parameter");
             let body = shape
@@ -399,10 +400,10 @@ fn a_quantifier_read_in_its_body_is_a_mention_of_the_body_parameter() {
 #[test]
 fn a_binder_births_the_callable_at_its_root_and_the_body_knows_its_form() {
     let source = "\
-LET f = (FN :{x :Number} -> Number = (x))
-LET wrapped = [(FN :{} -> Number = (1))]
-LET e = FN EXPR (TWICE x :Number) -> Number = (x)
-LET plus = OP \"+\" OVER Number = (left)
+LET f = (FN :{x :Number} -> Number = #(x))
+LET wrapped = [(FN :{} -> Number = #(1))]
+LET e = FN EXPR #(TWICE x :Number) -> Number = #(x)
+LET plus = OP #(+) OVER Number = #(left)
 LET k = 1";
     shaped(source, |fixture, lines, shape| {
         let shape = shape.expect("the program shapes");
@@ -532,14 +533,17 @@ fn a_signature_body_declares_its_own_members() {
     // manifest `LET` members are the definition's own: none is a mention of the enclosing shape.
     for (source, own) in [
         (
-            "SIG Pairish = (TYPE (Key Val AS Pair))",
+            "SIG Pairish = #[(TYPE (Key Val AS Pair))]",
             &["Key", "Val", "Pair"][..],
         ),
         (
-            "SIG Boxy = ((TYPE Elem) (VAL unbox :(EXPR FOR ALL (Held) (TAKE it :Held) -> Elem)))",
+            "SIG Boxy = #[(TYPE Elem) (VAL unbox :(EXPR FOR ALL #[Held] #(TAKE it :Held) -> Elem))]",
             &["Elem", "Held"],
         ),
-        ("SIG Fixed = ((LET Elem = Number) (VAL x :Elem))", &["Elem"]),
+        (
+            "SIG Fixed = #[(LET Elem = Number) (VAL x :Elem)]",
+            &["Elem"],
+        ),
     ] {
         shaped(source, |fixture, _, shape| {
             let shape = shape.unwrap_or_else(|error| {
@@ -563,11 +567,11 @@ fn a_parameterized_union_declares_its_parameters() {
     // mention of the enclosing shape, while any other type a payload names still is.
     for (source, own) in [
         (
-            "UNION (Elem AS Option) = (Some :Elem None :Null)",
+            "UNION (Elem AS Option) = #{Some: Elem, None: Null}",
             &["Elem"][..],
         ),
         (
-            "UNION (Ok Error AS Result) = (Ok :Ok Error :Error)",
+            "UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}",
             &["Ok", "Error"],
         ),
     ] {
@@ -586,7 +590,7 @@ fn a_parameterized_union_declares_its_parameters() {
         });
     }
     shaped(
-        "UNION (Elem AS Option) = (Some :Elem None :Null)",
+        "UNION (Elem AS Option) = #{Some: Elem, None: Null}",
         |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
             mention_of(
@@ -600,7 +604,7 @@ fn a_parameterized_union_declares_its_parameters() {
 #[test]
 fn a_signature_body_reads_the_types_it_does_not_declare() {
     shaped(
-        "NEWTYPE Distance = Number\nSIG Far = (VAL how_far :Distance)",
+        "NEWTYPE Distance = Number\nSIG Far = #[(VAL how_far :Distance)]",
         |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
             let distance = BinderSymbol::Type(type_name("Distance", fixture.symbols));
@@ -659,7 +663,7 @@ fn a_module_naming_itself_from_a_body_of_its_own_is_refused() {
     // position does not see that binder. So a module is never in a cycle with itself, and every
     // module born is a one-node knot.
     shaped(
-        "MODULE m = (LET f = (FN :{} -> Number = (m)))",
+        "MODULE m = (LET f = (FN :{} -> Number = #(m)))",
         |_, _, shape| {
             assert!(matches!(shape.err(), Some(ShapeError::Unbound { .. })));
         },
@@ -669,18 +673,18 @@ fn a_module_naming_itself_from_a_body_of_its_own_is_refused() {
 #[test]
 fn a_using_body_takes_its_operands_surfaced_names_as_parameters() {
     let module = "MODULE m = ((LET x = 1) (NEWTYPE Dist = Number))";
-    let shown = "SIG Shown = ((TYPE Carrier) (VAL zero :Carrier))";
+    let shown = "SIG Shown = #[(TYPE Carrier) (VAL zero :Carrier)]";
     let cases: &[(String, &[&str])] = &[
         // A `MODULE` binder read directly, and the same read from a body that precedes it.
         (format!("{module}\nUSING m SCOPE (x)"), &["x", "Dist"]),
         // A `GROUP` binder births the same body, so it reads the same way.
         (
-            "GROUP g FOLD LEFT = ((LET x = 1) (NEWTYPE Dist = Number) (OP #(@) OVER Number = (left)))\nUSING g SCOPE (x)"
+            "GROUP g FOLD LEFT = ((LET x = 1) (NEWTYPE Dist = Number) (OP #(@) OVER Number = #(left)))\nUSING g SCOPE (x)"
                 .to_string(),
             &["x", "Dist"],
         ),
         (
-            "LET f = (FN :{} -> Number = ((USING m SCOPE (x))))\nMODULE m = (LET x = 1)"
+            "LET f = (FN :{} -> Number = #(USING m SCOPE (x)))\nMODULE m = (LET x = 1)"
                 .to_string(),
             &["x"],
         ),
@@ -745,7 +749,7 @@ fn a_surfaced_name_resolves_like_any_other_local() {
 
 #[test]
 fn a_callable_in_a_using_body_captures_a_surfaced_name_by_reading_it() {
-    let source = "MODULE m = (LET x = 1)\nUSING m SCOPE ((LET f = (FN :{} -> Number = (x))))";
+    let source = "MODULE m = (LET x = 1)\nUSING m SCOPE (LET f = (FN :{} -> Number = #(x)))";
     shaped(source, |fixture, _, shape| {
         let shape = shape.expect("the program shapes");
         let block = only_block(shape);
@@ -766,12 +770,12 @@ fn a_callable_in_a_using_body_captures_a_surfaced_name_by_reading_it() {
 #[test]
 fn an_operand_whose_names_cannot_be_read_is_refused() {
     let module = "MODULE m = (LET x = 1)";
-    let shown = "SIG Shown = ((TYPE Carrier) (VAL zero :Carrier))";
+    let shown = "SIG Shown = #[(TYPE Carrier) (VAL zero :Carrier)]";
     let cases = [
         // A parameter typed by a signature may hold a wider module, so it is never readable.
-        format!("{shown}\nLET f = (FN :{{m :Shown}} -> Number = ((USING m SCOPE (zero))))"),
+        format!("{shown}\nLET f = (FN :{{m :Shown}} -> Number = #(USING m SCOPE (zero)))"),
         // A call says nothing statically.
-        format!("{module}\nLET f = (FN :{{}} -> Number = (1))\nUSING (f {{}}) SCOPE (x)"),
+        format!("{module}\nLET f = (FN :{{}} -> Number = #(1))\nUSING (f {{}}) SCOPE (x)"),
         // A member read is not a module the reader can follow.
         format!("{module}\nUSING m.x SCOPE (x)"),
     ];
@@ -797,16 +801,16 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
     };
     // A bound naming nothing in scope is unbound, in a `FOR ALL` group and a `TYPE` declarator.
     shaped(
-        "LET f = (FN FOR ALL (Elt UNDER Missing) :{x :Elt y :Elt} -> Elt = (x))",
+        "LET f = (FN FOR ALL #{Elt: Missing} :{x :Elt y :Elt} -> Elt = #(x))",
         |fixture, _, shape| missing(fixture, shape),
     );
     shaped(
-        "SIG Shown = ((TYPE (Carrier UNDER Missing)) (VAL zero :Carrier))",
+        "SIG Shown = #[(TYPE (Carrier UNDER Missing)) (VAL zero :Carrier)]",
         |fixture, _, shape| missing(fixture, shape),
     );
     // A bound naming a declared type is that type's mention; the bounded name is the body's.
     shaped(
-        "NEWTYPE Dist = Number\nLET f = (FN FOR ALL ((Elt UNDER Dist) Key) :{x :Elt y :Key} -> Elt = (x))",
+        "NEWTYPE Dist = Number\nLET f = (FN FOR ALL #{Elt: Dist, Key: Any} :{x :Elt y :Key} -> Elt = #(x))",
         |fixture, lines, shape| {
             let shape = shape.expect("the program shapes");
             let dist = BinderSymbol::Type(type_name("Dist", fixture.symbols));
@@ -824,7 +828,7 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
     );
     // A bounded `TYPE` member is the signature's own, and its bound a mention.
     shaped(
-        "SIG Shown = ((TYPE (Carrier UNDER Number)) (VAL zero :Carrier))",
+        "SIG Shown = #[(TYPE (Carrier UNDER Number)) (VAL zero :Carrier)]",
         |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
             let carrier = BinderSymbol::Type(type_name("Carrier", fixture.symbols));
@@ -842,7 +846,7 @@ fn a_bound_is_a_mention_of_the_enclosing_shape() {
 
 #[test]
 fn a_lambdas_body_is_found_by_its_forms_body_site() {
-    shaped("LET k = 1\n(FN :{} -> Number = (k))", |_, _, shape| {
+    shaped("LET k = 1\n(FN :{} -> Number = #(k))", |_, _, shape| {
         let shape = shape.expect("the program shapes");
         let node = shape.body()[1].statement_spine();
         let body = shape

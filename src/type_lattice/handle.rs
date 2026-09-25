@@ -128,8 +128,11 @@ impl KType {
     pub const LIST_OF_NAME: KType = KType(TypeDigest(0xe4ef6471_b3309818_6e9fe04f_0c66f18a));
     /// `List<Declaration>` — a `SIG` body, or the heads a bodyless `GROUP` declares.
     pub const LIST_OF_DECLARATION: KType = KType(TypeDigest(0xdaf2c481_09b90725_35f0053e_594b6591));
-    /// `Dict<Name, Block>` — an arm set.
+    /// `Dict<Name, Block>` — a `MATCH … OVER` or `TRY` arm set, each guard a label.
     pub const DICT_NAME_BLOCK: KType = KType(TypeDigest(0xd62f630b_16626d22_68df48ae_99aab59a));
+    /// `Dict<TypeCode, Block>` — a `MATCH … WITH` arm set, each guard a type.
+    pub const DICT_TYPE_CODE_BLOCK: KType =
+        KType(TypeDigest(0xf1066a0f_f0fe9f2f_9ba1351a_fb9f479f));
     /// `Dict<Name, TypeCode>` — a union's variants.
     pub const DICT_NAME_TYPE_CODE: KType = KType(TypeDigest(0x34fd5145_6f54557d_3aeab867_9093541d));
 
@@ -199,8 +202,8 @@ impl KType {
     }
 
     /// Handle equality in `const` context — the one digest word compared. Derived `PartialEq` is
-    /// not `const`, and a `static` table of slot types is checked against the raw-capture leaves
-    /// where it is built.
+    /// not `const`, and a `static` table of slot types is checked against the code types where it
+    /// is built.
     pub const fn same_as(self, other: KType) -> bool {
         self.0.0 == other.0.0
     }

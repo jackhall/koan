@@ -27,10 +27,14 @@ property suite below is only possible because nothing here has a runtime.
 
 The edge runs the other way too, for constants alone: `parse`'s builtin shape
 table types each slot by a `KType`, and since a builtin leaf's handle is a `const`
-content digest the table states a type with no registry in hand. `KType::same_as`
-is the equality that comparison uses, handle against handle in `const` context,
-where the derived `PartialEq` cannot go. Nothing but the handles and that
-comparison crosses back.
+content digest the table states a type with no registry in hand. The few
+composites the table spells — the code containers `List(Name)`,
+`List(Declaration)`, `Dict(Name, Block)` and `Dict(Name, TypeCode)`, and the union
+`TypeCode` — are pinned the same way, and every registry pre-seeds them.
+`KType::same_as` is the equality that comparison uses, handle against handle in
+`const` context, where the derived `PartialEq` cannot go. Nothing but the handles,
+that comparison and the code order's walk over them ([The code
+family](#the-code-family), below) crosses back.
 
 ## Identity: a handle *is* a content digest
 
@@ -69,16 +73,18 @@ a node holds is a slice in the run region, so a node is `Copy` and carries no
 drop glue, and reading one out of the registry copies a few words rather than a
 subtree.
 
-- **Leaves** — `Number`, `Str`, `Bool`, `Null`, `Identifier`, the two bounds
-  `Any` (the top, and the default bound of a rigid variable) and `Never` (the
-  uninhabited bottom, the identity element of both `join` and union
-  canonicalization), and two of the three family tops, `AnyValue` (spelled
-  `Value`) and `AnyCode` (spelled `Code`). See *Three families*, below.
-- **Binder-position slots** that capture syntax raw and never resolve —
-  `NameToken`, `TypeNameToken`, `KExpression`, `SigiledTypeExpr`, `RecordType`.
-  They are types because a declarator's slot has to be typed like any other, not
-  because anything is ever matched against them structurally. With `Identifier`,
-  they are the code family: every one lies under `Code`.
+- **Leaves** — `Number`, `Str`, `Bool`, `Null`, the two bounds `Any` (the top,
+  and the default bound of a rigid variable) and `Never` (the uninhabited bottom,
+  the identity element of both `join` and union canonicalization), and two of the
+  three family tops, `AnyValue` (spelled `Value`) and `AnyCode` (spelled `Code`).
+  See *Three families*, below.
+- **Code kinds** — what a piece of written code is: `Block`, `Expression`,
+  `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`, and the four
+  unspellable kinds `Identifier` (a value name), `TypeNameToken` (a type name),
+  `SigiledTypeExpr` (a lone `:(…)`) and `RecordType` (a lone `:{…}`). A quote's
+  value is typed by one, and a builtin slot read as written is typed by one or by
+  a container of them. They are ordered among themselves by the code tree
+  (*The code family*, below) and all lie under `Code`.
 - **`OfKind(KKind)`** — a type-accepting argument slot carrying the shallow
   [`KKind`](kind.rs) it admits. It is **type-channel only**: it admits a type
   *value*, never a runtime instance. A value is matched by a type, never by a
@@ -237,7 +243,7 @@ shape, per the table in [`family_top`](order.rs):
 | Family top | Node variants |
 |---|---|
 | `Value` | `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `Record`, `KFunction`, `ExpressionShape`, `ConstructorApply`, `Signature` (a module is a value), `SetMember`, `Sibling` |
-| `Code` | `Identifier`, `NameToken`, `TypeNameToken`, `KExpression`, `SigiledTypeExpr`, `RecordType` |
+| `Code` | every code kind: `Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`, `Identifier`, `TypeNameToken`, `SigiledTypeExpr`, `RecordType` |
 | `Type` | every `OfKind` |
 
 The other nodes take their family from elsewhere. A union lies under a top when
@@ -254,6 +260,43 @@ union holding all three tops is canonicalized to `Any` by
 [`union_of`](registry.rs), so the three families together are the whole
 lattice. Left uncollapsed, that union would be a second top strictly below
 `Any`, missing only the variables bounded by `Any`, which lie under no member.
+
+### The code family
+
+The code kinds form a tree under `Code`. A smaller syntax lies under a larger one
+wherever it can stand in its place:
+
+```text
+Code
+└─ Block                  statements; written, two or more
+   └─ Expression          one statement
+      ├─ Declaration      declares a name or a shape: VAL, a TYPE declarator, a bodyless head
+      │  └─ Binder        also installs where it is written: LET, an EXPR definition, …
+      ├─ Literal          a lone scalar literal or nested quote
+      ├─ Symbol           a lone token
+      │  ├─ Name          a value or type name — what a declaration binds
+      │  │  ├─ Identifier
+      │  │  └─ TypeNameToken
+      │  └─ Keyword
+      ├─ SigiledTypeExpr  a lone :(…)
+      └─ RecordType       a lone :{…}
+```
+
+A lone literal, name or keyword is an expression because dispatch evaluates it as
+a statement in its own shape, and an expression is a block of one statement, so
+a body slot typed `Block` takes `#(x)`. A block is no expression, since a slot
+wanting one statement cannot take several. The tree is written once, as
+[`KType::code_parent`](handle.rs) — the kind directly above a code kind — and
+`within_code` walks it; both are `const` over handles, so the order's leaf arm
+and a registry-free admission read the same edges. Join and meet need nothing of
+their own: a union drops a member under another, so `Literal | Expression` is
+`Expression`, and two kinds on different branches meet at `Never`.
+
+Which kind a written quote is belongs to `parse`
+([`KExpression::code_kind`](../parse/ast.rs)); the lattice holds only the order.
+Containers of code are ordinary value types — `List(Name)` lies under
+`List(Code)` and so under `Value` — since a container is a value whatever its
+elements are.
 
 ### Substitute, then ask
 

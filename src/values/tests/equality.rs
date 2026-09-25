@@ -329,3 +329,38 @@ fn a_seal_its_bound_reveals_is_read_through_and_any_other_stays() {
         })
     });
 }
+
+/// Every quote is one representation, so a seal bounded by any code kind reveals every quote it
+/// holds, whatever that quote's own kind; one bounded past `Code` keeps it.
+#[test]
+fn a_seal_bounded_by_a_code_kind_reveals_every_quote() {
+    use crate::memory::ScopeId;
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let carrier = crate::symbols::TypeSymbol::declared("Carrier", symbols).unwrap();
+        let mint = |bound| {
+            let nonce = ScopeId::next();
+            types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), bound)
+        };
+        let name = fixture.part("#(y)");
+        let call = fixture.part("#(f x)");
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let equal = |left: Value<'_, '_>, right: Value<'_, '_>| {
+                left.equals(&right, types, scratch).expect("no callable")
+            };
+            for part in [&name, &call] {
+                let quote =
+                    Value::lower_part(writer, part, types, scratch).expect("a quote lowers");
+                let sealed = |bound| {
+                    let tagged =
+                        Tagged::seal(writer, quote, mint(bound), quote.ktype(), types, scratch);
+                    Value::Tagged(tagged.expect("the quote satisfies its witness"))
+                };
+                assert!(equal(sealed(KType::EXPRESSION), quote), "{quote:?}");
+                assert!(equal(sealed(KType::ANY_CODE), quote), "{quote:?}");
+                assert!(!equal(sealed(KType::ANY), quote), "{quote:?}");
+            }
+        })
+    });
+}

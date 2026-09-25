@@ -42,7 +42,7 @@ fn independent_statements_run_in_source_order_without_interleaving() {
 #[test]
 fn a_forward_capture_runs_its_binder_first() {
     let mut substrate = loaded(
-        "LET f = (FN :{x :Number} -> Number = (g))\nLET g = 5\nLET r = (f 0)",
+        "LET f = (FN :{x :Number} -> Number = #(g))\nLET g = 5\nLET r = (f 0)",
         2,
     );
     assert_eq!(run_and_read(&mut substrate, &["r", "g"]), ["5", "5"]);
@@ -67,7 +67,7 @@ fn a_top_level_binding_is_built_in_the_root_from_the_start() {
     // A fresh list is built in the evaluation's home, which is the root; so is a call's value,
     // through a frame whose last statement forwards it there.
     let mut substrate = loaded(
-        "LET xs = [1 2 3]\nLET f = (FN :{n :Number} -> Any = ([4 5]))\nLET ys = (f 0)",
+        "LET xs = [1 2 3]\nLET f = (FN :{n :Number} -> Any = #([4 5]))\nLET ys = (f 0)",
         2,
     );
     reset();
@@ -92,8 +92,8 @@ fn a_result_built_in_its_own_region_crosses_into_the_root_at_the_verdicts_price(
     // long one pins, and the region splices into the root.
     let long = vec!["n"; 256].join(" ");
     let source = format!(
-        "LET f = (FN :{{n :Any}} -> Any = ((LET big = [{long}]) (LET small = [n n])))\n\
-         LET g = (FN :{{n :Any}} -> Any = ((LET small = [n n]) (LET big = [{long}])))\n\
+        "LET f = (FN :{{n :Any}} -> Any = #((LET big = [{long}]) (LET small = [n n])))\n\
+         LET g = (FN :{{n :Any}} -> Any = #((LET small = [n n]) (LET big = [{long}])))\n\
          LET copied = (f 1)\nLET pinned = (g 1)"
     );
     let mut substrate = loaded(&source, 2);
@@ -122,7 +122,7 @@ fn a_called_bodys_evaluations_are_tenants_of_the_frame() {
     // In a frame, `xs` is built by a tenant, at the frame's own brand, and the read after it finds
     // it where it lies.
     let mut substrate = loaded(
-        "LET f = (FN :{n :Number} -> Any = ((LET xs = [n n]) (xs)))\nLET r = (f 7)",
+        "LET f = (FN :{n :Number} -> Any = #((LET xs = [n n]) (xs)))\nLET r = (f 7)",
         2,
     );
     reset();
@@ -142,8 +142,8 @@ fn a_called_bodys_evaluations_are_tenants_of_the_frame() {
 #[test]
 fn a_component_is_one_unit_bound_from_one_knot() {
     let mut substrate = loaded(
-        "LET even = (FN :{n :Number} -> Number = (odd))\n\
-         LET odd = (FN :{n :Number} -> Number = (even))",
+        "LET even = (FN :{n :Number} -> Number = #(odd))\n\
+         LET odd = (FN :{n :Number} -> Number = #(even))",
         2,
     );
     let read = run_and_read(&mut substrate, &["even", "odd"]);
@@ -154,9 +154,9 @@ fn a_component_is_one_unit_bound_from_one_knot() {
 #[test]
 fn an_eager_part_is_supplied_by_site_in_one_wake() {
     let mut substrate = loaded(
-        "LET g = (FN :{x :Number} -> Number = (x))\n\
+        "LET g = (FN :{x :Number} -> Number = #(x))\n\
          LET a = [(g 1) f (g 2)]\n\
-         LET f = (FN :{x :Number} -> Any = (a))",
+         LET f = (FN :{x :Number} -> Any = #(a))",
         2,
     );
     SUPPLIED_WAKES.with(|wakes| wakes.set(0));
@@ -171,7 +171,7 @@ fn an_eager_part_is_supplied_by_site_in_one_wake() {
 #[test]
 fn a_recursion_deeper_than_the_slab_cap_runs_on_tree_cells() {
     let source = format!(
-        "LET count = (FN :{{n :Number}} -> Number = (WHEN n THEN (count (n MINUS 1)) ELSE 0))\n\
+        "LET count = (FN :{{n :Number}} -> Number = #(WHEN n THEN (count (n MINUS 1)) ELSE 0))\n\
          LET r = (count {DEPTH})"
     );
     let mut substrate = loaded(&source, 1);
@@ -198,10 +198,10 @@ fn a_module_binder_runs_its_body_inline_then_ties() {
 #[test]
 fn a_whole_program() {
     let source = format!(
-        "LET count = (FN :{{n :Number}} -> Number = (WHEN n THEN (count (n MINUS 1)) ELSE n))\n\
-         LET g = (FN :{{x :Number}} -> Number = (x))\n\
+        "LET count = (FN :{{n :Number}} -> Number = #(WHEN n THEN (count (n MINUS 1)) ELSE n))\n\
+         LET g = (FN :{{x :Number}} -> Number = #(x))\n\
          LET a = [(g 1) f (g 2)]\n\
-         LET f = (FN :{{x :Number}} -> Any = (a))\n\
+         LET f = (FN :{{x :Number}} -> Any = #(a))\n\
          MODULE m = ((LET inner = (g 3)))\n\
          LET deep = (count {DEPTH})\n\
          LET last = (f 0)"
@@ -219,7 +219,7 @@ fn a_whole_program() {
 #[test]
 fn a_quantified_lambda_is_called_by_name() {
     let mut substrate = loaded(
-        "LET id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))\nLET r = (id 7)",
+        "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nLET r = (id 7)",
         2,
     );
     let read = run_and_read(&mut substrate, &["r"]);
@@ -231,7 +231,7 @@ fn a_call_binds_each_type_parameter_to_its_solution() {
     // The frame solves the callee's group against the arguments' carried types and binds `Elt` to
     // what it solved, so the body reads the argument's own type.
     let mut substrate = loaded(
-        "LET which = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (Elt))\n\
+        "LET which = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(Elt))\n\
          LET n = (which 7)\nLET s = (which \"a\")",
         2,
     );
@@ -245,7 +245,7 @@ fn a_combined_quantified_expression_called_by_name_binds_its_solution() {
     // A combined definition is typed by its function type, so a call through its `LET` name solves
     // the group as a `FN FOR ALL`'s does.
     let mut substrate = loaded(
-        "LET which = FN EXPR FOR ALL (Elt) (WHICH x :Elt) -> Elt = (Elt)\n\
+        "LET which = FN EXPR FOR ALL #[Elt] #(WHICH x :Elt) -> Elt = #(Elt)\n\
          LET n = (which 7)\nLET s = (which \"a\")",
         2,
     );
@@ -264,8 +264,8 @@ fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
     // frame that read the map positionally would hand one of them the other's answer. Both must
     // read `Unused` as `Any` whichever way the two symbols happen to sort.
     let mut substrate = loaded(
-        "LET ab = (FN FOR ALL (Held Unused) :{x :(LIST OF Held)} -> Held = (Unused))\n\
-         LET ba = (FN FOR ALL (Unused Held) :{x :(LIST OF Held)} -> Held = (Unused))\n\
+        "LET ab = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Held = #(Unused))\n\
+         LET ba = (FN FOR ALL #[Unused Held] :{x :(LIST OF Held)} -> Held = #(Unused))\n\
          LET one = (ab [1 2])\nLET two = (ba [1 2])",
         2,
     );
@@ -281,7 +281,7 @@ fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
 fn a_lowercase_name_holds_a_value_a_type_or_code() {
     // An `Any` parameter binds a type argument and a quote without a refusal at bind.
     let mut substrate = loaded(
-        "LET f = (FN :{x :Any} -> Any = (x))\n\
+        "LET f = (FN :{x :Any} -> Any = #(x))\n\
          LET t = (f Number)\nLET q = (f #(1))\nLET u = Number",
         2,
     );
@@ -298,7 +298,7 @@ fn a_lowercase_name_holds_a_value_a_type_or_code() {
 fn a_generic_function_carries_types_and_code() {
     // A `FOR ALL` parameter's default bound is `Any`, so it stands for a type or a quote too.
     let mut substrate = loaded(
-        "LET id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))\n\
+        "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n\
          LET t = (id Number)\nLET q = (id #(1))",
         2,
     );
@@ -330,7 +330,7 @@ fn a_call_whose_argument_cannot_solve_the_group_is_refused() {
     // `Held` is reached only under a list, so a bare number admits nowhere and the walk refuses
     // before the frame binds anything.
     let mut substrate = loaded(
-        "LET first = (FN FOR ALL (Held) :{x :(LIST OF Held)} -> Held = (x))\nLET r = (first 7)",
+        "LET first = (FN FOR ALL #[Held] :{x :(LIST OF Held)} -> Held = #(x))\nLET r = (first 7)",
         2,
     );
     let outcome = substrate.with(|running| running.run());
@@ -355,7 +355,7 @@ fn a_quantified_return_shares_its_frame() {
     // A quantified return places as `Shares`, so the frame forwards the argument rather than
     // copying it: `r` reads back at the very address `xs` was built at.
     let mut substrate = loaded(
-        "LET id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))\nLET xs = [1 2]\nLET r = (id xs)",
+        "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nLET xs = [1 2]\nLET r = (id xs)",
         2,
     );
     let read = run_and_read(&mut substrate, &["xs", "r"]);
@@ -365,14 +365,14 @@ fn a_quantified_return_shares_its_frame() {
 #[test]
 fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
     let mut substrate = loaded(
-        "LET num = (FN FOR ALL (Elt UNDER Number) :{x :Elt} -> Elt = (x))\nLET r = (num 7)",
+        "LET num = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(x))\nLET r = (num 7)",
         2,
     );
     assert_eq!(run_and_read(&mut substrate, &["r"]), ["7"]);
     for source in [
-        "LET num = (FN FOR ALL (Elt UNDER Number) :{x :Elt} -> Elt = (x))\nLET r = (num \"a\")",
+        "LET num = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(x))\nLET r = (num \"a\")",
         // A quote is code, not a value.
-        "LET v = (FN FOR ALL (Elt UNDER Value) :{x :Elt} -> Elt = (x))\nLET q = (v #(1))",
+        "LET v = (FN FOR ALL #{Elt: Value} :{x :Elt} -> Elt = #(x))\nLET q = (v #(1))",
     ] {
         let mut substrate = loaded(source, 2);
         assert!(
@@ -385,7 +385,7 @@ fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
 #[test]
 fn a_type_parameter_canonical_form_dropped_reads_as_its_bound() {
     let mut substrate = loaded(
-        "LET which = (FN FOR ALL ((Unused UNDER Value) Held) :{x :(LIST OF Held)} -> Held = (Unused))\n\
+        "LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held = #(Unused))\n\
          LET t = (which [1 2])",
         2,
     );
@@ -394,7 +394,7 @@ fn a_type_parameter_canonical_form_dropped_reads_as_its_bound() {
 
 #[test]
 fn a_lambda_reads_a_later_binding_when_it_is_born() {
-    let mut substrate = loaded("(FN :{y :Number} -> Number = (later))\nLET later = 5", 2);
+    let mut substrate = loaded("(FN :{y :Number} -> Number = #(later))\nLET later = 5", 2);
     reset();
     substrate.with(|running| running.run().expect("the program runs"));
     let seen = recorded();
@@ -415,8 +415,8 @@ fn a_lambda_returned_from_a_frame_keeps_its_captures() {
     // the region is reclaimed. Each is called after, reading its capture where it now lies.
     let long = vec!["x"; 256].join(" ");
     let source = format!(
-        "LET constantly = (FN :{{x :Any}} -> Any = (FN :{{y :Number}} -> Any = (x)))\n\
-         LET wasteful = (FN :{{x :Any}} -> Any = ((LET big = [{long}]) (FN :{{y :Number}} -> Any = (x))))\n\
+        "LET constantly = (FN :{{x :Any}} -> Any = #(FN :{{y :Number}} -> Any = #(x)))\n\
+         LET wasteful = (FN :{{x :Any}} -> Any = #((LET big = [{long}]) (FN :{{y :Number}} -> Any = #(x))))\n\
          LET pinned = (constantly [1 2])\nLET copied = (wasteful [3 4])\n\
          LET r = (pinned 0)\nLET s = (copied 0)"
     );
@@ -474,7 +474,7 @@ fn a_lambda_returned_from_a_frame_keeps_its_captures() {
 #[test]
 fn a_lambda_in_a_knot_reads_its_fellow_through_an_edge() {
     let mut substrate = loaded(
-        "LET a = [(FN :{y :Number} -> Any = (a))]\nLET g = (FIRST a)\nLET r = (g 0)",
+        "LET a = [(FN :{y :Number} -> Any = #(a))]\nLET g = (FIRST a)\nLET r = (g 0)",
         2,
     );
     reset();
@@ -497,7 +497,7 @@ fn a_lambda_in_a_knot_reads_its_fellow_through_an_edge() {
 #[test]
 fn a_lambda_part_is_supplied_to_a_tie() {
     let mut substrate = loaded(
-        "LET k = 7\nLET a = [(FN :{} -> Number = (k)) f]\nLET f = (FN :{} -> Any = (a))",
+        "LET k = 7\nLET a = [(FN :{} -> Number = #(k)) f]\nLET f = (FN :{} -> Any = #(a))",
         2,
     );
     SUPPLIED_WAKES.with(|wakes| wakes.set(0));

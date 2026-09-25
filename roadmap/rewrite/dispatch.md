@@ -105,7 +105,7 @@ a statement's root, so a binder nested in an expression,
   decided.* A binary `OP` body's parameters are `left` and `right`, so
   `LET plus = OP #(⊕) OVER Number` binds `FN :{left :Number, right :Number} ->
   Number`; a unary one's is `operands`, so it binds
-  `FN :{operands :(LIST OF Number)} -> Number`. A `FN EXPR FOR ALL (Elem) …`
+  `FN :{operands :(LIST OF Number)} -> Number`. A `FN EXPR FOR ALL #[Elem] …`
   binds the quantified function type `callable_type` builds for it.
   Quantification changes nothing about how a call by name binds its frame:
   arguments bind by name, the frame

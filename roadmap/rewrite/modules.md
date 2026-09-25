@@ -33,6 +33,25 @@ is the module surface `machine` still owns.
 - *Where the doors live — decided.* In the
   [module layer](../../src/knot/module/README.md). This item evaluates them and adds
   no door of its own.
+- *Parameterized signatures — open.* A signature's type member — `TYPE Carrier`,
+  `TYPE (Carrier UNDER Number)` or `TYPE (Type AS Wrap)` — is a type the module
+  chooses once and the ascription hides or shows: `:|` mints it fresh, which is
+  what the [barrier](../../src/knot/module/README.md#members-are-born-coerced),
+  the abstract member's nonce and the signature meet over abstract members
+  serve, and where the [unplanned work](README.md#unplanned-work)'s barrier and
+  meet holes sit. The alternative is a signature quantified at its head,
+  `SIG Ordered FOR ALL #{Carrier: Bound} = #[…]`, so that
+  `Ordered WITH {Carrier = Number}` is an application, a module satisfies an
+  instance by its member types alone, representation hiding is a `NEWTYPE`
+  inside the module, and `:|` and `:!` differ only in which members they show;
+  no abstract member exists, and the barrier and the nonce go with it. A
+  functor then quantifies itself,
+  `EXPR FOR ALL #[Elt] #(MAKESET elem :(Ordered WITH {Carrier = Elt}))`, and
+  [dispatch](dispatch.md) solves `Elt` through the module's member types as it
+  solves through a list's element type; a higher-kinded parameter needs a
+  spelling the quantifier dict lacks; and the parameter spelling should be one
+  with `UNION (Elem AS Option)`'s, one of the two respelled. Recommended: the
+  parameterized signature.
 
 ## Dependencies
 

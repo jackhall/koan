@@ -5,7 +5,7 @@ use proptest::prelude::*;
 
 use crate::memory::{ProgramBrand, program_storage};
 use crate::parse::builtin_shapes::binder::{
-    BinderFacts, bounded_name, quantifier_entries, type_decl_binder_name,
+    BinderFacts, quantifier_entries, type_decl_binder_name,
 };
 use crate::parse::builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShape, ShapeElement, builtin_shape_for, render_key,
@@ -70,21 +70,21 @@ const DECLARATIONS: &[(&str, Expectation)] = &[
     // the namespace a block introduces is legible from its statement keys alone.
     ("LET {n} = (LET {p} = 3)", Expectation::Named(0)),
     (
-        "LET {n} = (EXPR (KAPOW {p} :Number) -> Number = ({p}))",
+        "LET {n} = (EXPR #(KAPOW {p} :Number) -> Number = #({p}))",
         Expectation::Named(0),
     ),
     // Each combined form fills both channels: the LET value name and the bucket key(s) the
     // declaration's body registers. `LET … = UNARY OP …` is the two-bucket maximum.
     (
-        "LET {n} = FN EXPR (KAPOW {p} :Number) -> Number = ({p})",
+        "LET {n} = FN EXPR #(KAPOW {p} :Number) -> Number = #({p})",
         Expectation::Named(1),
     ),
     (
-        "LET {n} = OP #({o}) OVER Number = (left + right)",
+        "LET {n} = OP #({o}) OVER Number = #(left + right)",
         Expectation::Named(1),
     ),
     (
-        "LET {n} = OP #({o}) OVER Number -> Bool = (left < right)",
+        "LET {n} = OP #({o}) OVER Number -> Bool = #(left < right)",
         Expectation::Named(1),
     ),
     (
@@ -92,21 +92,21 @@ const DECLARATIONS: &[(&str, Expectation)] = &[
         Expectation::Named(2),
     ),
     (
-        "EXPR (KAPOW {p} :Number) -> Number = ({p})",
+        "EXPR #(KAPOW {p} :Number) -> Number = #({p})",
         Expectation::BucketsOnly,
     ),
     (
-        "OP #({o}) OVER Number = (left + right)",
+        "OP #({o}) OVER Number = #(left + right)",
         Expectation::BucketsOnly,
     ),
     (
-        "UNARY OP #({o}) OVER Number -> Number = (0 - operands)",
+        "UNARY OP #({o}) OVER Number -> Number = #(0 - operands)",
         Expectation::BucketsOnly,
     ),
     // A `VAL` declaration records into the decl scope's collector, and the anonymous `FN :{…}`
     // signature names no bucket, so neither caches a plan.
     ("VAL {n} :Number", Expectation::NoPlan),
-    ("FN :{{p} :Number} -> Number = ({p})", Expectation::NoPlan),
+    ("FN :{{p} :Number} -> Number = #({p})", Expectation::NoPlan),
 ];
 
 /// The operator glyphs a generated declaration draws from — each keyword-class and unclaimed by the
@@ -170,12 +170,12 @@ proptest! {
 
     /// A parsed builtin form caches the table entry its key matches, and every fact the node
     /// answers off that entry is the entry's: the declared-name position is the form's
-    /// `name_slot`, the lazy stamp is the form's, and where the extractors did find a name the
-    /// token at that position **is** that name. A redundant single-`Expression` paren wrapper is
-    /// not itself a binder — the submission path reads through it to the child.
+    /// `name_slot`, and where the extractors did find a name the token at that position **is**
+    /// that name. A written single-`Expression` paren wrapper is not itself a binder — the
+    /// submission path reads through it to the child.
     ///
-    /// A key the table does not spell caches nothing at all: no entry, no plan, no name position,
-    /// and no lazy stamp, so raw capture stays available to builtin registration alone.
+    /// A key the table does not spell caches nothing at all: no entry, no plan and no name
+    /// position.
     #[test]
     fn a_parsed_form_caches_its_entry_and_a_user_key_caches_nothing(
         value_fillers in prop::collection::vec("[a-z]{2,4}", 1..4),
@@ -207,9 +207,6 @@ proptest! {
                 statement.binder_name_slot(),
                 form.binder.and_then(|binder| binder.name_slot),
             );
-            for slot in 0..statement.parts.len() {
-                prop_assert_eq!(statement.lazy_kinds_at(slot), form.lazy_kinds_at(slot));
-            }
             if let Some(name) = statement.binder_plan().and_then(|plan| plan.name) {
                 let at = statement
                     .binder_name_slot()
@@ -249,9 +246,6 @@ proptest! {
         prop_assert!(user.cache().builtin_shape().is_none());
         prop_assert!(user.binder_plan().is_none());
         prop_assert!(user.binder_name_slot().is_none());
-        for slot in 0..user.parts.len() {
-            prop_assert!(user.lazy_kinds_at(slot).is_empty());
-        }
     }
 
     /// A declaration's parse-time plan is its own spine and nothing else: the name channel carries
@@ -302,15 +296,14 @@ proptest! {
 fn entries(group: &ExpressionPart<'_>) -> Vec<(Symbol, bool)> {
     quantifier_entries(group)
         .map(|entry| {
-            let (name, bound) = bounded_name(entry).expect("a well-formed entry");
-            (name.symbol(), bound.is_some())
+            let name = entry.name.expect("a well-formed entry");
+            (name.symbol(), entry.bound.is_some())
         })
         .collect()
 }
 
-/// A bounded `TYPE` declarator names what its declarator names, and a lone bounded `FOR ALL` name
-/// is one entry however many parentheses it is written in — a value expression peels one pair, a
-/// type expression keeps both.
+/// A bounded `TYPE` declarator names what its declarator names, and a `FOR ALL` group is a list of
+/// name quotes or a dict of name quotes to bound quotes, in a value or a type expression alike.
 #[test]
 fn a_bound_is_read_off_its_declarator() {
     let program = program_storage();
@@ -327,18 +320,16 @@ fn a_bound_is_read_off_its_declarator() {
     let group = |source: &str| entries(&parse_one(brand, source).parts[3].value);
     let (elt, key) = (Symbol::of("Elt"), Symbol::of("Key"));
     assert_eq!(
-        group("FN FOR ALL ((Elt UNDER Value) Key) :{a :Elt b :Key} -> Elt = (a)"),
-        vec![(elt, true), (key, false)]
+        group("FN FOR ALL #{Elt: Value, Key: Any} :{a :Elt b :Key} -> Elt = #(a)"),
+        vec![(elt, true), (key, true)]
     );
-    for source in [
-        "FN FOR ALL ((Elt UNDER Value)) :{a :Elt} -> Elt = (a)",
-        "FN FOR ALL (Elt UNDER Value) :{a :Elt} -> Elt = (a)",
-    ] {
-        assert_eq!(group(source), vec![(elt, true)], "{source}");
-    }
+    assert_eq!(
+        group("FN FOR ALL #[Elt Key] :{a :Elt b :Key} -> Elt = #(a)"),
+        vec![(elt, false), (key, false)]
+    );
     let typed = parse_one(
         brand,
-        "LET t = :(FN FOR ALL ((Elt UNDER Value)) :{a :Elt} -> Elt)",
+        "LET t = :(FN FOR ALL #{Elt: Value} :{a :Elt} -> Elt)",
     );
     let ExpressionPart::SigiledTypeExpr(node) = typed.parts[3].value else {
         panic!("a sigiled type expression");

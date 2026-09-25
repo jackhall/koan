@@ -3,6 +3,7 @@
 
 mod activation;
 mod boundary;
+mod code;
 mod examples;
 mod groups;
 pub(crate) mod plan;

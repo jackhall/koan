@@ -18,8 +18,9 @@ use crate::source::{FileId, Span, Spanned};
 use crate::memory::{ProgramBrand, Writer, collect, resident};
 use crate::parse::builtin_shapes::binder::{StoredBinderKey, binder_plan_for};
 use crate::parse::builtin_shapes::layout::SlotLayout;
-use crate::parse::builtin_shapes::lazy::LazyKinds;
-use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
+use crate::symbols::{
+    BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol, WILDCARD,
+};
 use crate::type_lattice::KType;
 
 pub mod program;
@@ -112,6 +113,30 @@ impl<'a> ExpressionPart<'a> {
             PartClass::Keyword(symbol) => KeyElement::Keyword(symbol),
             _ => KeyElement::Slot,
         }
+    }
+
+    /// The code kind this part is written as, or `None` for a part that is no code: a bare literal
+    /// is a value, and a keyword fills no slot. A bare group is code of its own kind, as a quote is.
+    pub fn code_kind(&self) -> Option<KType> {
+        match self {
+            ExpressionPart::Identifier(_) => Some(KType::IDENTIFIER),
+            ExpressionPart::Type(_) => Some(KType::TYPE_NAME_TOKEN),
+            ExpressionPart::Expression(node) | ExpressionPart::QuotedExpression(node) => {
+                Some(node.reference().code_kind())
+            }
+            ExpressionPart::SigiledTypeExpr(_) => Some(KType::SIGILED_TYPE_EXPR),
+            ExpressionPart::RecordType(_) => Some(KType::RECORD_TYPE),
+            ExpressionPart::Keyword(_)
+            | ExpressionPart::Literal(_)
+            | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_) => None,
+        }
+    }
+
+    /// Whether this part is `_` — as a dict's key, the dict's default.
+    pub fn is_wildcard(&self) -> bool {
+        matches!(self, ExpressionPart::Keyword(symbol) if *symbol == WILDCARD.symbol())
     }
 
     /// Wrap a run of parts as a nested `Expression` part, writing both the run and the node into
@@ -452,12 +477,6 @@ impl<'a> KExpression<'a> {
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => KType::EXPRESSION,
         }
-    }
-
-    /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates. Read by the
-    /// scheduler to decide which children submit.
-    pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
-        self.cache.lazy_kinds_at(index)
     }
 
     /// The declared-name position of the binder form this node's bucket key matches

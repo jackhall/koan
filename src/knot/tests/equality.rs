@@ -12,7 +12,7 @@ const RING: &str =
 #[test]
 fn a_comparison_reaching_a_callable_is_an_error() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET f = (FN :{x :Number} -> Number = (x))");
+        let lines = fixture.parse("LET f = (FN :{x :Number} -> Number = #(x))");
         let (types, scratch) = (fixture.types, fixture.scratch());
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
@@ -36,7 +36,7 @@ fn a_comparison_reaching_a_callable_is_an_error() {
 #[test]
 fn a_callable_renders_as_its_type() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET k = 7\nLET f = (FN :{x :Number} -> Number = (k))");
+        let lines = fixture.parse("LET k = 7\nLET f = (FN :{x :Number} -> Number = #(k))");
         let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
@@ -83,7 +83,7 @@ fn two_rings_from_two_programs_are_equal() {
 #[test]
 fn a_list_node_holding_a_function_is_incomparable() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET a = [f]\nLET f = (FN :{} -> Any = (a))");
+        let lines = fixture.parse("LET a = [f]\nLET f = (FN :{} -> Any = #(a))");
         let (types, scratch) = (fixture.types, fixture.scratch());
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);

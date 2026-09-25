@@ -1,6 +1,6 @@
 # Pattern matching
 
-`MATCH` runs exactly one branch of a list. It has two forms, and which one you
+`MATCH` runs exactly one of several branches. It has two forms, and which one you
 write decides how the branch heads are read. `MATCH … OVER <Union> WITH` reads
 every head as a **variant of that union** and hands the branch the payload —
 this is the [tagged-union](05-tagged-unions.md) form. Plain `MATCH … WITH` reads
@@ -12,9 +12,9 @@ over a union gives you the payload to work with.
 ## The shape of a match
 
 ```koan
-UNION Maybe = (Some :Number None :Null)
+UNION Maybe = #{Some: Number, None: Null}
 LET m = (Maybe.Some 42)
-MATCH (m) OVER Maybe -> :Str WITH (Some -> (PRINT "got a value") None -> (PRINT "nothing"))
+MATCH (m) OVER Maybe -> :Str WITH #{Some: (PRINT "got a value"), None: (PRINT "nothing")}
 ```
 
 ```text
@@ -22,22 +22,22 @@ got a value
 ```
 
 A match has four parts: the value to inspect, `OVER <Union>` naming the union
-its heads come from, a **result type** written `-> :Type`, and a `WITH` list of
+its heads come from, a **result type** written `-> :Type`, and a `WITH` dict of
 branches. The `-> :Type` is required — it declares the type the whole `MATCH`
 expression produces, and every branch body must produce a value of that type
-(just like a function's return type). Each branch is `<Tag> -> (<body>)`.
+(just like a function's return type). The branches are written `#{<Tag>: (<body>), …}`,
+a dict of quotes: each body is quoted because only one of them runs (see
+[What is quoted and what is bare](10-quoting.md#what-is-quoted-and-what-is-bare)).
 
 The branch whose variant matches runs; when several match, the most specific one
 wins. Inside a branch, the name `it` is bound to the matched value's payload, so
 a match is also how you *unwrap* a union:
 
 ```koan
-UNION Maybe = (Some :Number None :Null)
+UNION Maybe = #{Some: Number, None: Null}
 LET m = (Maybe.Some 42)
 PRINT
-  MATCH (m) OVER Maybe -> :Number WITH
-    Some -> (it),
-    None -> (0)
+  MATCH (m) OVER Maybe -> :Number WITH #{Some: (it), None: (0)}
 ```
 
 ```text
@@ -52,7 +52,7 @@ Without `OVER`, `MATCH` branches on the value's runtime type instead — on a
 boolean, the two heads are `true` and `false`:
 
 ```koan
-MATCH true -> :Str WITH (true -> (PRINT "yes") false -> (PRINT "no"))
+MATCH true -> :Str WITH #{true: (PRINT "yes"), false: (PRINT "no")}
 ```
 
 ```text
@@ -66,22 +66,22 @@ of its union, and a missing one is an error at the match itself — before any
 value is looked at:
 
 ```koan
-UNION Maybe = (Some :Number None :Null)
+UNION Maybe = #{Some: Number, None: Null}
 LET m = (Maybe.None null)
-MATCH (m) OVER Maybe -> :Str WITH (Some -> (PRINT "got"))
+MATCH (m) OVER Maybe -> :Str WITH #{Some: (PRINT "got")}
 ```
 
 ```text
 error: shape error: inexhaustive match over `Maybe`: no arm for None (add a `_` arm to default them)
 ```
 
-Cover every variant the union declares — or add a `_` branch, which stands in
-for all the ones you left out:
+Cover every variant the union declares — or add a `_` key, which stands in for
+all the ones you left out:
 
 ```koan
-UNION Color = (Red :Null Green :Null Blue :Null)
+UNION Color = #{Red: Null, Green: Null, Blue: Null}
 LET c = (Color.Blue null)
-MATCH (c) OVER Color -> :Str WITH (Red -> (PRINT "red") _ -> (PRINT "some other colour"))
+MATCH (c) OVER Color -> :Str WITH #{Red: (PRINT "red"), _: (PRINT "some other colour")}
 ```
 
 ```text
@@ -98,36 +98,29 @@ branch's type admits what it was handed.
 
 ## Writing branches across lines
 
-The single-line form above keeps all branches inside one set of parentheses.
-For more than a couple of branches, spread them across lines. The rule has two
-parts, and you need both:
-
-1. Indent the branches **deeper** than the `MATCH` line.
-2. End every branch line **except the last** with a comma.
+For more than a couple of branches, open the `#{` at the end of the `MATCH`
+line and write one branch per line, indented inside it. The commas between
+entries are optional:
 
 ```koan
-UNION Color = (Red :Null Green :Null Blue :Null)
+UNION Color = #{Red: Null, Green: Null, Blue: Null}
 LET c = (Color.Green null)
-MATCH (c) OVER Color -> :Str WITH
-  Red -> (PRINT "red"),
-  Green -> (PRINT "green"),
-  Blue -> (PRINT "blue")
+MATCH (c) OVER Color -> :Str WITH #{
+  Red: (PRINT "red")
+  Green: (PRINT "green")
+  Blue: (PRINT "blue")
+}
 ```
 
 ```text
 green
 ```
 
-The trailing commas are what chain the branches into a single list; without
-them, deeper indentation alone won't group them and the match fails to find its
-branches. (Equivalently, you can wrap the whole branch list in parentheses and
-indent inside it.)
-
-A branch body that needs several steps is wrapped in one group, and its last
-expression is the branch's value:
+A branch body that needs several steps writes each step as its own group, and
+its last expression is the branch's value:
 
 ```koan
-Some -> ((PRINT "found it") (it))
+Some: ((PRINT "found it") (it))
 ```
 
 ## Recursion: the iteration idiom
@@ -137,11 +130,13 @@ one layer per call and stops at the base variant. Model the count as a union
 where each `Succ` wraps a smaller value and `Zero` is the base:
 
 ```koan
-UNION Nat = (Zero :Null Succ :Nat)
-EXPR (COUNTDOWN n :Nat) -> Str =
-  MATCH (n) OVER Nat -> :Str WITH
-    Zero -> (PRINT "liftoff"),
-    Succ -> ((PRINT "tick") (COUNTDOWN it))
+UNION Nat = #{Zero: Null, Succ: Nat}
+EXPR #(COUNTDOWN n :Nat) -> Str = #(
+  MATCH (n) OVER Nat -> :Str WITH #{
+    Zero: (PRINT "liftoff")
+    Succ: ((PRINT "tick") (COUNTDOWN it))
+  }
+)
 LET zero = (Nat.Zero null)
 LET one = (Nat.Succ zero)
 LET two = (Nat.Succ one)

@@ -621,8 +621,8 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     assert!(is_subtype_of(&types, region, each_list, each_bounded));
 }
 
-/// No law: a spelling. A bounded quantifier renders as the `UNDER` run it is written as, and a
-/// group of one bounded name drops its own parentheses.
+/// No law: a spelling. A group with a bounded quantifier renders as the dict it is written as, each
+/// name beside its bound, `Any` included.
 #[test]
 fn a_bounded_quantifier_renders_under_its_bound() {
     let symbols = SymbolInterner::new();
@@ -646,16 +646,13 @@ fn a_bounded_quantifier_renders_under_its_bound() {
     // Canonical form orders the group by first occurrence, which puts `Key` first here.
     assert_eq!(
         crate::type_lattice::display_name(pair, &types, &symbols).to_string(),
-        ":(FN FOR ALL (Key (Elt UNDER Value)) :{a :Elt b :Key} -> :(MAP Elt -> Key))"
+        ":(FN FOR ALL #{Key: Any, Elt: Value} :{a :Elt b :Key} -> :(MAP Elt -> Key))"
     );
     let alone = types
         .function_type(region, &[elt], &[(a, value_bounded)], value_bounded)
         .handle;
     let rendered = crate::type_lattice::display_name(alone, &types, &symbols).to_string();
-    assert!(
-        rendered.contains("FOR ALL (Elt UNDER Value) "),
-        "{rendered}"
-    );
+    assert!(rendered.contains("FOR ALL #{Elt: Value} "), "{rendered}");
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     let union_bounded = types.quantified(0, number_or_str);
     let spanning = types
@@ -663,7 +660,7 @@ fn a_bounded_quantifier_renders_under_its_bound() {
         .handle;
     let rendered = crate::type_lattice::display_name(spanning, &types, &symbols).to_string();
     assert!(
-        rendered.contains("FOR ALL (Elt UNDER :(Number | Str)) "),
+        rendered.contains("FOR ALL #{Elt: :(Number | Str)} "),
         "{rendered}"
     );
 }

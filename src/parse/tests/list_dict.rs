@@ -339,3 +339,14 @@ fn a_wildcard_is_a_dict_key_and_nothing_else_in_a_literal() {
     assert!(top("{_ = 1}").is_err());
     assert!(top("{a _: 1}").is_err());
 }
+
+/// A comma may follow a closing bracket or brace directly: it separates entries and reads as
+/// neither an index nor an application.
+#[test]
+fn a_comma_may_follow_a_closer() {
+    assert_eq!(
+        top("{a: [1], b: {c: 2}, d: 3}").unwrap(),
+        vec!["[D{t(a): L[n(1)], t(b): D{t(c): n(2)}, t(d): n(3)}]"]
+    );
+    assert!(top("#{Some: :{r :Number}, None: Null}").is_ok());
+}

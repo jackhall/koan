@@ -84,7 +84,7 @@ pub fn callable_type<'graph, 'x, XF: KnottedFamily<'graph>>(
         let part = &part.value;
         match role {
             Role::Body(kind) => body = Some((kind, part)),
-            Role::Signature => signature = Some(part),
+            Role::Signature | Role::Head => signature = Some(part),
             Role::Quantifiers => group = Some(part),
             Role::Data => symbol = Some(part),
             Role::TypeExpression => {
@@ -116,8 +116,8 @@ pub fn callable_type<'graph, 'x, XF: KnottedFamily<'graph>>(
                 | BuiltinShapeId::CombinedExpression
                 | BuiltinShapeId::CombinedQuantifiedExpression => {
                     let interned = elaborator.head_function(&group, signature, ret, &top)?;
-                    let ExpressionPart::Expression(run) = signature else {
-                        unreachable!("`head_function` refused a head that is no run")
+                    let ExpressionPart::QuotedExpression(run) = signature else {
+                        unreachable!("`head_function` refused a head that is no quote")
                     };
                     (interned, Some(Head::Written(run.reference())))
                 }

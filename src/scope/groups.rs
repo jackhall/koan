@@ -25,8 +25,10 @@
 
 use crate::memory::{BumpAllocator, BumpVec, ProgramBrand, collect, resident};
 use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::binder::{OpArity, op_declaration_arity, symbol_from_quote_body};
-use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Role};
+use crate::parse::builtin_shapes::binder::{
+    OpArity, op_declaration_arity, quoted_body, symbol_from_quote_body,
+};
+use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Reading, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{KeywordSymbol, StaticName};
 use crate::type_lattice::{DeclaredGroup, FoldDirection, ReductionMode};
@@ -391,7 +393,7 @@ pub(crate) fn declared_group<'x>(
         return Ok(None);
     }
     let body_role = if definition {
-        Role::Definition(DefinitionKind::Plain)
+        Role::Definition(DefinitionKind::Members)
     } else {
         Role::Body(BodyKind::Module)
     };
@@ -400,7 +402,7 @@ pub(crate) fn declared_group<'x>(
     for (role, part) in form.roles().zip(node.parts) {
         match role {
             role if role == body_role => body = Some(&part.value),
-            Role::Argument => combiner = Some(&part.value),
+            Role::Data => combiner = Some(&part.value),
             _ => {}
         }
     }
@@ -420,24 +422,34 @@ pub(crate) fn declared_group<'x>(
             },
         },
     };
-    let ExpressionPart::Expression(body) = body.ok_or(())? else {
-        return Err(());
+    // A `GROUP` statement's body is an in-place block; a bodyless head's is a list of head quotes.
+    let members = match body.ok_or(())? {
+        ExpressionPart::Expression(body) => scan_members(
+            body.reference()
+                .body_statements()
+                .map(|(statement, _)| statement),
+            scratch,
+        )?,
+        ExpressionPart::ListLiteral(heads) => {
+            scan_members(heads.iter().filter_map(quoted_body), scratch)?
+        }
+        _ => return Err(()),
     };
-    let members = scan_members(body.reference(), scratch)?;
     Ok(Some(DeclaredGroup {
         members: members.leak(),
         mode,
     }))
 }
 
-/// The member symbols of a `GROUP` body: the symbol of every top-level binary operator declaration,
-/// sorted and deduped. A `UNARY OP` among them, or a body declaring no operator at all, is refused.
-pub(crate) fn scan_members<'x>(
-    body: &KExpression<'_>,
+/// The member symbols of a `GROUP` body's statements: the symbol of every binary operator
+/// declaration among them, sorted and deduped. A `UNARY OP` among them, or no operator declared at
+/// all, is refused.
+pub(crate) fn scan_members<'n, 'g: 'n, 'x>(
+    statements: impl Iterator<Item = &'n KExpression<'g>>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, KeywordSymbol>, ()> {
     let mut members: BumpVec<'x, KeywordSymbol> = BumpVec::new_in(scratch);
-    for (statement, _) in body.body_statements() {
+    for statement in statements {
         let node = statement.statement_spine();
         match op_declaration_arity(node) {
             Some(OpArity::Binary) => {}
@@ -494,8 +506,8 @@ fn is_unary_declaration(form: BuiltinShapeId) -> bool {
 /// declarations sit.
 ///
 /// `outer` is the enclosing code's claims — the program's, for the code an `EVAL` runs — so
-/// evaluated code is held to the program's declarations. A `GROUP` inside a quote is data and is
-/// not walked.
+/// evaluated code is held to the program's declarations. The scan enters exactly the quotes the
+/// shape builder reads where they are written; a `GROUP` inside any other quote is data.
 pub(crate) fn claims<'graph, 'n, 'x>(
     brand: ProgramBrand<'graph>,
     scratch: BumpAllocator<'x>,
@@ -572,6 +584,30 @@ impl<'graph> Scan<'graph, '_> {
             {
                 self.claim_declaration(form.id, symbol)?;
             }
+            // The quotes the shape builder reads where they are written — a callable's body, a
+            // head, an arm, a signature's members — are code of this program; every other quote
+            // is data.
+            for (role, part) in form.roles().zip(node.parts) {
+                match (role.reading(), &part.value) {
+                    (Reading::Quote, ExpressionPart::QuotedExpression(quoted)) => {
+                        self.node(quoted.reference())?
+                    }
+                    (Reading::Container, ExpressionPart::ListLiteral(items)) => {
+                        for item in items.iter().filter_map(quoted_body) {
+                            self.node(item)?;
+                        }
+                    }
+                    (Reading::Container, ExpressionPart::DictLiteral(pairs)) => {
+                        for (key, value) in pairs.iter() {
+                            for quoted in [key, value].into_iter().filter_map(quoted_body) {
+                                self.node(quoted)?;
+                            }
+                        }
+                    }
+                    (_, part) => self.part(part)?,
+                }
+            }
+            return Ok(());
         }
         for part in node.parts {
             self.part(&part.value)?;
@@ -603,8 +639,8 @@ impl<'graph> Scan<'graph, '_> {
                 }
                 Ok(())
             }
-            // A quote is data: the code inside it is rewritten where an `EVAL` of it is built,
-            // under that site's own claims.
+            // A quote no builtin reads as written is data: the code inside it is rewritten where
+            // an `EVAL` of it is built, under that site's own claims.
             ExpressionPart::QuotedExpression(_)
             | ExpressionPart::Keyword(_)
             | ExpressionPart::Identifier(_)
