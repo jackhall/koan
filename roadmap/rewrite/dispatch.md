@@ -76,7 +76,21 @@ a statement's root, so a binder nested in an expression,
   refused where its shape is built.
 - `ATTR p y`, and `LET which = #(y)` followed by `ATTR p (which)`, read the
   same field, and `ATTR` over a `Str` label is a no-overload miss.
-- `$(n)` over a number is a no-overload miss, not a check of `EVAL`'s own.
+- `EVAL n` over a number is a no-overload miss, not a check of `EVAL`'s own.
+- A keyworded use written unmarked in a quote has as candidates the builtin
+  table's overloads and the registrations composed ahead of it, so a user
+  overload of `PRINT` or `==` composed ahead of the use is selected in the
+  builtin's place, while one visible only where the quote is written or run is
+  not a candidate.
+- `$(…)` resolves the bucket key of the use it wraps where the quote is written,
+  and `\(…)` where its code is built.
+- A `NEEDING` list names bucket keys beside names: a parameter admits a quote
+  whose needed keys its list covers, and an `EVAL` of the parameter resolves each
+  listed key where the `EVAL` is written.
+- A builtin function equals only itself, by its table identity.
+- `EVAL` and `code USING src` run as koan expressions through the doors
+  [quote binding](eval-scope.md) supplies, so `TWICE #(PRINT $x)` prints the
+  caller's `x`.
 - An evaluation or a frame that cannot proceed yields a koan error value, every
   evaluation passes an error it receives through unchanged, and an uncaught one
   ends the program with `error: <message>`.
@@ -92,8 +106,8 @@ a statement's root, so a binder nested in an expression,
 
 - *What dispatch runs — decided.* Literals, names, containers, record access
   (`.`, `ATTR`, `FROM`), newtype, type-constructor family and union-variant
-  construction, functions, keyword dispatch, the builtin library, quotes and
-  `$(…)`, and uncaught errors. [Control expression shapes and
+  construction, functions, keyword dispatch, the builtin library, quotes,
+  `EVAL` and `USING` over code, and uncaught errors. [Control expression shapes and
   errors](control-and-errors.md) owns `MATCH`, `TRY`, `CATCH` and `Result`, and
   [modules](modules.md) owns the module expression shapes.
 - *Builtins as function values — decided.* A builtin registers through the same
@@ -126,13 +140,15 @@ a statement's root, so a binder nested in an expression,
   mutually recursive registrations tie as one knot. A candidate's slot types are
   elaborated when its function is born, so no order is fixed where the shape is
   built; the per-call residue is the type test and the selection rule below. A
-  keyworded use inside a quote resolves where the quote is written, as one in a
-  callable body does ([quotes resolve where they are written](eval-scope.md));
-  a registration in evaluated code is a member of the block shape it runs in, a
-  candidate for the statements after it there, and never widens a bucket around
-  it, so no candidate list computed for a static site changes after it is
-  built. The closed-bucket and overlap checks run where a shape is built, so
-  code composed at run time fails them when it is evaluated.
+  keyworded use inside a quote is a hole unless marked: its candidates are the
+  builtin table's overloads and the registrations composed ahead of it, while
+  `$(…)` resolves its bucket key where the quote is written and `\(…)` where
+  its code is built ([quote binding](eval-scope.md)); a registration in
+  evaluated code is a member of the block shape it runs in, a candidate for the
+  statements after it there, and never widens a bucket around it, so no
+  candidate list computed for a static site changes after it is built. The
+  closed-bucket and overlap checks run where a shape is built, so code composed
+  at run time fails them when it is evaluated.
 - *Builtin buckets a user adds to — decided.* A `BUILTIN_SHAPES` entry is closed
   at its key because the body-shape builder walks a matching node by the entry's
   roles. An operator's bucket is open by type because its slots are eager
@@ -189,6 +205,19 @@ a statement's root, so a binder nested in an expression,
   `GROUP`'s own body and
   inside a `USING … SCOPE` body surfacing it, which is where the group's
   overloads are admitted here; builtin chaining is seen everywhere.
+- *A bucket key in a `NEEDING` list — open.* Spelled as the use with `_` for
+  each slot, `:(Block NEEDING #[(LOG _)])`, or with any name per slot,
+  `#[(LOG message)]`. Recommended: `_`, which names no binding.
+- *A group mark over an operator run — open.* `$(a + b + c)` wraps one written
+  node that chains into two uses. Either the mark covers the outermost use the
+  chain builds, or a mark over a run is refused and each use is marked on its
+  own.
+- *A shape built before composition — decided.* A hole's candidate list at an
+  open bucket includes registrations composed ahead of it, so a code shape
+  built before composition is never reused after it: composed code builds its
+  own ([code splicing](code-splicing.md)). A quote argument is matched by its
+  value's carried type, which names what its code needs, never by the raw
+  part's code kind.
 - *What dispatch evaluates — decided.* The statements a body's shape owns,
   [rewritten](../../src/scope/README.md#operator-groups), never the parse; and an
   expression part holding a nested block shape runs as a block whose value is
@@ -199,7 +228,7 @@ a statement's root, so a binder nested in an expression,
 
 **Requires:**
 
-- [Quotes resolve where they are written](eval-scope.md) — a quote's names and candidates resolve at the quote.
+- [Quote binding](eval-scope.md) — a quote's keyworded uses are holes unless marked.
 
 **Unblocks:**
 

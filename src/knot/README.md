@@ -292,13 +292,19 @@ function goes the same way, as the value word a member holding it would be.
 
 ## Equality and rendering
 
-A function has no structural equality: any comparison that reaches one is
-`Incomparable` ([Equality](../values/README.md#equality-and-rendering)), which
-the `==` builtin reports rather than answering `false`. A function renders as
-its type's name does, `:(FN :{x :Number} -> Number)`; its closure bindings are
-program state and never print. A module and a barrier are opaque to `values` the
-same way — a module renders as its signature's name, and a barrier as the
-function type a caller sees. A data node compares as a bisimulation and
+A function compares by its shape and its captures: two functions are equal
+when they hold the same shape handle — one per written `FN`, `EXPR` or `OP`, so
+a copy keeps it — and their closure bindings compare equal as a bisimulation,
+under the pair set circular data uses. Bindings are immutable and no shape
+retains a defining scope ([quotes](../scope/README.md#quotes)), so a function's
+shape and captures fix what it does. The same text written at another site is
+unequal, and a builtin compares by its table identity. A module and a barrier
+have no structural equality: a comparison that reaches one is `Incomparable`
+([Equality](../values/README.md#equality-and-rendering)), which the `==`
+builtin reports rather than answering `false`. A function renders as its type's
+name does, `:(FN :{x :Number} -> Number)`; its closure bindings are program
+state and never print. A module renders as its signature's name, and a barrier
+as the function type a caller sees. A data node compares as a bisimulation and
 renders with `@n` labels where a cycle closes, both in `values`.
 
 ## The import rule

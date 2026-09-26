@@ -43,16 +43,22 @@ Lowering is where koan's vocabulary enters, and six rules cover it
   line that is a group's whole content comes off, since nobody wrote it as parens.
   A compound atom that classifies to one sub-expression (`a.b`) is that
   sub-expression, not a statement holding it.
-- A **sigil** is `#`, `$` or `:` glued to the group after it. Because `sexlex`
-  recorded the glue and kept the atom whole, a sigil needs no table and adding
-  one changes nothing below. `#` also glues to a `[…]` or `{…}` literal and
-  quotes each element: a paren-group element is quoted as that group, any other
-  element as a one-part quote, and a `_` key or a record's field name stays bare,
-  so `#{Some: (x), _: (y)}` is `{#(Some): #(x), _: #(y)}`. The result is the bare
-  literal — a container of quotes, not a quote.
-- A **sigil-led line** is a whole layout line whose first atom starts with `#` or
-  `$`; the line's own body is what it quotes. A line that is only a sigil glued to
-  its group is that glued sigil.
+- A **sigil** is `#`, `$`, `\` or `:` glued to the group after it. Because
+  `sexlex` recorded the glue and kept the atom whole, a sigil needs no table and
+  adding one changes nothing below. Inside a quote, `$` and `\` also lead a
+  name atom, `$x` or `\x` ([quotes](../scope/README.md#quotes)), and `$..` a
+  splice, `$..xs` ([splicing](../scope/README.md#splicing)). `#` also glues to
+  a `[…]` or `{…}` literal and quotes each element: a paren-group element is
+  quoted as that group, any other element as a one-part quote, and a `_` key or
+  a record's field name stays bare, so `#{Some: (x), _: (y)}` is
+  `{#(Some): #(x), _: #(y)}`. The result is the bare literal — a container of
+  quotes, not a quote.
+- A **sigil-led line** is a whole layout line whose first atom starts with `#`;
+  the line's own body is what it quotes. A line that is only a sigil glued to
+  its group is that glued sigil. A layout line that is one splice or spread
+  atom, `$..xs` or `..xs`, is that atom's part rather than a statement holding
+  it, so a splice reads the same in a block laid out on one line or several; a
+  written `($..xs)` stays a group.
 - **Adjacency** rejects a `[` or `{` glued to a neighbouring token, and a closer
   followed by anything but whitespace, another closer or a `,`.
 - Everything else is an **atom**, which [atom.rs](atom.rs) classifies.

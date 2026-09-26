@@ -328,15 +328,19 @@ their names' text.
 value compares its identity before its payload, so it never equals its bare
 payload — save a seal its bound reveals, which is read through on either side;
 two type values are equal when they name the same handle; two quotes
-compare as syntax, part by part with spans ignored. Containers compare their
+compare as syntax, part by part with spans ignored, following each bound name
+through its binding as circular values do below
+([quotes](../scope/README.md#quotes)). Containers compare their
 contents **only when their memoized types are related**, one satisfied by the
 other in either direction — an empty list of strings and an empty list of
 numbers are unequal. That makes `==` intransitive across ascriptions by design.
 
-**An opaque member has no structural equality.** `equals` answers
-`Result<bool, Incomparable>`: a comparison with a function or a module on either
+**A module has no structural equality.** `equals` answers
+`Result<bool, Incomparable>`: a comparison with a module or a barrier on either
 side is `Incomparable`, which the `==` builtin reports as an error rather than
 `false`, and so is a pair of related containers whose aligned cells reach one.
+A function compares by its shape and captures
+([knots](../knot/README.md#equality-and-rendering)).
 Every aligned pair is compared, so an unequal pair before an opaque member does
 not hide it. A container pair with unrelated types is still unequal without
 descending, whatever it holds.

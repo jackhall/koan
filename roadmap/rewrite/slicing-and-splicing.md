@@ -62,11 +62,18 @@ elements cost O(kn).
   finger tree as Haskell's `Data.Sequence` is, or Clojure's `core.rrb-vector` —
   whose nodes memoize their subtree's join and weight, both monoids, O(log n)
   per view at the price of chunking flat runs.
+- *Spreading with `..` — open.* `..xs` spreads a list's elements one level
+  deep, and a quote's `..$xs` spreads when its code runs
+  ([code splicing](code-splicing.md)). A spread into a list literal, or into the arguments of a function called by name, needs nothing
+  more. A spread into a keyworded use leaves its bucket key's slot count
+  unknown where the use is written, and dispatch keys on the full bucket key
+  ([dispatch](dispatch.md)): either such a spread is refused, or the use is
+  dispatched once the count is known.
 - *String templates — open.* JavaScript's tagged templates and Python's
   t-strings keep a template's literal parts and its interpolated values apart
   until a consumer, such as an SQL escaper, splices them. That is the shape of a
   quote with its bindings
-  ([quotes resolve where they are written](eval-scope.md)), and it would give
+  ([quote binding](eval-scope.md)), and it would give
   strings a splicing surface for construction as well as editing.
 
 ## Dependencies
@@ -79,4 +86,4 @@ Splicing into code is [code splicing](code-splicing.md)'s.
 
 **Unblocks:**
 
-- [Code splicing](code-splicing.md) — slice and splice as builtins, and views.
+- [Code splicing](code-splicing.md) — slice as a builtin, views, and `..` outside a quote.
