@@ -303,9 +303,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     }
 
     /// The draft level, the position a read there takes, and the statement declaring `name` —
-    /// [`Builder::resolve`]'s walk with nothing recorded. `None` for a builtin, a name reached only
-    /// through an `EVAL`'s enclosing activation, a parameter (which declares no statement), and a
-    /// name with no binding at all.
+    /// [`Builder::resolve`]'s walk with nothing recorded. `None` for a builtin, a parameter (which
+    /// declares no statement), a hole of a quote's code, and a name with no binding at all.
     fn declaring(
         &self,
         level: usize,
@@ -323,7 +322,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let statement = declared.0.checked_sub(1)? as usize;
                 return Some((level, declared, &draft.nodes[statement]));
             }
-            if draft.kind == ShapeKind::Program {
+            if matches!(draft.kind, ShapeKind::Program | ShapeKind::Code) {
                 return None;
             }
             level = level.checked_sub(1)?;

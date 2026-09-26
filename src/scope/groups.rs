@@ -202,7 +202,7 @@ pub(crate) enum Claim<'graph> {
 }
 
 /// Every claim the code being built makes, collected once before the first draft and read by
-/// symbol. A `Claims` of an `EVAL`'s code chains to the program's, so evaluated code is held to the
+/// symbol. A `Claims` of a quote's code chains to the claims around it, so code is held to the
 /// program's declarations.
 #[derive(Clone, Copy)]
 pub(crate) struct Claims<'graph> {
@@ -295,10 +295,6 @@ impl<'graph> GroupFrame<'graph> {
             outer,
             claims,
         }
-    }
-
-    pub(crate) fn claims(&self) -> &'graph Claims<'graph> {
-        self.claims
     }
 
     /// The held group covering `symbol`, walking outward. `None` when no enclosing body holds one.
@@ -506,9 +502,9 @@ fn is_unary_declaration(form: BuiltinShapeId) -> bool {
 /// the first draft and blind to position, so how a symbol chains never depends on where its
 /// declarations sit.
 ///
-/// `outer` is the enclosing code's claims — the program's, for the code an `EVAL` runs — so
-/// evaluated code is held to the program's declarations. The scan enters exactly the quotes the
-/// shape builder reads where they are written; a `GROUP` inside any other quote is data.
+/// `outer` is the claims of the code around a quote value's, so a quote's code is held to the
+/// program's declarations. The scan enters exactly the quotes the shape builder reads where they
+/// are written; a quote value's code is scanned when the builder enters it.
 pub(crate) fn claims<'graph, 'n, 'x>(
     brand: ProgramBrand<'graph>,
     scratch: BumpAllocator<'x>,
@@ -641,8 +637,8 @@ impl<'graph> Scan<'graph, '_> {
                 }
                 Ok(())
             }
-            // A quote no builtin reads as written is data: the code inside it is rewritten where
-            // an `EVAL` of it is built, under that site's own claims.
+            // A quote no builtin reads as written is a quote value, whose code is scanned under
+            // its own claims when the builder enters it.
             ExpressionPart::QuotedExpression(_)
             | ExpressionPart::Keyword(_)
             | ExpressionPart::Identifier(_)

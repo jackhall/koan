@@ -2,15 +2,12 @@
 //! reached, which bodies a declared group reaches through `USING` and `EVAL`, and which operator
 //! runs the builder refuses rather than chains.
 
-use crate::memory::resident;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{Activation, BodyShape, Builtins, Position, ShapeError, ShapeKind, Site};
+use crate::scope::{BodyShape, Builtins, ShapeError, ShapeKind, Site};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 
-use super::{
-    Fixture, NOWHERE, Probe, ProbeFamily, builtins, located, unlocated, value_name, with_fixture,
-};
+use super::{Fixture, NOWHERE, builtins, located, unlocated, value_name, with_fixture};
 
 /// Build `source` against the suites' builtins and hand the result to `check`.
 fn shaped<R>(
@@ -451,62 +448,6 @@ LET x = (1 @ 2 @ 3)";
     );
 }
 
-/// Shape `quoted` as the body of an `EVAL`, at the program of `source` or — when `inside_using` —
-/// in the `USING` body its last statement opens.
-fn evaluated<R>(
-    source: &str,
-    quoted: &str,
-    inside_using: bool,
-    check: impl for<'f, 'graph> FnOnce(
-        &Fixture<'f, 'graph>,
-        Result<&'graph BodyShape<'graph>, ShapeError>,
-    ) -> R,
-) -> R {
-    with_fixture(|fixture| {
-        for name in ["AND", "NOT", "=="] {
-            KeywordSymbol::declared(name, fixture.symbols).expect("a keyword token");
-        }
-        let lines = fixture.parse(source);
-        let quoting = fixture.parse(quoted);
-        let ExpressionPart::QuotedExpression(quote) = quoting[0].parts[0].value else {
-            panic!("`{quoted}` is a quote");
-        };
-        let quote = quote.reference();
-        fixture.in_cell(|writer| {
-            let table: &Builtins<'_, '_, Probe> = builtins(fixture, writer);
-            let shape = BodyShape::of_program(
-                fixture.program,
-                &lines,
-                table,
-                fixture.types,
-                fixture.scratch(),
-            )
-            .expect("the program shapes");
-            let program: &Activation<'_, '_, ProbeFamily> =
-                resident(writer, Activation::of_program(writer, shape, table));
-            let (site, at) = if inside_using {
-                let using = &shape.body()[shape.body().len() - 1];
-                let block = nested(shape, using, 3);
-                let site = resident(writer, Activation::of_block(writer, block, program));
-                (site, Position::statement(0))
-            } else {
-                (program, shape.end())
-            };
-            check(
-                fixture,
-                BodyShape::for_eval(
-                    fixture.program,
-                    quote,
-                    site,
-                    at,
-                    fixture.types,
-                    fixture.scratch(),
-                ),
-            )
-        })
-    })
-}
-
 /// A `GROUP` whose members are `@` and `%`, under `mode`, named `name`.
 fn group(name: &str, mode: &str) -> String {
     format!("GROUP {name} {mode} = ((OP #(@) OVER Ring = #(left)) (OP #(%) OVER Ring = #(right)))")
@@ -613,32 +554,49 @@ USING (m :! Ops) SCOPE (1)",
 }
 
 #[test]
-fn evaluated_code_chains_under_its_site_and_is_held_to_the_programs_claims() {
+fn a_quotes_code_chains_under_its_own_groups_never_a_frame_around_it() {
     let source = format!(
         "{}
-USING g SCOPE (1)",
+USING g SCOPE (#(1 @ 2 % 3))
+LET e = #(1 + 2 - 3)",
         group("g", "FOLD RIGHT")
     );
-    evaluated(&source, "#(1 @ 2 % 3)", true, |fixture, shape| {
-        let shape = shape.expect("the quoted operator run shapes at its site");
-        assert_eq!(tree(&shape.body()[0], fixture.symbols), "(1 @ (2 % 3))");
-    });
-    // The same operator run outside that body has no group to chain under.
-    evaluated(&source, "#(1 @ 2 % 3)", false, |fixture, shape| {
-        refused_at(
-            shape,
-            ShapeError::Unchained {
+    shaped(&source, |fixture, shape| {
+        let shape = shape.expect("a quote's code is never refused where the program loads");
+        // The `USING` frame around the quote holds `g`, and its code does not see it.
+        let block = nested(shape, &shape.body()[1], 3);
+        let quoted = &block.body()[0].parts[0].value;
+        let code = block
+            .nested(Site::of(quoted))
+            .expect("a quote value's code is shaped");
+        assert_eq!(code.kind(), ShapeKind::Code);
+        assert_eq!(
+            code.refusal().copied().map(unlocated),
+            Some(ShapeError::Unchained {
                 symbol: keyword("@", fixture.symbols),
                 at: NOWHERE,
-            },
-            "@",
+            })
         );
+        // A builtin group chains in code wherever the quote is written.
+        let code = shape
+            .nested(Site::of(&shape.body()[2].parts[3].value))
+            .expect("a quote value's code is shaped");
+        assert!(code.refusal().is_none());
+        assert_eq!(tree(&code.body()[0], fixture.symbols), "((1 + 2) - 3)");
     });
-    // Evaluated code declares against the program's claims, so it may not re-chain a symbol.
-    let redeclared = format!("#({})", group("h", "FOLD RIGHT"));
-    evaluated(&group("g", "FOLD LEFT"), &redeclared, false, |_, shape| {
+    // Code declares against the program's claims, so it may not re-chain a symbol.
+    let source = format!(
+        "{}\nLET q = #({})",
+        group("g", "FOLD LEFT"),
+        group("h", "FOLD RIGHT")
+    );
+    shaped(&source, |_, shape| {
+        let shape = shape.expect("a quote's code is never refused where the program loads");
+        let code = shape
+            .nested(Site::of(&shape.body()[1].parts[3].value))
+            .expect("a quote value's code is shaped");
         assert!(matches!(
-            shape.err(),
+            code.refusal(),
             Some(ShapeError::RedeclaresGroup { .. })
         ));
     });

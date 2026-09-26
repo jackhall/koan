@@ -15,22 +15,26 @@
 //! body it births, and a `LET` value binder records its right-hand side, so a component's tie reads
 //! each member's signature, body or data off the shape.
 //!
+//! A quote value's code is built here too, as a [`ShapeKind::Code`] draft entered where the quote
+//! is written ([`Builder::enter_code`]): under the builtin groups and the groups its code holds,
+//! with its `$` names resolved outward and every other free name left open. A code draft that
+//! cannot be built is not an error of the program; its error is kept for the `EVAL` that runs it.
+//!
 //! See [README.md § Visibility](../README.md#visibility).
 
 use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, collect, resident,
     strongly_connected_components,
 };
-use crate::parse::builtin_shapes::binder::bounded;
+use crate::parse::builtin_shapes::binder::{bounded, needed_name, needing};
 use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement};
-use crate::parse::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, StaticName, TypeSymbol, ValueSymbol};
-use crate::values::{Knotted, KnottedFamily, admits_part};
+use crate::values::{Knotted, admits_part};
 
-use crate::type_lattice::{DeclaredGroup, TypeRegistry};
+use crate::type_lattice::{DeclaredGroup, KType, TypeRegistry};
 
-use super::super::activation::ActivationView;
 use super::super::builtins::Builtins;
 use super::super::channels::Channels;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
@@ -83,7 +87,7 @@ pub(super) fn program<'graph, X: Knotted>(
     // how a symbol chains never depends on where its declarations sit.
     let claims = groups::claims(brand, scratch, statements.iter(), None)?;
     let frame = resident(brand.writer(), GroupFrame::new(&[], None, claims));
-    let mut builder = Builder::new(brand, scratch, &lookup, types, None, claims, frame);
+    let mut builder = Builder::new(brand, scratch, &lookup, types, claims, frame);
     let statements = statements
         .iter()
         .enumerate()
@@ -95,51 +99,6 @@ pub(super) fn program<'graph, X: Knotted>(
         &[],
         &[],
         statements,
-    )?;
-    Ok(builder.seal(draft, None))
-}
-
-/// An `EVAL` body's block shape over `site`'s chain, reading at `at`.
-pub(super) fn eval<'graph, XF: KnottedFamily<'graph>>(
-    brand: ProgramBrand<'graph>,
-    body: &KExpression<'graph>,
-    site: &ActivationView<'graph, '_, XF>,
-    at: Position,
-    types: &TypeRegistry<'graph>,
-    scratch: BumpAllocator<'_>,
-) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
-    let lookup = |name| site.builtins().lookup(name);
-    let outer = |name, position| site.through_chain(name, position);
-    // Evaluated code is held to the program's declarations, and its operator runs chain under the
-    // groups the shapes enclosing the `EVAL` hold — found by this walk, which reads no activation
-    // slot.
-    let enclosing = site.shape().group_frame();
-    let claims = groups::claims(
-        brand,
-        scratch,
-        body.body_statements().map(|(statement, _)| statement),
-        Some(enclosing.claims()),
-    )?;
-    let frame = resident(
-        brand.writer(),
-        GroupFrame::new(&[], Some(enclosing), claims),
-    );
-    let mut builder = Builder::new(
-        brand,
-        scratch,
-        &lookup,
-        types,
-        Some((&outer, at)),
-        claims,
-        frame,
-    );
-    let draft = builder.draft(
-        ShapeKind::Block,
-        Entry::PLAIN,
-        at,
-        &[],
-        &[],
-        body.body_statements(),
     )?;
     Ok(builder.seal(draft, None))
 }
@@ -231,37 +190,69 @@ fn written_as_read<'e>(
     Ok(())
 }
 
-/// One unit's wait on another, by unit: the unit waited on, the waiter, and for an `EVAL`'s wait
-/// the slot it waits through and the `EVAL`'s statement.
-type Wait = (u32, u32, Option<(Slot, u32)>);
-
-/// Why a body's waits cycle, from the waits no emitted unit released: walk back from an unemitted
-/// unit through waits on unemitted ones until on a cycle, and name an `EVAL`'s wait on it — the
-/// slot it waits through and its statement. One exists, since the reads alone are acyclic.
-fn eval_cycle(waits: &[Wait], emitted: &[bool]) -> (Slot, u32) {
-    let outstanding = |waiter: u32| {
-        waits
-            .iter()
-            .find(|(bound, at, _)| *at == waiter && !emitted[*bound as usize])
-            .expect("an unemitted unit waits on an unemitted one")
-    };
-    let start = emitted
-        .iter()
-        .position(|emitted| !emitted)
-        .expect("a stalled order has an unemitted unit") as u32;
-    // Walk far enough back to be on the cycle, then once around it.
-    let mut unit = start;
-    for _ in 0..emitted.len() {
-        unit = outstanding(unit).0;
-    }
-    let on_cycle = unit;
-    loop {
-        let (bound, _, through) = *outstanding(unit);
-        if let Some(through) = through {
-            return through;
+/// The type part a signature run pairs with the parameter `name`.
+fn parameter_type<'graph>(
+    run: &'graph KExpression<'graph>,
+    name: BinderSymbol,
+) -> Option<&'graph ExpressionPart<'graph>> {
+    let mut index = 0;
+    while index < run.parts.len() {
+        match pair_name(run, index) {
+            Some(declared) if declared == Some(name) => return Some(&run.parts[index + 1].value),
+            Some(_) => index += 2,
+            None => index += 1,
         }
-        unit = bound;
-        assert_ne!(unit, on_cycle, "the reads alone are acyclic");
+    }
+    None
+}
+
+/// Every mark `node` holds outside the quote values nested in it, each beside its site: what a code
+/// draft that could not be built would have met. A quote a builtin reads as written is syntax of
+/// the code around it, so its marks are the code's.
+fn code_marks(node: &KExpression<'_>, out: &mut BumpVec<'_, (Mark, BinderSymbol, Site)>) {
+    let form = node.cache().builtin_shape();
+    for (index, part) in node.parts.iter().enumerate() {
+        let written = form
+            .and_then(|form| form.roles().nth(index))
+            .is_some_and(|role| role.reading() != Reading::Evaluated);
+        part_marks(&part.value, written, out);
+    }
+}
+
+/// [`code_marks`] for one part; `written` when a builtin reads it as written.
+fn part_marks(
+    part: &ExpressionPart<'_>,
+    written: bool,
+    out: &mut BumpVec<'_, (Mark, BinderSymbol, Site)>,
+) {
+    match part {
+        ExpressionPart::MarkedName(mark, name) => out.push((*mark, *name, Site::of(part))),
+        ExpressionPart::QuotedExpression(node) if written => code_marks(node.reference(), out),
+        ExpressionPart::Expression(node)
+        | ExpressionPart::SigiledTypeExpr(node)
+        | ExpressionPart::RecordType(node)
+        | ExpressionPart::MarkedUse(_, node) => code_marks(node.reference(), out),
+        ExpressionPart::ListLiteral(items) => {
+            for item in items.iter() {
+                part_marks(item, written, out);
+            }
+        }
+        ExpressionPart::DictLiteral(pairs) => {
+            for (key, value) in pairs.iter() {
+                part_marks(key, written, out);
+                part_marks(value, written, out);
+            }
+        }
+        ExpressionPart::RecordLiteral(fields) => {
+            for (_, value) in fields.iter() {
+                part_marks(value, written, out);
+            }
+        }
+        ExpressionPart::QuotedExpression(_)
+        | ExpressionPart::Identifier(_)
+        | ExpressionPart::Type(_)
+        | ExpressionPart::Keyword(_)
+        | ExpressionPart::Literal(_) => {}
     }
 }
 
@@ -325,7 +316,6 @@ impl Entry<'_> {
 }
 
 type Lookup<'e> = &'e dyn Fn(BinderSymbol) -> Option<BuiltinIndex>;
-type Outer<'e> = &'e dyn Fn(BinderSymbol, Position) -> Option<Coordinate>;
 
 /// One body under construction, in scratch.
 struct Draft<'graph, 'x> {
@@ -352,8 +342,6 @@ struct Draft<'graph, 'x> {
     /// `(statement, bound)`: the statement reads the bound slot, whether or not it binds — what a
     /// unit waits on.
     reads: BumpVec<'x, (u32, Slot)>,
-    /// Each statement that holds an `EVAL`, whose free names no shape can enumerate.
-    eval_statements: BumpVec<'x, u32>,
     /// The body's units in the order they are performed, once the components pass has run.
     units: BumpVec<'x, Unit>,
     /// Finished nested drafts, waiting on this draft's components to settle their captures.
@@ -370,7 +358,14 @@ struct Draft<'graph, 'x> {
     /// Each component's run in `members`, whether every mention between its members is deferred,
     /// and whether it is cyclic.
     components: BumpVec<'x, DraftComponent>,
-    keeps_defining_scope: bool,
+    /// A callable body's signature run, which an `EVAL` of one of its parameters reads that
+    /// parameter's type off.
+    signature: Option<&'graph KExpression<'graph>>,
+    /// Each `EVAL` of a parameter needing names, by its operand's site, beside what it offers.
+    offers: BumpVec<'x, (Site, &'graph [(BinderSymbol, Coordinate)])>,
+    /// A code draft's carried type, and why its code cannot be built; see [`BodyShape::code_type`].
+    code_type: KType,
+    refusal: Option<&'graph ShapeError<'graph>>,
     /// Whether this body's last statement is in tail position.
     tail: bool,
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
@@ -429,10 +424,9 @@ struct Builder<'graph, 'x, 'e> {
     brand: ProgramBrand<'graph>,
     scratch: BumpAllocator<'x>,
     builtins: Lookup<'e>,
-    /// The program's type registry, which the static check admits written parts through.
+    /// The program's type registry, which the static check admits written parts through and a
+    /// quote's carried type is interned in.
     types: &'e TypeRegistry<'graph>,
-    /// For an `EVAL` body: the by-name resolver over the site's chain, and `EVAL`'s position.
-    outer: Option<(Outer<'e>, Position)>,
     /// Every claim the code being built makes over an operator symbol, collected once up front.
     claims: &'graph Claims<'graph>,
     /// The frame of the draft being built: which groups an operator run written there sees.
@@ -450,6 +444,8 @@ struct Builder<'graph, 'x, 'e> {
     /// Where the current draft's own entries in `skip` start; a nested body declares its enclosing
     /// form's type parameters as parameters and reads them as mentions.
     skip_floor: usize,
+    /// The signature run of the callable body about to be drafted, taken by that draft.
+    signature: Option<&'graph KExpression<'graph>>,
 }
 
 impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
@@ -458,7 +454,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         scratch: BumpAllocator<'x>,
         builtins: Lookup<'e>,
         types: &'e TypeRegistry<'graph>,
-        outer: Option<(Outer<'e>, Position)>,
         claims: &'graph Claims<'graph>,
         frame: &'graph GroupFrame<'graph>,
     ) -> Self {
@@ -467,7 +462,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             scratch,
             builtins,
             types,
-            outer,
             claims,
             frame,
             blocks: bump_table(scratch),
@@ -476,6 +470,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             parts: bump_table(scratch),
             skip: BumpVec::new_in(scratch),
             skip_floor: 0,
+            signature: None,
         }
     }
 
@@ -534,6 +529,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             .last()
             .map_or(u32::MAX, |parent| parent.current.0);
         let mut draft = self.binders(kind, entered_at, parent_statement, parameters, &nodes)?;
+        draft.signature = self.signature.take();
         draft.frame = self.frame;
         draft.held = held;
         draft.tail = entry.tail;
@@ -549,7 +545,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }
         let mut draft = self.chain.pop().expect("this draft was pushed above");
         self.components(&mut draft)?;
-        self.units(&mut draft)?;
+        self.units(&mut draft);
         Ok(draft)
     }
 
@@ -618,7 +614,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             captures: BumpVec::new_in(scratch),
             edges: BumpVec::new_in(scratch),
             reads: BumpVec::new_in(scratch),
-            eval_statements: BumpVec::new_in(scratch),
             units: BumpVec::new_in(scratch),
             children: BumpVec::new_in(scratch),
             births: BumpVec::new_in(scratch),
@@ -630,7 +625,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             component_of: BumpVec::new_in(scratch),
             members: BumpVec::new_in(scratch),
             components: BumpVec::new_in(scratch),
-            keeps_defining_scope: false,
+            signature: None,
+            offers: BumpVec::new_in(scratch),
+            code_type: KType::ANY_CODE,
+            refusal: None,
             tail: false,
             arm: None,
             current: (0, MentionClass::Eager),
@@ -652,6 +650,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let Some(form) = node.cache().builtin_shape() else {
             if let [only] = node.parts {
                 return self.walk_part(level, statement, &only.value, state);
+            }
+            // A `NEEDING` list names what code needs; its quotes are syntax, not quote values.
+            if let Some((kind, _)) = needing(node) {
+                return self.walk_part(level, statement, kind, State::Eager);
             }
             if let [head, payload] = node.parts
                 && let ExpressionPart::Type(name) = &head.value
@@ -691,15 +693,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             });
         }
         if form.id == BuiltinShapeId::Eval {
-            for (at, draft) in self.chain.iter_mut().enumerate() {
-                draft.keeps_defining_scope = true;
-                let walked = if at == level {
-                    statement
-                } else {
-                    draft.current.0
-                };
-                draft.eval_statements.push(walked);
-            }
+            self.offer(level, statement, node)?;
         }
         // A type binder records its whole declaration node: the door reads which declaration it
         // is, and where its declared part sits, off the node's own builtin shape. The statement's
@@ -876,12 +870,25 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 Ok(())
             }
-            ExpressionPart::Type(_)
-            | ExpressionPart::Keyword(_)
-            | ExpressionPart::Literal(_)
-            | ExpressionPart::QuotedExpression(_)
-            | ExpressionPart::MarkedName(..)
-            | ExpressionPart::MarkedUse(..) => Ok(()),
+            ExpressionPart::QuotedExpression(node) => {
+                self.enter_code(level, statement, part, node.reference(), state)
+            }
+            ExpressionPart::MarkedName(mark, name) => {
+                self.mention_through(level, statement, part, *name, Some(*mark), state)
+            }
+            // A group mark says where its keyworded use resolves, which is dispatch's; the names
+            // inside it are read as any others are.
+            ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
+                Err(ShapeError::MarkOutsideQuote {
+                    at: self.part_source(level, statement, Site::of(part)),
+                })
+            }
+            ExpressionPart::MarkedUse(_, node) => {
+                self.walk_node(level, statement, node.reference(), State::Eager)
+            }
+            ExpressionPart::Type(_) | ExpressionPart::Keyword(_) | ExpressionPart::Literal(_) => {
+                Ok(())
+            }
         }
     }
 
@@ -1204,6 +1211,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             own = [record];
             held = &own;
         }
+        if kind == BodyKind::Lambda {
+            let form = node
+                .cache()
+                .builtin_shape()
+                .expect("a body role is a form's");
+            self.signature = form
+                .roles()
+                .zip(node.parts)
+                .find(|(role, _)| matches!(role, Role::Signature | Role::Head))
+                .and_then(|(_, part)| signature_run(&part.value));
+        }
         let parameters: &[BinderSymbol] = match kind {
             BodyKind::Lambda => signature,
             BodyKind::Operator => &operator,
@@ -1276,6 +1294,198 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         Ok(())
     }
 
+    /// A quote value: its code, drafted as a code shape nested at the quote's site and entered where
+    /// the quote is written, as a callable body is — so a `$` name reads at the statement, or at
+    /// the body's end under a constructor slot. The code chains its operator runs under the builtin
+    /// groups and the groups it holds, never a frame around it, and a type parameter of a form
+    /// around it is no parameter of its own. Code that cannot be built keeps its error as the
+    /// shape's refusal; only a `$` name nothing binds where the quote is written refuses the
+    /// program.
+    fn enter_code(
+        &mut self,
+        level: usize,
+        statement: u32,
+        part: &ExpressionPart<'graph>,
+        code: &KExpression<'graph>,
+        state: State,
+    ) -> Result<(), ShapeError<'graph>> {
+        let parent = &mut self.chain[level];
+        parent.current = (statement, state.constructor().class());
+        let entered_at = parent.boundary();
+        let saved = (self.claims, self.frame);
+        let floor = std::mem::replace(&mut self.skip_floor, self.skip.len());
+        let built = self.code_draft(entered_at, code);
+        (self.claims, self.frame) = saved;
+        self.skip_floor = floor;
+        let child = match built {
+            Ok(mut draft) => {
+                let mut offered = BumpVec::new_in(self.scratch);
+                offered.extend(
+                    draft
+                        .captures
+                        .iter()
+                        .filter(|capture| capture.source == CaptureSource::Offered)
+                        .map(|capture| capture.name),
+                );
+                draft.code_type = self
+                    .types
+                    .code_needing(self.scratch, code.code_kind(), &offered);
+                draft
+            }
+            Err(refusal) => self.refused_code(level, statement, entered_at, code, refusal)?,
+        };
+        self.chain[level].children.push((Site::of(part), child));
+        Ok(())
+    }
+
+    /// [`enter_code`](Self::enter_code)'s draft, under the code's own claims and a frame holding
+    /// nothing.
+    fn code_draft(
+        &mut self,
+        entered_at: Position,
+        code: &KExpression<'graph>,
+    ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>> {
+        let statements = code.body_statements().map(|(statement, _)| statement);
+        self.claims = groups::claims(self.brand, self.scratch, statements, Some(self.claims))?;
+        self.frame = resident(self.brand.writer(), GroupFrame::new(&[], None, self.claims));
+        self.draft(
+            ShapeKind::Code,
+            Entry::CALLABLE,
+            entered_at,
+            &[],
+            &[],
+            code.body_statements(),
+        )
+    }
+
+    /// The code draft of a quote whose code could not be built: no statements, its `$` names
+    /// captured where the quote is written — each as the built draft would have captured it — and
+    /// `refusal` kept. Its carried type needs every `\` name its code writes outside the quote
+    /// values nested in it, since which of them its own binders fill is unknown.
+    fn refused_code(
+        &mut self,
+        level: usize,
+        statement: u32,
+        entered_at: Position,
+        code: &KExpression<'graph>,
+        refusal: ShapeError<'graph>,
+    ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>> {
+        let mut marks = BumpVec::new_in(self.scratch);
+        code_marks(code, &mut marks);
+        let draft = self.binders(ShapeKind::Code, entered_at, statement, &[], &[])?;
+        self.chain.push(draft);
+        let inner = self.chain.len() - 1;
+        let reader = Reader {
+            level: inner,
+            statement: 0,
+            class: MentionClass::Eager,
+        };
+        let mut resolved = Ok(());
+        for (mark, name, site) in marks.iter().copied() {
+            if mark != Mark::Written || (self.builtins)(name).is_some() {
+                continue;
+            }
+            let written = Some(Mark::Written);
+            if self
+                .resolve(inner, name, written, Position::PARAMETER, reader)
+                .is_none()
+            {
+                let at = self.part_source(level, statement, site);
+                resolved = Err(ShapeError::Unbound { name, site, at });
+                break;
+            }
+        }
+        let mut draft = self.chain.pop().expect("this draft was pushed above");
+        resolved?;
+        let mut built = BumpVec::new_in(self.scratch);
+        built.extend(
+            marks
+                .iter()
+                .filter(|(mark, name, _)| *mark == Mark::Built && (self.builtins)(*name).is_none())
+                .map(|(_, name, _)| *name),
+        );
+        draft.code_type = self
+            .types
+            .code_needing(self.scratch, code.code_kind(), &built);
+        draft.refusal = Some(resident(self.brand.writer(), refusal));
+        Ok(draft)
+    }
+
+    /// An `EVAL` of a callable's parameter whose type needs names offers each of them to the code
+    /// it runs: each resolves here as an eager read at the `EVAL`'s statement would, recorded as
+    /// one for the units pass, and is `Unbound` when nothing binds it here.
+    fn offer(
+        &mut self,
+        level: usize,
+        statement: u32,
+        node: &KExpression<'graph>,
+    ) -> Result<(), ShapeError<'graph>> {
+        let operand = &node.parts[1].value;
+        let ExpressionPart::Identifier(name) = operand else {
+            return Ok(());
+        };
+        let at = Position::statement(statement as usize);
+        let Some(needed) = self.needed_by(level, BinderSymbol::Value(*name), at) else {
+            return Ok(());
+        };
+        let reader = Reader {
+            level,
+            statement,
+            class: MentionClass::Eager,
+        };
+        let mut offered = BumpVec::with_capacity_in(needed.len(), self.scratch);
+        // A malformed entry is the elaborator's to refuse.
+        for name in needed.iter().filter_map(needed_name) {
+            let coordinate = match (self.builtins)(name) {
+                Some(index) => Coordinate::Builtin(index),
+                None => self
+                    .resolve(level, name, None, at, reader)
+                    .ok_or(ShapeError::Unbound {
+                        name,
+                        site: Site::of(operand),
+                        at: node.source,
+                    })?,
+            };
+            offered.push((name, coordinate));
+        }
+        let offered = collect(self.brand.writer(), offered.iter().copied());
+        self.chain[level].offers.push((Site::of(operand), offered));
+        Ok(())
+    }
+
+    /// The `NEEDING` list of the parameter `name` names, when `name` read at `at` in the draft at
+    /// `level` is a callable's parameter typed `:(<kind> NEEDING #[…])`. A name a code draft does
+    /// not bind is a hole of it, so the search stops there.
+    fn needed_by(
+        &self,
+        mut level: usize,
+        name: BinderSymbol,
+        mut at: Position,
+    ) -> Option<&'graph [ExpressionPart<'graph>]> {
+        loop {
+            let draft = &self.chain[level];
+            let channels = draft.channels();
+            if let Some(index) = channels.find(name)
+                && at.sees(channels.get(index))
+            {
+                if draft.kind != ShapeKind::Callable || channels.get(index) != Position::PARAMETER {
+                    return None;
+                }
+                let ExpressionPart::SigiledTypeExpr(written) =
+                    parameter_type(draft.signature?, name)?
+                else {
+                    return None;
+                };
+                return needing(written.reference()).map(|(_, names)| names);
+            }
+            if matches!(draft.kind, ShapeKind::Program | ShapeKind::Code) {
+                return None;
+            }
+            level = level.checked_sub(1)?;
+            at = self.chain[level].boundary();
+        }
+    }
+
     /// Build a nested draft under the statement being walked at `level`, entered with `class`, and
     /// hold it under `site` until this draft's components settle its captures. `parameters` come
     /// beside where the node declaring them is written.
@@ -1321,6 +1531,25 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         name: BinderSymbol,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
+        self.mention_through(level, statement, part, name, None, state)
+    }
+
+    /// [`mention`](Self::mention) of a name read through `mark`, which only a quote value's code
+    /// may hold.
+    fn mention_through(
+        &mut self,
+        level: usize,
+        statement: u32,
+        part: &ExpressionPart<'graph>,
+        name: BinderSymbol,
+        mark: Option<Mark>,
+        state: State,
+    ) -> Result<(), ShapeError<'graph>> {
+        if mark.is_some() && !self.in_quote(level) {
+            return Err(ShapeError::MarkOutsideQuote {
+                at: self.part_source(level, statement, Site::of(part)),
+            });
+        }
         let class = state.class();
         let at = match class {
             MentionClass::Eager => Position::statement(statement as usize),
@@ -1334,13 +1563,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let site = Site::of(part);
         let coordinate = match (self.builtins)(name) {
             Some(index) => Coordinate::Builtin(index),
-            None => self
-                .resolve(level, name, at, reader)
-                .ok_or_else(|| ShapeError::Unbound {
-                    name,
-                    site,
-                    at: self.part_source(level, statement, site),
-                })?,
+            None => {
+                self.resolve(level, name, mark, at, reader)
+                    .ok_or_else(|| ShapeError::Unbound {
+                        name,
+                        site,
+                        at: self.part_source(level, statement, site),
+                    })?
+            }
         };
         self.chain[level].mentions.push(Mention {
             site,
@@ -1352,48 +1582,53 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         Ok(())
     }
 
-    /// `name` read at `at` in the draft at `level`: a visible local, else outward — a capturing
-    /// draft captures what it finds there, a block steps one activation out.
+    /// `name` read through `mark` at `at` in the draft at `level`: a visible local, else outward —
+    /// a capturing draft captures what it finds there, a block steps one activation out. A code
+    /// draft is where a mark is spent: a `$` name resolves outward from it, unmarked, and every
+    /// other name it does not bind stays an open hole or an open `\` mark of the code.
     fn resolve(
         &mut self,
         level: usize,
         name: BinderSymbol,
+        mark: Option<Mark>,
         at: Position,
         reader: Reader,
     ) -> Option<Coordinate> {
         let draft = &self.chain[level];
         let kind = draft.kind;
-        if let Some(target) = resolve_here(draft.channels(), &draft.captures, name, at) {
+        if let Some(target) = resolve_here(draft.channels(), &draft.captures, name, mark, at) {
             if let Target::Local(slot) = target {
                 self.edge(level, slot, reader);
             }
             return Some(Coordinate::Activation { hops: 0, target });
         }
-        let outer = |builder: &mut Self| match level.checked_sub(1) {
-            Some(parent) => {
-                let at = builder.chain[parent].boundary();
-                builder.resolve(parent, name, at, reader)
-            }
-            None => builder
-                .outer
-                .and_then(|(outer, position)| outer(name, position)),
+        let outer = |builder: &mut Self, mark| {
+            let parent = level.checked_sub(1)?;
+            let at = builder.chain[parent].boundary();
+            builder.resolve(parent, name, mark, at, reader)
         };
-        match kind {
-            ShapeKind::Program => None,
-            ShapeKind::Callable | ShapeKind::Module => {
-                let source = outer(self)?;
-                let captures = &mut self.chain[level].captures;
-                captures.push(CaptureSpec {
-                    name,
-                    source: CaptureSource::Read(source),
-                });
-                Some(Coordinate::Activation {
-                    hops: 0,
-                    target: Target::Capture(CaptureSlot(captures.len() as u32 - 1)),
-                })
-            }
-            ShapeKind::Block => Some(outer(self)?.through_block()),
-        }
+        let source = match (kind, mark) {
+            (ShapeKind::Program, _) => return None,
+            (ShapeKind::Block, _) => return Some(outer(self, mark)?.through_block()),
+            (ShapeKind::Callable | ShapeKind::Module, _) => CaptureSource::Read(outer(self, mark)?),
+            (ShapeKind::Code, Some(Mark::Written)) => CaptureSource::Read(outer(self, None)?),
+            (ShapeKind::Code, Some(Mark::Built)) => CaptureSource::Offered,
+            (ShapeKind::Code, None) => CaptureSource::Hole,
+        };
+        let captures = &mut self.chain[level].captures;
+        captures.push(CaptureSpec { name, mark, source });
+        Some(Coordinate::Activation {
+            hops: 0,
+            target: Target::Capture(CaptureSlot(captures.len() as u32 - 1)),
+        })
+    }
+
+    /// Whether the draft at `level` is a quote value's code or lies inside one — where a mark may
+    /// be written.
+    fn in_quote(&self, level: usize) -> bool {
+        self.chain[..=level]
+            .iter()
+            .any(|draft| draft.kind == ShapeKind::Code)
     }
 
     /// Record that the binder of the reading path's statement at `level` reads `slot`.
@@ -1528,12 +1763,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// The units pass: one unit per component whose members are not all parameters, keyed by its
     /// lowest statement, and one per statement that binds nothing, keyed by that statement; each
-    /// unit waits on the units binding a slot it reads, and a unit holding an `EVAL` on every unit
-    /// binding a name declared before it — a wait that closes a cycle refuses the body. The units are
-    /// emitted in the smallest-key order that respects every wait, so independent units come out
-    /// as they are written. Every read, wait and
-    /// count is scratch: the shape keeps only the order.
-    fn units(&self, draft: &mut Draft<'graph, 'x>) -> Result<(), ShapeError<'graph>> {
+    /// unit waits on the units binding a slot it reads. The units are emitted in the smallest-key
+    /// order that respects every wait, so independent units come out as they are written. Every
+    /// read, wait and count is scratch: the shape keeps only the order.
+    fn units(&self, draft: &mut Draft<'graph, 'x>) {
         let scratch = self.scratch;
         let statements = draft.statements as usize;
         let channels = draft.channels();
@@ -1584,39 +1817,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             let component = draft.component_of[slot.index()];
             component_key[component.index()].map(|key| unit_of_key[key as usize])
         };
-        // `(waited on, waiter, through)`, one per wait — duplicates only raise a count they also
-        // lower. A read waits through nothing, and the reads are acyclic: a cycle among bindings
-        // is one component. An `EVAL` waits through each slot declared before it, which it may
-        // read, so a cycle holds at least one `EVAL` and the body is refused.
-        let mut waits: BumpVec<'x, Wait> = BumpVec::new_in(scratch);
+        // `(waited on, waiter)`, one per wait — duplicates only raise a count they also lower. The
+        // reads are acyclic: a cycle among bindings is one component.
+        let mut waits: BumpVec<'x, (u32, u32)> = BumpVec::new_in(scratch);
         for (statement, slot) in draft.reads.iter() {
             let waiter = unit_of_statement(*statement);
             if let Some(bound) = unit_of_slot(*slot)
                 && bound != waiter
             {
-                waits.push((bound, waiter, None));
-            }
-        }
-        for statement in draft.eval_statements.iter() {
-            let waiter = unit_of_statement(*statement);
-            let before = Position::statement(*statement as usize);
-            for slot in 0..channels.len() {
-                let declared = channels.get(slot);
-                if declared == Position::PARAMETER || declared >= before {
-                    continue;
-                }
-                if let Some(bound) = unit_of_slot(Slot(slot as u32))
-                    && bound != waiter
-                {
-                    waits.push((bound, waiter, Some((Slot(slot as u32), *statement))));
-                }
+                waits.push((bound, waiter));
             }
         }
         waits.sort_unstable();
         // Per unit: the waits outstanding.
         let mut pending: BumpVec<'x, u32> = BumpVec::with_capacity_in(works.len(), scratch);
         pending.resize(works.len(), 0);
-        for (_, waiter, _) in waits.iter() {
+        for (_, waiter) in waits.iter() {
             pending[*waiter as usize] += 1;
         }
         let mut emitted: BumpVec<'x, bool> = BumpVec::with_capacity_in(works.len(), scratch);
@@ -1626,23 +1842,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             .map(|last| unit_of_statement(last as u32));
         let mut cursor = 0;
         while draft.units.len() < works.len() {
-            let Some(unit) =
-                (cursor..works.len()).find(|unit| !emitted[*unit] && pending[*unit] == 0)
-            else {
-                let (slot, statement) = eval_cycle(&waits, &emitted);
-                return Err(ShapeError::EvalCycle {
-                    name: draft.channels().name(slot.index()),
-                    at: draft.nodes[statement as usize].source,
-                });
-            };
+            let unit = (cursor..works.len())
+                .find(|unit| !emitted[*unit] && pending[*unit] == 0)
+                .expect("the reads are acyclic, so some unit is always ready");
             emitted[unit] = true;
             draft.units.push(Unit {
                 work: works[unit],
                 last: last == Some(unit as u32),
             });
             cursor = unit + 1;
-            let first = waits.partition_point(|(bound, _, _)| (*bound as usize) < unit);
-            for (bound, waiter, _) in waits[first..].iter() {
+            let first = waits.partition_point(|(bound, _)| (*bound as usize) < unit);
+            for (bound, waiter) in waits[first..].iter() {
                 if *bound as usize != unit {
                     break;
                 }
@@ -1652,7 +1862,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
             }
         }
-        Ok(())
     }
 
     /// Lay a finished draft down in program storage, its nested drafts first; `form` is the node
@@ -1691,6 +1900,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         declarations.sort_unstable_by_key(|(binder, _)| *binder);
         let mut mentions = draft.mentions;
         mentions.sort_unstable_by_key(|mention| mention.site);
+        let mut offers = draft.offers;
+        offers.sort_unstable_by_key(|(site, _)| *site);
         let members = collect(writer, draft.members.iter().copied());
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
         components.extend(draft.components.iter().map(|component| Component {
@@ -1720,8 +1931,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 rhs: collect(writer, rhs.iter().copied()),
                 declarations: collect(writer, declarations.iter().copied()),
                 units: collect(writer, draft.units.iter().copied()),
-                keeps_defining_scope: draft.keeps_defining_scope,
                 arm: draft.arm,
+                code_type: draft.code_type,
+                refusal: draft.refusal,
+                offers: collect(writer, offers.iter().copied()),
             },
         )
     }

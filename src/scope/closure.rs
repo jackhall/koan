@@ -42,6 +42,11 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
         read.extend(captures.iter().map(|capture| match capture.source {
             CaptureSource::Read(coordinate) => Link::Value(enclosing.read(coordinate)),
             CaptureSource::Member { index, .. } => Link::Edge(edge(index)),
+            CaptureSource::Hole | CaptureSource::Offered => {
+                unreachable!(
+                    "only a code shape's captures are open, and the `EVAL` running it fills them"
+                )
+            }
         }));
         read
     }

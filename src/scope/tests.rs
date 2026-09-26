@@ -8,6 +8,7 @@ mod examples;
 mod groups;
 pub(crate) mod plan;
 mod properties;
+mod quotes;
 mod rewrite;
 mod units;
 
@@ -131,7 +132,8 @@ pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
 pub(super) const BUILTIN_VALUES: &[&str] = &["origin"];
 
 /// The type builtins every suite's table holds.
-pub(super) const BUILTIN_TYPES: &[&str] = &["Number", "Str", "Bool", "Null", "Any", "Ring"];
+pub(super) const BUILTIN_TYPES: &[&str] =
+    &["Number", "Str", "Bool", "Null", "Any", "Ring", "Expression"];
 
 pub(super) fn value_name(text: &str, symbols: &SymbolInterner) -> ValueSymbol {
     ValueSymbol::declared(text, symbols).expect("a value token")
@@ -141,7 +143,8 @@ pub(super) fn type_name(text: &str, symbols: &SymbolInterner) -> TypeSymbol {
     TypeSymbol::declared(text, symbols).expect("a Type token")
 }
 
-/// The suites' builtin table: `origin = 0` and the scalar types, laid down in `writer`'s region.
+/// The suites' builtin table: `origin = 0`, the scalar types and `Expression`, laid down in
+/// `writer`'s region.
 pub(super) fn builtins<'graph, 'cell, X: Knotted>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
@@ -158,6 +161,7 @@ pub(super) fn builtins<'graph, 'cell, X: Knotted>(
         KType::NULL,
         KType::ANY,
         KType::ANY,
+        KType::EXPRESSION,
     ];
     let types: Vec<_> = BUILTIN_TYPES
         .iter()
@@ -190,7 +194,7 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::ShadowsBuiltin { name, .. } => E::ShadowsBuiltin { name, at },
         E::Unbound { name, site, .. } => E::Unbound { name, site, at },
         E::EagerCycle { members, .. } => E::EagerCycle { members, at },
-        E::EvalCycle { name, .. } => E::EvalCycle { name, at },
+        E::MarkOutsideQuote { .. } => E::MarkOutsideQuote { at },
         E::Unsupported { form, .. } => E::Unsupported { form, at },
         E::Malformed { form, .. } => E::Malformed { form, at },
         E::Unsurfaced { site, .. } => E::Unsurfaced { at, site },

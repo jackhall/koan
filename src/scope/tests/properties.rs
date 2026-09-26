@@ -143,7 +143,7 @@ fn kind(kind: Kind) -> ShapeKind {
     match kind {
         Kind::Program => ShapeKind::Program,
         Kind::Callable => ShapeKind::Callable,
-        Kind::Arm | Kind::Eval => ShapeKind::Block,
+        Kind::Arm => ShapeKind::Block,
     }
 }
 
@@ -197,6 +197,9 @@ fn follow(chain: &[&BodyShape<'_>], level: usize, coordinate: Coordinate) -> Fou
                         level: at - 1,
                         name: enclosing.slot_name(member),
                     }
+                }
+                CaptureSource::Hole | CaptureSource::Offered => {
+                    unreachable!("a plan writes no quote value")
                 }
             }
         }
@@ -262,11 +265,6 @@ fn check(
 
         assert_eq!(shape.kind(), kind(planned.kind), "`{source}`");
         assert_eq!(shape.statements(), planned.statements.len() as u32);
-        assert_eq!(
-            shape.keeps_defining_scope(),
-            planned.keeps_defining_scope(),
-            "`{source}`"
-        );
 
         // The layout: values in symbol order, then types in symbol order, each at its position.
         let mut layout: Vec<_> = planned
@@ -397,6 +395,9 @@ fn check(
                         target: Target::Local(_),
                     }) => assert!(!fellows.contains(&capture.name), "`{source}`"),
                     CaptureSource::Read(_) => {}
+                    CaptureSource::Hole | CaptureSource::Offered => {
+                        unreachable!("a plan writes no quote value")
+                    }
                 }
             }
         }
@@ -495,19 +496,59 @@ fn observe(value: Value<'_, '_, Probe>) -> Observed {
     }
 }
 
+/// Where `name` read at `at` in the last shape of `chain` lands, found by name: a builtin, a local
+/// visible at `at`, an unmarked capture, then each enclosing block's shape at the position the block
+/// was entered at — the search every coordinate saves a reader.
+fn by_name(
+    table: &Builtins<'_, '_, Probe>,
+    chain: &[&BodyShape<'_>],
+    name: BinderSymbol,
+    at: Position,
+) -> Option<Coordinate> {
+    if let Some(index) = table.lookup(name) {
+        return Some(Coordinate::Builtin(index));
+    }
+    through_chain(chain, name, at)
+}
+
+/// [`by_name`] for a name that is no builtin.
+fn through_chain(chain: &[&BodyShape<'_>], name: BinderSymbol, at: Position) -> Option<Coordinate> {
+    let (shape, outer) = chain.split_last()?;
+    if let Some((slot, declared)) = shape.slot(name)
+        && at.sees(declared)
+    {
+        let target = Target::Local(slot);
+        return Some(Coordinate::Activation { hops: 0, target });
+    }
+    let captured = shape
+        .captures()
+        .iter()
+        .position(|capture| capture.name == name && capture.mark.is_none());
+    if let Some(index) = captured {
+        let target = Target::Capture(crate::scope::CaptureSlot(index as u32));
+        return Some(Coordinate::Activation { hops: 0, target });
+    }
+    if shape.kind() != ShapeKind::Block {
+        return None;
+    }
+    Some(through_chain(outer, name, shape.entered_at())?.through_block())
+}
+
 /// Activate `shape` with every slot bound to a fresh number, check its by-name and capture laws, and
 /// activate every shape nested in it the way a call or an arm would — a callable's activation run
-/// by a probe standing for itself.
+/// by a probe standing for itself. `chain` is the shapes of the activations enclosing it.
 fn activate<'g, 'c>(
     writer: Writer<'c>,
     scratch: BumpAllocator<'_>,
     table: &'c Builtins<'g, 'c, Probe>,
     activation: Activation<'g, 'c, ProbeFamily>,
+    chain: &mut Vec<&'g BodyShape<'g>>,
     next: &mut f64,
 ) {
     let plan = KnotPlan::new(64);
     let activation = resident(writer, activation);
     let shape = activation.shape();
+    chain.push(shape);
     for slot in 0..shape.slots() {
         activation
             .bind(Slot(slot as u32), Value::Number(*next))
@@ -527,14 +568,8 @@ fn activate<'g, 'c>(
             );
         }
         assert_eq!(
-            activation.coordinate_of(mention.name, at),
+            by_name(table, chain, mention.name, at),
             Some(mention.coordinate)
-        );
-        assert_eq!(
-            activation
-                .coordinate_of(mention.name, at)
-                .map(|coordinate| observe(activation.read(coordinate))),
-            Some(observe(activation.read(mention.coordinate)))
         );
     }
     // A local is found by name exactly at the positions that see it.
@@ -548,7 +583,7 @@ fn activate<'g, 'c>(
                 target: Target::Local(slot),
             };
             assert_eq!(
-                activation.coordinate_of(shape.slot_name(slot), at) == Some(local),
+                by_name(table, chain, shape.slot_name(slot), at) == Some(local),
                 at.sees(declared)
             );
         }
@@ -561,6 +596,7 @@ fn activate<'g, 'c>(
                 scratch,
                 table,
                 Activation::of_block(writer, nested, activation),
+                chain,
                 next,
             ),
             ShapeKind::Callable => {
@@ -589,12 +625,16 @@ fn activate<'g, 'c>(
                     scratch,
                     table,
                     Activation::of_callable(writer, nested, Probe(u32::MAX), bindings, table),
+                    chain,
                     next,
                 );
             }
-            ShapeKind::Program | ShapeKind::Module => panic!("a plan nests no such shape"),
+            ShapeKind::Program | ShapeKind::Module | ShapeKind::Code => {
+                panic!("a plan nests no such shape")
+            }
         }
     }
+    chain.pop();
 }
 
 /// Whether `at` covers the source offset `offset`.
@@ -715,131 +755,17 @@ proptest! {
         shaped_plan(&program, |shaped| check(shaped.symbols, shaped.rendering, &shaped.located, &[]));
     }
 
-    /// Over every activation of a planned program, by-name resolution agrees with the
-    /// coordinates, a local is visible exactly where its position is seen, and closure bindings
-    /// copy the enclosing words.
+    /// Over every activation of a planned program, a by-name search agrees with the coordinates, a
+    /// local is visible exactly where its position is seen, and closure bindings copy the enclosing
+    /// words.
     #[test]
     fn activations_read_what_their_coordinates_name(choices in plan::choices()) {
         let program = Generator::new(&choices).program();
         shaped_plan(&program, |shaped| {
             let activation: Activation<'_, '_, ProbeFamily> =
                 Activation::of_program(shaped.writer, shaped.shape, shaped.table);
-            activate(shaped.writer, shaped.scratch, shaped.table, activation, &mut 1.0);
-        });
-    }
-
-    /// An `EVAL` body planned over the names a statement of the program or of an arm inside
-    /// it sees shapes back into its plan over that scope's chain, and each of its enclosing reads is
-    /// the site's own by-name read.
-    #[test]
-    fn an_eval_body_resolves_over_its_site(choices in plan::choices()) {
-        let mut generator = Generator::new(&choices);
-        let program = generator.program();
-        let rendering = plan::render_program(&program);
-
-        // A site: the program, or an arm reached through arms alone, and one of its statements.
-        let chain_of = |index: usize| {
-            let mut chain = vec![index];
-            while let Some(parent) = rendering.scopes[*chain.last().unwrap()].parent {
-                chain.push(parent);
-            }
-            chain.reverse();
-            chain
-        };
-        let sites: Vec<usize> = (0..rendering.scopes.len())
-            .filter(|index| {
-                chain_of(*index)[1..]
-                    .iter()
-                    .all(|scope| rendering.scopes[*scope].scope.kind == Kind::Arm)
-            })
-            .collect();
-        let site_chain = chain_of(sites[generator.pick(sites.len())]);
-        let innermost = rendering.scopes[*site_chain.last().unwrap()].scope;
-        let at = generator.pick(innermost.statements.len()) as u32;
-
-        // What the site sees: each scope's parameters and the binders before the statement the
-        // chain reads it at, and only the innermost arm's `it`.
-        let mut visible = Vec::new();
-        let mut it_seen = false;
-        for (depth, scope) in site_chain.iter().enumerate().rev() {
-            let reads_at = match site_chain.get(depth + 1) {
-                Some(child) => rendering.scopes[*child].statement,
-                None => at,
-            };
-            for (name, position) in rendering.scopes[*scope].scope.binders() {
-                if name == plan::Name::It {
-                    if it_seen {
-                        continue;
-                    }
-                    it_seen = true;
-                }
-                if position <= reads_at {
-                    visible.push((name, depth));
-                }
-            }
-        }
-        let body = generator.eval_body(site_chain.len(), &visible);
-        let quoted = plan::render_eval(&body, site_chain.len());
-
-        with_fixture(|fixture| {
-            let lines = fixture.parse(&rendering.source);
-            let eval_lines = fixture.parse(&quoted.source);
-            let ExpressionPart::QuotedExpression(quote) = eval_lines[0].parts[0].value else {
-                panic!("`{}` is a quote", quoted.source);
-            };
-            let quote = quote.reference();
-            fixture.in_cell(|writer| {
-                let table = builtins(fixture, writer);
-                let program_shape =
-                    BodyShape::of_program(fixture.program, &lines, table, fixture.types, fixture.scratch())
-                        .expect("a planned program shapes");
-                let nodes: Vec<_> = lines.iter().collect();
-                let located = locate(&rendering, Some(program_shape), &nodes);
-
-                // Activate each scope of the chain beside the one it sits in.
-                let mut next = 1.0;
-                let table: &Builtins<'_, '_, Probe> = table;
-                let mut site: Option<&Activation<'_, '_, ProbeFamily>> = None;
-                let mut shapes = Vec::new();
-                for scope in &site_chain {
-                    let shape = located.shapes[*scope].expect("every planned scope has a shape");
-                    let activation = resident(
-                        writer,
-                        match site {
-                            None => Activation::of_program(writer, shape, table),
-                            Some(site) => Activation::of_block(writer, shape, site),
-                        },
-                    );
-                    for slot in 0..shape.slots() {
-                        activation.bind(Slot(slot as u32), Value::Number(next)).unwrap();
-                        next += 1.0;
-                    }
-                    site = Some(activation);
-                    shapes.push(shape);
-                }
-                let site = site.expect("the chain holds the program");
-                let position = Position::statement(at as usize);
-                let shape = BodyShape::for_eval(fixture.program, quote, site, position, fixture.types, fixture.scratch())
-                    .unwrap_or_else(|error| panic!(
-                        "`{}` over `{}` shapes: {}",
-                        quoted.source,
-                        rendering.source,
-                        error.display(fixture.symbols, fixture.types),
-                    ));
-                let located = locate(&quoted, Some(shape), &[quote]);
-                check(fixture.symbols, &quoted, &located, &shapes);
-
-                let evaluated = Activation::of_block(writer, shape, site);
-                for mention in shape.mentions() {
-                    if matches!(mention.coordinate, Coordinate::Activation { hops: 0, .. }) {
-                        continue;
-                    }
-                    let by_name = site
-                        .coordinate_of(mention.name, position)
-                        .map(|coordinate| site.read(coordinate));
-                    assert_eq!(by_name.map(observe), Some(observe(evaluated.read(mention.coordinate))));
-                }
-            })
+            let mut chain = Vec::new();
+            activate(shaped.writer, shaped.scratch, shaped.table, activation, &mut chain, &mut 1.0);
         });
     }
 }

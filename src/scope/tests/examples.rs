@@ -389,23 +389,6 @@ fn every_capture_limiting_form_is_unsupported() {
 }
 
 #[test]
-fn eval_marks_its_shape_and_every_enclosing_one() {
-    shaped(
-        "LET d = #(origin)\nLET f = (FN :{} -> Number = #(EVAL d))\nLET g = 1",
-        |fixture, lines, shape| {
-            let shape = shape.expect("the program shapes");
-            assert!(shape.keeps_defining_scope());
-            let body = nested_at(shape, &lines[1], 3, 5);
-            assert!(body.keeps_defining_scope());
-            let _ = fixture;
-        },
-    );
-    shaped("LET g = 1", |_, _, shape| {
-        assert!(!shape.unwrap().keeps_defining_scope());
-    });
-}
-
-#[test]
 fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
     shaped(
         "LET f = (FN :{n :Nat} -> Number = #(n))\nUNION Nat = #{Zero: Null}",

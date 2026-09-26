@@ -14,9 +14,8 @@
 //! takes — the activation and its view over the callable's family, since a slot holds its value
 //! erased; `scope` threads it through and reads a callable only to resolve an edge capture.
 //!
-//! A read through a coordinate searches nothing by name. The walk `EVAL` runs is
-//! [`BodyShape::for_eval`], which resolves each free name through [`ActivationView::coordinate_of`] and lands
-//! where the coordinate would.
+//! A read through a coordinate searches nothing by name, `EVAL` included: a quote value's code is
+//! shaped where the program loads, so every free name of it is a capture its `EVAL` fills.
 //!
 //! **Imports.** This module may name `crate::memory`, `crate::parse`, `crate::symbols`,
 //! `crate::type_lattice` and `crate::values`, and no scheduler type. From `type_lattice` it names

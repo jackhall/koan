@@ -344,7 +344,9 @@ fn run<'graph, 'cell>(
                     activation.builtins(),
                 )
             }
-            ShapeKind::Program | ShapeKind::Module => panic!("a plan nests no such shape"),
+            ShapeKind::Program | ShapeKind::Module | ShapeKind::Code => {
+                panic!("a plan nests no such shape")
+            }
         };
         run(
             fixture,

@@ -172,6 +172,33 @@ pub(crate) fn quoted_body<'g>(part: &ExpressionPart<'g>) -> Option<&'g KExpressi
     }
 }
 
+/// A `<kind> NEEDING #[<name> …]` type expression's kind part and its list of one-name quotes, or
+/// `None` for any other node. The names are read by [`needed_name`].
+pub(crate) fn needing<'g>(
+    node: &KExpression<'g>,
+) -> Option<(&'g ExpressionPart<'g>, &'g [ExpressionPart<'g>])> {
+    let [kind, connector, list] = node.parts else {
+        return None;
+    };
+    match (connector.value, &list.value) {
+        (ExpressionPart::Keyword(symbol), ExpressionPart::ListLiteral(names))
+            if symbol == KEYWORDS.needing.symbol() =>
+        {
+            Some((&kind.value, names))
+        }
+        _ => None,
+    }
+}
+
+/// The name a `NEEDING` list's quote spells: a one-part quote of a value or type name.
+pub(crate) fn needed_name(quote: &ExpressionPart<'_>) -> Option<BinderSymbol> {
+    match quoted_part(quote)? {
+        ExpressionPart::Identifier(name) => Some(BinderSymbol::Value(*name)),
+        ExpressionPart::Type(name) => Some(BinderSymbol::Type(*name)),
+        _ => None,
+    }
+}
+
 /// The one part a quote of one part holds — the name or type code `#[…]` and `#{…}` quote an
 /// element as.
 pub(crate) fn quoted_part<'g>(part: &ExpressionPart<'g>) -> Option<&'g ExpressionPart<'g>> {

@@ -10,6 +10,11 @@
 //! each type binder's declaration node, and the order its units run in. [`build`] is the one
 //! builder every kind goes through.
 //!
+//! A quote value's code is a [`ShapeKind::Code`] shape nested at the quote's site, built where the
+//! program loads. Its captures are its `$` names, bound where the quote is written, its open holes
+//! and its open `\` marks; it carries its type and, when its code is malformed, the error an `EVAL`
+//! of it reports. See [README.md § Quotes](README.md#quotes).
+//!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
 //! position is strictly greater than the binding's own. A parameter writes at `0`, statement `i` at
 //! `i + 1`, and the body's end is one past its last statement. An eager mention reads at its
@@ -22,13 +27,12 @@ use std::fmt;
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
-use crate::parse::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredGroup, KType, TypeRegistry, display_name};
-use crate::values::{Knotted, KnottedFamily};
+use crate::values::Knotted;
 
-use super::activation::ActivationView;
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
@@ -167,7 +171,7 @@ pub struct Mention {
     pub coordinate: Coordinate,
 }
 
-/// The four kinds of body a shape describes.
+/// The five kinds of body a shape describes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShapeKind {
     /// The top level: no captures and no enclosing activation.
@@ -176,15 +180,22 @@ pub enum ShapeKind {
     Callable,
     /// A `MODULE` or `GROUP` body: captures, and is an eager context.
     Module,
-    /// A `MATCH` or `TRY` arm, or an `EVAL` body: activated in the enclosing frame beside a pointer
-    /// to the enclosing activation.
+    /// A `MATCH` or `TRY` arm, or a `USING … SCOPE` body: activated in the enclosing frame beside a
+    /// pointer to the enclosing activation.
     Block,
+    /// A quote value's code: captures its `$` names where the quote is written, like a callable,
+    /// and leaves every other free name an open hole or an open `\` mark. An `EVAL` activates it
+    /// with no enclosing activation.
+    Code,
 }
 
-/// One closure binding a callable's birth fills, and where from.
+/// One closure binding a birth fills, and where from. `mark` is the mark the name was read through
+/// — `None` for an unmarked name — so a hole `x`, a `$x` and a `\x` read in one body are three
+/// captures.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CaptureSpec {
     pub name: BinderSymbol,
+    pub mark: Option<Mark>,
     pub source: CaptureSource,
 }
 
@@ -199,6 +210,10 @@ pub enum CaptureSource {
         component: ComponentIndex,
         index: u32,
     },
+    /// An open hole of a code shape: a `USING` supplies it, or it stays unbound.
+    Hole,
+    /// An open `\` mark of a code shape: the `EVAL` that runs the code offers it.
+    Offered,
 }
 
 /// A strongly connected component of a shape's bindings.
@@ -247,7 +262,7 @@ pub struct BodyShape<'graph> {
     /// operand surfaces. Empty for every other body.
     held: &'graph [&'graph DeclaredGroup<'graph>],
     /// The position in the enclosing shape this one is entered at: the statement's for an eager
-    /// boundary, the enclosing body's end for a deferred one, and `EVAL`'s own for an `EVAL` body.
+    /// boundary, the enclosing body's end for a deferred one.
     entered_at: Position,
     component_of: &'graph [ComponentIndex],
     components: &'graph [Component<'graph>],
@@ -264,9 +279,17 @@ pub struct BodyShape<'graph> {
     declarations: &'graph [(Slot, &'graph KExpression<'graph>)],
     /// The body's units in the order they are performed.
     units: &'graph [Unit],
-    keeps_defining_scope: bool,
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
     arm: Option<Arm<'graph>>,
+    /// A code shape's carried type: its code kind needing its open `\` marks. `Code` for every
+    /// other kind.
+    code_type: KType,
+    /// Why a code shape's code cannot be built — reported when an `EVAL` runs it. A refused code
+    /// shape holds its `$` captures and nothing else.
+    refusal: Option<&'graph ShapeError<'graph>>,
+    /// Each `EVAL` of a code parameter whose type needs names, by its operand's site, beside each
+    /// needed name and where it resolves at the `EVAL`.
+    offers: &'graph [(Site, &'graph [(BinderSymbol, Coordinate)])],
 }
 
 /// What a `MATCH` or `TRY` arm's block is to the expression shape holding it.
@@ -294,19 +317,6 @@ impl<'graph> BodyShape<'graph> {
         build::program(brand, statements, builtins, types, scratch)
     }
 
-    /// The block shape of `body` evaluated by an `EVAL` reading at `at` in `site`: every free name
-    /// resolves by name over `site`'s chain, and a binder in `body` binds in this block.
-    pub fn for_eval<XF: KnottedFamily<'graph>>(
-        brand: ProgramBrand<'graph>,
-        body: &KExpression<'graph>,
-        site: &ActivationView<'graph, '_, XF>,
-        at: Position,
-        types: &TypeRegistry<'graph>,
-        scratch: BumpAllocator<'_>,
-    ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
-        build::eval(brand, body, site, at, types, scratch)
-    }
-
     pub fn kind(&self) -> ShapeKind {
         self.kind
     }
@@ -327,8 +337,8 @@ impl<'graph> BodyShape<'graph> {
         self.body
     }
 
-    /// The operator-group frame this body was built under — what an `EVAL` written here roots its
-    /// own frame at, and what decides which groups an operator run here may chain under.
+    /// The operator-group frame this body was built under — what decides which groups an operator
+    /// run here may chain under.
     pub fn group_frame(&self) -> &'graph GroupFrame<'graph> {
         self.group_frame
     }
@@ -373,6 +383,10 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// The capture layout, in closure-slot order. Empty for a program and a block.
+    ///
+    /// A code shape's captures are its `$` names, each read where the quote is written, its open
+    /// holes and its open `\` marks — every free name of its code, so nothing is searched when an
+    /// `EVAL` runs it.
     pub fn captures(&self) -> &'graph [CaptureSpec] {
         self.captures
     }
@@ -383,8 +397,7 @@ impl<'graph> BodyShape<'graph> {
 
     /// The body's units in the order they are performed: each after every unit it reads, two
     /// independent ones as they are written. A unit is a component whose members are not all
-    /// parameters, or a statement that binds nothing; a statement containing `EVAL` also follows
-    /// every unit binding a name declared before it, since no shape can enumerate what it reads.
+    /// parameters, or a statement that binds nothing.
     pub fn units(&self) -> &'graph [Unit] {
         self.units
     }
@@ -468,41 +481,52 @@ impl<'graph> BodyShape<'graph> {
         Some(self.declarations[index].1)
     }
 
-    /// Whether this shape holds an `EVAL` or encloses a shape that does, so its activation must
-    /// stay reachable from the shapes inside it.
-    pub fn keeps_defining_scope(&self) -> bool {
-        self.keeps_defining_scope
+    /// A code shape's carried type — its code kind needing its open `\` marks — and `Code` for
+    /// every other kind.
+    pub fn code_type(&self) -> KType {
+        self.code_type
     }
 
-    /// `name` by name within this shape alone: a local visible at `at`, else a capture.
-    pub(crate) fn resolve_here(&self, name: BinderSymbol, at: Position) -> Option<Target> {
-        resolve_here(self.names, self.captures, name, at)
+    /// Why this code shape's code cannot be built, reported when an `EVAL` runs it.
+    pub fn refusal(&self) -> Option<&'graph ShapeError<'graph>> {
+        self.refusal
+    }
+
+    /// The names the `EVAL` whose operand sits at `site` offers the code it runs, each beside where
+    /// it resolves there. Empty for an `EVAL` of anything but a parameter needing names.
+    pub fn offers(&self, site: Site) -> &'graph [(BinderSymbol, Coordinate)] {
+        self.offers
+            .binary_search_by_key(&site, |(offered, _)| *offered)
+            .map_or(&[], |index| self.offers[index].1)
     }
 }
 
-/// `name` read at `at` over one body's declared names and captures: a local visible at `at`, else a
-/// capture of that name.
+/// `name` read through `mark` at `at` over one body's declared names and captures: a local visible
+/// at `at`, else a capture of that name through the same mark. A `$` name never binds to a local,
+/// since it resolves where the quote holding it is written.
 fn resolve_here(
     names: Channels<'_, Position>,
     captures: &[CaptureSpec],
     name: BinderSymbol,
+    mark: Option<Mark>,
     at: Position,
 ) -> Option<Target> {
-    if let Some(index) = names.find(name)
+    if mark != Some(Mark::Written)
+        && let Some(index) = names.find(name)
         && at.sees(names.get(index))
     {
         return Some(Target::Local(Slot(index as u32)));
     }
     captures
         .iter()
-        .position(|capture| capture.name == name)
+        .position(|capture| capture.name == name && capture.mark == mark)
         .map(|index| Target::Capture(CaptureSlot(index as u32)))
 }
 
 /// Why a shape could not be built. Every error carries where it was found, as a [`SourceRef`]:
 /// the part it is about when that part carries a span, else the nearest spanned part or node
 /// around it.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeError<'graph> {
     /// A name declared twice in one shape, at where each declaration is written.
     Rebind {
@@ -524,9 +548,8 @@ pub enum ShapeError<'graph> {
         members: &'graph [BinderSymbol],
         at: SourceRef,
     },
-    /// An `EVAL` statement at `at` that may read `name`, declared before it, whose binding waits on
-    /// the `EVAL`'s statement.
-    EvalCycle { name: BinderSymbol, at: SourceRef },
+    /// A `$` or `\` mark at `at` that no quote value holds.
+    MarkOutsideQuote { at: SourceRef },
     /// A form the shape builder does not resolve.
     Unsupported { form: BuiltinShapeId, at: SourceRef },
     /// A form whose body or branches are not the shape it declares.
@@ -634,7 +657,7 @@ impl ShapeError<'_> {
             ShapeError::ShadowsBuiltin { at, .. }
             | ShapeError::Unbound { at, .. }
             | ShapeError::EagerCycle { at, .. }
-            | ShapeError::EvalCycle { at, .. }
+            | ShapeError::MarkOutsideQuote { at }
             | ShapeError::Unsupported { at, .. }
             | ShapeError::Malformed { at, .. }
             | ShapeError::Unsurfaced { at, .. }
@@ -697,10 +720,8 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
                 }
                 Ok(())
             }
-            ShapeError::EvalCycle { name: read, .. } => write!(
-                f,
-                "this `EVAL` may read `{}`, which needs its statement's value first",
-                name(read)
+            ShapeError::MarkOutsideQuote { .. } => f.write_str(
+                "a `$` or `\\` mark belongs to a quote value, and no quote value holds this one",
             ),
             ShapeError::Unsupported { form, .. } => {
                 write!(f, "`{form:?}` is not supported here yet")

@@ -85,6 +85,8 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) opaque: StaticName<KeywordSymbol>,
     /// The transparent ascription operator `:!`.
     pub(crate) transparent: StaticName<KeywordSymbol>,
+    /// The connector of a code kind and the names its code needs, `Expression NEEDING #[y]`.
+    pub(crate) needing: StaticName<KeywordSymbol>,
 }
 
 pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
@@ -122,6 +124,7 @@ pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
     attr: crate::static_name!(KeywordSymbol, "ATTR"),
     opaque: crate::static_name!(KeywordSymbol, ":|"),
     transparent: crate::static_name!(KeywordSymbol, ":!"),
+    needing: crate::static_name!(KeywordSymbol, "NEEDING"),
 };
 
 /// One position of a builtin bucket: a fixed keyword token, or a slot under a role typed once per
