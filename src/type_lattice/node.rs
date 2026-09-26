@@ -13,7 +13,7 @@
 //! See [README.md](README.md) § The node vocabulary.
 
 use crate::memory::ScopeId;
-use crate::symbols::TypeSymbol;
+use crate::symbols::{BinderSymbol, TypeSymbol};
 
 use super::digest::TypeDigest;
 use super::handle::KType;
@@ -65,6 +65,17 @@ pub enum TypeNode<'run> {
     AnyValue,
     /// The code family's top, spelled `Code`: above every code kind.
     AnyCode,
+    /// A code kind and the names its code needs where it is built, spelled
+    /// `:(Expression NEEDING #[y])`: the carried type of a quote whose `\` marks no binder in its
+    /// own code fills. Below `Code`, above the same kind needing more, and below the same kind
+    /// needing fewer; the bare kind is the kind needing nothing, so `names` is never empty. Build
+    /// through [`TypeRegistry::code_needing`](super::registry::TypeRegistry::code_needing).
+    CodeNeeding {
+        /// A code kind below `Code`.
+        kind: KType,
+        /// Symbol-sorted and deduplicated: the needed names are a set.
+        names: &'run [BinderSymbol],
+    },
     /// The uninhabited bottom: admitted by no value, below every other type, and the identity
     /// element of both [`join`](super::lattice::join) and union canonicalization. Spellable as
     /// the builtin name `Never`, where it declares a slot nothing fills.

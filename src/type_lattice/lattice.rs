@@ -13,7 +13,7 @@ use crate::memory::{BumpAllocator, BumpVec};
 
 use super::handle::KType;
 use super::node::TypeNode;
-use super::order::is_subtype_of;
+use super::order::{code_needs, is_subtype_of};
 use super::registry::TypeRegistry;
 use super::sig_relations::meet_schemas;
 use super::walk::Variance;
@@ -48,7 +48,8 @@ pub fn join_iter<I: IntoIterator<Item = KType>>(
 /// Pointwise through lists, dicts and constructor arguments; the union of both field sets with
 /// shared fields met for records; the intersection of parameter names with shared parameters joined
 /// and returns met for functions; distribution through a union; [`meet_schemas`] for two
-/// signatures; `Never` where no common shape exists.
+/// signatures; the kinds' meet needing the names both need for two code kinds; `Never` where no
+/// common shape exists.
 pub fn meet(types: &TypeRegistry<'_>, scratch: BumpAllocator<'_>, a: KType, b: KType) -> KType {
     lockstep(types, scratch, a, b, Variance::Co, &mut Meet)
 }
@@ -115,7 +116,23 @@ impl Lockstep for Meet {
             (TypeNode::Signature { schema: x, .. }, TypeNode::Signature { schema: y, .. }) => {
                 meet_schemas(types, scratch, x, y).unwrap_or(KType::NEVER)
             }
-            _ => KType::NEVER,
+            // Two code kinds, one needing names, meet at the kinds' meet needing the names both
+            // need. Two bare kinds unordered in the code tree have no meet.
+            (na, nb) => match (code_needs(types, a), code_needs(types, b)) {
+                (Some((x, xs)), Some((y, ys)))
+                    if matches!(na, TypeNode::CodeNeeding { .. })
+                        || matches!(nb, TypeNode::CodeNeeding { .. }) =>
+                {
+                    let kind = meet(types, scratch, x, y);
+                    if kind == KType::NEVER {
+                        return KType::NEVER;
+                    }
+                    let mut both = BumpVec::new_in(scratch);
+                    both.extend(xs.iter().filter(|name| ys.contains(name)).copied());
+                    types.code_needing(scratch, kind, &both)
+                }
+                _ => KType::NEVER,
+            },
         }
     }
 

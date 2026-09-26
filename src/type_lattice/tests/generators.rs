@@ -219,13 +219,23 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
                 )
             })
         });
+    // A code kind needing names: a kind from three levels of the code tree, needing one to three
+    // names of the binder alphabet.
+    let needing_world = world.clone();
+    let needing = (
+        prop::sample::select(&[KType::BLOCK, KType::EXPRESSION, KType::BINDER][..]),
+        prop::sample::subsequence(world.binders.as_ref().clone(), 1..=3),
+    )
+        .prop_map(move |(kind, names)| {
+            with_scratch(|scratch| needing_world.types.code_needing(scratch, kind, &names))
+        });
     let mut rigid: Vec<KType> = bound.as_ref().clone();
     rigid.extend(members.iter().copied());
     if rigid.is_empty() {
-        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque].boxed();
+        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => needing].boxed();
     }
     let in_scope = (0..rigid.len()).prop_map(move |index| rigid[index]);
-    prop_oneof![6 => atoms, 1 => deferred, 2 => opaque, 4 => in_scope].boxed()
+    prop_oneof![6 => atoms, 1 => deferred, 2 => opaque, 2 => needing, 4 => in_scope].boxed()
 }
 
 /// The declaring scope a generated opaque mint is sourced at — any id that is not the canonical

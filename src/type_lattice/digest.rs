@@ -92,6 +92,7 @@ const TAG_BINDER: u8 = 0x27;
 const TAG_NAME: u8 = 0x28;
 const TAG_KEYWORD: u8 = 0x29;
 const TAG_DECLARATION: u8 = 0x2A;
+const TAG_CODE_NEEDING: u8 = 0x2B;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -194,6 +195,7 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::AnyValue => leaf_digest(TAG_ANY_VALUE),
         TypeNode::AnyCode => leaf_digest(TAG_ANY_CODE),
         TypeNode::Never => leaf_digest(TAG_NEVER),
+        TypeNode::CodeNeeding { kind, names } => code_needing_digest(*kind, names),
         TypeNode::OfKind(k) => of_kind_digest(*k),
         TypeNode::DeferredReturn(surface) => deferred_return_digest(*surface),
         TypeNode::AbstractType {
@@ -288,6 +290,17 @@ pub(super) fn abstract_type_digest(
         h.symbol(param.symbol());
     }
     h.digest(bound.digest()).finish()
+}
+
+/// A code kind needing names: the kind, then the names in the symbol-sorted order the node stores
+/// them in.
+pub(super) fn code_needing_digest(kind: KType, names: &[BinderSymbol]) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_CODE_NEEDING);
+    h.digest(kind.digest()).count(names.len());
+    for name in names {
+        h.symbol(name.symbol());
+    }
+    h.finish()
 }
 
 // Per-shape digest builders. Each takes its children's handles — which are already their digests

@@ -16,6 +16,7 @@ use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
+use crate::type_lattice::render::display_name;
 use crate::type_lattice::schema::{SchemaDraft, shape_slots};
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 use crate::type_lattice::unify::{Collector, UnifyFailure, admits_with};
@@ -509,6 +510,72 @@ fn the_code_kinds_form_a_tree_under_code() {
         types.dict(KType::SYMBOL, KType::ANY_CODE)
     ));
     assert!(below(KType::TYPE_CODE, KType::EXPRESSION));
+}
+
+/// A code kind needing names lies under `Code`, over the same kind needing more and over a kind
+/// under its own, and under the same kind needing fewer; the bare kind needs none. Two meet at
+/// their kinds' meet needing the names both need, and one renders as its `NEEDING` spelling.
+#[test]
+fn a_code_kind_needing_names_is_ordered_by_kind_and_by_its_names() {
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let symbols = SymbolInterner::new();
+    let name = |text: &str| BinderSymbol::declared(text, &symbols).expect("a bindable token");
+    let (y, z) = (name("y"), name("z"));
+    let below = |a: KType, b: KType| is_subtype_of(&types, region, a, b);
+    let needing = |kind: KType, names: &[BinderSymbol]| types.code_needing(region, kind, names);
+
+    assert_eq!(needing(KType::EXPRESSION, &[]), KType::EXPRESSION);
+    assert_eq!(
+        needing(KType::EXPRESSION, &[z, y, y]),
+        needing(KType::EXPRESSION, &[y, z])
+    );
+    let expression_y = needing(KType::EXPRESSION, &[y]);
+    let expression_yz = needing(KType::EXPRESSION, &[y, z]);
+    let block_y = needing(KType::BLOCK, &[y]);
+    let binder_y = needing(KType::BINDER, &[y]);
+    let expression_z = needing(KType::EXPRESSION, &[z]);
+
+    for (lower, upper) in [
+        (KType::EXPRESSION, expression_y),
+        (expression_y, expression_yz),
+        (expression_y, block_y),
+        (binder_y, expression_y),
+        (KType::LITERAL, expression_y),
+        (expression_yz, KType::ANY_CODE),
+    ] {
+        assert!(below(lower, upper), "{lower:?} under {upper:?}");
+        assert!(!below(upper, lower), "{upper:?} not under {lower:?}");
+    }
+    for (a, b) in [
+        (expression_y, KType::EXPRESSION),
+        (expression_y, expression_z),
+        (block_y, KType::EXPRESSION),
+        (expression_y, KType::ANY_VALUE),
+    ] {
+        assert!(!below(a, b), "{a:?} not under {b:?}");
+    }
+
+    assert_eq!(meet(&types, region, expression_yz, block_y), expression_y);
+    assert_eq!(
+        meet(&types, region, expression_y, expression_z),
+        KType::EXPRESSION
+    );
+    assert_eq!(
+        meet(&types, region, block_y, KType::LITERAL),
+        KType::LITERAL
+    );
+    assert_eq!(meet(&types, region, binder_y, KType::LITERAL), KType::NEVER);
+    assert_eq!(
+        join(&types, region, expression_y, expression_yz),
+        expression_yz
+    );
+
+    assert_eq!(
+        display_name(block_y, &types, &symbols).to_string(),
+        ":(Block NEEDING #[y])"
+    );
 }
 
 /// No law: the order's laws hold over union-bounded variables without naming one. These pin the

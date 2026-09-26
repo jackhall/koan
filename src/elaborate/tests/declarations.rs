@@ -1,13 +1,14 @@
 //! The door a component of type binders comes into being through: each declaration it elaborates,
 //! each group it seals, and each refusal.
 
-use crate::symbols::{BinderSymbol, KeywordSymbol, ValueSymbol};
+use crate::memory::BumpAllocator;
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, ValueSymbol};
 use crate::type_lattice::{
-    FoldDirection, KKind, KType, NodeSchema, ReductionMode, TypeNode, member,
+    FoldDirection, KKind, KType, NodeSchema, ReductionMode, TypeNode, TypeRegistry, member,
 };
 
 use super::super::{Elaboration, callable_type};
-use super::{Program, brought, declared};
+use super::{Held, Program, brought, declared, with_program};
 
 /// The representation a newtype member wraps.
 fn representation(program: &Program<'_, '_, '_>, handle: KType) -> KType {
@@ -348,6 +349,55 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
                 "`{source}` refuses: {brought:?}"
             );
             assert!(program.unbound(left), "`{source}` leaves `{left}` empty");
+        });
+    }
+}
+
+/// `Kind NEEDING #[…]` is the code kind needing the names its one-name quotes spell, in any order;
+/// a kind that is no code, or a list element that is no one-name quote, refuses.
+#[test]
+fn a_code_kind_needing_names_is_spelled_with_needing() {
+    fn expression(
+        _: &TypeRegistry<'_>,
+        _: BumpAllocator<'_>,
+        _: &SymbolInterner,
+    ) -> Vec<(&'static str, KType)> {
+        vec![("Expression", KType::EXPRESSION)]
+    }
+    let declared = |source: &str, check: &dyn Fn(Program<'_, '_, '_>, Result<(), Elaboration>)| {
+        with_program(
+            source,
+            expression,
+            |_, _, _| Held::Empty,
+            |program| {
+                let brought = program.declare();
+                check(program, brought)
+            },
+        )
+    };
+    declared(
+        "LET Needs = :(Expression NEEDING #[y it Carrier])\nLET Same = :(Expression NEEDING #[Carrier it y y])",
+        &|program, brought| {
+            brought.expect("a code kind needing names declares");
+            let names = ["y", "it", "Carrier"].map(|text| BinderSymbol::classify(text).unwrap());
+            let needing = program
+                .types
+                .code_needing(program.scratch, KType::EXPRESSION, &names);
+            assert_eq!(program.bound("Needs"), needing);
+            assert_eq!(program.bound("Same"), needing);
+        },
+    );
+    for source in [
+        "LET Bad = :(Number NEEDING #[y])",
+        "LET Bad = :(Expression NEEDING #[(a b)])",
+        "LET Bad = :(Expression NEEDING [1])",
+    ] {
+        declared(source, &|program, brought| {
+            assert!(
+                matches!(brought, Err(Elaboration::Unsupported { .. })),
+                "`{source}` refuses: {brought:?}"
+            );
+            assert!(program.unbound("Bad"), "`{source}` leaves `Bad` empty");
         });
     }
 }

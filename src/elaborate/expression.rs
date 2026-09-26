@@ -25,6 +25,8 @@ struct Connectors {
     /// Arity-one constructor application. A connector of the type language, not a table keyword:
     /// the surrounding `:(…)` is what puts it in type context.
     as_: StaticName<KeywordSymbol>,
+    /// A code kind and the names its code needs, `Expression NEEDING #[y]`.
+    needing: StaticName<KeywordSymbol>,
 }
 
 static CONNECTORS: Connectors = Connectors {
@@ -34,6 +36,7 @@ static CONNECTORS: Connectors = Connectors {
     union: crate::static_name!(KeywordSymbol, "|"),
     meet: crate::static_name!(KeywordSymbol, "&"),
     as_: crate::static_name!(KeywordSymbol, "AS"),
+    needing: crate::static_name!(KeywordSymbol, "NEEDING"),
 };
 
 /// `part` as a type, its names read through `reader`: every name is the mention `reader`'s shape
@@ -275,6 +278,31 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                 };
                 let argument = self.part(&parts[0].value, groups)?;
                 self.apply(site, constructor, &[(BinderSymbol::Type(*param), argument)])
+            }
+            // `Kind NEEDING #[y …]` — a code kind below `Code`, and a list of one-name quotes.
+            3 if keyword(1, &CONNECTORS.needing) => {
+                let kind = self.part(&parts[0].value, groups)?;
+                let ExpressionPart::ListLiteral(quotes) = parts[2].value else {
+                    return Err(unsupported);
+                };
+                if kind.code_parent().is_none() {
+                    return Err(unsupported);
+                }
+                let mut names = BumpVec::with_capacity_in(quotes.len(), self.scratch);
+                for quote in quotes.iter() {
+                    let ExpressionPart::QuotedExpression(quoted) = quote else {
+                        return Err(unsupported);
+                    };
+                    names.push(match quoted.parts {
+                        [only] => match only.value {
+                            ExpressionPart::Identifier(name) => BinderSymbol::Value(name),
+                            ExpressionPart::Type(name) => BinderSymbol::Type(name),
+                            _ => return Err(unsupported),
+                        },
+                        _ => return Err(unsupported),
+                    });
+                }
+                Ok(self.types.code_needing(self.scratch, kind, &names))
             }
             4 if keyword(0, &CONNECTORS.map) && keyword(2, &KEYWORDS.arrow) => {
                 let key = self.part(&parts[1].value, groups)?;

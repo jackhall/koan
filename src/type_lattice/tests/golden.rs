@@ -171,6 +171,7 @@ fn every_node_kind_has_its_own_tag() {
     let arguments = [(field, KType::STR)];
     let elements = [DispatchTokenElement::Keyword(keyword)];
     let members = [KType::NUMBER, KType::STR];
+    let needed = [field];
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
@@ -242,6 +243,10 @@ fn every_node_kind_has_its_own_tag() {
         },
         TypeNode::DeferredReturn(DeferredReturnSurface::Type(name)),
         TypeNode::Sibling(0),
+        TypeNode::CodeNeeding {
+            kind: KType::EXPRESSION,
+            names: &needed,
+        },
         TypeNode::SetMember {
             scc_digest: node_digest(region, &TypeNode::Number),
             index: 0,
@@ -289,6 +294,7 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::DeferredReturn(_) => "DeferredReturn",
             TypeNode::Sibling(_) => "Sibling",
             TypeNode::SetMember { .. } => "SetMember",
+            TypeNode::CodeNeeding { .. } => "CodeNeeding",
         };
     }
     let digests: Vec<_> = representatives

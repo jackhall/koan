@@ -274,6 +274,7 @@ impl KType {
             | TypeNode::DeferredReturn(_)
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. }
+            | TypeNode::CodeNeeding { .. }
             | TypeNode::Sibling(_) => None,
         })
     }

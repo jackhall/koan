@@ -347,6 +347,10 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
         | TypeNode::Name
         | TypeNode::Keyword
         | TypeNode::AnyCode => part.code_kind().is_some_and(|kind| kind.within_code(slot)),
+        // A raw part reports its kind alone, so the names a slot offers constrain nothing here.
+        TypeNode::CodeNeeding { kind, .. } => {
+            part.code_kind().is_some_and(|part| part.within_code(kind))
+        }
         TypeNode::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),
         TypeNode::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
         TypeNode::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),

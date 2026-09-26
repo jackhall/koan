@@ -295,6 +295,8 @@ pub fn children(
         | TypeNode::Any
         | TypeNode::AnyValue
         | TypeNode::AnyCode
+        // Its kind is a ground code leaf, so nothing under it is ever rebuilt.
+        | TypeNode::CodeNeeding { .. }
         | TypeNode::Never
         | TypeNode::OfKind(_)
         | TypeNode::DeferredReturn(_)

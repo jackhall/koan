@@ -11,6 +11,7 @@
 //! step with this one.
 
 use crate::memory::{BumpAllocator, BumpVec};
+use crate::symbols::BinderSymbol;
 
 use super::handle::KType;
 use super::node::TypeNode;
@@ -175,6 +176,13 @@ impl Lockstep for Order {
                 TypeNode::ConstructorApply { constructor, .. },
                 TypeNode::SetMember { .. } | TypeNode::Sibling(_),
             ) => constructor == b,
+            // A code kind needing names is above a kind under its own needing no more of them;
+            // a bare kind needs none.
+            (_, TypeNode::CodeNeeding { kind, names }) => {
+                code_needs(types, a).is_some_and(|(sub, needs)| {
+                    sub.within_code(kind) && needs.iter().all(|name| names.contains(name))
+                })
+            }
             // A code kind below `Code` is above exactly the code kinds under it in the code
             // family's tree.
             _ if b.code_parent().is_some() => a.within_code(b),
@@ -213,6 +221,19 @@ impl Lockstep for Order {
     }
 }
 
+/// A code kind below `Code` as its kind and the names it needs: a bare kind needs none. `None` for
+/// every other type.
+pub(super) fn code_needs<'run>(
+    types: &TypeRegistry<'run>,
+    ktype: KType,
+) -> Option<(KType, &'run [BinderSymbol])> {
+    match types.node(ktype) {
+        TypeNode::CodeNeeding { kind, names } => Some((kind, names)),
+        _ if ktype.code_parent().is_some() => Some((ktype, &[])),
+        _ => None,
+    }
+}
+
 /// The family top `node` lies under by its own shape — `Value`, `Type` or `Code` — or `None` for a
 /// node whose family is decided elsewhere: the lattice's top and bottom, a union by its members, a
 /// type variable by its bound, and a deferred return by the return it defers. No arm is a wildcard,
@@ -245,6 +266,7 @@ fn family_top(node: &TypeNode<'_>) -> Option<KType> {
         | TypeNode::Binder
         | TypeNode::Name
         | TypeNode::Keyword
+        | TypeNode::CodeNeeding { .. }
         | TypeNode::AnyCode => Some(KType::ANY_CODE),
         TypeNode::OfKind(_) => Some(KType::ANY_TYPE),
         TypeNode::Any

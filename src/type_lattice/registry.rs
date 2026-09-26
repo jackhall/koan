@@ -530,6 +530,33 @@ impl<'run> TypeRegistry<'run> {
         })
     }
 
+    /// A code kind needing `names` where its code is built. `kind` is a code kind below `Code`;
+    /// `names` may arrive in any order and repeat, since identity is their set, and needing none
+    /// is the bare `kind` itself.
+    pub fn code_needing(
+        &self,
+        scratch: BumpAllocator<'_>,
+        kind: KType,
+        names: &[BinderSymbol],
+    ) -> KType {
+        debug_assert!(
+            kind.code_parent().is_some(),
+            "a code kind needing names is a kind below `Code`",
+        );
+        if names.is_empty() {
+            return kind;
+        }
+        let mut sorted = BumpVec::with_capacity_in(names.len(), scratch);
+        sorted.extend_from_slice(names);
+        sorted.sort_unstable();
+        sorted.dedup();
+        let digest = digest::code_needing_digest(kind, &sorted);
+        self.intern_digested(digest, || TypeNode::CodeNeeding {
+            kind,
+            names: self.rehome(&sorted),
+        })
+    }
+
     /// The `index`-th rigid variable of the enclosing shape's group, bounded by `bound`.
     ///
     /// A bound holds no rigid variable of its own — see [`contains_rigid`](Self::contains_rigid).

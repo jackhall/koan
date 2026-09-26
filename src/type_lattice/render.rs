@@ -73,6 +73,18 @@ fn write_name_in(
         TypeNode::AnyCode => f.write_str(CODE_NAME.text()),
         TypeNode::Never => f.write_str(NEVER_NAME.text()),
         TypeNode::OfKind(kind) => f.write_str(kind.surface_keyword()),
+        TypeNode::CodeNeeding { kind, names } => {
+            f.write_str(":(")?;
+            write_name_in(*kind, f, types, symbols, binder)?;
+            f.write_str(" NEEDING #[")?;
+            for (index, name) in names.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(" ")?;
+                }
+                write!(f, "{}", symbols.display(name.symbol()))?;
+            }
+            f.write_str("])")
+        }
         TypeNode::List { element } => {
             f.write_str(":(LIST OF ")?;
             write_name_in(*element, f, types, symbols, binder)?;
