@@ -30,8 +30,8 @@ use crate::symbols::{Symbol, SymbolInterner, is_keyword_token, is_type_name};
 // --- The generated tree ---
 
 /// A koan expression as the generator builds it: one variant per surface form a parse turns into
-/// a part. A `Group` is a `(…)`, a `Quote` a `#(…)`, an `Eval` a `$(…)`, and `Dict` / `Record`
-/// are the two readings of a `{…}` its first pair separator selects.
+/// a part. A `Group` is a `(…)`, a `Quote` a `#(…)`, a `Marked` a `$name` or `\name`, and `Dict` /
+/// `Record` are the two readings of a `{…}` its first pair separator selects.
 #[derive(Debug, Clone, PartialEq)]
 enum Tree {
     Keyword(String),
@@ -45,7 +45,7 @@ enum Tree {
     TypeSigil(Vec<Tree>),
     RecordType(Vec<(Tree, Tree)>),
     Quote(Vec<Tree>),
-    Eval(Vec<Tree>),
+    Marked(char, String),
     List(Vec<Tree>),
     Dict(Vec<(Tree, Tree)>),
     Record(Vec<(String, Tree)>),
@@ -106,6 +106,12 @@ fn scalar() -> BoxedStrategy<Tree> {
     .boxed()
 }
 
+/// A marked name, `$name` or `\name`.
+fn marked() -> impl Strategy<Value = Tree> {
+    (prop::sample::select(&['$', '\\'][..]), binder_name())
+        .prop_map(|(mark, name)| Tree::Marked(mark, name))
+}
+
 /// A binder name: what a record field key classifies as, on either side of the token partition.
 fn binder_name() -> impl Strategy<Value = String> {
     prop_oneof![identifier(), type_name()]
@@ -144,13 +150,10 @@ fn record_fields(depth: u32) -> impl Strategy<Value = Vec<(String, Tree)>> {
 }
 
 /// A `:(…)` body. A body of exactly one sub-expression is re-labelled onto that node rather than
-/// wrapped, so a filler part joins a lone group, type sigil or eval.
+/// wrapped, so a filler part joins a lone group or type sigil.
 fn type_sigil_body(depth: u32) -> impl Strategy<Value = Vec<Tree>> {
     prop::collection::vec(value_tree(depth), 0..3).prop_map(|mut items| {
-        if matches!(
-            items.as_slice(),
-            [Tree::Group(_) | Tree::TypeSigil(_) | Tree::Eval(_)]
-        ) {
+        if matches!(items.as_slice(), [Tree::Group(_) | Tree::TypeSigil(_)]) {
             items.push(Tree::Type("Filler".to_string()));
         }
         items
@@ -178,16 +181,21 @@ fn record_type_pairs(depth: u32) -> impl Strategy<Value = Vec<(Tree, Tree)>> {
 /// An item of an expression run — everything the surface admits where a keyword is a keyword.
 fn value_tree(depth: u32) -> BoxedStrategy<Tree> {
     if depth == 0 {
-        return prop_oneof![4 => scalar(), 1 => keyword().prop_map(Tree::Keyword)].boxed();
+        return prop_oneof![
+            4 => scalar(),
+            1 => keyword().prop_map(Tree::Keyword),
+            1 => marked(),
+        ]
+        .boxed();
     }
     prop_oneof![
         6 => scalar(),
         2 => keyword().prop_map(Tree::Keyword),
+        1 => marked(),
         3 => prop::collection::vec(value_tree(depth - 1), 0..3).prop_map(Tree::Group),
         1 => type_sigil_body(depth - 1).prop_map(Tree::TypeSigil),
         1 => record_type_pairs(depth - 1).prop_map(Tree::RecordType),
         1 => prop::collection::vec(value_tree(depth - 1), 1..3).prop_map(Tree::Quote),
-        1 => prop::collection::vec(value_tree(depth - 1), 1..3).prop_map(Tree::Eval),
         1 => prop::collection::vec(literal_tree(depth - 1), 0..3).prop_map(Tree::List),
         1 => dict_pairs(depth - 1).prop_map(Tree::Dict),
         1 => record_fields(depth - 1).prop_map(Tree::Record),
@@ -195,11 +203,11 @@ fn value_tree(depth: u32) -> BoxedStrategy<Tree> {
     .boxed()
 }
 
-/// A statement. A line that leads with `#` or `$` quotes or evaluates the whole line, so a sigil
-/// leads a statement only when it is the statement.
+/// A statement. A line that leads with `#` quotes the whole line, so a quote leads a statement only
+/// when it is the statement.
 fn statement() -> impl Strategy<Value = Statement> {
     prop::collection::vec(value_tree(2), 1..4).prop_map(|mut items| {
-        if items.len() > 1 && matches!(items[0], Tree::Quote(_) | Tree::Eval(_)) {
+        if items.len() > 1 && matches!(items[0], Tree::Quote(_)) {
             items.insert(0, Tree::Identifier("head".to_string()));
         }
         items
@@ -268,7 +276,7 @@ fn render_program(statements: &[Statement], layout: Layout, tape: &mut Tape) -> 
 /// leading with a sigil would read as a sigil-led line, and an empty one as a blank line.
 fn child_eligible(item: &Tree) -> bool {
     matches!(item, Tree::Group(inner)
-        if !inner.is_empty() && !matches!(inner[0], Tree::Quote(_) | Tree::Eval(_)))
+        if !inner.is_empty() && !matches!(inner[0], Tree::Quote(_)))
 }
 
 /// One layout line: an inline run, then a trailing run of groups written as its child lines. The
@@ -351,10 +359,9 @@ fn render_item(item: &Tree, layout: Layout, tape: &mut Tape, out: &mut String) {
             render_run(items, layout, tape, out);
             out.push(')');
         }
-        Tree::Eval(items) => {
-            out.push_str("$(");
-            render_run(items, layout, tape, out);
-            out.push(')');
+        Tree::Marked(mark, name) => {
+            out.push(*mark);
+            out.push_str(name);
         }
         Tree::List(items) => {
             out.push('[');
@@ -438,12 +445,8 @@ fn expected_program(statements: &[Statement]) -> Vec<String> {
     statements.iter().map(|s| expected_statement(s)).collect()
 }
 
-/// A line's statement. A line that is exactly `$(…)` *is* the `EVAL` call it asks for rather than
-/// a node holding it; every other line is the node of its run.
+/// A line's statement: the node of its run.
 fn expected_statement(items: &[Tree]) -> String {
-    if let [Tree::Eval(body)] = items {
-        return format!("[t(EVAL) {}]", body_describe(body));
-    }
     body_describe(items)
 }
 
@@ -472,7 +475,8 @@ fn describe_tree(item: &Tree) -> String {
         Tree::TypeSigil(items) => format!(":({})", run_describe(items)),
         Tree::RecordType(pairs) => format!(":{{{}}}", run_describe(&flatten(pairs))),
         Tree::Quote(items) => format!("#{}", body_describe(items)),
-        Tree::Eval(items) => format!("[t(EVAL) {}]", body_describe(items)),
+        Tree::Marked(mark, name) if is_type_name(name) => format!("{mark}T({name})"),
+        Tree::Marked(mark, name) => format!("{mark}t({name})"),
         Tree::List(items) => format!("L[{}]", run_describe(items)),
         Tree::Dict(pairs) => format!(
             "D{{{}}}",
@@ -582,11 +586,11 @@ fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, symbols: &Sym
     match part {
         ExpressionPart::Keyword(symbol) => {
             let rendering = symbols.render(symbol.symbol());
-            // A synthetic operator head takes its trigger's span instead: the `$` an evaluation
-            // was written as, the `.` or `?` a compound atom folded on.
+            // A synthetic operator head takes its trigger's span instead: the `.` or `?` a
+            // compound atom folded on.
             if rendering != text {
                 assert!(
-                    matches!(rendering.as_str(), "EVAL" | "ATTR" | "TRY"),
+                    matches!(rendering.as_str(), "ATTR" | "TRY"),
                     "a keyword slices back to its spelling, got {text:?} for {rendering:?}",
                 );
                 assert_eq!(
@@ -598,6 +602,10 @@ fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, symbols: &Sym
         }
         ExpressionPart::Identifier(name) => assert_eq!(symbols.render(name.symbol()), text),
         ExpressionPart::Type(name) => assert_eq!(symbols.render(name.symbol()), text),
+        ExpressionPart::MarkedName(mark, name) => assert_eq!(
+            format!("{}{}", mark.sigil(), symbols.render(name.symbol())),
+            text
+        ),
         ExpressionPart::Literal(KLiteral::Number(value)) => {
             assert_eq!(text.parse::<f64>().ok(), Some(*value));
         }
@@ -620,6 +628,13 @@ fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, symbols: &Sym
         }
         ExpressionPart::QuotedExpression(node) => {
             assert!(text.starts_with('#') && text.ends_with(')'), "got {text:?}");
+            check_expression(node, source, symbols, Some(span));
+        }
+        ExpressionPart::MarkedUse(mark, node) => {
+            assert!(
+                text.starts_with(mark.sigil()) && text.ends_with(')'),
+                "got {text:?}"
+            );
             check_expression(node, source, symbols, Some(span));
         }
         ExpressionPart::ListLiteral(items) => {
@@ -670,12 +685,8 @@ fn tree_spellings(item: &Tree, out: &mut BTreeSet<String>) {
                 tree_spellings(item, out);
             }
         }
-        // Evaluation is a runtime operation, so a `$(…)` mints the `EVAL` head it calls.
-        Tree::Eval(items) => {
-            out.insert("EVAL".to_string());
-            for item in items {
-                tree_spellings(item, out);
-            }
+        Tree::Marked(_, name) => {
+            out.insert(name.clone());
         }
         Tree::RecordType(pairs) | Tree::Dict(pairs) => {
             for (left, right) in pairs {
@@ -703,10 +714,12 @@ fn part_symbols(part: &ExpressionPart<'_>, out: &mut Vec<Symbol>) {
         ExpressionPart::Keyword(symbol) => out.push(symbol.symbol()),
         ExpressionPart::Identifier(name) => out.push(name.symbol()),
         ExpressionPart::Type(name) => out.push(name.symbol()),
+        ExpressionPart::MarkedName(_, name) => out.push(name.symbol()),
         ExpressionPart::Expression(node)
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
-        | ExpressionPart::QuotedExpression(node) => node_symbols(node, out),
+        | ExpressionPart::QuotedExpression(node)
+        | ExpressionPart::MarkedUse(_, node) => node_symbols(node, out),
         ExpressionPart::ListLiteral(items) => {
             for item in *items {
                 part_symbols(item, out);
@@ -872,15 +885,12 @@ proptest! {
         let mut inner = String::new();
         render_run(&statement, COMMAS, &mut tape, &mut inner);
         let bare = statement_facts(&inner);
-        // A line that is exactly `$(…)` is the `EVAL` call; inside a paren it is a sub-expression
-        // part, one node more.
-        let lone_eval = usize::from(matches!(statement.as_slice(), [Tree::Eval(_)]));
         for layers in 1..3 {
             let wrapped = format!("{}{inner}{}", "(".repeat(layers), ")".repeat(layers));
             let facts = statement_facts(&wrapped);
             prop_assert_eq!(
                 facts.wrappers,
-                bare.wrappers + layers + lone_eval,
+                bare.wrappers + layers,
                 "source: {}",
                 wrapped
             );

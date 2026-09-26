@@ -196,6 +196,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             ExpressionPart::RecordType(node) => Ok(self
                 .rewrite_fields(node.reference())?
                 .map(ExpressionPart::RecordType)),
+            ExpressionPart::MarkedUse(mark, node) => Ok(self
+                .rewrite_node(node.reference())?
+                .map(|node| ExpressionPart::MarkedUse(*mark, node))),
             ExpressionPart::ListLiteral(items) => {
                 let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
                 let mut changed = false;
@@ -236,6 +239,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Keyword(_)
             | ExpressionPart::Literal(_)
+            | ExpressionPart::MarkedName(..)
             | ExpressionPart::QuotedExpression(_) => Ok(None),
         }
     }

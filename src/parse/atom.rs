@@ -2,7 +2,8 @@
 //! `Spanned<ExpressionPart>`s it stands for. Recognizes literals, splits an atom on its colons
 //! into a word and the type names annotating it (`x:Number`), classifies non-literal words into
 //! keywords / types / identifiers, and desugars compound words (`a.b`, `a?`) into nested
-//! `ExpressionPart`s using the `operators` table.
+//! `ExpressionPart`s using the `operators` table. A mark the lowering found leading the atom (`$a.b`)
+//! lands on the leading name, so `$a.b` is `ATTR $a b`.
 //!
 //! A pure-symbol token that is not a builtin compound trigger (`+`, `|`, `<=`, `==`, `!=`) reaches
 //! `classify_atom` and tags as a `Keyword`, so a post-parse chain detector recognizes
@@ -21,11 +22,12 @@ use smallvec::SmallVec;
 
 use super::error::ParseError;
 use crate::memory::ProgramBrand;
-use crate::parse::ast::{ExpressionPart, KLiteral};
+use crate::parse::ast::{ExpressionPart, KLiteral, Mark};
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{FileId, Span, Spanned};
 use crate::symbols::{
-    KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol, is_keyword_token, is_type_name,
+    BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol, is_keyword_token,
+    is_type_name,
 };
 
 /// One atom's parts, plus whether the atom ended in a bare `:` (`a:`). A trailing colon pairs a
@@ -46,13 +48,45 @@ pub(super) struct Classified<'a> {
 ///
 /// `:|` and `:!` are whole keywords rather than a colon plus an operand, so they are matched
 /// before the split.
+///
+/// `text` is the atom as written. With `mark`, its first byte is the mark's sigil, and the name the
+/// leading word starts with is marked.
 pub(super) fn classify<'a>(
     brand: ProgramBrand<'a>,
     symbols: &SymbolInterner,
     text: &str,
     span: Span,
     file: FileId,
+    mark: Option<Mark>,
 ) -> Result<Classified<'a>, ParseError> {
+    if let Some(mark) = mark {
+        let word_end = text.find(':').unwrap_or(text.len());
+        let mut parts = SmallVec::new();
+        parts.push(classify_marked(
+            brand,
+            symbols,
+            &text[..word_end],
+            span.start,
+            file,
+            mark,
+        )?);
+        if word_end == text.len() {
+            return Ok(Classified {
+                parts,
+                trailing_colon: false,
+            });
+        }
+        let rest = Span {
+            start: span.start + word_end as u32,
+            end: span.end,
+        };
+        let annotations = classify(brand, symbols, &text[word_end..], rest, file, None)?;
+        parts.extend(annotations.parts);
+        return Ok(Classified {
+            parts,
+            trailing_colon: annotations.trailing_colon,
+        });
+    }
     let Some(first_colon) = text.find(':') else {
         return Ok(Classified {
             parts: smallvec::smallvec![classify_token(brand, symbols, text, span.start, file)?],
@@ -145,7 +179,45 @@ pub fn classify_token<'a>(
         return Ok(Spanned::at(part, token_span));
     }
     let mut chars = tok.char_indices().peekable();
-    let part = parse_compound(brand, symbols, tok, &mut chars, start, token_span, file)?;
+    let part = parse_compound(
+        brand, symbols, tok, &mut chars, start, token_span, file, None,
+    )?;
+    if let Some(&(_, c)) = chars.peek() {
+        return Err(ParseError::new(
+            format!("unexpected {:?} in token {:?}", c, tok),
+            Some(token_span),
+        ));
+    }
+    Ok(part)
+}
+
+/// A word written with a mark: `tok` is the word as written, its first byte the mark's sigil. The
+/// compound reads as it would unmarked, with the leading name marked — so `$a.b` is `ATTR $a b` —
+/// and a word that leads with no name is refused, naming it.
+fn classify_marked<'a>(
+    brand: ProgramBrand<'a>,
+    symbols: &SymbolInterner,
+    tok: &str,
+    start: u32,
+    file: FileId,
+    mark: Mark,
+) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
+    let token_span = Span {
+        start,
+        end: start + tok.len() as u32,
+    };
+    let mut chars = tok.char_indices().peekable();
+    chars.next();
+    let part = parse_compound(
+        brand,
+        symbols,
+        tok,
+        &mut chars,
+        start,
+        token_span,
+        file,
+        Some(mark),
+    )?;
     if let Some(&(_, c)) = chars.peek() {
         return Err(ParseError::new(
             format!("unexpected {:?} in token {:?}", c, tok),
@@ -281,6 +353,10 @@ fn classify_atom<'a>(
 /// Recursive-descent parser for compound tokens. Each matched operator's builder owns
 /// the output shape; the dispatcher just knows arity. Operator triggers take a
 /// 1-codepoint span at their position so error messages can point at the trigger char.
+///
+/// With `mark`, the leading atom must be a name, which the mark wraps, its span widened over the
+/// sigil byte before it.
+#[allow(clippy::too_many_arguments)]
 fn parse_compound<'a>(
     brand: ProgramBrand<'a>,
     symbols: &SymbolInterner,
@@ -289,8 +365,23 @@ fn parse_compound<'a>(
     start: u32,
     token_span: Span,
     file: FileId,
+    mark: Option<Mark>,
 ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
     let mut expr = read_atom(symbols, tok, chars, start, token_span)?;
+    if let Some(mark) = mark {
+        let name = match expr.value {
+            ExpressionPart::Identifier(name) => BinderSymbol::Value(name),
+            ExpressionPart::Type(name) => BinderSymbol::Type(name),
+            _ => return Err(unmarkable(tok, token_span)),
+        };
+        expr = Spanned {
+            value: ExpressionPart::MarkedName(mark, name),
+            span: expr.span.map(|span| Span {
+                start: span.start - 1,
+                end: span.end,
+            }),
+        };
+    }
 
     while let Some(&(ci, c)) = chars.peek() {
         let Some(op) = find_suffix(c) else { break };
@@ -306,6 +397,18 @@ fn parse_compound<'a>(
     }
 
     Ok(expr)
+}
+
+/// A `$` or `\` leading a word whose rest starts no name: `tok` is the word as written.
+pub(super) fn unmarkable(tok: &str, span: Span) -> ParseError {
+    ParseError::new(
+        format!(
+            "`{tok}`: a `{}` leading a word marks a value or type name, and `{}` starts none",
+            &tok[..1],
+            &tok[1..],
+        ),
+        Some(span),
+    )
 }
 
 fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
@@ -394,13 +497,16 @@ mod tests {
                     .collect();
                 format!(":{{{}}}", inner.join(" "))
             }
-            ExpressionPart::QuotedExpression(e) => {
+            ExpressionPart::QuotedExpression(e) | ExpressionPart::MarkedUse(_, e) => {
                 let inner: Vec<String> = e
                     .parts
                     .iter()
                     .map(|p| describe(&p.value, symbols))
                     .collect();
                 format!("#({})", inner.join(" "))
+            }
+            ExpressionPart::MarkedName(mark, name) => {
+                format!("{}({})", mark.sigil(), symbols.render(name.symbol()))
             }
             ExpressionPart::Literal(KLiteral::String(s)) => format!("s({})", s),
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),

@@ -133,6 +133,7 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     (BuiltinShapeId::Projection, &[]),
     (BuiltinShapeId::Attribute, &[(2, L)]),
     (BuiltinShapeId::Eval, &[]),
+    (BuiltinShapeId::UsingCode, &[]),
 ];
 
 const Q: Reading = Reading::Quote;
@@ -221,7 +222,7 @@ fn no_reserved_form_declares_a_binder() {
 /// The tag vocabulary is exhaustive over the table: `BuiltinShapeId` gains no variant without a row.
 #[test]
 fn the_table_is_as_long_as_the_tag_vocabulary() {
-    assert_eq!(BUILTIN_SHAPES.len(), BuiltinShapeId::Eval as usize + 1);
+    assert_eq!(BUILTIN_SHAPES.len(), BuiltinShapeId::UsingCode as usize + 1);
 }
 
 /// Every masked index names a slot position of its own key — the flip writes `parts[index]`, so a

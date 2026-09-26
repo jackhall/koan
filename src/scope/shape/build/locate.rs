@@ -46,7 +46,8 @@ fn within_part(part: &ExpressionPart<'_>, here: SourceRef, site: Site) -> Option
         ExpressionPart::Expression(node)
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
-        | ExpressionPart::QuotedExpression(node) => source_within(node.reference(), site),
+        | ExpressionPart::QuotedExpression(node)
+        | ExpressionPart::MarkedUse(_, node) => source_within(node.reference(), site),
         ExpressionPart::ListLiteral(items) => {
             items.iter().find_map(|item| within_part(item, here, site))
         }
@@ -59,6 +60,7 @@ fn within_part(part: &ExpressionPart<'_>, here: SourceRef, site: Site) -> Option
         ExpressionPart::Keyword(_)
         | ExpressionPart::Identifier(_)
         | ExpressionPart::Type(_)
+        | ExpressionPart::MarkedName(..)
         | ExpressionPart::Literal(_) => None,
     }
 }

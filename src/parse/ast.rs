@@ -71,10 +71,34 @@ pub enum ExpressionPart<'a> {
     /// A `#(...)` quote: the parenthesized body captured at parse time as data. The parser folds
     /// the sigil and its group into this part, so quoting is static syntax — there is no runtime
     /// quoting operation and the body never dispatches. Behaves as a literal everywhere: it is a
-    /// `Slot` in the untyped key, a single one classifies [`DispatchShape::LiteralPassThrough`],
-    /// and it resolves to `KObject::KExpression(<body>)` — the value `$(...)` evaluates. See
+    /// `Slot` in the untyped key and a single one classifies [`DispatchShape::LiteralPassThrough`].
+    /// In an evaluated position it is a quote value, whose code `EVAL` runs. See
     /// [README.md](README.md) § The AST: borrowed, `Copy`, and splice-free.
     QuotedExpression(ProgramNode<'a>),
+    /// A marked name, `$x` or `\x`: inside a quote value, a name resolved where the quote is written
+    /// or where its code is built rather than left a hole. Classifies as the name it marks.
+    MarkedName(Mark, BinderSymbol),
+    /// A marked group, `$(…)` or `\(…)`, wrapping exactly one keyworded use. It evaluates nothing:
+    /// the mark says where the use's keywords resolve. Classifies as a nested expression.
+    MarkedUse(Mark, ProgramNode<'a>),
+}
+
+/// Where a marked part of a quote resolves: `$` where the quote is written, `\` where its code is
+/// built. See [scope README](../scope/README.md#quotes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Mark {
+    Written,
+    Built,
+}
+
+impl Mark {
+    /// The sigil this mark is written with.
+    pub fn sigil(self) -> char {
+        match self {
+            Mark::Written => '$',
+            Mark::Built => '\\',
+        }
+    }
 }
 
 /// A parts run on its way into a node's region, as a construction door takes it: either a borrowed
@@ -103,6 +127,9 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::RecordLiteral(_) => PartClass::RecordLiteral,
             ExpressionPart::Literal(_) => PartClass::Literal,
             ExpressionPart::QuotedExpression(_) => PartClass::QuotedExpression,
+            ExpressionPart::MarkedName(_, BinderSymbol::Value(_)) => PartClass::Identifier,
+            ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => PartClass::Type,
+            ExpressionPart::MarkedUse(..) => PartClass::Expression,
         }
     }
 
@@ -119,11 +146,15 @@ impl<'a> ExpressionPart<'a> {
     /// is a value, and a keyword fills no slot. A bare group is code of its own kind, as a quote is.
     pub fn code_kind(&self) -> Option<KType> {
         match self {
-            ExpressionPart::Identifier(_) => Some(KType::IDENTIFIER),
-            ExpressionPart::Type(_) => Some(KType::TYPE_NAME_TOKEN),
+            ExpressionPart::Identifier(_)
+            | ExpressionPart::MarkedName(_, BinderSymbol::Value(_)) => Some(KType::IDENTIFIER),
+            ExpressionPart::Type(_) | ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => {
+                Some(KType::TYPE_NAME_TOKEN)
+            }
             ExpressionPart::Expression(node) | ExpressionPart::QuotedExpression(node) => {
                 Some(node.reference().code_kind())
             }
+            ExpressionPart::MarkedUse(..) => Some(KType::EXPRESSION),
             ExpressionPart::SigiledTypeExpr(_) => Some(KType::SIGILED_TYPE_EXPR),
             ExpressionPart::RecordType(_) => Some(KType::RECORD_TYPE),
             ExpressionPart::Keyword(_)
@@ -186,6 +217,14 @@ impl<'a> ExpressionPart<'a> {
             }
             ExpressionPart::QuotedExpression(e) => {
                 f.write_str("#(")?;
+                e.write_summary(f, symbols)?;
+                f.write_str(")")
+            }
+            ExpressionPart::MarkedName(mark, name) => {
+                write!(f, "{}{}", mark.sigil(), symbols.display(name.symbol()))
+            }
+            ExpressionPart::MarkedUse(mark, e) => {
+                write!(f, "{}(", mark.sigil())?;
                 e.write_summary(f, symbols)?;
                 f.write_str(")")
             }
@@ -455,12 +494,16 @@ impl<'a> KExpression<'a> {
         };
         match only.value {
             ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => KType::LITERAL,
-            ExpressionPart::Identifier(_) => KType::IDENTIFIER,
-            ExpressionPart::Type(_) => KType::TYPE_NAME_TOKEN,
+            ExpressionPart::Identifier(_)
+            | ExpressionPart::MarkedName(_, BinderSymbol::Value(_)) => KType::IDENTIFIER,
+            ExpressionPart::Type(_) | ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => {
+                KType::TYPE_NAME_TOKEN
+            }
             ExpressionPart::Keyword(_) => KType::KEYWORD,
             ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
             ExpressionPart::RecordType(_) => KType::RECORD_TYPE,
-            ExpressionPart::Expression(_)
+            ExpressionPart::MarkedUse(..)
+            | ExpressionPart::Expression(_)
             | ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => KType::EXPRESSION,

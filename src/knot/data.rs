@@ -224,6 +224,9 @@ impl<'stage, 'graph, 'cell, 'run> Stager<'stage, 'graph, 'cell, 'run> {
             ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => {
                 return Ok(Staged::Literal(part));
             }
+            ExpressionPart::MarkedName(..) | ExpressionPart::MarkedUse(..) => {
+                unreachable!("the shape builder refuses a mark outside a quote value")
+            }
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
                 return match shape.mention(Site::of(part)) {
                     Some(mention) => self.read(mention.name, mention.coordinate),

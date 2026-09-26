@@ -77,7 +77,7 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) scope: StaticName<KeywordSymbol>,
     pub(crate) close: StaticName<KeywordSymbol>,
     pub(crate) from: StaticName<KeywordSymbol>,
-    /// The head of the parse of `$(…)`; also its spelled-out surface.
+    /// The head that runs code.
     pub(crate) eval: StaticName<KeywordSymbol>,
     /// The head of the parse of `<record>.<field>`.
     pub(crate) attr: StaticName<KeywordSymbol>,
@@ -365,6 +365,7 @@ pub enum BuiltinShapeId {
     Projection,
     Attribute,
     Eval,
+    UsingCode,
 }
 
 impl BuiltinShapeId {
@@ -1420,11 +1421,23 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // EVAL <expr> — the parse of `$(expr)`.
+    // EVAL <code> — runs code.
     BuiltinShape {
         id: BuiltinShapeId::Eval,
         elements: &[Kw(&KEYWORDS.eval), slot(Argument, &[ANY_CODE])],
         returns: &[ANY],
+        binder: None,
+        reserved: false,
+    },
+    // <code> USING <source> — fills the code's holes from a record's fields or a module's members.
+    BuiltinShape {
+        id: BuiltinShapeId::UsingCode,
+        elements: &[
+            slot(Argument, &[ANY_CODE, ANY_CODE]),
+            Kw(&KEYWORDS.using),
+            slot(Argument, &[EMPTY_RECORD, MODULE]),
+        ],
+        returns: &[ANY_CODE, ANY_CODE],
         binder: None,
         reserved: false,
     },

@@ -620,7 +620,8 @@ impl<'graph> Scan<'graph, '_> {
         match part {
             ExpressionPart::Expression(node)
             | ExpressionPart::SigiledTypeExpr(node)
-            | ExpressionPart::RecordType(node) => self.node(node.reference()),
+            | ExpressionPart::RecordType(node)
+            | ExpressionPart::MarkedUse(_, node) => self.node(node.reference()),
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
                     self.part(item)?;
@@ -646,6 +647,7 @@ impl<'graph> Scan<'graph, '_> {
             | ExpressionPart::Keyword(_)
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Type(_)
+            | ExpressionPart::MarkedName(..)
             | ExpressionPart::Literal(_) => Ok(()),
         }
     }

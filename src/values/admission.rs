@@ -254,13 +254,18 @@ pub fn part_ktype(
             scratch,
             fields.iter().map(|(name, value)| (*name, element(value))),
         ),
-        ExpressionPart::Identifier(_) => KType::IDENTIFIER,
+        ExpressionPart::Identifier(_) | ExpressionPart::MarkedName(_, BinderSymbol::Value(_)) => {
+            KType::IDENTIFIER
+        }
+        ExpressionPart::MarkedUse(..) => KType::EXPRESSION,
         ExpressionPart::Expression(node) | ExpressionPart::QuotedExpression(node) => {
             node.reference().code_kind()
         }
         ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
         ExpressionPart::RecordType(_) => KType::RECORD_TYPE,
-        ExpressionPart::Type(_) => KType::PROPER_TYPE,
+        ExpressionPart::Type(_) | ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => {
+            KType::PROPER_TYPE
+        }
     })
 }
 

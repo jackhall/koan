@@ -40,6 +40,12 @@ fn walk<'g>(
         ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
             met.push(Met::Name(Site::of(part)))
         }
+        ExpressionPart::MarkedName(..) => {}
+        ExpressionPart::MarkedUse(_, node) => {
+            for inner in node.reference().parts {
+                walk(&inner.value, shapes, met);
+            }
+        }
         // A body, an arm or a variant the builder reads is a quote; the walk enters it as the
         // builder does.
         ExpressionPart::Expression(node)

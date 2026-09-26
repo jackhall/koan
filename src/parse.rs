@@ -50,8 +50,8 @@ pub use error::ParseError;
 /// caller building a node names it through `parse` rather than reaching past it.
 pub use crate::source::Spanned;
 pub use ast::{
-    DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KeyElement, NodeCache,
-    PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
+    DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KeyElement, Mark,
+    NodeCache, PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
 };
 pub use builtin_shapes::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinderKey};
 

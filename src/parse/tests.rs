@@ -50,6 +50,17 @@ pub(super) fn describe(e: &KExpression<'_>, symbols: &SymbolInterner) -> String 
             // The quoted body renders as a nested expression (`#[...]`), so the wrapper the
             // parse-static capture holds is visible in every shape assertion.
             ExpressionPart::QuotedExpression(e) => format!("#{}", describe(e, symbols)),
+            ExpressionPart::MarkedName(mark, name) => {
+                let class = if matches!(name, crate::symbols::BinderSymbol::Type(_)) {
+                    'T'
+                } else {
+                    't'
+                };
+                format!("{}{class}({})", mark.sigil(), symbols.render(name.symbol()))
+            }
+            ExpressionPart::MarkedUse(mark, e) => {
+                format!("{}{}", mark.sigil(), describe(e, symbols))
+            }
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(|p| describe_part(p, symbols)).collect();
                 format!("L[{}]", inner.join(" "))

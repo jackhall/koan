@@ -879,7 +879,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::Type(_)
             | ExpressionPart::Keyword(_)
             | ExpressionPart::Literal(_)
-            | ExpressionPart::QuotedExpression(_) => Ok(()),
+            | ExpressionPart::QuotedExpression(_)
+            | ExpressionPart::MarkedName(..)
+            | ExpressionPart::MarkedUse(..) => Ok(()),
         }
     }
 
@@ -1090,7 +1092,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::Expression(run)
             | ExpressionPart::SigiledTypeExpr(run)
             | ExpressionPart::RecordType(run)
-            | ExpressionPart::QuotedExpression(run) => run.reference(),
+            | ExpressionPart::QuotedExpression(run)
+            | ExpressionPart::MarkedUse(_, run) => run.reference(),
             ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => {
@@ -1099,6 +1102,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::Type(_)
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Keyword(_)
+            | ExpressionPart::MarkedName(..)
             | ExpressionPart::Literal(_) => return Ok(()),
         };
         for inner in run.parts {

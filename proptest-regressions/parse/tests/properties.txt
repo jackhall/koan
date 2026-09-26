@@ -6,3 +6,6 @@
 # everyone who runs the test benefits from these saved cases.
 cc 0766c1a0fb285f9850f7f2ed20f07c2f936c36bb3ef2703fd51d503af1ed06a3 # shrinks to base = ("0", "n(0)"), suffixes = [Attr { name: "e0", is_type: false }]
 cc 389f0fc2cafdb33103139b4ac2644276bf2aac47c16d3a4e731926f691ce7c0b # shrinks to statement = [Eval([Identifier("a")])], bytes = []
+cc 71da6644a5259eaef53dcbafa50fa2d7c86fd1341e3e0ec667266d5eec54032d # shrinks to statements = [[Quote([Dict([(Marked('$', "a"), Identifier("a"))])])]], bytes = []
+cc c028e6a314c9fba45b165ca5c7216d5ca859d17c1a90f886eca3bdd5f7941c56 # shrinks to statements = [[Dict([(Marked('$', "a"), Identifier("a"))])]], bytes = []
+cc 768a9faf931d866d1342f456009f927038721a6e4cecf97970fcd4e12abc079a # shrinks to statement = [Dict([(Marked('$', "a"), Identifier("a"))])], bytes = []

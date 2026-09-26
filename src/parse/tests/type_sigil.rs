@@ -82,7 +82,7 @@ fn a_non_binder_run_with_the_same_shape_does_not_flip() {
 /// folding already does — so a quoted definition evaluated later reads identically to its sigiled
 /// spelling.
 #[test]
-fn the_flip_reaches_quote_and_eval_bodies() {
+fn the_flip_reaches_quote_bodies() {
     use super::top;
     assert_eq!(
         top("#(EXPR #(WRAP s :Str) -> (LIST OF Str) = #(s))").unwrap(),
@@ -92,9 +92,5 @@ fn the_flip_reaches_quote_and_eval_bodies() {
         top("#(EXPR #(WRAP s :Str) -> (LIST OF Str) = #(s))").unwrap()[0]
             .contains(":(t(LIST) t(OF) T(Str))"),
         "a quote body's type slot takes the flip",
-    );
-    assert_eq!(
-        top("$(EXPR #(WRAP s :Str) -> (LIST OF Str) = #(s))").unwrap(),
-        top("$(EXPR #(WRAP s :Str) -> :(LIST OF Str) = #(s))").unwrap(),
     );
 }
