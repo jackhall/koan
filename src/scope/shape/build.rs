@@ -1082,6 +1082,15 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::Type(name) if !self.skips(name) => {
                 return self.mention(level, statement, part, BinderSymbol::Type(*name), state);
             }
+            // A marked name never binds to a name the definition declares, so it skips nothing.
+            ExpressionPart::MarkedName(mark, name) => {
+                return self.mention_through(level, statement, part, *name, Some(*mark), state);
+            }
+            ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
+                return Err(ShapeError::MarkOutsideQuote {
+                    at: self.part_source(level, statement, Site::of(part)),
+                });
+            }
             // A type expression written inside a definition, and a quoted head, are nodes with
             // builtin shapes of their own: read their parts by their roles rather than descending
             // into them blind.
@@ -1109,7 +1118,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::Type(_)
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Keyword(_)
-            | ExpressionPart::MarkedName(..)
             | ExpressionPart::Literal(_) => return Ok(()),
         };
         for inner in run.parts {

@@ -593,3 +593,14 @@ fn a_malformed_quote_loads_and_its_error_is_reported_when_eval_runs_it() {
     assert!(substrate.with(|running| running.run()).is_err());
     assert_eq!(recorded(), ["refused shape"]);
 }
+
+#[test]
+fn a_marked_type_name_in_a_signature_the_code_writes_binds_where_the_quote_is_written() {
+    let mut substrate = loaded(
+        "LET Alias = Number\n\
+         LET g = (EVAL #(FN :{v :($Alias)} -> Number = #(v)))\n\
+         LET r = (g 4)",
+        4,
+    );
+    assert_eq!(run_and_read(&mut substrate, &["r"]), ["4"]);
+}

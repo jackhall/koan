@@ -145,6 +145,9 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let site = Site::of(part);
         match part {
             ExpressionPart::Type(name) => self.name(site, *name, groups),
+            // A marked name resolves past the definition's own quantifiers and names, through the
+            // mention the shape recorded.
+            ExpressionPart::MarkedName(_, BinderSymbol::Type(name)) => self.mention(site, *name),
             ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
                 self.node(site, node.reference(), groups)
             }
@@ -180,6 +183,11 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         if let Some((_, handle)) = self.locals.iter().find(|(declared, _)| *declared == name) {
             return Ok(*handle);
         }
+        self.mention(site, name)
+    }
+
+    /// A type name read through the mention the shape recorded at `site`.
+    fn mention(&self, site: Site, name: TypeSymbol) -> Result<KType, Elaboration> {
         // A definition declares its own names, so the shape records no mention for one. Every
         // other name a type expression reads has one; a definition-local name reaching here has
         // not been declared yet — a forward reference the local table cannot answer.

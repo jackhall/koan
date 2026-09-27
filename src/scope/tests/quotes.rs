@@ -203,6 +203,23 @@ fn marks_work_on_type_names_and_a_builtin_is_no_hole() {
             }
         },
     );
+    // A marked type name in a type a definition in the code writes is the code's too.
+    for source in [
+        "LET Alias = Number\nLET q = #(FN :{v :($Alias)} -> Number = #(v))",
+        "LET Alias = Number\nLET q = #(NEWTYPE Boxed = :(LIST OF $Alias))",
+    ] {
+        shaped(source, |fixture, shape| {
+            let shape = shape.expect("the program shapes");
+            let code = code(shape, 1);
+            let alias = BinderSymbol::Type(type_name("Alias", fixture.symbols));
+            let (slot, _) = shape.slot(alias).unwrap();
+            assert_eq!(
+                captures(code),
+                [(alias, Some(Mark::Written), local(slot))],
+                "`{source}`"
+            );
+        });
+    }
 }
 
 #[test]
@@ -307,6 +324,15 @@ fn a_mark_no_quote_value_holds_is_refused() {
         ("$(PRINT origin)", "$(PRINT origin)"),
         // A body written in place is syntax of the code around it, which here is no quote value.
         ("LET v = 1\nLET f = (FN :{} -> Number = #($v))", "$v"),
+        // So is a type written in a definition.
+        (
+            "LET Alias = Number\nNEWTYPE Boxed = :(LIST OF $Alias)",
+            "$Alias",
+        ),
+        (
+            "LET Alias = Number\nLET f = (FN :{v :($Alias)} -> Number = #(v))",
+            "$Alias",
+        ),
     ] {
         shaped(source, |_, shape| {
             let error = shape
