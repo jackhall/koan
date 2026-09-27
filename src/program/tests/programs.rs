@@ -1,12 +1,12 @@
 //! Whole programs under the drain: unit order, where a value is built, the slab holding the root
-//! alone, calls and recursion, components, eager parts, module bodies, and lambdas: born where
-//! they are written, returned from a frame, and held in a knot.
+//! alone, calls and recursion, components, eager parts, module bodies, lambdas — born where they
+//! are written, returned from a frame, and held in a knot — and quotes run by `EVAL`.
 
 use crate::program::CellSubstrate;
 use crate::program::body::SUPPLIED_WAKES;
 
 use super::evaluator::{Mini, recorded, reset};
-use super::{loaded, read_back, run_and_read};
+use super::{compare_back, loaded, read_back, run_and_read};
 
 /// The depth a recursion runs to: past the slab cap, and small under Miri.
 const DEPTH: u32 = if cfg!(miri) { 8 } else { 300 };
@@ -513,4 +513,83 @@ fn a_lambda_part_is_supplied_to_a_tie() {
     let read = read_back(&mut substrate, &["a", "f"]);
     assert!(read[0].starts_with("node in "), "{read:?}");
     assert!(read[1].starts_with("fn in "), "{read:?}");
+}
+
+const TWICE: &str = "LET x = 7\nLET twice = (FN :{body :Expression} -> Any = #(EVAL body))";
+
+#[test]
+fn eval_runs_code_whose_dollar_name_binds_where_it_is_written() {
+    let mut substrate = loaded(&format!("{TWICE}\nLET r = (twice #($x MINUS 1))"), 4);
+    assert_eq!(run_and_read(&mut substrate, &["r"]), ["6"]);
+}
+
+#[test]
+fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
+    for twice in [
+        TWICE.to_string(),
+        TWICE.replace("#(EVAL body)", "#((LET x = 3) (EVAL body))"),
+    ] {
+        let mut substrate = loaded(&format!("{twice}\nLET r = (twice #(x MINUS 1))"), 4);
+        reset();
+        let outcome = substrate.with(|running| running.run());
+        assert!(outcome.is_err(), "{twice}");
+        assert!(
+            recorded().contains(&String::from("refused unbound x")),
+            "{twice}: {:?}",
+            recorded()
+        );
+    }
+}
+
+#[test]
+fn a_parameter_needing_a_name_is_offered_it_where_eval_is_written() {
+    let mut substrate = loaded(
+        "LET twice = (FN :{body :(Expression NEEDING #[it])} -> Any = \
+         #((LET it = 5) (EVAL body)))\n\
+         LET r = (twice #(\\it MINUS 1))",
+        4,
+    );
+    assert_eq!(run_and_read(&mut substrate, &["r"]), ["4"]);
+}
+
+#[test]
+fn a_function_built_from_code_carries_its_bindings_as_captures() {
+    let mut substrate = loaded(
+        "LET make = (FN :{v :Number} -> Any = #(EVAL #(FN :{} -> Number = #($v))))\n\
+         LET a = (make 1)\nLET b = (make 1)\nLET c = (make 2)",
+        4,
+    );
+    substrate.with(|running| running.run().expect("the program runs"));
+    assert_eq!(compare_back(&mut substrate, "a", "b"), "Ok(true)");
+    assert_eq!(compare_back(&mut substrate, "a", "c"), "Ok(false)");
+}
+
+#[test]
+fn a_quote_reading_its_own_binder_is_a_one_node_knot() {
+    let mut substrate = loaded("LET echo = #(PRINT $echo)", 2);
+    assert_eq!(
+        run_and_read(&mut substrate, &["echo"]),
+        ["#(PRINT $echo) in 1 binding [echo=self]"]
+    );
+    assert_eq!(compare_back(&mut substrate, "echo", "echo"), "Ok(true)");
+}
+
+#[test]
+fn a_binder_capturing_an_eval_statement_declared_after_it_runs_after_it() {
+    // `f` is born once `y` is bound, and `EVAL` waits on no binder declared before it.
+    let mut substrate = loaded(
+        "LET f = (FN :{n :Number} -> Number = #(y))\n\
+         LET y = (EVAL #(7 MINUS 2))\n\
+         LET r = (f 0)",
+        4,
+    );
+    assert_eq!(run_and_read(&mut substrate, &["r", "y"]), ["5", "5"]);
+}
+
+#[test]
+fn a_malformed_quote_loads_and_its_error_is_reported_when_eval_runs_it() {
+    let mut substrate = loaded("LET r = (EVAL #((LET x = 1) (LET x = 2) (PRINT x)))", 4);
+    reset();
+    assert!(substrate.with(|running| running.run()).is_err());
+    assert_eq!(recorded(), ["refused shape"]);
 }

@@ -31,6 +31,13 @@ pub enum KBirth<'graph, 'cell> {
         callee: KValue<'graph, 'cell>,
         arguments: KValue<'graph, 'cell>,
     },
+    /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
+    /// carries and the names `offered`, a record of them by name, supplies.
+    Eval {
+        program: &'graph Program<'graph>,
+        code: KValue<'graph, 'cell>,
+        offered: KValue<'graph, 'cell>,
+    },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
     Evaluate {
         program: &'graph Program<'graph>,
@@ -94,6 +101,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
             KBirth::Call {
                 callee, arguments, ..
             } => callee.weight().plus(arguments.weight()).bytes(),
+            KBirth::Eval { code, offered, .. } => code.weight().plus(offered.weight()).bytes(),
             KBirth::Evaluate { .. } | KBirth::Inspect { .. } => usize::MAX,
         }
     }
@@ -117,6 +125,15 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     program,
                     callee: copy_severed::<_, KnottedFamily>(writer, view, &callee),
                     arguments: copy_severed::<_, KnottedFamily>(writer, view, &arguments),
+                },
+                KBirth::Eval {
+                    program,
+                    code,
+                    offered,
+                } => KBirth::Eval {
+                    program,
+                    code: copy_severed::<_, KnottedFamily>(writer, view, &code),
+                    offered: copy_severed::<_, KnottedFamily>(writer, view, &offered),
                 },
                 // Only a forced copy reaches here with a view — a tail hop's successor, which is a
                 // sibling of the cell the view names. No step hops holding a view.

@@ -1,6 +1,6 @@
 //! The body runner: the one step that performs a body's units, in the order its shape emitted
 //! them — the top level's, as a tenant of the root born as each call's root work, and a called
-//! body's, in the frame's own cell.
+//! body's or the code an `EVAL` runs, in the frame's own cell.
 //!
 //! The runner claims nothing ahead and no unit has a cell of its own. A unit of type binders is
 //! declared through the elaborator's door and bound in the same step; a module binder's body runs
@@ -19,9 +19,10 @@ use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
+use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{Collector, KType, TypeNode, Variance, admits_with};
-use crate::values::{TypeValue, Value};
+use crate::values::{Link, TypeValue, Value};
 
 use super::bundle::{KBirth, KBundle, KState};
 use super::record::{Evaluated, Program};
@@ -104,6 +105,14 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph
             Some(activation) => Runner::at(program, activation, Level::Frame),
             None => return step.failed(StepError::Refused),
         },
+        KState::Born(KBirth::Eval {
+            program,
+            code,
+            offered,
+        }) => match code_frame(&step, program, code, offered) {
+            Some(activation) => Runner::at(program, activation, Level::Frame),
+            None => return step.failed(StepError::Refused),
+        },
         KState::Runner(runner) => match woken(&mut step, runner, scratch) {
             Ok(runner) => runner,
             Err(error) => return step.failed(error),
@@ -141,6 +150,69 @@ pub fn call<'graph, 'here>(
             },
         },
     }
+}
+
+/// Why an `EVAL` refused to run its operand.
+#[derive(Clone, Copy, Debug)]
+pub enum CodeRefused<'graph> {
+    /// The operand is not a quote's code.
+    NotCode,
+    /// The code's shape, built where the program loaded, kept this error.
+    Shape(&'graph ShapeError<'graph>),
+    /// A hole no `USING` filled, or a `\` name the `EVAL` does not offer: the first in the
+    /// shape's capture order.
+    Unbound(BinderSymbol),
+}
+
+/// What an evaluator asks for to run `code` under `EVAL`, `offered` a record of the names the
+/// `EVAL` offers: a frame running the code's shape, which shares its operands' storage. Refused
+/// before anything is spawned when `code` is no code, its shape kept an error, or a name it reads
+/// is bound neither by a `USING` nor by `offered`. Nothing builds a shape here: the code's was
+/// built where the program loaded.
+pub fn eval<'graph, 'here>(
+    program: &'graph Program<'graph>,
+    code: KValue<'graph, 'here>,
+    offered: KValue<'graph, 'here>,
+    use_: Use,
+) -> Result<Request<'graph, 'here, KBundle>, CodeRefused<'graph>> {
+    let node = code
+        .as_code()
+        .and_then(Knotted::code)
+        .ok_or(CodeRefused::NotCode)?;
+    let shape = node.shape();
+    if let Some(error) = shape.refusal() {
+        return Err(CodeRefused::Shape(error));
+    }
+    let offers = |name: BinderSymbol| {
+        offered
+            .as_record()
+            .is_some_and(|record| record.field(name.symbol()).is_some())
+    };
+    for capture in shape.captures() {
+        let bound = match capture.source {
+            CaptureSource::Read(_) | CaptureSource::Member { .. } => true,
+            CaptureSource::Hole => node
+                .supplied()
+                .iter()
+                .any(|(name, _)| *name == capture.name),
+            CaptureSource::Offered => offers(capture.name),
+        };
+        if !bound {
+            return Err(CodeRefused::Unbound(capture.name));
+        }
+    }
+    Ok(Request {
+        placement: Placement::Shares,
+        use_,
+        work: crate::scheduler::Work {
+            step: run,
+            state: KBirth::Eval {
+                program,
+                code,
+                offered,
+            },
+        },
+    })
 }
 
 /// The derived placement bit: `Fresh` when the return type is `Number`, `Bool` or `Null` — the
@@ -288,6 +360,44 @@ fn frame<'graph, 'here>(
         activation.bind(slot, value).ok()?;
     }
     (parameters == record.len()).then_some(activation)
+}
+
+/// An `EVAL`'s frame: the code's activation over a closure run assembled in its shape's capture
+/// order — each `$` name from the bindings the code carries, each hole from those `USING` supplied,
+/// each `\` name from `offered` — every edge resolved to the member it names, so the run holds value
+/// words only. `None` when a name is bound nowhere, which [`eval`] refuses first.
+fn code_frame<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_>,
+    program: &'graph Program<'graph>,
+    code: KValue<'graph, 'here>,
+    offered: KValue<'graph, 'here>,
+) -> Option<&'here KActivation<'graph, 'here>> {
+    let member = code.as_code()?;
+    let node = member.code()?;
+    let shape = node.shape();
+    let record = offered.as_record()?;
+    let find = |run: &[(BinderSymbol, Link<'here, Knotted<'graph, 'here>>)], name| {
+        let at = run.binary_search_by_key(&name, |(held, _)| *held).ok()?;
+        Some(run[at].1.resolve(member))
+    };
+    let bump = Bump::new();
+    let mut links = BumpVec::with_capacity_in(shape.captures().len(), &bump);
+    for capture in shape.captures() {
+        let value = match capture.source {
+            CaptureSource::Read(_) | CaptureSource::Member { .. } => {
+                find(node.bound(), capture.name)?
+            }
+            CaptureSource::Hole => find(node.supplied(), capture.name)?,
+            CaptureSource::Offered => *record.field(capture.name.symbol())?,
+        };
+        links.push(Link::Value(value));
+    }
+    let writer = step.writer();
+    let closure = ClosureBindings::of(writer, &links);
+    Some(resident(
+        writer,
+        KActivation::of_code(writer, shape, closure, program.builtins()),
+    ))
 }
 
 /// A parked runner woken: the evaluation it asked for bound or kept, or the parts a tie named

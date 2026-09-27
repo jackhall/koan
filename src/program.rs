@@ -7,8 +7,9 @@
 //! outside names `'graph`: the running state is reached through [`CellSubstrate::with`], whose
 //! closure is quantified over a fresh lifetime, and the scheduler is a view made per call over the
 //! graph. [`KBundle`] is the step bundle the scheduler runs, and [`run`] is the body runner — the
-//! top level's root work, and every called body's frame. The layer above supplies a [`Language`]:
-//! the builtin table, and the step every evaluation runs.
+//! top level's root work, every called body's frame, and the frame of the code an `EVAL` runs.
+//! [`call`] and [`eval`] are the doors an evaluator asks for those frames through. The layer above
+//! supplies a [`Language`]: the builtin table, and the step every evaluation runs.
 //!
 //! **Imports.** Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
 //! `crate::memory`, `crate::parse`, `crate::scheduler`, `crate::scope`, `crate::symbols`,
@@ -25,7 +26,7 @@ mod substrate;
 #[cfg(test)]
 mod tests;
 
-pub use body::{Runner, call, placement_of, run};
+pub use body::{CodeRefused, Runner, call, eval, placement_of, run};
 pub use bundle::{KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily};
 pub use record::{Evaluated, Language, LoadError, Program};
 pub use substrate::{CellSubstrate, Running};

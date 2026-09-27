@@ -1,7 +1,8 @@
 //! The miniature evaluator the program suites supply as their [`Language`]: not dispatch, and kept
 //! small. Its builtin table is `origin = 0` and the scalar types, and it evaluates exactly a
-//! literal, a quote — born through the [quote door](crate::knot::quote) — a name, a list of
-//! literals, names and quotes, `(WHEN c THEN a ELSE b)`,
+//! literal, a quote — born through the [quote door](crate::knot::quote) — a name, marked or not, a
+//! list of literals, names and quotes, `(EVAL code)` through the [`EVAL` door](crate::program::eval),
+//! `(WHEN c THEN a ELSE b)`,
 //! `(a MINUS b)`, `(FIRST xs)` over a list data node whose first cell is an edge, a call `(f x)` of a function with one
 //! parameter, and a `FN`, born through the [lambda door](crate::knot::lambda). `WHEN`, `THEN`,
 //! `ELSE`, `MINUS` and `FIRST` are no builtin shapes, so the shape builder walks them as plain
@@ -15,7 +16,9 @@ use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda, quote};
 use crate::memory::{Active, Bump, BumpAllocator, Writer};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
-use crate::program::{Evaluated, KBirth, KBundle, KState, Language, Program, call};
+use crate::program::{
+    CodeRefused, Evaluated, KBirth, KBundle, KState, Language, Program, call, eval,
+};
 use crate::scheduler::{
     Action, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
@@ -61,6 +64,8 @@ impl Language for Mini {
             ("Null", KType::NULL),
             ("Any", KType::ANY),
             ("Value", KType::ANY_VALUE),
+            ("Expression", KType::EXPRESSION),
+            ("Code", KType::ANY_CODE),
         ]
         .into_iter()
         .map(|(name, handle)| {
@@ -134,6 +139,17 @@ fn born<'graph>(member: Knotted<'graph, '_>, program: &'graph Program<'graph>) -
     )
 }
 
+/// Why an `EVAL` refused, in a form a test can assert on.
+fn refusal(refused: CodeRefused<'_>, program: &Program<'_>) -> String {
+    match refused {
+        CodeRefused::NotCode => String::from("not code"),
+        CodeRefused::Shape(_) => String::from("shape"),
+        CodeRefused::Unbound(name) => {
+            format!("unbound {}", program.symbols().display(name.symbol()))
+        }
+    }
+}
+
 /// Whether a condition's value takes the `THEN` branch.
 fn truthy(value: &KValue<'_, '_>) -> bool {
     match value {
@@ -189,7 +205,11 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
         }
         // A Type-class name reads through the activation like any other mention: a frame binds
         // its callee's type parameters, so `Elt` inside a quantified body is an ordinary read.
-        Form::Leaf(part @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
+        Form::Leaf(
+            part @ (ExpressionPart::Identifier(_)
+            | ExpressionPart::Type(_)
+            | ExpressionPart::MarkedName(..)),
+        ) => {
             let Some(value) = read(&view, part) else {
                 return step.failed(StepError::Refused);
             };
@@ -290,6 +310,32 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             match list.cells().first() {
                 Some(Link::Edge(edge)) => step.finish(Value::Knotted(holder.sibling(*edge))),
                 _ => step.failed(StepError::Refused),
+            }
+        }
+        ([head, operand], 0) if keyword(head, "EVAL") => {
+            let asked = ask(&mut step, birth, &operand.value, Use::Keeps);
+            park(step, asked, birth, 3)
+        }
+        ([_, operand], 3) => {
+            let Some(Ok(Received::Here(code))) = step.results().next() else {
+                return step.failed(StepError::Unredeemable);
+            };
+            let fields: Vec<_> = view
+                .shape()
+                .offers(Site::of(&operand.value))
+                .iter()
+                .map(|(name, at)| (*name, view.read(*at)))
+                .collect();
+            let offered = Record::new(step.writer(), &fields, types, &scratch);
+            match eval(program, code, Value::Record(offered), Use::Forwards) {
+                Ok(request) => {
+                    let asked = step.spawn(request);
+                    park(step, asked, birth, 2)
+                }
+                Err(refused) => {
+                    record(format!("refused {}", refusal(refused, program)));
+                    step.failed(StepError::Refused)
+                }
             }
         }
         ([_, argument], 0) => {
