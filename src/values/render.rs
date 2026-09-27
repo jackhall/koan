@@ -11,15 +11,16 @@ use crate::memory::{BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, bump_s
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{TypeRegistry, display_name};
 
-use super::circular::{Cells, Composite};
+use super::circular::{Cells, Composite, Resolved};
 use super::{Knotted, Value};
 
-impl<X: Knotted> Value<'_, '_, X> {
+impl<X: Knotted> Value<'_, X> {
     /// Render the value into `out`. A string writes its text bare, a dict key quoted; a list reads
     /// `[a, b]`, a dict `{k: v}` in key order, a record `{x = 1}` in field-name order; a tagged value
     /// reads as its type's name around its payload, a type as its name, a quote as its body's
-    /// surface, a function as its type's name, and a knot's data node as the plain value of its
-    /// kind, labelled where a cycle returns to it. The marks, symbols and record field orders are
+    /// surface with its marks as written and never what they bind, a function, a module or a
+    /// barrier as its type's name, and a knot's data node as the plain value of its kind, labelled
+    /// where a cycle returns to it. The marks, symbols and record field orders are
     /// staged over `scratch`.
     pub fn render(
         &self,
@@ -98,10 +99,16 @@ struct Render<'o, 'env, 'run, 'x, O, X> {
 }
 
 impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, O, X> {
-    fn value(&mut self, value: &Value<'_, '_, X>) -> fmt::Result {
+    fn value(&mut self, value: &Value<'_, X>) -> fmt::Result {
         let (types, symbols) = (self.types, self.symbols);
-        if let Some(opaque) = value.as_opaque() {
-            return write!(self.out, "{}", display_name(opaque.ktype(), types, symbols));
+        if let Value::Knotted(member) = value {
+            match member.resolve() {
+                Resolved::Code(code) => return write!(self.out, "{}", code.body.summary(symbols)),
+                Resolved::Function { .. } | Resolved::Module | Resolved::Barrier => {
+                    return write!(self.out, "{}", display_name(member.ktype(), types, symbols));
+                }
+                Resolved::Circular(_) => {}
+            }
         }
         if let Some((node, composite)) = value.composite() {
             if let Some(node) = node {
@@ -123,7 +130,6 @@ impl<O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, O, X> {
             Value::Bool(flag) => write!(self.out, "{flag}"),
             Value::Null => self.out.write_str("null"),
             Value::Str(text) => self.out.write_str(text),
-            Value::Expression(node) => write!(self.out, "{}", node.summary(symbols)),
             Value::Type(value) => {
                 write!(self.out, "{}", display_name(value.handle(), types, symbols))
             }

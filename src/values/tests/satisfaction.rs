@@ -152,14 +152,16 @@ fn a_circular_value_satisfies_by_its_node_memo() {
 
 #[test]
 fn a_value_a_type_and_a_quote_each_satisfy_their_family_alone() {
+    use super::{Stand, quote};
+    use crate::values::Value as Holding;
     with_fixture(|fixture| {
         let (types, scratch) = (fixture.types, fixture.scratch());
-        let quote = fixture.part("#(a)");
+        let quote = quote(fixture, "#(a)");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let number = Value::Number(1.0);
-            let type_value = Value::Type(TypeValue::new(writer, KType::NUMBER, types));
-            let quote = Value::lower_part(writer, &quote, types, scratch).expect("a quote lowers");
+            let number = Holding::Number(1.0);
+            let type_value = Holding::Type(TypeValue::new(writer, KType::NUMBER, types));
+            let quote = Holding::Knotted(Stand::Code(quote));
             let families = [
                 (&number, [KType::ANY_VALUE, KType::NUMBER]),
                 (&type_value, [KType::ANY_TYPE, KType::PROPER_TYPE]),
@@ -184,6 +186,8 @@ fn a_value_a_type_and_a_quote_each_satisfy_their_family_alone() {
 /// other.
 #[test]
 fn a_quote_satisfies_its_own_kind_and_every_kind_above_it() {
+    use super::{Stand, quote};
+    use crate::values::Value as Holding;
     with_fixture(|fixture| {
         let (types, scratch) = (fixture.types, fixture.scratch());
         let kinds = [
@@ -257,12 +261,11 @@ fn a_quote_satisfies_its_own_kind_and_every_kind_above_it() {
         ];
         let parts: Vec<_> = cases
             .iter()
-            .map(|(source, _)| fixture.part(source))
+            .map(|(source, _)| quote(fixture, source))
             .collect();
-        fixture.in_cell(pin, |context| {
+        fixture.in_cell(pin, |_| {
             for ((source, above), part) in cases.iter().zip(&parts) {
-                let quote = Value::lower_part(context.writer(), part, types, scratch)
-                    .expect("a quote lowers");
+                let quote = Holding::Knotted(Stand::Code(*part));
                 for kind in kinds {
                     assert_eq!(
                         satisfies(kind, &quote, types, scratch),

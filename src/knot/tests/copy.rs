@@ -1,11 +1,11 @@
 //! A knot member crossing under a copy: its whole knot re-tied at the destination.
 //!
 //! `a_copied_knot_outlives_its_home`, `a_copied_ring_outlives_its_home`,
-//! `a_copied_module_outlives_its_home` and `a_copied_barrier_outlives_its_home` are on the Miri
-//! slate:
-//! they are the paths only `knot` drives — a knot's run laid down with closure runs, typing
-//! records, data nodes and deep copies written into the region while the node run is being filled,
-//! read through edges after the region it was copied from is gone.
+//! `a_copied_module_outlives_its_home`, `a_copied_barrier_outlives_its_home` and
+//! `a_copied_quote_outlives_its_home` are on the Miri slate: they are the paths only `knot` drives —
+//! a knot's run laid down with closure runs, typing records, bound runs, data nodes and deep copies
+//! written into the region while the node run is being filled, read through edges after the region
+//! it was copied from is gone.
 
 use std::ptr;
 
@@ -22,7 +22,7 @@ fn capture<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     callable: Knotted<'graph, 'cell>,
     name: &str,
-) -> Link<'graph, 'cell, Knotted<'graph, 'cell>> {
+) -> Link<'cell, Knotted<'graph, 'cell>> {
     let function = callable.function().expect("a function");
     let name = fixture.name(name);
     let index = function
@@ -84,6 +84,11 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                 assert_eq!(copied.member().index(), g.member().index());
                 assert_eq!(copied.ktype(), g.ktype());
                 assert_eq!(copied.weight(), g.weight());
+                assert_eq!(
+                    Value::Knotted(copied).equals(&Value::Knotted(g), types, scratch),
+                    Ok(true),
+                    "a function equals its copy"
+                );
                 assert!(ptr::eq(
                     copied.function().expect("a function").shape(),
                     g.function().expect("a function").shape()
@@ -175,6 +180,58 @@ fn a_copied_knot_outlives_its_home() {
                     let words = words.as_list().expect("`words` is a list");
                     assert_eq!(words.get(1).and_then(Value::as_str), Some("beta"));
                 }
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
+#[test]
+fn a_copied_quote_outlives_its_home() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse("LET greeting = \"hi\"\nLET echo = #(PRINT $echo $greeting)");
+        let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        let dormant = graph
+            .enter(home, |context| {
+                let activation = fixture.run(context.writer(), &lines, &[]);
+                let echo = bound(fixture, activation, "echo");
+                let source = context.lift::<KValueFamily>(echo);
+                let crossed = cross(context, dest, &source).unwrap();
+                let copied = context.read(&crossed).value();
+                assert!(!ptr::eq(
+                    copied.as_code().expect("code crosses as code").node(),
+                    echo.as_code().expect("code").node()
+                ));
+                assert_eq!(copied.equals(&echo, types, scratch), Ok(true));
+                context.keep(crossed)
+            })
+            .unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        graph
+            .enter(dest, |context| {
+                let carrier = context.redeem(dormant).unwrap();
+                let echo = context.read(&carrier).value();
+                let member = echo.as_code().expect("the kept code redeems as code");
+                let code = member.code().expect("a quote's node");
+                let greeting = fixture.name("greeting");
+                for (name, link) in code.bound() {
+                    match link {
+                        Link::Edge(edge) => {
+                            assert!(ptr::eq(member.sibling(*edge).node(), member.node()));
+                        }
+                        Link::Value(value) => {
+                            assert_eq!(*name, greeting);
+                            assert_eq!(value.as_str(), Some("hi"));
+                        }
+                    }
+                }
+                let mut rendered = String::new();
+                echo.render(&mut rendered, types, symbols, scratch).unwrap();
+                assert_eq!(rendered, "PRINT $echo $greeting");
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();

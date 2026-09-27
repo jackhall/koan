@@ -9,17 +9,17 @@ use super::{Knotted, Nothing, Value, Weight};
 
 /// A value word, or an edge into the holder's own knot.
 #[derive(Clone, Copy, Debug)]
-pub enum Link<'graph, 'cell, X = Nothing> {
-    Value(Value<'graph, 'cell, X>),
+pub enum Link<'cell, X = Nothing> {
+    Value(Value<'cell, X>),
     Edge(Edge),
 }
 
-const _: () = assert!(size_of::<Link<'static, 'static>>() == 24);
+const _: () = assert!(size_of::<Link<'static>>() == 24);
 
-impl<'graph, 'cell, X: Knotted> Link<'graph, 'cell, X> {
+impl<'cell, X: Knotted> Link<'cell, X> {
     /// The value this link denotes, read through `holder`, the member whose run holds it: an edge
     /// is the sibling it names.
-    pub fn resolve(&self, holder: X) -> Value<'graph, 'cell, X> {
+    pub fn resolve(&self, holder: X) -> Value<'cell, X> {
         match *self {
             Link::Value(value) => value,
             Link::Edge(edge) => Value::Knotted(holder.sibling(edge)),
@@ -30,8 +30,8 @@ impl<'graph, 'cell, X: Knotted> Link<'graph, 'cell, X> {
     /// edge names a node by index, so it means the same in a copy of its knot.
     pub fn copied<'to, Y>(
         &self,
-        copy: &mut impl FnMut(&Value<'graph, 'cell, X>) -> Value<'graph, 'to, Y>,
-    ) -> Link<'graph, 'to, Y> {
+        copy: &mut impl FnMut(&Value<'cell, X>) -> Value<'to, Y>,
+    ) -> Link<'to, Y> {
         match self {
             Link::Value(value) => Link::Value(copy(value)),
             Link::Edge(edge) => Link::Edge(*edge),

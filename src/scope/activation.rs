@@ -46,7 +46,7 @@ use super::shape::{BodyShape, Coordinate, ShapeKind, Slot, Target};
 /// use koan::scope::{ActivationView, Coordinate};
 /// use koan::values::Value;
 ///
-/// fn read<'graph, 'cell>(view: ActivationView<'graph, 'cell>, at: Coordinate) -> Value<'graph, 'cell> {
+/// fn read<'graph, 'cell>(view: ActivationView<'graph, 'cell>, at: Coordinate) -> Value<'cell> {
 ///     view.read(at)
 /// }
 /// ```
@@ -63,8 +63,8 @@ pub struct ActivationView<
     'graph: 'cell,
 {
     shape: &'graph BodyShape<'graph>,
-    closure: &'cell ClosureBindings<'graph, 'cell, X>,
-    builtins: &'cell Builtins<'graph, 'cell, X>,
+    closure: &'cell ClosureBindings<'cell, X>,
+    builtins: &'cell Builtins<'cell, X>,
     enclosing: Option<&'cell ActivationView<'graph, 'cell, XF, X>>,
     /// The knot member this activation runs: `Some` for a callable's activation and every block
     /// inside one, `None` for the program's, a module's, and every block inside those. An edge
@@ -123,8 +123,8 @@ where
     fn laid_down(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
-        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
-        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
         enclosing: Option<&'cell ActivationView<'graph, 'cell, XF>>,
         callable: Option<XF::Closed<'cell>>,
     ) -> Self {
@@ -146,7 +146,7 @@ where
     pub fn of_program(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
-        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Program);
         Self::laid_down(
@@ -165,8 +165,8 @@ where
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
         callable: XF::Closed<'cell>,
-        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
-        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Callable);
         debug_assert_eq!(
@@ -183,8 +183,8 @@ where
     pub fn of_module(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
-        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
-        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Module);
         debug_assert_eq!(
@@ -202,8 +202,8 @@ where
     pub fn of_code(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
-        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
-        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Code);
         debug_assert_eq!(
@@ -242,7 +242,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> Activation<'graph, 'cell, XF> {
     pub fn bind(
         &self,
         slot: Slot,
-        value: Value<'graph, 'cell, XF::Closed<'cell>>,
+        value: Value<'cell, XF::Closed<'cell>>,
     ) -> Result<(), SlotConflict> {
         self.slots.bind(slot.index(), value)
     }
@@ -253,7 +253,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
         self.shape
     }
 
-    pub fn builtins(&self) -> &'cell Builtins<'graph, 'cell, XF::Closed<'cell>> {
+    pub fn builtins(&self) -> &'cell Builtins<'cell, XF::Closed<'cell>> {
         self.builtins
     }
 
@@ -266,7 +266,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
     /// [`read`](ActivationView::read) does: a body is read whole only once its every unit has run.
     pub fn slots(
         &self,
-    ) -> impl ExactSizeIterator<Item = (Slot, Value<'graph, 'cell, XF::Closed<'cell>>)> + '_ {
+    ) -> impl ExactSizeIterator<Item = (Slot, Value<'cell, XF::Closed<'cell>>)> + '_ {
         (0..self.shape.slots()).map(|index| {
             let value = self.slots.get(index).expect(
                 "a slot read out of an activation is never empty: every unit of the body has run",
@@ -280,7 +280,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
     ///
     /// Panics on an empty slot: the shape orders a body's units so every binder runs before its
     /// readers, so an empty slot here is a scheduler bug.
-    pub fn read(&self, at: Coordinate) -> Value<'graph, 'cell, XF::Closed<'cell>> {
+    pub fn read(&self, at: Coordinate) -> Value<'cell, XF::Closed<'cell>> {
         let (hops, target) = match at {
             Coordinate::Builtin(index) => return self.builtins.get(index),
             Coordinate::Activation { hops, target } => (hops, target),

@@ -1,14 +1,16 @@
 //! A knot's data node, read through the member holding it: a list, dict, record or tagged value
 //! whose cells are [`Link`]s, so a cell may name a sibling node of the same knot. What a member holds
-//! is its [`Resolved`] form.
+//! is its [`Resolved`] form: beside a data node, a function or a quote's code, each read through
+//! the links it holds, or a module or a barrier, opaque to `values`.
 //!
 //! [`Composite`] is the one reading of a container or tagged value that equality, rendering and the
 //! mark pass share: its cells as values, whether they are plain words or links resolved through the
 //! node holding them. The lifetimes of a node's run shorten to the borrow a member hands out, which
-//! is sound because every resident is covariant in `'graph` and `'cell`.
+//! is sound because every resident is covariant in `'cell` and so is every member.
 
 use crate::memory::{Writer, collect};
-use crate::symbols::Symbol;
+use crate::parse::KExpression;
+use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::KType;
 
 use super::{DeepCopy, Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, Value, Weight};
@@ -16,31 +18,56 @@ use super::{DeepCopy, Dict, Key, Knotted, Link, List, Nothing, Record, Tagged, V
 /// What a knot member holds.
 #[derive(Clone, Copy)]
 pub enum Resolved<'a, X> {
-    /// A function: opaque to `values`, incomparable, rendered as its type's name.
-    Function,
-    /// A module: opaque in the same way, and carrying no type `values` names.
+    /// A function, rendered as its type's name. It compares by `identity` — one per `FN`, `EXPR` or
+    /// `OP` written, so a copy keeps it — and by its closure bindings, read through the member.
+    Function {
+        identity: usize,
+        closure: &'a [Link<'a, X>],
+    },
+    /// A module: opaque to `values`, incomparable, rendered as its type's name.
     Module,
+    /// A function behind an opaque view's barrier: called as a function, opaque as a module.
+    Barrier,
     /// A data node.
-    Circular(Circular<'a, 'a, X>),
+    Circular(Circular<'a, X>),
+    /// A quote's code.
+    Code(CodeView<'a, X>),
 }
 
-/// A data node of a knot. `Copy`.
-pub enum Circular<'graph, 'cell, X = Nothing> {
-    List(&'cell List<'graph, 'cell, X, Link<'graph, 'cell, X>>),
-    Dict(&'cell Dict<'graph, 'cell, X, Link<'graph, 'cell, X>>),
-    Record(&'cell Record<'graph, 'cell, X, Link<'graph, 'cell, X>>),
-    Tagged(&'cell Tagged<'graph, 'cell, X, Link<'graph, 'cell, X>>),
+/// A quote's code as `values` reads it: its body as written, and the names its code binds, each
+/// beside a link read through the member — its `$` names and the holes a `USING` filled, each run
+/// sorted by name.
+pub struct CodeView<'a, X> {
+    pub body: &'a KExpression<'a>,
+    pub bound: &'a [(BinderSymbol, Link<'a, X>)],
+    pub supplied: &'a [(BinderSymbol, Link<'a, X>)],
 }
 
-impl<X> Clone for Circular<'_, '_, X> {
+impl<X> Clone for CodeView<'_, X> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<X> Copy for Circular<'_, '_, X> {}
+impl<X> Copy for CodeView<'_, X> {}
 
-impl<'graph, 'cell, X: Knotted> Circular<'graph, 'cell, X> {
+/// A data node of a knot. `Copy`.
+pub enum Circular<'cell, X = Nothing> {
+    List(&'cell List<'cell, X, Link<'cell, X>>),
+    Dict(&'cell Dict<'cell, X, Link<'cell, X>>),
+    Record(&'cell Record<'cell, X, Link<'cell, X>>),
+    Tagged(&'cell Tagged<'cell, X, Link<'cell, X>>),
+}
+
+impl<X> Clone for Circular<'_, X> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<X> Copy for Circular<'_, X> {}
+
+impl<'cell, X: Knotted> Circular<'cell, X> {
     /// The node's memoized type, exact and finite: the tie derived it.
     pub fn ktype(&self) -> KType {
         match self {
@@ -66,9 +93,9 @@ impl<'graph, 'cell, X: Knotted> Circular<'graph, 'cell, X> {
     pub fn copied<'to, Y: Knotted>(
         &self,
         writer: Writer<'to>,
-        copy: &mut DeepCopy<'_, 'graph, 'cell, 'to, X, Y>,
-    ) -> Circular<'graph, 'to, Y> {
-        let mut copy = |value: &Value<'graph, 'cell, X>| copy(value);
+        copy: &mut DeepCopy<'_, 'cell, 'to, X, Y>,
+    ) -> Circular<'to, Y> {
+        let mut copy = |value: &Value<'cell, X>| copy(value);
         match *self {
             Circular::List(list) => {
                 let source = list.cells();
@@ -127,14 +154,14 @@ pub(super) enum Composite<'a, X> {
     },
     Tagged {
         ktype: KType,
-        payload: Value<'a, 'a, X>,
+        payload: Value<'a, X>,
     },
 }
 
 /// A run of cells read as values: plain words, or links resolved through their holder.
 pub(super) enum Cells<'a, X> {
-    Plain(&'a [Value<'a, 'a, X>]),
-    Linked(&'a [Link<'a, 'a, X>], X),
+    Plain(&'a [Value<'a, X>]),
+    Linked(&'a [Link<'a, X>], X),
 }
 
 impl<X: Knotted> Clone for Cells<'_, X> {
@@ -153,25 +180,24 @@ impl<'a, X: Knotted> Cells<'a, X> {
         }
     }
 
-    pub(super) fn get(self, at: usize) -> Value<'a, 'a, X> {
+    pub(super) fn get(self, at: usize) -> Value<'a, X> {
         match self {
             Cells::Plain(cells) => cells[at],
             Cells::Linked(cells, holder) => cells[at].resolve(holder),
         }
     }
 
-    pub(super) fn iter(self) -> impl ExactSizeIterator<Item = Value<'a, 'a, X>> {
+    pub(super) fn iter(self) -> impl ExactSizeIterator<Item = Value<'a, X>> {
         (0..self.len()).map(move |at| self.get(at))
     }
 }
 
-impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
+impl<'cell, X: Knotted> Value<'cell, X> {
     /// The composite this value reads as, beside the data node it is when it is one. `None` for a
-    /// scalar, a string, a quote, a type and a function.
+    /// scalar, a string, a type and every knot member but a data node.
     pub(super) fn composite<'a>(&self) -> Option<(Option<X>, Composite<'a, X>)>
     where
         'cell: 'a,
-        'graph: 'a,
         X: 'a,
     {
         let plain = match *self {
@@ -205,7 +231,7 @@ impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
     }
 }
 
-impl<'a, X: Knotted> Circular<'a, 'a, X> {
+impl<'a, X: Knotted> Circular<'a, X> {
     /// This node read as a composite, its links resolved through `holder`.
     fn composite(self, holder: X) -> Composite<'a, X> {
         match self {

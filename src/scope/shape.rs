@@ -310,7 +310,7 @@ impl<'graph> BodyShape<'graph> {
     pub fn of_program<X: Knotted>(
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
-        builtins: &Builtins<'_, '_, X>,
+        builtins: &Builtins<'_, X>,
         types: &TypeRegistry<'graph>,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {

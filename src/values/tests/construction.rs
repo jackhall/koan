@@ -2,14 +2,13 @@
 
 use std::ptr;
 
-use crate::parse::ExpressionPart;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KKind, KType, TypeNode};
 use crate::values::{Key, KeyRejected, TypeValue, Weight};
 
 use super::{Dict, List, Record, Tagged, TypeSymbol, Value, pin, text, with_fixture};
 
-const WORD: Weight = Weight::flat::<Value<'static, 'static>>();
+const WORD: Weight = Weight::flat::<Value<'static>>();
 
 #[test]
 fn a_list_memoizes_the_join_of_its_cells_and_weighs_every_byte_it_lays_down() {
@@ -24,7 +23,7 @@ fn a_list_memoizes_the_join_of_its_cells_and_weighs_every_byte_it_lays_down() {
             assert_eq!(list.ktype(), types.list(KType::STR));
             assert_eq!(
                 list.weight(),
-                Weight::flat::<List<'static, 'static>>()
+                Weight::flat::<List<'static>>()
                     .plus(WORD)
                     .plus(WORD)
                     .plus(Weight::text(5))
@@ -79,7 +78,7 @@ fn a_record_sorts_its_fields_and_memoizes_the_record_of_their_types() {
             );
             assert_eq!(
                 record.weight(),
-                Weight::flat::<Record<'static, 'static>>()
+                Weight::flat::<Record<'static>>()
                     .plus(Weight::flat::<crate::symbols::Symbol>())
                     .plus(Weight::flat::<crate::symbols::Symbol>())
                     .plus(WORD)
@@ -178,13 +177,9 @@ fn peeling_replaces_one_tagged_layer_and_holding_keeps_every_layer() {
 }
 
 #[test]
-fn a_quote_weighs_its_pointer_and_a_type_value_its_kind() {
+fn a_type_value_weighs_its_kind() {
     with_fixture(|fixture| {
-        let ExpressionPart::QuotedExpression(node) = fixture.part("#(a b c)") else {
-            panic!("a quote parses to a quote part");
-        };
         fixture.in_cell(pin, |context| {
-            assert_eq!(Value::Expression(node).weight(), WORD);
             let value = TypeValue::new(context.writer(), KType::NUMBER, fixture.types);
             assert_eq!(value.handle(), KType::NUMBER);
             assert_eq!(value.ktype(), KType::of_kind(KKind::ProperType));
@@ -242,12 +237,13 @@ fn a_tagged_value_retyped_against_a_union_takes_the_member_it_inhabits() {
 }
 
 #[test]
-fn lowering_builds_nested_literals_and_quotes_and_refuses_names() {
+fn lowering_builds_nested_literals_and_refuses_names_and_quotes() {
     with_fixture(|fixture| {
         let (types, scratch) = (fixture.types, fixture.scratch());
         let nested = fixture.part("[[1 2] [\"a\"]]");
-        let dict = fixture.part("{\"k\": #(x), 2: {y = true}}");
+        let dict = fixture.part("{\"k\": \"s\", 2: {y = true}}");
         let named = fixture.part("[1 x]");
+        let quoted = fixture.part("[#(x)]");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let Some(Value::List(outer)) = Value::lower_part(writer, &nested, types, scratch)
@@ -260,17 +256,17 @@ fn lowering_builds_nested_literals_and_quotes_and_refuses_names() {
             let Some(Value::Dict(dict)) = Value::lower_part(writer, &dict, types, scratch) else {
                 panic!("a dict literal of lowerable entries lowers");
             };
-            assert!(
-                dict.get(&Key::str("k"))
-                    .and_then(Value::as_expression)
-                    .is_some()
-            );
+            assert!(dict.get(&Key::str("k")).and_then(Value::as_str) == Some("s"));
             assert!(
                 dict.get(&Key::number(2.0).unwrap())
                     .and_then(Value::as_record)
                     .is_some()
             );
             assert!(Value::lower_part(writer, &named, types, scratch).is_none());
+            assert!(
+                Value::lower_part(writer, &quoted, types, scratch).is_none(),
+                "a quote's code is a knot member, which `values` does not build"
+            );
         })
     });
 }
@@ -279,16 +275,14 @@ fn lowering_builds_nested_literals_and_quotes_and_refuses_names() {
 fn each_linked_door_stores_its_memo_and_weighs_its_links() {
     use super::{Link, Node};
     use crate::memory::KnotPlan;
-    type LinkedList =
-        crate::values::List<'static, 'static, Node<'static, 'static>, Link<'static, 'static>>;
-    type LinkedTagged =
-        crate::values::Tagged<'static, 'static, Node<'static, 'static>, Link<'static, 'static>>;
+    type LinkedList = crate::values::List<'static, Node<'static>, Link<'static>>;
+    type LinkedTagged = crate::values::Tagged<'static, Node<'static>, Link<'static>>;
     with_fixture(|fixture| {
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
             let edge = Link::Edge(KnotPlan::new(1).edge(0).unwrap());
-            let link = Weight::flat::<Link<'static, 'static>>();
+            let link = Weight::flat::<Link<'static>>();
             let word = Link::Value(crate::values::text(writer, "abc"));
             let memo = types.list(KType::STR);
 

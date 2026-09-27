@@ -104,7 +104,7 @@ and every parts run the parser produces is written into program storage through 
 the storage releases the whole tree. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s
 `fill`, which every door lands on.
 
-- `the_flip_reaches_quote_and_eval_bodies`
+- `the_flip_reaches_quote_bodies`
   a quoted binder form with sigil-nested sub-expressions, parsed twice into the program region
   and compared shape for shape — nested runs, cached form entries and the quote wrapper all written.
 - `a_binder_forms_type_slot_admits_the_bare_parenthesized_spelling`
@@ -125,12 +125,11 @@ value copied across a crossing is rebuilt through the destination's writer and r
 region it came from is released.
 
 - `a_copied_list_outlives_its_home`
-  a list of a string list, a string-keyed dict and a quote crosses under a copy verdict, is kept,
-  its home released, and redeemed in the destination's next step: every byte reads back and the
-  quote is the parsed node.
+  a list of a string list and a string-keyed dict crosses under a copy verdict, is kept, its home
+  released, and redeemed in the destination's next step: every byte reads back.
 
 **Knots in a cell's region** ([src/knot/copy.rs](../src/knot/copy.rs)) — a knot
-member copied across a crossing, a function or a data node, re-ties its whole knot through the
+member copied across a crossing, a function, a quote or a data node, re-ties its whole knot through the
 destination's writer, and is read through its edges after the region it came from is released.
 
 - `a_copied_knot_outlives_its_home`
@@ -153,6 +152,11 @@ destination's writer, and is read through its edges after the region it came fro
   its home released, and redeemed: the barrier beside the node and the whole knot behind it are
   written at the destination while the copy's node run is still being filled, and the captured
   bytes read back.
+- `a_copied_quote_outlives_its_home`
+  a quote whose `$` names bind its own binder and a string crosses under a copy verdict, is kept,
+  its home released, and redeemed: the code beside the node and its bound run are written at the
+  destination while the copy's node run is still being filled, the self-reference names the copy,
+  and the string reads back.
 
 **Cells the drain creates and releases** ([src/scheduler/drain.rs](../src/scheduler/drain.rs)) — a
 tail hand-off waking its state across a release, a state kept in one cell and woken in another,

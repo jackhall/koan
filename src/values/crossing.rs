@@ -3,9 +3,9 @@
 //!
 //! A pinned operand arrives at the destination's region lifetime and is embedded as it is. A copied
 //! one arrives at an unrelated lifetime, so the only rebuild that typechecks is [`copy_into`]'s deep
-//! one through the destination's writer; its program nodes are `'graph` borrows and embed verbatim,
-//! and a knot member rebuilds its whole knot through its family, handed this same copy for every
-//! value the knot holds.
+//! one through the destination's writer, and a knot member rebuilds its whole knot through its
+//! family, handed this same copy for every value the knot holds; what a member borrows of program
+//! storage embeds verbatim.
 
 use crate::memory::{
     Active, CellHandle, Covariant, CrossedOperand, Delivery, Operand, Prices, Reattachable,
@@ -69,7 +69,7 @@ pub fn cross_here<
 >(
     context: &mut StepContext<'graph, 'step, 'here, '_, C, S, D>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
-) -> Value<'graph, 'here, XF::Closed<'here>>
+) -> Value<'here, XF::Closed<'here>>
 where
     ValueFamily<XF>: Covariant<'graph>,
 {
@@ -90,7 +90,7 @@ where
 pub fn cross_view<'graph, 'cell, XF: KnottedFamily<'graph>>(
     writer: Writer<'cell>,
     view: &CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>>,
-) -> Value<'graph, 'cell, XF::Closed<'cell>> {
+) -> Value<'cell, XF::Closed<'cell>> {
     match *view {
         CrossedOperand::Pinned { view: value, .. } => value,
         CrossedOperand::Copied { view: value, .. } => copy_into::<XF>(writer, &value),
@@ -103,8 +103,8 @@ pub fn cross_view<'graph, 'cell, XF: KnottedFamily<'graph>>(
 pub fn copy_severed<'graph, 'cell, 'severed, F: Reattachable<'graph>, XF: KnottedFamily<'graph>>(
     writer: Writer<'cell>,
     operand: &CrossedOperand<'graph, 'cell, 'severed, F>,
-    value: &Value<'graph, 'severed, XF::Closed<'severed>>,
-) -> Value<'graph, 'cell, XF::Closed<'cell>> {
+    value: &Value<'severed, XF::Closed<'severed>>,
+) -> Value<'cell, XF::Closed<'cell>> {
     debug_assert!(
         matches!(operand, CrossedOperand::Copied { .. }),
         "a pinned operand's values embed as they are"
@@ -118,8 +118,8 @@ pub fn copy_severed<'graph, 'cell, 'severed, F: Reattachable<'graph>, XF: Knotte
 /// the graph priced.
 fn copy_into<'graph, 'from, 'to, XF: KnottedFamily<'graph>>(
     writer: Writer<'to>,
-    value: &Value<'graph, 'from, XF::Closed<'from>>,
-) -> Value<'graph, 'to, XF::Closed<'to>>
+    value: &Value<'from, XF::Closed<'from>>,
+) -> Value<'to, XF::Closed<'to>>
 where
     'graph: 'from,
     'graph: 'to,
@@ -128,7 +128,6 @@ where
         Value::Number(number) => Value::Number(number),
         Value::Bool(flag) => Value::Bool(flag),
         Value::Null => Value::Null,
-        Value::Expression(node) => Value::Expression(node),
         Value::Str(source) => text(writer, source),
         Value::Type(type_value) => Value::Type(type_value.copied(writer)),
         Value::List(list) => {

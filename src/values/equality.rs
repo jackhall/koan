@@ -8,10 +8,12 @@
 //! the payload's kind ([`unsealed`]), so a sealed number behind a `Number`-bounded member equals
 //! the number; any other seal compares by identity, as every tagged value does.
 //!
-//! A function has no structural equality: a comparison that reaches one on either side is
-//! [`Incomparable`], which the `==` builtin reports, never `false`.
+//! A module or a barrier has no structural equality: a comparison that reaches one on either side
+//! is [`Incomparable`], which the `==` builtin reports, never `false`. A function compares by its
+//! identity — one per `FN`, `EXPR` or `OP` written — and its closure bindings; a quote's code by its
+//! syntax, marks included, and the values its `$` names and its supplied holes bind.
 //!
-//! Two data nodes of knots compare as a bisimulation: a node pair is recorded before its cells are
+//! Two knot members compare as a bisimulation: a member pair is recorded before what it holds is
 //! compared, and a recorded pair met again counts as equal. See
 //! [README.md § Equality and rendering](README.md#equality-and-rendering) for why that is sound.
 
@@ -19,26 +21,27 @@ use crate::memory::{BumpAllocator, BumpBackedSet, bump_set};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::type_lattice::{KType, TypeRegistry, satisfied_by};
 
-use super::circular::{Cells, Composite};
-use super::{Knotted, Value, unsealed};
+use super::circular::{Cells, CodeView, Composite, Resolved};
+use super::{Knotted, Link, Value, unsealed};
 
-/// A comparison reached a function.
+/// A comparison reached a module or a barrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Incomparable;
 
-impl<X: Knotted> Value<'_, '_, X> {
+impl<X: Knotted> Value<'_, X> {
     /// Whether two values are equal. Numbers follow IEEE (`NaN != NaN`, `-0 == 0`); a tagged value
     /// compares its identity first, so it never equals its bare payload — save a sealed value whose
     /// seal [`unsealed`] reads through, which compares as its payload; two types are equal when
-    /// they are the same handle; two quoted expressions compare as syntax, part by part with spans
-    /// ignored; a knot's data node compares as the plain value of its kind would, its cells read
-    /// through it. The two sides may live at unrelated lifetimes. A function on either side is
-    /// [`Incomparable`], and so is a pair of containers whose contents reach one; a container pair
-    /// with unrelated types is unequal without descending, whatever it holds. The node pairs a
-    /// comparison has entered are staged over `scratch`.
+    /// they are the same handle; a knot's data node compares as the plain value of its kind would,
+    /// its cells read through it; two functions by identity, then their closure bindings; two
+    /// quotes' code as syntax, part by part with spans ignored, then the values their names bind.
+    /// The two sides may live at unrelated lifetimes. A module or a barrier on either side is
+    /// [`Incomparable`], and so is a pair whose contents reach one; a container pair with unrelated
+    /// types is unequal without descending, whatever it holds. The member pairs a comparison has
+    /// entered are staged over `scratch`.
     pub fn equals<Y: Knotted>(
         &self,
-        other: &Value<'_, '_, Y>,
+        other: &Value<'_, Y>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<bool, Incomparable> {
@@ -49,7 +52,7 @@ impl<X: Knotted> Value<'_, '_, X> {
     /// [`equals`](Self::equals) under the node pairs already entered.
     fn equals_within<Y: Knotted>(
         &self,
-        other: &Value<'_, '_, Y>,
+        other: &Value<'_, Y>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
         seen: &mut BumpBackedSet<'_, (X, Y)>,
@@ -59,6 +62,30 @@ impl<X: Knotted> Value<'_, '_, X> {
         let that = unsealed(*other, types, scratch);
         if this.as_opaque().is_some() || that.as_opaque().is_some() {
             return Err(Incomparable);
+        }
+        if let (Value::Knotted(left), Value::Knotted(right)) = (this, that) {
+            match (left.resolve(), right.resolve()) {
+                (
+                    Resolved::Function { identity, closure },
+                    Resolved::Function {
+                        identity: other,
+                        closure: others,
+                    },
+                ) => {
+                    if !seen.insert((left, right)) {
+                        return Ok(true);
+                    }
+                    return Ok(identity == other
+                        && links_equal((closure, left), (others, right), types, scratch, seen)?);
+                }
+                (Resolved::Code(code), Resolved::Code(other)) => {
+                    if !seen.insert((left, right)) {
+                        return Ok(true);
+                    }
+                    return code_equal((code, left), (other, right), types, scratch, seen);
+                }
+                _ => {}
+            }
         }
         Ok(match (this.composite(), that.composite()) {
             (Some((left_node, left)), Some((right_node, right))) => {
@@ -75,9 +102,6 @@ impl<X: Knotted> Value<'_, '_, X> {
                 (Value::Bool(left), Value::Bool(right)) => left == right,
                 (Value::Null, Value::Null) => true,
                 (Value::Str(left), Value::Str(right)) => left == right,
-                (Value::Expression(left), Value::Expression(right)) => {
-                    expression_equal(left, right)
-                }
                 (Value::Type(left), Value::Type(right)) => left.handle() == right.handle(),
                 _ => false,
             },
@@ -162,6 +186,63 @@ fn cells_equal<X: Knotted, Y: Knotted>(
     Ok(equal)
 }
 
+/// Two runs of links, each read through the member holding it: equal in length and pairwise, the
+/// first incomparable pair deciding as in [`cells_equal`].
+fn links_equal<X: Knotted, Y: Knotted>(
+    (left, holder): (&[Link<'_, X>], X),
+    (right, other): (&[Link<'_, Y>], Y),
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    seen: &mut BumpBackedSet<'_, (X, Y)>,
+) -> Result<bool, Incomparable> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    let mut equal = true;
+    for (left, right) in left.iter().zip(right) {
+        equal &= left
+            .resolve(holder)
+            .equals_within(&right.resolve(other), types, scratch, seen)?;
+    }
+    Ok(equal)
+}
+
+/// Two quotes' code: their syntax, then the names their `$` names and supplied holes bind — the
+/// same names, each binding an equal value.
+fn code_equal<X: Knotted, Y: Knotted>(
+    (left, holder): (CodeView<'_, X>, X),
+    (right, other): (CodeView<'_, Y>, Y),
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    seen: &mut BumpBackedSet<'_, (X, Y)>,
+) -> Result<bool, Incomparable> {
+    let names = |left: &[(_, _)], right: &[(_, _)]| {
+        left.len() == right.len()
+            && left
+                .iter()
+                .zip(right)
+                .all(|(left, right)| left.0 == right.0)
+    };
+    if !expression_equal(left.body, right.body)
+        || !names(left.bound, right.bound)
+        || !names(left.supplied, right.supplied)
+    {
+        return Ok(false);
+    }
+    let mut equal = true;
+    for (left, right) in [(left.bound, right.bound), (left.supplied, right.supplied)] {
+        for (left, right) in left.iter().zip(right) {
+            equal &= left.1.resolve(holder).equals_within(
+                &right.1.resolve(other),
+                types,
+                scratch,
+                seen,
+            )?;
+        }
+    }
+    Ok(equal)
+}
+
 /// Quoted code as syntax: the same parts in the same order. A literal compares by what was written
 /// and a container literal order-sensitively, since it is syntax and not the value it would build.
 fn expression_equal(left: &KExpression<'_>, right: &KExpression<'_>) -> bool {
@@ -180,6 +261,12 @@ fn part_equal(left: &ExpressionPart<'_>, right: &ExpressionPart<'_>) -> bool {
         (Part::Identifier(left), Part::Identifier(right)) => left == right,
         (Part::Type(left), Part::Type(right)) => left.symbol() == right.symbol(),
         (Part::Literal(left), Part::Literal(right)) => literal_equal(left, right),
+        (Part::MarkedName(mark, left), Part::MarkedName(other, right)) => {
+            mark == other && left == right
+        }
+        (Part::MarkedUse(mark, left), Part::MarkedUse(other, right)) => {
+            mark == other && expression_equal(left, right)
+        }
         (Part::Expression(left), Part::Expression(right))
         | (Part::SigiledTypeExpr(left), Part::SigiledTypeExpr(right))
         | (Part::RecordType(left), Part::RecordType(right))

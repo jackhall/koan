@@ -78,9 +78,8 @@ fn a_non_binder_run_with_the_same_shape_does_not_flip() {
     );
 }
 
-/// Parse normalization applies uniformly inside a `#(…)` quote and a `$(…)` body, as suffix
-/// folding already does — so a quoted definition evaluated later reads identically to its sigiled
-/// spelling.
+/// Parse normalization applies uniformly inside a `#(…)` quote, as suffix folding already does —
+/// so a quoted definition run later reads identically to its written spelling.
 #[test]
 fn the_flip_reaches_quote_bodies() {
     use super::top;

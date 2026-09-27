@@ -34,8 +34,8 @@ struct Step;
 reattachable!(Step => ());
 
 /// What a slot of the program holds when the check runs.
-pub(super) enum Held<'graph, 'cell> {
-    Bound(Value<'graph, 'cell>),
+pub(super) enum Held<'cell> {
+    Bound(Value<'cell>),
     /// Empty: its unit has not run.
     Empty,
 }
@@ -122,12 +122,7 @@ impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
     }
 
     /// Bind `name`'s slot in `body` to `value`.
-    pub fn bind_member(
-        &self,
-        body: &Activation<'graph, 'cell>,
-        name: &str,
-        value: Value<'graph, 'cell>,
-    ) {
+    pub fn bind_member(&self, body: &Activation<'graph, 'cell>, name: &str, value: Value<'cell>) {
         let name = BinderSymbol::classify(name).expect("a binder name");
         let (slot, _) = body.shape().slot(name).expect("a declared binder");
         body.bind(slot, value).expect("an empty slot binds");
@@ -157,7 +152,7 @@ pub(super) fn with_program<R>(
         BumpAllocator<'_>,
         &SymbolInterner,
     ) -> Vec<(&'static str, KType)>,
-    hold: impl for<'graph, 'cell> Fn(&str, Writer<'cell>, &TypeRegistry<'graph>) -> Held<'graph, 'cell>,
+    hold: impl for<'graph, 'cell> Fn(&str, Writer<'cell>, &TypeRegistry<'graph>) -> Held<'cell>,
     check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
 ) -> R {
     let storage = program_storage();
@@ -260,7 +255,7 @@ pub(super) fn nulls<'graph, 'cell>(
     _: &str,
     _: Writer<'cell>,
     _: &TypeRegistry<'graph>,
-) -> Held<'graph, 'cell> {
+) -> Held<'cell> {
     Held::Bound(Value::Null)
 }
 

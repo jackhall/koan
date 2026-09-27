@@ -473,7 +473,7 @@ struct ShapedPlan<'p, 'g, 'c> {
     located: Located<'g>,
     shape: &'g BodyShape<'g>,
     writer: Writer<'c>,
-    table: &'c Builtins<'g, 'c, Probe>,
+    table: &'c Builtins<'c, Probe>,
 }
 
 // ---------- activations ----------
@@ -487,7 +487,7 @@ enum Observed {
     Edge(u32),
 }
 
-fn observe(value: Value<'_, '_, Probe>) -> Observed {
+fn observe(value: Value<'_, Probe>) -> Observed {
     match value {
         Value::Number(number) => Observed::Number(number.to_bits()),
         Value::Type(ty) => Observed::Type(ty.handle()),
@@ -500,7 +500,7 @@ fn observe(value: Value<'_, '_, Probe>) -> Observed {
 /// visible at `at`, an unmarked capture, then each enclosing block's shape at the position the block
 /// was entered at — the search every coordinate saves a reader.
 fn by_name(
-    table: &Builtins<'_, '_, Probe>,
+    table: &Builtins<'_, Probe>,
     chain: &[&BodyShape<'_>],
     name: BinderSymbol,
     at: Position,
@@ -540,7 +540,7 @@ fn through_chain(chain: &[&BodyShape<'_>], name: BinderSymbol, at: Position) -> 
 fn activate<'g, 'c>(
     writer: Writer<'c>,
     scratch: BumpAllocator<'_>,
-    table: &'c Builtins<'g, 'c, Probe>,
+    table: &'c Builtins<'c, Probe>,
     activation: Activation<'g, 'c, ProbeFamily>,
     chain: &mut Vec<&'g BodyShape<'g>>,
     next: &mut f64,

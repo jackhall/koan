@@ -25,7 +25,7 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
     fn copy_into<'from, 'to>(
         writer: Writer<'to>,
         member: &Knotted<'graph, 'from>,
-        copy: &mut DeepCopy<'_, 'graph, 'from, 'to, Knotted<'graph, 'from>, Knotted<'graph, 'to>>,
+        copy: &mut DeepCopy<'_, 'from, 'to, Knotted<'graph, 'from>, Knotted<'graph, 'to>>,
     ) -> Knotted<'graph, 'to>
     where
         'graph: 'from,
@@ -56,6 +56,7 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                     };
                     Node::Coerced(resident(writer, coerced.rebuilt(underlying)))
                 }
+                Node::Code(code) => Node::Code(resident(writer, code.rebuilt(writer, &mut *copy))),
             });
         Knotted(knot.member(member.member().index()))
     }

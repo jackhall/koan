@@ -14,13 +14,13 @@ use super::shape::BuiltinIndex;
 
 /// The builtin names and what they are bound to.
 #[derive(Clone, Copy)]
-pub struct Builtins<'graph, 'cell, X = Nothing> {
-    names: Channels<'cell, Value<'graph, 'cell, X>>,
+pub struct Builtins<'cell, X = Nothing> {
+    names: Channels<'cell, Value<'cell, X>>,
 }
 
-impl<'graph, 'cell, X: Knotted> Builtins<'graph, 'cell, X> {
+impl<'cell, X: Knotted> Builtins<'cell, X> {
     /// The table with no builtin in it.
-    pub fn empty() -> &'cell Builtins<'graph, 'cell, X> {
+    pub fn empty() -> &'cell Builtins<'cell, X> {
         &Builtins {
             names: Channels::EMPTY,
         }
@@ -33,9 +33,9 @@ impl<'graph, 'cell, X: Knotted> Builtins<'graph, 'cell, X> {
     pub fn new(
         writer: Writer<'cell>,
         scratch: BumpAllocator<'_>,
-        values: &[(ValueSymbol, Value<'graph, 'cell, X>)],
-        types: &[(TypeSymbol, Value<'graph, 'cell, X>)],
-    ) -> &'cell Builtins<'graph, 'cell, X> {
+        values: &[(ValueSymbol, Value<'cell, X>)],
+        types: &[(TypeSymbol, Value<'cell, X>)],
+    ) -> &'cell Builtins<'cell, X> {
         let names = Channels::sorted_in(writer, scratch, values, types);
         resident(writer, Builtins { names })
     }
@@ -48,7 +48,7 @@ impl<'graph, 'cell, X: Knotted> Builtins<'graph, 'cell, X> {
     }
 
     /// What `index` is bound to. Panics past the table's end, like a slice index.
-    pub fn get(&self, index: BuiltinIndex) -> Value<'graph, 'cell, X> {
+    pub fn get(&self, index: BuiltinIndex) -> Value<'cell, X> {
         self.names.get(index.index())
     }
 

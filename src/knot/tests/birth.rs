@@ -173,7 +173,7 @@ fn capture_read<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: crate::memory::Writer<'cell>,
     callable: Knotted<'graph, 'cell>,
-    builtins: &'cell crate::scope::Builtins<'graph, 'cell, Knotted<'graph, 'cell>>,
+    builtins: &'cell crate::scope::Builtins<'cell, Knotted<'graph, 'cell>>,
     name: &str,
 ) -> KValue<'graph, 'cell> {
     let function = callable.function().expect("a function");

@@ -157,7 +157,7 @@ fn follows_layout<'graph, 'cell>(
 /// Every link `member` holds: a function's closure bindings, or a planned data node's cells.
 fn links<'graph, 'cell>(
     member: Knotted<'graph, 'cell>,
-) -> Vec<Link<'cell, 'cell, Knotted<'graph, 'cell>>> {
+) -> Vec<Link<'cell, Knotted<'graph, 'cell>>> {
     match member.function() {
         Some(function) => (0..function.closure().len())
             .map(|at| function.closure().get(CaptureSlot(at as u32)))

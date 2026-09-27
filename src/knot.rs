@@ -3,12 +3,14 @@
 //!
 //! A knot member is one node of a [`Knot`](crate::memory::Knot) laid down in a cell's region.
 //! [`Knotted`] is that node, the `(knot, index)` pair, and [`Node`] is what one holds: a
-//! [function](crate::knot::function), a data node — a [`Circular`] over links — a [module](crate::knot::module), or a
-//! barrier over a function member of an opaque view. A function that names no fellow is a one-node
-//! knot, and so is every module and every barrier; a deferred-only component of value binders is
-//! born together as one knot by [`tie`], each mention of a fellow member an edge into it. A `FN` a data
-//! member holds that captures a fellow member is a node of that knot. Any other callable no binder
-//! names is born alone through [`lambda`], where the evaluator meets it.
+//! [function](crate::knot::function), a quote's [code](crate::knot::code), a data node — a
+//! [`Circular`] over links — a [module](crate::knot::module), or a barrier over a function member of
+//! an opaque view. A function or a quote that names no fellow is a one-node knot, and so is every
+//! module and every barrier; a deferred-only component of value binders is born together as one
+//! knot by [`tie`], each mention of a fellow member an edge into it. A `FN` a data member holds that
+//! captures a fellow member is a node of that knot, and so is a quote whose `$` name reads one. Any
+//! other callable no binder names is born alone through [`lambda`], and any other quote through
+//! [`quote`], where the evaluator meets it.
 //!
 //! A module's node is the carrier, not a claim about cycles: `m.f` is not a knot edge but an index
 //! into the run, and the run holds members of knots the module does not own. A mention reached from
@@ -17,12 +19,14 @@
 //! [`Knotted`] is sixteen bytes, so a value holding one stays one twenty-four-byte word. A member
 //! copies at a crossing by re-tying its whole knot at the destination, each held value deep-copied
 //! and each edge carried verbatim, priced by the knot's memoized weight under the ordinary verdict.
-//! Structural equality over a function is [`Incomparable`](crate::values::Incomparable).
+//! A function compares by its shape's address — one per `FN` written, so a copy keeps it — and its
+//! captures, a quote by its code and bindings, and a module or a barrier is
+//! [`Incomparable`](crate::values::Incomparable).
 //!
 //! **What sits where.** This file is the vocabulary every node kind shares: the member, the node,
 //! the value and activation spelled at it, and the [`Supplied`] and [`Untieable`] a birth answers
-//! with. [`function`] and [`module`] each own one node kind — its payload, its doors and,
-//! for a module, everything that reads one by name — and neither names the other; [`data`] owns
+//! with. [`function`], [`code`] and [`module`] each own one node kind — its payload, its doors and,
+//! for a module, everything that reads one by name — and none names another; [`data`] owns
 //! the data node; [`tie`](crate::knot::tie()) births a component over them, and `copy` re-ties a whole knot.
 //! A submodule reaches this vocabulary through the facade, never a sibling.
 //!
@@ -33,6 +37,7 @@
 //!
 //! See [knot/README.md](knot/README.md).
 
+pub mod code;
 mod copy;
 mod data;
 pub mod function;
@@ -42,6 +47,7 @@ mod tie;
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub use code::{Code, quote, using};
 pub use function::{Function, lambda};
 pub use module::{Coerced, Module};
 pub use tie::tie;
@@ -49,11 +55,11 @@ pub use tie::tie;
 use std::fmt;
 
 use crate::elaborate::Elaboration;
-use crate::memory::{DropFree, Edge, Member, covariant, reattachable};
+use crate::memory::{BumpAllocator, DropFree, Edge, Member, covariant, reattachable};
 use crate::parse::ExpressionPart;
 use crate::scope::{Activation, ActivationView, Builtins, Site};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::KType;
+use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{
     self, Circular, ConstructionRefused, KeyRejected, Resolved, Value, ValueCarrier, ValueFamily,
     Weight,
@@ -66,7 +72,7 @@ pub enum Node<'graph, 'cell> {
     /// A data node: a member's right-hand side, or an anonymous constructor below one on the path to
     /// a sibling mention.
     Data {
-        circular: Circular<'graph, 'cell, Knotted<'graph, 'cell>>,
+        circular: Circular<'cell, Knotted<'graph, 'cell>>,
         /// What rebuilding the whole knot this node sits in writes, the same on every node.
         knot_weight: Weight,
     },
@@ -76,6 +82,8 @@ pub enum Node<'graph, 'cell> {
     /// same region and the node points at it, since its six fields would otherwise be the widest
     /// arm and every node in the program pays for that.
     Coerced(&'cell Coerced<'graph, 'cell>),
+    /// A quote's code, homed beside the node for the reason a barrier is.
+    Code(&'cell Code<'graph, 'cell>),
 }
 
 const _: () = assert!(!std::mem::needs_drop::<Node<'static, 'static>>());
@@ -118,6 +126,14 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
         }
     }
 
+    /// The code this member is, if it is a quote's node.
+    pub fn code(self) -> Option<&'cell Code<'graph, 'cell>> {
+        match self.node() {
+            Node::Code(code) => Some(code),
+            _ => None,
+        }
+    }
+
     /// The barrier this member sits behind, if it is a coerced function's node.
     pub fn coerced(self) -> Option<&'cell Coerced<'graph, 'cell>> {
         match self.node() {
@@ -143,6 +159,7 @@ impl values::Knotted for Knotted<'_, '_> {
             Node::Data { circular, .. } => circular.ktype(),
             Node::Module(module) => module.ktype(),
             Node::Coerced(coerced) => coerced.ktype(),
+            Node::Code(code) => code.ktype(),
         }
     }
 
@@ -152,6 +169,7 @@ impl values::Knotted for Knotted<'_, '_> {
             Node::Data { knot_weight, .. } => *knot_weight,
             Node::Module(module) => module.knot_weight(),
             Node::Coerced(coerced) => coerced.knot_weight(),
+            Node::Code(code) => code.knot_weight(),
         }
     }
 
@@ -164,12 +182,31 @@ impl values::Knotted for Knotted<'_, '_> {
         Self: 'a,
     {
         match self.node() {
-            Node::Function(_) => Resolved::Function,
+            // One shape per function written, so its address is the function's identity.
+            Node::Function(function) => Resolved::Function {
+                identity: std::ptr::from_ref(function.shape()).addr(),
+                closure: function.closure().links(),
+            },
             Node::Data { circular, .. } => Resolved::Circular(*circular),
             Node::Module(_) => Resolved::Module,
-            // A barrier is as opaque to `values` as the function behind it, and calls the same way.
-            Node::Coerced(_) => Resolved::Function,
+            Node::Coerced(_) => Resolved::Barrier,
+            Node::Code(code) => Resolved::Code(code.view()),
         }
+    }
+}
+
+/// The value `source` holds under `name`: a record's field, or a module's member. `None` for any
+/// other value, or a name `source` does not hold.
+fn field<'graph, 'cell>(
+    source: KValue<'graph, 'cell>,
+    name: BinderSymbol,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> Option<KValue<'graph, 'cell>> {
+    match source {
+        Value::Record(record) => record.field(name.symbol()).copied(),
+        Value::Knotted(member) => module::layout::member(member, name, types, scratch),
+        _ => None,
     }
 }
 
@@ -224,7 +261,7 @@ reattachable!(KnottedFamily => Knotted<'graph, 'cell>);
 impl DropFree for KnottedFamily {}
 
 /// A value that may hold a function.
-pub type KValue<'graph, 'cell> = Value<'graph, 'cell, Knotted<'graph, 'cell>>;
+pub type KValue<'graph, 'cell> = Value<'cell, Knotted<'graph, 'cell>>;
 
 /// The family of [`KValue`].
 pub type KValueFamily = ValueFamily<KnottedFamily>;
@@ -246,4 +283,4 @@ pub type KActivationView<'graph, 'cell> =
     ActivationView<'graph, 'cell, KnottedFamily, Knotted<'graph, 'cell>>;
 
 /// A builtin table whose values may hold functions.
-pub type KBuiltins<'graph, 'cell> = Builtins<'graph, 'cell, Knotted<'graph, 'cell>>;
+pub type KBuiltins<'graph, 'cell> = Builtins<'cell, Knotted<'graph, 'cell>>;

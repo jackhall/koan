@@ -1,6 +1,7 @@
 //! The miniature evaluator the program suites supply as their [`Language`]: not dispatch, and kept
 //! small. Its builtin table is `origin = 0` and the scalar types, and it evaluates exactly a
-//! literal, a quote, a name, a list of literals and names, `(WHEN c THEN a ELSE b)`,
+//! literal, a quote — born through the [quote door](crate::knot::quote) — a name, a list of
+//! literals, names and quotes, `(WHEN c THEN a ELSE b)`,
 //! `(a MINUS b)`, `(FIRST xs)` over a list data node whose first cell is an edge, a call `(f x)` of a function with one
 //! parameter, and a `FN`, born through the [lambda door](crate::knot::lambda). `WHEN`, `THEN`,
 //! `ELSE`, `MINUS` and `FIRST` are no builtin shapes, so the shape builder walks them as plain
@@ -10,7 +11,7 @@
 
 use std::cell::RefCell;
 
-use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda};
+use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda, quote};
 use crate::memory::{Active, Bump, BumpAllocator, Writer};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
@@ -172,16 +173,19 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
     let types = program.types();
     let scratch = Bump::new();
     let parts = match form(node) {
-        Form::Leaf(part @ (ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_))) => {
-            if let ExpressionPart::Literal(KLiteral::Number(number)) = part {
+        Form::Leaf(part @ ExpressionPart::Literal(literal)) => {
+            if let KLiteral::Number(number) = literal {
                 record(format!("literal {number}"));
             }
             return step.finish_fresh(|writer, _| {
                 Active::new(
-                    Value::lower_part(writer, part, types, &scratch)
-                        .expect("a literal or a quote lowers"),
+                    Value::lower_part(writer, part, types, &scratch).expect("a literal lowers"),
                 )
             });
+        }
+        Form::Leaf(part @ ExpressionPart::QuotedExpression(_)) => {
+            let member = quote(step.writer(), &view, part, &scratch);
+            return step.finish(Value::Knotted(member));
         }
         // A Type-class name reads through the activation like any other mention: a frame binds
         // its callee's type parameters, so `Elt` inside a quantified body is an ordinary read.
@@ -217,6 +221,9 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                         Some(value) => cells.push(value),
                         None => return step.failed(StepError::Refused),
                     },
+                    ExpressionPart::QuotedExpression(_) => {
+                        cells.push(Value::Knotted(quote(writer, &view, item, &scratch)));
+                    }
                     _ => match Value::lower_part(writer, item, types, &scratch) {
                         Some(value) => cells.push(value),
                         None => return step.failed(StepError::Refused),

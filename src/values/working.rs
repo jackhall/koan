@@ -37,7 +37,7 @@ pub enum WorkingPart<'graph, 'cell, X = Nothing> {
     /// `None` for a sub-dispatch's result — so a diagnostic quotes the operand as the source spelled
     /// it.
     Spliced {
-        value: Value<'graph, 'cell, X>,
+        value: Value<'cell, X>,
         from_name: Option<BinderSymbol>,
     },
     /// A positional slot whose eager value a sibling dispatch is producing. It keeps the run's length
@@ -74,7 +74,7 @@ impl<'graph, 'cell, X: Knotted> WorkingPart<'graph, 'cell, X> {
     }
 
     /// The value this slot was spliced with, if it was.
-    pub fn as_value(&self) -> Option<&Value<'graph, 'cell, X>> {
+    pub fn as_value(&self) -> Option<&Value<'cell, X>> {
         match self {
             WorkingPart::Spliced { value, .. } => Some(value),
             _ => None,

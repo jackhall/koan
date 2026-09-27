@@ -1,13 +1,12 @@
 //! The surface rendering `PRINT` writes.
 
-use crate::parse::ExpressionPart;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{Key, TypeValue};
 
-use super::{Dict, Fixture, List, Record, Tagged, Value, pin, text, with_fixture};
+use super::{Dict, Fixture, List, Record, Stand, Tagged, Value, pin, quote, text, with_fixture};
 
-fn rendered(fixture: &Fixture<'_, '_>, value: Value<'_, '_>) -> String {
+fn rendered(fixture: &Fixture<'_, '_>, value: Value<'_>) -> String {
     let mut out = String::new();
     value
         .render(&mut out, fixture.types, fixture.symbols, fixture.scratch())
@@ -55,16 +54,17 @@ fn containers_render_their_cells_in_reading_order() {
 #[test]
 fn types_tags_and_quotes_render_their_surface() {
     with_fixture(|fixture| {
-        let ExpressionPart::QuotedExpression(node) = fixture.part("#(a b)") else {
-            panic!("a quote parses to a quote part");
-        };
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let number = Value::Type(TypeValue::new(writer, KType::NUMBER, fixture.types));
             assert_eq!(rendered(fixture, number), "Number");
             let tagged = Value::Tagged(Tagged::hold(writer, text(writer, "x"), KType::STR));
             assert_eq!(rendered(fixture, tagged), "Str(x)");
-            assert_eq!(rendered(fixture, Value::Expression(node)), "a b");
+            let code = crate::values::Value::Knotted(Stand::Code(quote(fixture, "#($a \\b)")));
+            let mut out = String::new();
+            code.render(&mut out, fixture.types, fixture.symbols, fixture.scratch())
+                .unwrap();
+            assert_eq!(out, "$a \\b", "code prints each mark as written");
         })
     });
 }
@@ -77,7 +77,7 @@ fn a_cycle_labels_its_target_and_a_shared_node_prints_inline() {
         let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
         let ring_type = fixture.ring_type("Ring", "next");
         let next = BinderSymbol::declared("next", symbols).unwrap();
-        let rendered = |value: Holding<'_, '_>| {
+        let rendered = |value: Holding<'_>| {
             let mut out = String::new();
             value.render(&mut out, types, symbols, scratch).unwrap();
             out

@@ -27,7 +27,7 @@ pub struct Function<'graph, 'cell, X> {
     /// [`Node::Coerced`]: super::Node::Coerced
     typing: Option<&'cell Typing<'cell>>,
     shape: &'graph BodyShape<'graph>,
-    closure: &'cell ClosureBindings<'graph, 'cell, X>,
+    closure: &'cell ClosureBindings<'cell, X>,
     /// What rebuilding the whole knot this node sits in writes, the same on every node.
     knot_weight: Weight,
 }
@@ -47,7 +47,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         ktype: KType,
         typing: Option<&'cell Typing<'cell>>,
         shape: &'graph BodyShape<'graph>,
-        closure: &'cell ClosureBindings<'graph, 'cell, X>,
+        closure: &'cell ClosureBindings<'cell, X>,
         knot_weight: Weight,
     ) -> Self {
         Function {
@@ -94,7 +94,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     }
 
     /// The closure bindings a call's activation reads its captures through.
-    pub fn closure(&self) -> &'cell ClosureBindings<'graph, 'cell, X> {
+    pub fn closure(&self) -> &'cell ClosureBindings<'cell, X> {
         self.closure
     }
 
@@ -108,7 +108,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     pub(super) fn rebuilt<'to, Y>(
         &self,
         writer: Writer<'to>,
-        closure: &'to ClosureBindings<'graph, 'to, Y>,
+        closure: &'to ClosureBindings<'to, Y>,
     ) -> Function<'graph, 'to, Y> {
         Function {
             ktype: self.ktype,
@@ -172,7 +172,7 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     pub quantifier_map: &'x [(TypeSymbol, Canonical)],
     /// The shape the elaborator built for a registration.
     pub registered: Option<KType>,
-    pub captures: BumpVec<'x, Link<'graph, 'cell, Knotted<'graph, 'cell>>>,
+    pub captures: BumpVec<'x, Link<'cell, Knotted<'graph, 'cell>>>,
 }
 
 impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
@@ -182,7 +182,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
         &self,
         writer: Writer<'cell>,
     ) -> (
-        &'cell ClosureBindings<'graph, 'cell, Knotted<'graph, 'cell>>,
+        &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
         Option<&'cell Typing<'cell>>,
         Weight,
     ) {

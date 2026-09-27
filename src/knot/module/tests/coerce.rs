@@ -138,7 +138,7 @@ fn a_function_member_is_born_behind_a_barrier() {
                 panic!("a function slot stays a knot member");
             };
             let barrier = step.coerced().expect("a function member is wrapped");
-            assert!(matches!(step.resolve(), Resolved::Function));
+            assert!(matches!(step.resolve(), Resolved::Barrier));
             assert!(
                 step.function().is_none(),
                 "the wrapper is not itself a function"
@@ -197,8 +197,8 @@ fn a_transparent_view_coerces_nothing() {
 /// Whether two values point at the same thing — a stronger claim than equality, and the one a
 /// transparent view makes.
 fn same_referent(
-    left: Value<'_, '_, crate::knot::Knotted<'_, '_>>,
-    right: Value<'_, '_, crate::knot::Knotted<'_, '_>>,
+    left: Value<'_, crate::knot::Knotted<'_, '_>>,
+    right: Value<'_, crate::knot::Knotted<'_, '_>>,
 ) -> bool {
     match (left, right) {
         (Value::List(left), Value::List(right)) => ptr::eq(left, right),

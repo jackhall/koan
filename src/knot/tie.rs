@@ -3,18 +3,21 @@
 //! A member is a callable binder, whose node is a [function](super::function); a `MODULE` or
 //! `GROUP` binder, whose node is a [module](super::module) — alone in its component, so it ties on
 //! its own path; or a `LET` of a value name whose right-hand side is rooted at a constructor, whose
-//! node is [data](super::data); anything else refuses the tie before a member is read.
+//! node is [data](super::data), or at a quote reading a fellow member, whose node is
+//! [code](super::code); anything else refuses the tie before a member is read.
 //!
 //! Everything a member needs is then read into scratch with no writer in reach — a function's
-//! body, its type elaborated from its signature and its captures; a data member's cells, with a
+//! body, its type elaborated from its signature and its captures; a code node's `$` bindings; a
+//! data member's cells, with a
 //! part only the caller can evaluate asked of its evaluator by site —
 //! every mention of a fellow member minted as an edge into the knot about to be tied. Derived
 //! memos are computed and every construction checked, and a part the caller has not evaluated, a
 //! cycle of derived nodes or a construction the rule refuses stops the tie before a byte is
 //! written.
-//! Only then are the closure runs and data nodes laid down, the knot's weight summed, and the nodes
-//! tied: member `i` is node `i`, and the anonymous nodes follow. A `FN` a data member holds that
-//! captures a fellow member is one of them, a function node staged like a function member.
+//! Only then are the closure runs, bound runs and data nodes laid down, the knot's weight summed,
+//! and the nodes tied: member `i` is node `i`, and the anonymous nodes follow. A `FN` a data member
+//! holds that captures a fellow member is one of them, a function node staged like a function
+//! member, and so is a quote that reads one.
 
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
@@ -24,7 +27,7 @@ use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::Weight;
 
 use super::data::{self, Stager};
-use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, function, module};
+use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, code, function, module};
 
 /// Tie `component` of `activation`'s shape as one knot in `writer`'s region: every member born
 /// together, each closure binding and data cell a value word or an edge into this knot, each part
@@ -85,13 +88,22 @@ pub fn tie<'graph, 'cell, 'x>(
         Some(node) => node.function(),
     }));
     let functions = function::stage(&plan, activation, &bodies, types, scratch)?;
+    let mut codes = BumpVec::with_capacity_in(nodes.len(), scratch);
+    codes.extend(nodes.iter().map(|node| {
+        let (body, shape) = node.as_ref()?.code()?;
+        Some(code::staged(body, shape, activation, scratch, |index| {
+            plan.edge(index)
+                .expect("a member index is below the knot's count")
+        }))
+    }));
 
     let mut memos: BumpVec<'x, Option<KType>> = BumpVec::with_capacity_in(nodes.len(), scratch);
-    memos.extend(
-        functions
-            .iter()
-            .map(|staged| staged.as_ref().map(|staged| staged.ktype)),
-    );
+    memos.extend(functions.iter().zip(&codes).map(|(function, code)| {
+        function
+            .as_ref()
+            .map(|staged| staged.ktype)
+            .or_else(|| code.as_ref().map(|staged| staged.shape.code_type()))
+    }));
     data::memos(&nodes, &mut memos, &names, types, scratch)?;
     data::check(&nodes, &memos, &names, types, scratch)?;
 
@@ -107,9 +119,19 @@ pub fn tie<'graph, 'cell, 'x>(
             (closure, typing)
         }));
     }
+    let mut bound = BumpVec::with_capacity_in(codes.len(), scratch);
+    for staged in codes.iter() {
+        bound.push(staged.as_ref().map(|staged| {
+            let (run, weight) = staged.laid_down(writer);
+            knot_weight = knot_weight.plus(weight);
+            run
+        }));
+    }
     let mut circulars = BumpVec::with_capacity_in(nodes.len(), scratch);
     for (index, node) in nodes.iter().enumerate() {
-        let data = node.as_ref().filter(|node| node.function().is_none());
+        let data = node
+            .as_ref()
+            .filter(|node| node.function().is_none() && node.code().is_none());
         circulars.push(data.map(|node| {
             let memo = memos[index].expect("every node's memo is derived");
             let circular = data::lay_down(writer, node, memo, &plan, types, scratch);
@@ -122,6 +144,9 @@ pub fn tie<'graph, 'cell, 'x>(
     });
     Ok(plan.tie(writer, |edge| {
         let index = edge.index() as usize;
+        if let Some((staged, run)) = codes[index].as_ref().zip(bound[index]) {
+            return staged.tied(writer, run, knot_weight);
+        }
         match (functions[index].as_ref().zip(laid[index]), circulars[index]) {
             (Some((staged, (closure, typing))), _) => Node::Function(Function::new(
                 staged.ktype,
@@ -134,7 +159,7 @@ pub fn tie<'graph, 'cell, 'x>(
                 circular,
                 knot_weight,
             },
-            (None, None) => unreachable!("every node is a function or a data node"),
+            (None, None) => unreachable!("every node is a function, a code or a data node"),
         }
     }))
 }

@@ -14,24 +14,24 @@ use super::{
 /// A tagged value. The identity is its type, so no tag symbol rides beside the payload. Its payload
 /// is a value word, or a [`Link`] when the tagged value is a knot's data node.
 #[derive(Clone, Copy, Debug)]
-pub struct Tagged<'graph, 'cell, X = Nothing, C = Value<'graph, 'cell, X>> {
+pub struct Tagged<'cell, X = Nothing, C = Value<'cell, X>> {
     payload: C,
     ktype: KType,
     weight: Weight,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
-    member: PhantomData<Value<'graph, 'cell, X>>,
+    member: PhantomData<Value<'cell, X>>,
 }
 
-impl<'graph, 'cell, X: Knotted> Tagged<'graph, 'cell, X> {
+impl<'cell, X: Knotted> Tagged<'cell, X> {
     /// A construction `(head payload)`: [`construction`] checks the payload against what the head
     /// names — a newtype or a family — and the payload is held under the identity it answers.
     pub fn construct(
         writer: Writer<'cell>,
         head: &TypeValue,
-        payload: Value<'graph, 'cell, X>,
+        payload: Value<'cell, X>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> Result<&'cell Tagged<'graph, 'cell, X>, ConstructionRefused> {
+    ) -> Result<&'cell Tagged<'cell, X>, ConstructionRefused> {
         let identity = construction(types, scratch, head.handle(), payload.ktype())?;
         Ok(Self::hold(writer, payload, identity))
     }
@@ -40,9 +40,9 @@ impl<'graph, 'cell, X: Knotted> Tagged<'graph, 'cell, X> {
     /// nested tagged layers included, so a newtype over another keeps every layer.
     pub fn hold(
         writer: Writer<'cell>,
-        payload: Value<'graph, 'cell, X>,
+        payload: Value<'cell, X>,
         identity: KType,
-    ) -> &'cell Tagged<'graph, 'cell, X> {
+    ) -> &'cell Tagged<'cell, X> {
         let weight = Weight::flat::<Self>().plus(payload.referent_weight());
         Self::from_payload(writer, payload, identity, weight)
     }
@@ -52,12 +52,12 @@ impl<'graph, 'cell, X: Knotted> Tagged<'graph, 'cell, X> {
     /// takes the mint as its one tagged layer.
     pub fn seal(
         writer: Writer<'cell>,
-        value: Value<'graph, 'cell, X>,
+        value: Value<'cell, X>,
         mint: KType,
         witness: KType,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> Result<&'cell Tagged<'graph, 'cell, X>, SealRefused> {
+    ) -> Result<&'cell Tagged<'cell, X>, SealRefused> {
         let identity = sealing(types, scratch, mint, witness, value.ktype())?;
         Ok(Self::peel(writer, value, identity))
     }
@@ -66,9 +66,9 @@ impl<'graph, 'cell, X: Knotted> Tagged<'graph, 'cell, X> {
     /// itself tagged.
     pub fn peel(
         writer: Writer<'cell>,
-        value: Value<'graph, 'cell, X>,
+        value: Value<'cell, X>,
         identity: KType,
-    ) -> &'cell Tagged<'graph, 'cell, X> {
+    ) -> &'cell Tagged<'cell, X> {
         match value {
             Value::Tagged(tagged) => tagged.with_type(writer, identity),
             other => Self::hold(writer, other, identity),
@@ -76,13 +76,9 @@ impl<'graph, 'cell, X: Knotted> Tagged<'graph, 'cell, X> {
     }
 }
 
-impl<'graph, 'cell, X: Knotted> Tagged<'graph, 'cell, X, Link<'graph, 'cell, X>> {
+impl<'cell, X: Knotted> Tagged<'cell, X, Link<'cell, X>> {
     /// A knot's tagged data node over `payload`, under the identity the tie checked.
-    pub fn linked(
-        writer: Writer<'cell>,
-        payload: Link<'graph, 'cell, X>,
-        identity: KType,
-    ) -> &'cell Self {
+    pub fn linked(writer: Writer<'cell>, payload: Link<'cell, X>, identity: KType) -> &'cell Self {
         Self::from_payload(
             writer,
             payload,
@@ -92,7 +88,7 @@ impl<'graph, 'cell, X: Knotted> Tagged<'graph, 'cell, X, Link<'graph, 'cell, X>>
     }
 }
 
-impl<'graph, 'cell, X: Copy, C: Copy> Tagged<'graph, 'cell, X, C> {
+impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
     /// A tagged value over a payload already resident in `writer`'s region, under an identity and
     /// weight the caller already knows — the deep copy's arm.
     pub(crate) fn from_payload(

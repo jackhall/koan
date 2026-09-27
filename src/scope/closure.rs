@@ -15,13 +15,13 @@ use super::shape::{BodyShape, CaptureSlot, CaptureSource};
 
 /// A callable's closure bindings, in capture-slot order.
 #[derive(Clone, Copy)]
-pub struct ClosureBindings<'graph, 'cell, X = crate::values::Nothing> {
-    slots: &'cell [Link<'graph, 'cell, X>],
+pub struct ClosureBindings<'cell, X = crate::values::Nothing> {
+    slots: &'cell [Link<'cell, X>],
 }
 
-impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
+impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     /// The bindings of a shape that captures nothing — a program's, a block's.
-    pub fn empty() -> &'cell ClosureBindings<'graph, 'cell, X> {
+    pub fn empty() -> &'cell ClosureBindings<'cell, X> {
         &ClosureBindings { slots: &[] }
     }
 
@@ -36,7 +36,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
         enclosing: &ActivationView<'graph, 'cell, XF>,
         scratch: BumpAllocator<'x>,
         mut edge: impl FnMut(u32) -> Edge,
-    ) -> BumpVec<'x, Link<'graph, 'cell, X>> {
+    ) -> BumpVec<'x, Link<'cell, X>> {
         let captures = shape.captures();
         let mut read = BumpVec::with_capacity_in(captures.len(), scratch);
         read.extend(captures.iter().map(|capture| match capture.source {
@@ -54,8 +54,8 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
     /// A finished read laid down in `writer`'s region.
     pub fn of(
         writer: Writer<'cell>,
-        captures: &[Link<'graph, 'cell, X>],
-    ) -> &'cell ClosureBindings<'graph, 'cell, X> {
+        captures: &[Link<'cell, X>],
+    ) -> &'cell ClosureBindings<'cell, X> {
         let slots = collect(writer, captures.iter().copied());
         resident(writer, ClosureBindings { slots })
     }
@@ -65,8 +65,8 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
     pub fn copied<'to, Y: Knotted>(
         &self,
         writer: Writer<'to>,
-        mut copy: impl FnMut(&Value<'graph, 'cell, X>) -> Value<'graph, 'to, Y>,
-    ) -> &'to ClosureBindings<'graph, 'to, Y> {
+        mut copy: impl FnMut(&Value<'cell, X>) -> Value<'to, Y>,
+    ) -> &'to ClosureBindings<'to, Y> {
         let source = self.slots;
         let slots = writer.fill(source.len(), |at| source[at].copied(&mut copy));
         resident(writer, ClosureBindings { slots })
@@ -83,8 +83,13 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'graph, 'cell, X> {
     }
 
     /// The binding at `slot`. Panics past the end, like a slice index.
-    pub fn get(&self, slot: CaptureSlot) -> Link<'graph, 'cell, X> {
+    pub fn get(&self, slot: CaptureSlot) -> Link<'cell, X> {
         self.slots[slot.index()]
+    }
+
+    /// Every binding, in capture-slot order.
+    pub fn links(&self) -> &'cell [Link<'cell, X>] {
+        self.slots
     }
 
     pub fn len(&self) -> usize {

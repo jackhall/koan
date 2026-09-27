@@ -72,7 +72,7 @@ fn values_sees_a_barrier_as_the_function_it_stands_for() {
                 );
                 let value = Value::Knotted(barrier);
 
-                assert!(matches!(barrier.resolve(), Resolved::Function));
+                assert!(matches!(barrier.resolve(), Resolved::Barrier));
                 assert_eq!(value.as_callable(), Some(barrier));
                 assert_eq!(value.as_opaque(), Some(barrier));
                 assert_eq!(value.as_module(), None);

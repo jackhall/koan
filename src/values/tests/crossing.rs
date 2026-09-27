@@ -1,31 +1,22 @@
 //! The crossing verb over both verdicts and both cell tiers, and the verdict itself.
 //!
 //! `a_copied_list_outlives_its_home` is on the Miri slate: it is the one path only `values` drives —
-//! a deep copy nesting `fill` inside `fill` with string writes between, a program node embedded,
-//! read after the region it was copied from is gone.
+//! a deep copy nesting `fill` inside `fill` with string writes between, read after the region it was
+//! copied from is gone.
 
 use std::ptr;
 
 use crate::memory::{CellGraph, Prices, ReleaseAbsorption, Verdict};
-use crate::parse::{ExpressionPart, ProgramNode};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{COPY_RATIO, Key, ValueFamily, cross, cross_here, verdict};
 
-use super::{Dict, Fixture, List, Record, Step, Value, copy, pin, text, with_fixture};
-
-fn quote<'graph>(fixture: &Fixture<'_, 'graph>, source: &str) -> ProgramNode<'graph> {
-    match fixture.part(source) {
-        ExpressionPart::QuotedExpression(node) => node,
-        _ => panic!("`{source}` parses to a quote"),
-    }
-}
+use super::{Dict, List, Record, Step, Value, copy, pin, text, with_fixture};
 
 #[test]
 fn a_copied_list_outlives_its_home() {
     with_fixture(|fixture| {
         let (types, scratch) = (fixture.types, fixture.scratch());
-        let node = quote(fixture, "#(a b)");
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();
@@ -36,11 +27,7 @@ fn a_copied_list_outlives_its_home() {
                 let inner = List::new(writer, words.into_iter(), types, scratch);
                 let entries = [(Key::str("key"), text(writer, "gamma"))];
                 let dict = Dict::new(writer, &entries, types, scratch);
-                let cells = [
-                    Value::List(inner),
-                    Value::Dict(dict),
-                    Value::Expression(node),
-                ];
+                let cells = [Value::List(inner), Value::Dict(dict)];
                 let outer = List::new(writer, cells.into_iter(), types, scratch);
                 let source = context.lift::<ValueFamily>(Value::List(outer));
                 let crossed = cross(context, dest, &source).unwrap();
@@ -65,8 +52,6 @@ fn a_copied_list_outlives_its_home() {
                     dict.get(&Key::str("key")).and_then(Value::as_str),
                     Some("gamma")
                 );
-                let copied_node = outer.get(2).and_then(Value::as_expression).unwrap();
-                assert!(ptr::eq(copied_node.reference(), node.reference()));
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
@@ -148,38 +133,6 @@ fn a_kept_value_redeems_in_a_later_step() {
             })
             .unwrap();
         graph.release(cell, ReleaseAbsorption::IntoHolder).unwrap();
-    });
-}
-
-#[test]
-fn a_quote_crosses_a_forced_tree_copy() {
-    with_fixture(|fixture| {
-        let (types, scratch) = (fixture.types, fixture.scratch());
-        let node = quote(fixture, "#(x)");
-        let mut graph: CellGraph<'_, Step> = CellGraph::new(1, pin);
-        let root = graph.create(None).unwrap();
-        let left = graph.create_tree(root, None).unwrap();
-        let right = graph.create_tree(root, None).unwrap();
-        graph
-            .enter(left, |context| {
-                let writer = context.writer();
-                let cells = [Value::Expression(node), text(writer, "left")];
-                let list = List::new(writer, cells.into_iter(), types, scratch);
-                let source = context.lift::<ValueFamily>(Value::List(list));
-                let crossed = cross(context, right, &source).unwrap();
-                let Value::List(copied) = context.read(&crossed).value() else {
-                    panic!("a list crosses as a list");
-                };
-                assert!(!ptr::eq(copied.cells(), list.cells()));
-                let copied_node = copied.get(0).and_then(Value::as_expression).unwrap();
-                assert!(ptr::eq(copied_node.reference(), node.reference()));
-                assert_eq!(copied.get(1).and_then(Value::as_str), Some("left"));
-            })
-            .unwrap();
-        graph.release_tree(right).unwrap();
-        graph.release_tree(left).unwrap();
-        graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
-        assert!(graph.is_empty());
     });
 }
 
@@ -272,7 +225,7 @@ fn a_circular_value_copies_as_the_same_graph_and_pins_as_the_same_node() {
                         return;
                     }
                     assert!(copied != source[0], "a copy is a new knot");
-                    let edge = |member: super::Node<'_, '_>| {
+                    let edge = |member: super::Node<'_>| {
                         let Some((_, Circular::Tagged(tagged))) =
                             Holding::Knotted(member).as_circular()
                         else {
@@ -294,6 +247,6 @@ fn a_circular_value_copies_as_the_same_graph_and_pins_as_the_same_node() {
     });
 }
 
-fn text_in<'graph, 'cell>(writer: crate::memory::Writer<'cell>) -> super::Holding<'graph, 'cell> {
+fn text_in<'cell>(writer: crate::memory::Writer<'cell>) -> super::Holding<'cell> {
     crate::values::text(writer, "held")
 }

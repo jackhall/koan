@@ -49,7 +49,10 @@ impl Knotted for Probe {
     }
 
     fn resolve<'a>(&self) -> Resolved<'a, Self> {
-        Resolved::Function
+        Resolved::Function {
+            identity: self.0 as usize,
+            closure: &[],
+        }
     }
 }
 
@@ -65,7 +68,7 @@ impl<'graph> KnottedFamily<'graph> for ProbeFamily {
     fn copy_into<'from, 'to>(
         _: Writer<'to>,
         member: &Probe,
-        _: &mut DeepCopy<'_, 'graph, 'from, 'to, Probe, Probe>,
+        _: &mut DeepCopy<'_, 'from, 'to, Probe, Probe>,
     ) -> Probe
     where
         'graph: 'from,
@@ -148,7 +151,7 @@ pub(super) fn type_name(text: &str, symbols: &SymbolInterner) -> TypeSymbol {
 pub(super) fn builtins<'graph, 'cell, X: Knotted>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
-) -> &'cell Builtins<'graph, 'cell, X> {
+) -> &'cell Builtins<'cell, X> {
     let symbols = fixture.symbols;
     let values: Vec<_> = BUILTIN_VALUES
         .iter()

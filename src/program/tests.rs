@@ -85,14 +85,13 @@ fn describe<'graph>(value: KValue<'graph, '_>, program: &'graph Program<'graph>)
         Value::Type(value) => {
             display_name(value.handle(), program.types(), program.symbols()).to_string()
         }
-        Value::Expression(node) => format!("#({})", node.summary(program.symbols())),
         Value::Knotted(member) => describe_member(member, program),
         _ => String::from("other"),
     }
 }
 
-/// A knot member: a function by the knot it sits in, a module by its members, a data node by its
-/// knot.
+/// A knot member: a function by the knot it sits in, a module by its members, a quote by its code,
+/// a data node by its knot.
 fn describe_member<'graph>(
     member: Knotted<'graph, '_>,
     program: &'graph Program<'graph>,
@@ -114,6 +113,9 @@ fn describe_member<'graph>(
     }
     if member.function().is_some() {
         return format!("fn in {knot:p}");
+    }
+    if let Some(code) = member.code() {
+        return format!("#({})", code.body().summary(program.symbols()));
     }
     format!("node in {knot:p}")
 }
