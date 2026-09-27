@@ -73,7 +73,7 @@ elements cost O(kn).
   t-strings keep a template's literal parts and its interpolated values apart
   until a consumer, such as an SQL escaper, splices them. That is the shape of a
   quote with its bindings
-  ([quote binding](eval-scope.md)), and it would give
+  ([quotes](../../src/scope/README.md#quotes)), and it would give
   strings a splicing surface for construction as well as editing.
 
 ## Dependencies

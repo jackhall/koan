@@ -55,8 +55,13 @@ the link in each section to the relevant chapter.
 |---------------|------------------------------------------------------|
 | `#(<expr>)`   | Quote: capture an expression as a value, unevaluated. |
 | `#[<element> ...]`, `#{<key>: <value>, ...}` | A list or dict literal with every element quoted; a `_` key stays bare. |
-| `$(<expr>)`   | Evaluate a quoted-expression value in the current scope. |
+| `EVAL <code>` | Run a quote's code. Its names bind only as the quote says, never in the scope `EVAL` is written in. |
+| `x` inside a quote | A hole: binds only to a builtin, a binder in the quote's own code, or a name `USING` supplies. |
+| `$x`, `$(<keyworded use>)` inside a quote | Resolve the name, or the one keyworded use, where the quote is written. |
+| `\x`, `\(<keyworded use>)` inside a quote | Resolve where the code is run, from what the code parameter's type offers. |
+| `<code> USING <record>` | Fill the holes the record's fields (or a module's members) name; the rest stay holes. |
 | `<name> :Expression`  | A parameter taking one statement of code as a value; call sites pass `#(…)`. |
+| `<name> :(Expression NEEDING #[<name> ...])` | A code parameter offering names; an `EVAL` of it supplies each where the `EVAL` is written. |
 | `Block` `Expression` `Declaration` `Binder` `Literal` `Symbol` `Name` `Keyword` | The kinds of code under `Code`, each under the one before it in [the tree](10-quoting.md#what-kind-of-code-a-quote-is). |
 
 ## Modules — see [11](11-modules.md), [12](12-functors.md)

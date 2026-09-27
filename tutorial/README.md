@@ -55,7 +55,8 @@ Read them in order the first time through — each builds on the last.
 9. [Errors](09-errors.md) — error values, catching with `TRY`, capturing with
    `CATCH`, and `Result`.
 10. [Quoting and evaluating](10-quoting.md) — capturing an expression as data
-    with `#`, running it with `$`, and passing code to a form you defined.
+    with `#`, running it with `EVAL`, binding its names with `$`, `\` and
+    `USING`, and passing code to a function you wrote.
 11. [Modules](11-modules.md) — grouping bindings, signatures, and ascription.
 12. [Functors](12-functors.md) — module-returning functions: parameterizing a
     module by another module, and signature specialization.

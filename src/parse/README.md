@@ -45,16 +45,23 @@ Lowering is where koan's vocabulary enters, and six rules cover it
   sub-expression, not a statement holding it.
 - A **sigil** is `#`, `$`, `\` or `:` glued to the group after it. Because
   `sexlex` recorded the glue and kept the atom whole, a sigil needs no table and
-  adding one changes nothing below. Inside a quote, `$` and `\` also lead a
-  name atom, `$x` or `\x` ([quotes](../scope/README.md#quotes)), and `$..` a
-  splice, `$..xs` ([splicing](../scope/README.md#splicing)). `#` also glues to
+  adding one changes nothing below. `$` and `\` are **marks**
+  ([quotes](../scope/README.md#holes-and-marks)): glued to a paren, `$(…)` or
+  `\(…)` wraps exactly one keyworded use, and one wrapping no keyword, or a
+  closed builtin expression shape such as `LET`, is a parse error. Leading an
+  atom, a mark marks the name the atom starts with, `$x` or `\x`, so `$a.b` is
+  `ATTR $a b`, and an atom that starts with no name (`$3`, `\true`) is a parse
+  error naming it. The parser marks wherever it meets a mark; the shape builder
+  refuses one no quote value holds. `$..` leads a splice, `$..xs`
+  ([splicing](../scope/README.md#splicing)). `#` also glues to
   a `[…]` or `{…}` literal and quotes each element: a paren-group element is
   quoted as that group, any other element as a one-part quote, and a `_` key or
   a record's field name stays bare, so `#{Some: (x), _: (y)}` is
   `{#(Some): #(x), _: #(y)}`. The result is the bare literal — a container of
   quotes, not a quote.
 - A **sigil-led line** is a whole layout line whose first atom starts with `#`;
-  the line's own body is what it quotes. A line that is only a sigil glued to
+  the line's own body is what it quotes. A mark leads no line, so `$x` alone on
+  a line is the marked name. A line that is only a sigil glued to
   its group is that glued sigil. A layout line that is one splice or spread
   atom, `$..xs` or `..xs`, is that atom's part rather than a statement holding
   it, so a splice reads the same in a block laid out on one line or several; a
@@ -85,8 +92,11 @@ another region is a slice copy rather than a rebuild.
 
 `ExpressionPart` is the vocabulary a run is spelled in: keywords, identifiers and
 type names as classified symbols; nested expressions; the two type sigils
-(`:(…)` and `:{…}`); list, dict and record literals; scalar literals; and
-`QuotedExpression`, the `#(…)` body captured at parse time as data.
+(`:(…)` and `:{…}`); list, dict and record literals; scalar literals;
+`QuotedExpression`, the `#(…)` body captured at parse time as data; and the two
+marked parts, `MarkedName` (`$x`, `\x`), which classifies as the name it marks,
+and `MarkedUse` (`$(…)`, `\(…)`), which classifies as a nested expression. A
+`Mark` is `Written` (`$`) or `Built` (`\`).
 
 **Every node carries a source.** Code always comes from somewhere, so a node
 holds the [`SourceRef`](../source.rs) — extent and registered file — of the text

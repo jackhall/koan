@@ -74,16 +74,15 @@ without bound.
   alone: holes bind to binders in the code and to the builtin table, `$` names
   carry their bindings, and `\` marks are the shape's parameters, which the
   `EVAL` supplies. A written quote's is built where the program loads
-  ([quote binding](eval-scope.md)); composed code's is built once and kept where
+  ([building code](../../src/scope/README.md#building-code)); composed code's is built once and kept where
   the code value lives, as invisible as a view, and code keeps its syntactic kind
   ([the code family](../../src/type_lattice/README.md#the-code-family)). Code
-  becomes a callable as the body of an `FN` ([quote binding](eval-scope.md)).
+  becomes a callable as the body of an `FN` ([quotes and functions](../../src/scope/README.md#quotes-and-functions)).
 
 ## Dependencies
 
 **Requires:**
 
-- [Quote binding](eval-scope.md) — a quote's marks, bindings and knot edges.
 - [Slicing and splicing](slicing-and-splicing.md) — slice as a builtin, views, and `..` outside a quote.
 
 **Unblocks:**

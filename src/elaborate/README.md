@@ -25,7 +25,10 @@ is born in.
 Every composite is built from the handles its parts elaborate to, through the
 registry's own doors:
 
-- a bare name, `Number`, is the handle its binding holds;
+- a bare name, `Number`, is the handle its binding holds, and a
+  [marked](../scope/README.md#holes-and-marks) one in a quote's code, `$Alias`,
+  the handle the binding its mark resolved to holds, past the definition's own
+  quantifiers and names;
 - `LIST OF Elem` and `MAP Key -> Val` are the list and dict nodes;
 - `Left | Right` is the canonical union of its two members, and a longer
   union arrives as `| [Left Right …]` — the
@@ -40,6 +43,9 @@ registry's own doors:
 - `EXPR #(head) -> Ret`, with or without a `FOR ALL` group, is the expression
   shape over the keywords and typed slots of the head its quote holds, and the
   return;
+- `Kind NEEDING #[y …]` is the [code kind](../type_lattice/README.md#the-code-family)
+  `Kind` needing the names its one-name quotes spell; a kind that is no code
+  kind, or an element that is no one-name quote, is unsupported;
 - `Union.Tag` is the member of the union whose tag it names;
 - `Record.field` is the type the record under `Record` declares `field` with,
   read through every newtype layer above the record — a `NEWTYPE`'s

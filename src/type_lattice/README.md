@@ -84,10 +84,15 @@ subtree.
 - **Code kinds** — what a piece of written code is: `Block`, `Expression`,
   `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`, and the four
   unspellable kinds `Identifier` (a value name), `TypeNameToken` (a type name),
-  `SigiledTypeExpr` (a lone `:(…)`) and `RecordType` (a lone `:{…}`). A quote's
-  value is typed by one, and a builtin slot read as written is typed by one or by
-  a container of them. They are ordered among themselves by the code tree
-  (*The code family*, below) and all lie under `Code`.
+  `SigiledTypeExpr` (a lone `:(…)`) and `RecordType` (a lone `:{…}`). A quote
+  needing no name is typed by one, and a builtin slot read as written is typed
+  by one or by a container of them. They are
+  ordered among themselves by the code tree (*The code family*, below) and all
+  lie under `Code`.
+- **`CodeNeeding`** — a code kind and the names its code needs where it is
+  built, spelled `:(Expression NEEDING #[y])`: a quote's carried type, and a
+  code parameter's. Its names are a symbol-sorted set and never empty, since a
+  kind needing nothing is the bare kind.
 - **`OfKind(KKind)`** — a type-accepting argument slot carrying the shallow
   [`KKind`](kind.rs) it admits. It is **type-channel only**: it admits a type
   *value*, never a runtime instance. A value is matched by a type, never by a
@@ -291,9 +296,21 @@ a body slot typed `Block` takes `#(x)`. A block is no expression, since a slot
 wanting one statement cannot take several. The tree is written once, as
 [`KType::code_parent`](handle.rs) — the kind directly above a code kind — and
 `within_code` walks it; both are `const` over handles, so the order's leaf arm
-and a registry-free admission read the same edges. Join and meet need nothing of
-their own: a union drops a member under another, so `Literal | Expression` is
+and a registry-free admission read the same edges. Join needs nothing of its
+own: a union drops a member under another, so `Literal | Expression` is
 `Expression`, and two kinds on different branches meet at `Never`.
+
+**A code kind needing names** is `CodeNeeding`, built through
+[`TypeRegistry::code_needing`](registry.rs), which sorts and deduplicates the
+names and answers the bare kind for none. A bare kind is the kind needing
+nothing, so one order covers both: a code type lies under a kind needing names
+when its kind lies under that kind and every name it needs is among them. So
+`:(Expression NEEDING #[y])` lies over `Expression`, over `Binder` needing `y`,
+and under `Expression` needing `y` and `z`, and all of them lie under `Code`. A
+parameter of that type therefore admits a quote whose needed names its list
+covers. Two code types meet at their kinds' meet needing the names both need,
+and at `Never` when the kinds do; the join is the ordinary union. A code kind
+needing names holds no variable, so every walk treats it as ground.
 
 Which kind a written quote is belongs to `parse`
 ([`KExpression::code_kind`](../parse/ast.rs)); the lattice holds only the order.

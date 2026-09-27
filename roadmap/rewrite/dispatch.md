@@ -89,7 +89,7 @@ a statement's root, so a binder nested in an expression,
   listed key where the `EVAL` is written.
 - A builtin function equals only itself, by its table identity.
 - `EVAL` and `code USING src` run as koan expressions through the doors
-  [quote binding](eval-scope.md) supplies, so `TWICE #(PRINT $x)` prints the
+  [the program](../../src/program/README.md#the-body-runner) supplies, so `TWICE #(PRINT $x)` prints the
   caller's `x`.
 - An evaluation or a frame that cannot proceed yields a koan error value, every
   evaluation passes an error it receives through unchanged, and an uncaught one
@@ -143,7 +143,7 @@ a statement's root, so a binder nested in an expression,
   keyworded use inside a quote is a hole unless marked: its candidates are the
   builtin table's overloads and the registrations composed ahead of it, while
   `$(…)` resolves its bucket key where the quote is written and `\(…)` where
-  its code is built ([quote binding](eval-scope.md)); a registration in
+  its code is built ([holes and marks](../../src/scope/README.md#holes-and-marks)); a registration in
   evaluated code is a member of the block shape it runs in, a candidate for the
   statements after it there, and never widens a bucket around it, so no
   candidate list computed for a static site changes after it is built. The
@@ -228,7 +228,6 @@ a statement's root, so a binder nested in an expression,
 
 **Requires:**
 
-- [Quote binding](eval-scope.md) — a quote's keyworded uses are holes unless marked.
 
 **Unblocks:**
 

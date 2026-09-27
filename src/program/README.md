@@ -108,7 +108,8 @@ a program's steps run over, with its three families:
 
 - **`KBirth`**, what a cell is born holding, which crosses and is covariant:
   `Program`, the top level's root work; `Call`, a callee and a record of its
-  arguments by name; `Evaluate`, a node and the view it is read through; and
+  arguments by name; `Eval`, a quote's code and a record of the names its
+  `EVAL` offers; `Evaluate`, a node and the view it is read through; and
   `Inspect`, the view the top level leaves at rest. The family's `covariant!`
   witness is what checks that an activation's view is covariant in its brand.
 - **`KState`**, what a cell holds at a step and parks with: the birth on a
@@ -127,7 +128,7 @@ until the end.
 the verdict always pins it: it borrows another cell's region, and an evaluation
 or an inspection is born under the cell it views, where pinning costs nothing.
 A birth that is copied rebuilds what it carries: a `Call`'s callee and
-arguments are deep-copied through
+arguments, and an `Eval`'s code and offered names, are deep-copied through
 [`copy_severed`](../values/README.md#crossing), the crossing's door for a value
 held inside a copied operand of another family, so the copy is still one the
 graph priced.
@@ -155,15 +156,19 @@ drain, in a separate call from the one that ran it.
 
 ## The body runner
 
-[`run`](body.rs) is one step that performs the top level and every called
-body. Its state is the activation, the next unit, and the stage it parked at.
+[`run`](body.rs) is one step that performs the top level, every called body
+and the code every `EVAL` runs. Its state is the activation, the next unit, and the stage it parked at.
 It claims nothing ahead, ties and binds each unit itself, and no unit has a
 cell of its own: a cell per unit would cost a create, an enter, a release and a
 receipt slot per statement per call, for statements that mostly never park.
 Born as `KBirth::Program` it lays the top level's activation down; born as
 `KBirth::Call` it lays the callee's activation down in the frame's own cell and
 binds each value parameter from the argument record, which must name them
-exactly. A **quantified** callee's frame first solves its group: every declared
+exactly; born as `KBirth::Eval` it lays the code's activation down in the
+frame's own cell over a closure run it assembles in the code shape's capture
+order — each `$` name from the bindings the code carries, each hole from those
+a `USING` supplied, each `\` name from the offered record — every edge resolved
+to the member it names, so the run holds value words only. A **quantified** callee's frame first solves its group: every declared
 parameter type against the argument's carried type, under one collector, and
 each type-parameter slot is then bound to a type value holding its solution,
 looked up **by its own name** through the callee's
@@ -223,6 +228,18 @@ since no value of those shares bytes with an argument, and every other return
 `Shares`. A builtin's native step states its own placement in the request it
 makes.
 
+**Running code.** [`eval`](body.rs) is what an evaluator asks for to run code
+under `EVAL`, beside `call`: a `Shares` frame running the code's shape, which
+was built where the program loaded, so nothing builds a shape at run time. The
+evaluator hands it the names the `EVAL` offers, read at the coordinates the
+shape recorded for its operand (`BodyShape::offers`), as a record. It refuses
+before anything is spawned, with a `CodeRefused`: `NotCode` for an operand that
+is no quote, `Shape` for code whose shape kept an error, and `Unbound` for the
+first hole no `USING` filled or `\` name the `EVAL` does not offer. The frame
+reads nothing of the scope the `EVAL` is written in but those names, so code
+fills no hole from the frame that runs it
+([building code](../scope/README.md#building-code)).
+
 ## The scheduler is a view
 
 A [`Scheduler`](../scheduler/README.md#the-drain) borrows the graph and owns
@@ -251,7 +268,11 @@ module body run inline, lambdas — born through the
 [lambda door](../knot/README.md#a-lambda) after a later binding they read,
 returned from a frame and called with their captures, held in a knot and
 reading their fellow through an edge, and supplied to a tie as an eager part —
-and one whole program with all of them.
+`EVAL` running code whose `$` name binds the caller's value, a hole unbound
+whatever the callee declares, a parameter needing a name offered it, a function
+built from code carrying its bindings as captures, a quote reading its own
+binder, a binder before an `EVAL` statement run after it, a malformed quote
+refused only when run, and one whole program with all of them.
 [`tests/substrate.rs`](tests/substrate.rs) loads two programs through a helper,
 moves them into a `Vec`, runs each, and reads a binding back in a separate call
 through a resumed root work; it also checks both load errors, an inspection

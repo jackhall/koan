@@ -163,6 +163,19 @@ member's place in the component, which the birth turns into a knot edge the
 caller mints. That covers a callable a binder births and a `FN` a data binder's
 constructor slot holds alike.
 
+A code shape is where a [mark](#holes-and-marks) is spent, so its captures are
+keyed by name **and** mark: a hole `x`, a `$x` and a `\x` read in one body are
+three captures. A `$x` skips every binder in the code, the parameters of a
+callable nested in it included, and at the code shape resolves outward,
+unmarked, where the quote is written; its capture reads there as a callable's
+does, or names a fellow member. Every other name the code does not bind stays
+open: a hole is a `Hole` capture, which a `USING` fills, and a `\` mark an
+`Offered` one, which the `EVAL` running the code fills. A callable nested in the
+code captures each of the three through its own mark. An `EVAL` whose operand
+is a parameter typed `:(<kind> NEEDING #[…])` records what it offers, keyed by
+the operand's site (`BodyShape::offers`): each listed name resolved as an eager
+read at the `EVAL`'s statement, and unbound there when nothing binds it.
+
 **No reader sees a bare edge.** The scope layer is generic over the knot member
 a value holds — the parameter [`values`](../values/README.md#what-a-value-is)
 takes — and reads one only to resolve an edge. An activation of a callable
@@ -439,7 +452,9 @@ Inside a quote, a name or a keyworded use is in one of three states:
   can share one context record; a hole an earlier `USING` filled is no hole, and
   is never rebound.
 
-Both marks work on value and type names alike. A group mark wraps exactly one
+Both marks work on value and type names alike, a type name's in a type
+expression too: `:(LIST OF $Alias)`, or `:($Alias)` alone, since the `:` sigil
+takes a type name or a group. A group mark wraps exactly one
 keyworded use, so `$(y)` is not `$y`: a group holding no keyworded use gives
 `$(…)` or `\(…)` nothing to resolve and is refused, and so is one wrapping a
 closed builtin expression shape such as `LET`, whose bucket resolves the same
@@ -737,7 +752,9 @@ see a user's operator overloads anyway.
 ## Errors
 
 A shape that cannot be built is refused where it is built, with the first
-error in walk order:
+error in walk order — save a quote value's code shape, which keeps its error as
+its refusal (`BodyShape::refusal`) for the `EVAL` that runs it, and refuses the
+program only for a `$` name nothing binds where the quote is written:
 
 - a **rebind** — a name declared twice in one shape, parameters included;
 - a binding that **shadows a builtin**, in either channel;
@@ -807,10 +824,10 @@ outlives every frame, its closure bindings live in the callable value, which
 the caller keeps alive across the call, an enclosing activation lives in the
 same frame, and its slots hold values. An activation is therefore copied by
 copying its bytes. Each kind of body has its own constructor — a program's
-with neither closure bindings nor an enclosing activation, a callable's or
-module's with the callable and its closure bindings, a block's beside an
-enclosing activation whose builtin table and callable it shares — so no other
-combination can be built.
+with neither closure bindings nor an enclosing activation, a callable's with
+the callable and its closure bindings, a module's or a quote's code's with its
+closure bindings alone, a block's beside an enclosing activation whose builtin
+table and callable it shares — so no other combination can be built.
 
 A shape and everything it holds — declared-name runs, mentions, captures,
 components, nested shapes — rest in program storage and are `Copy`. A written
@@ -834,9 +851,6 @@ type outside the one error that lists names, and on a retired lifetime name.
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
 - [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
-- [Quote binding](../../roadmap/rewrite/eval-scope.md) — holes and the `$` and
-  `\` marks, `EVAL`, code parameters and code equality, as
-  [quotes](#quotes) describes them.
 - [Code splicing](../../roadmap/rewrite/code-splicing.md) — how several parts
   are spliced into a quote at once, and a kind for built code.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE

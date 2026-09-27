@@ -12,8 +12,8 @@ layers above, and they call in here.
 ## What a value is
 
 A [`Value`](../values.rs) is one `Copy` word of 24 bytes: a number, a bool,
-null, a string borrowed where its bytes live, a quoted expression borrowed where
-the parse put it, or a borrow of a **per-kind resident struct** —
+null, a string borrowed where its bytes live, or a borrow of a **per-kind
+resident struct** —
 [`List`](list.rs), [`Dict`](dict.rs), [`Record`](record.rs),
 [`Tagged`](tagged.rs) or [`TypeValue`](type_value.rs) — or a **knot member**.
 `Value` is the sum and the per-kind structs carry the methods, so a consumer
@@ -24,7 +24,7 @@ mutually recursive functions, a ring of tagged values, a list holding a
 function that captures it — is born together as one
 [knot](../memory/README.md#the-knot), and a function holds the environment it
 captured, which is the [scope layer's](../scope/README.md#three-tiers), which
-`values` may not name. So `Value<'graph, 'cell, X>` has one arm, `Knotted(X)`,
+`values` may not name. So `Value<'cell, X>` has one arm, `Knotted(X)`,
 over a type parameter a layer above closes — [`knot`](../knot/README.md)
 closes it with a sixteen-byte `(knot, index)` member, so the word stays at 24
 bytes. `values` states what it asks of `X` as a trait pair
@@ -39,22 +39,29 @@ working expression, and every door and relation over them carry the same
 parameter.
 
 **What a member holds** is the one total answer `Knotted::resolve` gives, a
-[`Resolved`](circular.rs): a **function** or a **module**, both opaque to
-`values` — a module carries no type this module names — or a **data node**, a
-[`Circular`](circular.rs). `Value::as_callable` and `Value::as_module` answer
-only for their own arm, `Value::as_opaque` for either of the two opaque ones —
-which is what equality refuses and rendering writes the type's name for — and
-`Value::as_circular` only for the data node, so no arm's meaning rests
-on an invariant `values` cannot check. A data node is a list, dict, record or
+[`Resolved`](circular.rs): a **function**, as its identity and its closure
+bindings; a quote's **code**, as a `CodeView` of its body as written and the
+bindings its names carry; a **module** or a **barrier**, both opaque to
+`values` — a module carries no type this module names; or a **data node**, a
+[`Circular`](circular.rs). A function's identity is a `usize` the layer above
+derives from its body shape, since `values` names no shape. `Value::as_callable`
+answers for a function and a barrier, which calls the same way,
+`Value::as_code` for code, `Value::as_module` for a module, `Value::as_opaque`
+for the two opaque arms — which is what equality refuses — and
+`Value::as_circular` only for the data node, so no arm's meaning rests on an
+invariant `values` cannot check. A data node is a list, dict, record or
 tagged resident whose cells are [`Link`](link.rs)s instead of value words: a
 link is a value word or an `Edge` naming a sibling node of the same knot, since
 a sibling has no address until the knot is tied. A link is read only through
 the member holding it, which resolves an edge to `Value::Knotted` of the
-sibling. The four residents take the cell type as a parameter defaulting to the
+sibling. A quote is a knot member for the same reason a function is: its `$`
+names bind values, and one may name a fellow member, as
+`LET echo = #(PRINT $echo)` names itself. The four residents take the cell type as a parameter defaulting to the
 value word, so their accessors and deep-copy doors are written once; each has
 a `linked` door that lays a data node down under a memo its caller already
 derived, and the plain doors stay on value cells. A function's closure
-bindings are the same `Link` run.
+bindings are the same `Link` run, and so are a quote's bound and supplied
+names.
 
 No type handle rides in the word. A `KType` is a `u128` aligned to 16 bytes, and
 one inline would more than double every cell; every handle lives in the resident
@@ -127,7 +134,7 @@ the mint layer exactly where the mint lies under the representation it reads,
 which is where the member's declared bound reveals it. [`unsealed`](admission.rs)
 is that one reading for equality and dict keys, under the payload's own kind —
 `Number` for a number, `LIST OF Any` for a list, `Code` for a quote, since every
-quote is one representation whatever its code kind: a 5 sealed behind a member
+quote is one representation whatever its carried type: a 5 sealed behind a member
 bounded by `Number` equals 5, equals another view's sealed 5, and keys a dict as
 5, and a quote sealed behind a member bounded by any code kind is read through.
 Behind a member bounded by `Value`, or by `Number | Str`, the mint lies under
@@ -135,27 +142,19 @@ no one kind, so the seal stays opaque to both. A reader reached through a slot
 typed `T` reads through a mint lying under `T` by the same rule. A seal takes
 one layer, so there is one layer to read through.
 
-## Two lifetimes
+## One lifetime
 
-A value borrows at two lifetimes, `Value<'graph, 'cell>`, following
+A value borrows at one lifetime, `Value<'cell>`: what a writer laid down in a
+cell's region, following
 [cellgraph's contract](../../cellgraph/README.md#the-contract-two-embedder-types).
-What it holds of **program storage** — a quoted expression's node, a
-`ProgramNode` — sits at `'graph`, the lifetime of storage that outlives the cell
-graph and that the substrate never retypes. What a **writer laid down** sits at
-`'cell`. `'graph: 'cell` always holds, so a program borrow shortens to a region
-one where a single lifetime is wanted, and never the reverse.
+No arm holds program storage. A quote's body lives there, but a quote is a knot
+member, and what a member holds of program storage — a function's body shape, a
+quote's body and code shape — sits inside the member, at the lifetime the layer
+above closes the parameter with.
 
-The split is what makes a quote free to move. A copied operand arrives at the
-destination severed, as `Value<'graph, 'severed>`: its region parts are
-unreachable and must be rebuilt through the destination's writer, but its
-program nodes are `'graph` borrows and embed as they are. **A quoted expression
-is the same node on either side of every crossing** — a pin, a copy, and a
-forced tree-cell copy alike — and weighs its pointer. No AST node is ever homed
-in a cell.
-
-It is also why **every value copies**: every region part has a deep copy,
-every program part has none to do, and a knot member is rebuilt by its family, so
-the copy is total.
+So **every value copies**: every region part has a deep copy, and a knot member
+is rebuilt by its family, which embeds its program storage verbatim, so the copy
+is total. No AST node is ever homed in a cell.
 
 ## The type memo and `satisfies`
 
@@ -166,12 +165,15 @@ cells, a record the record type of its fields in written order, a type value
 `OfKind` of the kind of the type it names, a tagged value its identity, and a
 knot member reports its own. A join across families is their union, so a list
 holding a number and a type memoizes `List<(Number | ProperType)>`.
-`Value::ktype` copies that handle or names a leaf constant, and a quote's type
-is its [code kind](../type_lattice/README.md#the-code-family), read off its body
-as written ([`KExpression::code_kind`](../parse/README.md#the-ast-borrowed-copy-and-splice-free)):
-`#(y)` is a `Name`, `#((y))` an `Expression`, a two-statement quote a `Block`.
-It reads no registry and walks nothing. A container of quotes is an ordinary
-container, typed by the join of its elements' kinds as any other is.
+`Value::ktype` copies that handle or names a leaf constant, and reads no
+registry and walks nothing. A quote's type is its carried type, memoized on its
+node: its [code kind](../type_lattice/README.md#the-code-family), read off its
+body as written ([`KExpression::code_kind`](../parse/README.md#the-ast-borrowed-copy-and-splice-free)),
+needing the `\` names no binder in its code fills
+([code parameters](../scope/README.md#code-parameters)): `#(y)` is a `Name`,
+`#((y))` an `Expression`, `#(PRINT \y)` an `:(Expression NEEDING #[y])`. A
+container of quotes is an ordinary container, typed by the join of its
+elements' types as any other is.
 
 **A data node's memo is exact and finite.** The lattice has no structural
 recursive type, so recursion in a value's type goes through a declared memo: a
@@ -223,8 +225,8 @@ its payload word inline, so it adds only what the payload points at. A link
 weighs its word plus what a value word points at; an edge points at nothing. A
 knot member weighs what its own rebuild writes, which its layer memoizes — the
 whole knot it sits in, since a member copies by re-tying its knot, and a data
-node's resident weighs only its own struct and links. Program storage weighs nothing past the
-pointer. A crossing reads the weight off the
+node's resident weighs only its own struct and links. Program storage a member
+holds weighs nothing past the pointer. A crossing reads the weight off the
 value rather than walking it; a retype shares the runs, so it shares the
 weight.
 
@@ -239,7 +241,7 @@ its weight, and both build through `cross_view`, which turns one crossed operand
 into a value at the destination's brand: a **pinned** operand arrives there and
 embeds as it is, and a **copied** one is rebuilt through
 `copy_into` — region parts written again through the destination's writer,
-program nodes embedded verbatim, memoized types and weights carried over
+memoized types and weights carried over
 unchanged, and a knot member handed to its family's copy together with
 `copy_into` itself, so every value its knot holds is rebuilt by the same
 copy. A data node rebuilds through `Circular::copied`: each value link through
@@ -327,10 +329,11 @@ their names' text.
 `Value::equals` is what `==` means over data. Numbers follow IEEE; a tagged
 value compares its identity before its payload, so it never equals its bare
 payload — save a seal its bound reveals, which is read through on either side;
-two type values are equal when they name the same handle; two quotes
-compare as syntax, part by part with spans ignored, following each bound name
-through its binding as circular values do below
-([quotes](../scope/README.md#quotes)). Containers compare their
+two type values are equal when they name the same handle; two quotes' code
+compares as syntax, part by part with spans ignored and marks included, then
+the values its `$` names and its supplied holes bind, name by name, under the
+pair set circular values use below
+([quotes](../scope/README.md#equality-and-knots)). Containers compare their
 contents **only when their memoized types are related**, one satisfied by the
 other in either direction — an empty list of strings and an empty list of
 numbers are unequal. That makes `==` intransitive across ascriptions by design.
@@ -339,8 +342,8 @@ numbers are unequal. That makes `==` intransitive across ascriptions by design.
 `Result<bool, Incomparable>`: a comparison with a module or a barrier on either
 side is `Incomparable`, which the `==` builtin reports as an error rather than
 `false`, and so is a pair of related containers whose aligned cells reach one.
-A function compares by its shape and captures
-([knots](../knot/README.md#equality-and-rendering)).
+A function compares by its identity, then its closure bindings under the same
+pair set ([knots](../knot/README.md#equality-and-rendering)).
 Every aligned pair is compared, so an unequal pair before an opaque member does
 not hide it. A container pair with unrelated types is still unequal without
 descending, whatever it holds.
@@ -362,10 +365,11 @@ rendering and the mark pass below are written once over both.
 `Value::render` is the surface `PRINT` writes: a string bare, a dict key quoted
 so `{"1": x}` and `{1: x}` read apart, `[a, b]`, `{k: v}` in key order,
 `{x = 1}` in field-name order, a tagged value as its type's name around its
-payload, a type as its name, a quote as its body's surface, an opaque member —
-a function, or a module — as its type's name, which is a module's signature; its
-closure bindings or members are program state and never print — and a
-data node as the plain value of its kind.
+payload, a type as its name, a quote as its body's surface with each mark as
+written and never what a name binds, a function, a module or a barrier as its
+type's name, which is a module's signature — its closure bindings or members
+are program state and never print — and a data node as the plain value of its
+kind.
 
 **A cycle prints with labels.** A mark pass walks depth first from the first
 data node the write meets that no earlier pass entered, entering each node
@@ -378,9 +382,10 @@ it stops wherever a cycle closes: `LET a = (Ring {next = a})` prints
 appearance, and a node that is no target prints inline each time it is reached.
 
 `Value::lower_part` builds a value straight from a region-pure AST part — a
-scalar or string literal, a quote, or a container literal whose every element
-lowers and whose every dict key is a scalar literal — and refuses anything
-that needs dispatch or a scope. The part is checked whole before anything is
+scalar or string literal, or a container literal whose every element lowers and
+whose every dict key is a scalar literal — and refuses anything that needs
+dispatch or a scope, a quote included, since its code binds its `$` names where
+it is written ([the quote door](../knot/README.md#a-quote)). The part is checked whole before anything is
 written, so a refusal leaves the region untouched.
 
 ## Working expressions
@@ -441,8 +446,8 @@ seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rin
 ([tests/satisfaction.rs](tests/satisfaction.rs)). One test joins the koan
 [Miri slate](../../observe/miri_slate.md): `a_copied_list_outlives_its_home`,
 the one path only `values` drives — a deep copy nesting `fill` inside `fill`
-with string writes between and a program node embedded, read after the region
-it was copied from is released. The pinned and kept paths it would otherwise
+with string writes between, read after the region it was copied from is
+released. The pinned and kept paths it would otherwise
 pair with are `cellgraph`'s own slate.
 
 ## Open work

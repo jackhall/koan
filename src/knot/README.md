@@ -1,8 +1,8 @@
 # Knots
 
-Functions, modules and circular data as values: the layer that closes
+Functions, quotes, modules and circular data as values: the layer that closes
 [`Value`](../values.rs)'s knot-member parameter with a node that is a function,
-a data node, a module or a barrier over a function, ties a component of value
+a quote's code, a data node, a module or a barrier over a function, ties a component of value
 binders as one [knot](../memory/README.md#the-knot), and copies a member by
 re-tying its knot.
 It sits above [`values`](../values/README.md), [`scope`](../scope/README.md)
@@ -18,6 +18,8 @@ beside it:
 
 - [`function.rs`](function.rs) — a function node, the staging a tie does for a
   function node, and [the lambda door](#a-lambda).
+- [`code.rs`](code.rs) — a code node, the staging a tie does for one, and
+  [the quote and `USING` doors](#a-quote).
 - [`data.rs`](data.rs) — a data node: staging, the memo derivation below, and
   the lay-down.
 - [`module/`](module/README.md) — a module node and a barrier node, and
@@ -25,11 +27,11 @@ beside it:
 
 [`tie.rs`](tie.rs) births a component over them, and [`copy.rs`](copy.rs) re-ties
 a whole knot. A node kind reaches the shared vocabulary through the facade and
-never a sibling, so `function` and `module` do not name each other.
+never a sibling, so `function`, `code` and `module` do not name one another.
 
 ## What a knot member is
 
-`values` does not define a knot member. Its `Value<'graph, 'cell, X>` has one
+`values` does not define a knot member. Its `Value<'cell, X>` has one
 arm, `Knotted(X)`, over a parameter it asks two things of
 ([What a value is](../values/README.md#what-a-value-is)), and `scope` threads
 the same parameter through closure bindings, the builtin table and the
@@ -38,7 +40,7 @@ activation. This module closes it:
 - [`Knotted`](../knot.rs) is one member of a knot — the `(knot, index)`
   pair, sixteen bytes — so a value holding one stays a twenty-four-byte word.
   Its equality is node identity.
-- The knot's payload is a `Node`, of four arms. A `Function` node holds the
+- The knot's payload is a `Node`, of five arms. A `Function` node holds the
   function's memoized type handle, the body shape it runs (in program storage),
   its closure bindings, the weight of the whole knot it sits in, and its
   **typing record**: its quantifier map and its registered shape. The
@@ -66,10 +68,14 @@ activation. This module closes it:
   **barrier** over a function member of an opaque view
   ([members are born coerced](module/README.md#members-are-born-coerced)):
   the function it stands before, the type a caller sees, the slot type the
-  view's signature declares, and the two substitutions it coerces between.
-  `values::Knotted::resolve` tells a data node from the rest, and
-  `Knotted::function`, `::module` and `::coerced` each answer only for their own
-  arm.
+  view's signature declares, and the two substitutions it coerces between. A
+  `Code` node is a quote's code, homed beside the node as a barrier is: the
+  quote's body as written, the code shape the program built for it where it
+  loads, its carried type, its **bound** run — each `$` name's binding — and its
+  **supplied** run — each hole a `USING` filled — both sorted by name, and the
+  same knot weight. `values::Knotted::resolve` says which arm a node is, and
+  `Knotted::function`, `::code`, `::module` and `::coerced` each answer only for
+  their own arm.
 - `KValue`, `KValueFamily`, `KValueCarrier` and `KActivation` spell the value,
   its family, its carrier and the activation at this parameter.
 
@@ -77,11 +83,12 @@ activation. This module closes it:
 node in the program pays for the widest arm. The module arm sets that width; a
 barrier's six fields would widen every node, so `Coerced` points at a resident
 struct beside the node instead, at the price of one pointer hop to read a
-barrier and one extra resident write per barrier born. The next arm has to
-justify itself against the same pin.
+barrier and one extra resident write per barrier born, and `Code` does the
+same. The next arm has to justify itself against the same pin.
 
-Every function is a knot node, and so is every module. A function that names no
-fellow is a one-node knot, and a module always is: a mention reached from a
+Every function is a knot node, and so is every quote and every module. A
+function or a quote that names no fellow is a one-node knot, and a module
+always is: a mention reached from a
 module binder's root is eager whatever body it sits in, so a module is never in
 a cycle — with a fellow binder, which the shape refuses as an eager cycle, nor
 with itself, which is refused a step earlier, since an eager read at the
@@ -107,8 +114,9 @@ binder that reads nothing of its own is an ordinary value.
 its right-hand side is a callable form at its root, through transparent groups
 (`LET f = (FN …)`), or its form is a combined one (`LET f = FN EXPR …`,
 `LET f = OP …`). It is a *data member* when it is a `LET` whose right-hand side
-(`Shape::rhs`), through one-part groups, is a list, dict or record literal or a
-nominal construction `(Head payload)`. It is a *module member* when it is a
+(`Shape::rhs`), through one-part groups, is a list, dict or record literal, a
+nominal construction `(Head payload)`, or a quote whose `$` name reads a fellow
+member. It is a *module member* when it is a
 `MODULE` or `GROUP` binder — a member class of its own rather than `Opaque`.
 Anything else is `Opaque` and refuses the tie before a member is read. A
 callable form anywhere else is no member. A `FN` a data member holds that
@@ -165,12 +173,19 @@ scratch first.
   its captures of fellows minted by the same plan. So
   `LET a = [(FN :{} -> Any = (a))]` ties two nodes: `a`, a list whose cell is an
   edge to the function, whose capture is an edge back to `a`.
+- **A quote whose `$` name reads a fellow member is a code node of the knot**:
+  the member's own node at its root, else an anonymous node reached by an edge,
+  as such a `FN` is. Its bound run is read through the activation, each `$`
+  name of a fellow an edge. So `LET echo = #(PRINT $echo)` is a one-node knot
+  whose one binding is an edge to itself. A quote reading no fellow is an eager
+  part the caller's evaluator supplies, born through [the quote door](#a-quote).
 
 Every mention of a fellow member becomes the edge the knot's plan mints for
 that node's index.
 
 **Derive memos: the nominal cut.** A function node's memo is its signature
-type and a tagged node's is the head it names; both are declared, and
+type, a code node's its carried type and a tagged node's the head it names; all
+are declared, and
 exist before the knot does. A *derived* node's memo is read off its cells, with
 an edge contributing its target's memo. A container's is derived by the rule the plain door of
 its kind uses (`values::list_type`, `dict_type`, `record_type`) — the join of its cells for a list, the key and value
@@ -202,8 +217,8 @@ member's mention, a construction's head — finds its slot bound, because the
 body runner performs a body's [units](../scope/README.md#units) in the shape's
 order and a component follows every unit it reads.
 
-**Write.** Only then are the closure runs and each data node's resident laid
-down, the knot's weight summed, and the nodes tied: member `i` is node `i`,
+**Write.** Only then are the closure runs, the bound runs and each data node's
+resident laid down, the knot's weight summed, and the nodes tied: member `i` is node `i`,
 and the anonymous nodes follow.
 
 Because nothing is written before every read and check has finished, **a
@@ -242,6 +257,26 @@ a callable that captures a fellow member is a node of its binder's knot, which
 the tie never asks the evaluator for. A signature that does not elaborate
 refuses `Type` and writes nothing.
 
+## A quote
+
+[`quote`](code.rs) births a quote value the evaluator meets as a one-node knot,
+as the lambda door births a callable: keyed by the quote part's `Site`, which is
+what the enclosing shape keys its code shape by, and reading each `$` name's
+binding through the activation view the evaluator reads in. The code shape was
+built where the program loaded, so the door refuses nothing: an error in the
+code is the shape's refusal, which the [`EVAL` door](../program/README.md#the-body-runner)
+reports. No binding it reads is an edge, since a quote that reads a fellow
+member is a node of its binder's knot, which the tie never asks the evaluator
+for. A hole or a `\` mark names no binding, so neither is held.
+
+[`using`](code.rs) is `code USING src`: a new one-node knot whose holes a field
+of `src` names — a record's field or a module's member — are filled, and whose
+other holes stay holes. A field naming no hole is ignored, and a hole an
+earlier `USING` filled is no hole, so it is never rebound. Every binding the
+code carries that is an edge is resolved to the member it names, so the new
+knot's runs hold value words only. Code whose shape carries a refusal comes
+back unchanged, since which names are its holes is unknown.
+
 ## Closure bindings and edges
 
 A function's captured environment is the scope layer's
@@ -262,8 +297,9 @@ not an edge.
 ## Weight and copy
 
 A member's weight is its knot's: the run header, one `Node` per node, each
-function's closure run and typing record, each data node's resident, each
-module's member run and each barrier's resident, with everything their value
+function's closure run and typing record, each code node's resident and its
+bound and supplied runs, each data node's resident, each module's member run
+and each barrier's resident, with everything their value
 words point at. A member
 that is itself a knot member contributes its *whole* knot's weight, since a
 crossing rebuilds that knot whole. It is summed at the tie and memoized on every node, so a
@@ -275,12 +311,13 @@ this module's family together with the copy itself, and
 [`copy_into`](copy.rs) re-ties the whole knot in the destination's region:
 every node rebuilt in index order — a function's closure run through
 `ClosureBindings::copied` and its typing record re-homed beside it through the
-destination's writer, a data node through `Circular::copied`, a module's
+destination's writer, a code node's bound and supplied runs through the same
+copy, a data node through `Circular::copied`, a module's
 member run and a barrier's underlying function through that same copy — each held
 value deep-copied through the copy the crossing priced, each edge carried
 verbatim, since an edge names a node by index and so means the same node in
-the copy, anonymous nodes included, and the types, body shapes and knot weight
-carried over. The copied member is the one at the source's own index. A copy
+the copy, anonymous nodes included, and the types, body and code shapes, quote
+bodies and knot weight carried over. The copied member is the one at the source's own index. A copy
 never shares a node with its source, so a copied knot outlives the region it
 was copied from.
 
@@ -298,13 +335,18 @@ a copy keeps it — and their closure bindings compare equal as a bisimulation,
 under the pair set circular data uses. Bindings are immutable and no shape
 retains a defining scope ([quotes](../scope/README.md#quotes)), so a function's
 shape and captures fix what it does. The same text written at another site is
-unequal, and a builtin compares by its table identity. A module and a barrier
+unequal, and a builtin compares by its table identity. `values` compares by an
+identity rather than a shape, since it names none: `Knotted::resolve` hands it
+the shape's address. A quote's code compares as its syntax and the values its
+names bind ([quotes](../scope/README.md#equality-and-knots)), so
+`LET echo = #(PRINT $echo)` equals its copy. A module and a barrier
 have no structural equality: a comparison that reaches one is `Incomparable`
 ([Equality](../values/README.md#equality-and-rendering)), which the `==`
 builtin reports rather than answering `false`. A function renders as its type's
 name does, `:(FN :{x :Number} -> Number)`; its closure bindings are program
-state and never print. A module renders as its signature's name, and a barrier
-as the function type a caller sees. A data node compares as a bisimulation and
+state and never print. A quote renders as its body as written, marks included,
+and never what a name binds. A module renders as its signature's name, and a
+barrier as the function type a caller sees. A data node compares as a bisimulation and
 renders with `@n` labels where a cycle closes, both in `values`.
 
 ## The import rule
@@ -360,11 +402,16 @@ carries the scalar types alone.
   binder, a fellow function, or its binder below a nested constructor tied as a
   function node of the knot; and a `FN` capturing no fellow asked of the caller.
 - [`tests/copy.rs`](tests/copy.rs) — a two-node knot crossed under a copy is the
-  same knot rebuilt, and so is a tagged ring beside a function capturing it
+  same knot rebuilt and its function equal to the source's, and so is a tagged ring beside a function capturing it
   (`a_copied_ring_is_the_same_graph_rebuilt`) and a module whose members are
   themselves knot members (`a_copied_module_is_the_same_members_rebuilt`).
+- [`tests/code.rs`](tests/code.rs) — the quote door binding `$` names where the
+  quote is written and printing its marks, code compared by its text and the
+  values its names bind, a quote reading its own binder as a one-node knot, and
+  `USING` over a record and a module, extra fields and refused code included.
 - [`tests/equality.rs`](tests/equality.rs) — comparison and rendering: rings
-  from two programs are equal, a list node holding a function is
+  from two programs are equal, a function by the `FN` written and its
+  captures, a list node holding a function equal to itself, a module
   incomparable, and a ring renders with a label where it closes.
 - [`tests/properties.rs`](tests/properties.rs) — over `scope`'s generated shape
   plans ([TEST.md](../../TEST.md#scope-property-laws)): a component of value
@@ -375,7 +422,7 @@ carries the scalar types alone.
   function's closure, a member's or such a node's, follows its capture layout;
   and every tied knot copies whole with each link's kind kept.
 
-Four tests join the koan [Miri slate](../../observe/miri_slate.md), the paths
+Five tests join the koan [Miri slate](../../observe/miri_slate.md), the paths
 only `knot` drives: `a_copied_knot_outlives_its_home` — a knot's node run
 filled while closure runs and deep copies are written into the same region,
 read through its edges after the region it was copied from is released —
@@ -384,7 +431,9 @@ holds a string cell and an anonymous list node,
 `a_copied_module_outlives_its_home`, the same for a module whose member run is
 rebuilt member by member with each member's own knot behind it, and
 `a_copied_barrier_outlives_its_home`, for a barrier's resident written beside
-the node while the copy's node run is still being filled.
+the node while the copy's node run is still being filled, and
+`a_copied_quote_outlives_its_home`, the same for a code node's resident and its
+bound run, one binding an edge to itself.
 
 ## Open work
 
