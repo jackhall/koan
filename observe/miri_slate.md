@@ -72,6 +72,12 @@ silence the stale-anchor check; delete a redundant test instead.
   shorter brands and a module body's activation and the enclosing place are written into the
   running region mid-body. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s
   once-written run read, its reattach seam and its keep and redeem doors.
+- `src/dispatch/evaluate.rs` — the evaluator asks for a call's slots as tenants of its own cell,
+  builds the argument record from what they kept, and — its callee returning `Str`, so placed
+  `Shares` — hops to the callee's frame as a co-tenant of the frame it finishes, every hop a tenant
+  of one host, where the body runner's tail test hops `Fresh` frames over `Fresh` children. No
+  `unsafe` of its own; the backing `unsafe` is `cellgraph`'s tenant creation and release, its
+  keep and redeem doors and its reattach seam.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -227,14 +233,23 @@ shorter brand than the one it was bound at.
   frame is released, and the evaluation reads through that view and tails into the next frame —
   sixty-four hops under Miri.
 
+**Dispatch** ([src/dispatch/evaluate.rs](../src/dispatch/evaluate.rs)) — the evaluator selecting a
+registration's function under a frame's contract and hopping to its frame, its argument record built
+in a tenant's storage and crossed into the callee's birth.
+
+- `a_keyworded_self_call_in_tail_position_holds_its_cells_constant_however_deep`
+  a keyworded call as a frame's last statement selects its own overload by the carried type of a
+  link read through a newtype, and the evaluation owing the frame's contract tails into the next
+  frame with the argument record it built — sixty-four hops under Miri.
+
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-28: 531s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 199s — 25 tests, 0 leaks, 0 UB
 - 2026-09-24: 175s — 23 tests, 0 leaks, 0 UB
 - 2026-09-22: 106s — 22 tests, 0 leaks, 0 UB
 - 2026-09-22: 108s — 22 tests, 0 leaks, 0 UB
-- 2026-09-22: 79s — 21 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

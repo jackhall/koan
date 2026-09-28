@@ -244,6 +244,7 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::NestedBinder { .. } => E::NestedBinder { at },
         E::RankingDisagrees { key, .. } => E::RankingDisagrees { key, at },
         E::NoCandidate { key, .. } => E::NoCandidate { key, at },
+        E::Overlaps { key, builtin, .. } => E::Overlaps { key, builtin, at },
     }
 }
 

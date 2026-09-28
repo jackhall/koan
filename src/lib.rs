@@ -10,6 +10,9 @@
 
 #[cfg(feature = "pending_rewrite")]
 pub mod builtins;
+/// The language koan's programs run under: the builtin table, keyword selection over a use's
+/// candidates, and the step every evaluation runs.
+pub mod dispatch;
 /// Type expressions elaborated into lattice handles where they are read, and a callable's type
 /// read off its signature where it is born.
 pub mod elaborate;

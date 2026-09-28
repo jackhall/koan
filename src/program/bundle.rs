@@ -69,8 +69,8 @@ pub enum KState<'graph, 'cell> {
     Born(KBirth<'graph, 'cell>),
     /// The body runner, between units.
     Runner(Runner<'graph, 'cell>),
-    /// An evaluator's resumption: what it was born with, and how far it got. Dispatch reshapes this
-    /// arm; the tests' miniature evaluator needs nothing more.
+    /// An evaluator's resumption: what it was born with, and how far it got — which parts of the
+    /// node it has asked for is read again off the node itself.
     Evaluating {
         birth: KBirth<'graph, 'cell>,
         stage: u32,

@@ -69,3 +69,25 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn a_chain_far_longer_than_a_thread_stack_allows_recursing_over_is_walked() {
+    // Each node references the next, so a walk from the first reaches every other before it closes
+    // one: a recursive walk would be as deep as the chain.
+    let count = if cfg!(miri) { 1_000 } else { 100_000 };
+    let edges: Vec<Vec<usize>> = (0..count)
+        .map(|node| {
+            if node + 1 < count {
+                vec![node + 1]
+            } else {
+                vec![]
+            }
+        })
+        .collect();
+    let borrowed: Vec<&[usize]> = edges.iter().map(Vec::as_slice).collect();
+    let scratch = Bump::new();
+    let components = strongly_connected_components(&scratch, &borrowed);
+    let emitted: Vec<usize> = components.iter().map(|component| component[0]).collect();
+    assert!(components.iter().all(|component| component.len() == 1));
+    assert_eq!(emitted, (0..count).rev().collect::<Vec<_>>());
+}

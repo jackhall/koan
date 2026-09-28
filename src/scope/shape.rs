@@ -775,6 +775,13 @@ pub enum ShapeError<'graph> {
         key: &'graph [KeyElement],
         at: SourceRef,
     },
+    /// A registration whose operand types, spelled from builtin names alone, meet those of the
+    /// builtin overload `builtin` at its key, whose operands are not all `Any`.
+    Overlaps {
+        key: &'graph [KeyElement],
+        builtin: KType,
+        at: SourceRef,
+    },
 }
 
 /// Which part of a form a quote, or a container of quotes, was wanted for.
@@ -845,7 +852,8 @@ impl ShapeError<'_> {
             | ShapeError::RankedDefinition { at }
             | ShapeError::NestedBinder { at }
             | ShapeError::RankingDisagrees { at, .. }
-            | ShapeError::NoCandidate { at, .. } => *at,
+            | ShapeError::NoCandidate { at, .. }
+            | ShapeError::Overlaps { at, .. } => *at,
         }
     }
 
@@ -982,22 +990,29 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
             ShapeError::NoCandidate { key, .. } => {
                 write!(f, "`{}` has no overload visible here", self.key(key))
             }
+            ShapeError::Overlaps { key, builtin, .. } => write!(
+                f,
+                "this overload of `{}` takes operands the builtin {} already takes",
+                self.key(key),
+                display_name(*builtin, self.types, self.symbols)
+            ),
         }
     }
 }
 
 impl ShapeErrorDisplay<'_, '_> {
-    /// `key` spelled as it is written: its keywords, `_` at each slot.
     fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
-        KeyDisplay {
-            key,
-            symbols: self.symbols,
-        }
+        spelled(key, self.symbols)
     }
 }
 
+/// `key` spelled as it is written: its keywords, `_` at each slot.
+pub fn spelled<'k>(key: &'k [KeyElement], symbols: &'k SymbolInterner) -> KeyDisplay<'k> {
+    KeyDisplay { key, symbols }
+}
+
 /// A bucket key beside the interner its keywords render through.
-struct KeyDisplay<'k> {
+pub struct KeyDisplay<'k> {
     key: &'k [KeyElement],
     symbols: &'k SymbolInterner,
 }

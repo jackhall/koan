@@ -328,28 +328,11 @@ impl fmt::Display for UntieableDisplay<'_, '_, '_> {
                 }
                 KeyRejected::NaN => f.write_str("NaN cannot be a dict key"),
             },
-            Untieable::Construction { refused, .. } => match refused {
-                ConstructionRefused::NotConstructible(head) => {
-                    write!(f, "{} is not callable", ktype(head))
-                }
-                ConstructionRefused::Misfit {
-                    identity,
-                    representation,
-                    payload,
-                } => write!(
-                    f,
-                    "{} cannot wrap {}: its representation is {}",
-                    ktype(identity),
-                    ktype(payload),
-                    ktype(representation)
-                ),
-                ConstructionRefused::Unsolved { family, payload } => write!(
-                    f,
-                    "{} cannot be solved against {}",
-                    ktype(family),
-                    ktype(payload)
-                ),
-            },
+            Untieable::Construction { refused, .. } => write!(
+                f,
+                "{}",
+                refused_construction(refused, self.symbols, self.types)
+            ),
             Untieable::TypeCycle { names } => {
                 f.write_str("these bindings build values of no finite type:")?;
                 for member in names.iter() {
@@ -357,6 +340,55 @@ impl fmt::Display for UntieableDisplay<'_, '_, '_> {
                 }
                 Ok(())
             }
+        }
+    }
+}
+
+/// A construction the construction rule refused, as an error value's message: what a tie of a
+/// data member and an evaluated construction both report.
+pub fn refused_construction<'d, 'run>(
+    refused: &'d ConstructionRefused,
+    symbols: &'d SymbolInterner,
+    types: &'d TypeRegistry<'run>,
+) -> RefusedConstruction<'d, 'run> {
+    RefusedConstruction {
+        refused,
+        symbols,
+        types,
+    }
+}
+
+/// A [`ConstructionRefused`] beside the interner and registry it renders through.
+pub struct RefusedConstruction<'d, 'run> {
+    refused: &'d ConstructionRefused,
+    symbols: &'d SymbolInterner,
+    types: &'d TypeRegistry<'run>,
+}
+
+impl fmt::Display for RefusedConstruction<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ktype = |handle: &KType| display_name(*handle, self.types, self.symbols);
+        match self.refused {
+            ConstructionRefused::NotConstructible(head) => {
+                write!(f, "{} is not callable", ktype(head))
+            }
+            ConstructionRefused::Misfit {
+                identity,
+                representation,
+                payload,
+            } => write!(
+                f,
+                "{} cannot wrap {}: its representation is {}",
+                ktype(identity),
+                ktype(payload),
+                ktype(representation)
+            ),
+            ConstructionRefused::Unsolved { family, payload } => write!(
+                f,
+                "{} cannot be solved against {}",
+                ktype(family),
+                ktype(payload)
+            ),
         }
     }
 }

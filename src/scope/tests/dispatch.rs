@@ -281,6 +281,18 @@ fn a_candidate_list_keys_on_the_full_bucket_key() {
 }
 
 #[test]
+fn a_lone_keyword_is_a_use_of_its_key() {
+    built("EXPR #(NOW) -> Number = #(1)\nLET a = (NOW)", |_, shape| {
+        let registration = shape.registrations()[0].slot;
+        let list = candidates(shape, node(&shape.body()[1].parts[3].value));
+        assert_eq!(list.candidates, [local(0, registration)]);
+    });
+    let (at, message) = refusal("LET a = (NOW)");
+    assert_eq!(message, "`NOW` has no overload visible here");
+    assert_eq!(at, "(NOW)");
+}
+
+#[test]
 fn builtin_overloads_come_first_in_a_candidate_list() {
     let source = "EXPR #(PRINT x :Str) -> Str = #(x)\nLET a = (PRINT \"s\")";
     built(source, |_, shape| {

@@ -1115,7 +1115,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             return Err(ShapeError::NestedBinder { at: node.source });
         }
         let Some(form) = node.cache().builtin_shape() else {
-            if let [only] = node.parts {
+            // A one-part node is its part — save a lone keyword, which is a use of its key.
+            if let [only] = node.parts
+                && !matches!(only.value, ExpressionPart::Keyword(_))
+            {
                 return self.walk_part(level, statement, &only.value, state);
             }
             // A `NEEDING` list names what code needs; its quotes are syntax, not quote values.
