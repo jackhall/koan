@@ -45,7 +45,8 @@ use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement, b
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{
-    BinderSymbol, KeySymbol, RegistrationSymbol, StaticName, TypeSymbol, ValueSymbol,
+    BinderSymbol, KeySymbol, RegistrationSymbol, StaticName, SymbolInterner, TypeSymbol,
+    ValueSymbol,
 };
 use crate::values::{Knotted, admits_part};
 
@@ -98,13 +99,14 @@ pub(super) fn program<'graph, X: Knotted>(
     statements: &[KExpression<'graph>],
     builtins: &Builtins<'_, X>,
     types: &TypeRegistry<'graph>,
+    symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
     // Every claim the program makes over an operator symbol is collected before the first draft, so
     // how a symbol chains never depends on where its declarations sit.
     let claims = groups::claims(brand, scratch, statements.iter(), None)?;
     let frame = resident(brand.writer(), GroupFrame::new(&[], None, claims));
-    let mut builder = Builder::new(brand, scratch, builtins, types, claims, frame);
+    let mut builder = Builder::new(brand, scratch, builtins, types, symbols, claims, frame);
     let statements = statements
         .iter()
         .enumerate()
@@ -602,6 +604,9 @@ struct Builder<'graph, 'x, 'e> {
     /// The program's type registry, which the static check admits written parts through and a
     /// quote's carried type is interned in.
     types: &'e TypeRegistry<'graph>,
+    /// The program's interner, which records the spelling of each key a quote's code leaves open,
+    /// so its carried type renders the key as written.
+    symbols: &'e SymbolInterner,
     /// Every claim the code being built makes over an operator symbol, collected once up front.
     claims: &'graph Claims<'graph>,
     /// The frame of the draft being built: which groups an operator run written there sees.
@@ -637,6 +642,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         scratch: BumpAllocator<'x>,
         builtins: &'e dyn BuiltinNames,
         types: &'e TypeRegistry<'graph>,
+        symbols: &'e SymbolInterner,
         claims: &'graph Claims<'graph>,
         frame: &'graph GroupFrame<'graph>,
     ) -> Self {
@@ -645,6 +651,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             scratch,
             builtins,
             types,
+            symbols,
             claims,
             frame,
             built: bump_table(scratch),
@@ -1894,9 +1901,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         built.extend(marks.iter().filter_map(|(mark, marked, _)| match marked {
             _ if *mark != Mark::Built => None,
             Marked::Name(name) => self.builtins.lookup(*name).is_none().then_some(*name),
-            Marked::Use(node) => Some(BinderSymbol::Key(KeyElement::key(
-                node.cache().stored_key().iter().copied(),
-            ))),
+            Marked::Use(node) => Some(BinderSymbol::Key(self.spelled(node.cache().stored_key()))),
         }));
         draft.code_type = self
             .types
@@ -2145,8 +2150,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut candidates = BumpVec::new_in(self.scratch);
         let classes = match (mark, code) {
             (Some(Mark::Built), _) => {
+                let open = BinderSymbol::Key(self.spelled(elements));
                 let offered = self
-                    .resolve(level, BinderSymbol::Key(key), Some(Mark::Built), at, reader)
+                    .resolve(level, open, Some(Mark::Built), at, reader)
                     .expect("a quote's code leaves a `\\` key open");
                 candidates.push(Candidate::Spread(offered));
                 self.written(elements)
@@ -2182,8 +2188,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     if candidates.is_empty() && !required.contains(&key) {
                         required.push(key);
                     }
+                    let open = BinderSymbol::Key(self.spelled(elements));
                     let hole = self
-                        .resolve(level, BinderSymbol::Key(key), None, at, reader)
+                        .resolve(level, open, None, at, reader)
                         .expect("a quote's code leaves its holes open");
                     candidates.push(Candidate::Spread(hole));
                 }
@@ -2265,6 +2272,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             candidates.push(Candidate::One(coordinate));
         }
         Ok(classes.unwrap_or_else(|| self.written(elements)))
+    }
+
+    /// The key `elements` spell, its spelling recorded: a key a quote's code leaves open is named
+    /// by the code's carried type, which renders it as written.
+    fn spelled(&self, elements: &[KeyElement]) -> KeySymbol {
+        self.symbols
+            .record_key(elements.iter().map(|element| element.keyword()))
     }
 
     /// Written-order classes over the slots of `elements`.

@@ -140,13 +140,20 @@ impl<'graph> Fixture<'_, 'graph> {
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
         let builtins = self.builtins(writer);
-        let shape = BodyShape::of_program(self.program, lines, builtins, self.types, self.scratch)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "the program shapes: {}",
-                    error.display(self.symbols, self.types)
-                )
-            });
+        let shape = BodyShape::of_program(
+            self.program,
+            lines,
+            builtins,
+            self.types,
+            self.symbols,
+            self.scratch,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "the program shapes: {}",
+                error.display(self.symbols, self.types)
+            )
+        });
         let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
         let left: Vec<BinderSymbol> = leave.iter().map(|name| self.name(name)).collect();
         // A reader takes a body's statements from its shape, never from the parse: the shape owns

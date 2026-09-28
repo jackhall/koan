@@ -189,10 +189,11 @@ pub(super) fn with_program<R>(
                 })
                 .collect();
             let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table, &[]);
-            let shape = BodyShape::of_program(program, &lines, builtins, &types, &scratch)
-                .unwrap_or_else(|error| {
-                    panic!("`{source}` shapes: {}", error.display(&symbols, &types))
-                });
+            let shape =
+                BodyShape::of_program(program, &lines, builtins, &types, &symbols, &scratch)
+                    .unwrap_or_else(|error| {
+                        panic!("`{source}` shapes: {}", error.display(&symbols, &types))
+                    });
             let activation: &Activation =
                 resident(writer, Activation::of_program(writer, shape, builtins));
             for slot in 0..shape.slots() {

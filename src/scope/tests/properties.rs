@@ -417,6 +417,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
                 &lines,
                 table,
                 fixture.types,
+                fixture.symbols,
                 fixture.scratch(),
             )
             .unwrap_or_else(|error| {
@@ -668,7 +669,7 @@ proptest! {
             fixture.in_cell(|writer| {
                 let table: &Builtins = builtins(fixture, writer);
                 let source = &rendering.source;
-                let error = BodyShape::of_program(fixture.program, &lines, table, fixture.types, fixture.scratch())
+                let error = BodyShape::of_program(fixture.program, &lines, table, fixture.types, fixture.symbols, fixture.scratch())
                     .err()
                     .unwrap_or_else(|| panic!("`{source}` is refused with {refusal:?}"));
                 let symbols = fixture.symbols;

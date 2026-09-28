@@ -133,11 +133,11 @@ impl CellSubstrate {
                 .alloc(TypeRegistry::in_region(&owner.registry));
             let scratch = Bump::new();
             let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
-            let shape = BodyShape::of_program(brand, &parsed, builtins, types, &scratch).map_err(
-                |error| LoadError::Shape {
-                    rendered: error.display(&owner.symbols, types).to_string(),
-                },
-            )?;
+            let shape =
+                BodyShape::of_program(brand, &parsed, builtins, types, &owner.symbols, &scratch)
+                    .map_err(|error| LoadError::Shape {
+                        rendered: error.display(&owner.symbols, types).to_string(),
+                    })?;
             let program = resident(
                 brand.writer(),
                 Program::new(shape, builtins, types, &owner.symbols, L::evaluator()),

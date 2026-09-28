@@ -403,9 +403,10 @@ impl<'graph> BodyShape<'graph> {
         statements: &[KExpression<'graph>],
         builtins: &Builtins<'_, X>,
         types: &TypeRegistry<'graph>,
+        symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
-        build::program(brand, statements, builtins, types, scratch)
+        build::program(brand, statements, builtins, types, symbols, scratch)
     }
 
     pub fn kind(&self) -> ShapeKind {

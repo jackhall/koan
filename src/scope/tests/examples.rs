@@ -33,6 +33,7 @@ fn shaped<R>(
                 &lines,
                 table,
                 fixture.types,
+                fixture.symbols,
                 fixture.scratch(),
             );
             check(fixture, &lines, shape)

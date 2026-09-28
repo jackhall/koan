@@ -29,6 +29,7 @@ fn shaped<R>(
                 &lines,
                 table,
                 fixture.types,
+                fixture.symbols,
                 fixture.scratch(),
             );
             check(fixture, shape)
@@ -283,6 +284,24 @@ fn a_built_use_is_its_key_offered_where_the_code_is_built() {
             assert_eq!(code(shape, 0).code_type(), needing);
         },
     );
+}
+
+/// Every key a `\(…)` leaves open renders as written, even one no source spells: the combiner of
+/// a chained comparison, and the `==` of a `!=`.
+#[test]
+fn each_key_a_built_mark_leaves_open_renders_as_written() {
+    for (source, keys) in [
+        ("LET q = #(\\(a < b < c))", &["(_ < _)", "(_ AND _)"][..]),
+        ("LET q = #(\\(a != b))", &["(_ == _)"][..]),
+    ] {
+        built(source, |fixture, shape| {
+            let code_type = code(shape, 0).code_type();
+            let rendered = display_name(code_type, fixture.types, fixture.symbols).to_string();
+            for key in keys {
+                assert!(rendered.contains(key), "`{source}`: {rendered}");
+            }
+        });
+    }
 }
 
 #[test]

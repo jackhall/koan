@@ -26,6 +26,7 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
                 &lines,
                 table,
                 fixture.types,
+                fixture.symbols,
                 fixture.scratch(),
             )
             .unwrap();
@@ -59,6 +60,7 @@ fn reading_an_empty_slot_breaks_the_scheduler_invariant() {
                 &lines,
                 table,
                 fixture.types,
+                fixture.symbols,
                 fixture.scratch(),
             )
             .unwrap();
