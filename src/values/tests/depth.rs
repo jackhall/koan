@@ -7,7 +7,7 @@ use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema};
 use crate::values::{TypeValue, cross};
 
-use super::{Fixture, Record, Step, Tagged, Value, copy, with_fixture};
+use super::{Fixture, Record, Step, Tagged, Value, copy, pin, with_fixture};
 
 /// How deep each chain is: about a hundred times what a recursive walk reaches in a debug build.
 const DEPTH: usize = 100_000;
@@ -84,5 +84,21 @@ fn a_chain_deeper_than_the_stack_crosses() {
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
         assert!(graph.is_empty());
+    });
+}
+
+#[test]
+fn a_chain_deeper_than_the_stack_compares() {
+    with_fixture(|fixture| {
+        let node = fixture.chain_type();
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let chain = fixture.chain(writer, node, DEPTH);
+            let same = fixture.chain(writer, node, DEPTH);
+            let shorter = fixture.chain(writer, node, DEPTH - 1);
+            assert_eq!(chain.equals(&same, types, scratch), Ok(true));
+            assert_eq!(chain.equals(&shorter, types, scratch), Ok(false));
+        });
     });
 }
