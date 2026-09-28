@@ -79,6 +79,13 @@ pub trait Knotted: Copy + Eq + Hash {
     /// The member `edge` names among this one's own siblings.
     fn sibling(&self, edge: Edge) -> Self;
 
+    /// This member's own edge in its knot.
+    fn index(&self) -> Edge;
+
+    /// The member at index 0 of this one's knot: one member names the whole knot, so a copy keys
+    /// the knots it has rebuilt by it.
+    fn root(&self) -> Self;
+
     /// What the node holds: a function or a quote's code, read through the links it holds; a module
     /// or a barrier, opaque to `values`; or a data node read through its cells.
     fn resolve<'a>(&self) -> Resolved<'a, Self>
@@ -88,16 +95,27 @@ pub trait Knotted: Copy + Eq + Hash {
 
 /// A knot member across region lifetimes: its form at each, and the copy from one to another.
 ///
-/// The copy is handed the deep copy of a value, so a member holding values rebuilds them through
-/// the one copy a crossing priced.
+/// The copy is two walks over the knot. [`held`](Self::held) lists every value the knot holds, and
+/// the crossing's worklist copies each of them; [`copy_into`](Self::copy_into) then ties the knot
+/// once, asking for each finished copy in the same order. The worklist owns the recursion, so a
+/// knot holding values that hold knots never nests a call per level.
 pub trait KnottedFamily<'graph> {
     /// The member at `'cell`: one type up to `'cell`, as an associated type is.
     type Closed<'cell>: Knotted + 'cell
     where
         'graph: 'cell;
 
-    /// `member`'s knot rebuilt in `writer`'s region, each value it holds through `copy`, and the
-    /// member at its own index.
+    /// Every value `member`'s knot holds, handed to `out` in the order `copy_into` asks `copy` for
+    /// them: nodes in index order, and within a node exactly the values its rebuild asks for.
+    fn held<'from>(
+        member: &Self::Closed<'from>,
+        out: &mut dyn FnMut(Value<'from, Self::Closed<'from>>),
+    ) where
+        'graph: 'from;
+
+    /// `member`'s knot rebuilt in `writer`'s region, and the member at its own index. `copy`
+    /// answers each value [`held`](Self::held) listed with its finished copy, in `held`'s order,
+    /// and answers nothing else.
     fn copy_into<'from, 'to>(
         writer: Writer<'to>,
         member: &Self::Closed<'from>,
@@ -108,7 +126,7 @@ pub trait KnottedFamily<'graph> {
         'graph: 'to;
 }
 
-/// The deep copy of a value from `'from` to `'to`, as a member's family is handed it.
+/// The finished copy of each value a member's knot holds, as its family's rebuild is handed it.
 pub type DeepCopy<'copy, 'from, 'to, X, Y> = dyn FnMut(&Value<'from, X>) -> Value<'to, Y> + 'copy;
 
 /// The knot member of a value that holds none: uninhabited, so its arm cannot be built.
@@ -128,6 +146,14 @@ impl Knotted for Nothing {
         match *self {}
     }
 
+    fn index(&self) -> Edge {
+        match *self {}
+    }
+
+    fn root(&self) -> Self {
+        match *self {}
+    }
+
     fn resolve<'a>(&self) -> Resolved<'a, Self> {
         match *self {}
     }
@@ -141,6 +167,13 @@ impl<'graph> KnottedFamily<'graph> for NoKnot {
         = Nothing
     where
         'graph: 'cell;
+
+    fn held<'from>(member: &Nothing, _: &mut dyn FnMut(Value<'from, Nothing>))
+    where
+        'graph: 'from,
+    {
+        match *member {}
+    }
 
     fn copy_into<'from, 'to>(
         _: Writer<'to>,

@@ -60,6 +60,15 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         resident(writer, ClosureBindings { slots })
     }
 
+    /// Every value these bindings hold, in the order [`copied`](Self::copied) asks for them.
+    pub fn held(&self, out: &mut dyn FnMut(Value<'cell, X>)) {
+        for link in self.slots {
+            if let Link::Value(value) = link {
+                out(*value);
+            }
+        }
+    }
+
     /// These bindings rebuilt in `writer`'s region: each value through `copy`, each edge verbatim —
     /// an edge names a node by index, so it means the same in a copy of its knot.
     pub fn copied<'to, Y: Knotted>(

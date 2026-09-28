@@ -82,6 +82,16 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         }
     }
 
+    /// Every value this code's bindings hold, bound then supplied, in the order
+    /// [`rebuilt`](Self::rebuilt) asks for them.
+    pub(super) fn held(&self, out: &mut dyn FnMut(KValue<'graph, 'cell>)) {
+        for (_, link) in self.bound.iter().chain(self.supplied) {
+            if let Link::Value(value) = link {
+                out(*value);
+            }
+        }
+    }
+
     /// This code rebuilt in `writer`'s region — the copy's arm: each binding's value through `copy`,
     /// each edge verbatim, and the body, shape, type and knot weight carried over.
     pub(super) fn rebuilt<'to>(

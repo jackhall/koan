@@ -3,9 +3,11 @@
 //! is its [`Resolved`] form: beside a data node, a function or a quote's code, each read through
 //! the links it holds, or a module or a barrier, opaque to `values`.
 //!
-//! [`Composite`] is the one reading of a container or tagged value that equality, rendering and the
-//! mark pass share: its cells as values, whether they are plain words or links resolved through the
-//! node holding them. The lifetimes of a node's run shorten to the borrow a member hands out, which
+//! [`Composite`] is the one reading of a container or tagged value that equality, rendering, the
+//! mark pass and the deep copy share: its cells as values, whether they are plain words or links
+//! resolved through the node holding them. [`Circular::held`] lists the values a data node's
+//! [`copied`](Circular::copied) asks for, in its order, for a knot family's
+//! [`held`](super::KnottedFamily::held). The lifetimes of a node's run shorten to the borrow a member hands out, which
 //! is sound because every resident is covariant in `'cell` and so is every member.
 
 use crate::memory::{Writer, collect};
@@ -88,6 +90,23 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
         }
     }
 
+    /// Every value this node's links hold, in the order [`copied`](Self::copied) asks for them.
+    pub fn held(&self, out: &mut dyn FnMut(Value<'cell, X>)) {
+        let mut links = |cells: &[Link<'cell, X>]| {
+            for link in cells {
+                if let Link::Value(value) = link {
+                    out(*value);
+                }
+            }
+        };
+        match *self {
+            Circular::List(list) => links(list.cells()),
+            Circular::Dict(dict) => links(dict.cells()),
+            Circular::Record(record) => links(record.cells()),
+            Circular::Tagged(tagged) => links(std::slice::from_ref(tagged.payload())),
+        }
+    }
+
     /// This node rebuilt in `writer`'s region: each link through [`Link::copied`], keys rehomed,
     /// names collected, type and weight carried over.
     pub fn copied<'to, Y: Knotted>(
@@ -156,6 +175,31 @@ pub(super) enum Composite<'a, X> {
         ktype: KType,
         payload: Value<'a, X>,
     },
+}
+
+impl<'a, X: Knotted> Composite<'a, X> {
+    /// How many values this composite holds: its cells, or a tagged value's one payload.
+    pub(super) fn len(&self) -> usize {
+        match self {
+            Composite::List { cells, .. }
+            | Composite::Dict { cells, .. }
+            | Composite::Record { cells, .. } => cells.len(),
+            Composite::Tagged { .. } => 1,
+        }
+    }
+
+    /// The value at `at`, below [`len`](Self::len): a cell, or a tagged value's payload.
+    pub(super) fn child(&self, at: usize) -> Value<'a, X> {
+        match self {
+            Composite::List { cells, .. }
+            | Composite::Dict { cells, .. }
+            | Composite::Record { cells, .. } => cells.get(at),
+            Composite::Tagged { payload, .. } => {
+                debug_assert_eq!(at, 0, "a tagged value holds one payload");
+                *payload
+            }
+        }
+    }
 }
 
 /// A run of cells read as values: plain words, or links resolved through their holder.

@@ -193,6 +193,14 @@ impl values::Knotted for Knotted<'_, '_> {
         Knotted(self.0.follow(edge))
     }
 
+    fn index(&self) -> Edge {
+        self.0.index()
+    }
+
+    fn root(&self) -> Self {
+        Knotted(self.0.knot().members().next().expect("a knot holds a node"))
+    }
+
     fn resolve<'a>(&self) -> Resolved<'a, Self>
     where
         Self: 'a,

@@ -5,6 +5,7 @@
 mod boundary;
 mod construction;
 mod crossing;
+mod depth;
 mod equality;
 mod render;
 mod satisfaction;
@@ -167,6 +168,15 @@ impl Knotted for Stand<'_> {
         *self
     }
 
+    /// A stand-in is a knot of one.
+    fn index(&self) -> Edge {
+        KnotPlan::new(1).edge(0).expect("a knot of one has node 0")
+    }
+
+    fn root(&self) -> Self {
+        *self
+    }
+
     fn resolve<'a>(&self) -> Resolved<'a, Self>
     where
         Self: 'a,
@@ -211,6 +221,14 @@ impl Knotted for Node<'_> {
         Node(self.0.follow(edge))
     }
 
+    fn index(&self) -> Edge {
+        self.0.index()
+    }
+
+    fn root(&self) -> Self {
+        Node(self.0.knot().members().next().expect("a knot holds a node"))
+    }
+
     fn resolve<'a>(&self) -> Resolved<'a, Self>
     where
         Self: 'a,
@@ -233,6 +251,15 @@ impl<'graph> KnottedFamily<'graph> for NodeFamily {
         = Node<'cell>
     where
         'graph: 'cell;
+
+    fn held<'from>(member: &Node<'from>, out: &mut dyn FnMut(Holding<'from>))
+    where
+        'graph: 'from,
+    {
+        for node in member.0.knot().members() {
+            node.payload().held(out);
+        }
+    }
 
     fn copy_into<'from, 'to>(
         writer: Writer<'to>,

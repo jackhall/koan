@@ -542,26 +542,79 @@ fn a_copied_module_outlives_its_home() {
                     .as_callable()
                     .expect("a callable member");
                 assert_eq!(captured_value(fixture, f, "greeting").as_str(), Some("hi"));
-                // Each member was rebuilt through the one crossing, bringing its whole knot with
-                // it, so the two members of the body's function knot arrive as two copies of it —
-                // each internally consistent, neither naming the other's nodes.
-                let (fs_g, gs_f) = (
-                    captured_sibling(fixture, f, "g"),
-                    captured_sibling(fixture, g, "f"),
-                );
-                assert!(!ptr::eq(fs_g.node(), g.node()));
-                assert!(!ptr::eq(gs_f.node(), f.node()));
-                assert!(ptr::eq(
-                    captured_sibling(fixture, fs_g, "f").node(),
-                    f.node()
-                ));
-                assert!(ptr::eq(
-                    captured_sibling(fixture, gs_f, "g").node(),
-                    g.node()
-                ));
+                // Both members were rebuilt through the one crossing, which copies the body's
+                // function knot once, so the two arrive as members of one copy and capture each
+                // other.
+                assert!(ptr::eq(captured_sibling(fixture, f, "g").node(), g.node()));
+                assert!(ptr::eq(captured_sibling(fixture, g, "f").node(), f.node()));
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
+#[test]
+fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
+    use crate::memory::{Active, CrossedOperand, Operand};
+    use crate::values::{List, copy_severed};
+
+    use super::super::KnottedFamily;
+
+    with_fixture(|fixture| {
+        let lines = fixture.parse(KNOT);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        graph
+            .enter(home, |context| {
+                let writer = context.writer();
+                let activation = fixture.run(writer, &lines, &[]);
+                let (f, g) = (
+                    callable(fixture, activation, "f"),
+                    callable(fixture, activation, "g"),
+                );
+                let pair = [Value::Knotted(f), Value::Knotted(g)];
+                let list = Value::List(List::new(writer, pair.into_iter(), types, scratch));
+                let source = context.lift::<KValueFamily>(list);
+                let operand = Operand {
+                    carrier: &source,
+                    copy_bytes: list.weight().bytes(),
+                };
+                // A birth carrying two values copies them the way this placement does.
+                let placed = context
+                    .alloc_into::<KValueFamily, KValueFamily>(dest, &[operand], |writer, views| {
+                        let CrossedOperand::Copied { view, .. } = views[0] else {
+                            panic!("the operand is copied");
+                        };
+                        let cells = view.as_list().expect("a list").cells();
+                        let copies = copy_severed::<_, KnottedFamily, 2>(
+                            writer,
+                            &views[0],
+                            [&cells[0], &cells[1]],
+                        );
+                        Active::new(Value::List(List::new(
+                            writer,
+                            copies.into_iter(),
+                            types,
+                            scratch,
+                        )))
+                    })
+                    .unwrap();
+                let copied = context.read(&placed).value().as_list().expect("a list");
+                let [Value::Knotted(f), Value::Knotted(g)] = copied.cells() else {
+                    panic!("a list of two functions");
+                };
+                assert!(
+                    f.member().knot() == g.member().knot(),
+                    "one copy of the knot"
+                );
+                assert!(ptr::eq(captured_sibling(fixture, *f, "g").node(), g.node()));
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
         assert!(graph.is_empty());
     });
 }

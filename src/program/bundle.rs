@@ -129,26 +129,35 @@ impl<'graph> StepBundle<'graph> for KBundle {
             CrossedOperand::Pinned { view, .. } => *view,
             CrossedOperand::Copied { view: copied, .. } => match *copied {
                 KBirth::Program { program } => KBirth::Program { program },
+                // The values of one birth cross through one copy, so they share each knot.
                 KBirth::Call {
                     program,
                     callee,
                     arguments,
                     kind,
-                } => KBirth::Call {
-                    program,
-                    callee: copy_severed::<_, KnottedFamily>(writer, view, &callee),
-                    arguments: copy_severed::<_, KnottedFamily>(writer, view, &arguments),
-                    kind,
-                },
+                } => {
+                    let [callee, arguments] =
+                        copy_severed::<_, KnottedFamily, 2>(writer, view, [&callee, &arguments]);
+                    KBirth::Call {
+                        program,
+                        callee,
+                        arguments,
+                        kind,
+                    }
+                }
                 KBirth::Eval {
                     program,
                     code,
                     offered,
-                } => KBirth::Eval {
-                    program,
-                    code: copy_severed::<_, KnottedFamily>(writer, view, &code),
-                    offered: copy_severed::<_, KnottedFamily>(writer, view, &offered),
-                },
+                } => {
+                    let [code, offered] =
+                        copy_severed::<_, KnottedFamily, 2>(writer, view, [&code, &offered]);
+                    KBirth::Eval {
+                        program,
+                        code,
+                        offered,
+                    }
+                }
                 // Only a forced copy reaches here with a view: a `Fresh` hop's successor, a sibling
                 // of the cell the view names. A view is born under the cell it views, or handed on
                 // by a `Shares` hop, whose successor is a tenant of an ancestor and pins it.

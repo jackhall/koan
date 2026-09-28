@@ -247,6 +247,38 @@ fn a_circular_value_copies_as_the_same_graph_and_pins_as_the_same_node() {
     });
 }
 
+#[test]
+fn two_members_of_one_knot_cross_as_members_of_one_copy() {
+    use super::{Holding, NodeFamily, ring};
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        graph
+            .enter(home, |context| {
+                let writer = context.writer();
+                let source = ring(fixture, writer, KType::STR, &[None, None]);
+                let pair = [Holding::Knotted(source[0]), Holding::Knotted(source[1])];
+                let list = crate::values::List::new(writer, pair.into_iter(), types, scratch);
+                let carrier = context.lift::<ValueFamily<NodeFamily>>(Holding::List(list));
+                let crossed = cross(context, dest, &carrier).unwrap();
+                let copied = context.read(&crossed).value().as_list().expect("a list");
+                let [Holding::Knotted(first), Holding::Knotted(second)] = copied.cells() else {
+                    panic!("a list of two knot members");
+                };
+                assert!(first.0.knot() == second.0.knot(), "one copy of the knot");
+                assert!(first.0.knot() != source[0].0.knot(), "a copy is a new knot");
+                assert_eq!(first.0.index(), source[0].0.index());
+                assert_eq!(second.0.index(), source[1].0.index());
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
 fn text_in<'cell>(writer: crate::memory::Writer<'cell>) -> super::Holding<'cell> {
     crate::values::text(writer, "held")
 }

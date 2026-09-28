@@ -15,8 +15,8 @@ mod rewrite;
 mod units;
 
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, Edge, ProgramBrand, ReleaseAbsorption, Verdict, Writer,
-    covariant, program_storage, reattachable,
+    Bump, BumpAllocator, CellGraph, Edge, KnotPlan, ProgramBrand, ReleaseAbsorption, Verdict,
+    Writer, covariant, program_storage, reattachable,
 };
 use crate::parse::{KExpression, parse};
 use crate::source::{FileId, SourceRef, Span};
@@ -50,6 +50,17 @@ impl Knotted for Probe {
         Probe(edge.index())
     }
 
+    /// Every probe is a member of one knot, at its own index.
+    fn index(&self) -> Edge {
+        KnotPlan::new(self.0 + 1)
+            .edge(self.0)
+            .expect("an index below its own count")
+    }
+
+    fn root(&self) -> Self {
+        Probe(0)
+    }
+
     fn resolve<'a>(&self) -> Resolved<'a, Self> {
         Resolved::Function {
             identity: self.0 as usize,
@@ -66,6 +77,12 @@ impl<'graph> KnottedFamily<'graph> for ProbeFamily {
         = Probe
     where
         'graph: 'cell;
+
+    fn held<'from>(_: &Probe, _: &mut dyn FnMut(Value<'from, Probe>))
+    where
+        'graph: 'from,
+    {
+    }
 
     fn copy_into<'from, 'to>(
         _: Writer<'to>,
