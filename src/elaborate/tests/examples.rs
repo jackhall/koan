@@ -6,7 +6,7 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{BodyShape, Position, Site, Slot};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{
-    DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
+    DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry, display_name,
 };
 use crate::values::Value;
 
@@ -102,6 +102,37 @@ LET Fixed = :(EXPR #(ID x :Number) -> Number)";
         let named = elaborated(&program, 0).unwrap();
         assert_eq!(elaborated(&program, 1), Ok(named));
         assert_ne!(elaborated(&program, 2), Ok(named));
+    });
+}
+
+#[test]
+fn a_ranked_head_interns_by_its_dense_ranking() {
+    // A signature member ranks a head by the integers in its slots' places: `2 … 1` and `20 … 10`
+    // are one ranking, written order another, and a named slot sits in the unnumbered class.
+    let source = "\
+LET Ranked = :(EXPR #(MOVE 2 :Number TO 1 :Str) -> Number)
+LET Scaled = :(EXPR #(MOVE 20 :Number TO 10 :Str) -> Number)
+LET Written = :(EXPR #(MOVE _ :Number TO _ :Str) -> Number)
+LET Named = :(EXPR #(MOVE piece :Number TO 1 :Str) -> Number)";
+    with_program(source, scalars, nulls, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        let elements = [
+            keyword("MOVE", program.symbols),
+            DispatchTokenElement::Slot(KType::NUMBER),
+            keyword("TO", program.symbols),
+            DispatchTokenElement::Slot(KType::STR),
+        ];
+        let ranked = types
+            .shape_type(scratch, &[], &elements, &[1, 0], KType::NUMBER)
+            .handle;
+        assert_eq!(elaborated(&program, 0), Ok(ranked));
+        assert_eq!(elaborated(&program, 1), Ok(ranked));
+        assert_ne!(elaborated(&program, 2), Ok(ranked));
+        assert_eq!(elaborated(&program, 3), Ok(ranked));
+        assert_eq!(
+            display_name(ranked, types, program.symbols).to_string(),
+            ":(EXPR #(MOVE 2 :Number TO 1 :Str) -> Number)"
+        );
     });
 }
 

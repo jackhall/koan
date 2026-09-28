@@ -259,12 +259,12 @@ const fn every_overload_within(types: &[KType], kind: KType) -> bool {
 }
 
 /// The roles whose reading fixes the syntax that fills them, and so the slot's type: every body is
-/// a `Block`, an `EXPR` head an `Expression`, a quoted symbol a `Keyword`, a field label a `Name`,
-/// an arm set a `Dict(TypeCode, Block)` under type guards and a `Dict(Name, Block)` under labels, a
-/// union's variants a `Dict(Name, TypeCode)`, a signature's members a `List(Declaration)`, a
-/// representation `TypeCode`, a `FOR ALL` group a list of names or a dict of names to bounds, and a
-/// binder name a code kind no larger than an expression. A binding's right-hand side is classified
-/// where it lands, so it is `Any`.
+/// a `Block`, an `EXPR` head an `Expression`, a quoted symbol a `Keyword`, a field label a code
+/// kind no larger than a `Name`, an arm set a `Dict(TypeCode, Block)` under type guards and a
+/// `Dict(Name, Block)` under labels, a union's variants a `Dict(Name, TypeCode)`, a signature's
+/// members a `List(Declaration)`, a representation `TypeCode`, a `FOR ALL` group a list of names or
+/// a dict of names to bounds, and a binder name a code kind no larger than an expression. A
+/// binding's right-hand side is classified where it lands, so it is `Any`.
 const fn roles_agree_with_code_types(table: &[BuiltinShape]) -> bool {
     let mut entry = 0;
     while entry < table.len() {
@@ -276,7 +276,7 @@ const fn roles_agree_with_code_types(table: &[BuiltinShape]) -> bool {
                     Role::Body(_) => every_overload_is(types, KType::BLOCK),
                     Role::Head => every_overload_is(types, KType::EXPRESSION),
                     Role::Data => every_overload_is(types, KType::KEYWORD),
-                    Role::Field => every_overload_is(types, KType::NAME),
+                    Role::Field => every_overload_within(types, KType::NAME),
                     Role::Branches(Heads::Types) => {
                         every_overload_is(types, KType::DICT_TYPE_CODE_BLOCK)
                     }
@@ -338,6 +338,7 @@ pub enum BuiltinShapeId {
     ExpressionHead,
     QuantifiedExpressionDefinition,
     QuantifiedExpressionHead,
+    BucketDeclaration,
     CombinedExpression,
     CombinedQuantifiedExpression,
     OperatorDefinition,
@@ -896,6 +897,16 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
+    // EXPR <head> — a bucket declaration: keywords and one integer or `_` per slot, `EXPR #(MOVE
+    // 2 TO 1)`. It ranks its bucket's slots and nothing else: no types, no return, no binder, and
+    // in a module body no member.
+    BuiltinShape {
+        id: BuiltinShapeId::BucketDeclaration,
+        elements: &[Kw(&KEYWORDS.expr), slot(Head, &[EXPRESSION])],
+        returns: &[ANY],
+        binder: None,
+        reserved: false,
+    },
     // LET <name> = FN EXPR <head> -> <return type> = <body> — a combined statement, one binder
     // filling both channels: the LET value name and the bucket key the declaration's body
     // registers under.
@@ -1412,13 +1423,14 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // ATTR <record> <field> — the parse of `m.x`.
+    // ATTR <record> <field> — the parse of `m.x`. A type's member is labelled by a type name, so
+    // `Point.y` is no overload's.
     BuiltinShape {
         id: BuiltinShapeId::Attribute,
         elements: &[
             Kw(&KEYWORDS.attr),
             slot(Argument, &[MODULE, ANY, ANY_TYPE]),
-            slot(Field, &[NAME, NAME, NAME]),
+            slot(Field, &[NAME, NAME, TYPE_NAME]),
         ],
         returns: &[ANY, ANY, ANY],
         binder: None,

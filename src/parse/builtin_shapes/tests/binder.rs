@@ -5,14 +5,15 @@ use proptest::prelude::*;
 
 use crate::memory::{ProgramBrand, program_storage};
 use crate::parse::builtin_shapes::binder::{
-    BinderFacts, quantifier_entries, type_decl_binder_name,
+    BinderFacts, SlotLabel, needed_key, needing, quantifier_entries, slot_label,
+    type_decl_binder_name,
 };
 use crate::parse::builtin_shapes::{
-    BUILTIN_SHAPES, BuiltinShape, ShapeElement, builtin_shape_for, render_key,
+    BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for, render_key,
 };
-use crate::parse::{ExpressionPart, KExpression, parse};
+use crate::parse::{ExpressionPart, KExpression, KeyElement, parse};
 use crate::source::Spanned;
-use crate::symbols::{Symbol, SymbolInterner};
+use crate::symbols::{BinderSymbol, Symbol, SymbolInterner};
 
 /// Every form the table gives binder facts, with those facts beside it.
 fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
@@ -337,4 +338,120 @@ fn a_bound_is_read_off_its_declarator() {
         panic!("a sigiled type expression");
     };
     assert_eq!(entries(&node.reference().parts[3].value), vec![(elt, true)]);
+}
+
+// ---------- rankings ----------
+
+/// A bucket declaration is an `EXPR` of one head quote, whatever its slots write — integers, `_`,
+/// or both — and it installs nothing.
+#[test]
+fn a_bucket_declaration_is_its_own_shape() {
+    let program = program_storage();
+    for source in [
+        "EXPR #(MOVE 2 TO 1)",
+        "EXPR #(MOVE _ TO 1)",
+        "EXPR #(MOVE _)",
+    ] {
+        let statement = parse_one(program.brand(), source);
+        let shape = statement.cache().builtin_shape().expect("a builtin shape");
+        assert_eq!(shape.id, BuiltinShapeId::BucketDeclaration, "{source}");
+        assert!(statement.binder_plan().is_none(), "{source}");
+    }
+}
+
+/// A rank in a slot's name position labels a slot, so a definition head writing one keys the
+/// bucket its unranked twin keys; the shape builder refuses it there.
+#[test]
+fn a_ranked_head_keys_as_its_unranked_twin() {
+    let program = program_storage();
+    let key = |source: &str| {
+        let statement = parse_one(program.brand(), source);
+        let plan = statement.binder_plan().expect("a definition is a binder");
+        plan.buckets.expect("a definition registers").first.to_vec()
+    };
+    let ranked = key("EXPR #(MOVE 2 :Number TO 1 :Number) -> Number = #(1)");
+    assert_eq!(
+        ranked,
+        key("EXPR #(MOVE a :Number TO b :Number) -> Number = #(1)")
+    );
+    assert_eq!(
+        ranked,
+        key("EXPR #(MOVE _ :Number TO 1 :Number) -> Number = #(1)")
+    );
+}
+
+/// A slot's label is a name, `_`, or a whole number that fits a rank; anything else labels no slot.
+#[test]
+fn a_slot_label_is_a_name_a_wildcard_or_a_rank() {
+    let program = program_storage();
+    let statement = parse_one(program.brand(), "f x _ 2 20 2.5 -1 MOVE 'a'");
+    let labels: Vec<_> = statement
+        .parts
+        .iter()
+        .map(|part| slot_label(&part.value))
+        .collect();
+    let x = crate::symbols::ValueSymbol::classify("x").expect("a value token");
+    let f = crate::symbols::ValueSymbol::classify("f").expect("a value token");
+    assert_eq!(
+        labels,
+        [
+            Some(SlotLabel::Named(BinderSymbol::Value(f))),
+            Some(SlotLabel::Named(BinderSymbol::Value(x))),
+            Some(SlotLabel::Wildcard),
+            Some(SlotLabel::Ranked(2)),
+            Some(SlotLabel::Ranked(20)),
+            None,
+            None,
+            None,
+            None,
+        ]
+    );
+}
+
+/// A `NEEDING` list names a bucket key by a group of keywords and `_`: its key is the run a call
+/// spelling it computes, and the parse records its spelling for a type that names it.
+#[test]
+fn a_needed_key_is_the_run_it_spells() {
+    let program = program_storage();
+    let symbols = SymbolInterner::new();
+    let source =
+        "LET f = FN (run :(Block NEEDING #[y (LOG _) (_ SEND _ TO _) (_) (LOG x)])) -> Any = #(1)";
+    let statements = parse(program.brand(), &symbols, source).expect("the source parses");
+    let needing = find_needing(&statements[0]).expect("the source writes a NEEDING list");
+    let log = crate::symbols::KeywordSymbol::of("LOG").expect("a keyword token");
+    let send = crate::symbols::KeywordSymbol::of("SEND").expect("a keyword token");
+    let to = crate::symbols::KeywordSymbol::of("TO").expect("a keyword token");
+    let keys: Vec<Option<Vec<KeyElement>>> = needing
+        .iter()
+        .map(|quote| needed_key(quote).map(Iterator::collect))
+        .collect();
+    use KeyElement::{Keyword, Slot};
+    assert_eq!(
+        keys,
+        [
+            None,
+            Some(vec![Keyword(log), Slot]),
+            Some(vec![Slot, Keyword(send), Slot, Keyword(to), Slot]),
+            None,
+            None,
+        ]
+    );
+    let log_key = KeyElement::key([Keyword(log), Slot]);
+    assert_eq!(symbols.render(log_key.symbol()), "LOG _");
+    let send_key = KeyElement::key([Slot, Keyword(send), Slot, Keyword(to), Slot]);
+    assert_eq!(symbols.render(send_key.symbol()), "_ SEND _ TO _");
+}
+
+/// The quotes of the first `<kind> NEEDING #[…]` run nested anywhere in `node`.
+fn find_needing<'a>(node: &KExpression<'a>) -> Option<&'a [ExpressionPart<'a>]> {
+    if let Some((_, quotes)) = needing(node) {
+        return Some(quotes);
+    }
+    node.parts.iter().find_map(|part| match part.value {
+        ExpressionPart::Expression(child)
+        | ExpressionPart::SigiledTypeExpr(child)
+        | ExpressionPart::RecordType(child)
+        | ExpressionPart::QuotedExpression(child) => find_needing(child.reference()),
+        _ => None,
+    })
 }

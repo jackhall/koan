@@ -39,7 +39,7 @@ use crate::type_lattice::{FoldDirection, ReductionMode};
 use super::super::super::groups::{
     Cover, equal_symbol, equality_mode, is_equality, is_unequal, not_symbol,
 };
-use super::super::super::signature::{pair_name, signature_run};
+use super::super::super::signature::{pair_label, signature_run};
 use super::super::ShapeError;
 use super::Builder;
 
@@ -274,7 +274,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         let mut changed = false;
         let mut index = 0;
         while index < run.parts.len() {
-            let typed = pair_name(run, index).is_some();
+            let typed = pair_label(run, index).is_some();
             let position = if typed { index + 1 } else { index };
             if let Some(rewritten) = self.rewrite_part(&run.parts[position].value)? {
                 changed = true;

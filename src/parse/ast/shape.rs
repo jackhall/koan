@@ -14,7 +14,7 @@
 use crate::memory::{Writer, collect};
 use crate::parse::builtin_shapes::binder::StoredBinderKey;
 use crate::parse::builtin_shapes::{BuiltinShape, builtin_shape_for};
-use crate::symbols::KeywordSymbol;
+use crate::symbols::{KeySymbol, KeywordSymbol};
 
 /// One position of a bucket key: a fixed token as its [`KeywordSymbol`], or an argument slot.
 /// `Copy` and lifetime-free, so a key run is the same type whether it sits in a `Vec` a caller
@@ -27,6 +27,21 @@ use crate::symbols::KeywordSymbol;
 pub enum KeyElement {
     Slot,
     Keyword(KeywordSymbol),
+}
+
+impl KeyElement {
+    /// The keyword this position pins, `None` at a slot — the run [`KeySymbol::of`] digests.
+    pub fn keyword(self) -> Option<KeywordSymbol> {
+        match self {
+            KeyElement::Keyword(symbol) => Some(symbol),
+            KeyElement::Slot => None,
+        }
+    }
+
+    /// The [`KeySymbol`] a key run names.
+    pub fn key(run: impl IntoIterator<Item = KeyElement>) -> KeySymbol {
+        KeySymbol::of(run.into_iter().map(KeyElement::keyword))
+    }
 }
 
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and

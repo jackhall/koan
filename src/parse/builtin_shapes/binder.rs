@@ -14,11 +14,12 @@
 use smallvec::SmallVec;
 
 use crate::memory::{Writer, collect};
-use crate::parse::ast::{ExpressionPart, KExpression, KeyElement};
+use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, KeyElement};
 use crate::parse::builtin_shapes::role::Role;
 use crate::parse::builtin_shapes::{BuiltinShape, KEYWORDS, builtin_shape_for};
 use crate::source::Spanned;
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol, WILDCARD};
+use crate::type_lattice::RawRank;
 
 /// Structural name extractor for a binder builtin. Returning `Some(name)` names the placeholder a
 /// forward reference parks on while the binder's body is in flight. Both channels' names are `Copy`
@@ -199,6 +200,25 @@ pub(crate) fn needed_name(quote: &ExpressionPart<'_>) -> Option<BinderSymbol> {
     }
 }
 
+/// The bucket key a `NEEDING` list's quote spells, `#[(LOG _)]`: a quoted group of keywords and
+/// one `_` per slot, with at least one keyword that is not `_`. A slot name is invisible to
+/// dispatch, so the key names none.
+pub(crate) fn needed_key<'g>(
+    quote: &ExpressionPart<'g>,
+) -> Option<impl Iterator<Item = KeyElement> + Clone + 'g> {
+    let parts = quoted_body(quote)?.parts;
+    let element = |part: &Spanned<ExpressionPart<'_>>| match part.value {
+        ExpressionPart::Keyword(symbol) if symbol == WILDCARD.symbol() => Some(KeyElement::Slot),
+        ExpressionPart::Keyword(symbol) => Some(KeyElement::Keyword(symbol)),
+        _ => None,
+    };
+    let keyed = parts.iter().all(|part| element(part).is_some())
+        && parts
+            .iter()
+            .any(|part| matches!(element(part), Some(KeyElement::Keyword(_))));
+    keyed.then(move || parts.iter().filter_map(element))
+}
+
 /// The one part a quote of one part holds — the name or type code `#[…]` and `#{…}` quote an
 /// element as.
 pub(crate) fn quoted_part<'g>(part: &ExpressionPart<'g>) -> Option<&'g ExpressionPart<'g>> {
@@ -258,7 +278,7 @@ pub(crate) fn fn_def_binder_bucket<'a>(
     writer: Writer<'a>,
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
-    let signature_expr = signature_expr_part(expr)?;
+    let signature_expr = head_run(expr)?;
     let parts = signature_expr.parts;
     // Staged on the stack, not the heap: the stride is data-dependent (`+= 2` collapses a
     // `<name> :<Type>` pair), so no exact-length iterator spells the run and the fill needs a length
@@ -267,37 +287,74 @@ pub(crate) fn fn_def_binder_bucket<'a>(
     let mut key: SmallVec<[KeyElement; 8]> = SmallVec::new();
     let mut i = 0;
     while i < parts.len() {
-        match parts[i].value {
-            // `_` lexes keyword-class, but a `_ :<Type>` pair is an unnamed slot — the one keyword
-            // this walk reads as a slot rather than as a fixed token, so a wildcard head keys the
-            // same bucket the call spelling it will compute.
-            ExpressionPart::Keyword(symbol)
-                if symbol == WILDCARD.symbol() && next_is_type_slot(parts, i + 1) =>
-            {
-                key.push(KeyElement::Slot);
-                i += 2;
-            }
-            ExpressionPart::Keyword(symbol) => {
-                key.push(KeyElement::Keyword(symbol));
-                i += 1;
-            }
-            ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
-                if next_is_type_slot(parts, i + 1) =>
-            {
-                key.push(KeyElement::Slot);
-                i += 2;
-            }
-            _ => {
-                i += 1;
-            }
+        // A labelled `<label> :<Type>` pair is one slot, whatever the label: a name, `_`, or a rank.
+        if slot_label(&parts[i].value).is_some() && next_is_type_slot(parts, i + 1) {
+            key.push(KeyElement::Slot);
+            i += 2;
+            continue;
         }
+        if let ExpressionPart::Keyword(symbol) = parts[i].value {
+            key.push(KeyElement::Keyword(symbol));
+        }
+        i += 1;
     }
     Some(BucketKeys::one(collect(writer, key.into_iter())))
 }
 
+/// What stands before a slot's type in a head: a parameter name, `_` for a slot that names nothing,
+/// or a rank — an integer, which only a signature member's head writes
+/// (`EXPR #(MOVE 2 :Piece TO 1 :Square) -> Board`); a definition's head is refused one where its
+/// shape is built.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SlotLabel {
+    Named(BinderSymbol),
+    Wildcard,
+    Ranked(u32),
+}
+
+impl SlotLabel {
+    /// The parameter the label declares, if it names one.
+    pub(crate) fn name(self) -> Option<BinderSymbol> {
+        match self {
+            SlotLabel::Named(name) => Some(name),
+            SlotLabel::Wildcard | SlotLabel::Ranked(_) => None,
+        }
+    }
+
+    /// The label's rank, as the lattice normalizes a written ranking.
+    pub(crate) fn rank(self) -> RawRank {
+        match self {
+            SlotLabel::Ranked(rank) => RawRank::Numbered(rank),
+            SlotLabel::Named(_) | SlotLabel::Wildcard => RawRank::Unnumbered,
+        }
+    }
+}
+
+/// The label `part` would be in a slot's name position, or `None` for a part that labels no slot.
+pub(crate) fn slot_label(part: &ExpressionPart<'_>) -> Option<SlotLabel> {
+    match *part {
+        ExpressionPart::Identifier(name) => Some(SlotLabel::Named(BinderSymbol::Value(name))),
+        ExpressionPart::Type(name) => Some(SlotLabel::Named(BinderSymbol::Type(name))),
+        ExpressionPart::Keyword(symbol) if symbol == WILDCARD.symbol() => Some(SlotLabel::Wildcard),
+        _ => rank(part).map(SlotLabel::Ranked),
+    }
+}
+
+/// The rank a part writes: a whole-number literal that fits a `u32`.
+fn rank(part: &ExpressionPart<'_>) -> Option<u32> {
+    match *part {
+        ExpressionPart::Literal(KLiteral::Number(value))
+            if value >= 0.0 && value.fract() == 0.0 && value <= f64::from(u32::MAX) =>
+        {
+            Some(value as u32)
+        }
+        _ => None,
+    }
+}
+
 /// True iff the part at `index` is a type ascription — the second half of a `<name> :<Type>` pair,
 /// which collapses to one slot in the bucket key.
-fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> bool {
+pub(crate) fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> bool {
     parts.get(index).is_some_and(|p| {
         matches!(
             p.value,
@@ -309,12 +366,11 @@ fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> boo
     })
 }
 
-/// The head slot of an expression-shape definition: the part right after the keyword that opens
-/// the head — `ALL` on a quantified form, whose group sits between `EXPR` and the head, and `EXPR`
-/// otherwise. Read by position relative to that keyword rather than at a fixed index, so the bare
-/// form and the combined `LET <name> = FN EXPR …` statement share one extractor. Anything but a
-/// parenthesized group there is no head, so it keys no bucket.
-fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
+/// The run an `EXPR` statement's head quote holds — a definition's, a bodyless head's or a bucket
+/// declaration's. Read through the entry's [`Role::Head`] slot rather than at a fixed index, so the
+/// bare form and the combined `LET <name> = FN EXPR …` statement share one extractor. Anything but
+/// a quote there is no head, so it keys no bucket.
+fn head_run<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
     let form = expr.cache().builtin_shape()?;
     let (_, head) = form
         .roles()

@@ -88,7 +88,7 @@ impl SymbolInterner {
     }
 
     /// Record `text` under `symbol`, the digest the caller already holds. The one write door the
-    /// three public ones funnel through: a caller that classified the text has minted its digest
+    /// public ones funnel through: a caller that classified the text has minted its digest
     /// already, so the recording costs a map lookup and no second hash.
     fn record_text(&self, symbol: Symbol, text: &str) {
         let mut texts = self.texts.borrow_mut();
@@ -381,6 +381,59 @@ impl BinderSymbol {
             BinderSymbol::Value(_) => BindKind::Value,
             BinderSymbol::Type(_) => BindKind::Type,
         }
+    }
+}
+
+/// A **bucket key's** identity: a digest of its run of keywords and slots, so `LOG _` and a call
+/// spelling `LOG` beside one argument arrive at the same symbol. The run is digested as symbol bits,
+/// not text, so minting one needs no interner; [`SymbolInterner::record_key`] records the spelling
+/// (`LOG _`) where one is written, for a diagnostic or a rendered type naming it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct KeySymbol(Symbol);
+
+impl KeySymbol {
+    /// The key a run spells: each keyword's symbol, `None` at each slot. Tagged apart from a
+    /// token's own digest, so no key's bits are a name's.
+    pub fn of(run: impl IntoIterator<Item = Option<KeywordSymbol>>) -> KeySymbol {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"key");
+        for element in run {
+            match element {
+                Some(keyword) => hasher
+                    .update(&[1])
+                    .update(&keyword.symbol().0.to_le_bytes()),
+                None => hasher.update(&[0]),
+            };
+        }
+        KeySymbol(Symbol::of_hash(hasher.finalize()))
+    }
+
+    /// The raw digest.
+    pub fn symbol(self) -> Symbol {
+        self.0
+    }
+}
+
+impl SymbolInterner {
+    /// Mint the key `run` spells and record its spelling — each keyword's recorded text, `_` at a
+    /// slot, one space apart — so a rendering of the key reads as it is written.
+    pub fn record_key(
+        &self,
+        run: impl IntoIterator<Item = Option<KeywordSymbol>> + Clone,
+    ) -> KeySymbol {
+        let key = KeySymbol::of(run.clone());
+        let mut text = String::new();
+        for (index, element) in run.into_iter().enumerate() {
+            if index > 0 {
+                text.push(' ');
+            }
+            match element {
+                Some(keyword) => text.push_str(&self.render(keyword.symbol())),
+                None => text.push_str(WILDCARD.text()),
+            }
+        }
+        self.record_text(key.symbol(), &text);
+        key
     }
 }
 

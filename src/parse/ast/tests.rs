@@ -471,6 +471,8 @@ fn a_quote_is_typed_by_its_body_as_written() {
         ("#(TYPE Carrier)", Kind::DECLARATION),
         ("#(TYPE (Carrier UNDER Number))", Kind::DECLARATION),
         ("#(EXPR #(FOO _ :Number) -> Number)", Kind::DECLARATION),
+        // A bucket declaration ranks a bucket and declares no member.
+        ("#(EXPR #(MOVE 2 TO 1))", Kind::EXPRESSION),
     ];
     let program = program_storage();
     let symbols = SymbolInterner::new();

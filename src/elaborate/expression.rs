@@ -2,14 +2,14 @@
 //! the handles its parts elaborate to.
 
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::builtin_shapes::binder::{needed_name, needing, quantifier_entries};
+use crate::parse::builtin_shapes::binder::{SlotLabel, needed_name, needing, quantifier_entries};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_name};
+use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, GroupIntern, KType, NodeSchema, TypeNode, TypeRegistry,
-    constructor_param_names, meet,
+    constructor_param_names, dense_classes, meet,
 };
 use crate::values::{KnottedFamily, Value};
 
@@ -538,8 +538,8 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let run = run.reference();
         let mut params = BumpVec::with_capacity_in(run.parts.len() / 2, self.scratch);
         walk_head(run, unsupported, |element| {
-            if let HeadElement::Slot(name, slot) = element {
-                params.push((name.ok_or(unsupported)?, self.part(slot, groups)?));
+            if let HeadElement::Slot(label, slot) = element {
+                params.push((label.name().ok_or(unsupported)?, self.part(slot, groups)?));
             }
             Ok(())
         })?;
@@ -550,7 +550,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
     }
 
     /// `EXPR [FOR ALL <names>] <head> -> <return>`: the head's keywords and typed slots, under a
-    /// group of its own.
+    /// group of its own, ranked by the integers a signature member writes in its slots' places.
     pub(super) fn shape(
         &self,
         group: &QuantifierGroup<'_>,
@@ -571,17 +571,22 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         };
         let run = run.reference();
         let mut elements = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
+        let mut ranks = BumpVec::with_capacity_in(run.parts.len() / 2, self.scratch);
         walk_head(run, unsupported, |element| {
             elements.push(match element {
                 HeadElement::Keyword(symbol) => DispatchTokenElement::Keyword(symbol),
-                HeadElement::Slot(_, slot) => DispatchTokenElement::Slot(self.part(slot, &own)?),
+                HeadElement::Slot(label, slot) => {
+                    ranks.push(label.rank());
+                    DispatchTokenElement::Slot(self.part(slot, &own)?)
+                }
             });
             Ok(())
         })?;
+        let classes = dense_classes(self.scratch, &ranks);
         let ret = self.part(ret, &own)?;
         Ok(self
             .types
-            .shape_type(self.scratch, &group.names, &elements, &[], ret)
+            .shape_type(self.scratch, &group.names, &elements, classes, ret)
             .handle)
     }
 
@@ -596,7 +601,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
     ) -> Result<(), Elaboration> {
         let mut index = 0;
         while index < run.parts.len() {
-            let Some(Some(name)) = pair_name(run, index) else {
+            let Some(SlotLabel::Named(name)) = pair_label(run, index) else {
                 return Err(Elaboration::Unsupported { site });
             };
             field(name, self.part(&run.parts[index + 1].value, groups)?)?;
@@ -610,11 +615,11 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
 #[derive(Clone, Copy)]
 pub(super) enum HeadElement<'p, 'graph> {
     Keyword(KeywordSymbol),
-    /// A `<name> :<Type>` pair: its name, `None` for `_`, and its type part.
-    Slot(Option<BinderSymbol>, &'p ExpressionPart<'graph>),
+    /// A `<label> :<Type>` pair: its label — a name, `_`, or a rank — and its type part.
+    Slot(SlotLabel, &'p ExpressionPart<'graph>),
 }
 
-/// Hand each keyword and `<name> :<Type>` pair of an `EXPR` head's `run` to `each`, in written
+/// Hand each keyword and `<label> :<Type>` pair of an `EXPR` head's `run` to `each`, in written
 /// order, or fail with `malformed` at the first part that is neither. The one walk every reader of
 /// a head shares: its shape, its function type, and the shape a definition registers.
 pub(super) fn walk_head<'p, 'graph, E>(
@@ -624,7 +629,7 @@ pub(super) fn walk_head<'p, 'graph, E>(
 ) -> Result<(), E> {
     let mut index = 0;
     while index < run.parts.len() {
-        match (&run.parts[index].value, pair_name(run, index)) {
+        match (&run.parts[index].value, pair_label(run, index)) {
             (_, Some(name)) => {
                 each(HeadElement::Slot(name, &run.parts[index + 1].value))?;
                 index += 2;

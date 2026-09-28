@@ -296,9 +296,12 @@ fn registered_shape(
         Head::Written(run) => walk_head(run, (), |element| {
             elements.push(match element {
                 HeadElement::Keyword(symbol) => DispatchTokenElement::Keyword(symbol),
-                HeadElement::Slot(name, _) => {
-                    slot(name.expect("`head_function` refused a `_` slot").symbol())
-                }
+                HeadElement::Slot(label, _) => slot(
+                    label
+                        .name()
+                        .expect("`head_function` refused a nameless slot")
+                        .symbol(),
+                ),
             });
             Ok(())
         })

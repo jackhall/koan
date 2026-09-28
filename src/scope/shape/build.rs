@@ -39,7 +39,7 @@ use super::super::builtins::Builtins;
 use super::super::channels::Channels;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::signature::{
-    body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_name,
+    body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_label,
     quantifier_bounds, quoted_body, signature_run,
 };
 use super::{
@@ -197,8 +197,8 @@ fn parameter_type<'graph>(
 ) -> Option<&'graph ExpressionPart<'graph>> {
     let mut index = 0;
     while index < run.parts.len() {
-        match pair_name(run, index) {
-            Some(declared) if declared == Some(name) => return Some(&run.parts[index + 1].value),
+        match pair_label(run, index) {
+            Some(label) if label.name() == Some(name) => return Some(&run.parts[index + 1].value),
             Some(_) => index += 2,
             None => index += 1,
         }
@@ -903,7 +903,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Result<(), ShapeError<'graph>> {
         let mut index = 0;
         while index < run.parts.len() {
-            if pair_name(run, index).is_some() {
+            if pair_label(run, index).is_some() {
                 self.walk_part(level, statement, &run.parts[index + 1].value, state)?;
                 index += 2;
             } else {

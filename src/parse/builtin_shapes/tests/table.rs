@@ -70,6 +70,7 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
         BuiltinShapeId::QuantifiedExpressionHead,
         &[(3, C), (4, Q), (6, B)],
     ),
+    (BuiltinShapeId::BucketDeclaration, &[(1, Q)]),
     (
         BuiltinShapeId::CombinedExpression,
         &[(1, B), (5, Q), (7, B), (9, Q)],

@@ -37,7 +37,7 @@ mod signature;
 pub(crate) mod tests;
 
 pub(crate) use shape::IMPLICIT;
-pub(crate) use signature::pair_name;
+pub(crate) use signature::pair_label;
 
 pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;

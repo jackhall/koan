@@ -12,7 +12,8 @@
 //! line's own body is what it quotes. A `$` or `\` is a mark: glued to a paren it wraps one
 //! keyworded use, and leading an atom it marks the name the atom starts with, so no line is led by
 //! one. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. Everything else is an
-//! atom, which [`super::atom`] classifies.
+//! atom, which [`super::atom`] classifies. The one fact lowering records beyond the tree is the
+//! spelling of each bucket key a `NEEDING` list names, since past the parse a key is its symbol.
 //!
 //! See [README.md](README.md) § The division of labour with `sexlex`.
 
@@ -23,7 +24,8 @@ use crate::memory::{ProgramBrand, collect};
 use crate::parse::ast::{
     ExpressionPart, KExpression, KLiteral, KeyElement, Mark, ProgramExpression,
 };
-use crate::parse::builtin_shapes::binder::admit_bare_type_slots;
+use crate::parse::builtin_shapes::KEYWORDS;
+use crate::parse::builtin_shapes::binder::{admit_bare_type_slots, needed_key};
 use crate::source::{FileId, SourceRef, Span, Spanned};
 use crate::symbols::{SymbolInterner, WILDCARD};
 
@@ -166,6 +168,19 @@ impl<'a, 's> Lower<'a, '_, 's> {
         })
     }
 
+    /// Record the spelling of each bucket key a `<kind> NEEDING #[…]` run lists, so a type naming
+    /// the key renders it as written (`LOG _`): past the parse, a key is its symbol alone.
+    fn record_needed_keys(&self, parts: &[Spanned<ExpressionPart<'a>>]) {
+        if let [_, needing, list] = parts
+            && matches!(needing.value, ExpressionPart::Keyword(symbol) if symbol == KEYWORDS.needing.symbol())
+            && let ExpressionPart::ListLiteral(quotes) = list.value
+        {
+            for key in quotes.iter().filter_map(needed_key) {
+                self.symbols.record_key(key.map(KeyElement::keyword));
+            }
+        }
+    }
+
     /// Walk a run of sibling items in order, emitting the parts they stand for. A sigil consumes
     /// the group after it, so the walk keeps a lookahead; adjacency reads the sibling before.
     fn lower_run<'i, I>(
@@ -228,6 +243,9 @@ impl<'a, 's> Lower<'a, '_, 's> {
                     self.push_part(context, &mut parts, part)?;
                 }
             }
+        }
+        if matches!(context, Context::Expression) {
+            self.record_needed_keys(&parts);
         }
         Ok(parts)
     }
