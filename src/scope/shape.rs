@@ -1,14 +1,21 @@
 //! The **shape**: one per body, built once into program storage and shared by every activation of
 //! that body.
 //!
-//! It holds the body's declared names as one two-channel run — value names first, type names
-//! after, each channel sorted by symbol and each name at its slot — every mention with its class
-//! and coordinate,
+//! It holds the body's declared names as one three-channel run — value names first, type names
+//! after, and each keyworded definition's registration last, each channel sorted by symbol and
+//! each entry at its slot — every mention with its class and coordinate, each bucket declaration's
+//! ranking and the ranking each registration carries, each keyworded use's candidate list,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
 //! components of the body's bindings, the shapes nested in it by site, the form node a callable's
 //! body sits in, the callable body each binder births, each `LET` binder's right-hand side, and
 //! each type binder's declaration node, and the order its units run in. [`build`] is the one
 //! builder every kind goes through.
+//!
+//! A **registration** is a binder no text names: the slot a definition's function is bound to
+//! under its bucket key. A keyworded use reaches it by key, through a [`CandidateList`] fixed where
+//! the shape is built — the builtin overloads at the key, then each registration visible to the
+//! use — and each registration in the list is resolved as an eager read at the use's statement, so
+//! captures, components and units treat it as they treat a name.
 //!
 //! A quote value's code is a [`ShapeKind::Code`] shape nested at the quote's site, built where the
 //! program loads. Its captures are its `$` names, bound where the quote is written, its open holes
@@ -27,9 +34,9 @@ use std::fmt;
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
-use crate::parse::{ExpressionPart, KExpression, Mark};
+use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
+use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredGroup, KType, TypeRegistry, display_name};
 use crate::values::Knotted;
 
@@ -41,7 +48,8 @@ mod build;
 
 pub(crate) use build::IMPLICIT;
 
-/// An index into an activation's slot run: value slots first, type slots after.
+/// An index into an activation's slot run: value slots first, type slots after, registration slots
+/// last.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Slot(pub(crate) u32);
 
@@ -49,7 +57,7 @@ pub struct Slot(pub(crate) u32);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct CaptureSlot(pub(crate) u32);
 
-/// An index into the builtin table: values first, types after.
+/// An index into the builtin table: values first, types after, overloads last.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct BuiltinIndex(pub(crate) u32);
 
@@ -147,6 +155,11 @@ impl Site {
         Site(std::ptr::from_ref(part) as usize)
     }
 
+    /// The site of a whole node — its parts run's address, which every copy of the node shares.
+    pub fn of_node(node: &KExpression<'_>) -> Site {
+        Site(node.parts.as_ptr() as usize)
+    }
+
     /// The site of `form`'s body part — where the shape enclosing `form` records the body nested in
     /// it — or `None` for a node whose builtin shape declares no body.
     pub fn of_body(form: &KExpression<'_>) -> Option<Site> {
@@ -169,6 +182,57 @@ pub struct Mention {
     pub at: Position,
     pub class: MentionClass,
     pub coordinate: Coordinate,
+}
+
+/// Which of a definition's bucket keys a registration is under: its only one, or for a `UNARY OP`,
+/// its unary key `⊕ _` or its binary key `_ ⊕ _`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Which {
+    Only,
+    Unary,
+    Binary,
+}
+
+/// One registration a body declares: a keyworded definition's function, bound at `slot`, under one
+/// of its bucket keys.
+#[derive(Clone, Copy, Debug)]
+pub struct Registration<'graph> {
+    pub slot: Slot,
+    pub key: KeySymbol,
+    /// The key as its keywords and slots.
+    pub elements: &'graph [KeyElement],
+    /// Each slot's dense priority class, in element order: the ranking of the declaration visible
+    /// where the definition is written, an operator's chaining, or written order.
+    pub classes: &'graph [u8],
+    pub which: Which,
+}
+
+/// A bucket declaration a body holds, `EXPR #(MOVE 2 TO 1)`: the ranking it gives its key, from
+/// the position it is written at. It binds nothing.
+#[derive(Clone, Copy, Debug)]
+pub struct Ranking<'graph> {
+    pub key: KeySymbol,
+    pub elements: &'graph [KeyElement],
+    pub at: Position,
+    pub classes: &'graph [u8],
+}
+
+/// One callable a keyworded use may select.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Candidate {
+    /// A builtin overload, or a registration read where the use resolves it.
+    One(Coordinate),
+}
+
+/// What a keyworded use may select, fixed where its shape is built: the builtin overloads at its
+/// key, in table order, then each registration at the key visible to it, the enclosing bodies
+/// innermost first. Every candidate carries one ranking, `classes`.
+#[derive(Clone, Copy, Debug)]
+pub struct CandidateList<'graph> {
+    pub key: KeySymbol,
+    pub elements: &'graph [KeyElement],
+    pub classes: &'graph [u8],
+    pub candidates: &'graph [Candidate],
 }
 
 /// The five kinds of body a shape describes.
@@ -290,6 +354,12 @@ pub struct BodyShape<'graph> {
     /// Each `EVAL` of a code parameter whose type needs names, by its operand's site, beside each
     /// needed name and where it resolves at the `EVAL`.
     offers: &'graph [(Site, &'graph [(BinderSymbol, Coordinate)])],
+    /// Each registration this body declares, by slot.
+    registrations: &'graph [Registration<'graph>],
+    /// Each bucket declaration this body holds, in statement order.
+    rankings: &'graph [Ranking<'graph>],
+    /// Each keyworded use's candidates, by the use's node site.
+    candidates: &'graph [(Site, CandidateList<'graph>)],
 }
 
 /// What a `MATCH` or `TRY` arm's block is to the expression shape holding it.
@@ -437,10 +507,11 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// The body the binder at `slot` births: `Some` for a binder whose right-hand side is a
-    /// callable form at its root (`LET f = FN …`), for a combined form (`LET f = FN EXPR …`,
-    /// `LET f = OP …`), and for a `MODULE` or `GROUP` binder, whose body shape is
-    /// [`ShapeKind::Module`] and carries no [`form`](Self::form); `None` for a data binder, a
-    /// parameter, and a body nested under anything else.
+    /// callable form at its root (`LET f = FN …`), for both binders of a combined form (`LET f =
+    /// FN EXPR …`, `LET f = OP …`) and a bare definition's registration, and for a `MODULE` or
+    /// `GROUP` binder, whose body shape is [`ShapeKind::Module`] and carries no
+    /// [`form`](Self::form); `None` for a data binder, a parameter, and a body nested under
+    /// anything else.
     pub fn births(&self, slot: Slot) -> Option<&'graph BodyShape<'graph>> {
         let index = self
             .births
@@ -499,6 +570,34 @@ impl<'graph> BodyShape<'graph> {
             .binary_search_by_key(&site, |(offered, _)| *offered)
             .map_or(&[], |index| self.offers[index].1)
     }
+
+    /// Every registration this body declares, by slot.
+    pub fn registrations(&self) -> &'graph [Registration<'graph>] {
+        self.registrations
+    }
+
+    /// The registration bound at `slot`, or `None` for a name's slot.
+    pub fn registration(&self, slot: Slot) -> Option<&'graph Registration<'graph>> {
+        let index = self
+            .registrations
+            .binary_search_by_key(&slot, |registration| registration.slot)
+            .ok()?;
+        Some(&self.registrations[index])
+    }
+
+    /// Every bucket declaration this body holds, in statement order.
+    pub fn rankings(&self) -> &'graph [Ranking<'graph>] {
+        self.rankings
+    }
+
+    /// The candidates of the keyworded use whose node sits at `site` ([`Site::of_node`]).
+    pub fn candidates(&self, site: Site) -> Option<&'graph CandidateList<'graph>> {
+        let index = self
+            .candidates
+            .binary_search_by_key(&site, |(use_site, _)| *use_site)
+            .ok()?;
+        Some(&self.candidates[index].1)
+    }
 }
 
 /// `name` read through `mark` at `at` over one body's declared names and captures: a local visible
@@ -543,9 +642,10 @@ pub enum ShapeError<'graph> {
         at: SourceRef,
     },
     /// A component containing an eager mention of one of its own members, found at the statement
-    /// of the member declared first.
+    /// of the member declared first: its named members, and the key of each registration in it.
     EagerCycle {
         members: &'graph [BinderSymbol],
+        definitions: &'graph [&'graph [KeyElement]],
         at: SourceRef,
     },
     /// A `$` or `\` mark at `at` that no quote value holds.
@@ -605,6 +705,29 @@ pub enum ShapeError<'graph> {
     },
     /// A value dict written with a `_` key, whose default has no reading yet.
     DictDefault { site: Site, at: SourceRef },
+    /// A definition or bucket declaration at the key of a builtin expression shape, which is
+    /// closed.
+    ClosedBucket {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
+    /// A definition or bucket declaration whose key spells no keyword.
+    NoKeyword { at: SourceRef },
+    /// A definition whose head ranks a slot, which only a bucket declaration may.
+    RankedDefinition { at: SourceRef },
+    /// A binder or bucket declaration that is not its statement's own expression.
+    NestedBinder { at: SourceRef },
+    /// Two rankings of one key that meet: a declaration or definition seeing another, or a
+    /// keyworded use seeing both.
+    RankingDisagrees {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
+    /// A keyworded use at a key with no builtin overload and no registration visible to it.
+    NoCandidate {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
 }
 
 /// Which part of a form a quote, or a container of quotes, was wanted for.
@@ -669,7 +792,13 @@ impl ShapeError<'_> {
             | ShapeError::Derived { at, .. }
             | ShapeError::Unquoted { at, .. }
             | ShapeError::Inadmissible { at, .. }
-            | ShapeError::DictDefault { at, .. } => *at,
+            | ShapeError::DictDefault { at, .. }
+            | ShapeError::ClosedBucket { at, .. }
+            | ShapeError::NoKeyword { at }
+            | ShapeError::RankedDefinition { at }
+            | ShapeError::NestedBinder { at }
+            | ShapeError::RankingDisagrees { at, .. }
+            | ShapeError::NoCandidate { at, .. } => *at,
         }
     }
 
@@ -713,10 +842,17 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
             ShapeError::Unbound { name: read, .. } => {
                 write!(f, "`{}` names no binding visible here", name(read))
             }
-            ShapeError::EagerCycle { members, .. } => {
+            ShapeError::EagerCycle {
+                members,
+                definitions,
+                ..
+            } => {
                 f.write_str("these bindings need each other's values before any of them exists:")?;
                 for member in members.iter() {
                     write!(f, " `{}`", name(member))?;
+                }
+                for key in definitions.iter() {
+                    write!(f, " `{}`", self.key(key))?;
                 }
                 Ok(())
             }
@@ -779,6 +915,59 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_> {
             ShapeError::DictDefault { .. } => {
                 f.write_str("a dict's `_` default is not supported yet")
             }
+            ShapeError::ClosedBucket { key, .. } => write!(
+                f,
+                "`{}` is a builtin expression shape, which no definition adds to",
+                self.key(key)
+            ),
+            ShapeError::NoKeyword { .. } => {
+                f.write_str("a definition's head must spell at least one keyword")
+            }
+            ShapeError::RankedDefinition { .. } => f.write_str(
+                "a definition's head ranks no slot; declare the ranking on its own: `EXPR #(…)`",
+            ),
+            ShapeError::NestedBinder { .. } => {
+                f.write_str("a binding must be its statement's own expression, not a part of one")
+            }
+            ShapeError::RankingDisagrees { key, .. } => {
+                write!(f, "`{}` is ranked two ways here", self.key(key))
+            }
+            ShapeError::NoCandidate { key, .. } => {
+                write!(f, "`{}` has no overload visible here", self.key(key))
+            }
         }
+    }
+}
+
+impl ShapeErrorDisplay<'_, '_> {
+    /// `key` spelled as it is written: its keywords, `_` at each slot.
+    fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
+        KeyDisplay {
+            key,
+            symbols: self.symbols,
+        }
+    }
+}
+
+/// A bucket key beside the interner its keywords render through.
+struct KeyDisplay<'k> {
+    key: &'k [KeyElement],
+    symbols: &'k SymbolInterner,
+}
+
+impl fmt::Display for KeyDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, element) in self.key.iter().enumerate() {
+            if index > 0 {
+                f.write_str(" ")?;
+            }
+            match element {
+                KeyElement::Keyword(keyword) => {
+                    write!(f, "{}", self.symbols.display(keyword.symbol()))?
+                }
+                KeyElement::Slot => f.write_str("_")?,
+            }
+        }
+        Ok(())
     }
 }

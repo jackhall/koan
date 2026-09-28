@@ -131,7 +131,7 @@ impl<'a> SlotLayout<'a> {
             .iter()
             .filter_map(|(binder, _)| match binder {
                 BinderSymbol::Value(name) => Some((*name, 0)),
-                BinderSymbol::Type(_) => None,
+                BinderSymbol::Type(_) | BinderSymbol::Registration(_) => None,
             })
             .collect();
         entries.extend(body.entries.iter().copied());
@@ -194,7 +194,7 @@ impl<'a> SlotLayout<'a> {
 fn binder_of(statement: &KExpression<'_>) -> Option<ValueSymbol> {
     match statement.statement_binder_plan()?.name {
         Some(BinderSymbol::Value(name)) => Some(name),
-        Some(BinderSymbol::Type(_)) | None => None,
+        Some(BinderSymbol::Type(_) | BinderSymbol::Registration(_)) | None => None,
     }
 }
 

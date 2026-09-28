@@ -4,6 +4,7 @@
 mod activation;
 mod boundary;
 mod code;
+mod dispatch;
 mod examples;
 mod groups;
 pub(crate) mod plan;
@@ -138,6 +139,13 @@ pub(super) const BUILTIN_VALUES: &[&str] = &["origin"];
 pub(super) const BUILTIN_TYPES: &[&str] =
     &["Number", "Str", "Bool", "Null", "Any", "Ring", "Expression"];
 
+/// The keys every suite's table holds an overload at: the generated plans' `ZZ`, `PRINT`, and the
+/// builtin operators.
+pub(super) const BUILTIN_KEYS: &[&str] = &[
+    "ZZ _", "ZZ _ _", "PRINT _", "_ + _", "_ - _", "_ * _", "_ / _", "_ < _", "_ <= _", "_ > _",
+    "_ >= _", "_ == _", "_ AND _", "NOT _", "| _", "& _", "_ | _", "_ & _",
+];
+
 pub(super) fn value_name(text: &str, symbols: &SymbolInterner) -> ValueSymbol {
     ValueSymbol::declared(text, symbols).expect("a value token")
 }
@@ -146,8 +154,8 @@ pub(super) fn type_name(text: &str, symbols: &SymbolInterner) -> TypeSymbol {
     TypeSymbol::declared(text, symbols).expect("a Type token")
 }
 
-/// The suites' builtin table: `origin = 0`, the scalar types and `Expression`, laid down in
-/// `writer`'s region.
+/// The suites' builtin table: `origin = 0`, the scalar types and `Expression`, and a `Null`
+/// overload at each of [`BUILTIN_KEYS`], laid down in `writer`'s region.
 pub(super) fn builtins<'graph, 'cell, X: Knotted>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
@@ -174,7 +182,11 @@ pub(super) fn builtins<'graph, 'cell, X: Knotted>(
             (type_name(name, symbols), value)
         })
         .collect();
-    Builtins::new(writer, fixture.scratch, &values, &types)
+    let overloads: Vec<_> = BUILTIN_KEYS
+        .iter()
+        .map(|text| (symbols.key(text).expect("a key"), Value::Null))
+        .collect();
+    Builtins::new(writer, fixture.scratch, &values, &types, &overloads)
 }
 
 /// The location [`unlocated`] writes, which no registered source has.
@@ -196,7 +208,15 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         },
         E::ShadowsBuiltin { name, .. } => E::ShadowsBuiltin { name, at },
         E::Unbound { name, site, .. } => E::Unbound { name, site, at },
-        E::EagerCycle { members, .. } => E::EagerCycle { members, at },
+        E::EagerCycle {
+            members,
+            definitions,
+            ..
+        } => E::EagerCycle {
+            members,
+            definitions,
+            at,
+        },
         E::MarkOutsideQuote { .. } => E::MarkOutsideQuote { at },
         E::Unsupported { form, .. } => E::Unsupported { form, at },
         E::Malformed { form, .. } => E::Malformed { form, at },
@@ -217,6 +237,12 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             at,
         },
         E::DictDefault { site, .. } => E::DictDefault { site, at },
+        E::ClosedBucket { key, .. } => E::ClosedBucket { key, at },
+        E::NoKeyword { .. } => E::NoKeyword { at },
+        E::RankedDefinition { .. } => E::RankedDefinition { at },
+        E::NestedBinder { .. } => E::NestedBinder { at },
+        E::RankingDisagrees { key, .. } => E::RankingDisagrees { key, at },
+        E::NoCandidate { key, .. } => E::NoCandidate { key, at },
     }
 }
 

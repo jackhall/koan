@@ -477,7 +477,7 @@ fn a_group_in_a_quoted_body_is_claimed_and_one_in_a_free_quote_is_not() {
         },
     );
     shaped(
-        &format!("LET q = #({group})\nLET r = (1 @ 2 @ 3)"),
+        &format!("LET q = #({group})\nOP #(@) OVER Number = #(left)\nLET r = (1 @ 2 @ 3)"),
         |_, _, shape| {
             assert!(shape.is_ok(), "a quote no builtin reads claims nothing");
         },

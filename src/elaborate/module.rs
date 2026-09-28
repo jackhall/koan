@@ -4,8 +4,8 @@
 //!
 //! Nothing here walks a value: a slot's type is the memo its value already carries, which the tie
 //! derived. A module's signature declares no abstract member — a body binds every name it
-//! declares — and its keyworded and operator channels are empty until
-//! [dispatch](../../roadmap/rewrite/dispatch.md) gives a bodyless definition a slot.
+//! declares — and its keyworded channel is empty until
+//! [dispatch](../../roadmap/rewrite/dispatch.md) reads a registration slot's registered shape.
 
 use crate::memory::BumpAllocator;
 use crate::scope::{ActivationView, ShapeKind};
@@ -32,6 +32,8 @@ pub fn self_signature<'graph, XF: KnottedFamily<'graph>>(
                 };
                 draft.insert_manifest(name, held.handle());
             }
+            // A registration names no member: its keyworded member is a shape, not a slot's name.
+            BinderSymbol::Registration(_) => {}
         }
     }
     // A `GROUP` body holds the group it declares, and that chaining is part of what the module is:

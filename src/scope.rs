@@ -1,8 +1,9 @@
 //! Koan's lexical environments: what a name means at the point it is read, in three tiers.
 //!
 //! - The [`BodyShape`] — one per body, built once into program storage — declares the body's value and
-//!   type names, classifies every mention eager or deferred, delimits the components its bindings
-//!   form, and resolves every name the body reads to a [`Coordinate`].
+//!   type names and its definitions' registrations, classifies every mention eager or deferred,
+//!   delimits the components its bindings form, resolves every name the body reads to a
+//!   [`Coordinate`], and every keyworded use to a [`CandidateList`] of them.
 //! - [`ClosureBindings`] — one run per callable, born from the enclosing activation through the
 //!   shape's capture layout: a value word per capture, or an edge into the callable's own knot.
 //! - An [`Activation`] — one per call or block entry, laid down in the frame's region: a pointer to
@@ -44,7 +45,8 @@ pub use builtins::Builtins;
 pub use closure::ClosureBindings;
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use shape::{
-    Arm, BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component,
-    ComponentIndex, Coordinate, Mention, MentionClass, Position, QuotedPart, ShapeError, ShapeKind,
-    Site, Slot, Target, Unit, UnitWork,
+    Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
+    CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Position,
+    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, Unit, UnitWork,
+    Which,
 };

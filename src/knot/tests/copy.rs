@@ -80,7 +80,8 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                     panic!("a callable crosses as a callable");
                 };
                 assert!(!ptr::eq(copied.node(), g.node()), "a copy is a new knot");
-                assert_eq!(copied.member().knot().len(), 2);
+                // `f`, its registration, and `g`.
+                assert_eq!(copied.member().knot().len(), 3);
                 assert_eq!(copied.member().index(), g.member().index());
                 assert_eq!(copied.ktype(), g.ktype());
                 assert_eq!(copied.weight(), g.weight());

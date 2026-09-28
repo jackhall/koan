@@ -340,6 +340,38 @@ pub(crate) fn slot_label(part: &ExpressionPart<'_>) -> Option<SlotLabel> {
     }
 }
 
+/// One element of a bucket declaration's head, `EXPR #(MOVE 2 TO _)`: a keyword, or a slot and its
+/// rank — an integer, or `_` for a slot ranked after every numbered one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DeclaredElement {
+    Keyword(KeywordSymbol),
+    Slot(RawRank),
+}
+
+impl DeclaredElement {
+    /// The key position this element holds.
+    pub(crate) fn key(self) -> KeyElement {
+        match self {
+            DeclaredElement::Keyword(symbol) => KeyElement::Keyword(symbol),
+            DeclaredElement::Slot(_) => KeyElement::Slot,
+        }
+    }
+}
+
+/// The element one part of a bucket declaration's head writes, or `None` for a part a declaration
+/// cannot hold: a declaration spells no names and no types.
+pub(crate) fn declared_element(part: &ExpressionPart<'_>) -> Option<DeclaredElement> {
+    match slot_label(part) {
+        Some(SlotLabel::Wildcard) => Some(DeclaredElement::Slot(RawRank::Unnumbered)),
+        Some(SlotLabel::Ranked(rank)) => Some(DeclaredElement::Slot(RawRank::Numbered(rank))),
+        Some(SlotLabel::Named(_)) => None,
+        None => match *part {
+            ExpressionPart::Keyword(symbol) => Some(DeclaredElement::Keyword(symbol)),
+            _ => None,
+        },
+    }
+}
+
 /// The rank a part writes: a whole-number literal that fits a `u32`.
 fn rank(part: &ExpressionPart<'_>) -> Option<u32> {
     match *part {
@@ -370,7 +402,7 @@ pub(crate) fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: us
 /// declaration's. Read through the entry's [`Role::Head`] slot rather than at a fixed index, so the
 /// bare form and the combined `LET <name> = FN EXPR …` statement share one extractor. Anything but
 /// a quote there is no head, so it keys no bucket.
-fn head_run<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
+pub(crate) fn head_run<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
     let form = expr.cache().builtin_shape()?;
     let (_, head) = form
         .roles()

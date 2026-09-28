@@ -214,11 +214,13 @@ where
         Self::laid_down(writer, shape, closure, builtins, None, None)
     }
 
-    /// A fresh activation of the block shape `shape` beside `enclosing`, every slot empty.
+    /// A fresh activation of the block shape `shape` beside the resident view `enclosing`, every
+    /// slot empty. A view is all it needs, so an evaluation holding only a view can lay a block
+    /// down.
     pub fn of_block(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
-        enclosing: &'cell Activation<'graph, 'cell, XF>,
+        enclosing: &'cell ActivationView<'graph, 'cell, XF>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Block);
         Self::laid_down(
@@ -226,7 +228,7 @@ where
             shape,
             ClosureBindings::empty(),
             enclosing.builtins,
-            Some(&enclosing.view),
+            Some(enclosing),
             enclosing.callable,
         )
     }

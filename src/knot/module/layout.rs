@@ -51,6 +51,8 @@ pub fn member_index(
         BinderSymbol::Type(name) => {
             rank(&type_members(schema, scratch), name).map(|rank| value_count(schema) + rank)
         }
+        // A signature names a keyworded member by its shape, never by a slot's name.
+        BinderSymbol::Registration(_) => None,
     }
 }
 

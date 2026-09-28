@@ -201,7 +201,7 @@ impl Statement {
 pub(super) enum BuiltinShape {
     /// `LET x = <carriers>`.
     Let(Vec<Carrier>),
-    /// `LET x = FN EXPR #(ZZ <signature>) -> <returns> = #<body>`.
+    /// `LET x = (FN :{<signature>} -> <returns> = #<body>)`.
     Function(Callable),
     /// `UNION Tx = #{<tag>: <read> …}`, every read deferred.
     Union(Vec<Read>),
@@ -1366,17 +1366,21 @@ impl<'p> Renderer<'p> {
             BuiltinShape::Function(callable) => {
                 self.text("LET ");
                 self.other(statement.binder.expect("a function binds"));
-                self.text(" = FN EXPR #(ZZ");
-                for (parameter, ty) in callable.body.parameters.iter().zip(&callable.types) {
-                    self.text(" ");
+                self.text(" = (FN :{");
+                let parameters = callable.body.parameters.iter().zip(&callable.types);
+                for (index, (parameter, ty)) in parameters.enumerate() {
+                    if index > 0 {
+                        self.text(", ");
+                    }
                     self.other(*parameter);
                     self.text(" :");
                     self.read(ty);
                 }
-                self.text(") -> ");
+                self.text("} -> ");
                 self.read(&callable.returns);
                 self.text(" = #");
                 self.body(&callable.body);
+                self.text(")");
             }
             BuiltinShape::Union(reads) => {
                 self.text("UNION ");
@@ -1447,13 +1451,19 @@ impl<'p> Renderer<'p> {
         }
     }
 
+    /// A call of the builtin `ZZ` over each argument in turn, nested — `(ZZ a (ZZ b (ZZ c)))` — so
+    /// every call takes one argument or two, the arities the suites' table holds `ZZ` at.
     fn call(&mut self, arguments: &[&'p Carrier]) {
-        self.text("(ZZ");
-        for &argument in arguments {
-            self.text(" ");
+        for (index, &argument) in arguments.iter().enumerate() {
+            if index > 0 {
+                self.text(" ");
+            }
+            self.text("(ZZ ");
             self.eager(argument);
         }
-        self.text(")");
+        for _ in arguments {
+            self.text(")");
+        }
     }
 
     fn eager(&mut self, carrier: &'p Carrier) {

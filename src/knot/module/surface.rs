@@ -69,6 +69,9 @@ pub fn surface<'graph, 'cell>(
                 kinds += 1;
                 layout::value_count(&schema) + kinds - 1
             }
+            BinderSymbol::Registration(_) => {
+                unreachable!("a registration is declared at a statement, never as a parameter")
+            }
         };
         if layout::member_index(&schema, scratch, name) != Some(index) {
             return Err(Unsurfaceable::Unnamed { name });

@@ -356,6 +356,9 @@ fn frame<'graph, 'here>(
                 };
                 Value::Type(TypeValue::new(writer, solved, types))
             }
+            BinderSymbol::Registration(_) => {
+                unreachable!("a registration is declared at a statement, never as a parameter")
+            }
         };
         activation.bind(slot, value).ok()?;
     }

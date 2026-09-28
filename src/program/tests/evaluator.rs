@@ -73,7 +73,19 @@ impl Language for Mini {
             (name, Value::Type(TypeValue::new(writer, handle, types)))
         })
         .collect();
-        Builtins::new(writer, scratch, &[(origin, Value::Number(0.0))], &scalars)
+        // Its keyworded calls are no builtin shapes, so each key holds an overload for the shape
+        // builder to find; the evaluator reads the keyword itself and never the overload.
+        let overloads: Vec<_> = ["WHEN _ THEN _ ELSE _", "_ MINUS _", "FIRST _"]
+            .into_iter()
+            .map(|text| (symbols.key(text).expect("a key"), Value::Null))
+            .collect();
+        Builtins::new(
+            writer,
+            scratch,
+            &[(origin, Value::Number(0.0))],
+            &scalars,
+            &overloads,
+        )
     }
 
     fn evaluator<'graph>() -> NativeStep<'graph, KBundle> {

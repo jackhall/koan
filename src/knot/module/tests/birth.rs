@@ -59,7 +59,7 @@ LET outside = 1";
                 .iter()
                 .filter_map(|name| match name {
                     BinderSymbol::Value(name) => Some(*name),
-                    BinderSymbol::Type(_) => None,
+                    _ => None,
                 })
                 .collect();
             assert_eq!(values.len(), 2, "the two value names take the first slots");
@@ -91,7 +91,7 @@ LET outside = 1";
                     schema.value_slots,
                     match fixture.name("zero") {
                         BinderSymbol::Value(name) => name,
-                        BinderSymbol::Type(_) => unreachable!("`zero` is a value name"),
+                        _ => unreachable!("`zero` is a value name"),
                     }
                 ),
                 Some(KType::NUMBER),
@@ -140,7 +140,7 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = #(greetin
                     schema.value_slots,
                     match fixture.name("inner") {
                         BinderSymbol::Value(name) => name,
-                        BinderSymbol::Type(_) => unreachable!("`inner` is a value name"),
+                        _ => unreachable!("`inner` is a value name"),
                     }
                 ),
                 Some(inner.ktype()),
@@ -157,7 +157,8 @@ fn a_group_binder_births_a_module_the_same_way() {
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let g = module(fixture, activation, "g");
-            assert_eq!(g.module().expect("a module node").members().len(), 1);
+            // `step`, and the `OP`'s registration: a bare definition is a member too.
+            assert_eq!(g.module().expect("a module node").members().len(), 2);
         })
     });
 }

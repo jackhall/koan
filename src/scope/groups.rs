@@ -342,20 +342,26 @@ impl<'graph> GroupFrame<'graph> {
     /// signature's bodyless `GROUP` claims nothing and reaches a body only as a held group, so a
     /// declaration under a `USING` that surfaces one is admitted by the frame alone.
     pub fn pairwise(&self, symbol: KeywordSymbol) -> bool {
+        matches!(self.mode(symbol), Some(ReductionMode::Pairwise { .. }))
+    }
+
+    /// How a binary run of `symbol` reduces, read as [`pairwise`](Self::pairwise) reads it:
+    /// equality's own mode, its group's wherever that group is declared, or `None` for a symbol no
+    /// group covers — a unary operator's among them.
+    pub(crate) fn mode(&self, symbol: KeywordSymbol) -> Option<ReductionMode> {
         if is_equality(symbol) {
-            return true;
+            return Some(equality_mode());
         }
-        let mode = match BuiltinGroup::of(symbol) {
+        Some(match BuiltinGroup::of(symbol) {
             Some(group) => group.mode(),
             None => match self.visible(symbol) {
                 Some(group) => group.mode,
                 None => match self.claims.get(symbol) {
                     Some(Claim::Group(group)) => group.mode,
-                    Some(Claim::Unary) | None => return false,
+                    Some(Claim::Unary) | None => return None,
                 },
             },
-        };
-        matches!(mode, ReductionMode::Pairwise { .. })
+        })
     }
 }
 

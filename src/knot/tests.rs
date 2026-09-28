@@ -94,7 +94,8 @@ impl<'graph> Fixture<'_, 'graph> {
         BinderSymbol::declared(text, self.symbols).expect("a binder name")
     }
 
-    /// `origin = 0` and the scalar types, laid down in `writer`'s region.
+    /// `origin = 0`, the scalar types, and a `Null` overload at the generated plans' `ZZ _` and
+    /// `ZZ _ _`, laid down in `writer`'s region.
     pub fn builtins<'cell>(
         &self,
         writer: Writer<'cell>,
@@ -122,6 +123,10 @@ impl<'graph> Fixture<'_, 'graph> {
             self.scratch,
             &[(origin, Value::Number(0.0))],
             &types,
+            &[
+                (self.symbols.key("ZZ _").expect("a key"), Value::Null),
+                (self.symbols.key("ZZ _ _").expect("a key"), Value::Null),
+            ],
         )
     }
 
@@ -170,11 +175,11 @@ impl<'graph> Fixture<'_, 'graph> {
         component: &Component<'graph>,
     ) {
         let shape = activation.shape();
-        let values = component
+        let declares_types = component
             .members
             .iter()
-            .all(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Value(_)));
-        if !values {
+            .any(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Type(_)));
+        if declares_types {
             let handles = type_declarations(component, activation, self.types, self.scratch)
                 .expect("the component declares its types");
             for (slot, handle) in component.members.iter().zip(handles) {

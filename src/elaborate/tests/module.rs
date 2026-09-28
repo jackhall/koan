@@ -136,6 +136,11 @@ fn a_group_bodys_self_signature_carries_the_chaining_it_declares() {
         nulls,
         |program| {
             let body = program.module_body("g");
+            // Each definition's registration is a slot of the body; the chaining is what is read.
+            for registration in body.shape().registrations() {
+                body.bind(registration.slot, Value::Null)
+                    .expect("an empty slot binds");
+            }
             let handle = crate::elaborate::self_signature(body, program.types, program.scratch);
             let TypeNode::Signature { schema, .. } = program.types.node(handle) else {
                 panic!("a self-signature is a Signature node");

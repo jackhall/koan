@@ -73,6 +73,7 @@ fn synthetic<'graph, 'cell>(
             *next += 1.0;
             Value::Number(*next)
         }
+        BinderSymbol::Registration(_) => unreachable!("the plans declare no registration"),
     }
 }
 

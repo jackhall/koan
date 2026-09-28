@@ -127,8 +127,8 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::RecordLiteral(_) => PartClass::RecordLiteral,
             ExpressionPart::Literal(_) => PartClass::Literal,
             ExpressionPart::QuotedExpression(_) => PartClass::QuotedExpression,
-            ExpressionPart::MarkedName(_, BinderSymbol::Value(_)) => PartClass::Identifier,
             ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => PartClass::Type,
+            ExpressionPart::MarkedName(..) => PartClass::Identifier,
             ExpressionPart::MarkedUse(..) => PartClass::Expression,
         }
     }
@@ -146,10 +146,11 @@ impl<'a> ExpressionPart<'a> {
     /// is a value, and a keyword fills no slot. A bare group is code of its own kind, as a quote is.
     pub fn code_kind(&self) -> Option<KType> {
         match self {
-            ExpressionPart::Identifier(_)
-            | ExpressionPart::MarkedName(_, BinderSymbol::Value(_)) => Some(KType::IDENTIFIER),
             ExpressionPart::Type(_) | ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => {
                 Some(KType::TYPE_NAME_TOKEN)
+            }
+            ExpressionPart::Identifier(_) | ExpressionPart::MarkedName(..) => {
+                Some(KType::IDENTIFIER)
             }
             ExpressionPart::Expression(node) | ExpressionPart::QuotedExpression(node) => {
                 Some(node.reference().code_kind())
@@ -494,11 +495,10 @@ impl<'a> KExpression<'a> {
         };
         match only.value {
             ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => KType::LITERAL,
-            ExpressionPart::Identifier(_)
-            | ExpressionPart::MarkedName(_, BinderSymbol::Value(_)) => KType::IDENTIFIER,
             ExpressionPart::Type(_) | ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => {
                 KType::TYPE_NAME_TOKEN
             }
+            ExpressionPart::Identifier(_) | ExpressionPart::MarkedName(..) => KType::IDENTIFIER,
             ExpressionPart::Keyword(_) => KType::KEYWORD,
             ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
             ExpressionPart::RecordType(_) => KType::RECORD_TYPE,

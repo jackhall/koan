@@ -188,7 +188,7 @@ pub(super) fn with_program<R>(
                     (name, Value::Type(TypeValue::new(writer, *handle, &types)))
                 })
                 .collect();
-            let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table);
+            let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table, &[]);
             let shape = BodyShape::of_program(program, &lines, builtins, &types, &scratch)
                 .unwrap_or_else(|error| {
                     panic!("`{source}` shapes: {}", error.display(&symbols, &types))

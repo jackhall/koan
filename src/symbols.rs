@@ -333,18 +333,21 @@ impl Borrow<Symbol> for TypeSymbol {
     }
 }
 
-/// A **bindable** name: the two classes a declaration can actually install under. Keywords are
-/// fixed syntax and bind to nothing, so they are not a variant — [`declared`](Self::declared) of
-/// keyword text is `None`.
+/// A **bindable** name: the two classes a declaration can install under by name, and the
+/// registration a keyworded definition installs under its bucket key. Keywords are fixed syntax and
+/// bind to nothing, so they are not a variant — [`declared`](Self::declared) of keyword text is
+/// `None`.
 ///
-/// This is the currency of a seam that accepts either class and routes on the answer: an FN
-/// parameter name, a placeholder install, a member probe. The variant *is* the
-/// [`BindKind`], so a site carrying one threads no separate kind
-/// tag beside the name.
+/// This is the currency of a seam that accepts any class and routes on the answer: an FN
+/// parameter name, a slot of a body's shape, a capture. The variant is the channel, so a site
+/// carrying one threads no separate kind tag beside the name.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub enum BinderSymbol {
     Value(ValueSymbol),
     Type(TypeSymbol),
+    /// A registration slot, which no text spells: a keyworded use reaches it through its bucket
+    /// key.
+    Registration(RegistrationSymbol),
 }
 
 impl BinderSymbol {
@@ -372,15 +375,44 @@ impl BinderSymbol {
         match self {
             BinderSymbol::Value(name) => name.symbol(),
             BinderSymbol::Type(name) => name.symbol(),
+            BinderSymbol::Registration(registration) => registration.symbol(),
         }
     }
 
-    /// Which side of the value/type partition this name binds on.
+    /// Which side of the value/type partition this name binds on. A registration binds a function,
+    /// which is a value.
     pub fn bind_kind(self) -> BindKind {
         match self {
-            BinderSymbol::Value(_) => BindKind::Value,
+            BinderSymbol::Value(_) | BinderSymbol::Registration(_) => BindKind::Value,
             BinderSymbol::Type(_) => BindKind::Type,
         }
+    }
+}
+
+/// One registration's identity: the slot a keyworded definition's function is bound to, under one
+/// of its bucket keys. No text spells it, and it is distinct on any chain of enclosing bodies: it
+/// digests the key, the depth of the body declaring it, the statement's position there, and which
+/// of the statement's keys it is. A diagnostic names the key, never this.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct RegistrationSymbol(Symbol);
+
+impl RegistrationSymbol {
+    /// The registration under `key` that the statement at `position` of a body `depth` bodies deep
+    /// declares as its key number `which`.
+    pub fn of(key: KeySymbol, depth: u32, position: u32, which: u8) -> RegistrationSymbol {
+        let mut hasher = blake3::Hasher::new();
+        hasher
+            .update(b"registration")
+            .update(&key.symbol().0.to_le_bytes())
+            .update(&depth.to_le_bytes())
+            .update(&position.to_le_bytes())
+            .update(&[which]);
+        RegistrationSymbol(Symbol::of_hash(hasher.finalize()))
+    }
+
+    /// The raw digest.
+    pub fn symbol(self) -> Symbol {
+        self.0
     }
 }
 
@@ -434,6 +466,21 @@ impl SymbolInterner {
         }
         self.record_text(key.symbol(), &text);
         key
+    }
+
+    /// The key `text` spells — keywords and a `_` per slot, one space apart, `PRINT _` — minted
+    /// and recorded as [`record_key`](Self::record_key) does, each keyword declared as it goes.
+    /// `None` when a word is neither a keyword nor `_`. How a builtin table names the key of an
+    /// overload.
+    pub fn key(&self, text: &str) -> Option<KeySymbol> {
+        let mut run = Vec::new();
+        for word in text.split(' ') {
+            run.push(match word {
+                "_" => None,
+                word => Some(KeywordSymbol::declared(word, self)?),
+            });
+        }
+        Some(self.record_key(run.iter().copied()))
     }
 }
 

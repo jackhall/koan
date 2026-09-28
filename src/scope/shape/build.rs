@@ -1,14 +1,22 @@
 //! The **shape builder**: one recursive walk that every kind of shape goes through.
 //!
 //! A body is built in four passes over a draft kept in scratch. The binders pass lays out the
-//! declared names and refuses a repeated name or a builtin's. The mention pass walks each statement
-//! from its root, carrying the class a mention met there would take, resolving each mention as it
-//! is met and building each nested body or arm as a draft of its own on top of the chain of
-//! enclosing drafts. The components pass condenses the bindings' reference graph, refuses a
-//! component with an eager internal mention, turns a nested callable's capture of a fellow member
-//! into a knot edge, and seals the nested drafts into program storage. The units pass orders the
-//! body's units — its components and the statements that bind nothing — so each follows every unit
-//! it reads and independent ones come out as written; the runner performs them in that order.
+//! declared names and refuses a repeated name or a builtin's, then lays out each definition's
+//! registrations and reads each bucket declaration's ranking, ranking each registration by its
+//! chaining or by the declaration it sees and refusing two rankings of one key that meet. The
+//! mention pass walks each statement from its root, carrying the class a mention met there would
+//! take, resolving each mention and each keyworded use's candidates as it is met and building each
+//! nested body or arm as a draft of its own on top of the chain of enclosing drafts; a binder or
+//! declaration it meets anywhere but at its statement's root is refused. The components pass
+//! condenses the bindings' reference graph, with every binder of one statement forced into one
+//! component, refuses a component with an eager internal mention, turns a nested callable's capture
+//! of a fellow member into a knot edge, and seals the nested drafts into program storage. The units
+//! pass orders the body's units — its components and the statements that bind nothing — so each
+//! follows every unit it reads and independent ones come out as written; the runner performs them
+//! in that order.
+//!
+//! A keyworded node inside a type expression is a type the elaborator reads, not a use, so the walk
+//! counts the type expressions it is inside and resolves no candidates there.
 //!
 //! A callable body records the form node holding it, a binder whose right-hand side is a callable
 //! form at its root — or a combined form that is one, or a `MODULE`/`GROUP` binder — records the
@@ -26,16 +34,21 @@ use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, bump_table, collect, resident,
     strongly_connected_components,
 };
-use crate::parse::builtin_shapes::binder::{bounded, needed_name, needing};
-use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement};
-use crate::parse::{ExpressionPart, KExpression, Mark};
+use crate::parse::builtin_shapes::binder::{
+    BinderSurface, DeclaredElement, SlotLabel, bounded, declared_element, head_run, needed_name,
+    needing, slot_label,
+};
+use crate::parse::builtin_shapes::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
+use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, StaticName, TypeSymbol, ValueSymbol};
+use crate::symbols::{
+    BinderSymbol, KeySymbol, RegistrationSymbol, StaticName, TypeSymbol, ValueSymbol,
+};
 use crate::values::{Knotted, admits_part};
 
-use crate::type_lattice::{DeclaredGroup, KType, TypeRegistry};
+use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, TypeRegistry, dense_classes};
 
-use super::super::builtins::Builtins;
+use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::signature::{
@@ -43,9 +56,10 @@ use super::super::signature::{
     quantifier_bounds, quoted_body, signature_run,
 };
 use super::{
-    Arm, BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component,
-    ComponentIndex, Coordinate, Mention, MentionClass, Position, QuotedPart, ShapeError, ShapeKind,
-    Site, Slot, Target, Unit, UnitWork, resolve_here,
+    Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
+    CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Position,
+    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, Unit, UnitWork,
+    Which, resolve_here,
 };
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Reading, Role};
 
@@ -82,12 +96,11 @@ pub(super) fn program<'graph, X: Knotted>(
     types: &TypeRegistry<'graph>,
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
-    let lookup = |name| builtins.lookup(name);
     // Every claim the program makes over an operator symbol is collected before the first draft, so
     // how a symbol chains never depends on where its declarations sit.
     let claims = groups::claims(brand, scratch, statements.iter(), None)?;
     let frame = resident(brand.writer(), GroupFrame::new(&[], None, claims));
-    let mut builder = Builder::new(brand, scratch, &lookup, types, claims, frame);
+    let mut builder = Builder::new(brand, scratch, builtins, types, claims, frame);
     let statements = statements
         .iter()
         .enumerate()
@@ -294,28 +307,130 @@ struct Reader {
 }
 
 /// What a nested body is to the statement it is entered from: whether its last statement is in
-/// tail position, and, for a `MATCH` or `TRY` arm, the arm's facts.
+/// tail position, for a `MATCH` or `TRY` arm the arm's facts, and whether it is a `USING … SCOPE`
+/// body.
 #[derive(Clone, Copy)]
 struct Entry<'graph> {
     tail: bool,
     arm: Option<Arm<'graph>>,
+    surfaced: bool,
 }
 
 impl Entry<'_> {
-    /// A body that is no tail and no arm: the program, a module, a `USING` or synthesized block.
+    /// A body that is no tail and no arm: the program, a module, a synthesized block.
     const PLAIN: Entry<'static> = Entry {
         tail: false,
         arm: None,
+        surfaced: false,
     };
 
     /// A callable's body, whose last statement is its value.
     const CALLABLE: Entry<'static> = Entry {
         tail: true,
         arm: None,
+        surfaced: false,
+    };
+
+    /// A `USING … SCOPE` body.
+    const SURFACED: Entry<'static> = Entry {
+        tail: false,
+        arm: None,
+        surfaced: true,
     };
 }
 
-type Lookup<'e> = &'e dyn Fn(BinderSymbol) -> Option<BuiltinIndex>;
+/// The slots one statement binds: its name's first, then each registration's — at most three, a
+/// combined `UNARY OP`'s name and two keys.
+#[derive(Clone, Copy)]
+struct Binders {
+    slots: [Slot; 3],
+    len: u8,
+}
+
+impl Binders {
+    const NONE: Binders = Binders {
+        slots: [Slot(0); 3],
+        len: 0,
+    };
+
+    fn push(&mut self, slot: Slot) {
+        self.slots[self.len as usize] = slot;
+        self.len += 1;
+    }
+
+    fn iter(&self) -> impl Iterator<Item = Slot> + '_ {
+        self.slots[..self.len as usize].iter().copied()
+    }
+
+    /// The statement's first binder: its name's slot when it has one. Every binder of a statement
+    /// is one component, so this one stands for all of them.
+    fn first(&self) -> Option<Slot> {
+        self.iter().next()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+/// One registration a draft declares, before its slot is known.
+#[derive(Clone, Copy)]
+struct Registered<'graph> {
+    symbol: RegistrationSymbol,
+    at: Position,
+    key: KeySymbol,
+    elements: &'graph [KeyElement],
+    classes: &'graph [u8],
+    which: Which,
+}
+
+/// A ranking some statement gives a key, as a statement or a use at the same key sees it.
+#[derive(Clone, Copy)]
+enum Seen<'a, 'graph> {
+    Declaration(&'a Ranking<'graph>),
+    Registration(&'a Registered<'graph>),
+}
+
+impl<'graph> Seen<'_, 'graph> {
+    fn classes(self) -> &'graph [u8] {
+        match self {
+            Seen::Declaration(ranking) => ranking.classes,
+            Seen::Registration(registered) => registered.classes,
+        }
+    }
+}
+
+/// A draft's kind and keyed entries so far, beside the position a statement of it reads at.
+type Own<'a, 'graph> = (
+    ShapeKind,
+    &'a [Registered<'graph>],
+    &'a [Ranking<'graph>],
+    Position,
+);
+
+/// How many slots `key` holds.
+fn slots(key: &[KeyElement]) -> usize {
+    key.iter()
+        .filter(|element| matches!(element, KeyElement::Slot))
+        .count()
+}
+
+/// Whether `classes` rank their slots in written order, as every builtin overload's do.
+fn written_order(classes: &[u8]) -> bool {
+    classes
+        .iter()
+        .enumerate()
+        .all(|(index, class)| *class as usize == index)
+}
+
+/// Whether a definition's head writes a rank anywhere, which only a bucket declaration may.
+fn ranked_head(node: &KExpression<'_>) -> bool {
+    head_run(node).is_some_and(|run| {
+        run.parts
+            .iter()
+            .any(|part| matches!(slot_label(&part.value), Some(SlotLabel::Ranked(_))))
+    })
+}
 
 /// One body under construction, in scratch.
 struct Draft<'graph, 'x> {
@@ -326,8 +441,15 @@ struct Draft<'graph, 'x> {
     statements: u32,
     values: BumpVec<'x, (ValueSymbol, Position)>,
     types: BumpVec<'x, (TypeSymbol, Position)>,
-    /// The slot each statement binds, if it binds one.
-    statement_binder: BumpVec<'x, Option<Slot>>,
+    registrations: BumpVec<'x, (RegistrationSymbol, Position)>,
+    /// Each registration, in statement order.
+    registered: BumpVec<'x, Registered<'graph>>,
+    /// Each bucket declaration, in statement order.
+    rankings: BumpVec<'x, Ranking<'graph>>,
+    /// The slots each statement binds.
+    statement_binders: BumpVec<'x, Binders>,
+    /// Each keyworded use's candidates, by the use's node site.
+    candidates: BumpVec<'x, (Site, CandidateList<'graph>)>,
     /// This body's statement spines, **rewritten**, copied into scratch so the surfaced-name reader
     /// can reach a binder's own statement. Each spine's parts run stays where it is in program
     /// storage.
@@ -368,6 +490,9 @@ struct Draft<'graph, 'x> {
     refusal: Option<&'graph ShapeError<'graph>>,
     /// Whether this body's last statement is in tail position.
     tail: bool,
+    /// Whether this is a `USING … SCOPE` body, whose operand's registrations the builder does not
+    /// read: a use under one may select one, so none is refused for want of a candidate.
+    surfaced: bool,
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
     arm: Option<Arm<'graph>>,
     /// The statement being walked when a nested draft was entered, and the class that path takes
@@ -408,7 +533,7 @@ impl Draft<'_, '_> {
 
     /// The declared names, once the binders pass has sorted them.
     fn channels(&self) -> Channels<'_, Position> {
-        Channels::new(&self.values, &self.types)
+        Channels::new(&self.values, &self.types, &self.registrations)
     }
 
     /// Where the path into the nested draft being walked reads at this level.
@@ -423,7 +548,7 @@ impl Draft<'_, '_> {
 struct Builder<'graph, 'x, 'e> {
     brand: ProgramBrand<'graph>,
     scratch: BumpAllocator<'x>,
-    builtins: Lookup<'e>,
+    builtins: &'e dyn BuiltinNames,
     /// The program's type registry, which the static check admits written parts through and a
     /// quote's carried type is interned in.
     types: &'e TypeRegistry<'graph>,
@@ -446,13 +571,16 @@ struct Builder<'graph, 'x, 'e> {
     skip_floor: usize,
     /// The signature run of the callable body about to be drafted, taken by that draft.
     signature: Option<&'graph KExpression<'graph>>,
+    /// How many type expressions the walk is inside: a keyworded node there is a type the
+    /// elaborator reads, not a use dispatch selects for.
+    in_type: u32,
 }
 
 impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     fn new(
         brand: ProgramBrand<'graph>,
         scratch: BumpAllocator<'x>,
-        builtins: Lookup<'e>,
+        builtins: &'e dyn BuiltinNames,
         types: &'e TypeRegistry<'graph>,
         claims: &'graph Claims<'graph>,
         frame: &'graph GroupFrame<'graph>,
@@ -471,6 +599,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             skip: BumpVec::new_in(scratch),
             skip_floor: 0,
             signature: None,
+            in_type: 0,
         }
     }
 
@@ -534,6 +663,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         draft.held = held;
         draft.tail = entry.tail;
         draft.arm = entry.arm;
+        draft.surfaced = entry.surfaced;
         draft.nodes.extend(nodes.iter().map(|node| **node));
         self.chain.push(draft);
         let level = self.chain.len() - 1;
@@ -549,9 +679,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         Ok(draft)
     }
 
-    /// The binders pass: every parameter at `0` and every statement's binder at its position, a
-    /// repeated name and a builtin's name refused in that order. Each parameter comes paired with
-    /// where the node declaring it is written, which an error about it points at.
+    /// The binders pass: every parameter at `0` and every statement's name at its position, a
+    /// repeated name and a builtin's name refused in that order; then each statement's registrations
+    /// and bucket declarations, each ranked and checked against every ranking of its key it sees.
+    /// Each parameter comes paired with where the node declaring it is written, which an error
+    /// about it points at.
     fn binders(
         &self,
         kind: ShapeKind,
@@ -580,26 +712,32 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     second: source,
                 });
             }
-            if (self.builtins)(name).is_some() {
+            if self.builtins.lookup(name).is_some() {
                 return Err(ShapeError::ShadowsBuiltin { name, at: source });
             }
             match name {
                 BinderSymbol::Value(name) => values.push((name, position)),
                 BinderSymbol::Type(name) => types.push((name, position)),
+                BinderSymbol::Registration(_) => unreachable!("a plan's name is a written name"),
             }
         }
         values.sort_unstable_by_key(|(name, _)| *name);
         types.sort_unstable_by_key(|(name, _)| *name);
-        let mut statement_binder = BumpVec::with_capacity_in(nodes.len(), scratch);
-        statement_binder.resize(nodes.len(), None);
+        let (registered, rankings) = self.keyed(kind, nodes)?;
+        let mut registrations = BumpVec::with_capacity_in(registered.len(), scratch);
+        registrations.extend(registered.iter().map(|entry| (entry.symbol, entry.at)));
+        registrations.sort_unstable_by_key(|(symbol, _)| *symbol);
+        let mut statement_binders = BumpVec::with_capacity_in(nodes.len(), scratch);
+        statement_binders.resize(nodes.len(), Binders::NONE);
         let entries = values
             .iter()
             .map(|(_, position)| *position)
-            .chain(types.iter().map(|(_, position)| *position));
+            .chain(types.iter().map(|(_, position)| *position))
+            .chain(registrations.iter().map(|(_, position)| *position));
         for (slot, position) in entries.enumerate() {
             // A parameter writes at `0` and binds no statement.
             if let Some(statement) = position.0.checked_sub(1) {
-                statement_binder[statement as usize] = Some(Slot(slot as u32));
+                statement_binders[statement as usize].push(Slot(slot as u32));
             }
         }
         Ok(Draft {
@@ -609,7 +747,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             statements: nodes.len() as u32,
             values,
             types,
-            statement_binder,
+            registrations,
+            registered,
+            rankings,
+            statement_binders,
+            candidates: BumpVec::new_in(scratch),
             mentions: BumpVec::new_in(scratch),
             captures: BumpVec::new_in(scratch),
             edges: BumpVec::new_in(scratch),
@@ -630,16 +772,232 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             code_type: KType::ANY_CODE,
             refusal: None,
             tail: false,
+            surfaced: false,
             arm: None,
             current: (0, MentionClass::Eager),
         })
+    }
+
+    /// The keyed half of the binders pass, statement by statement: each definition's registration
+    /// under each of its keys, ranked by its chaining when it is an operator and otherwise by the
+    /// declaration it sees, and each bucket declaration's ranking. Each is refused when it sees
+    /// another ranking of its key, or a builtin overload there, that differs from its own.
+    #[allow(clippy::type_complexity)]
+    fn keyed(
+        &self,
+        kind: ShapeKind,
+        nodes: &[&KExpression<'graph>],
+    ) -> Result<
+        (
+            BumpVec<'x, Registered<'graph>>,
+            BumpVec<'x, Ranking<'graph>>,
+        ),
+        ShapeError<'graph>,
+    > {
+        let depth = self.chain.len() as u32;
+        let mut registered: BumpVec<'x, Registered<'graph>> = BumpVec::new_in(self.scratch);
+        let mut rankings: BumpVec<'x, Ranking<'graph>> = BumpVec::new_in(self.scratch);
+        for (index, node) in nodes.iter().enumerate() {
+            let spine = node.statement_spine();
+            let at = Position::statement(index);
+            let source = node.source;
+            let form = spine.cache().builtin_shape();
+            if form.is_some_and(|form| form.id == BuiltinShapeId::BucketDeclaration) {
+                let ranking = self.declared(spine, at)?;
+                let own = (kind, &registered[..], &rankings[..], at);
+                self.agrees(own, ranking.key, ranking.elements, ranking.classes, source)?;
+                rankings.push(ranking);
+                continue;
+            }
+            let Some(buckets) = spine.binder_plan().and_then(|plan| plan.buckets) else {
+                continue;
+            };
+            let operator = form
+                .and_then(|form| form.binder)
+                .is_some_and(|binder| binder.surface == BinderSurface::OperatorDef);
+            if !operator && ranked_head(spine) {
+                return Err(ShapeError::RankedDefinition { at: source });
+            }
+            let unary = buckets.count() == 2;
+            for (which, elements) in buckets.iter().enumerate() {
+                self.open_key(elements, source)?;
+                let key = KeyElement::key(elements.iter().copied());
+                let own = (kind, &registered[..], &rankings[..], at);
+                let classes = if operator {
+                    self.operator_classes(elements)
+                } else {
+                    self.adopted(own, key, slots(elements))
+                };
+                self.agrees(own, key, elements, classes, source)?;
+                registered.push(Registered {
+                    symbol: RegistrationSymbol::of(key, depth, index as u32, which as u8),
+                    at,
+                    key,
+                    elements,
+                    classes,
+                    which: match (unary, which) {
+                        (false, _) => Which::Only,
+                        (true, 0) => Which::Unary,
+                        (true, _) => Which::Binary,
+                    },
+                });
+            }
+        }
+        Ok((registered, rankings))
+    }
+
+    /// The ranking a bucket declaration at `at` gives its key: keywords, and an integer or `_` per
+    /// slot. A name or a type in its head is `Malformed`.
+    fn declared(
+        &self,
+        node: &KExpression<'graph>,
+        at: Position,
+    ) -> Result<Ranking<'graph>, ShapeError<'graph>> {
+        let malformed = ShapeError::Malformed {
+            form: BuiltinShapeId::BucketDeclaration,
+            at: node.source,
+        };
+        let run = head_run(node).ok_or(malformed)?;
+        let mut written = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
+        for part in run.parts {
+            written.push(declared_element(&part.value).ok_or(malformed)?);
+        }
+        let writer = self.brand.writer();
+        let elements = collect(writer, written.iter().map(|element| element.key()));
+        self.open_key(elements, node.source)?;
+        let mut raw = BumpVec::with_capacity_in(written.len(), self.scratch);
+        raw.extend(written.iter().filter_map(|element| match element {
+            DeclaredElement::Slot(rank) => Some(*rank),
+            DeclaredElement::Keyword(_) => None,
+        }));
+        let classes = dense_classes(self.scratch, &raw);
+        Ok(Ranking {
+            key: KeyElement::key(elements.iter().copied()),
+            elements,
+            at,
+            classes: collect(writer, classes.iter().copied()),
+        })
+    }
+
+    /// Refuse a key a definition or declaration may not name: one spelling no keyword, and one a
+    /// builtin expression shape closes.
+    fn open_key(
+        &self,
+        elements: &'graph [KeyElement],
+        at: SourceRef,
+    ) -> Result<(), ShapeError<'graph>> {
+        if !elements
+            .iter()
+            .any(|element| matches!(element, KeyElement::Keyword(_)))
+        {
+            return Err(ShapeError::NoKeyword { at });
+        }
+        if builtin_shape_for(elements.iter().copied()).is_some() {
+            return Err(ShapeError::ClosedBucket { key: elements, at });
+        }
+        Ok(())
+    }
+
+    /// An operator registration's ranking, from how a run of its symbol chains: a fold-right
+    /// operand first on the right, every other binary one left to right, and a unary key's one slot.
+    fn operator_classes(&self, elements: &[KeyElement]) -> &'graph [u8] {
+        let classes: &[u8] = match elements {
+            [
+                KeyElement::Slot,
+                KeyElement::Keyword(symbol),
+                KeyElement::Slot,
+            ] => match self.frame.mode(*symbol) {
+                Some(ReductionMode::FoldRight) => &[1, 0],
+                _ => &[0, 1],
+            },
+            _ => &[0],
+        };
+        collect(self.brand.writer(), classes.iter().copied())
+    }
+
+    /// A definition's ranking: the classes of the nearest bucket declaration of `key` it sees, or
+    /// written order over its `slots`.
+    fn adopted(&self, own: Own<'_, 'graph>, key: KeySymbol, slots: usize) -> &'graph [u8] {
+        let declared = self.visible(own, self.chain.len(), key, |seen| match seen {
+            Seen::Declaration(ranking) => Some(ranking.classes),
+            Seen::Registration(_) => None,
+        });
+        declared
+            .unwrap_or_else(|| collect(self.brand.writer(), (0..slots).map(|class| class as u8)))
+    }
+
+    /// Refuse `classes` for `key` where it meets another ranking of the key: a builtin overload's,
+    /// which is written order, or one a statement it sees gives.
+    fn agrees(
+        &self,
+        own: Own<'_, 'graph>,
+        key: KeySymbol,
+        elements: &'graph [KeyElement],
+        classes: &[u8],
+        at: SourceRef,
+    ) -> Result<(), ShapeError<'graph>> {
+        let disagrees = ShapeError::RankingDisagrees { key: elements, at };
+        if !self.builtins.overloads(key).is_empty() && !written_order(classes) {
+            return Err(disagrees);
+        }
+        let differs = self.visible(own, self.chain.len(), key, |seen| {
+            (seen.classes() != classes).then_some(())
+        });
+        match differs {
+            Some(()) => Err(disagrees),
+            None => Ok(()),
+        }
+    }
+
+    /// Visit each ranking of `key` a statement at `own`'s position sees, innermost first and the
+    /// latest first within a body: `own`'s entries so far, then the drafts below `from` on the
+    /// chain as a name read there reaches them, stopping past a program or a code draft. The walk
+    /// ends at the first `Some` `visit` returns.
+    fn visible<'a, R>(
+        &'a self,
+        (kind, registered, rankings, at): Own<'a, 'graph>,
+        from: usize,
+        key: KeySymbol,
+        mut visit: impl FnMut(Seen<'a, 'graph>) -> Option<R>,
+    ) -> Option<R> {
+        let mut here = |registered: &'a [Registered<'graph>],
+                        rankings: &'a [Ranking<'graph>],
+                        at: Position| {
+            let declarations = rankings
+                .iter()
+                .rev()
+                .filter(|ranking| ranking.key == key && at.sees(ranking.at))
+                .map(Seen::Declaration);
+            let definitions = registered
+                .iter()
+                .rev()
+                .filter(|entry| entry.key == key && at.sees(entry.at))
+                .map(Seen::Registration);
+            declarations.chain(definitions).find_map(&mut visit)
+        };
+        if let Some(found) = here(registered, rankings, at) {
+            return Some(found);
+        }
+        if matches!(kind, ShapeKind::Program | ShapeKind::Code) {
+            return None;
+        }
+        for draft in self.chain[..from].iter().rev() {
+            if let Some(found) = here(&draft.registered, &draft.rankings, draft.boundary()) {
+                return Some(found);
+            }
+            if matches!(draft.kind, ShapeKind::Program | ShapeKind::Code) {
+                break;
+            }
+        }
+        None
     }
 
     /// Walk a node's parts under `state`, by its form's roles. A formless node is a call, a grouping
     /// or a construction: a single-part group is transparent; a two-part node headed by a type name
     /// is a nominal construction, its head eager and its payload a constructor slot — which also
     /// classifies a type-constructor application written in value position; every part of a call
-    /// is eager.
+    /// is eager, and a call spelling a keyword is a keyworded use, whose candidates are resolved
+    /// here. A binder or a bucket declaration anywhere but at its statement's root is refused.
     fn walk_node(
         &mut self,
         level: usize,
@@ -647,13 +1005,23 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         node: &KExpression<'graph>,
         state: State,
     ) -> Result<(), ShapeError<'graph>> {
+        let declares = node.cache().binder_plan().is_some()
+            || node
+                .cache()
+                .builtin_shape()
+                .is_some_and(|form| form.id == BuiltinShapeId::BucketDeclaration);
+        let root = self.chain[level].nodes[statement as usize].statement_spine();
+        if declares && !std::ptr::eq(node.parts, root.parts) {
+            return Err(ShapeError::NestedBinder { at: node.source });
+        }
         let Some(form) = node.cache().builtin_shape() else {
             if let [only] = node.parts {
                 return self.walk_part(level, statement, &only.value, state);
             }
             // A `NEEDING` list names what code needs; its quotes are syntax, not quote values.
             if let Some((kind, _)) = needing(node) {
-                return self.walk_part(level, statement, kind, State::Eager);
+                return self
+                    .typed(|builder| builder.walk_part(level, statement, kind, State::Eager));
             }
             if let [head, payload] = node.parts
                 && let ExpressionPart::Type(name) = &head.value
@@ -661,6 +1029,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             {
                 self.walk_part(level, statement, &head.value, State::Eager)?;
                 return self.walk_part(level, statement, &payload.value, state.constructor());
+            }
+            if self.in_type == 0
+                && node
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part.value, ExpressionPart::Keyword(_)))
+            {
+                self.candidates(level, statement, node, false)?;
             }
             for part in node.parts {
                 self.walk_part(level, statement, &part.value, State::Eager)?;
@@ -679,6 +1055,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             "a builtin shape's parts match its run"
         );
         written_as_read(form, node, self.types)?;
+        // A builtin shape whose slots dispatch evaluates selects among its own builtin overloads.
+        if form.dispatched() && self.in_type == 0 {
+            self.candidates(level, statement, node, true)?;
+        }
         // A binary operator declaring a result type of its own is admitted only where its symbol
         // chains pairwise: a fold hands its own result back as the next operand.
         if matches!(
@@ -700,7 +1080,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         // own spine is reached first, so a declarator nested under it records nothing.
         let draft = &mut self.chain[level];
         if state == State::Root
-            && let Some(binder) = draft.statement_binder[statement as usize]
+            && let Some(binder) = draft.statement_binders[statement as usize].first()
             && draft.is_type_slot(binder)
             && !draft.declarations.iter().any(|(held, _)| *held == binder)
         {
@@ -734,7 +1114,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         self.skip
             .extend(parameters.iter().filter_map(|name| match name {
                 BinderSymbol::Type(name) => Some(*name),
-                BinderSymbol::Value(_) => None,
+                _ => None,
             }));
         let walked = self.walk_parts(level, statement, node, form, &parameters, state);
         self.skip.truncate(mark);
@@ -770,32 +1150,39 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 // naming one records nothing and the elaborator refuses it.
                 Role::Quantifiers => {
                     for bound in quantifier_bounds(part) {
-                        self.walk_part(level, statement, bound, State::Eager)?;
+                        self.typed(|builder| {
+                            builder.walk_part(level, statement, bound, State::Eager)
+                        })?;
                     }
                 }
                 Role::Rhs => {
                     let draft = &mut self.chain[level];
                     if state == State::Root
-                        && let Some(binder) = draft.statement_binder[statement as usize]
+                        && let Some(binder) = draft.statement_binders[statement as usize].first()
                     {
                         draft.rhs.push((binder, Site::of(part)));
                         self.parts.insert(Site::of(part), part);
                     }
                     self.walk_part(level, statement, part, state)?
                 }
-                Role::Argument | Role::TypeExpression | Role::InPlace => {
+                Role::Argument | Role::InPlace => {
                     self.walk_part(level, statement, part, State::Eager)?
                 }
-                Role::Signature | Role::Head => self.walk_signature(level, statement, part)?,
+                Role::TypeExpression => {
+                    self.typed(|builder| builder.walk_part(level, statement, part, State::Eager))?
+                }
+                Role::Signature | Role::Head => {
+                    self.typed(|builder| builder.walk_signature(level, statement, part))?
+                }
                 Role::Body(kind) => {
                     self.enter_body(level, statement, node, part, kind, parameters, state)?
                 }
                 Role::Branches(heads) => {
                     self.enter_arms(level, statement, node, part, heads, state)?
                 }
-                Role::Definition(kind) => {
-                    self.walk_definition(level, statement, part, kind, state.constructor())?
-                }
+                Role::Definition(kind) => self.typed(|builder| {
+                    builder.walk_definition(level, statement, part, kind, state.constructor())
+                })?,
                 Role::Unsupported => unreachable!("an unsupported form returned above"),
             }
         }
@@ -837,12 +1224,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 self.walk_node(level, statement, node.reference(), state)
             }
-            ExpressionPart::SigiledTypeExpr(node) => {
-                self.walk_node(level, statement, node.reference(), State::Eager)
-            }
-            ExpressionPart::RecordType(node) => {
-                self.walk_fields(level, statement, node.reference(), State::Eager)
-            }
+            ExpressionPart::SigiledTypeExpr(node) => self.typed(|builder| {
+                builder.walk_node(level, statement, node.reference(), State::Eager)
+            }),
+            ExpressionPart::RecordType(node) => self.typed(|builder| {
+                builder.walk_fields(level, statement, node.reference(), State::Eager)
+            }),
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
                     self.walk_part(level, statement, item, state.constructor())?;
@@ -958,7 +1345,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 own.extend(members.iter().filter_map(quoted_body).filter_map(|member| {
                     match member.statement_binder_plan()?.name? {
                         BinderSymbol::Type(name) => Some(name),
-                        BinderSymbol::Value(_) => None,
+                        _ => None,
                     }
                 }));
                 let mark = self.skip.len();
@@ -1012,7 +1399,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         self.skip
             .extend(parameters.iter().filter_map(|name| match name {
                 BinderSymbol::Type(name) => Some(*name),
-                BinderSymbol::Value(_) => None,
+                _ => None,
             }));
         let walked = self.walk_definition_roles(level, statement, node, form, state);
         self.skip.truncate(mark);
@@ -1161,11 +1548,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 self.forms
                     .insert(site, resident(self.brand.writer(), *node));
             }
+            // Every binder of the statement births the one body: a combined form's name and each
+            // registration alike.
             let draft = &mut self.chain[level];
-            if state == State::Root
-                && let Some(binder) = draft.statement_binder[statement as usize]
-            {
-                draft.births.push((binder, site));
+            if state == State::Root {
+                let binders = draft.statement_binders[statement as usize];
+                draft
+                    .births
+                    .extend(binders.iter().map(|binder| (binder, site)));
             }
         }
         let (shape_kind, class, entry) = match kind {
@@ -1175,7 +1565,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Entry::CALLABLE,
             ),
             BodyKind::Module => (ShapeKind::Module, MentionClass::Eager, Entry::PLAIN),
-            BodyKind::Surfaced => (ShapeKind::Block, MentionClass::Eager, Entry::PLAIN),
+            BodyKind::Surfaced => (ShapeKind::Block, MentionClass::Eager, Entry::SURFACED),
         };
         let operator = [
             BinderSymbol::Value(IMPLICIT.left.symbol()),
@@ -1270,7 +1660,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let draft = &self.chain[level];
         let tail = state == State::Root
             && draft.tail
-            && draft.statement_binder[statement as usize].is_none()
+            && draft.statement_binders[statement as usize].is_empty()
             && statement + 1 == draft.statements;
         for (guard, body_part) in arms.iter() {
             let guard = (!guard.is_wildcard()).then_some(guard);
@@ -1278,7 +1668,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 && let Some(written) = guard.and_then(quoted_body)
             {
                 for inner in written.parts {
-                    self.walk_part(level, statement, &inner.value, State::Eager)?;
+                    self.typed(|builder| {
+                        builder.walk_part(level, statement, &inner.value, State::Eager)
+                    })?;
                 }
             }
             let body = quoted_body(body_part).expect("the static check admits only quotes");
@@ -1286,6 +1678,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             let entry = Entry {
                 tail,
                 arm: Some(Arm { guard, heads, tail }),
+                surfaced: false,
             };
             self.enter_child(
                 level,
@@ -1322,9 +1715,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let entered_at = parent.boundary();
         let saved = (self.claims, self.frame);
         let floor = std::mem::replace(&mut self.skip_floor, self.skip.len());
+        let in_type = std::mem::replace(&mut self.in_type, 0);
         let built = self.code_draft(entered_at, code);
         (self.claims, self.frame) = saved;
         self.skip_floor = floor;
+        self.in_type = in_type;
         let child = match built {
             Ok(mut draft) => {
                 let mut offered = BumpVec::new_in(self.scratch);
@@ -1390,7 +1785,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         };
         let mut resolved = Ok(());
         for (mark, name, site) in marks.iter().copied() {
-            if mark != Mark::Written || (self.builtins)(name).is_some() {
+            if mark != Mark::Written || self.builtins.lookup(name).is_some() {
                 continue;
             }
             let written = Some(Mark::Written);
@@ -1409,7 +1804,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         built.extend(
             marks
                 .iter()
-                .filter(|(mark, name, _)| *mark == Mark::Built && (self.builtins)(*name).is_none())
+                .filter(|(mark, name, _)| {
+                    *mark == Mark::Built && self.builtins.lookup(*name).is_none()
+                })
                 .map(|(_, name, _)| *name),
         );
         draft.code_type = self
@@ -1444,7 +1841,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut offered = BumpVec::with_capacity_in(needed.len(), self.scratch);
         // A malformed entry is the elaborator's to refuse.
         for name in needed.iter().filter_map(needed_name) {
-            let coordinate = match (self.builtins)(name) {
+            let coordinate = match self.builtins.lookup(name) {
                 Some(index) => Coordinate::Builtin(index),
                 None => self
                     .resolve(level, name, None, at, reader)
@@ -1519,8 +1916,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         parent.current = (statement, class);
         let entered_at = parent.boundary();
         let floor = std::mem::replace(&mut self.skip_floor, self.skip.len());
+        let in_type = std::mem::replace(&mut self.in_type, 0);
         let child = self.draft(kind, entry, entered_at, &paired, held, statements);
         self.skip_floor = floor;
+        self.in_type = in_type;
         self.chain[level].children.push((site, child?));
         Ok(())
     }
@@ -1528,6 +1927,89 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// Whether `name` is a type parameter of a form enclosing the walk within the current draft.
     fn skips(&self, name: &TypeSymbol) -> bool {
         self.skip[self.skip_floor..].contains(name)
+    }
+
+    /// Run `walk` inside a type expression.
+    fn typed<R>(&mut self, walk: impl FnOnce(&mut Self) -> R) -> R {
+        self.in_type += 1;
+        let walked = walk(self);
+        self.in_type -= 1;
+        walked
+    }
+
+    /// Resolve the keyworded use `node`, read at its statement: the builtin overloads at its key,
+    /// then — unless `closed`, a builtin shape's own bucket — each registration at the key visible
+    /// to it, resolved as an eager read there, so each is a mention of the use's statement. Every
+    /// candidate must carry one ranking, and a use with none is refused — except in a quote's code,
+    /// where it is a hole, and under a `USING … SCOPE` body, whose operand's registrations are
+    /// candidates this builder does not read.
+    fn candidates(
+        &mut self,
+        level: usize,
+        statement: u32,
+        node: &KExpression<'graph>,
+        closed: bool,
+    ) -> Result<(), ShapeError<'graph>> {
+        let writer = self.brand.writer();
+        let elements = node.cache().stored_key();
+        let key = KeyElement::key(elements.iter().copied());
+        let at = Position::statement(statement as usize);
+        let mut candidates = BumpVec::new_in(self.scratch);
+        candidates.extend(
+            self.builtins
+                .overloads(key)
+                .map(|index| Candidate::One(Coordinate::Builtin(BuiltinIndex(index)))),
+        );
+        let written = || collect(writer, (0..slots(elements)).map(|class| class as u8));
+        let mut classes = (!candidates.is_empty()).then(written);
+        let mut found = BumpVec::new_in(self.scratch);
+        if !closed {
+            let draft = &self.chain[level];
+            let own = (draft.kind, &draft.registered[..], &draft.rankings[..], at);
+            self.visible(own, level, key, |seen| {
+                if let Seen::Registration(entry) = seen {
+                    found.push((entry.symbol, entry.classes));
+                }
+                None::<()>
+            });
+        }
+        let reader = Reader {
+            level,
+            statement,
+            class: MentionClass::Eager,
+        };
+        for (symbol, theirs) in found.iter().copied() {
+            if classes.is_some_and(|classes| classes != theirs) {
+                return Err(ShapeError::RankingDisagrees {
+                    key: elements,
+                    at: node.source,
+                });
+            }
+            classes = Some(theirs);
+            let coordinate = self
+                .resolve(level, BinderSymbol::Registration(symbol), None, at, reader)
+                .expect("a visible registration resolves");
+            candidates.push(Candidate::One(coordinate));
+        }
+        let open_ended = self.chain[..=level]
+            .iter()
+            .any(|draft| draft.kind == ShapeKind::Code || draft.surfaced);
+        if candidates.is_empty() && !closed && !open_ended {
+            return Err(ShapeError::NoCandidate {
+                key: elements,
+                at: node.source,
+            });
+        }
+        let list = CandidateList {
+            key,
+            elements,
+            classes: classes.unwrap_or_else(written),
+            candidates: collect(writer, candidates.iter().copied()),
+        };
+        self.chain[level]
+            .candidates
+            .push((Site::of_node(node), list));
+        Ok(())
     }
 
     /// Resolve and record the mention of `name` at `part`.
@@ -1569,7 +2051,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             class,
         };
         let site = Site::of(part);
-        let coordinate = match (self.builtins)(name) {
+        let coordinate = match self.builtins.lookup(name) {
             Some(index) => Coordinate::Builtin(index),
             None => {
                 self.resolve(level, name, mark, at, reader)
@@ -1648,7 +2130,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             draft.current
         };
         draft.reads.push((statement, slot));
-        if let Some(binder) = draft.statement_binder[statement as usize] {
+        if let Some(binder) = draft.statement_binders[statement as usize].first() {
             draft.edges.push((binder, slot, class));
         }
     }
@@ -1658,6 +2140,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     fn components(&mut self, draft: &mut Draft<'graph, 'x>) -> Result<(), ShapeError<'graph>> {
         let scratch = self.scratch;
         let count = draft.channels().len();
+        // A statement's binders are one component: each reads the next and the last the first, as
+        // deferred edges, since none of them is a mention.
+        for binders in draft.statement_binders.iter() {
+            let slots = &binders.slots[..binders.len as usize];
+            if slots.len() > 1 {
+                for (index, binder) in slots.iter().enumerate() {
+                    let next = slots[(index + 1) % slots.len()];
+                    draft.edges.push((*binder, next, MentionClass::Deferred));
+                }
+            }
+        }
         // Compressed rows: `offsets[i]..offsets[i + 1]` of `targets` are the slots binder `i` reads.
         let mut offsets: BumpVec<'x, usize> = BumpVec::with_capacity_in(count + 1, scratch);
         offsets.resize(count + 1, 0);
@@ -1730,21 +2223,32 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 .0
                 .checked_sub(1)
                 .expect("a cyclic member binds a statement");
-            // The member names are written to program storage, where the shape would have gone.
+            // The member names and keys are written to program storage, where the shape would have
+            // gone.
+            let mut members = BumpVec::new_in(scratch);
+            let mut definitions = BumpVec::new_in(scratch);
+            for slot in draft.members_of(component) {
+                match draft.channels().name(slot.index()) {
+                    BinderSymbol::Registration(symbol) => definitions.extend(
+                        draft
+                            .registered
+                            .iter()
+                            .filter(|entry| entry.symbol == symbol)
+                            .map(|entry| entry.elements),
+                    ),
+                    name => members.push(name),
+                }
+            }
+            let writer = self.brand.writer();
             return Err(ShapeError::EagerCycle {
-                members: collect(
-                    self.brand.writer(),
-                    draft
-                        .members_of(component)
-                        .iter()
-                        .map(|slot| draft.channels().name(slot.index())),
-                ),
+                members: collect(writer, members.iter().copied()),
+                definitions: collect(writer, definitions.iter().copied()),
                 at: draft.nodes[statement as usize].source,
             });
         }
 
         for (_, child) in draft.children.iter_mut() {
-            let binder = draft.statement_binder[child.parent_statement as usize];
+            let binder = draft.statement_binders[child.parent_statement as usize].first();
             for capture in child.captures.iter_mut() {
                 let CaptureSource::Read(Coordinate::Activation {
                     hops: 0,
@@ -1799,8 +2303,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 by_key[*key as usize] = Some(UnitWork::Component(ComponentIndex(component as u32)));
             }
         }
-        for (statement, binder) in draft.statement_binder.iter().enumerate() {
-            if binder.is_none() {
+        for (statement, binders) in draft.statement_binders.iter().enumerate() {
+            if binders.is_empty() {
                 by_key[statement] = Some(UnitWork::Statement(statement as u32));
             }
         }
@@ -1813,7 +2317,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 works.push(*work);
             }
         }
-        let unit_of_statement = |statement: u32| match draft.statement_binder[statement as usize] {
+        let unit_of_statement = |statement: u32| match draft.statement_binders[statement as usize]
+            .first()
+        {
             Some(binder) => {
                 let component = draft.component_of[binder.index()];
                 let key = component_key[component.index()].expect("a binder's component has a key");
@@ -1910,6 +2416,23 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         mentions.sort_unstable_by_key(|mention| mention.site);
         let mut offers = draft.offers;
         offers.sort_unstable_by_key(|(site, _)| *site);
+        let channels = Channels::new(&draft.values, &draft.types, &draft.registrations);
+        let mut registrations = BumpVec::with_capacity_in(draft.registered.len(), self.scratch);
+        registrations.extend(draft.registered.iter().map(|entry| {
+            let index = channels
+                .find(BinderSymbol::Registration(entry.symbol))
+                .expect("a registration has its slot");
+            Registration {
+                slot: Slot(index as u32),
+                key: entry.key,
+                elements: entry.elements,
+                classes: entry.classes,
+                which: entry.which,
+            }
+        }));
+        registrations.sort_unstable_by_key(|registration| registration.slot);
+        let mut candidates = draft.candidates;
+        candidates.sort_unstable_by_key(|(site, _)| *site);
         let members = collect(writer, draft.members.iter().copied());
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
         components.extend(draft.components.iter().map(|component| Component {
@@ -1924,6 +2447,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 names: Channels::new(
                     collect(writer, draft.values.iter().copied()),
                     collect(writer, draft.types.iter().copied()),
+                    collect(writer, draft.registrations.iter().copied()),
                 ),
                 body: collect(writer, draft.nodes.iter().copied()),
                 group_frame: draft.frame,
@@ -1943,6 +2467,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 code_type: draft.code_type,
                 refusal: draft.refusal,
                 offers: collect(writer, offers.iter().copied()),
+                registrations: collect(writer, registrations.iter().copied()),
+                rankings: collect(writer, draft.rankings.iter().copied()),
+                candidates: collect(writer, candidates.iter().copied()),
             },
         )
     }

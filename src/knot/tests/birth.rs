@@ -133,13 +133,15 @@ fn a_function_born_for_a_registration_carries_its_shape() {
             );
             let f = callable(fixture, activation, "f");
             assert_eq!(f.function().expect("a function").registered_shape(), None);
-            // The typing record is laid down although the quantifier map is empty.
+            // The typing record is laid down although the quantifier map is empty. A combined
+            // statement's knot holds two members over its one body: the name's function and the
+            // registration's.
+            let member = Weight::flat::<Node<'static, 'static>>()
+                .plus(twice_function.closure().weight())
+                .plus(Weight::flat::<Typing<'static>>());
             assert_eq!(
                 twice.weight(),
-                Weight::flat::<usize>()
-                    .plus(Weight::flat::<Node<'static, 'static>>())
-                    .plus(twice_function.closure().weight())
-                    .plus(Weight::flat::<Typing<'static>>())
+                Weight::flat::<usize>().plus(member).plus(member)
             );
         });
     });

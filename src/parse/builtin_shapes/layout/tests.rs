@@ -172,7 +172,7 @@ proptest! {
             .iter()
             .filter_map(|binder| match binder {
                 BinderSymbol::Value(name) => Some((*name, 0)),
-                BinderSymbol::Type(_) => None,
+                _ => None,
             })
             .collect();
         entries.extend(pairs(inner));
