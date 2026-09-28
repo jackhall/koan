@@ -230,10 +230,6 @@ impl<'a, X: Knotted> Cells<'a, X> {
             Cells::Linked(cells, holder) => cells[at].resolve(holder),
         }
     }
-
-    pub(super) fn iter(self) -> impl ExactSizeIterator<Item = Value<'a, X>> {
-        (0..self.len()).map(move |at| self.get(at))
-    }
 }
 
 impl<'cell, X: Knotted> Value<'cell, X> {

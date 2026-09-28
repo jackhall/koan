@@ -3,7 +3,7 @@
 //! Each walk runs over an explicit stack, so each test here runs on that thread.
 
 use crate::memory::{CellGraph, ReleaseAbsorption, Writer};
-use crate::symbols::{BinderSymbol, Symbol};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema};
 use crate::values::{TypeValue, cross};
 
@@ -46,17 +46,22 @@ impl Fixture<'_, '_> {
     }
 }
 
-/// How many levels `value` descends through `next` before it reaches `Null`.
-fn levels(value: Value<'_>, next: Symbol) -> usize {
-    let mut value = value;
-    let mut levels = 0;
-    while let Some(tagged) = value.as_tagged() {
-        let record = tagged.payload().as_record().expect("a node holds a record");
-        value = *record.field(next).expect("a node's record holds `next`");
-        levels += 1;
-    }
-    assert!(matches!(value, Value::Null), "a chain ends in `Null`");
-    levels
+/// `value` as `PRINT` writes it.
+fn rendered(fixture: &Fixture<'_, '_>, value: Value<'_>) -> String {
+    let mut out = String::new();
+    value
+        .render(&mut out, fixture.types, fixture.symbols, fixture.scratch())
+        .unwrap();
+    out
+}
+
+/// How a chain `depth` deep renders.
+fn chain_text(depth: usize) -> String {
+    format!(
+        "{}null{}",
+        "Node({next = ".repeat(depth),
+        "})".repeat(depth)
+    )
 }
 
 #[test]
@@ -79,7 +84,7 @@ fn a_chain_deeper_than_the_stack_crosses() {
             .enter(dest, |context| {
                 let carrier = context.redeem(dormant).unwrap();
                 let copied = context.read(&carrier).value();
-                assert_eq!(levels(copied, fixture.next().symbol()), DEPTH);
+                assert_eq!(rendered(fixture, copied), chain_text(DEPTH));
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
@@ -99,6 +104,17 @@ fn a_chain_deeper_than_the_stack_compares() {
             let shorter = fixture.chain(writer, node, DEPTH - 1);
             assert_eq!(chain.equals(&same, types, scratch), Ok(true));
             assert_eq!(chain.equals(&shorter, types, scratch), Ok(false));
+        });
+    });
+}
+
+#[test]
+fn a_chain_deeper_than_the_stack_renders() {
+    with_fixture(|fixture| {
+        let node = fixture.chain_type();
+        fixture.in_cell(pin, |context| {
+            let chain = fixture.chain(context.writer(), node, DEPTH);
+            assert_eq!(rendered(fixture, chain), chain_text(DEPTH));
         });
     });
 }
