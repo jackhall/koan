@@ -48,6 +48,7 @@ pub enum ConstructionRefused {
     Misfit {
         identity: KType,
         representation: KType,
+        payload: KType,
     },
     /// The payload's type cannot be solved against the family's representation: a structural
     /// mismatch, or contributions to one parameter with no maximum.
@@ -80,6 +81,7 @@ pub fn construction(
                 Err(ConstructionRefused::Misfit {
                     identity: head,
                     representation,
+                    payload,
                 })
             }
         }

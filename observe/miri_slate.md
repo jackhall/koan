@@ -221,15 +221,20 @@ shorter brand than the one it was bound at.
   root; one also holding a list its lambda never reaches, whose lambda's knot is re-tied in the root
   with its capture deep-copied and the region reclaimed; each called after, reading its capture
   where it now lies.
+- `a_self_call_in_tail_position_holds_its_cells_constant_however_deep`
+  a frame tails its last statement into the evaluator with a view of its own activation: the
+  successor is a tenant of the frame's caller, so the crossing pins the frame's region before the
+  frame is released, and the evaluation reads through that view and tails into the next frame —
+  sixty-four hops under Miri.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-28: 199s — 25 tests, 0 leaks, 0 UB
 - 2026-09-24: 175s — 23 tests, 0 leaks, 0 UB
 - 2026-09-22: 106s — 22 tests, 0 leaks, 0 UB
 - 2026-09-22: 108s — 22 tests, 0 leaks, 0 UB
 - 2026-09-22: 79s — 21 tests, 0 leaks, 0 UB
-- 2026-09-21: 84s — 20 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

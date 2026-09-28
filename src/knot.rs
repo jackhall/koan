@@ -62,8 +62,8 @@ use crate::elaborate::Elaboration;
 use crate::memory::{BumpAllocator, DropFree, Edge, Member, covariant, reattachable};
 use crate::parse::ExpressionPart;
 use crate::scope::{Activation, ActivationView, Builtins, Site};
-use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::symbols::{BinderSymbol, SymbolInterner};
+use crate::type_lattice::{KType, TypeRegistry, display_name};
 use crate::values::{
     self, Circular, ConstructionRefused, KeyRejected, Resolved, Value, ValueCarrier, ValueFamily,
     Weight,
@@ -285,6 +285,80 @@ pub enum Untieable<'x> {
     /// no function node or cut between them, so no finite type memoizes them: the members whose
     /// right-hand sides hold them, in component order.
     TypeCycle { names: &'x [BinderSymbol] },
+}
+
+impl<'x> Untieable<'x> {
+    /// The refusal as an error value's message, with its names spelled through `symbols` and its
+    /// types through `types`.
+    pub fn display<'d, 'run>(
+        &'d self,
+        symbols: &'d SymbolInterner,
+        types: &'d TypeRegistry<'run>,
+    ) -> UntieableDisplay<'d, 'x, 'run> {
+        UntieableDisplay {
+            error: self,
+            symbols,
+            types,
+        }
+    }
+}
+
+/// An [`Untieable`] beside the interner and registry it renders through.
+pub struct UntieableDisplay<'d, 'x, 'run> {
+    error: &'d Untieable<'x>,
+    symbols: &'d SymbolInterner,
+    types: &'d TypeRegistry<'run>,
+}
+
+impl fmt::Display for UntieableDisplay<'_, '_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
+        let ktype = |handle: &KType| display_name(*handle, self.types, self.symbols);
+        match self.error {
+            Untieable::Type(error) => write!(f, "{}", error.display(self.symbols, self.types)),
+            Untieable::Opaque { name: member } => {
+                write!(f, "`{}` is bound to nothing a knot holds", name(member))
+            }
+            Untieable::Eager { name: member, .. } => {
+                write!(f, "`{}` needs a part evaluated first", name(member))
+            }
+            Untieable::Key { rejected, .. } => match rejected {
+                KeyRejected::NotAScalar(handle) => {
+                    write!(f, "{} cannot be a dict key", ktype(handle))
+                }
+                KeyRejected::NaN => f.write_str("NaN cannot be a dict key"),
+            },
+            Untieable::Construction { refused, .. } => match refused {
+                ConstructionRefused::NotConstructible(head) => {
+                    write!(f, "{} is not callable", ktype(head))
+                }
+                ConstructionRefused::Misfit {
+                    identity,
+                    representation,
+                    payload,
+                } => write!(
+                    f,
+                    "{} cannot wrap {}: its representation is {}",
+                    ktype(identity),
+                    ktype(payload),
+                    ktype(representation)
+                ),
+                ConstructionRefused::Unsolved { family, payload } => write!(
+                    f,
+                    "{} cannot be solved against {}",
+                    ktype(family),
+                    ktype(payload)
+                ),
+            },
+            Untieable::TypeCycle { names } => {
+                f.write_str("these bindings build values of no finite type:")?;
+                for member in names.iter() {
+                    write!(f, " `{}`", name(member))?;
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 /// The family of [`Knotted`], which `values` crosses a callable through.

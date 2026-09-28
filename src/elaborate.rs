@@ -55,9 +55,11 @@ pub use signature::{
     Callable, Canonical, ParameterBinding, Registered, callable_type, static_callable_type,
 };
 
+use std::fmt;
+
 use crate::scope::Site;
-use crate::symbols::{Symbol, TypeSymbol};
-use crate::type_lattice::KType;
+use crate::symbols::{Symbol, SymbolInterner, TypeSymbol};
+use crate::type_lattice::{KType, TypeRegistry, display_name};
 
 /// Why a type expression did not elaborate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,4 +76,48 @@ pub enum Elaboration {
     Bound { site: Site },
     /// A meet at `site` of two signatures that rank one keyword pattern two ways.
     RankingDisagrees { site: Site },
+}
+
+impl Elaboration {
+    /// The refusal as an error value's message, with its names spelled through `symbols` and its
+    /// types through `types`.
+    pub fn display<'x, 'run>(
+        &'x self,
+        symbols: &'x SymbolInterner,
+        types: &'x TypeRegistry<'run>,
+    ) -> ElaborationDisplay<'x, 'run> {
+        ElaborationDisplay {
+            error: self,
+            symbols,
+            types,
+        }
+    }
+}
+
+/// An [`Elaboration`] beside the interner and registry it renders through.
+pub struct ElaborationDisplay<'x, 'run> {
+    error: &'x Elaboration,
+    symbols: &'x SymbolInterner,
+    types: &'x TypeRegistry<'run>,
+}
+
+impl fmt::Display for ElaborationDisplay<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.error {
+            Elaboration::NotAType { name, .. } => {
+                write!(f, "{} names no type", self.symbols.display(name.symbol()))
+            }
+            Elaboration::Unsupported { .. } => f.write_str("this type expression is not supported"),
+            Elaboration::NoSuchMember { owner, name } => write!(
+                f,
+                "{} has no member {}",
+                display_name(*owner, self.types, self.symbols),
+                self.symbols.display(*name)
+            ),
+            Elaboration::Bound { .. } => f.write_str("a bound names a type variable or Never"),
+            Elaboration::RankingDisagrees { .. } => {
+                f.write_str("a meet of two signatures ranks one key two ways")
+            }
+        }
+    }
 }

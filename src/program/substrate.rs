@@ -1,5 +1,7 @@
 //! The substrate: an owner that borrows nothing, and the running state that borrows it.
 
+use std::cell::Cell;
+
 use self_cell::self_cell;
 
 use crate::memory::{Bump, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident};
@@ -11,7 +13,7 @@ use crate::type_lattice::TypeRegistry;
 
 use super::body;
 use super::bundle::{KBirth, KBundle};
-use super::record::{Language, LoadError, Program};
+use super::record::{Language, LoadError, Outcome, Output, Program};
 
 /// What the substrate owns outright. It borrows nothing, and `self_cell` boxes it and only ever
 /// lends it shared, so everything that borrows it lives in [`Running`].
@@ -47,16 +49,23 @@ impl<'graph> Running<'graph> {
 
     /// Run the program: the body runner born as a tenant of the root, so the top level's bindings
     /// are written in the root's region. What it leaves at rest is kept for [`inspect`](Self::inspect);
-    /// a second run runs the program again and replaces it.
-    pub fn run(&mut self) -> Result<(), DrainStalled> {
+    /// a second run runs the program again and replaces it. A run whose top level received an
+    /// error value wrote its message to the error sink, and is [`Outcome::Uncaught`].
+    pub fn run(&mut self) -> Result<Outcome, DrainStalled> {
         let work = Work {
             step: body::run,
             state: KBirth::Program {
                 program: self.program,
             },
         };
+        let uncaught = self.program.uncaught();
+        uncaught.set(false);
         self.resting = Scheduler::over(&mut self.graph).run(work, self.root, Placement::Shares)?;
-        Ok(())
+        Ok(if uncaught.get() {
+            Outcome::Uncaught
+        } else {
+            Outcome::Completed
+        })
     }
 
     /// Run `step` as a later root work, a tenant of the root born from what the top level left at
@@ -111,12 +120,18 @@ pub struct CellSubstrate(Joined);
 impl CellSubstrate {
     /// Parse `source` into fresh program storage and stand the program up beside it, over a slab of
     /// `cap` cells, one of which is its root: `language`'s builtin table at `'graph`, the program's
-    /// shape over it, the root, and the [`Program`] record. `cap` is at least one.
+    /// shape over it and checked by the language, the root, and the [`Program`] record writing to
+    /// `output`. `cap` is at least one.
     ///
     /// A refused shape is rendered into its [`LoadError`] on the way out, while the interner and
     /// registry its names and types render through still stand; a load that succeeds renders
     /// nothing.
-    pub fn load<L: Language>(source: &str, path: &str, cap: u32) -> Result<Self, LoadError> {
+    pub fn load<L: Language>(
+        source: &str,
+        path: &str,
+        cap: u32,
+        output: Output,
+    ) -> Result<Self, LoadError> {
         let owner = Owner {
             storage: program_storage(),
             registry: Bump::new(),
@@ -133,14 +148,25 @@ impl CellSubstrate {
                 .alloc(TypeRegistry::in_region(&owner.registry));
             let scratch = Bump::new();
             let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
+            let refused = |error: crate::scope::ShapeError<'_>| LoadError::Shape {
+                rendered: error.display(&owner.symbols, types).to_string(),
+            };
             let shape =
                 BodyShape::of_program(brand, &parsed, builtins, types, &owner.symbols, &scratch)
-                    .map_err(|error| LoadError::Shape {
-                        rendered: error.display(&owner.symbols, types).to_string(),
-                    })?;
+                    .map_err(refused)?;
+            L::check(shape, builtins, types, &scratch).map_err(refused)?;
+            let writer = brand.writer();
             let program = resident(
-                brand.writer(),
-                Program::new(shape, builtins, types, &owner.symbols, L::evaluator()),
+                writer,
+                Program::new(
+                    shape,
+                    builtins,
+                    types,
+                    &owner.symbols,
+                    L::evaluator(),
+                    output,
+                    &writer.fill(1, |_| Cell::new(false))[0],
+                ),
             );
             let mut graph = Graph::new(cap);
             let root = graph

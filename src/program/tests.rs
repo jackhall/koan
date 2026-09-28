@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use crate::knot::{KValue, Knotted};
 use crate::memory::Bump;
 use crate::program::record::Program;
-use crate::program::{CellSubstrate, KBirth, KBundle, KState};
+use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome, Output};
 use crate::scheduler::{Action, Step, StepError};
 use crate::scope::{Coordinate, Target};
 use crate::type_lattice::display_name;
@@ -22,18 +22,42 @@ use evaluator::{Mini, record};
 thread_local! {
     /// The top-level names the next [`inspecting`] step reads, in order.
     static WANTED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Every line written to either sink since the last [`written`], in order.
+    static WRITTEN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Sinks that keep what they are handed for [`written`].
+fn output() -> Output {
+    fn keep(text: &str) {
+        WRITTEN.with(|written| written.borrow_mut().push(text.to_string()));
+    }
+    Output {
+        print: keep,
+        error: keep,
+    }
+}
+
+/// Everything written to either sink since the last call, which forgets it.
+fn written() -> Vec<String> {
+    WRITTEN.with(|written| std::mem::take(&mut *written.borrow_mut()))
 }
 
 /// `source` loaded over the miniature evaluator on a slab of `cap` cells.
 fn loaded(source: &str, cap: u32) -> CellSubstrate {
-    CellSubstrate::load::<Mini>(source, "<test>", cap)
+    written();
+    CellSubstrate::load::<Mini>(source, "<test>", cap, output())
         .unwrap_or_else(|error| panic!("`{source}` loads: {error:?}"))
 }
 
 /// Run `substrate`'s program, then read `names` back through a second root work in a separate call,
 /// and hand back what each read.
 fn run_and_read(substrate: &mut CellSubstrate, names: &[&str]) -> Vec<String> {
-    substrate.with(|running| running.run().expect("the program runs to completion"));
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Completed),
+        "{:?}",
+        written()
+    );
     read_back(substrate, names)
 }
 
@@ -61,6 +85,31 @@ fn compare_back(substrate: &mut CellSubstrate, left: &str, right: &str) -> Strin
             .expect("the comparison runs to completion")
     });
     evaluator::recorded().concat()
+}
+
+/// The type of the top-level binding `name`, read through a root work resumed from what the top
+/// level left at rest.
+fn type_back(substrate: &mut CellSubstrate, name: &str) -> String {
+    evaluator::reset();
+    WANTED.with(|wanted| *wanted.borrow_mut() = vec![name.to_string()]);
+    substrate.with(|running| {
+        running
+            .inspect(typing)
+            .expect("the inspection runs to completion")
+    });
+    evaluator::recorded().concat()
+}
+
+/// [`inspecting`]'s sibling: it records the wanted binding's type.
+fn typing<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+    let (step, state) = step.state();
+    let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
+        return step.failed(StepError::Refused);
+    };
+    let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
+    let value = wanted(program, &view, &name);
+    record(display_name(value.ktype(), program.types(), program.symbols()).to_string());
+    step.leave(birth)
 }
 
 /// A root work born from the top level's resting view: it records each wanted binding and leaves

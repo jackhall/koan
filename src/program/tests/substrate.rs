@@ -4,7 +4,7 @@ use crate::program::{CellSubstrate, KBirth, KBundle, LoadError};
 use crate::scheduler::{Action, DrainStalled, Placement, Step, StepError, Work};
 
 use super::evaluator::Mini;
-use super::{loaded, read_back, run_and_read};
+use super::{loaded, output, read_back, run_and_read};
 
 /// Two programs, loaded by a helper that hands each substrate back.
 fn two() -> (CellSubstrate, CellSubstrate) {
@@ -30,11 +30,11 @@ fn two_programs_run_and_are_read_back_in_a_separate_call() {
 #[test]
 fn load_reports_a_parse_error_and_a_shape_error() {
     assert!(matches!(
-        CellSubstrate::load::<Mini>("foo[2]", "<test>", 2),
+        CellSubstrate::load::<Mini>("foo[2]", "<test>", 2, output()),
         Err(LoadError::Parse(_))
     ));
     assert!(matches!(
-        CellSubstrate::load::<Mini>("LET a = nowhere", "<test>", 2),
+        CellSubstrate::load::<Mini>("LET a = nowhere", "<test>", 2, output()),
         Err(LoadError::Shape { .. })
     ));
 }
@@ -52,7 +52,7 @@ fn a_refused_load_renders_its_shape_error_alone() {
         ),
     ] {
         // The substrate, and with it the interner and registry, is gone once `load` returns.
-        let Err(error) = CellSubstrate::load::<Mini>(source, "main.koan", 2) else {
+        let Err(error) = CellSubstrate::load::<Mini>(source, "main.koan", 2, output()) else {
             panic!("`{source}` is refused");
         };
         assert_eq!(error.to_string(), rendered, "{source}");

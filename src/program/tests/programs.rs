@@ -1,12 +1,13 @@
 //! Whole programs under the drain: unit order, where a value is built, the slab holding the root
 //! alone, calls and recursion, components, eager parts, module bodies, lambdas — born where they
-//! are written, returned from a frame, and held in a knot — and quotes run by `EVAL`.
+//! are written, returned from a frame, and held in a knot — quotes run by `EVAL`, error values,
+//! the contract a frame ends under, and the tail a frame hands its last statement to.
 
-use crate::program::CellSubstrate;
 use crate::program::body::SUPPLIED_WAKES;
+use crate::program::{CellSubstrate, Outcome};
 
 use super::evaluator::{Mini, recorded, reset};
-use super::{compare_back, loaded, read_back, run_and_read};
+use super::{compare_back, loaded, output, read_back, run_and_read, type_back, written};
 
 /// The depth a recursion runs to: past the slab cap, and small under Miri.
 const DEPTH: u32 = if cfg!(miri) { 8 } else { 300 };
@@ -207,11 +208,12 @@ fn a_whole_program() {
          LET last = (f 0)"
     );
     let mut substrate = loaded(&source, 1);
-    let read = run_and_read(&mut substrate, &["deep", "m", "last", "a"]);
+    let read = run_and_read(&mut substrate, &["deep", "m"]);
     assert_eq!(read[0], "0");
     assert_eq!(read[1], "module(3)");
     assert_eq!(
-        read[2], read[3],
+        compare_back(&mut substrate, "last", "a"),
+        "Ok(true)",
         "`f` returns `a`, the data node it closes over"
     );
 }
@@ -226,18 +228,29 @@ fn a_quantified_lambda_is_called_by_name() {
     assert_eq!(read[0], "7");
 }
 
+/// Run `substrate`'s program to completion and hand back every type value its bodies read.
+fn read_types(substrate: &mut CellSubstrate) -> Vec<String> {
+    reset();
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Completed)
+    );
+    recorded()
+        .into_iter()
+        .filter(|seen| seen.starts_with("read ") && !seen.contains("0x"))
+        .collect()
+}
+
 #[test]
 fn a_call_binds_each_type_parameter_to_its_solution() {
     // The frame solves the callee's group against the arguments' carried types and binds `Elt` to
     // what it solved, so the body reads the argument's own type.
     let mut substrate = loaded(
-        "LET which = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(Elt))\n\
+        "LET which = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #((Elt) (x)))\n\
          LET n = (which 7)\nLET s = (which \"a\")",
         2,
     );
-    let read = run_and_read(&mut substrate, &["n", "s"]);
-    assert_eq!(read[0], "Number");
-    assert_eq!(read[1], "Str");
+    assert_eq!(read_types(&mut substrate), ["read Number", "read Str"]);
 }
 
 #[test]
@@ -245,13 +258,11 @@ fn a_combined_quantified_expression_called_by_name_binds_its_solution() {
     // A combined definition is typed by its function type, so a call through its `LET` name solves
     // the group as a `FN FOR ALL`'s does.
     let mut substrate = loaded(
-        "LET which = FN EXPR FOR ALL #[Elt] #(WHICH x :Elt) -> Elt = #(Elt)\n\
+        "LET which = FN EXPR FOR ALL #[Elt] #(WHICH x :Elt) -> Elt = #((Elt) (x))\n\
          LET n = (which 7)\nLET s = (which \"a\")",
         2,
     );
-    let read = run_and_read(&mut substrate, &["n", "s"]);
-    assert_eq!(read[0], "Number");
-    assert_eq!(read[1], "Str");
+    assert_eq!(read_types(&mut substrate), ["read Number", "read Str"]);
 }
 
 /// A quantified return is no scalar, so a call through one shares its frame rather than placing
@@ -264,8 +275,8 @@ fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
     // frame that read the map positionally would hand one of them the other's answer. Both must
     // read `Unused` as `Any` whichever way the two symbols happen to sort.
     let mut substrate = loaded(
-        "LET ab = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Held = #(Unused))\n\
-         LET ba = (FN FOR ALL #[Unused Held] :{x :(LIST OF Held)} -> Held = #(Unused))\n\
+        "LET ab = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
+         LET ba = (FN FOR ALL #[Unused Held] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
          LET one = (ab [1 2])\nLET two = (ba [1 2])",
         2,
     );
@@ -313,9 +324,9 @@ fn a_generic_function_carries_types_and_code() {
 #[test]
 fn a_capitalized_name_holds_only_a_type() {
     // Whether the refusal comes at load or at run is not this test's business.
-    let refused = |source: &str| match CellSubstrate::load::<Mini>(source, "<test>", 2) {
+    let refused = |source: &str| match CellSubstrate::load::<Mini>(source, "<test>", 2, output()) {
         Err(_) => true,
-        Ok(mut substrate) => substrate.with(|running| running.run()).is_err(),
+        Ok(mut substrate) => substrate.with(|running| running.run()) != Ok(Outcome::Completed),
     };
     assert!(!refused("LET Foo = Number"), "a type under a type name");
     assert!(refused("LET Foo = 1"), "a number under a type name");
@@ -333,10 +344,18 @@ fn a_call_whose_argument_cannot_solve_the_group_is_refused() {
         "LET first = (FN FOR ALL #[Held] :{x :(LIST OF Held)} -> Held = #(x))\nLET r = (first 7)",
         2,
     );
-    let outcome = substrate.with(|running| running.run());
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught),
+        "a group the argument cannot solve raises an error value"
+    );
+    let [error] = &written()[..] else {
+        panic!("one error written");
+    };
     assert!(
-        outcome.is_err(),
-        "a group the argument cannot solve refuses"
+        error.starts_with("error: :(FN FOR ALL #[Held]")
+            && error.ends_with("cannot be solved against :{x :Number}"),
+        "{error}"
     );
 }
 
@@ -375,8 +394,9 @@ fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
         "LET v = (FN FOR ALL #{Elt: Value} :{x :Elt} -> Elt = #(x))\nLET q = (v #(1))",
     ] {
         let mut substrate = loaded(source, 2);
-        assert!(
-            substrate.with(|running| running.run()).is_err(),
+        assert_eq!(
+            substrate.with(|running| running.run()),
+            Ok(Outcome::Uncaught),
             "`{source}` refuses"
         );
     }
@@ -385,7 +405,7 @@ fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
 #[test]
 fn a_type_parameter_canonical_form_dropped_reads_as_its_bound() {
     let mut substrate = loaded(
-        "LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held = #(Unused))\n\
+        "LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Any = #(Unused))\n\
          LET t = (which [1 2])",
         2,
     );
@@ -532,11 +552,11 @@ fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
         let mut substrate = loaded(&format!("{twice}\nLET r = (twice #(x MINUS 1))"), 4);
         reset();
         let outcome = substrate.with(|running| running.run());
-        assert!(outcome.is_err(), "{twice}");
-        assert!(
-            recorded().contains(&String::from("refused unbound x")),
-            "{twice}: {:?}",
-            recorded()
+        assert_eq!(outcome, Ok(Outcome::Uncaught), "{twice}");
+        assert_eq!(
+            written(),
+            ["error: unbound name 'x'"],
+            "the refusal is an error value the top level reports"
         );
     }
 }
@@ -546,16 +566,11 @@ fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
 #[test]
 fn a_required_keyworded_hole_is_unbound_when_eval_runs() {
     let mut substrate = loaded(&format!("{TWICE}\nLET r = (twice #(NOPE 1))"), 4);
-    reset();
-    let outcome = substrate.with(|running| running.run());
-    assert!(outcome.is_err());
-    let recorded = recorded();
-    assert!(
-        recorded
-            .iter()
-            .any(|entry| entry.starts_with("refused unbound")),
-        "{recorded:?}"
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught)
     );
+    assert_eq!(written(), ["error: unbound key (NOPE _)"]);
 }
 
 #[test]
@@ -606,9 +621,14 @@ fn a_binder_capturing_an_eval_statement_declared_after_it_runs_after_it() {
 #[test]
 fn a_malformed_quote_loads_and_its_error_is_reported_when_eval_runs_it() {
     let mut substrate = loaded("LET r = (EVAL #((LET x = 1) (LET x = 2) (PRINT x)))", 4);
-    reset();
-    assert!(substrate.with(|running| running.run()).is_err());
-    assert_eq!(recorded(), ["refused shape"]);
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught)
+    );
+    let [error] = &written()[..] else {
+        panic!("one error written");
+    };
+    assert!(error.contains("is bound twice"), "{error}");
 }
 
 #[test]
@@ -620,4 +640,96 @@ fn a_marked_type_name_in_a_signature_the_code_writes_binds_where_the_quote_is_wr
         4,
     );
     assert_eq!(run_and_read(&mut substrate, &["r"]), ["4"]);
+}
+
+#[test]
+fn a_refused_tie_is_an_error_value_that_ends_the_program_uncaught() {
+    let mut substrate = loaded("LET before = 1\nLET a = [b]\nLET b = [a]\nLET after = 2", 2);
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught)
+    );
+    let [error] = &written()[..] else {
+        panic!("one error written");
+    };
+    // The members are named in component order, which is by symbol.
+    assert!(
+        error == "error: these bindings build values of no finite type: `a` `b`"
+            || error == "error: these bindings build values of no finite type: `b` `a`",
+        "{error}"
+    );
+    assert_eq!(
+        read_back(&mut substrate, &["before"]),
+        ["1"],
+        "what the top level bound before the error stays readable"
+    );
+}
+
+#[test]
+fn a_frame_s_value_is_retyped_to_its_declared_return() {
+    // The first body's last statement binds nothing, so the frame tails into its evaluation, which
+    // owes the contract; the second's is a `LET`, which the frame holds to it as it ends.
+    for body in ["#([1 2])", "#((LET xs = [1 2]))"] {
+        let mut substrate = loaded(
+            &format!("LET f = (FN :{{n :Number}} -> (LIST OF Any) = {body})\nLET r = (f 0)"),
+            2,
+        );
+        run_and_read(&mut substrate, &[]);
+        assert_eq!(type_back(&mut substrate, "r"), ":(LIST OF Any)", "{body}");
+    }
+}
+
+#[test]
+fn a_return_that_misses_its_declared_type_is_an_error_value() {
+    for body in ["#(n)", "#((LET m = n))"] {
+        let mut substrate = loaded(
+            &format!("LET f = (FN :{{n :Number}} -> Str = {body})\nLET r = (f 1)"),
+            2,
+        );
+        assert_eq!(
+            substrate.with(|running| running.run()),
+            Ok(Outcome::Uncaught),
+            "{body}"
+        );
+        assert_eq!(
+            written(),
+            ["error: :(FN :{n :Number} -> Str) returned Number, which does not satisfy Str"],
+            "{body}"
+        );
+    }
+}
+
+/// The most cells live at once while `(count depth)` runs, where `count`'s last statement is a
+/// `WHEN` whose branch calls `count` again.
+fn peak_counting_down(depth: u32) -> usize {
+    let mut substrate = loaded(
+        &format!(
+            "LET count = (FN :{{n :Number}} -> Number = #(WHEN n THEN (count (n MINUS 1)) ELSE n))\n\
+             LET r = (count {depth})"
+        ),
+        2,
+    );
+    substrate.with(|running| {
+        let work = crate::scheduler::Work {
+            step: crate::program::run,
+            state: crate::program::KBirth::Program {
+                program: running.program(),
+            },
+        };
+        let root = running.root();
+        let mut scheduler = running.scheduler();
+        scheduler
+            .run(work, root, crate::scheduler::Placement::Shares)
+            .expect("the program runs");
+        scheduler.peak_live_cells()
+    })
+}
+
+#[test]
+fn a_self_call_in_tail_position_holds_its_cells_constant_however_deep() {
+    // The frame tails its `WHEN` into the evaluator under its contract, the `WHEN` tails its branch,
+    // and the call — whose callee returns `Number`, which the contract asks — tails into the next
+    // frame, so no frame waits on the one after it.
+    let deep = if cfg!(miri) { 64 } else { 10_000 };
+    assert_eq!(peak_counting_down(deep), peak_counting_down(4));
 }
