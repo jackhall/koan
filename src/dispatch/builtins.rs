@@ -14,7 +14,7 @@
 //! A native runs over operands its overload's shape admitted, so it reads each one as the type its
 //! slot declares. What it refuses of a value it admitted is an error value.
 
-use crate::elaborate::{builtin_error, builtin_shape_types};
+use crate::elaborate::{builtin_error, builtin_shape_types, declared_field};
 use crate::knot::{KBuiltins, KValue, UsingRefused, builtin, using};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
 use crate::parse::builtin_shapes::{BUILTIN_SHAPES, BuiltinShapeId, ShapeElement};
@@ -317,6 +317,17 @@ pub(super) fn run<'graph, 'here>(
         Native::ModuleMember => raise(Raised::ModuleMember),
         Native::Field => {
             let (record, name) = (value(0), label(operands[1]).symbol());
+            // A type's field is the type its record declares the field with, as `:(Point.y)` reads.
+            if let Some(owner) = record.as_type() {
+                let owner = owner.handle();
+                return Ran::Value(match declared_field(types, &scratch, owner, name) {
+                    Some(declared) => type_value(declared),
+                    None => raise(Raised::NoField {
+                        of: owner,
+                        field: name,
+                    }),
+                });
+            }
             field(record, name).unwrap_or_else(|| {
                 raise(Raised::NoField {
                     of: record.ktype(),

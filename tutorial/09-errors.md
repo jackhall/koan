@@ -1,24 +1,22 @@
 # Errors
 
-When something goes wrong, Koan raises a structured **error value**. An error
-carries a *kind* (what went wrong) and a chain of *frames* (where it came from).
-An uncaught error stops the program and prints to standard error, listing the
-frames beneath the message:
+When something goes wrong while a program runs, Koan raises an **error value**
+carrying a message. Every expression that receives an error value passes it on
+unchanged, so an error raised deep inside a call surfaces as the value of the
+statement that made the call. An uncaught error stops the program and prints its
+message to standard error:
 
 ```koan
-EXPR #(BOOM x :Number) -> Str = #(mystery)
-BOOM 1
+EXPR #(BOOM x :Number) -> Str = #(x + "one")
+PRINT "before"
+PRINT (BOOM 1)
+PRINT "after"
 ```
 
 ```text
-error: unbound name 'mystery'
-  in :(FN :{x :Number} -> Str) (BOOM 1) at <input>:2:1
+before
+error: no overload of _ + _ admits (Number, Str)
 ```
-
-The `in …` lines are the call trace, innermost first. A frame for a function call
-names it two ways — the function's signature type, then the call site's own source
-text in parentheses — and ends with the file, line and column that call sits at.
-An error raised at the top level, outside any call, has no frames.
 
 ## Catching errors with `TRY`
 

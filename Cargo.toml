@@ -15,14 +15,13 @@ path = "src/lib.rs"
 [[bin]]
 name = "koan"
 path = "src/main.rs"
-# The interpreter binary drives the pending-rewrite runtime, so it builds only with that feature.
-required-features = ["pending_rewrite"]
 
 [features]
-# The pre-rewrite runtime: `machine`, `builtins`, the interpreter binary, the integration tests
+# The pre-rewrite runtime: `machine`, `builtins`, the integration tests
 # and every kept-module test that reaches the old runtime. Off by default so the default build,
 # test and lint slate covers only the modules the rewrite keeps (TEST.md § The pending rewrite).
-# `cargo test --features pending_rewrite` runs the whole old suite. Every other feature below is a knob on the old runtime, so each turns this one on.
+# `cargo test --features pending_rewrite` runs the whole old suite. The seam and region-audit
+# features below are knobs on the old runtime, so each turns this one on.
 pending_rewrite = []
 
 # Escape-seam verification builds — mutually exclusive (a `compile_error!` guards the pair).
@@ -33,19 +32,19 @@ seam-force-copy = ["pending_rewrite"]   # escape seam always copies records
 seam-force-pin  = ["pending_rewrite"]   # escape seam always pins records
 
 # Reach-tightness auditing: the over-pinning report at the fold chokepoint
-# (`machine::core::reach_audit`). Off by default and absent from a release build; `cargo run
-# --features region-audit -- <program>` turns it on for a debug interpreter run.
+# (`machine::core::reach_audit`). Off by default and absent from a release build.
 region-audit = ["pending_rewrite"]
 
 # Whole-program instrument counts: wraps the binary's allocator in the delegating counter
-# at `audit/counting_alloc.rs` and arms the symbol-mint tally in `machine::model::labels`,
-# reporting the run's `allocations:` and `symbols_minted:` totals on stderr.
+# at `audit/counting_alloc.rs` and arms the symbol-mint tally in `symbols`, reporting the
+# run's `allocations:` and `symbols_minted:` totals on stderr.
 # `cargo run --features alloc-count -- audit/shapes/wide_n100.koan` reads one shape;
 # `tools/alloc_audit.py` reads them all. Off by default, so a normal build keeps `mimalloc`
 # unwrapped — and because the counter wraps rather than replaces, the counted build and
-# the shipped build allocate through the same allocator.
-alloc-count = ["pending_rewrite"]
-dhat = ["pending_rewrite", "dep:dhat"]
+# the shipped build allocate through the same allocator. Neither this nor `dhat` is a knob on
+# the old runtime: both instrument the interpreter binary.
+alloc-count = []
+dhat = ["dep:dhat"]
 
 [dependencies]
 indexmap = "2"

@@ -68,7 +68,7 @@ EXPR #(x :Number) -> Number = #(x)
 ```
 
 ```text
-error: shape error: FN signature must contain at least one Keyword (a fixed token to dispatch on)
+error: <input>:1:1: a definition's head must spell at least one keyword
 ```
 
 ## Return types are enforced
@@ -82,12 +82,11 @@ WRONG 5
 ```
 
 ```text
-error: type mismatch for argument '<return>': expected Str, got Number
-  in :(FN :{x :Number} -> Str) (WRONG 5) at <input>:2:1
+error: :(FN :{x :Number} -> Str) returned Number, which does not satisfy Str
 ```
 
-The indented `in …` line is the call trace that every error carries;
-[Errors](09-errors.md) covers how to read and catch them.
+The message names the function by its type; [Errors](09-errors.md) covers what an
+error is.
 
 This has one consequence worth internalizing early: **`PRINT` evaluates to the
 string it printed**, not to null. So a function whose body is a `PRINT` returns
@@ -210,7 +209,7 @@ pick {a = "only"}
 ```
 
 ```text
-error: missing argument 'b'
+error: arguments :{a :Str} do not name the parameters of :(FN :{a :Str b :Str} -> Str)
 ```
 
 ### Anonymous functions

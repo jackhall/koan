@@ -262,7 +262,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
                     };
                     self.types
                         .union_member_named(owner, name)
-                        .or_else(|| self.field(owner, name))
+                        .or_else(|| declared_field(self.types, self.scratch, owner, name))
                         .ok_or(Elaboration::NoSuchMember { owner, name })
                 }
                 _ => Err(unsupported),
@@ -363,28 +363,6 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
             return Err(Elaboration::RankingDisagrees { site });
         }
         Ok(meet(self.types, self.scratch, left, right))
-    }
-
-    /// The type the record under `owner` declares `name` with, read through every newtype layer
-    /// above it — a `NEWTYPE`'s representation, a union variant's payload. `None` when no record
-    /// lies under `owner` or it declares no `name`; a ring of newtypes with no record under it,
-    /// `NEWTYPE Loop = Loop`, is peeled once round and then refused.
-    fn field(&self, owner: KType, name: Symbol) -> Option<KType> {
-        let mut peeled = BumpVec::new_in(self.scratch);
-        let mut layer = owner;
-        loop {
-            match self.types.node(layer) {
-                TypeNode::Record { fields } => return fields.get(name),
-                TypeNode::SetMember {
-                    schema: NodeSchema::NewType(repr),
-                    ..
-                } if !peeled.contains(&repr) => {
-                    peeled.push(layer);
-                    layer = repr;
-                }
-                _ => return None,
-            }
-        }
     }
 
     /// A `FOR ALL` group's names and bounds, in written order: a list of name quotes, or a dict of
@@ -664,4 +642,31 @@ pub(super) fn walk_head<'p, 'graph, E>(
         }
     }
     Ok(())
+}
+
+/// The type the record under `owner` declares `name` with, read through every newtype layer above
+/// it — a `NEWTYPE`'s representation, a union variant's payload. `None` when no record lies under
+/// `owner` or it declares no `name`; a ring of newtypes with no record under it, `NEWTYPE Loop =
+/// Loop`, is peeled once round and then refused.
+pub fn declared_field(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    owner: KType,
+    name: Symbol,
+) -> Option<KType> {
+    let mut peeled = BumpVec::new_in(scratch);
+    let mut layer = owner;
+    loop {
+        match types.node(layer) {
+            TypeNode::Record { fields } => return fields.get(name),
+            TypeNode::SetMember {
+                schema: NodeSchema::NewType(repr),
+                ..
+            } if !peeled.contains(&repr) => {
+                peeled.push(layer);
+                layer = repr;
+            }
+            _ => return None,
+        }
+    }
 }

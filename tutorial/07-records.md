@@ -76,7 +76,7 @@ p.w
 ```
 
 ```text
-error: shape error: `Point` has no field `w`
+error: Point has no field w
 ```
 
 ## Reading a field named at runtime
@@ -137,7 +137,7 @@ Point {x = 3}
 ```
 
 ```text
-error: type mismatch for argument 'value': expected :{x :Number y :Number}, got :{x :Number}
+error: Point cannot wrap :{x :Number}: its representation is :{x :Number y :Number}
 ```
 
 ```koan
@@ -146,7 +146,7 @@ Point {x = "oops", y = 4}
 ```
 
 ```text
-error: type mismatch for argument 'value': expected :{x :Number y :Number}, got :{x :Str y :Number}
+error: Point cannot wrap :{x :Str y :Number}: its representation is :{x :Number y :Number}
 ```
 
 The required fields are a *minimum*, though — a record may carry **more** fields
@@ -203,8 +203,7 @@ PRINT person.email
 ```
 
 ```text
-error: shape error: `:{name :Str age :Number}` has no field `email`
-  in PRINT <staged> (<bind>) at <input>:2:1
+error: :{name :Str age :Number} has no field email
 ```
 
 Width subtyping has a cost in dispatch: a wide record can satisfy two different
@@ -219,7 +218,7 @@ PICK both
 ```
 
 ```text
-error: ambiguous dispatch: 2 candidates match PICK :{x :Number y :Str z :Str} at <input>:4:1 with equal specificity
+error: ambiguous call of PICK _: 2 overloads admit (:{x :Number y :Str z :Str}) and none ranks first
 ```
 
 `#[<fields>] FROM <record>` resolves this by *projecting* a record to exactly the
@@ -251,8 +250,7 @@ PRINT view.z
 
 ```text
 a
-error: shape error: `:{x :Number y :Str}` has no field `z`
-  in PRINT <staged> (<bind>) at <input>:4:1
+error: :{x :Number y :Str} has no field z
 ```
 
 When you bind a projection, wrap the whole right-hand side:

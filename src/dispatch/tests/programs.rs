@@ -144,6 +144,23 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
 }
 
 #[test]
+fn a_type_s_field_is_the_type_its_record_declares() {
+    let source = "NEWTYPE Point = :{x :Number, y :Str}\n\
+                  NEWTYPE Boxed = Point\n\
+                  PRINT Point.y\n\
+                  PRINT Boxed.x\n\
+                  LET which = #(y)\n\
+                  PRINT (ATTR Point (which))\n\
+                  PRINT Point.z";
+    assert_eq!(run(source), "Str\nNumber\nStr\nerror: Point has no field z");
+    assert_eq!(
+        run("PRINT Number.y"),
+        "error: Number has no field y",
+        "a type with no record under it"
+    );
+}
+
+#[test]
 fn from_projects_a_record_to_the_fields_it_names() {
     let source = "EXPR #(PICK r :{x :Number, y :Str}) -> Str = #(\"got xy\")\n\
                   EXPR #(PICK r :{x :Number, z :Str}) -> Str = #(\"got xz\")\n\

@@ -43,16 +43,17 @@ PRINT name
 world
 ```
 
-Anything that goes wrong surfaces as a structured error printed to standard
-error, and the program stops. For example, referring to a name that was never
-bound:
+Anything that goes wrong surfaces as an error printed to standard error, and
+the program stops. A mistake koan can see in the text itself is reported with
+its line and column before anything runs — referring to a name that was never
+bound, for example:
 
 ```koan
 PRINT mystery
 ```
 
 ```text
-error: unbound name 'mystery'
+error: <input>:1:7: `mystery` names no binding visible here
 ```
 
 ## Expressions and grouping

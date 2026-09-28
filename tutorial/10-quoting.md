@@ -130,7 +130,7 @@ TWICE (PRINT "hi")
 prints `hi` once — that is the argument evaluating — and *then* fails to
 dispatch, because what reached the slot was the `Str` the print returned, not
 code. Nothing is undone by the failure; the side effect had already happened.
-The error names the missing quote:
+The same happens to a name — its value, not its code, reaches the slot:
 
 ```koan
 EXPR #(TWICE body :Expression) -> Any = #(
@@ -142,13 +142,12 @@ TWICE greeting
 ```
 
 ```text
-error: dispatch failed for TWICE Str at <input>:6:1: no matching function: an argument evaluated before dispatch; write #(…) to pass the code itself
+error: no overload of TWICE _ admits (Str)
 ```
 
-The diagnostic names each argument by the *type* dispatch matched it on, not by
+The message names each argument by the *type* dispatch matched it on, not by
 its spelling — `greeting` had already evaluated to a `Str`, and a `Str` is what
-failed to match an `:Expression` slot. The site after the expression is where to
-read the spelling back.
+failed to match an `:Expression` slot. Write `#(…)` to pass the code itself.
 
 Hence the rule for calling a form that takes code: **quote what must not run.**
 

@@ -48,7 +48,7 @@ mod tests;
 
 pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
 pub use declaration::type_declarations;
-pub use expression::type_expression;
+pub use expression::{declared_field, type_expression};
 pub use module::self_signature;
 pub use reads::{BuiltinsOnly, Reads};
 pub use signature::{

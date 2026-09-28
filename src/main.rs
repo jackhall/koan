@@ -1,21 +1,23 @@
-use std::io::Read;
+//! The interpreter: read a program from the file its first argument names, or from stdin, load it
+//! under [`Koan`](koan::dispatch::Koan) and run it. `PRINT` writes to stdout; a refused load, or the
+//! error value that ended the program, writes `error: <message>` to stderr and exits non-zero.
+
+use std::io::{Read, Write};
 use std::process::ExitCode;
 
-use koan::machine::interpret_with_writer_path;
+use koan::dispatch::Koan;
+use koan::program::{CellSubstrate, Outcome, Output};
 
-// Allocator selection, over two axes. Miri can't call mimalloc's FFI
-// (`mi_malloc_aligned`), so the bin target falls back to the system allocator under miri
-// to stay in the audit slate. `alloc-count` then *wraps* whichever of the two is in play
-// in the delegating counter rather than replacing it, so the counted build and the
-// shipped build allocate through the same allocator and a wall-clock reading off the
-// counted one is still comparable.
+// Allocator selection, over two axes. Miri can't call mimalloc's FFI (`mi_malloc_aligned`), so the
+// binary falls back to the system allocator under Miri. `alloc-count` then *wraps* whichever of
+// the two is in play in the delegating counter rather than replacing it, so the counted build and
+// the shipped build allocate through the same allocator.
 #[cfg(feature = "alloc-count")]
 #[path = "../audit/counting_alloc.rs"]
 mod counting_alloc;
 
 // The dhat attribution profiler must own the global allocator outright (it wraps the system
-// allocator and records a backtrace per allocation), so it cannot compose with the delegating
-// counter the way the counter composes with mimalloc.
+// allocator and records a backtrace per allocation), so it cannot compose with the counter.
 #[cfg(all(feature = "dhat", feature = "alloc-count"))]
 compile_error!("`dhat` and `alloc-count` both claim the global allocator; enable exactly one");
 
@@ -37,78 +39,63 @@ static GLOBAL: counting_alloc::Counting<mimalloc::MiMalloc> =
 static GLOBAL: counting_alloc::Counting<std::alloc::System> =
     counting_alloc::Counting(std::alloc::System);
 
-/// CLI entry point: read source from a file (if a path is given as the first argument) or from
-/// stdin, then parse, dispatch, and execute it via `interpret_with_writer_path` so error
-/// frames can render real `path:line:col` locations.
+/// The slab's cap: the whole width a graph's type fixes, so the cap is never what refuses a cell.
+const CELLS: u32 = 64;
+
+/// Read the source, load and run it, and exit on how it ended.
 fn main() -> ExitCode {
-    // Untrimmed backtraces: attribution quality over speed — a profiled run exists to name
-    // allocation sites, and trimming hides the koan frames under deep allocator plumbing.
     #[cfg(feature = "dhat")]
     let _profiler = dhat::Profiler::builder().trim_backtraces(None).build();
-    let (source, path): (String, Option<String>) = match std::env::args().nth(1) {
+    let (source, path) = match std::env::args().nth(1) {
         Some(path) => match std::fs::read_to_string(&path) {
-            Ok(s) => (s, Some(path)),
-            Err(e) => {
-                eprintln!("could not read {}: {}", path, e);
+            Ok(source) => (source, path),
+            Err(error) => {
+                eprintln!("could not read {path}: {error}");
                 return ExitCode::FAILURE;
             }
         },
         None => {
-            let mut buf = String::new();
-            if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
-                eprintln!("could not read stdin: {}", e);
+            let mut source = String::new();
+            if let Err(error) = std::io::stdin().read_to_string(&mut source) {
+                eprintln!("could not read stdin: {error}");
                 return ExitCode::FAILURE;
             }
-            (buf, None)
+            (source, String::from("<input>"))
         }
     };
-
-    let out: Box<dyn std::io::Write> = Box::new(std::io::stdout());
-    let outcome = interpret_with_writer_path(&source, path.as_deref(), out);
-    // Before the region audits: their pin-ring walk is debug scaffolding that allocates in
-    // proportion to what the run pinned, so counting it would fold the reader's own cost
-    // into the program's.
+    let output = Output {
+        print: |text| println!("{text}"),
+        error: |text| {
+            // Whatever was printed lands before the message that ended the program.
+            let _ = std::io::stdout().flush();
+            eprintln!("{text}");
+        },
+    };
+    let mut substrate = match CellSubstrate::load::<Koan>(&source, &path, CELLS, output) {
+        Ok(substrate) => substrate,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let outcome = substrate.with(|running| running.run());
     report_allocations();
-    report_region_audits();
     match outcome {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {}", e);
+        Ok(Outcome::Completed) => ExitCode::SUCCESS,
+        Ok(Outcome::Uncaught) => ExitCode::FAILURE,
+        Err(stalled) => {
+            eprintln!("error: the program stalled ({stalled:?})");
             ExitCode::FAILURE
         }
     }
 }
 
-/// Print the debug region audits' findings to stderr after the run — the reader half of the two
-/// audits, without which turning them on surfaces nothing. Each arm compiles in with what it
-/// reports: the pin-ring log is a debug-build surface, the tightness log the `region-audit`
-/// feature's. The feature is named rather than `cfg(test)`-ored because this binary is its own
-/// crate: the library it links against is built without `--test`, so only the feature turns the
-/// tightness surface on here.
-fn report_region_audits() {
-    #[cfg(debug_assertions)]
-    for ring in koan::memory::pin_cycle_reports() {
-        eprintln!(
-            "region audit: pin ring retained by {:#x} along {:x?}",
-            ring.retainer, ring.path
-        );
-    }
-    #[cfg(feature = "region-audit")]
-    for flag in koan::machine::reach_audit::tightness_flags() {
-        eprintln!(
-            "region audit: over-fold at {} — member {:#x} unjustified; deps {:?} contributed nothing",
-            flag.site, flag.member, flag.non_contributing
-        );
-    }
-}
-
 /// Print the run's allocation and symbol-mint totals to stderr — the reader half of the
-/// `alloc-count` feature, without which arming the two counters surfaces nothing. Both tallies
-/// are read before the first print, since the print itself allocates.
+/// `alloc-count` feature. Both tallies are read before the first print, since the print allocates.
 #[cfg(feature = "alloc-count")]
 fn report_allocations() {
     let total = counting_alloc::allocations();
-    let minted = koan::parse::symbols_minted();
+    let minted = koan::symbols::symbols_minted();
     eprintln!("allocations: {total}");
     eprintln!("symbols_minted: {minted}");
 }
