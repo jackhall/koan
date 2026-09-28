@@ -148,8 +148,9 @@ name it declares. Its **operator channel** carries the
 body's own group, and nothing for a `MODULE` — so how a module's operators chain
 is part of what it is, and a signature stating that chaining is one it satisfies.
 Its keyworded channel is empty until
-[dispatch](../../roadmap/rewrite/dispatch.md) gives a bodyless definition a
-slot.
+[dispatch](../../roadmap/rewrite/dispatch.md) gives a bucket-only definition —
+a bare `EXPR` or `OP` statement — a slot; a bodiless bucket declaration,
+`EXPR #(MOVE 2 TO 1)`, only ranks its bucket and declares no member.
 
 Every slot is bound: the caller runs the body to completion and only then
 ties the binder ([the tie](../knot/README.md#the-tie)), so the self-signature
@@ -389,7 +390,8 @@ interns as the union of its three members.
 ## Open work
 
 - [Dispatch](../../roadmap/rewrite/dispatch.md) — the keyworded channel a
-  bodyless `EXPR` or `OP` member fills, which a self-signature leaves empty.
+  bucket-only `EXPR` or `OP` definition fills, which a self-signature leaves
+  empty.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `WITH` over
   a signature, which the lattice specializes but no type expression elaborates;
   a family's variance, which no declaration states; and a parameterized union

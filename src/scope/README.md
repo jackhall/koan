@@ -383,7 +383,8 @@ Two forms introduce names no shape can see.
 - **`USING … SCOPE`** makes the names its operand surfaces the **parameters of
   its body's block shape**, so a mention of one resolves through the ordinary
   local read, a callable nested in the block captures it the ordinary way, and
-  no coordinate names a member. Only the binding is left to run time, which is
+  no coordinate names a member. The registrations it surfaces are parameters
+  the same way, and candidates for a keyworded use in the body. Only the binding is left to run time, which is
   [the module layer](../knot/module/README.md#entering-a-using--scope-block)'s.
 
   That works only if the names are readable where the shape is built, so the
@@ -426,17 +427,22 @@ Inside a quote, a name or a keyworded use is in one of three states:
   type, which belongs to no scope. A keyworded use that is a hole
   also has the builtin table's overloads as candidates, since they belong to no
   scope, and a registration is a candidate for it only when composed ahead of
-  it. So `#(PRINT x)` finds `PRINT` wherever it goes, and `#(GREET "bob")` finds
-  a user's `GREET` only through composition or a mark. A user's overload of a
-  builtin's key is invisible to an unmarked use, which dispatches over the
-  builtin table's overloads alone.
+  it or filled in by a `USING`. So `#(PRINT x)` finds `PRINT` wherever it goes,
+  and `#(GREET "bob")` finds a user's `GREET` only through composition, a
+  `USING` or a mark. A user's overload of a builtin's key reaches an unmarked
+  use only through composition or a `USING`; one merely visible where the quote
+  is written or run never does.
 - **`$` resolves where the quote is written.** `$x` binds `x` to its binding
   when the quote is born; the part stays a name and compares by its binding.
   `$(…)` resolves the bucket key of the one keyworded use it wraps where the
   quote is written, to a candidate list as a written use does. It covers only
   that use: the use's arguments stay as written, each a hole or marked on its
-  own. `$` never evaluates. A computed value enters a quote as a bound name,
-  and only so: `LET v = (…)`, then `#(… $v …)`.
+  own. Over an operator run the [operator rewrite](#the-four-rewrites)
+  expands, it covers every use the rewrite builds, a pairwise combiner
+  included, so every operator in it resolves the same way; over `a != b` it
+  covers the `==`, since the `NOT` around it is always the builtin's.
+  `$` never evaluates. A computed value enters a quote as a bound name, and
+  only so: `LET v = (…)`, then `#(… $v …)`.
 - **`\` resolves where the code is built**, as the list of free names a
   syntactic closure leaves open does (Bawden and Rees). `\x` binds to the
   nearest binder in the code it is composed into, and otherwise to what the
@@ -444,7 +450,8 @@ Inside a quote, a name or a keyworded use is in one of three states:
   the one keyworded use it wraps, again covering only that use. A mark keeps
   its `\` through every composition until something binds it.
 - **`code USING src`** binds the holes `src` surfaces — a record's fields, a
-  module's members — and returns code with the others still holes, as
+  module's members, and a keyworded hole to the module's registrations at its
+  key — and returns code with the others still holes, as
   [`USING … SCOPE`](#names-that-arrive-at-run-time) makes the names its operand
   surfaces its body's parameters. It applies as often as a program likes, so a
   template's holes can be filled in stages. A field naming no hole is ignored,
@@ -570,7 +577,9 @@ binder in `TWICE`'s body never binds a name in `body`.
 ### Code parameters
 
 A parameter that takes code states the kind of code it takes and the names and
-bucket keys that code may need, spelled from the code's side: when code is
+bucket keys that code may need — a key stored as a symbol and written with `_`
+for each slot, `:(Block NEEDING #[(LOG _)])`, since a slot's name is invisible
+to dispatch — spelled from the code's side: when code is
 composed, its holes are its inputs and its binders its outputs. Offering them
 is the consent of the side that builds, as `\` is the consent of the side that
 writes. A quote's carried type is its code kind and the `\` marks no binder in

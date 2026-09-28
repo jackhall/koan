@@ -4,9 +4,8 @@ The last step of the rewrite: delete the first implementation and the crate it
 scheduled on, once every layer above them has been rebuilt.
 
 **Problem.** The first runtime — [src/machine/](../../src/machine),
-[src/builtins/](../../src/builtins), [src/main.rs](../../src/main.rs), the
-`tests/*.rs` integration binaries and the `workgraph` crate's
-[src/](../../workgraph/README.md) — sits behind the `pending_rewrite` cargo
+[src/builtins/](../../src/builtins), the `tests/*.rs` integration binaries and
+the `workgraph` crate's [src/](../../workgraph/README.md) — sits behind the `pending_rewrite` cargo
 feature, and that build no longer compiles
 ([TEST.md](../../TEST.md#the-pending-rewrite)). It is read as requirements, not
 run. Two things keep it on disk anyway. The first is that the rewrite has not
@@ -24,9 +23,9 @@ the two collide in the `pending_rewrite` build.
 
 **Acceptance criteria.**
 
-- `src/machine/`, `src/builtins/`, `src/builtins.rs`, `src/main.rs` and the
-  `tests/*.rs` integration binaries are gone, and `src/lib.rs` declares no
-  module and re-exports nothing behind a `pending_rewrite` gate.
+- `src/machine/`, `src/builtins/`, `src/builtins.rs` and the `tests/*.rs`
+  integration binaries are gone, and `src/lib.rs` declares no module and
+  re-exports nothing behind a `pending_rewrite` gate.
 - The `pending_rewrite` cargo feature is gone, as is every feature that only
   turns the old runtime on, and no script, doc or CI invocation names one.
 - The `workgraph` crate is gone from the workspace and from

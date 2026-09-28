@@ -71,8 +71,7 @@ as surprises, not scheduled.
 - **No warning channel.** A program has no way to be told about something
   that is neither an error nor a value. The first case with nothing to report
   through is [dispatch](dispatch.md)'s: a user overload that is never selected,
-  because at its instantiated operand type a builtin, or an enclosing scope's
-  overload, is chosen first. The second is a
+  because at its instantiated operand type a builtin is chosen first. The second is a
   keyworded use written unmarked in a quote ([holes](../../src/scope/README.md#holes-and-marks)), whose key has registrations
   visible where it is written that the quote will not see.
 - **`CLOSE OVER` limits what an `EVAL` can see.** The scope builder reports
@@ -121,22 +120,16 @@ as surprises, not scheduled.
 - **A union slot coerces by whichever member the union interned first.** The
   [coercion walk](../../src/knot/module/README.md#members-are-born-coerced) takes the
   first declared member of a union whose source side admits the value. Where two
-  admit it — a slot declared `Carrier | Number` over a source binding `Carrier`
-  to `Number` — which one is reached decides whether the member is sealed at the
-  view's mint or carried as a plain number. Union identity is order-blind
+  admit it — a slot declared `Carrier | Number` over a source solving `Carrier`
+  to `Number` — which one is reached decides whether the member is wrapped in the
+  view's carrier or carried as a plain number. Union identity is order-blind
   ([the type lattice](../../src/type_lattice/README.md#the-node-vocabulary)), so
   the stored member order is whichever spelling interned first anywhere in the
   program, and an unrelated `:(Number | Carrier)` elsewhere can change what this
-  slot builds. A rule that does not depend on interning order — the abstract
-  member winning, or a refusal where two members admit — is a
+  slot builds. A rule that does not depend on interning order — the carrier
+  winning, or a refusal where two members admit — is a
   [modules](modules.md) decision, since that item is where a coerced value is
   first read back.
-- **A signature meet can bound a member by `Never`.** Where two signatures
-  bound one abstract member by types with no common refinement,
-  [`meet_schemas`](../../src/type_lattice/sig_relations.rs) mints the member
-  bounded by their meet, `Never`. A variable bounded by `Never` lies both above
-  and below `Never` as a distinct handle, which breaks the order's antisymmetry;
-  the elaborator refuses a written `Never` bound, but nothing refuses this one.
 - **A dict's keys cross an opaque view's barrier unsealed.** The
   [coercion walk](../../src/knot/module/coerce.rs) leaves a dict's keys
   untouched while it restamps the dict at `MAP <mint> -> …`, so a key read back

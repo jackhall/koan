@@ -37,7 +37,7 @@ Show the top of the table to the user.
 
 ### 2. Lock scope / migration / commit choices
 
-Use `AskUserQuestion` with three questions before launching anything (skip the scope question if `$ARGUMENTS` already specified it):
+Ask three questions in plain text — never through `AskUserQuestion` — and wait for the answers before launching anything (skip the scope question if `$ARGUMENTS` already specified it):
 
 1. **Scope** — `~25 files >20% comments` (recommended), `Comment-bearing files only (>5 comment lines)`, or `All .rs files`.
 2. **Migration** — `Leave source comment in place; flag only` (recommended) or `Delete source comment immediately`. Recommended preserves rationale until your consolidation pass writes it elsewhere.

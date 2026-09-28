@@ -283,9 +283,10 @@ or a string is a **view**: it reads through its sources' runs rather than
 laying down cells or bytes of its own, and a view built from views is one view,
 not a chain.
 
-**A view is invisible.** It carries the type of the eager value it stands for,
-and equality, rendering and `satisfies` read through it, so a program tells a
-view from that value only by what it costs.
+**A view is invisible.** A slice carries its source's type, and a concatenation
+or a splice the join of its sources' types, whether it is a view or written
+flat. Equality, rendering and `satisfies` read through a view, so a program
+tells it from the flat value only by what it costs.
 
 **A crossing resolves a view.** A copy writes only the elements a view shows,
 as flat runs at the destination, and the copy holds nothing of its sources. A
