@@ -524,8 +524,9 @@ vocabulary so an identity move is visible in a diff
 
 - [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
   — a group interned with every declared variable kept, for solving only.
-- [Recursion over runtime data](../../roadmap/rewrite/recursion-over-runtime-data.md)
-  — the structural walks a run-time value's depth may drive.
+- [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
+  — every structural walk, relation and rendering over types as deep as a
+  run-time value's carried type.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
   signature meet that bounds an abstract member by `Never`, which the
   closed-bound rule forbids.

@@ -57,6 +57,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Control expression shapes and errors](rewrite/control-and-errors.md)
 - [Dict defaults](rewrite/dict-defaults.md)
 - [Modules](rewrite/modules.md)
+- [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [Recursion over runtime data](rewrite/recursion-over-runtime-data.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
 - [Slicing and splicing](rewrite/slicing-and-splicing.md)
