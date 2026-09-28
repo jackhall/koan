@@ -85,6 +85,7 @@ fn a_twice_used_variable_takes_the_maximum_or_fails() {
                 DispatchTokenElement::Slot(element),
                 DispatchTokenElement::Slot(element),
             ],
+            &[],
             KType::NULL,
         )
         .handle;
@@ -148,6 +149,7 @@ fn a_single_occurrence_takes_its_bound_or_never() {
                     DispatchTokenElement::Keyword(keyword),
                     DispatchTokenElement::Slot(slot),
                 ],
+                &[],
                 ret,
             )
             .handle
@@ -343,6 +345,7 @@ fn each_node_kind_lies_under_its_family_top() {
                 quantifiers: &[],
                 bounds: &[],
                 elements: &elements,
+                classes: &[],
                 ret: KType::NUMBER,
             },
         ),

@@ -133,6 +133,14 @@ impl<'s> Collector<'s> {
         self.bounds.truncate(mark.cells);
     }
 
+    /// Pin the `index`-th variable to `to`, as though `to` had reached it at both polarities: every
+    /// later contribution must then lie on the right side of `to` for the variable to solve, and it
+    /// solves to `to`. How a class-by-class admission holds a variable an earlier class solved.
+    pub(super) fn pin(&mut self, index: usize, bound: KType, to: KType) {
+        self.contribute(index, bound, to, Variance::Co);
+        self.contribute(index, bound, to, Variance::Contra);
+    }
+
     /// Record that `carried` reached the `index`-th variable at `variance`.
     fn contribute(&mut self, index: usize, bound: KType, carried: KType, variance: Variance) {
         if self.lower.len() <= index {

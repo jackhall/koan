@@ -217,9 +217,10 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::ExpressionShape {
             quantifiers,
             elements,
+            classes,
             ret,
             ..
-        } => shape_digest(quantifiers.len(), elements, ret.digest()),
+        } => shape_digest(quantifiers.len(), elements, classes, ret.digest()),
         TypeNode::Quantified { index, bound } => quantified_digest(*index, *bound),
         TypeNode::Union { members } => union_digest(scratch, members),
         TypeNode::ConstructorApply {
@@ -353,6 +354,7 @@ pub(super) fn function_digest(
 pub(super) fn shape_digest(
     arity: usize,
     elements: &[DispatchTokenElement],
+    classes: &[u8],
     ret: TypeDigest,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_EXPRESSION_SHAPE);
@@ -362,6 +364,11 @@ pub(super) fn shape_digest(
             DispatchTokenElement::Keyword(symbol) => h.byte(1).symbol(symbol.symbol()),
             DispatchTokenElement::Slot(kt) => h.byte(0).digest(kt.digest()),
         };
+    }
+    // A ranking follows the elements, whose count fixes where it starts; written order feeds
+    // nothing, so an unranked shape digests as it always has.
+    for class in classes {
+        h.byte(*class);
     }
     h.digest(ret).finish()
 }

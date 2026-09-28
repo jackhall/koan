@@ -581,7 +581,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let ret = self.part(ret, &own)?;
         Ok(self
             .types
-            .shape_type(self.scratch, &group.names, &elements, ret)
+            .shape_type(self.scratch, &group.names, &elements, &[], ret)
             .handle)
     }
 

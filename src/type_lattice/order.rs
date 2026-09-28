@@ -16,7 +16,7 @@ use crate::symbols::BinderSymbol;
 use super::handle::KType;
 use super::node::TypeNode;
 use super::registry::{Relation, TypeRegistry};
-use super::sig_relations::{Returns, admits_function, admits_shape, sig_subtype};
+use super::sig_relations::{admits_function, admits_shape, sig_subtype};
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
 
@@ -163,7 +163,7 @@ impl Lockstep for Order {
             // A quantified shape is below another when some instantiation of its group puts every
             // slot and the return under the other's, with the other's rigid.
             (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
-                admits_shape(types, scratch, a, b, Returns::Checked)
+                admits_shape(types, scratch, a, b)
             }
             // The same clause for a pair of function types, related name by name. Only a pair
             // where one quantifies reaches here — two monomorphic ones pair structurally.

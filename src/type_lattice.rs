@@ -20,7 +20,9 @@
 //! declared type against a carried one and collects what would solve the quantified positions;
 //! [`Collector::solve`] takes a maximum, a minimum, or the bound, and never mints a union nobody
 //! wrote. [`sig_subtype`] and [`meet_schemas`] are the order and the meet over two signature schemas —
-//! two unordered signatures join to their union — and [`shape_specificity`] ranks two candidates under one bucket key.
+//! two unordered signatures join to their union — and [`shape_specificity`] ranks two candidates under one bucket key,
+//! class by class through a shape's priority classes: [`admit_by_class`] is what a keyworded call
+//! admits by, and [`select_by_class`] the elimination a candidate list runs.
 //!
 //! # Storage
 //!
@@ -53,6 +55,7 @@ mod lattice;
 mod node;
 mod operators;
 mod order;
+mod ranking;
 mod record;
 mod registry;
 mod render;
@@ -74,6 +77,7 @@ pub use lattice::{join, join_iter, meet};
 pub use node::{NodeSchema, TypeNode};
 pub use operators::{FoldDirection, ReductionMode};
 pub use order::{is_more_specific_than, is_subtype_of, satisfied_by};
+pub use ranking::{admit_by_class, class_at_least, select_by_class};
 pub use record::Record;
 pub use registry::{GroupIntern, TypeRegistry};
 pub use render::{
@@ -85,7 +89,7 @@ pub use schema::{
     is_abstract_sig_member, is_shape, member, shape_keys_equal, shape_return, shape_slots,
     specialize_schema,
 };
-pub use shape::{DeferredReturnSurface, DispatchTokenElement, Specificity};
+pub use shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, dense_classes};
 pub use sig_relations::{
     SigSubtypeFailure, most_specific_ktype, select_keyworded_satisfier, shape_specificity,
     sig_subtype,

@@ -102,7 +102,7 @@ fn a_function_born_for_a_registration_carries_its_shape() {
             let shape = |elements: &[DispatchTokenElement]| {
                 Some(
                     types
-                        .shape_type(scratch, &[], elements, KType::NUMBER)
+                        .shape_type(scratch, &[], elements, &[], KType::NUMBER)
                         .handle,
                 )
             };

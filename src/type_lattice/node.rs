@@ -161,6 +161,10 @@ pub enum TypeNode<'run> {
         bounds: &'run [KType],
         /// The call shape: fixed keywords interleaved with the argument positions' declared types.
         elements: &'run [DispatchTokenElement],
+        /// Each slot's priority class, in slot order, dense from 0 — the ranking a dispatch admits
+        /// and ranks the slots by, class by class. Empty for written order, the canonical spelling
+        /// of `0..n`, so an unranked shape stores and digests nothing for it.
+        classes: &'run [u8],
         ret: KType,
     },
     /// A **rigid variable bound by the enclosing binder** — a [`Self::ExpressionShape`], or a

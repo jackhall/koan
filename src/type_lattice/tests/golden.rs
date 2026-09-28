@@ -226,6 +226,7 @@ fn every_node_kind_has_its_own_tag() {
             quantifiers: &[],
             bounds: &[],
             elements: &elements,
+            classes: &[],
             ret: KType::NUMBER,
         },
         TypeNode::Quantified {

@@ -535,6 +535,15 @@ pub(super) fn shape_elements<'run>(node: &TypeNode<'run>) -> &'run [DispatchToke
     }
 }
 
+/// A shape's ranking — each slot's dense priority class, empty for written order — or empty for
+/// anything that is not a shape.
+pub(super) fn shape_classes<'run>(kt: KType, types: &TypeRegistry<'run>) -> &'run [u8] {
+    match types.node(kt) {
+        TypeNode::ExpressionShape { classes, .. } => classes,
+        _ => &[],
+    }
+}
+
 /// A shape's argument-position types, in order — the bucket key's typed half, for the readers that
 /// compare or render one position at a time. Read straight off the node's element run, so the
 /// read builds nothing.

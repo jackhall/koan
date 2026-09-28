@@ -1,11 +1,12 @@
 //! The vocabulary an expression shape is spelled in: the element run a call must match, the
-//! surface a deferred return is shadowed as, and the four-verdict specificity a dispatch ranks
-//! candidates by.
+//! priority classes its slots rank in, the surface a deferred return is shadowed as, and the
+//! four-verdict specificity a dispatch ranks candidates by.
 //!
 //! A shape node itself lives in [`node`](super::node); this file owns the pieces that appear
 //! *inside* one, plus the specificity verdict [`shape_specificity`](super::sig_relations)
 //! produces.
 
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use super::handle::KType;
@@ -55,6 +56,51 @@ impl DeferredReturnSurface<'_> {
             Self::Expression(text) => text.starts_with(':'),
         }
     }
+}
+
+/// One slot's place in a written ranking, in the order the slots are written: an integer a bucket
+/// declaration or a `SIG` member writes in the slot's place (`EXPR #(MOVE 2 TO 1)`), or `_`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RawRank {
+    Numbered(u32),
+    Unnumbered,
+}
+
+/// The one normalizer from a written ranking to the dense classes an
+/// [`ExpressionShape`](super::node::TypeNode::ExpressionShape) stores: numbered slots come first,
+/// in integer order, slots sharing an integer share a class, and each `_` is a class of its own
+/// after them, in written order. So `2 1` and `20 10` are both `[1, 0]`, and `_ _` is `[0, 1]`.
+pub fn dense_classes<'s>(scratch: BumpAllocator<'s>, raw: &[RawRank]) -> &'s [u8] {
+    let key = |index: usize| match raw[index] {
+        RawRank::Numbered(n) => (0u8, n as usize),
+        RawRank::Unnumbered => (1u8, index),
+    };
+    let mut keys = BumpVec::with_capacity_in(raw.len(), scratch);
+    keys.extend((0..raw.len()).map(key));
+    keys.sort_unstable();
+    keys.dedup();
+    scratch.alloc_slice_fill_iter((0..raw.len()).map(|index| {
+        let class = keys
+            .binary_search(&key(index))
+            .expect("every key was collected");
+        u8::try_from(class).expect("a shape has fewer than 256 slots")
+    }))
+}
+
+/// Whether `classes` ranks the slots in written order: empty, or `0..n`.
+pub(super) fn written_order(classes: &[u8]) -> bool {
+    classes
+        .iter()
+        .enumerate()
+        .all(|(index, class)| usize::from(*class) == index)
+}
+
+/// The class of slot `index` under `classes` — its own index where the shape is written-order.
+pub(super) fn class_of(classes: &[u8], index: usize) -> u8 {
+    classes
+        .get(index)
+        .copied()
+        .unwrap_or_else(|| u8::try_from(index).expect("a shape has fewer than 256 slots"))
 }
 
 /// How two candidates under one dispatch bucket rank against each other.

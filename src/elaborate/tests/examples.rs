@@ -83,7 +83,9 @@ LET Bare = Alias";
             ];
             assert_eq!(
                 elaborated(&program, 6),
-                Ok(types.shape_type(scratch, &[], &twice, KType::NUMBER).handle)
+                Ok(types
+                    .shape_type(scratch, &[], &twice, &[], KType::NUMBER)
+                    .handle)
             );
             assert_eq!(elaborated(&program, 7), Ok(KType::STR));
         },
@@ -141,6 +143,7 @@ fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
                         keyword("TO", program.symbols),
                         DispatchTokenElement::Slot(quantified),
                     ],
+                    &[],
                     quantified
                 )
                 .handle)
@@ -279,7 +282,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
                 .handle)
         );
         let shape = |elements: &[DispatchTokenElement], ret| {
-            types.shape_type(scratch, &[], elements, ret).handle
+            types.shape_type(scratch, &[], elements, &[], ret).handle
         };
         let number = DispatchTokenElement::Slot(KType::NUMBER);
         // Every definition is typed by its function type, over its head's **slot names**: a call
@@ -356,6 +359,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
                             keyword("ID", symbols),
                             DispatchTokenElement::Slot(quantified)
                         ],
+                        &[],
                         quantified
                     )
                     .handle

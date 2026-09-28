@@ -20,6 +20,7 @@ use super::handle::{
 };
 use super::node::TypeNode;
 use super::operators::{FoldDirection, ReductionMode};
+use super::ranking::Ranked;
 use super::record::Record;
 use super::registry::TypeRegistry;
 use super::schema::{DeclaredGroup, SigSchema, shape_elements, shape_return, shape_slots};
@@ -131,10 +132,18 @@ fn write_name_in(
             quantifiers,
             bounds,
             elements,
+            classes,
             ret,
         } => {
             f.write_str(":(EXPR ")?;
-            write_shape_surface(f, quantifiers, bounds, elements, *ret, types, symbols)?;
+            let shape = Ranked {
+                quantifiers,
+                bounds,
+                elements,
+                classes,
+                ret: *ret,
+            };
+            write_shape_surface(f, shape, types, symbols)?;
             f.write_str(")")
         }
         // A quantified position renders as the name its enclosing binder bound it to. The
@@ -284,20 +293,25 @@ fn write_param_record(
 /// a signature's rendered member is named with, so a declaration and the error naming it read
 /// alike.
 ///
-/// `bounds` are the group's bounds as the shape node stores them, one per quantifier.
-pub(super) fn write_shape_surface(
+/// The group's bounds are read as the shape node stores them, one per quantifier.
+fn write_shape_surface(
     f: &mut std::fmt::Formatter<'_>,
-    quantifiers: &[TypeSymbol],
-    bounds: &[KType],
-    elements: &[DispatchTokenElement],
-    ret: KType,
+    shape: Ranked<'_>,
     types: &TypeRegistry<'_>,
     symbols: &SymbolInterner,
 ) -> std::fmt::Result {
-    write_quantifier_group(f, quantifiers, bounds, types, symbols)?;
-    write_shape_head(f, elements, types, symbols, quantifiers)?;
+    let quantifiers = shape.quantifiers;
+    write_quantifier_group(f, quantifiers, shape.bounds, types, symbols)?;
+    write_shape_head(
+        f,
+        shape.elements,
+        shape.classes,
+        types,
+        symbols,
+        quantifiers,
+    )?;
     f.write_str(" -> ")?;
-    write_name_in(ret, f, types, symbols, quantifiers)
+    write_name_in(shape.ret, f, types, symbols, quantifiers)
 }
 
 /// `FOR ALL #[<names>] ` — the quantifier group a binder's surface opens with, or nothing at all
@@ -331,16 +345,19 @@ fn write_quantifier_group(
 }
 
 /// `#(<keyword> _ :<Type> …)` — an expression shape's head, quoted as an `EXPR` head is written.
-/// Every argument position is the wildcard `_`: the type carries no argument names, so there is
-/// none to print.
+/// Every argument position is the wildcard `_`, as the type carries no argument names — or, in a
+/// ranked shape, its priority class counted from 1, as a `SIG` member writes it (`#(MOVE 2 :Any TO
+/// 1 :Any)`).
 fn write_shape_head(
     f: &mut std::fmt::Formatter<'_>,
     elements: &[DispatchTokenElement],
+    classes: &[u8],
     types: &TypeRegistry<'_>,
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
 ) -> std::fmt::Result {
     f.write_str("#(")?;
+    let mut slot = 0;
     for (index, element) in elements.iter().enumerate() {
         if index > 0 {
             f.write_str(" ")?;
@@ -350,7 +367,11 @@ fn write_shape_head(
                 write!(f, "{}", display_symbol(symbol.symbol(), symbols))?;
             }
             DispatchTokenElement::Slot(kt) => {
-                f.write_str("_ ")?;
+                match classes.get(slot) {
+                    Some(class) => write!(f, "{} ", u32::from(*class) + 1)?,
+                    None => f.write_str("_ ")?,
+                }
+                slot += 1;
                 if !surface_opens_sigil(*kt, types) {
                     f.write_str(":")?;
                 }
@@ -443,46 +464,27 @@ pub fn render_keyworded_head(
     if let Some(head) = render_operator_head(shape, operators, types, symbols) {
         return head;
     }
-    match types.node(shape) {
-        TypeNode::ExpressionShape {
-            quantifiers,
-            bounds,
-            elements,
-            ret,
-        } => ShapeSurface {
-            quantifiers,
-            bounds,
-            elements,
-            ret,
+    match Ranked::of(types, shape) {
+        Some(shape) => ShapeSurface {
+            shape,
             types,
             symbols,
         }
         .to_string(),
-        _ => display_name(shape, types, symbols).to_string(),
+        None => display_name(shape, types, symbols).to_string(),
     }
 }
 
 /// [`write_shape_surface`] as a `Display` view, for the diagnostics that keep the text.
 struct ShapeSurface<'r, 'run> {
-    quantifiers: &'r [TypeSymbol],
-    bounds: &'r [KType],
-    elements: &'r [DispatchTokenElement],
-    ret: KType,
+    shape: Ranked<'run>,
     types: &'r TypeRegistry<'run>,
     symbols: &'r SymbolInterner,
 }
 
 impl std::fmt::Display for ShapeSurface<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write_shape_surface(
-            f,
-            self.quantifiers,
-            self.bounds,
-            self.elements,
-            self.ret,
-            self.types,
-            self.symbols,
-        )
+        write_shape_surface(f, self.shape, self.types, self.symbols)
     }
 }
 
@@ -699,6 +701,11 @@ pub fn render_sig_failure(
         SigSubtypeFailure::MissingKeyworded { head: shape } => {
             format!("missing keyworded member `{}`", head(*shape))
         }
+        SigSubtypeFailure::RankingMismatch { head: shape, got } => format!(
+            "keyworded member `{}` is ranked two ways (found `{}`)",
+            head(*shape),
+            head(*got)
+        ),
         SigSubtypeFailure::KeywordedMismatch { head: shape, got } => format!(
             "no overload satisfies keyworded member `{}` (found {})",
             head(*shape),

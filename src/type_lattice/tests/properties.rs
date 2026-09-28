@@ -17,12 +17,12 @@ use crate::type_lattice::node::TypeNode;
 use crate::type_lattice::order::{is_more_specific_than, is_subtype_of, satisfied_by};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::{
-    Members, SigSchema, canonical_overloads, is_shape, shape_keys_equal, shape_quantifiers,
-    shape_return, shape_slots, specialize_schema,
+    Members, SigSchema, canonical_overloads, is_shape, shape_classes, shape_keys_equal,
+    shape_quantifiers, shape_return, shape_slots, specialize_schema,
 };
 use crate::type_lattice::shape::Specificity;
 use crate::type_lattice::sig_relations::{
-    Returns, admits_shape, meet_schemas, shape_specificity, sig_subtype,
+    admits_shape, meet_schemas, shape_specificity, sig_subtype,
 };
 use crate::type_lattice::substitute::{
     canonicalize_binder, erase_quantified, instantiate_quantified, quantifier_bounds,
@@ -416,11 +416,12 @@ proptest! {
         if let TypeNode::ExpressionShape {
             quantifiers,
             elements,
+            classes,
             ret,
             ..
         } = types.node(a)
         {
-            let again = types.shape_type(scratch, quantifiers, elements, ret);
+            let again = types.shape_type(scratch, quantifiers, elements, classes, ret);
             prop_assert_eq!(again.handle, a);
         }
     }
@@ -528,13 +529,16 @@ proptest! {
         if !is_shape(a, &types) {
             prop_assert_eq!(shape_specificity(&types, scratch, a, b), Specificity::Incomparable);
             prop_assert_eq!(shape_specificity(&types, scratch, b, a), Specificity::Incomparable);
-            prop_assert!(!admits_shape(&types, scratch, a, b, Returns::Ignored));
-            prop_assert!(!admits_shape(&types, scratch, b, a, Returns::Ignored));
+            prop_assert!(!admits_shape(&types, scratch, a, b));
+            prop_assert!(!admits_shape(&types, scratch, b, a));
         }
     }
 
+    /// Over monomorphic shapes the ranking is the pointwise order folded class by class: the first
+    /// class whose slots order the pair one way only decides, and two rankings of one key are
+    /// unrelated.
     #[test]
-    fn monomorphic_specificity_is_the_pointwise_fold(a in shape(), b in shape()) {
+    fn monomorphic_specificity_is_the_lexicographic_pointwise_fold(a in shape(), b in shape()) {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
@@ -546,23 +550,34 @@ proptest! {
         if !monomorphic {
             return Ok(());
         }
+        let actual = shape_specificity(&types, scratch, a, b);
+        let (ranking, other) = (shape_classes(a, &types), shape_classes(b, &types));
+        if ranking != other {
+            prop_assert_eq!(actual, Specificity::Incomparable);
+            return Ok(());
+        }
         let left: Vec<KType> = shape_slots(a, &types).collect();
         let right: Vec<KType> = shape_slots(b, &types).collect();
-        let more = left
-            .iter()
-            .zip(right.iter())
-            .all(|(x, y)| is_subtype_of(&types, scratch, *x, *y));
-        let less = left
-            .iter()
-            .zip(right.iter())
-            .all(|(x, y)| is_subtype_of(&types, scratch, *y, *x));
-        let expected = match (more, less) {
-            (true, false) => Specificity::StrictlyMore,
-            (false, true) => Specificity::StrictlyLess,
-            (true, true) => Specificity::Equal,
-            (false, false) => Specificity::Incomparable,
-        };
-        prop_assert_eq!(shape_specificity(&types, scratch, a, b), expected);
+        let class = |index: usize| ranking.get(index).map_or(index, |c| usize::from(*c));
+        let mut expected = Specificity::Equal;
+        for current in 0..left.len() {
+            let in_class = || (0..left.len()).filter(|index| class(*index) == current);
+            let more = in_class().all(|i| is_subtype_of(&types, scratch, left[i], right[i]));
+            let less = in_class().all(|i| is_subtype_of(&types, scratch, right[i], left[i]));
+            match (more, less) {
+                (true, false) => {
+                    expected = Specificity::StrictlyMore;
+                    break;
+                }
+                (false, true) => {
+                    expected = Specificity::StrictlyLess;
+                    break;
+                }
+                (true, true) => {}
+                (false, false) => expected = Specificity::Incomparable,
+            }
+        }
+        prop_assert_eq!(actual, expected);
     }
 
     #[test]

@@ -314,6 +314,6 @@ fn registered_shape(
         ]),
     }
     types
-        .shape_type(scratch, quantifiers, &elements, ret)
+        .shape_type(scratch, quantifiers, &elements, &[], ret)
         .handle
 }

@@ -395,6 +395,7 @@ fn reassemble(
         TypeNode::ExpressionShape {
             quantifiers,
             elements,
+            classes,
             ..
         } => {
             let mut slots = new.iter();
@@ -406,7 +407,9 @@ fn reassemble(
                 keyword => *keyword,
             }));
             let ret = *slots.next().expect("the return follows the slots");
-            types.shape_type(scratch, quantifiers, &rebuilt, ret).handle
+            types
+                .shape_type(scratch, quantifiers, &rebuilt, classes, ret)
+                .handle
         }
         TypeNode::Union { .. } => match cfg.union {
             UnionDoor::Canonical => types.union_of(scratch, new),
