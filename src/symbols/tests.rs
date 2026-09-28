@@ -267,3 +267,25 @@ fn a_slot_group_declares_each_field_independently() {
     );
     assert_ne!(GROUP.width.symbol(), GROUP.height.symbol());
 }
+
+/// A key is its run of keywords and slots: the same run mints the same key with or without an
+/// interner, a slot moved or a keyword changed mints another, and the recorded spelling reads as
+/// written.
+#[test]
+fn a_key_is_its_run() {
+    let symbols = SymbolInterner::new();
+    let log = KeywordSymbol::declared("LOG", &symbols).expect("a keyword token");
+    let to = KeywordSymbol::declared("TO", &symbols).expect("a keyword token");
+    let recorded = symbols.record_key([Some(log), None]);
+    assert_eq!(recorded, KeySymbol::of([Some(log), None]));
+    assert_eq!(symbols.render(recorded.symbol()), "LOG _");
+    assert_ne!(recorded, KeySymbol::of([None, Some(log)]));
+    assert_ne!(recorded, KeySymbol::of([Some(to), None]));
+    assert_ne!(recorded, KeySymbol::of([Some(log), None, None]));
+    assert_ne!(recorded.symbol(), log.symbol());
+    let run = [None, Some(log), None, Some(to), None];
+    assert_eq!(
+        symbols.render(symbols.record_key(run).symbol()),
+        "_ LOG _ TO _"
+    );
+}

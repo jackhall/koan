@@ -7,6 +7,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::{Incomparable, Knotted as _, Resolved, Value};
 
+use crate::knot::module::layout;
 use crate::knot::tests::{Fixture, bound, callable, declared, pin, with_fixture};
 use crate::knot::{KActivation, Knotted, Untieable, tie};
 
@@ -59,7 +60,7 @@ LET outside = 1";
                 .iter()
                 .filter_map(|name| match name {
                     BinderSymbol::Value(name) => Some(*name),
-                    BinderSymbol::Type(_) => None,
+                    _ => None,
                 })
                 .collect();
             assert_eq!(values.len(), 2, "the two value names take the first slots");
@@ -91,7 +92,7 @@ LET outside = 1";
                     schema.value_slots,
                     match fixture.name("zero") {
                         BinderSymbol::Value(name) => name,
-                        BinderSymbol::Type(_) => unreachable!("`zero` is a value name"),
+                        _ => unreachable!("`zero` is a value name"),
                     }
                 ),
                 Some(KType::NUMBER),
@@ -104,7 +105,7 @@ LET outside = 1";
 fn a_module_captures_an_outer_value_and_holds_a_module_of_its_own() {
     let source = "\
 LET greeting = \"hi\"
-MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = (greeting))))";
+MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = #(greeting))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
@@ -140,7 +141,7 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = (greeting
                     schema.value_slots,
                     match fixture.name("inner") {
                         BinderSymbol::Value(name) => name,
-                        BinderSymbol::Type(_) => unreachable!("`inner` is a value name"),
+                        _ => unreachable!("`inner` is a value name"),
                     }
                 ),
                 Some(inner.ktype()),
@@ -151,13 +152,14 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = (greeting
 
 #[test]
 fn a_group_binder_births_a_module_the_same_way() {
-    let source = "GROUP g FOLD LEFT = ((LET step = 1) (OP #(@) OVER Number = (left)))";
+    let source = "GROUP g FOLD LEFT = ((LET step = 1) (OP #(@) OVER Number = #(left)))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let g = module(fixture, activation, "g");
-            assert_eq!(g.module().expect("a module node").members().len(), 1);
+            // `step`, and the `OP`'s registration: a bare definition is a member too.
+            assert_eq!(g.module().expect("a module node").members().len(), 2);
         })
     });
 }
@@ -165,7 +167,7 @@ fn a_group_binder_births_a_module_the_same_way() {
 #[test]
 fn a_module_whose_body_ties_a_knot_holds_each_member_callable() {
     let source = "\
-MODULE m = ((LET f = (FN :{} -> Number = (g))) (LET g = (FN :{} -> Number = (f))))";
+MODULE m = ((LET f = (FN :{} -> Number = #(g))) (LET g = (FN :{} -> Number = #(f))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {
@@ -268,6 +270,41 @@ fn a_type_member_is_read_back_through_the_declaration_door() {
                 "a newtype is its own identity"
             );
             let _ = callable;
+        })
+    });
+}
+
+#[test]
+fn a_bare_definition_is_the_run_tail_and_a_keyworded_member_of_the_signature() {
+    let source = "MODULE m = ((LET zero = 0) (EXPR #(TWICE x :Number) -> Number = #(x)))";
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let m = module(fixture, activation, "m");
+            assert_eq!(m.module().expect("a module node").members().len(), 2);
+            let [twice] = layout::registrations(m, types, scratch) else {
+                panic!("one registration past the named members");
+            };
+            let shape = twice
+                .as_callable()
+                .and_then(Knotted::function)
+                .and_then(|function| function.registered_shape())
+                .expect("the function born for the registration");
+            let TypeNode::Signature { schema, .. } = types.node(m.ktype()) else {
+                panic!("a module's type is its self-signature");
+            };
+            assert_eq!(
+                schema.keyworded,
+                [shape],
+                "its keyworded channel holds the shape"
+            );
+            assert_eq!(
+                schema.value_slots.len(),
+                1,
+                "a registration names no value slot"
+            );
         })
     });
 }

@@ -5,6 +5,7 @@
 mod boundary;
 mod construction;
 mod crossing;
+mod depth;
 mod equality;
 mod render;
 mod satisfaction;
@@ -14,26 +15,23 @@ use crate::memory::{
     Bump, BumpAllocator, CellGraph, Edge, KnotPlan, Member, Prices, ProgramBrand,
     ReleaseAbsorption, StepContext, Verdict, Writer, covariant, program_storage, reattachable,
 };
-use crate::parse::{ExpressionPart, KExpression, parse};
+use crate::parse::{ExpressionPart, KExpression, ProgramNode, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry};
-use crate::values::{Circular, DeepCopy, Knotted, KnottedFamily, Resolved, Weight};
+use crate::values::{Circular, CodeView, DeepCopy, Knotted, KnottedFamily, Resolved, Weight};
 
 /// A value holding no callable — what every suite here builds, spelled once so a literal arm
 /// needs no annotation. The containers and the working form follow it.
-pub(super) type Value<'graph, 'cell> = crate::values::Value<'graph, 'cell>;
-pub(super) type List<'graph, 'cell> = crate::values::List<'graph, 'cell>;
-pub(super) type Dict<'graph, 'cell> = crate::values::Dict<'graph, 'cell>;
-pub(super) type Record<'graph, 'cell> = crate::values::Record<'graph, 'cell>;
-pub(super) type Tagged<'graph, 'cell> = crate::values::Tagged<'graph, 'cell>;
+pub(super) type Value<'cell> = crate::values::Value<'cell>;
+pub(super) type List<'cell> = crate::values::List<'cell>;
+pub(super) type Dict<'cell> = crate::values::Dict<'cell>;
+pub(super) type Record<'cell> = crate::values::Record<'cell>;
+pub(super) type Tagged<'cell> = crate::values::Tagged<'cell>;
 pub(super) type WorkingExpression<'graph, 'cell> = crate::values::WorkingExpression<'graph, 'cell>;
 pub(super) type WorkingPart<'graph, 'cell> = crate::values::WorkingPart<'graph, 'cell>;
 
 /// [`crate::values::text`] at [`Value`].
-pub(super) fn text<'graph, 'cell>(
-    writer: crate::memory::Writer<'cell>,
-    text: &str,
-) -> Value<'graph, 'cell> {
+pub(super) fn text<'cell>(writer: crate::memory::Writer<'cell>, text: &str) -> Value<'cell> {
     crate::values::text(writer, text)
 }
 
@@ -120,11 +118,97 @@ pub(super) fn copy(_: Prices) -> Verdict {
     Verdict::Copy
 }
 
+/// A stand-in for a knot member only a layer above `values` builds: a function of an identity that
+/// captures nothing, a barrier, or a quote's code that binds no name. Equal and hashed by that
+/// identity, a quote's by its body's address.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Stand<'graph> {
+    Function(usize),
+    Barrier,
+    Code(ProgramNode<'graph>),
+}
+
+impl Stand<'_> {
+    fn identity(&self) -> (u8, usize) {
+        match self {
+            Stand::Function(identity) => (0, *identity),
+            Stand::Barrier => (1, 0),
+            Stand::Code(node) => (2, std::ptr::from_ref(node.reference()).addr()),
+        }
+    }
+}
+
+impl PartialEq for Stand<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity() == other.identity()
+    }
+}
+
+impl Eq for Stand<'_> {}
+
+impl std::hash::Hash for Stand<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity().hash(state);
+    }
+}
+
+impl Knotted for Stand<'_> {
+    fn ktype(&self) -> KType {
+        match self {
+            Stand::Code(node) => node.code_kind(),
+            Stand::Function(_) | Stand::Barrier => KType::ANY,
+        }
+    }
+
+    fn weight(&self) -> Weight {
+        Weight::ZERO
+    }
+
+    fn sibling(&self, _: Edge) -> Self {
+        *self
+    }
+
+    /// A stand-in is a knot of one.
+    fn index(&self) -> Edge {
+        KnotPlan::new(1).edge(0).expect("a knot of one has node 0")
+    }
+
+    fn root(&self) -> Self {
+        *self
+    }
+
+    fn resolve<'a>(&self) -> Resolved<'a, Self>
+    where
+        Self: 'a,
+    {
+        match *self {
+            Stand::Function(identity) => Resolved::Function {
+                identity,
+                closure: &[],
+            },
+            Stand::Barrier => Resolved::Barrier,
+            Stand::Code(node) => Resolved::Code(CodeView {
+                body: node.reference(),
+                bound: &[],
+                supplied: &[],
+            }),
+        }
+    }
+}
+
+/// The quote `source` parses to.
+pub(super) fn quote<'graph>(fixture: &Fixture<'_, 'graph>, source: &str) -> ProgramNode<'graph> {
+    match fixture.part(source) {
+        ExpressionPart::QuotedExpression(node) => node,
+        _ => panic!("`{source}` parses to a quote"),
+    }
+}
+
 /// A test-only knot member: every node is a data node, and its memo is the node's own.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct Node<'graph, 'cell>(Member<'cell, Circular<'graph, 'cell, Node<'graph, 'cell>>>);
+pub(super) struct Node<'cell>(Member<'cell, Circular<'cell, Node<'cell>>>);
 
-impl Knotted for Node<'_, '_> {
+impl Knotted for Node<'_> {
     fn ktype(&self) -> KType {
         self.0.payload().ktype()
     }
@@ -137,6 +221,14 @@ impl Knotted for Node<'_, '_> {
         Node(self.0.follow(edge))
     }
 
+    fn index(&self) -> Edge {
+        self.0.index()
+    }
+
+    fn root(&self) -> Self {
+        Node(self.0.knot().members().next().expect("a knot holds a node"))
+    }
+
     fn resolve<'a>(&self) -> Resolved<'a, Self>
     where
         Self: 'a,
@@ -145,7 +237,7 @@ impl Knotted for Node<'_, '_> {
     }
 }
 
-impl std::fmt::Debug for Node<'_, '_> {
+impl std::fmt::Debug for Node<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Node({})", self.0.index().index())
     }
@@ -156,15 +248,24 @@ pub(super) struct NodeFamily;
 
 impl<'graph> KnottedFamily<'graph> for NodeFamily {
     type Closed<'cell>
-        = Node<'graph, 'cell>
+        = Node<'cell>
     where
         'graph: 'cell;
 
+    fn held<'from>(member: &Node<'from>, out: &mut dyn FnMut(Holding<'from>))
+    where
+        'graph: 'from,
+    {
+        for node in member.0.knot().members() {
+            node.payload().held(out);
+        }
+    }
+
     fn copy_into<'from, 'to>(
         writer: Writer<'to>,
-        member: &Node<'graph, 'from>,
-        copy: &mut DeepCopy<'_, 'graph, 'from, 'to, Node<'graph, 'from>, Node<'graph, 'to>>,
-    ) -> Node<'graph, 'to>
+        member: &Node<'from>,
+        copy: &mut DeepCopy<'_, 'from, 'to, Node<'from>, Node<'to>>,
+    ) -> Node<'to>
     where
         'graph: 'from,
         'graph: 'to,
@@ -180,18 +281,18 @@ impl<'graph> KnottedFamily<'graph> for NodeFamily {
 covariant!(crate::values::ValueFamily<NodeFamily>);
 
 /// A value that may hold a [`Node`].
-pub(super) type Holding<'graph, 'cell> = crate::values::Value<'graph, 'cell, Node<'graph, 'cell>>;
+pub(super) type Holding<'cell> = crate::values::Value<'cell, Node<'cell>>;
 
 /// A link a [`Node`]'s cell holds.
-pub(super) type Link<'graph, 'cell> = crate::values::Link<'graph, 'cell, Node<'graph, 'cell>>;
+pub(super) type Link<'cell> = crate::values::Link<'cell, Node<'cell>>;
 
 /// Tie `count` nodes in `writer`'s region: `build` is handed each node's index and every node's
 /// edge, and returns its finished payload. Every node, in index order.
 pub(super) fn tie<'graph, 'cell>(
     writer: Writer<'cell>,
     count: u32,
-    mut build: impl FnMut(u32, &[Edge]) -> Circular<'graph, 'cell, Node<'graph, 'cell>>,
-) -> Vec<Node<'graph, 'cell>> {
+    mut build: impl FnMut(u32, &[Edge]) -> Circular<'cell, Node<'cell>>,
+) -> Vec<Node<'cell>> {
     let plan = KnotPlan::new(count);
     let edges: Vec<Edge> = (0..count).map(|index| plan.edge(index).unwrap()).collect();
     let knot = plan.tie(writer, |edge| build(edge.index(), &edges));
@@ -264,8 +365,8 @@ pub(super) fn ring<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
     identity: KType,
-    values: &[Option<Holding<'graph, 'cell>>],
-) -> Vec<Node<'graph, 'cell>> {
+    values: &[Option<Holding<'cell>>],
+) -> Vec<Node<'cell>> {
     let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
     let next = crate::symbols::BinderSymbol::declared("next", symbols).unwrap();
     let value = crate::symbols::BinderSymbol::declared("value", symbols).unwrap();

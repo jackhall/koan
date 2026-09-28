@@ -61,7 +61,7 @@ fn born<'graph, 'cell>(
 #[test]
 fn a_lambda_is_born_as_a_one_node_knot() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET k = \"kept\"\n(FN :{} -> Str = (k))");
+        let lines = fixture.parse("LET k = \"kept\"\n(FN :{} -> Str = #(k))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -95,7 +95,7 @@ fn a_lambda_is_born_as_a_one_node_knot() {
 #[test]
 fn a_lambda_reads_a_later_binding_at_birth() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("(FN :{} -> Number = (later))\nLET later = 5");
+        let lines = fixture.parse("(FN :{} -> Number = #(later))\nLET later = 5");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -112,8 +112,8 @@ fn a_lambda_reads_a_later_binding_at_birth() {
 #[test]
 fn a_lambda_weighs_what_the_tie_gives_the_same_function() {
     with_fixture(|fixture| {
-        let lines =
-            fixture.parse("LET k = \"kept\"\nLET f = (FN :{} -> Str = (k))\n(FN :{} -> Str = (k))");
+        let lines = fixture
+            .parse("LET k = \"kept\"\nLET f = (FN :{} -> Str = #(k))\n(FN :{} -> Str = #(k))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -128,7 +128,7 @@ fn a_lambda_weighs_what_the_tie_gives_the_same_function() {
 #[test]
 fn a_quantified_lambda_carries_its_quantifier_map() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("(FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))");
+        let lines = fixture.parse("(FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -144,7 +144,7 @@ fn a_quantified_lambda_carries_its_quantifier_map() {
 #[test]
 fn a_lambda_capturing_its_binder_is_a_node_of_its_knot() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET a = [(FN :{} -> Any = (a))]");
+        let lines = fixture.parse("LET a = [(FN :{} -> Any = #(a))]");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let (a, Circular::List(list)) = circular(bound(fixture, activation, "a")) else {
@@ -171,7 +171,8 @@ fn a_lambda_capturing_its_binder_is_a_node_of_its_knot() {
 #[test]
 fn a_lambda_capturing_a_fellow_function_is_a_node_of_the_knot() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET a = [(FN :{} -> Any = (f))]\nLET f = (FN :{} -> Any = (a))");
+        let lines =
+            fixture.parse("LET a = [(FN :{} -> Any = #(f))]\nLET f = (FN :{} -> Any = #(a))");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let f = callable(fixture, activation, "f");
@@ -190,7 +191,7 @@ fn a_lambda_capturing_a_fellow_function_is_a_node_of_the_knot() {
 #[test]
 fn a_lambda_below_a_nested_constructor_makes_its_path_anonymous() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET a = {inner = [(FN :{} -> Any = (a))] plain = [1 2]}");
+        let lines = fixture.parse("LET a = {inner = [(FN :{} -> Any = #(a))] plain = [1 2]}");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let (a, Circular::Record(record)) = circular(bound(fixture, activation, "a")) else {
@@ -218,7 +219,7 @@ fn a_lambda_below_a_nested_constructor_makes_its_path_anonymous() {
 fn a_lambda_part_capturing_no_fellow_is_asked_of_the_caller() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
-            "LET k = 7\nLET a = [(FN :{} -> Number = (k)) f]\nLET f = (FN :{} -> Any = (a))",
+            "LET k = 7\nLET a = [(FN :{} -> Number = #(k)) f]\nLET f = (FN :{} -> Any = #(a))",
         );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();

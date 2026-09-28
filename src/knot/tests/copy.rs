@@ -1,28 +1,31 @@
 //! A knot member crossing under a copy: its whole knot re-tied at the destination.
 //!
 //! `a_copied_knot_outlives_its_home`, `a_copied_ring_outlives_its_home`,
-//! `a_copied_module_outlives_its_home` and `a_copied_barrier_outlives_its_home` are on the Miri
-//! slate:
-//! they are the paths only `knot` drives — a knot's run laid down with closure runs, typing
-//! records, data nodes and deep copies written into the region while the node run is being filled,
-//! read through edges after the region it was copied from is gone.
+//! `a_copied_module_outlives_its_home`, `a_copied_barrier_outlives_its_home` and
+//! `a_copied_quote_outlives_its_home` are on the Miri slate: they are the paths only `knot` drives —
+//! a knot's run laid down with closure runs, typing records, bound runs and data nodes written into
+//! the region while the node run is being filled, over the held values' finished copies, read
+//! through edges after the region it was copied from is gone.
 
 use std::ptr;
 
 use crate::memory::{CellGraph, ReleaseAbsorption};
 use crate::scope::{CaptureSlot, Slot};
+use crate::type_lattice::KType;
 use crate::values::{Circular, Link};
 use crate::values::{Knotted as _, Value, cross};
 
-use super::super::{Coerced, KValue, KValueFamily, Knotted};
-use super::{Fixture, Step, bound, callable, circular, copy, declared, follow, with_fixture};
+use super::super::{Coerced, KValue, KValueFamily, Knotted, builtin};
+use super::{
+    Fixture, Step, bound, callable, circular, copy, declared, follow, registered, with_fixture,
+};
 
 /// The capture `name` of `callable`'s closure.
 fn capture<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     callable: Knotted<'graph, 'cell>,
     name: &str,
-) -> Link<'graph, 'cell, Knotted<'graph, 'cell>> {
+) -> Link<'cell, Knotted<'graph, 'cell>> {
     let function = callable.function().expect("a function");
     let name = fixture.name(name);
     let index = function
@@ -59,8 +62,8 @@ fn captured_sibling<'graph, 'cell>(
 const KNOT: &str = "\
 LET greeting = \"hi\"
 LET words = [\"alpha\" \"beta\"]
-LET f = FN EXPR (GREET n :Number) -> Str = (greeting words g)
-LET g = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (words f x))";
+LET f = FN EXPR #(GREET n :Number) -> Str = #(greeting words g)
+LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(words f x))";
 
 #[test]
 fn a_copied_knot_is_the_same_knot_rebuilt() {
@@ -80,10 +83,16 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                     panic!("a callable crosses as a callable");
                 };
                 assert!(!ptr::eq(copied.node(), g.node()), "a copy is a new knot");
-                assert_eq!(copied.member().knot().len(), 2);
+                // `f`, its registration, and `g`.
+                assert_eq!(copied.member().knot().len(), 3);
                 assert_eq!(copied.member().index(), g.member().index());
                 assert_eq!(copied.ktype(), g.ktype());
                 assert_eq!(copied.weight(), g.weight());
+                assert_eq!(
+                    Value::Knotted(copied).equals(&Value::Knotted(g), types, scratch),
+                    Ok(true),
+                    "a function equals its copy"
+                );
                 assert!(ptr::eq(
                     copied.function().expect("a function").shape(),
                     g.function().expect("a function").shape()
@@ -101,12 +110,20 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                     captured_sibling(fixture, g, "f"),
                     captured_sibling(fixture, copied, "f"),
                 );
-                // `f` is born for a registration, so its typing record rides the copy too.
-                let registered = f.function().expect("a function").registered_shape();
-                assert!(registered.is_some());
+                // `f`'s registration is born for it, so its typing record rides the copy too.
+                let registration = registered(fixture, activation, "f");
+                let copied_registration = Knotted::of(
+                    copied.member().knot(),
+                    registration.member().index().index() as usize,
+                );
+                let shape = registration.function().expect("a function").registered();
+                assert!(shape.is_some());
                 assert_eq!(
-                    copied_f.function().expect("a function").registered_shape(),
-                    registered
+                    copied_registration
+                        .function()
+                        .expect("a function")
+                        .registered(),
+                    shape
                 );
                 assert!(
                     ptr::eq(
@@ -182,11 +199,102 @@ fn a_copied_knot_outlives_its_home() {
     });
 }
 
+#[test]
+fn a_copied_builtin_keeps_its_record() {
+    with_fixture(|fixture| {
+        let original = builtin(fixture.program.writer(), KType::NUMBER, 7);
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        let dormant = graph
+            .enter(home, |context| {
+                let source = context.lift::<KValueFamily>(Value::Knotted(original));
+                let crossed = cross(context, dest, &source).unwrap();
+                context.keep(crossed)
+            })
+            .unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        graph
+            .enter(dest, |context| {
+                let carrier = context.redeem(dormant).unwrap();
+                let Value::Knotted(copied) = context.read(&carrier).value() else {
+                    panic!("a builtin crosses as a knot member");
+                };
+                assert!(
+                    !ptr::eq(copied.node(), original.node()),
+                    "a copy is a new knot"
+                );
+                let record = copied.builtin().expect("a builtin's node");
+                assert!(
+                    ptr::eq(record, original.builtin().expect("a builtin's node")),
+                    "the record in program storage is shared, not copied"
+                );
+                assert_eq!(record.id(), 7);
+                assert_eq!(copied.weight(), original.weight());
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
+#[test]
+fn a_copied_quote_outlives_its_home() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse("LET greeting = \"hi\"\nLET echo = #(PRINT $echo $greeting)");
+        let (types, symbols, scratch) = (fixture.types, fixture.symbols, fixture.scratch());
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        let dormant = graph
+            .enter(home, |context| {
+                let activation = fixture.run(context.writer(), &lines, &[]);
+                let echo = bound(fixture, activation, "echo");
+                let source = context.lift::<KValueFamily>(echo);
+                let crossed = cross(context, dest, &source).unwrap();
+                let copied = context.read(&crossed).value();
+                assert!(!ptr::eq(
+                    copied.as_code().expect("code crosses as code").node(),
+                    echo.as_code().expect("code").node()
+                ));
+                assert_eq!(copied.equals(&echo, types, scratch), Ok(true));
+                context.keep(crossed)
+            })
+            .unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        graph
+            .enter(dest, |context| {
+                let carrier = context.redeem(dormant).unwrap();
+                let echo = context.read(&carrier).value();
+                let member = echo.as_code().expect("the kept code redeems as code");
+                let code = member.code().expect("a quote's node");
+                let greeting = fixture.name("greeting");
+                for (name, link) in code.bound() {
+                    match link {
+                        Link::Edge(edge) => {
+                            assert!(ptr::eq(member.sibling(*edge).node(), member.node()));
+                        }
+                        Link::Value(value) => {
+                            assert_eq!(*name, greeting);
+                            assert_eq!(value.as_str(), Some("hi"));
+                        }
+                    }
+                }
+                let mut rendered = String::new();
+                echo.render(&mut rendered, types, symbols, scratch).unwrap();
+                assert_eq!(rendered, "PRINT $echo $greeting");
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
 const RING: &str = "\
 NEWTYPE Ring = :{next :Ring}
 LET a = (Ring {next = b})
 LET b = (Ring {next = a})
-LET f = (FN :{} -> Any = (a))";
+LET f = (FN :{} -> Any = #(a))";
 
 /// The member `next` of a ring node names: its tagged payload's record node, then that record's
 /// `next` field.
@@ -319,8 +427,8 @@ const MODULE: &str = "\
 LET greeting = \"hi\"
 MODULE m = (\
 (LET words = [\"alpha\" \"beta\"]) \
-(LET f = (FN :{} -> Str = (greeting g))) \
-(LET g = (FN :{} -> Str = (f))) \
+(LET f = (FN :{} -> Str = #(greeting g))) \
+(LET g = (FN :{} -> Str = #(f))) \
 (NEWTYPE Dist = Number))";
 
 /// The slot each named member of `m`'s body takes — the body shape lives in program storage, so
@@ -434,23 +542,11 @@ fn a_copied_module_outlives_its_home() {
                     .as_callable()
                     .expect("a callable member");
                 assert_eq!(captured_value(fixture, f, "greeting").as_str(), Some("hi"));
-                // Each member was rebuilt through the one crossing, bringing its whole knot with
-                // it, so the two members of the body's function knot arrive as two copies of it —
-                // each internally consistent, neither naming the other's nodes.
-                let (fs_g, gs_f) = (
-                    captured_sibling(fixture, f, "g"),
-                    captured_sibling(fixture, g, "f"),
-                );
-                assert!(!ptr::eq(fs_g.node(), g.node()));
-                assert!(!ptr::eq(gs_f.node(), f.node()));
-                assert!(ptr::eq(
-                    captured_sibling(fixture, fs_g, "f").node(),
-                    f.node()
-                ));
-                assert!(ptr::eq(
-                    captured_sibling(fixture, gs_f, "g").node(),
-                    g.node()
-                ));
+                // Both members were rebuilt through the one crossing, which copies the body's
+                // function knot once, so the two arrive as members of one copy and capture each
+                // other.
+                assert!(ptr::eq(captured_sibling(fixture, f, "g").node(), g.node()));
+                assert!(ptr::eq(captured_sibling(fixture, g, "f").node(), f.node()));
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
@@ -459,9 +555,74 @@ fn a_copied_module_outlives_its_home() {
 }
 
 #[test]
+fn values_copied_in_one_placement_share_one_copy_of_a_knot() {
+    use crate::memory::{Active, CrossedOperand, Operand};
+    use crate::values::{List, copy_severed};
+
+    use super::super::KnottedFamily;
+
+    with_fixture(|fixture| {
+        let lines = fixture.parse(KNOT);
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        graph
+            .enter(home, |context| {
+                let writer = context.writer();
+                let activation = fixture.run(writer, &lines, &[]);
+                let (f, g) = (
+                    callable(fixture, activation, "f"),
+                    callable(fixture, activation, "g"),
+                );
+                let pair = [Value::Knotted(f), Value::Knotted(g)];
+                let list = Value::List(List::new(writer, pair.into_iter(), types, scratch));
+                let source = context.lift::<KValueFamily>(list);
+                let operand = Operand {
+                    carrier: &source,
+                    copy_bytes: list.weight().bytes(),
+                };
+                // A birth carrying two values copies them the way this placement does.
+                let placed = context
+                    .alloc_into::<KValueFamily, KValueFamily>(dest, &[operand], |writer, views| {
+                        let CrossedOperand::Copied { view, .. } = views[0] else {
+                            panic!("the operand is copied");
+                        };
+                        let cells = view.as_list().expect("a list").cells();
+                        let copies = copy_severed::<_, KnottedFamily, 2>(
+                            writer,
+                            &views[0],
+                            [&cells[0], &cells[1]],
+                        );
+                        Active::new(Value::List(List::new(
+                            writer,
+                            copies.into_iter(),
+                            types,
+                            scratch,
+                        )))
+                    })
+                    .unwrap();
+                let copied = context.read(&placed).value().as_list().expect("a list");
+                let [Value::Knotted(f), Value::Knotted(g)] = copied.cells() else {
+                    panic!("a list of two functions");
+                };
+                assert!(
+                    f.member().knot() == g.member().knot(),
+                    "one copy of the knot"
+                );
+                assert!(ptr::eq(captured_sibling(fixture, *f, "g").node(), g.node()));
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
+#[test]
 fn a_copied_barrier_outlives_its_home() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET greeting = \"hi\"\nLET f = (FN :{} -> Str = (greeting))");
+        let lines = fixture.parse("LET greeting = \"hi\"\nLET f = (FN :{} -> Str = #(greeting))");
         let mut graph: CellGraph<'_, Step> = CellGraph::new(2, copy);
         let home = graph.create(None).unwrap();
         let dest = graph.create(None).unwrap();

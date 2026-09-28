@@ -1,30 +1,29 @@
 # Errors
 
-When something goes wrong, Koan raises a structured **error value**. An error
-carries a *kind* (what went wrong) and a chain of *frames* (where it came from).
-An uncaught error stops the program and prints to standard error, listing the
-frames beneath the message:
+When something goes wrong while a program runs, Koan raises an **error value**
+carrying a message. Every expression that receives an error value passes it on
+unchanged, so an error raised deep inside a call surfaces as the value of the
+statement that made the call. An uncaught error stops the program and prints its
+message to standard error:
 
 ```koan
-EXPR (BOOM x :Number) -> Str = (mystery)
-BOOM 1
+EXPR #(BOOM x :Number) -> Str = #(x + "one")
+PRINT "before"
+PRINT (BOOM 1)
+PRINT "after"
 ```
 
 ```text
-error: unbound name 'mystery'
-  in :(FN :{x :Number} -> Str) (BOOM 1) at <input>:2:1
+before
+error: no overload of _ + _ admits (Number, Str)
 ```
-
-The `in …` lines are the call trace, innermost first. A frame for a function call
-names it two ways — the function's signature type, then the call site's own source
-text in parentheses — and ends with the file, line and column that call sits at.
-An error raised at the top level, outside any call, has no frames.
 
 ## Catching errors with `TRY`
 
-`TRY (<expr>) -> :<Type> WITH (<branches>)` runs `<expr>` in a catching context
+`TRY (<expr>) -> :<Type> WITH #{<branches>}` runs `<expr>` in a catching context
 and dispatches to a branch based on the result. Like `MATCH`, it needs a result
-type, and every branch must produce that type. The branch heads are:
+type, and every branch must produce that type. The branches are a dict of
+quotes, `#{<head>: (<body>), …}`, and the heads are:
 
 - `Ok` — the expression succeeded; `it` is its value.
 - an **error-kind name** — the matching error was caught; `it` is the error's
@@ -36,7 +35,7 @@ names is simply re-raised, so `_` is optional. Anything else in head position �
 a boolean literal, a name that is not an error kind — is an error at the form.
 
 ```koan
-TRY (PRINT "working") -> :Str WITH (Ok -> (PRINT "all good"))
+TRY (PRINT "working") -> :Str WITH #{Ok: (PRINT "all good")}
 ```
 
 ```text
@@ -48,9 +47,7 @@ When an error is caught, `it` holds a record of fields describing the error. You
 can print it whole:
 
 ```koan
-TRY (mystery) -> :Str WITH
-  Ok -> (PRINT "ok"),
-  UnboundName -> (PRINT it)
+TRY (mystery) -> :Str WITH #{Ok: (PRINT "ok"), UnboundName: (PRINT it)}
 ```
 
 ```text
@@ -60,9 +57,7 @@ TRY (mystery) -> :Str WITH
 It is an ordinary record, so you can read a single field off it:
 
 ```koan
-TRY (mystery) -> :Str WITH
-  Ok -> (PRINT "ok"),
-  UnboundName -> (PRINT it.name)
+TRY (mystery) -> :Str WITH #{Ok: (PRINT "ok"), UnboundName: (PRINT it.name)}
 ```
 
 ```text
@@ -76,9 +71,10 @@ A named branch always wins over `_`, regardless of order, so you can handle
 specific kinds and let the default mop up the rest:
 
 ```koan
-TRY (mystery) -> :Str WITH
-  TypeMismatch -> (PRINT "type problem"),
-  _ -> (PRINT "something failed")
+TRY (mystery) -> :Str WITH #{
+  TypeMismatch: (PRINT "type problem")
+  _: (PRINT "something failed")
+}
 ```
 
 ```text
@@ -90,9 +86,7 @@ supply a fallback:
 
 ```koan
 LET safe =
-  TRY (mystery) -> :Str WITH
-    Ok -> (it),
-    _ -> ("default")
+  TRY (mystery) -> :Str WITH #{Ok: (it), _: ("default")}
 PRINT safe
 ```
 
@@ -179,9 +173,10 @@ Error(boom)
 And like any union, you take one apart with `MATCH … OVER`:
 
 ```koan
-MATCH (CATCH (mystery)) OVER Result -> :Str WITH
-  Ok -> (PRINT "worked"),
-  Error -> (PRINT "failed")
+MATCH (CATCH (mystery)) OVER Result -> :Str WITH #{
+  Ok: (PRINT "worked")
+  Error: (PRINT "failed")
+}
 ```
 
 ```text
@@ -194,7 +189,7 @@ The `TRY` body and each branch are their own scopes. A name bound inside a
 branch is local to it and gone afterward:
 
 ```koan
-TRY (PRINT "x") -> :Str WITH (Ok -> ((LET note = "local") (PRINT note)))
+TRY (PRINT "x") -> :Str WITH #{Ok: ((LET note = "local") (PRINT note))}
 note
 ```
 

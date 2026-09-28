@@ -2,14 +2,15 @@
 //!
 //! Every node of the source knot is rebuilt in index order, so an edge means the same node in the
 //! copy and is carried verbatim; each closure binding's value, each data node's value cell and each
-//! module member is deep-copied through the copy the crossing handed down, and the types, body
-//! shapes and knot weight ride over. The copied member is the one at the source's own index.
+//! module member is the finished copy the crossing hands back, and the types, body shapes and knot
+//! weight ride over. A builtin's node points into program storage, so it is carried as-is. The
+//! copied member is the one at the source's own index.
 //!
-//! A module's members are rebuilt through that one copy, so a member that is itself a knot member
-//! brings its whole knot with it. Two members of one foreign knot therefore arrive as two copies of
-//! that knot — the price of "a member brings its knot", which a data node holding two such words
-//! already pays. A barrier's underlying function goes the same way, as the value word it would be
-//! if a member held it.
+//! [`held`](values::KnottedFamily::held) lists the values a rebuild asks for, in the order it asks,
+//! so each arm below sits beside its rebuild's twin. The crossing copies those values over its own
+//! worklist and keys every knot it has rebuilt, so two members of one foreign knot a module holds
+//! arrive as members of one copy of that knot. A barrier's underlying function goes the same way,
+//! as the value word it would be if a member held it.
 
 use crate::memory::{KnotPlan, Writer, resident};
 use crate::values::{self, DeepCopy, Value};
@@ -22,10 +23,28 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
     where
         'graph: 'cell;
 
+    fn held<'from>(
+        member: &Knotted<'graph, 'from>,
+        out: &mut dyn FnMut(Value<'from, Knotted<'graph, 'from>>),
+    ) where
+        'graph: 'from,
+    {
+        for node in member.member().knot().members() {
+            match node.payload() {
+                Node::Function(function) => function.closure().held(out),
+                Node::Builtin(_) => {}
+                Node::Data { circular, .. } => circular.held(out),
+                Node::Module(module) => module.members().iter().for_each(|value| out(*value)),
+                Node::Coerced(coerced) => out(Value::Knotted(coerced.underlying())),
+                Node::Code(code) => code.held(out),
+            }
+        }
+    }
+
     fn copy_into<'from, 'to>(
         writer: Writer<'to>,
         member: &Knotted<'graph, 'from>,
-        copy: &mut DeepCopy<'_, 'graph, 'from, 'to, Knotted<'graph, 'from>, Knotted<'graph, 'to>>,
+        copy: &mut DeepCopy<'_, 'from, 'to, Knotted<'graph, 'from>, Knotted<'graph, 'to>>,
     ) -> Knotted<'graph, 'to>
     where
         'graph: 'from,
@@ -37,6 +56,8 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                 Node::Function(function) => Node::Function(
                     function.rebuilt(writer, function.closure().copied(writer, &mut *copy)),
                 ),
+                // The record lives in program storage, which outlives the destination.
+                Node::Builtin(builtin) => Node::Builtin(builtin),
                 Node::Data {
                     circular,
                     knot_weight,
@@ -56,6 +77,7 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                     };
                     Node::Coerced(resident(writer, coerced.rebuilt(underlying)))
                 }
+                Node::Code(code) => Node::Code(resident(writer, code.rebuilt(writer, &mut *copy))),
             });
         Knotted(knot.member(member.member().index()))
     }

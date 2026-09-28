@@ -35,3 +35,17 @@ static COUNTING_ALLOCATOR: counting_alloc::Counting<std::alloc::System> =
 pub(crate) fn case_share(numerator: u32, denominator: u32) -> u32 {
     (proptest::prelude::ProptestConfig::default().cases * numerator / denominator).max(64)
 }
+
+thread_local! {
+    static TEST_FILE: crate::source::FileId =
+        crate::source::register(crate::source::SourceFile::new("<test>", String::new()));
+}
+
+/// A registered, empty source for a node a test builds by hand: code always comes from somewhere.
+/// Registered once per thread, since the source registry is per thread.
+pub(crate) fn source() -> crate::source::SourceRef {
+    crate::source::SourceRef {
+        span: crate::source::Span { start: 0, end: 0 },
+        file: TEST_FILE.with(|file| *file),
+    }
+}

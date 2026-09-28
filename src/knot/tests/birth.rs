@@ -1,19 +1,21 @@
-//! The tie: a lone function, the shape a registration's function carries, closure words, knots of
-//! fellow members read through their edges, data members and the anonymous nodes below them, and
+//! The tie: a lone function, what a registration's function carries, a combined statement's two
+//! members, closure words, knots of fellow members read through their edges, data members and the anonymous nodes below them, and
 //! every refusal.
 
-use crate::elaborate::Elaboration;
+use crate::elaborate::{Elaboration, ParameterBinding};
 use crate::memory::{Knot, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{CaptureSlot, Coordinate, Site, Target};
-use crate::symbols::KeywordSymbol;
+use crate::symbols::{BinderSymbol, KeywordSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, NodeSchema, TypeNode};
 use crate::values::{Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
 use super::super::function::Typing;
 use super::super::{Eager, KActivation, KValue, Knotted, Node, Supplied, Untieable, tie};
-use super::{Fixture, bound, callable, circular, declared, follow, pin, with_fixture};
+use super::{
+    Fixture, at_key, bound, callable, circular, declared, follow, pin, registered, with_fixture,
+};
 
 /// The component `name` belongs to, tied again with `eager` — a refusal the runner left for the
 /// test to see.
@@ -49,7 +51,7 @@ pub(super) fn tie_of<'f, 'graph, 'cell>(
 #[test]
 fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET f = (FN :{x :Number} -> Number = (x))");
+        let lines = fixture.parse("LET f = (FN :{x :Number} -> Number = #(x))");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let f = callable(fixture, activation, "f");
@@ -86,9 +88,9 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
 fn a_function_born_for_a_registration_carries_its_shape() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
-            "LET twice = FN EXPR (TWICE x :Number) -> Number = (x)\n\
-             LET plus = OP #(+) OVER Number = (left)\n\
-             LET f = (FN :{x :Number} -> Number = (x))",
+            "LET twice = FN EXPR #(TWICE x :Number) -> Number = #(x)\n\
+             LET plus = OP #(+) OVER Number = #(left)\n\
+             LET f = (FN :{x :Number} -> Number = #(x))",
         );
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
@@ -102,17 +104,23 @@ fn a_function_born_for_a_registration_carries_its_shape() {
             let shape = |elements: &[DispatchTokenElement]| {
                 Some(
                     types
-                        .shape_type(scratch, &[], elements, KType::NUMBER)
+                        .shape_type(scratch, &[], elements, &[], KType::NUMBER)
                         .handle,
                 )
             };
-            let twice = callable(fixture, activation, "twice");
+            let twice = registered(fixture, activation, "twice");
             let twice_function = twice.function().expect("a function");
             assert_eq!(
                 twice_function.registered_shape(),
                 shape(&[keyword("TWICE"), number])
             );
-            let plus = callable(fixture, activation, "plus");
+            // The name's function is born for no registration, so it carries no bucket's shape.
+            let named = callable(fixture, activation, "twice");
+            assert_eq!(
+                named.function().expect("a function").registered_shape(),
+                None
+            );
+            let plus = registered(fixture, activation, "plus");
             assert_eq!(
                 plus.function().expect("a function").registered_shape(),
                 shape(&[number, keyword("+"), number])
@@ -133,14 +141,123 @@ fn a_function_born_for_a_registration_carries_its_shape() {
             );
             let f = callable(fixture, activation, "f");
             assert_eq!(f.function().expect("a function").registered_shape(), None);
-            // The typing record is laid down although the quantifier map is empty.
+            // A combined statement's knot holds two members over its one body: the name's
+            // function, and the registration's, whose typing record is laid down although its
+            // quantifier maps are empty, beside the one parameter name its binding reads.
+            let member =
+                Weight::flat::<Node<'static, 'static>>().plus(twice_function.closure().weight());
+            let typing = Weight::run::<BinderSymbol>(1).plus(Weight::flat::<Typing<'static>>());
             assert_eq!(
                 twice.weight(),
                 Weight::flat::<usize>()
-                    .plus(Weight::flat::<Node<'static, 'static>>())
-                    .plus(twice_function.closure().weight())
-                    .plus(Weight::flat::<Typing<'static>>())
+                    .plus(member)
+                    .plus(member)
+                    .plus(typing)
             );
+        });
+    });
+}
+
+#[test]
+fn a_bare_definition_binds_its_function_to_its_registration_slot() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse("EXPR #(TWICE x :Number) -> Number = #(x)");
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let (types, scratch) = (fixture.types, fixture.scratch());
+            let twice = at_key(fixture, activation, "TWICE _");
+            let registered = twice
+                .function()
+                .expect("a function")
+                .registered()
+                .expect("born for its registration");
+            let keyword = KeywordSymbol::declared("TWICE", fixture.symbols).expect("a keyword");
+            assert_eq!(
+                registered.shape,
+                types
+                    .shape_type(
+                        scratch,
+                        &[],
+                        &[
+                            DispatchTokenElement::Keyword(keyword),
+                            DispatchTokenElement::Slot(KType::NUMBER)
+                        ],
+                        &[],
+                        KType::NUMBER
+                    )
+                    .handle
+            );
+            assert_eq!(
+                registered.parameters,
+                ParameterBinding::Named(&[fixture.name("x")])
+            );
+        });
+    });
+}
+
+#[test]
+fn a_combined_statement_births_two_equal_members_over_its_one_body() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse("LET twice = FN EXPR #(TWICE x :Number) -> Number = #(x)");
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let named = callable(fixture, activation, "twice");
+            let registration = at_key(fixture, activation, "TWICE _");
+            assert!(!std::ptr::eq(named.node(), registration.node()));
+            assert!(std::ptr::eq(
+                named.function().expect("a function").shape(),
+                registration.function().expect("a function").shape()
+            ));
+            assert_eq!(
+                Value::Knotted(named).equals(&Value::Knotted(registration), types, scratch),
+                Ok(true),
+                "one body over the same captures"
+            );
+        });
+    });
+}
+
+#[test]
+fn registrations_that_call_each_other_are_one_knot() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(
+            "EXPR #(PING n :Number) -> Number = #(PONG n)\n\
+             EXPR #(PONG n :Number) -> Number = #(PING n)",
+        );
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let ping = at_key(fixture, activation, "PING _");
+            let pong = at_key(fixture, activation, "PONG _");
+            let knot = ping.member().knot();
+            assert_eq!(knot.len(), 2);
+            assert!(
+                (0..2).any(|index| Knotted::of(knot, index) == pong),
+                "each captures the other through an edge into one knot"
+            );
+        });
+    });
+}
+
+#[test]
+fn a_unary_operator_registers_under_both_its_keys() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse("UNARY OP #(~) OVER Number -> Number = #(operands)");
+        fixture.in_cell(pin, |context| {
+            let activation = fixture.run(context.writer(), &lines, &[]);
+            let binding = |text| {
+                at_key(fixture, activation, text)
+                    .function()
+                    .expect("a function")
+                    .registered()
+                    .expect("born for its registration")
+                    .parameters
+            };
+            assert_eq!(
+                binding("~ _"),
+                ParameterBinding::Named(&[fixture.name("operands")])
+            );
+            assert_eq!(binding("_ ~ _"), ParameterBinding::Operands);
         });
     });
 }
@@ -148,7 +265,7 @@ fn a_function_born_for_a_registration_carries_its_shape() {
 #[test]
 fn a_closure_captures_the_enclosing_value_word() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET k = \"kept\"\nLET f = (FN :{} -> Str = (k))");
+        let lines = fixture.parse("LET k = \"kept\"\nLET f = (FN :{} -> Str = #(k))");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let f = callable(fixture, activation, "f");
@@ -173,7 +290,7 @@ fn capture_read<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: crate::memory::Writer<'cell>,
     callable: Knotted<'graph, 'cell>,
-    builtins: &'cell crate::scope::Builtins<'graph, 'cell, Knotted<'graph, 'cell>>,
+    builtins: &'cell crate::scope::Builtins<'cell, Knotted<'graph, 'cell>>,
     name: &str,
 ) -> KValue<'graph, 'cell> {
     let function = callable.function().expect("a function");
@@ -205,7 +322,7 @@ fn capture_read<'graph, 'cell>(
 fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
     with_fixture(|fixture| {
         let lines =
-            fixture.parse("LET f = (FN :{} -> Number = (g))\nLET g = (FN :{} -> Number = (f))");
+            fixture.parse("LET f = (FN :{} -> Number = #(g))\nLET g = (FN :{} -> Number = #(f))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -241,7 +358,7 @@ fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
 #[test]
 fn a_self_recursive_function_edges_itself() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET loop = (FN :{} -> Number = (loop))");
+        let lines = fixture.parse("LET loop = (FN :{} -> Number = #(loop))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -260,8 +377,9 @@ fn a_self_recursive_function_edges_itself() {
 #[test]
 fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
     with_fixture(|fixture| {
-        let lines = fixture
-            .parse("LET f = (FN :{} -> Number = (\n    LET h = (FN :{} -> Number = (f))\n    h))");
+        let lines = fixture.parse(
+            "LET f = (FN :{} -> Number = #(\n    LET h = (FN :{} -> Number = #(f))\n    h))",
+        );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -295,7 +413,7 @@ fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
 #[test]
 fn an_unsupported_signature_is_a_type_refusal() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET f = (FN :{x :(Number AS Any)} -> Number = (x))");
+        let lines = fixture.parse("LET f = (FN :{x :(Number AS Any)} -> Number = #(x))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &["f"]);
@@ -370,7 +488,7 @@ fn a_tagged_ring_of_two_members_is_one_knot() {
 #[test]
 fn a_container_and_the_function_that_captures_it_share_a_knot() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET a = [f]\nLET f = (FN :{} -> Any = (a))");
+        let lines = fixture.parse("LET a = [f]\nLET f = (FN :{} -> Any = #(a))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &[]);
@@ -400,7 +518,7 @@ fn a_container_and_the_function_that_captures_it_share_a_knot() {
 fn a_nested_constructor_on_a_sibling_path_is_an_anonymous_node() {
     with_fixture(|fixture| {
         let lines =
-            fixture.parse("LET a = {inner = [f] plain = [1 2]}\nLET f = (FN :{} -> Any = (a))");
+            fixture.parse("LET a = {inner = [f] plain = [1 2]}\nLET f = (FN :{} -> Any = #(a))");
         fixture.in_cell(pin, |context| {
             let activation = fixture.run(context.writer(), &lines, &[]);
             let f = callable(fixture, activation, "f");
@@ -491,8 +609,8 @@ fn a_nested_construction_is_built_through_the_checked_door() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
             "NEWTYPE Distance = Number\n\
-             LET a = [(Distance 3) f]\nLET f = (FN :{} -> Any = (a))\n\
-             LET b = [(Distance \"x\") g]\nLET g = (FN :{} -> Any = (b))",
+             LET a = [(Distance 3) f]\nLET f = (FN :{} -> Any = #(a))\n\
+             LET b = [(Distance \"x\") g]\nLET g = (FN :{} -> Any = #(b))",
         );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
@@ -520,7 +638,7 @@ fn a_nested_construction_is_built_through_the_checked_door() {
 fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
-            "LET g = (FN :{x :Number} -> Any = (x))\nLET a = [(g 1) f]\nLET f = (FN :{} -> Any = (a))",
+            "LET g = (FN :{x :Number} -> Any = #(x))\nLET a = [(g 1) f]\nLET f = (FN :{} -> Any = #(a))",
         );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
@@ -561,8 +679,8 @@ fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
 fn every_eager_part_is_asked_for_in_one_attempt() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
-            "LET g = (FN :{x :Number} -> Any = (x))\n\
-             LET a = [(g 1) {(g 2): f} (g 4)]\nLET f = (FN :{} -> Any = (a))",
+            "LET g = (FN :{x :Number} -> Any = #(x))\n\
+             LET a = [(g 1) {(g 2): f} (g 4)]\nLET f = (FN :{} -> Any = #(a))",
         );
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
@@ -593,7 +711,7 @@ fn every_eager_part_is_asked_for_in_one_attempt() {
 #[test]
 fn a_dict_key_that_is_no_scalar_refuses() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET k = [1]\nLET a = {(k): f}\nLET f = (FN :{} -> Any = (a))");
+        let lines = fixture.parse("LET k = [1]\nLET a = {(k): f}\nLET f = (FN :{} -> Any = #(a))");
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
             let activation = fixture.run(writer, &lines, &["a"]);

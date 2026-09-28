@@ -43,7 +43,7 @@ use super::record::Record;
 use super::schema::{
     DeclaredGroup, Members, SchemaDraft, SigSchema, canonical_groups, canonical_overloads,
 };
-use super::shape::{DeferredReturnSurface, DispatchTokenElement};
+use super::shape::{DeferredReturnSurface, DispatchTokenElement, written_order};
 use super::substitute::substitute_quantified;
 use super::walk::Variance;
 use super::walk::unary::{LEAF, Step, Visit, children, visit, visit_in};
@@ -103,14 +103,28 @@ impl<'run> Entry<'run> {
 /// The node table: keyed by digest under the identity hasher, bucket array in the run region.
 type NodeTable<'run> = BumpBackedMap<'run, TypeDigest, Entry<'run>, IdentityBuildHasher>;
 
-/// Which question a recorded verdict answers. The two never alias — each digest domain is disjoint
-/// by construction — but the enum still keys the table explicitly.
+/// Which question a recorded verdict answers. They never alias — each digest domain is disjoint by
+/// construction, and a class verdict names its class — but the enum still keys the table
+/// explicitly.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Relation {
     /// [`is_subtype_of`](super::order::is_subtype_of), the one order.
     Subtype,
     /// [`sig_subtype`](super::sig_relations::sig_subtype) over the two schemas.
     SigSatisfies,
+    /// [`class_at_least`](super::ranking::class_at_least) at the class it names.
+    ClassAtLeast(u8),
+}
+
+impl Relation {
+    /// The bits a bucket fold mixes in: distinct per relation and per class.
+    fn bits(self) -> u64 {
+        match self {
+            Relation::Subtype => 0,
+            Relation::SigSatisfies => 1,
+            Relation::ClassAtLeast(class) => 2 + u64::from(class),
+        }
+    }
 }
 
 /// Slots in the verdict table. A power of two, two slots to a bucket.
@@ -215,11 +229,17 @@ impl<'run> TypeRegistry<'run> {
             TypeNode::Bool,
             TypeNode::Null,
             TypeNode::Identifier,
-            TypeNode::NameToken,
+            TypeNode::Symbol,
             TypeNode::TypeNameToken,
-            TypeNode::KExpression,
+            TypeNode::Expression,
             TypeNode::SigiledTypeExpr,
             TypeNode::RecordType,
+            TypeNode::Literal,
+            TypeNode::Block,
+            TypeNode::Declaration,
+            TypeNode::Binder,
+            TypeNode::Name,
+            TypeNode::Keyword,
             TypeNode::Any,
             TypeNode::AnyValue,
             TypeNode::AnyCode,
@@ -239,6 +259,24 @@ impl<'run> TypeRegistry<'run> {
         self.list(KType::ANY);
         self.dict(KType::ANY, KType::ANY);
         self.intern_schema(SigSchema::EMPTY);
+        let type_code = self.union_of(
+            self.bump,
+            &[
+                KType::TYPE_NAME_TOKEN,
+                KType::SIGILED_TYPE_EXPR,
+                KType::RECORD_TYPE,
+            ],
+        );
+        self.list(KType::NAME);
+        self.list(KType::DECLARATION);
+        self.dict(KType::NAME, KType::BLOCK);
+        self.dict(KType::NAME, type_code);
+        self.dict(type_code, KType::BLOCK);
+        self.union_of(
+            self.bump,
+            &[KType::LIST_OF_NAME, KType::DICT_NAME_TYPE_CODE],
+        );
+        self.record(self.bump, &[]);
     }
 
     /// `test`-only: how many verdicts were recorded, and how many of those evicted another.
@@ -506,6 +544,33 @@ impl<'run> TypeRegistry<'run> {
         })
     }
 
+    /// A code kind needing `names` where its code is built. `kind` is a code kind below `Code`;
+    /// `names` may arrive in any order and repeat, since identity is their set, and needing none
+    /// is the bare `kind` itself.
+    pub fn code_needing(
+        &self,
+        scratch: BumpAllocator<'_>,
+        kind: KType,
+        names: &[BinderSymbol],
+    ) -> KType {
+        debug_assert!(
+            kind.code_parent().is_some(),
+            "a code kind needing names is a kind below `Code`",
+        );
+        if names.is_empty() {
+            return kind;
+        }
+        let mut sorted = BumpVec::with_capacity_in(names.len(), scratch);
+        sorted.extend_from_slice(names);
+        sorted.sort_unstable();
+        sorted.dedup();
+        let digest = digest::code_needing_digest(kind, &sorted);
+        self.intern_digested(digest, || TypeNode::CodeNeeding {
+            kind,
+            names: self.rehome(&sorted),
+        })
+    }
+
     /// The `index`-th rigid variable of the enclosing shape's group, bounded by `bound`.
     ///
     /// A bound holds no rigid variable of its own — see [`contains_rigid`](Self::contains_rigid).
@@ -627,16 +692,31 @@ impl<'run> TypeRegistry<'run> {
     /// are render-only, so two shapes alpha-equivalent under a renaming intern to the node
     /// whichever spelling built first. The returned map translates a caller's declaration-order
     /// bindings into the canonical group's order.
+    ///
+    /// `classes` is each slot's dense priority class, as [`dense_classes`](super::shape::dense_classes)
+    /// normalizes a written ranking; empty for written order, and written order spelled out is
+    /// stored empty, so the two spellings are one handle.
     pub fn shape_type<'s>(
         &self,
         scratch: BumpAllocator<'s>,
         quantifiers: &[TypeSymbol],
         elements: &[DispatchTokenElement],
+        classes: &[u8],
         ret: KType,
     ) -> GroupIntern<'s> {
+        debug_assert!(
+            classes.is_empty()
+                || classes.len()
+                    == elements
+                        .iter()
+                        .filter(|e| matches!(e, DispatchTokenElement::Slot(_)))
+                        .count(),
+            "a ranking names one class per slot",
+        );
+        let classes = if written_order(classes) { &[] } else { classes };
         if quantifiers.is_empty() {
             return GroupIntern {
-                handle: self.intern_shape(&[], &[], elements, ret),
+                handle: self.intern_shape(&[], &[], elements, classes, ret),
                 quantifier_map: &[],
             };
         }
@@ -668,7 +748,13 @@ impl<'run> TypeRegistry<'run> {
             "every quantified position names an index of the shape's own canonical group",
         );
         GroupIntern {
-            handle: self.intern_shape(&group.names, &group.bounds, &canonical_elements, ret),
+            handle: self.intern_shape(
+                &group.names,
+                &group.bounds,
+                &canonical_elements,
+                classes,
+                ret,
+            ),
             quantifier_map: group.quantifier_map,
         }
     }
@@ -736,13 +822,15 @@ impl<'run> TypeRegistry<'run> {
         quantifiers: &[TypeSymbol],
         bounds: &[KType],
         elements: &[DispatchTokenElement],
+        classes: &[u8],
         ret: KType,
     ) -> KType {
-        let handle = digest::shape_digest(quantifiers.len(), elements, ret.digest());
+        let handle = digest::shape_digest(quantifiers.len(), elements, classes, ret.digest());
         self.intern_digested(handle, || TypeNode::ExpressionShape {
             quantifiers: self.rehome(quantifiers),
             bounds: self.rehome(bounds),
             elements: self.rehome(elements),
+            classes: self.rehome(classes),
             ret,
         })
     }
@@ -997,7 +1085,7 @@ impl<'run> TypeRegistry<'run> {
     /// land in different buckets — with the relation mixed in. A slot compares the whole key, so a
     /// fold collision costs a slot and never a wrong verdict.
     fn bucket(&self, subject: TypeDigest, candidate: TypeDigest, relation: Relation) -> usize {
-        let fold = (subject.0 as u64).rotate_left(32) ^ (candidate.0 as u64) ^ (relation as u64);
+        let fold = (subject.0 as u64).rotate_left(32) ^ (candidate.0 as u64) ^ relation.bits();
         2 * ((fold as usize) & (self.verdict_slots / 2 - 1))
     }
 

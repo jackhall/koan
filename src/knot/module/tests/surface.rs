@@ -123,7 +123,7 @@ USING m SCOPE (zero name)";
 fn a_value_that_is_no_module_cannot_be_surfaced() {
     let source = "\
 MODULE m = (LET zero = 0)
-LET f = (FN :{} -> Number = (1))
+LET f = (FN :{} -> Number = #(1))
 USING m SCOPE (zero)";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);

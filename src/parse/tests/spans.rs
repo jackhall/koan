@@ -1,5 +1,6 @@
 //! The spans a parse synthesizes rather than reads off a token: an operator trigger folded out
-//! of a compound atom, a compound keyword, and the file a span resolves against. That every other
+//! of a compound atom, a compound keyword, a brace literal's wrappers and element quotes, and the
+//! file a span resolves against. That every other
 //! span indexes its own text is [`properties`](super::properties)' fourth law.
 
 use crate::memory::{ProgramBrand, program_storage};
@@ -7,8 +8,8 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::parse::{parse, parse_with_path};
 use crate::source::{self, SourceFile, Span, Spanned};
 
-fn span_of(expr: &KExpression<'_>) -> Option<Span> {
-    expr.span
+fn span_of(expr: &KExpression<'_>) -> Span {
+    expr.source.span
 }
 
 fn s(start: u32, end: u32) -> Span {
@@ -24,7 +25,7 @@ fn attr_token_spans_full_token_and_trigger_is_one_byte() {
     let program = program_storage();
     let exprs = top(program.brand(), "foo.bar");
     let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 7)));
+    assert_eq!(span_of(outer), s(0, 7));
     let kw = &outer.parts[0];
     let lhs = &outer.parts[1];
     let rhs = &outer.parts[2];
@@ -39,7 +40,7 @@ fn chained_attr_sub_atoms_get_distinct_trigger_spans() {
     let program = program_storage();
     let exprs = top(program.brand(), "foo.bar.baz");
     let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 11)));
+    assert_eq!(span_of(outer), s(0, 11));
     assert!(
         matches!(outer.parts[0].value, ExpressionPart::Keyword(symbol) if symbol == probe_symbol("ATTR"))
     );
@@ -72,7 +73,7 @@ fn span_resolves_to_line_column_via_sourcefile() {
     let program = program_storage();
     let exprs = top(program.brand(), src);
     let file = SourceFile::new("<t>", src.to_string());
-    assert_eq!(file.resolve(span_of(&exprs[1]).unwrap().start), (2, 1));
+    assert_eq!(file.resolve(span_of(&exprs[1]).start), (2, 1));
     assert_eq!(file.resolve(exprs[1].parts[1].span.unwrap().start), (2, 5));
 }
 
@@ -100,15 +101,41 @@ fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
         ExpressionPart::Expression(e) => &**e,
         other => panic!("expected nested Expression part, got {other:?}"),
     };
-    let file_id = nested
-        .file
-        .expect("file should be populated by parse_with_path");
-    let span = nested.span.expect("span should be populated");
+    let file_id = nested.source.file;
+    let span = nested.source.span;
     let (line, col) = source::with(file_id, |f| {
         assert_eq!(&*f.path, "lib.koan");
         f.resolve(span.start)
     });
     assert_eq!((line, col), (3, 5));
+}
+
+#[test]
+fn a_brace_literals_multi_part_key_is_wrapped_at_the_whole_literal() {
+    let program = program_storage();
+    let exprs = top(program.brand(), "LET d = {f 1: 2}");
+    let ExpressionPart::DictLiteral([(ExpressionPart::Expression(wrapper), _)]) =
+        exprs[0].parts[3].value
+    else {
+        panic!("a one-pair dict whose key is wrapped");
+    };
+    assert_eq!(wrapper.parts.len(), 2);
+    assert_eq!(span_of(wrapper), s(8, 16));
+}
+
+#[test]
+fn an_element_quote_is_sourced_at_the_whole_literal() {
+    let program = program_storage();
+    let exprs = top(program.brand(), "LET q = #[x 1]");
+    let ExpressionPart::ListLiteral(items) = exprs[0].parts[3].value else {
+        panic!("a quoted list literal");
+    };
+    for item in items {
+        let ExpressionPart::QuotedExpression(quote) = item else {
+            panic!("every element is quoted");
+        };
+        assert_eq!(span_of(quote), s(8, 14));
+    }
 }
 
 /// The operator-probe symbol for a probe key a test spells out (`"ATTR"`, `":|"`).

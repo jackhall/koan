@@ -34,6 +34,7 @@ pub mod builtin_shapes;
 
 mod atom;
 mod brace;
+mod depth;
 mod error;
 mod lower;
 mod operators;
@@ -44,17 +45,17 @@ use crate::memory::ProgramBrand;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile};
 use crate::symbols::SymbolInterner;
 
+pub use depth::MAX_SYNTAX_DEPTH;
 pub use error::ParseError;
 
 /// The span wrapper a node's parts run carries — the type every construction door here takes, so a
 /// caller building a node names it through `parse` rather than reaching past it.
 pub use crate::source::Spanned;
 pub use ast::{
-    DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KeyElement, NodeCache,
-    PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
+    DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KeyElement, Mark,
+    NodeCache, PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
 };
 pub use builtin_shapes::binder::{BinderBucketFn, BinderNameFn, BinderSurface, StoredBinderKey};
-pub use builtin_shapes::lazy::LazyKinds;
 
 #[cfg_attr(not(feature = "pending_rewrite"), allow(unused_imports))]
 pub(crate) use builtin_shapes::binder::{
@@ -89,7 +90,8 @@ pub fn parse_with_path<'a>(
 }
 
 /// Parse against a pre-registered `SourceFile`. Installs `id` as the active `CURRENT_FILE` via
-/// [`CurrentFileGuard`] so [`ParseError::new`] sees the right file. Every name and every parts run the
+/// [`CurrentFileGuard`] so [`ParseError::new`] sees the right file. A top-level expression nested
+/// deeper than [`MAX_SYNTAX_DEPTH`] is refused. Every name and every parts run the
 /// products hold is written into `program`'s store, so the caller owns the storage the whole AST
 /// lives in.
 pub fn parse_with_source<'a>(
@@ -98,7 +100,12 @@ pub fn parse_with_source<'a>(
     id: FileId,
 ) -> Result<Vec<KExpression<'a>>, ParseError> {
     let _guard = CurrentFileGuard::push(id);
-    source::with(id, |f| {
-        lower::lower_source(program, symbols, &f.text, Some(id))
-    })
+    let expressions = source::with(id, |f| lower::lower_source(program, symbols, &f.text, id))?;
+    if let Some(deep) = expressions.iter().find(|e| e.depth() > MAX_SYNTAX_DEPTH) {
+        return Err(ParseError::new(
+            format!("syntax nests deeper than {MAX_SYNTAX_DEPTH}"),
+            Some(deep.source.span),
+        ));
+    }
+    Ok(expressions)
 }

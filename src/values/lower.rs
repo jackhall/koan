@@ -6,18 +6,18 @@ use crate::type_lattice::TypeRegistry;
 
 use super::{Dict, Key, Knotted, List, Record, Value, text};
 
-impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
-    /// The value a region-pure part denotes: a scalar or string literal, a quote, or a container
-    /// literal whose every element lowers and whose every dict key is a scalar literal. `None` for a
-    /// part that needs dispatch or a scope — a name, a parenthesized expression, a sigiled type
-    /// body — anywhere inside it; the part is checked whole before anything is written, so a refusal
-    /// leaves the region untouched. A quote lowers to its program node, borrowed at `'graph`.
+impl<'cell, X: Knotted> Value<'cell, X> {
+    /// The value a region-pure part denotes: a scalar or string literal, or a container literal
+    /// whose every element lowers and whose every dict key is a scalar literal. `None` for a part
+    /// that needs dispatch or a scope — a name, a parenthesized expression, a sigiled type body, a
+    /// quote, whose code binds its `$` names where it is written — anywhere inside it; the part is
+    /// checked whole before anything is written, so a refusal leaves the region untouched.
     pub fn lower_part(
         writer: Writer<'cell>,
-        part: &ExpressionPart<'graph>,
+        part: &ExpressionPart<'_>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> Option<Value<'graph, 'cell, X>> {
+    ) -> Option<Value<'cell, X>> {
         lowers(part).then(|| lower(writer, part, types, scratch))
     }
 }
@@ -25,7 +25,7 @@ impl<'graph, 'cell, X: Knotted> Value<'graph, 'cell, X> {
 /// Whether [`lower`] takes `part` whole.
 fn lowers(part: &ExpressionPart<'_>) -> bool {
     match part {
-        ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => true,
+        ExpressionPart::Literal(_) => true,
         ExpressionPart::ListLiteral(items) => items.iter().all(lowers),
         ExpressionPart::DictLiteral(pairs) => pairs.iter().all(|(key, value)| {
             let scalar = match key {
@@ -41,23 +41,25 @@ fn lowers(part: &ExpressionPart<'_>) -> bool {
         | ExpressionPart::Type(_)
         | ExpressionPart::Expression(_)
         | ExpressionPart::SigiledTypeExpr(_)
-        | ExpressionPart::RecordType(_) => false,
+        | ExpressionPart::RecordType(_)
+        | ExpressionPart::QuotedExpression(_)
+        | ExpressionPart::MarkedName(..)
+        | ExpressionPart::MarkedUse(..) => false,
     }
 }
 
 /// The value of a part [`lowers`] took.
-fn lower<'graph, 'cell, X: Knotted>(
+fn lower<'cell, X: Knotted>(
     writer: Writer<'cell>,
-    part: &ExpressionPart<'graph>,
+    part: &ExpressionPart<'_>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> Value<'graph, 'cell, X> {
+) -> Value<'cell, X> {
     match part {
         ExpressionPart::Literal(KLiteral::Number(number)) => Value::Number(*number),
         ExpressionPart::Literal(KLiteral::String(literal)) => text(writer, literal),
         ExpressionPart::Literal(KLiteral::Boolean(flag)) => Value::Bool(*flag),
         ExpressionPart::Literal(KLiteral::Null) => Value::Null,
-        ExpressionPart::QuotedExpression(node) => Value::Expression(*node),
         ExpressionPart::ListLiteral(items) => {
             let mut cells = BumpVec::with_capacity_in(items.len(), scratch);
             cells.extend(items.iter().map(|item| lower(writer, item, types, scratch)));
@@ -94,6 +96,9 @@ fn lower<'graph, 'cell, X: Knotted>(
         | ExpressionPart::Type(_)
         | ExpressionPart::Expression(_)
         | ExpressionPart::SigiledTypeExpr(_)
-        | ExpressionPart::RecordType(_) => unreachable!("a lowerable part needs no dispatch"),
+        | ExpressionPart::RecordType(_)
+        | ExpressionPart::QuotedExpression(_)
+        | ExpressionPart::MarkedName(..)
+        | ExpressionPart::MarkedUse(..) => unreachable!("a lowerable part needs no dispatch"),
     }
 }

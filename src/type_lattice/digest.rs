@@ -57,7 +57,7 @@ const TAG_STR: u8 = 0x02;
 const TAG_BOOL: u8 = 0x03;
 const TAG_NULL: u8 = 0x04;
 const TAG_IDENTIFIER: u8 = 0x05;
-const TAG_KEXPRESSION: u8 = 0x06;
+const TAG_EXPRESSION: u8 = 0x06;
 const TAG_SIGILED_TYPE_EXPR: u8 = 0x07;
 const TAG_RECORD_TYPE: u8 = 0x08;
 const TAG_ANY: u8 = 0x09;
@@ -79,13 +79,20 @@ const TAG_RECURSIVE_SET: u8 = 0x1B;
 const TAG_SIG_CONTENT: u8 = 0x1C;
 // 0x1D is retired: it tagged the deep canonicalizing walk's self-reference leaf, which no longer
 // exists — projection's sentinel re-sourcing makes an own-member reference content-determined.
-const TAG_NAME_TOKEN: u8 = 0x1E;
+const TAG_SYMBOL: u8 = 0x1E;
 const TAG_TYPE_NAME_TOKEN: u8 = 0x1F;
 const TAG_NEVER: u8 = 0x20;
 const TAG_EXPRESSION_SHAPE: u8 = 0x21;
 const TAG_QUANTIFIED: u8 = 0x22;
 const TAG_ANY_VALUE: u8 = 0x23;
 const TAG_ANY_CODE: u8 = 0x24;
+const TAG_LITERAL: u8 = 0x25;
+const TAG_BLOCK: u8 = 0x26;
+const TAG_BINDER: u8 = 0x27;
+const TAG_NAME: u8 = 0x28;
+const TAG_KEYWORD: u8 = 0x29;
+const TAG_DECLARATION: u8 = 0x2A;
+const TAG_CODE_NEEDING: u8 = 0x2B;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -173,15 +180,22 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::Bool => leaf_digest(TAG_BOOL),
         TypeNode::Null => leaf_digest(TAG_NULL),
         TypeNode::Identifier => leaf_digest(TAG_IDENTIFIER),
-        TypeNode::NameToken => leaf_digest(TAG_NAME_TOKEN),
+        TypeNode::Symbol => leaf_digest(TAG_SYMBOL),
         TypeNode::TypeNameToken => leaf_digest(TAG_TYPE_NAME_TOKEN),
-        TypeNode::KExpression => leaf_digest(TAG_KEXPRESSION),
+        TypeNode::Expression => leaf_digest(TAG_EXPRESSION),
         TypeNode::SigiledTypeExpr => leaf_digest(TAG_SIGILED_TYPE_EXPR),
         TypeNode::RecordType => leaf_digest(TAG_RECORD_TYPE),
+        TypeNode::Literal => leaf_digest(TAG_LITERAL),
+        TypeNode::Block => leaf_digest(TAG_BLOCK),
+        TypeNode::Declaration => leaf_digest(TAG_DECLARATION),
+        TypeNode::Binder => leaf_digest(TAG_BINDER),
+        TypeNode::Name => leaf_digest(TAG_NAME),
+        TypeNode::Keyword => leaf_digest(TAG_KEYWORD),
         TypeNode::Any => leaf_digest(TAG_ANY),
         TypeNode::AnyValue => leaf_digest(TAG_ANY_VALUE),
         TypeNode::AnyCode => leaf_digest(TAG_ANY_CODE),
         TypeNode::Never => leaf_digest(TAG_NEVER),
+        TypeNode::CodeNeeding { kind, names } => code_needing_digest(*kind, names),
         TypeNode::OfKind(k) => of_kind_digest(*k),
         TypeNode::DeferredReturn(surface) => deferred_return_digest(*surface),
         TypeNode::AbstractType {
@@ -203,9 +217,10 @@ pub(super) fn node_digest(scratch: BumpAllocator<'_>, node: &TypeNode<'_>) -> Ty
         TypeNode::ExpressionShape {
             quantifiers,
             elements,
+            classes,
             ret,
             ..
-        } => shape_digest(quantifiers.len(), elements, ret.digest()),
+        } => shape_digest(quantifiers.len(), elements, classes, ret.digest()),
         TypeNode::Quantified { index, bound } => quantified_digest(*index, *bound),
         TypeNode::Union { members } => union_digest(scratch, members),
         TypeNode::ConstructorApply {
@@ -278,6 +293,17 @@ pub(super) fn abstract_type_digest(
     h.digest(bound.digest()).finish()
 }
 
+/// A code kind needing names: the kind, then the names in the symbol-sorted order the node stores
+/// them in.
+pub(super) fn code_needing_digest(kind: KType, names: &[BinderSymbol]) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_CODE_NEEDING);
+    h.digest(kind.digest()).count(names.len());
+    for name in names {
+        h.symbol(name.symbol());
+    }
+    h.finish()
+}
+
 // Per-shape digest builders. Each takes its children's handles — which are already their digests
 // — so the work is shallow: one hash over one tag and a few `u128`s, never a walk.
 
@@ -328,6 +354,7 @@ pub(super) fn function_digest(
 pub(super) fn shape_digest(
     arity: usize,
     elements: &[DispatchTokenElement],
+    classes: &[u8],
     ret: TypeDigest,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_EXPRESSION_SHAPE);
@@ -337,6 +364,11 @@ pub(super) fn shape_digest(
             DispatchTokenElement::Keyword(symbol) => h.byte(1).symbol(symbol.symbol()),
             DispatchTokenElement::Slot(kt) => h.byte(0).digest(kt.digest()),
         };
+    }
+    // A ranking follows the elements, whose count fixes where it starts; written order feeds
+    // nothing, so an unranked shape digests as it always has.
+    for class in classes {
+        h.byte(*class);
     }
     h.digest(ret).finish()
 }

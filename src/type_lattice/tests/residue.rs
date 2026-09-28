@@ -16,6 +16,7 @@ use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::order::is_subtype_of;
 use crate::type_lattice::record::Record;
 use crate::type_lattice::registry::TypeRegistry;
+use crate::type_lattice::render::display_name;
 use crate::type_lattice::schema::{SchemaDraft, shape_slots};
 use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
 use crate::type_lattice::unify::{Collector, UnifyFailure, admits_with};
@@ -84,6 +85,7 @@ fn a_twice_used_variable_takes_the_maximum_or_fails() {
                 DispatchTokenElement::Slot(element),
                 DispatchTokenElement::Slot(element),
             ],
+            &[],
             KType::NULL,
         )
         .handle;
@@ -147,6 +149,7 @@ fn a_single_occurrence_takes_its_bound_or_never() {
                     DispatchTokenElement::Keyword(keyword),
                     DispatchTokenElement::Slot(slot),
                 ],
+                &[],
                 ret,
             )
             .handle
@@ -342,6 +345,7 @@ fn each_node_kind_lies_under_its_family_top() {
                 quantifiers: &[],
                 bounds: &[],
                 elements: &elements,
+                classes: &[],
                 ret: KType::NUMBER,
             },
         ),
@@ -366,11 +370,17 @@ fn each_node_kind_lies_under_its_family_top() {
     }
     let codes = [
         KType::IDENTIFIER,
-        KType::NAME_TOKEN,
+        KType::SYMBOL,
         KType::TYPE_NAME_TOKEN,
-        KType::KEXPRESSION,
+        KType::EXPRESSION,
         KType::SIGILED_TYPE_EXPR,
         KType::RECORD_TYPE,
+        KType::LITERAL,
+        KType::BLOCK,
+        KType::DECLARATION,
+        KType::BINDER,
+        KType::NAME,
+        KType::KEYWORD,
         KType::ANY_CODE,
     ];
     for code in codes {
@@ -411,6 +421,163 @@ fn each_node_kind_lies_under_its_family_top() {
     assert_eq!(
         join(&types, region, KType::ANY_VALUE, KType::ANY_TYPE),
         pair_top
+    );
+}
+
+/// The code family is a tree: each kind lies under its parent and, transitively, every kind above
+/// it, and under nothing beside. The meets and joins that matter follow from the tree alone.
+#[test]
+fn the_code_kinds_form_a_tree_under_code() {
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let below = |a: KType, b: KType| is_subtype_of(&types, region, a, b);
+    let edges = [
+        (KType::BLOCK, KType::ANY_CODE),
+        (KType::EXPRESSION, KType::BLOCK),
+        (KType::DECLARATION, KType::EXPRESSION),
+        (KType::LITERAL, KType::EXPRESSION),
+        (KType::SYMBOL, KType::EXPRESSION),
+        (KType::SIGILED_TYPE_EXPR, KType::EXPRESSION),
+        (KType::RECORD_TYPE, KType::EXPRESSION),
+        (KType::BINDER, KType::DECLARATION),
+        (KType::NAME, KType::SYMBOL),
+        (KType::KEYWORD, KType::SYMBOL),
+        (KType::IDENTIFIER, KType::NAME),
+        (KType::TYPE_NAME_TOKEN, KType::NAME),
+    ];
+    for (child, parent) in edges {
+        assert!(below(child, parent), "{child:?} under {parent:?}");
+        assert!(!below(parent, child), "{parent:?} not under {child:?}");
+    }
+    let chain = [
+        KType::IDENTIFIER,
+        KType::NAME,
+        KType::SYMBOL,
+        KType::EXPRESSION,
+        KType::BLOCK,
+        KType::ANY_CODE,
+    ];
+    for (index, lower) in chain.iter().enumerate() {
+        for upper in &chain[index..] {
+            assert!(below(*lower, *upper), "{lower:?} under {upper:?}");
+        }
+    }
+    assert!(below(KType::BINDER, KType::EXPRESSION));
+    for (a, b) in [
+        (KType::KEYWORD, KType::NAME),
+        (KType::LITERAL, KType::SYMBOL),
+        (KType::BINDER, KType::SYMBOL),
+        (KType::DECLARATION, KType::BINDER),
+        (KType::BLOCK, KType::EXPRESSION),
+        (KType::EXPRESSION, KType::SYMBOL),
+        (KType::IDENTIFIER, KType::KEYWORD),
+    ] {
+        assert!(!below(a, b), "{a:?} not under {b:?}");
+    }
+    for kind in [KType::BLOCK, KType::NAME, KType::KEYWORD, KType::BINDER] {
+        assert!(!below(kind, KType::ANY_VALUE), "{kind:?} not a value");
+        assert!(!below(kind, KType::ANY_TYPE), "{kind:?} not a type");
+    }
+
+    assert_eq!(
+        meet(&types, region, KType::EXPRESSION, KType::BLOCK),
+        KType::EXPRESSION
+    );
+    assert_eq!(
+        meet(&types, region, KType::NAME, KType::KEYWORD),
+        KType::NEVER
+    );
+    assert_eq!(
+        meet(&types, region, KType::LITERAL, KType::BINDER),
+        KType::NEVER
+    );
+    assert_eq!(
+        meet(&types, region, KType::DECLARATION, KType::SYMBOL),
+        KType::NEVER
+    );
+    assert_eq!(
+        types.union_of(region, &[KType::LITERAL, KType::EXPRESSION]),
+        KType::EXPRESSION
+    );
+
+    let list_of_code = types.list(KType::ANY_CODE);
+    assert!(below(KType::LIST_OF_NAME, list_of_code));
+    assert!(below(list_of_code, KType::ANY_VALUE));
+    assert!(below(
+        KType::LIST_OF_DECLARATION,
+        types.list(KType::EXPRESSION)
+    ));
+    assert!(below(
+        KType::DICT_NAME_BLOCK,
+        types.dict(KType::SYMBOL, KType::ANY_CODE)
+    ));
+    assert!(below(KType::TYPE_CODE, KType::EXPRESSION));
+}
+
+/// A code kind needing names lies under `Code`, over the same kind needing more and over a kind
+/// under its own, and under the same kind needing fewer; the bare kind needs none. Two meet at
+/// their kinds' meet needing the names both need, and one renders as its `NEEDING` spelling.
+#[test]
+fn a_code_kind_needing_names_is_ordered_by_kind_and_by_its_names() {
+    let bump = Bump::new();
+    let region = &bump;
+    let types = TypeRegistry::in_region(region);
+    let symbols = SymbolInterner::new();
+    let name = |text: &str| BinderSymbol::declared(text, &symbols).expect("a bindable token");
+    let (y, z) = (name("y"), name("z"));
+    let below = |a: KType, b: KType| is_subtype_of(&types, region, a, b);
+    let needing = |kind: KType, names: &[BinderSymbol]| types.code_needing(region, kind, names);
+
+    assert_eq!(needing(KType::EXPRESSION, &[]), KType::EXPRESSION);
+    assert_eq!(
+        needing(KType::EXPRESSION, &[z, y, y]),
+        needing(KType::EXPRESSION, &[y, z])
+    );
+    let expression_y = needing(KType::EXPRESSION, &[y]);
+    let expression_yz = needing(KType::EXPRESSION, &[y, z]);
+    let block_y = needing(KType::BLOCK, &[y]);
+    let binder_y = needing(KType::BINDER, &[y]);
+    let expression_z = needing(KType::EXPRESSION, &[z]);
+
+    for (lower, upper) in [
+        (KType::EXPRESSION, expression_y),
+        (expression_y, expression_yz),
+        (expression_y, block_y),
+        (binder_y, expression_y),
+        (KType::LITERAL, expression_y),
+        (expression_yz, KType::ANY_CODE),
+    ] {
+        assert!(below(lower, upper), "{lower:?} under {upper:?}");
+        assert!(!below(upper, lower), "{upper:?} not under {lower:?}");
+    }
+    for (a, b) in [
+        (expression_y, KType::EXPRESSION),
+        (expression_y, expression_z),
+        (block_y, KType::EXPRESSION),
+        (expression_y, KType::ANY_VALUE),
+    ] {
+        assert!(!below(a, b), "{a:?} not under {b:?}");
+    }
+
+    assert_eq!(meet(&types, region, expression_yz, block_y), expression_y);
+    assert_eq!(
+        meet(&types, region, expression_y, expression_z),
+        KType::EXPRESSION
+    );
+    assert_eq!(
+        meet(&types, region, block_y, KType::LITERAL),
+        KType::LITERAL
+    );
+    assert_eq!(meet(&types, region, binder_y, KType::LITERAL), KType::NEVER);
+    assert_eq!(
+        join(&types, region, expression_y, expression_yz),
+        expression_yz
+    );
+
+    assert_eq!(
+        display_name(block_y, &types, &symbols).to_string(),
+        ":(Block NEEDING #[y])"
     );
 }
 
@@ -524,8 +691,8 @@ fn a_carried_variable_fills_what_its_bound_fills() {
     assert!(is_subtype_of(&types, region, each_list, each_bounded));
 }
 
-/// No law: a spelling. A bounded quantifier renders as the `UNDER` run it is written as, and a
-/// group of one bounded name drops its own parentheses.
+/// No law: a spelling. A group with a bounded quantifier renders as the dict it is written as, each
+/// name beside its bound, `Any` included.
 #[test]
 fn a_bounded_quantifier_renders_under_its_bound() {
     let symbols = SymbolInterner::new();
@@ -549,16 +716,13 @@ fn a_bounded_quantifier_renders_under_its_bound() {
     // Canonical form orders the group by first occurrence, which puts `Key` first here.
     assert_eq!(
         crate::type_lattice::display_name(pair, &types, &symbols).to_string(),
-        ":(FN FOR ALL (Key (Elt UNDER Value)) :{a :Elt b :Key} -> :(MAP Elt -> Key))"
+        ":(FN FOR ALL #{Key: Any, Elt: Value} :{a :Elt b :Key} -> :(MAP Elt -> Key))"
     );
     let alone = types
         .function_type(region, &[elt], &[(a, value_bounded)], value_bounded)
         .handle;
     let rendered = crate::type_lattice::display_name(alone, &types, &symbols).to_string();
-    assert!(
-        rendered.contains("FOR ALL (Elt UNDER Value) "),
-        "{rendered}"
-    );
+    assert!(rendered.contains("FOR ALL #{Elt: Value} "), "{rendered}");
     let number_or_str = types.union_of(region, &[KType::NUMBER, KType::STR]);
     let union_bounded = types.quantified(0, number_or_str);
     let spanning = types
@@ -566,7 +730,7 @@ fn a_bounded_quantifier_renders_under_its_bound() {
         .handle;
     let rendered = crate::type_lattice::display_name(spanning, &types, &symbols).to_string();
     assert!(
-        rendered.contains("FOR ALL (Elt UNDER :(Number | Str)) "),
+        rendered.contains("FOR ALL #{Elt: :(Number | Str)} "),
         "{rendered}"
     );
 }

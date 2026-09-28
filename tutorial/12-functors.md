@@ -8,19 +8,20 @@ required signature can be plugged in.
 
 ## Defining and applying
 
-`EXPR (<keyword> <param> :<Signature>) -> <ReturnType> = (<body>)` — the ordinary
+`EXPR #(<keyword> <param> :<Signature>) -> <ReturnType> = #(<body>)` — the ordinary
 expression-shape binder from [chapter 4](04-functions.md). The parameter is a module
 constrained by a signature, and the body builds and returns a new module. You
 apply it by calling its keyword with a module that satisfies the parameter's
 signature, exactly as you would call any other function:
 
 ```koan
-SIG Ordered = (VAL compare :Number)
+SIG Ordered = #[(VAL compare :Number)]
 MODULE int_order = (LET compare = 7)
 LET int_order_view = (int_order :! Ordered)
-EXPR (MAKESET elem :Ordered) -> Module =
+EXPR #(MAKESET elem :Ordered) -> Module = #(
   MODULE built =
     LET sample = (elem.compare)
+)
 LET number_set = (MAKESET int_order_view)
 PRINT number_set.sample
 ```
@@ -50,9 +51,9 @@ Because a functor is an ordinary function, the combined
 alongside the keyworded one:
 
 ```koan
-SIG Ordered = (VAL compare :Number)
+SIG Ordered = #[(VAL compare :Number)]
 MODULE int_order = (LET compare = 7)
-LET make_set = FN EXPR (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = (elem.compare)))
+LET make_set = FN EXPR #(MAKESET elem :Ordered) -> Module = #(MODULE built = (LET sample = (elem.compare)))
 LET a = (MAKESET int_order)
 LET b = (make_set {elem = int_order})
 PRINT a.sample
@@ -69,8 +70,8 @@ the parameters by name through the bound function value. Binding it under a
 Type-class (capitalized) name is an error — a function is a value, not a type:
 
 ```koan
-SIG Ordered = (VAL compare :Number)
-LET MakeSet = FN EXPR (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = 1))
+SIG Ordered = #[(VAL compare :Number)]
+LET MakeSet = FN EXPR #(MAKESET elem :Ordered) -> Module = #(MODULE built = (LET sample = 1))
 ```
 
 ```text
@@ -88,13 +89,14 @@ Write it in a slot to admit any module with that interface, or in a return type 
 say "returns a module with this argument's interface", resolved per call:
 
 ```koan
-SIG Ordered = (VAL compare :Number)
+SIG Ordered = #[(VAL compare :Number)]
 MODULE int_order = (LET compare = 7)
-EXPR (MAKESET elem :Ordered) -> Module =
+EXPR #(MAKESET elem :Ordered) -> Module = #(
   MODULE built =
     LET compare = 3
+)
 LET number_set = (MAKESET int_order)
-EXPR (ECHO elem :Ordered) -> :(TYPE OF elem) = (elem)
+EXPR #(ECHO elem :Ordered) -> :(TYPE OF elem) = #(elem)
 LET same = (ECHO number_set)
 PRINT same.compare
 PRINT (ECHO int_order)
@@ -117,8 +119,8 @@ type resolves to the argument module's `Carrier` type member.
 points at the spelling above:
 
 ```koan
-SIG Ordered = (VAL compare :Number)
-EXPR (ECHO elem :Ordered) -> elem = (elem)
+SIG Ordered = #[(VAL compare :Number)]
+EXPR #(ECHO elem :Ordered) -> elem = #(elem)
 ```
 
 ```text
@@ -132,10 +134,10 @@ written `TYPE <TypeName>`, and have other members refer to it. `WITH` pins such
 a type member to a concrete type, producing a more specific signature:
 
 ```koan
-SIG Ordered = (
-  TYPE Carrier
-  VAL compare :Carrier
-)
+SIG Ordered = #[
+  (TYPE Carrier)
+  (VAL compare :Carrier)
+]
 LET IntOrdered = (Ordered WITH {Carrier = Number})
 MODULE ints = (
   LET Carrier = Number
@@ -170,8 +172,8 @@ the box:
 
 ```koan
 NEWTYPE (Type AS Boxed)
-EXPR (OPEN b :(Number AS Boxed)) -> Str = ("a boxed number")
-EXPR (OPEN b :(Str AS Boxed)) -> Str = ("a boxed string")
+EXPR #(OPEN b :(Number AS Boxed)) -> Str = #("a boxed number")
+EXPR #(OPEN b :(Str AS Boxed)) -> Str = #("a boxed string")
 PRINT (OPEN (Boxed (7)))
 PRINT (OPEN (Boxed ("hi")))
 ```
@@ -222,8 +224,8 @@ A union can take type parameters too. List them before the `AS`, as for
 `NEWTYPE`, and name them in the variants' payload types:
 
 ```koan
-UNION (Elem AS Option) = (Some :Elem None :Null)
-UNION (Elem AS Tree) = (Leaf :Null Node :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)})
+UNION (Elem AS Option) = #{Some: Elem, None: Null}
+UNION (Elem AS Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)}}
 ```
 
 Each variant is a type constructor over *all* of the union's parameters, and a
@@ -231,7 +233,7 @@ payload may apply the union itself, as `Tree`'s `Node` does. Applying the union
 applies every variant at once: `:(Number AS Option)` admits a `Some` holding a
 number and a `None`, and `:(Result {Ok = Number, Error = Str})` either variant of
 the built-in `Result`, which is declared this way:
-`UNION (Ok Error AS Result) = (Ok :Ok Error :Error)`.
+`UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}`.
 
 A value built through a variant infers each parameter from its payload, and a
 parameter the payload says nothing about is `Never`. `Option.Some 1` has type
@@ -244,19 +246,20 @@ has no `left` field, or whose `value` is a number while its `left` holds strings
 — is an error naming the variant and the payload's type.
 
 Two things a parameterized union can't do: bound a parameter with `UNDER`, and
-use a parameter inside a function type's parameter list — `(Take :(FN :{x :Elem}
--> Null))` is an error, while a function *returning* an `Elem` is fine.
+use a parameter inside a function type's parameter list — a variant
+`Take: :(FN :{x :Elem} -> Null)` is an error, while a function *returning* an
+`Elem` is fine.
 
 ## One definition at every type: `FOR ALL`
 
 The `OPEN` overloads above name one boxed type each. When an operation works the
 same way at *every* type, write it once and quantify over the type instead. A
-`FOR ALL (<names>)` group sits between `EXPR` and the head, and the names it lists
-can be used by the slots and the return:
+`FOR ALL #[<names>]` group — a list of quoted names — sits between `EXPR` and the
+head, and the names it lists can be used by the slots and the return:
 
 ```koan
 NEWTYPE (Type AS Boxed)
-EXPR FOR ALL (Elt) (BOX x :Elt) -> :(Elt AS Boxed) = (Boxed (x))
+EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(Elt AS Boxed) = #(Boxed (x))
 PRINT (BOX 7)
 PRINT (BOX "hi")
 ```
@@ -277,13 +280,13 @@ A signature can declare a quantified member the same way, and a module satisfies
 with a single implementation:
 
 ```koan
-SIG Boxes = (
+SIG Boxes = #[
   (TYPE (Type AS Wrap))
-  (EXPR FOR ALL (Elt) (BOX _ :Elt) -> :(Elt AS Wrap))
-)
+  (EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(Elt AS Wrap))
+]
 MODULE boxing = (
   (NEWTYPE (Type AS Wrap))
-  (EXPR FOR ALL (Elt) (BOX x :Elt) -> :(Elt AS Wrap) = (Wrap (x)))
+  (EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(Elt AS Wrap) = #(Wrap (x)))
 )
 LET boxes = (boxing :| Boxes)
 PRINT (USING boxes SCOPE (BOX 7))
@@ -296,7 +299,7 @@ PRINT (USING boxes SCOPE (BOX "hi"))
 ```
 
 The module ascribes **once**, not once per element type. A module offering only
-`(EXPR (BOX x :Number) -> :(Number AS Wrap) = …)` is refused, and the error names the
+`(EXPR #(BOX x :Number) -> :(Number AS Wrap) = #(…))` is refused, and the error names the
 quantifier the overload pinned down: one implementation has to hold at every `Elt`.
 
 Note that `_` in the signature's head. A declaration has no body, so it has no use
@@ -304,41 +307,41 @@ for a parameter name — write `_` and give the slot its type. A definition name
 parameters because its body reads them, and two definitions that differ only in what
 they call their parameters satisfy the same declaration.
 
-A quantifier is not the same thing as a `:Type` parameter. `EXPR (MAKESET Elt :Type) …`
+A quantifier is not the same thing as a `:Type` parameter. `EXPR #(MAKESET Elt :Type) …`
 takes the type as an *argument*, written at the call (`MAKESET Number`).
-`EXPR FOR ALL (Elt) …` takes no such argument: the type is worked out from what the
+`EXPR FOR ALL #[Elt] …` takes no such argument: the type is worked out from what the
 other arguments carry.
 
-## Bounding a type parameter: `UNDER`
+## Bounding a type parameter
 
-A bare `FOR ALL` name stands for any type at all — an ordinary value's, a type's,
-or code's. To keep a parameter to one part of that, give it a **bound** with
-`UNDER`:
+A `FOR ALL` name in a list stands for any type at all — an ordinary value's, a
+type's, or code's. To keep a parameter to one part of that, give it a **bound**:
+write the group as a dict of quotes, each name to the type it lies under:
 
 ```koan
-EXPR FOR ALL (Elt UNDER Value) (KEEP x :Elt) -> Elt = (x)
-LET pick = (FN FOR ALL ((Elt UNDER Number) Key) :{x :Elt y :Key} -> Elt = (x))
+EXPR FOR ALL #{Elt: Value} #(KEEP x :Elt) -> Elt = #(x)
+LET pick = (FN FOR ALL #{Elt: Number, Key: Any} :{x :Elt y :Key} -> Elt = #(x))
 ```
 
 `KEEP` takes any ordinary value — a number, a string, a list, a module — but not a
 quote: `#(1)` is code, and code does not lie under `Value`. `pick` works out `Elt`
 from `x` as before, and a call whose `x` is not a number, such as
 `pick {x = "a", y = 1}`, is refused just as a call that leaves `Elt` with no
-answer is. `Key` is written bare, so it is bounded by `Any` and takes anything.
+answer is. `Key` is bounded by `Any`, so it takes anything — every name in a
+dict has a bound, and `Any` is what a name in a list is bounded by.
 
-Each bounded name sits in parentheses of its own, beside the bare ones; a group
-holding a single bounded name drops the outer pair, as `KEEP` does. A bound is one
-type, so a union is written sigiled: `(Elt UNDER :(Number | Str))`. It may not name
-another type parameter or a signature's abstract type, and it may not be `Never`,
-which no value could ever satisfy.
+A bound is one type, written as a type name or sigiled, so a union is
+`#{Elt: :(Number | Str)}`. It may not name another type parameter or a
+signature's abstract type, and it may not be `Never`, which no value could ever
+satisfy.
 
-A signature's type member takes a bound the same way:
+A signature's type member takes a bound with `UNDER`:
 
 ```koan
-SIG Counter = (
+SIG Counter = #[
   (TYPE (Carrier UNDER Number))
   (VAL zero :Carrier)
-)
+]
 MODULE ints = (
   (LET Carrier = Number)
   (LET zero = 0)

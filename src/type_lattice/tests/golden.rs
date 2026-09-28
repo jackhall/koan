@@ -8,7 +8,7 @@ use crate::memory::{Bump, ScopeId};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
 
 use crate::type_lattice::digest::node_digest;
-use crate::type_lattice::handle::KType;
+use crate::type_lattice::handle::{KType, builtin_types};
 use crate::type_lattice::kind::KKind;
 use crate::type_lattice::node::{NodeSchema, TypeNode};
 use crate::type_lattice::record::Record;
@@ -28,19 +28,25 @@ fn constants_match_freshly_interned_nodes() {
         ("BOOL", KType::BOOL, TypeNode::Bool),
         ("NULL", KType::NULL, TypeNode::Null),
         ("IDENTIFIER", KType::IDENTIFIER, TypeNode::Identifier),
-        ("NAME_TOKEN", KType::NAME_TOKEN, TypeNode::NameToken),
+        ("SYMBOL", KType::SYMBOL, TypeNode::Symbol),
         (
             "TYPE_NAME_TOKEN",
             KType::TYPE_NAME_TOKEN,
             TypeNode::TypeNameToken,
         ),
-        ("KEXPRESSION", KType::KEXPRESSION, TypeNode::KExpression),
+        ("EXPRESSION", KType::EXPRESSION, TypeNode::Expression),
         (
             "SIGILED_TYPE_EXPR",
             KType::SIGILED_TYPE_EXPR,
             TypeNode::SigiledTypeExpr,
         ),
         ("RECORD_TYPE", KType::RECORD_TYPE, TypeNode::RecordType),
+        ("LITERAL", KType::LITERAL, TypeNode::Literal),
+        ("BLOCK", KType::BLOCK, TypeNode::Block),
+        ("DECLARATION", KType::DECLARATION, TypeNode::Declaration),
+        ("BINDER", KType::BINDER, TypeNode::Binder),
+        ("NAME", KType::NAME, TypeNode::Name),
+        ("KEYWORD", KType::KEYWORD, TypeNode::Keyword),
         ("ANY", KType::ANY, TypeNode::Any),
         ("ANY_VALUE", KType::ANY_VALUE, TypeNode::AnyValue),
         ("ANY_CODE", KType::ANY_CODE, TypeNode::AnyCode),
@@ -93,6 +99,56 @@ fn constants_match_freshly_interned_nodes() {
             "the pinned `KType::{name}` is not the digest its own node computes",
         );
     }
+    // The code composites are checked through the doors that mint them, the union's canonical
+    // member order being the registry's to choose.
+    let type_code = types.union_of(
+        region,
+        &[
+            KType::TYPE_NAME_TOKEN,
+            KType::SIGILED_TYPE_EXPR,
+            KType::RECORD_TYPE,
+        ],
+    );
+    let composites = [
+        ("TYPE_CODE", KType::TYPE_CODE, type_code),
+        ("LIST_OF_NAME", KType::LIST_OF_NAME, types.list(KType::NAME)),
+        (
+            "LIST_OF_DECLARATION",
+            KType::LIST_OF_DECLARATION,
+            types.list(KType::DECLARATION),
+        ),
+        (
+            "DICT_NAME_BLOCK",
+            KType::DICT_NAME_BLOCK,
+            types.dict(KType::NAME, KType::BLOCK),
+        ),
+        (
+            "DICT_TYPE_CODE_BLOCK",
+            KType::DICT_TYPE_CODE_BLOCK,
+            types.dict(type_code, KType::BLOCK),
+        ),
+        (
+            "DICT_NAME_TYPE_CODE",
+            KType::DICT_NAME_TYPE_CODE,
+            types.dict(KType::NAME, type_code),
+        ),
+        (
+            "QUANTIFIER_CODE",
+            KType::QUANTIFIER_CODE,
+            types.union_of(region, &[KType::LIST_OF_NAME, KType::DICT_NAME_TYPE_CODE]),
+        ),
+        (
+            "EMPTY_RECORD",
+            KType::EMPTY_RECORD,
+            types.record(region, &[]),
+        ),
+    ];
+    for (name, pinned, minted) in composites {
+        assert_eq!(
+            minted, pinned,
+            "the pinned `KType::{name}` is not what its door interns",
+        );
+    }
     // The empty signature carries a schema digest computed at intern time, so it is checked through
     // the door that mints one rather than against a hand-built node.
     assert_eq!(
@@ -115,6 +171,7 @@ fn every_node_kind_has_its_own_tag() {
     let arguments = [(field, KType::STR)];
     let elements = [DispatchTokenElement::Keyword(keyword)];
     let members = [KType::NUMBER, KType::STR];
+    let needed = [field];
     let bump = Bump::new();
     let region = &bump;
     let types = TypeRegistry::in_region(region);
@@ -126,11 +183,17 @@ fn every_node_kind_has_its_own_tag() {
         TypeNode::Bool,
         TypeNode::Null,
         TypeNode::Identifier,
-        TypeNode::NameToken,
+        TypeNode::Symbol,
         TypeNode::TypeNameToken,
-        TypeNode::KExpression,
+        TypeNode::Expression,
         TypeNode::SigiledTypeExpr,
         TypeNode::RecordType,
+        TypeNode::Literal,
+        TypeNode::Block,
+        TypeNode::Declaration,
+        TypeNode::Binder,
+        TypeNode::Name,
+        TypeNode::Keyword,
         TypeNode::Any,
         TypeNode::AnyValue,
         TypeNode::AnyCode,
@@ -163,6 +226,7 @@ fn every_node_kind_has_its_own_tag() {
             quantifiers: &[],
             bounds: &[],
             elements: &elements,
+            classes: &[],
             ret: KType::NUMBER,
         },
         TypeNode::Quantified {
@@ -180,6 +244,10 @@ fn every_node_kind_has_its_own_tag() {
         },
         TypeNode::DeferredReturn(DeferredReturnSurface::Type(name)),
         TypeNode::Sibling(0),
+        TypeNode::CodeNeeding {
+            kind: KType::EXPRESSION,
+            names: &needed,
+        },
         TypeNode::SetMember {
             scc_digest: node_digest(region, &TypeNode::Number),
             index: 0,
@@ -198,11 +266,17 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::Bool => "Bool",
             TypeNode::Null => "Null",
             TypeNode::Identifier => "Identifier",
-            TypeNode::NameToken => "NameToken",
+            TypeNode::Symbol => "Symbol",
             TypeNode::TypeNameToken => "TypeNameToken",
-            TypeNode::KExpression => "KExpression",
+            TypeNode::Expression => "Expression",
             TypeNode::SigiledTypeExpr => "SigiledTypeExpr",
             TypeNode::RecordType => "RecordType",
+            TypeNode::Literal => "Literal",
+            TypeNode::Block => "Block",
+            TypeNode::Declaration => "Declaration",
+            TypeNode::Binder => "Binder",
+            TypeNode::Name => "Name",
+            TypeNode::Keyword => "Keyword",
             TypeNode::Any => "Any",
             TypeNode::AnyValue => "AnyValue",
             TypeNode::AnyCode => "AnyCode",
@@ -221,6 +295,7 @@ fn every_node_kind_has_its_own_tag() {
             TypeNode::DeferredReturn(_) => "DeferredReturn",
             TypeNode::Sibling(_) => "Sibling",
             TypeNode::SetMember { .. } => "SetMember",
+            TypeNode::CodeNeeding { .. } => "CodeNeeding",
         };
     }
     let digests: Vec<_> = representatives
@@ -261,5 +336,26 @@ fn the_family_tops_are_spelled_value_type_and_code() {
             "`{spelling}` lowers to its top"
         );
         assert_eq!(display_name(top, &types, &symbols).to_string(), spelling);
+    }
+}
+
+/// Every builtin type name lowers to the handle it names, and every one but the bare containers —
+/// which render their parameters — names itself by the same token.
+#[test]
+fn every_builtin_type_name_round_trips() {
+    let symbols = SymbolInterner::new();
+    let bump = Bump::new();
+    let types = TypeRegistry::in_region(&bump);
+    for (name, ktype) in builtin_types() {
+        let symbol = symbols.record(name);
+        assert_eq!(KType::from_symbol(symbol), Some(ktype), "{}", name.text());
+        if ktype != KType::LIST_OF_ANY && ktype != KType::DICT_ANY_ANY {
+            assert_eq!(
+                ktype.name_symbol(&types, &symbols),
+                Some(symbol),
+                "`{}` names itself",
+                name.text()
+            );
+        }
     }
 }

@@ -3,25 +3,30 @@
 
 mod activation;
 mod boundary;
+mod code;
+mod dispatch;
 mod examples;
 mod groups;
 pub(crate) mod plan;
 mod properties;
+mod quoted_uses;
+mod quotes;
 mod rewrite;
 mod units;
 
 use crate::memory::{
-    Bump, BumpAllocator, CellGraph, Edge, ProgramBrand, ReleaseAbsorption, Verdict, Writer,
-    covariant, program_storage, reattachable,
+    Bump, BumpAllocator, CellGraph, Edge, KnotPlan, ProgramBrand, ReleaseAbsorption, Verdict,
+    Writer, covariant, program_storage, reattachable,
 };
 use crate::parse::{KExpression, parse};
+use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{
     DeepCopy, Knotted, KnottedFamily, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
 
-use super::Builtins;
+use super::{Builtins, ShapeError};
 
 /// A continuation family for a graph whose cells only store.
 struct Step;
@@ -45,8 +50,22 @@ impl Knotted for Probe {
         Probe(edge.index())
     }
 
+    /// Every probe is a member of one knot, at its own index.
+    fn index(&self) -> Edge {
+        KnotPlan::new(self.0 + 1)
+            .edge(self.0)
+            .expect("an index below its own count")
+    }
+
+    fn root(&self) -> Self {
+        Probe(0)
+    }
+
     fn resolve<'a>(&self) -> Resolved<'a, Self> {
-        Resolved::Function
+        Resolved::Function {
+            identity: self.0 as usize,
+            closure: &[],
+        }
     }
 }
 
@@ -59,10 +78,16 @@ impl<'graph> KnottedFamily<'graph> for ProbeFamily {
     where
         'graph: 'cell;
 
+    fn held<'from>(_: &Probe, _: &mut dyn FnMut(Value<'from, Probe>))
+    where
+        'graph: 'from,
+    {
+    }
+
     fn copy_into<'from, 'to>(
         _: Writer<'to>,
         member: &Probe,
-        _: &mut DeepCopy<'_, 'graph, 'from, 'to, Probe, Probe>,
+        _: &mut DeepCopy<'_, 'from, 'to, Probe, Probe>,
     ) -> Probe
     where
         'graph: 'from,
@@ -129,7 +154,15 @@ pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
 pub(super) const BUILTIN_VALUES: &[&str] = &["origin"];
 
 /// The type builtins every suite's table holds.
-pub(super) const BUILTIN_TYPES: &[&str] = &["Number", "Str", "Bool", "Null", "Any", "Ring"];
+pub(super) const BUILTIN_TYPES: &[&str] =
+    &["Number", "Str", "Bool", "Null", "Any", "Ring", "Expression"];
+
+/// The keys every suite's table holds an overload at: the generated plans' `ZZ`, `PRINT`, and the
+/// builtin operators.
+pub(super) const BUILTIN_KEYS: &[&str] = &[
+    "ZZ _", "ZZ _ _", "PRINT _", "_ + _", "_ - _", "_ * _", "_ / _", "_ < _", "_ <= _", "_ > _",
+    "_ >= _", "_ == _", "_ AND _", "NOT _", "| _", "& _", "_ | _", "_ & _",
+];
 
 pub(super) fn value_name(text: &str, symbols: &SymbolInterner) -> ValueSymbol {
     ValueSymbol::declared(text, symbols).expect("a value token")
@@ -139,11 +172,12 @@ pub(super) fn type_name(text: &str, symbols: &SymbolInterner) -> TypeSymbol {
     TypeSymbol::declared(text, symbols).expect("a Type token")
 }
 
-/// The suites' builtin table: `origin = 0` and the scalar types, laid down in `writer`'s region.
+/// The suites' builtin table: `origin = 0`, the scalar types and `Expression`, and a `Null`
+/// overload at each of [`BUILTIN_KEYS`], laid down in `writer`'s region.
 pub(super) fn builtins<'graph, 'cell, X: Knotted>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell>,
-) -> &'cell Builtins<'graph, 'cell, X> {
+) -> &'cell Builtins<'cell, X> {
     let symbols = fixture.symbols;
     let values: Vec<_> = BUILTIN_VALUES
         .iter()
@@ -156,6 +190,7 @@ pub(super) fn builtins<'graph, 'cell, X: Knotted>(
         KType::NULL,
         KType::ANY,
         KType::ANY,
+        KType::EXPRESSION,
     ];
     let types: Vec<_> = BUILTIN_TYPES
         .iter()
@@ -165,5 +200,72 @@ pub(super) fn builtins<'graph, 'cell, X: Knotted>(
             (type_name(name, symbols), value)
         })
         .collect();
-    Builtins::new(writer, fixture.scratch, &values, &types)
+    let overloads: Vec<_> = BUILTIN_KEYS
+        .iter()
+        .map(|text| (symbols.key(text).expect("a key"), Value::Null))
+        .collect();
+    Builtins::new(writer, fixture.scratch, &values, &types, &overloads)
+}
+
+/// The location [`unlocated`] writes, which no registered source has.
+pub(super) const NOWHERE: SourceRef = SourceRef {
+    span: Span { start: 0, end: 0 },
+    file: FileId(u32::MAX),
+};
+
+/// `error` with every location it holds replaced by [`NOWHERE`], so a suite compares the rest of it
+/// structurally and pins the locations by [`located`].
+pub(super) fn unlocated(error: ShapeError) -> ShapeError {
+    use ShapeError as E;
+    let at = NOWHERE;
+    match error {
+        E::Rebind { name, .. } => E::Rebind {
+            name,
+            first: at,
+            second: at,
+        },
+        E::ShadowsBuiltin { name, .. } => E::ShadowsBuiltin { name, at },
+        E::Unbound { name, site, .. } => E::Unbound { name, site, at },
+        E::EagerCycle {
+            members,
+            definitions,
+            ..
+        } => E::EagerCycle {
+            members,
+            definitions,
+            at,
+        },
+        E::MarkOutsideQuote { .. } => E::MarkOutsideQuote { at },
+        E::Unsupported { form, .. } => E::Unsupported { form, at },
+        E::Malformed { form, .. } => E::Malformed { form, at },
+        E::Unsurfaced { site, .. } => E::Unsurfaced { at, site },
+        E::Unchained { symbol, .. } => E::Unchained { symbol, at },
+        E::MixedGroups { first, second, .. } => E::MixedGroups { first, second, at },
+        E::RedeclaresGroup { symbol, .. } => E::RedeclaresGroup { symbol, at },
+        E::ResultOutsidePairwise { symbol, .. } => E::ResultOutsidePairwise { symbol, at },
+        E::SpellsForm { symbol, .. } => E::SpellsForm { symbol, at },
+        E::Derived { symbol, .. } => E::Derived { symbol, at },
+        E::Unquoted { form, part, .. } => E::Unquoted { form, part, at },
+        E::Inadmissible {
+            form, index, slot, ..
+        } => E::Inadmissible {
+            form,
+            index,
+            slot,
+            at,
+        },
+        E::DictDefault { site, .. } => E::DictDefault { site, at },
+        E::ClosedBucket { key, .. } => E::ClosedBucket { key, at },
+        E::NoKeyword { .. } => E::NoKeyword { at },
+        E::RankedDefinition { .. } => E::RankedDefinition { at },
+        E::NestedBinder { .. } => E::NestedBinder { at },
+        E::RankingDisagrees { key, .. } => E::RankingDisagrees { key, at },
+        E::NoCandidate { key, .. } => E::NoCandidate { key, at },
+        E::Overlaps { key, builtin, .. } => E::Overlaps { key, builtin, at },
+    }
+}
+
+/// The source text a location covers.
+pub(super) fn located(at: SourceRef) -> String {
+    at.text()
 }

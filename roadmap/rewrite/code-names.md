@@ -6,8 +6,9 @@ named once can be built where it is used.
 **Problem.** Code has no name class of its own. A quote bound by `LET` sits in
 a value name, and the [shape builder](../../src/scope/README.md#three-tiers)
 reads no value where it builds a shape, so a callable's body can only be a
-quote written in place ([code as values](code-values.md)); code named once
-cannot be the body of two callables. A module exports code only as a value,
+quote written in place
+([what is quoted](../../tutorial/10-quoting.md#what-is-quoted-and-what-is-bare));
+code named once cannot be the body of two callables. A module exports code only as a value,
 and a `SIG` has no member for code.
 
 **Acceptance criteria.**
@@ -19,6 +20,9 @@ and a `SIG` has no member for code.
   when it is evaluated.
 - A `SIG` declares a code member with `VAL`, as a slot, or with `LET`, as
   manifest code.
+- Code `#(\w * \h)` named as the body of a callable with parameters `w` and `h`
+  binds both to them, and a hole in such a body is refused where the callable
+  is built ([building code](../../src/scope/README.md#building-code)).
 
 **Directions.**
 
@@ -35,13 +39,13 @@ and a `SIG` has no member for code.
 - *What a sigiled name resolves to — open.* Narrowing the family alone is
   admission's job, so the sigil needs a resolution rule of its own. One
   candidate: inside a quote, a sigiled name splices its code, while a lowercase
-  name stays a captured reference.
+  name is a hole ([holes and marks](../../src/scope/README.md#holes-and-marks)).
 - *A code binder in a module's self-signature — open.* A slot at its code kind,
   as a value binder is, or a manifest member, as a type binder is.
 - *Manifest code in a `SIG` — open.* Two textually identical `SIG`s are one
   type, so manifest code that captures from its surroundings would make
   identical text differ. Code equality follows bindings
-  ([quotes resolve where they are written](eval-scope.md)), so either manifest
+  ([equality and knots](../../src/scope/README.md#equality-and-knots)), so either manifest
   code captures nothing, or a `SIG`'s identity compares its code by something
   other than equality.
 
@@ -49,8 +53,6 @@ and a `SIG` has no member for code.
 
 **Requires:**
 
-- [Code as values](code-values.md) — the code kinds a sigiled name holds.
-- [Quotes resolve where they are written](eval-scope.md) — a sigiled name inside a quote resolves beside the quote's bindings.
 - [Code splicing](code-splicing.md) — a shape built at run time for code the builder cannot trace.
 
 **Unblocks:** none — a leaf.

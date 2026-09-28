@@ -15,11 +15,11 @@ the link in each section to the relevant chapter.
 
 | Form                                       | Meaning                                  |
 |--------------------------------------------|------------------------------------------|
-| `EXPR (<head>) -> <Type> = (<body>)`       | Define an expression shape — a keyword/slot run with an enforced return type, reached by dispatch. |
-| `EXPR FOR ALL (<names>) (<head>) -> <Type> = (<body>)` | The same, quantified: each name is solved per call from the types the arguments carry. |
-| `LET <name> = FN EXPR (<head>) -> <Type> = (<body>)` | Both channels from one statement: the value name and the shape's bucket. |
-| `FN :{<fields>} -> <Type> = (<body>)`      | A lambda: keyword-less, reached by name, called with a record of named arguments. |
-| `FN FOR ALL (<names>) :{<fields>} -> <Type> = (<body>)` | The same, quantified: each name is solved per call from the types the arguments carry, and the body reads it as a type. |
+| `EXPR #(<head>) -> <Type> = #(<body>)`     | Define an expression shape — a keyword/slot run with an enforced return type, reached by dispatch. |
+| `EXPR FOR ALL #[<names>] #(<head>) -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry. |
+| `LET <name> = FN EXPR #(<head>) -> <Type> = #(<body>)` | Both channels from one statement: the value name and the shape's bucket. |
+| `FN :{<fields>} -> <Type> = #(<body>)`     | A lambda: keyword-less, reached by name, called with a record of named arguments. |
+| `FN FOR ALL #[<names>] :{<fields>} -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry, and the body reads it as a type. |
 | `<keyword> <args>`                         | Call a function by writing its shape (e.g. `ECHO 21`). |
 | `<fn> {name = value, ...}`                 | Call a captured function by named arguments. |
 | `CLOSE OVER (<captures>) (<block>)`        | Run a block over a region of its own, copying the named values in; only the block's last expression escapes, and it holds copies rather than the enclosing call. |
@@ -29,7 +29,7 @@ the link in each section to the relevant chapter.
 
 | Form                                       | Meaning                                  |
 |--------------------------------------------|------------------------------------------|
-| `UNION <Name> = (<Tag> :<Type> ...)`       | Declare a tagged union (sum type).       |
+| `UNION <Name> = #{<Tag>: <Type>, ...}`     | Declare a tagged union (sum type).       |
 | `<Union>.<Tag>`                            | Name one variant as a type value.        |
 | `<Union>.<Tag> <value>`                    | Construct a tagged value.                |
 | `:(<Union>.<Tag>)`                         | A slot type admitting one variant.       |
@@ -37,15 +37,15 @@ the link in each section to the relevant chapter.
 | `NEWTYPE <Name> = :{<field> :<Type>, ...}` | Declare a record type (named fields).    |
 | `(<Type> {field = value, ...})`            | Construct a record value.                |
 | `<record>.<field>`                         | Read a field off any record value.       |
-| `(<fields>) FROM <record>`                 | Project a record's type to the named fields. |
+| `#[<fields>] FROM <record>`                | Project a record's type to the named fields. |
 
 ## Control and errors — see [6](06-pattern-matching.md), [9](09-errors.md)
 
 | Form                                              | Meaning                           |
 |---------------------------------------------------|-----------------------------------|
-| `MATCH (<value>) OVER <Union> -> :<Type> WITH (<Tag> -> (<body>) ...)` | Branch on a union's variants; every variant needs an arm unless a `_` arm defaults the rest, and `it` is the payload. |
-| `MATCH (<value>) -> :<Type> WITH (<Type> -> (<body>) ...)` | Branch on the value's runtime type or on `true` / `false`; `it` is the value unchanged. |
-| `TRY (<expr>) -> :<Type> WITH (<Tag> -> (<body>) ... )`   | Catch errors; arms are `Ok`, error-kind names, and `_`. Uncaught kinds re-raise. |
+| `MATCH (<value>) OVER <Union> -> :<Type> WITH #{<Tag>: (<body>), ...}` | Branch on a union's variants; every variant needs an arm unless a `_` arm defaults the rest, and `it` is the payload. |
+| `MATCH (<value>) -> :<Type> WITH #{<Type>: (<body>), ...}` | Branch on the value's runtime type; each head is a type, and `it` is the value unchanged. |
+| `TRY (<expr>) -> :<Type> WITH #{<Tag>: (<body>), ...}`    | Catch errors; arms are `Ok`, error-kind names, and `_`. Uncaught kinds re-raise. |
 | `CATCH (<expr>)`                                   | Run an expression, returning a `Result` value. |
 | `Result.Ok <value>`, `Result.Error <value>`       | Built-in result union's variants, reached by projection. |
 
@@ -54,8 +54,15 @@ the link in each section to the relevant chapter.
 | Form          | Meaning                                              |
 |---------------|------------------------------------------------------|
 | `#(<expr>)`   | Quote: capture an expression as a value, unevaluated. |
-| `$(<expr>)`   | Evaluate a quoted-expression value in the current scope. |
-| `<name> :KExpression`  | A parameter taking code as a value; call sites pass `#(…)`. |
+| `#[<element> ...]`, `#{<key>: <value>, ...}` | A list or dict literal with every element quoted; a `_` key stays bare. |
+| `EVAL <code>` | Run a quote's code. Its names bind only as the quote says, never in the scope `EVAL` is written in. |
+| `x` inside a quote | A hole: binds only to a builtin, a binder in the quote's own code, or a name `USING` supplies. |
+| `$x`, `$(<keyworded use>)` inside a quote | Resolve the name, or the one keyworded use, where the quote is written. |
+| `\x`, `\(<keyworded use>)` inside a quote | Resolve where the code is run, from what the code parameter's type offers. |
+| `<code> USING <record>` | Fill the holes the record's fields (or a module's members) name; the rest stay holes. |
+| `<name> :Expression`  | A parameter taking one statement of code as a value; call sites pass `#(…)`. |
+| `<name> :(Expression NEEDING #[<name> ...])` | A code parameter offering names; an `EVAL` of it supplies each where the `EVAL` is written. |
+| `Block` `Expression` `Declaration` `Binder` `Literal` `Symbol` `Name` `Keyword` | The kinds of code under `Code`, each under the one before it in [the tree](10-quoting.md#what-kind-of-code-a-quote-is). |
 
 ## Modules — see [11](11-modules.md), [12](12-functors.md)
 
@@ -63,13 +70,13 @@ the link in each section to the relevant chapter.
 |--------------------------------------------------|------------------------------------|
 | `MODULE <name> = (<bindings>)`                   | Group bindings under a name (snake_case — a module is a value). |
 | `<module>.<member>`                              | Read a module member.              |
-| `SIG <Name> = (VAL <name> :<Type> ...)`          | Declare a signature (a module's type; Type-token name). |
+| `SIG <Name> = #[(VAL <name> :<Type>) ...]`       | Declare a signature (a module's type; Type-token name). |
 | `VAL <name> :<Type>`                             | A required value member, inside a `SIG`. |
-| `EXPR (<head>) -> <Type>`                        | A required keyworded member, inside a `SIG` (bodyless; `FOR ALL` twin included). |
+| `EXPR #(<head>) -> <Type>`                       | A required keyworded member, inside a `SIG` (bodyless; `FOR ALL` twin included). |
 | `<module> :! <Sig>`                              | Transparent ascription.            |
 | `<module> :\| <Sig>`                             | Opaque ascription.                 |
 | `USING <module> SCOPE (<body>)`                  | Run a body with a module's members in scope. |
-| `EXPR (<KW> <p> :<Sig>) -> Module = (<body>)`      | A functor: a function returning a module (a module parameterized by a module). |
+| `EXPR #(<KW> <p> :<Sig>) -> Module = #(<body>)`    | A functor: a function returning a module (a module parameterized by a module). |
 | `<Sig> WITH {<Slot> = <Type>}`                   | Specialize a signature by pinning a type slot. |
 | `TYPE OF <value>`                                | The type a value reports for itself; a module's is its signature. |
 
@@ -85,15 +92,15 @@ the link in each section to the relevant chapter.
 | `:(LIST OF <Type>)`           | List type.                                         |
 | `:(MAP <Key> -> <Value>)`     | Map / dictionary type.                             |
 | `:(FN :{<params>} -> <Result>)`| Lambda type — the parameter list is a record type (`:{}` when nullary). |
-| `:(FN FOR ALL (<names>) :{<params>} -> <Result>)` | The quantified lambda type. |
-| `:(EXPR (<head>) -> <Result>)` | Expression-shape type — the keyword/slot run a keyworded definition registers for dispatch; write `_` at each slot. |
-| `:(EXPR FOR ALL (<names>) (<head>) -> <Result>)` | The quantified shape type. |
-| `FOR ALL ((<Name> UNDER <Type>) <Name> ...)` | A bounded type parameter beside a bare one (bounded by `Any`); a lone bounded name is `FOR ALL (<Name> UNDER <Type>)`. See [12](12-functors.md#bounding-a-type-parameter-under). |
+| `:(FN FOR ALL #[<names>] :{<params>} -> <Result>)` | The quantified lambda type. |
+| `:(EXPR #(<head>) -> <Result>)` | Expression-shape type — the keyword/slot run a keyworded definition registers for dispatch; write `_` at each slot. |
+| `:(EXPR FOR ALL #[<names>] #(<head>) -> <Result>)` | The quantified shape type. |
+| `FOR ALL #{<Name>: <Type>, ...}` | Bounded type parameters, each name to its bound; a name in a `#[…]` group is bounded by `Any`. See [12](12-functors.md#bounding-a-type-parameter). |
 | `TYPE (<Name> UNDER <Type>)`  | A bounded type member, inside a `SIG`.             |
 | `:(<Type> & <Type>)`          | Meet — a value of both types; mixes with `\|` only through parentheses. |
 | `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |
 | `NEWTYPE (Key Val AS Pair)`   | A type constructor with one or more parameters.    |
-| `UNION (Elem AS Option) = (<Tag> :<Type> ...)` | A union over type parameters; each variant is a constructor over all of them. See [12](12-functors.md#unions-over-type-parameters-union-elem-as-option). |
+| `UNION (Elem AS Option) = #{<Tag>: <Type>, ...}` | A union over type parameters; each variant is a constructor over all of them. See [12](12-functors.md#unions-over-type-parameters-union-elem-as-option). |
 | `:(Pair {Key = Number, Val = Str})` | Apply a type constructor, binding each parameter by name. |
 | `:(Number AS Wrap)`           | Shorthand for applying a one-parameter constructor.|
 

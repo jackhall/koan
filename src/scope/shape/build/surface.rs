@@ -29,7 +29,8 @@ use super::super::super::groups::{
     BuiltinGroup, Claim, builtin_equal, declared_group, groups_equal,
 };
 use super::super::{Position, ShapeError, ShapeKind, Site};
-use super::{Builder, body_of};
+use super::{Builder, body_of, quoted_body};
+use crate::source::SourceRef;
 
 /// What one operand surfaces: its names, in the order the spine gives them, and the operator groups
 /// the body may chain under. The binders pass sorts the names into layout order, so the reader owes
@@ -57,13 +58,13 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         statement: u32,
         node: &KExpression<'graph>,
         out: &mut Surfaced<'x, 'graph>,
-    ) -> Result<(), ShapeError> {
+    ) -> Result<(), ShapeError<'graph>> {
         let operand = &node
             .parts
             .get(1)
             .ok_or(ShapeError::Malformed {
                 form: BuiltinShapeId::UsingScope,
-                at: Position::statement(statement as usize),
+                at: node.source,
             })?
             .value;
         // One rule applied per unit of fuel, so an alias that names itself terminates.
@@ -76,7 +77,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         let at = Position::statement(statement as usize);
         self.value_names(level, at, operand, out, &mut fuel)
             .map_err(|()| ShapeError::Unsurfaced {
-                at,
+                at: self.part_source(level, statement, Site::of(operand)),
                 site: Site::of(operand),
             })
     }
@@ -165,7 +166,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         let definition = role_part(
                             statement,
                             Role::Definition(
-                                crate::parse::builtin_shapes::role::DefinitionKind::Plain,
+                                crate::parse::builtin_shapes::role::DefinitionKind::Members,
                             ),
                         )
                         .ok_or(())?;
@@ -191,9 +192,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     /// refused, since a symbol chains one way for the whole build.
     pub(super) fn surfaced_groups(
         &self,
-        at: Position,
+        at: SourceRef,
         surfaced: &Surfaced<'x, 'graph>,
-    ) -> Result<BumpVec<'x, &'graph DeclaredGroup<'graph>>, ShapeError> {
+    ) -> Result<BumpVec<'x, &'graph DeclaredGroup<'graph>>, ShapeError<'graph>> {
         let mut kept = BumpVec::new_in(self.scratch);
         for group in surfaced.groups.iter() {
             if builtin_equal(group) {
@@ -249,8 +250,11 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         definition: &ExpressionPart<'graph>,
         out: &mut Surfaced<'x, 'graph>,
     ) -> Result<(), ()> {
-        let body = body_of(definition).ok_or(())?;
-        for (line, _) in body.body_statements() {
+        let ExpressionPart::ListLiteral(members) = definition else {
+            return Err(());
+        };
+        for member in members.iter() {
+            let line = quoted_body(member).ok_or(())?.statement_spine();
             match line.cache().builtin_shape().map(|shape| shape.id) {
                 Some(BuiltinShapeId::TypeDeclaration | BuiltinShapeId::LetValue) => {
                     out.names.push(
@@ -299,9 +303,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     }
 
     /// The draft level, the position a read there takes, and the statement declaring `name` —
-    /// [`Builder::resolve`]'s walk with nothing recorded. `None` for a builtin, a name reached only
-    /// through an `EVAL`'s enclosing activation, a parameter (which declares no statement), and a
-    /// name with no binding at all.
+    /// [`Builder::resolve`]'s walk with nothing recorded. `None` for a builtin, a parameter (which
+    /// declares no statement), a hole of a quote's code, and a name with no binding at all.
     fn declaring(
         &self,
         level: usize,
@@ -319,7 +322,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let statement = declared.0.checked_sub(1)? as usize;
                 return Some((level, declared, &draft.nodes[statement]));
             }
-            if draft.kind == ShapeKind::Program {
+            if matches!(draft.kind, ShapeKind::Program | ShapeKind::Code) {
                 return None;
             }
             level = level.checked_sub(1)?;

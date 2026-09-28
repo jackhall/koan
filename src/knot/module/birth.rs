@@ -10,9 +10,9 @@
 //! body-born module's member run is its finished activation's slots read out in slot order.
 
 use crate::elaborate::self_signature;
-use crate::knot::{Eager, KActivation, KActivationView, Node, Supplied, Untieable};
+use crate::knot::{Eager, KActivation, KActivationView, Knotted, Node, Supplied, Untieable};
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
-use crate::scope::{Activation, ClosureBindings, Component, ShapeKind, Slot};
+use crate::scope::{Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target};
 use crate::type_lattice::TypeRegistry;
 
 use super::Module;
@@ -68,7 +68,20 @@ pub fn tie_member<'graph, 'cell, 'x>(
         body.shape(),
         shape.births(*slot).expect("this binder births its body"),
     ));
-    let ktype = self_signature(body, types, scratch);
+    let mut keyworded = BumpVec::with_capacity_in(body.shape().registrations().len(), scratch);
+    for registration in body.shape().registrations() {
+        let member = body
+            .read(Coordinate::Activation {
+                hops: 0,
+                target: Target::Local(registration.slot),
+            })
+            .as_callable()
+            .and_then(Knotted::function)
+            .and_then(|function| function.registered_shape())
+            .expect("a registration binds the function born for it");
+        keyworded.push(member);
+    }
+    let ktype = self_signature(body, &keyworded, types, scratch);
     let mut members = BumpVec::with_capacity_in(body.shape().slots(), scratch);
     members.extend(body.slots().map(|(_, value)| value));
     Ok(Module::tie(writer, ktype, &members))

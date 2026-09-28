@@ -51,13 +51,13 @@ silence the stale-anchor check; delete a redundant test instead.
   discharges residence at compile time. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s `fill`.
 - `src/values/crossing.rs` — the crossing verb's deep copy lays a value down through the
-  destination's `Writer`, nesting `fill` inside `fill` with `text` between and embedding program
-  nodes at `'graph`. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s placement doors
+  destination's `Writer`, each composite after its children, writing a dict's string keys inside
+  its key run's `fill` and embedding program nodes at `'graph`. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s placement doors
   and reattach seam, whose pin and keep paths its own slate pins.
 - `src/knot/copy.rs` — a knot member's copy re-ties its whole knot through the destination's
   `Writer`: `thin_run` fills the node run while each function's closure run, each data node's
-  resident and cell runs, each module's member run, each barrier's resident and every held value's
-  deep copy are written into the same region. No `unsafe` of its own; the backing `unsafe` is
+  resident and cell runs, each module's member run and each barrier's resident are written into
+  the same region, over the finished copies of the values the knot holds. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s `thin_run`, `fill` and reattach seam.
 - `src/scheduler/drain.rs` — the drain performs every birth and every death: it creates a tail
   successor, wakes its state out of its predecessor, and only then releases that predecessor, whose
@@ -72,6 +72,12 @@ silence the stale-anchor check; delete a redundant test instead.
   shorter brands and a module body's activation and the enclosing place are written into the
   running region mid-body. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s
   once-written run read, its reattach seam and its keep and redeem doors.
+- `src/dispatch/evaluate.rs` — the evaluator asks for a call's slots as tenants of its own cell,
+  builds the argument record from what they kept, and — its callee returning `Str`, so placed
+  `Shares` — hops to the callee's frame as a co-tenant of the frame it finishes, every hop a tenant
+  of one host, where the body runner's tail test hops `Fresh` frames over `Fresh` children. No
+  `unsafe` of its own; the backing `unsafe` is `cellgraph`'s tenant creation and release, its
+  keep and redeem doors and its reattach seam.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -104,7 +110,7 @@ and every parts run the parser produces is written into program storage through 
 the storage releases the whole tree. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s
 `fill`, which every door lands on.
 
-- `the_flip_reaches_quote_and_eval_bodies`
+- `the_flip_reaches_quote_bodies`
   a quoted binder form with sigil-nested sub-expressions, parsed twice into the program region
   and compared shape for shape — nested runs, cached form entries and the quote wrapper all written.
 - `a_binder_forms_type_slot_admits_the_bare_parenthesized_spelling`
@@ -125,12 +131,11 @@ value copied across a crossing is rebuilt through the destination's writer and r
 region it came from is released.
 
 - `a_copied_list_outlives_its_home`
-  a list of a string list, a string-keyed dict and a quote crosses under a copy verdict, is kept,
-  its home released, and redeemed in the destination's next step: every byte reads back and the
-  quote is the parsed node.
+  a list of a string list and a string-keyed dict crosses under a copy verdict, is kept, its home
+  released, and redeemed in the destination's next step: every byte reads back.
 
 **Knots in a cell's region** ([src/knot/copy.rs](../src/knot/copy.rs)) — a knot
-member copied across a crossing, a function or a data node, re-ties its whole knot through the
+member copied across a crossing, a function, a quote or a data node, re-ties its whole knot through the
 destination's writer, and is read through its edges after the region it came from is released.
 
 - `a_copied_knot_outlives_its_home`
@@ -146,13 +151,18 @@ destination's writer, and is read through its edges after the region it came fro
 - `a_copied_module_outlives_its_home`
   a module holding a string list, a two-function knot and a newtype handle crosses under a copy
   verdict, is kept, its home released, and redeemed: every member is rebuilt through the one
-  crossing, each function member bringing its whole knot with it, and every captured byte reads
-  back.
+  crossing, the two function members through one copy of their knot, and every captured byte
+  reads back.
 - `a_copied_barrier_outlives_its_home`
   an opaque view's barrier over a closure-holding function crosses under a copy verdict, is kept,
-  its home released, and redeemed: the barrier beside the node and the whole knot behind it are
-  written at the destination while the copy's node run is still being filled, and the captured
-  bytes read back.
+  its home released, and redeemed: the whole knot behind the barrier is copied first, the barrier
+  beside the node is written at the destination while the copy's node run is still being filled,
+  and the captured bytes read back.
+- `a_copied_quote_outlives_its_home`
+  a quote whose `$` names bind its own binder and a string crosses under a copy verdict, is kept,
+  its home released, and redeemed: the code beside the node and its bound run are written at the
+  destination while the copy's node run is still being filled, the self-reference names the copy,
+  and the string reads back.
 
 **Cells the drain creates and releases** ([src/scheduler/drain.rs](../src/scheduler/drain.rs)) — a
 tail hand-off waking its state across a release, a state kept in one cell and woken in another,
@@ -217,15 +227,29 @@ shorter brand than the one it was bound at.
   root; one also holding a list its lambda never reaches, whose lambda's knot is re-tied in the root
   with its capture deep-copied and the region reclaimed; each called after, reading its capture
   where it now lies.
+- `a_self_call_in_tail_position_holds_its_cells_constant_however_deep`
+  a frame tails its last statement into the evaluator with a view of its own activation: the
+  successor is a tenant of the frame's caller, so the crossing pins the frame's region before the
+  frame is released, and the evaluation reads through that view and tails into the next frame —
+  sixty-four hops under Miri.
+
+**Dispatch** ([src/dispatch/evaluate.rs](../src/dispatch/evaluate.rs)) — the evaluator selecting a
+registration's function under a frame's contract and hopping to its frame, its argument record built
+in a tenant's storage and crossed into the callee's birth.
+
+- `a_keyworded_self_call_in_tail_position_holds_its_cells_constant_however_deep`
+  a keyworded call as a frame's last statement selects its own overload by the carried type of a
+  link read through a newtype, and the evaluation owing the frame's contract tails into the next
+  frame with the argument record it built — five hops under Miri, against two.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-28: 293s — 26 tests, 0 leaks, 0 UB
+- 2026-09-28: 231s — 26 tests, 0 leaks, 0 UB
+- 2026-09-28: 531s — 26 tests, 0 leaks, 0 UB
+- 2026-09-28: 199s — 25 tests, 0 leaks, 0 UB
 - 2026-09-24: 175s — 23 tests, 0 leaks, 0 UB
-- 2026-09-22: 106s — 22 tests, 0 leaks, 0 UB
-- 2026-09-22: 108s — 22 tests, 0 leaks, 0 UB
-- 2026-09-22: 79s — 21 tests, 0 leaks, 0 UB
-- 2026-09-21: 84s — 20 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

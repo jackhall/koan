@@ -2,7 +2,7 @@
 
 Branching on a value, and catching an error.
 
-**Problem.** [Dispatch](dispatch.md) runs a program's values, names, functions
+**Problem.** [Dispatch](../../src/dispatch/README.md) runs a program's values, names, functions
 and keyworded calls, and an error there is a tagged value of the builtin
 `Error` over `{message :Str}` that ends the program when nothing catches it —
 and nothing can. `MATCH`, `MATCH … OVER`, `TRY` and `CATCH` each have a
@@ -47,23 +47,29 @@ and `CATCH`'s declared return is `Any`.
   heads are written, against the tutorial's `TRY` snippets.
 - *`MATCH … UNDER` — decided.* The union clause claims the scrutinee's type
   lies under the union, the relation
-  [a bound's `UNDER`](../../tutorial/12-functors.md#bounding-a-type-parameter-under)
+  [a bound's `UNDER`](../../tutorial/12-functors.md#bounding-a-type-parameter)
   names. `OVER` is left naming
   a domain: an operator's operand type, and the captures `CLOSE OVER` copies.
 - *An arm is a block — decided.* An arm runs as the block shape the scope
   builder already builds for it, with `it` its one parameter, through the same
   block evaluation dispatch uses for a synthesized block.
-- *Arms select by specificity — decided.* Arms are written as a quoted dict of
-  guards to blocks ([code as values](code-values.md)), so their written order
-  says nothing; the most specific admitting guard is chosen, by the order
-  dispatch ranks candidates by.
+- *Arms select by specificity — decided.* Arms are written as a dict of
+  quotes, guards to blocks — typed `Dict(TypeCode, Block)` under `MATCH`'s type
+  guards and `Dict(Name, Block)` under `MATCH … UNDER`'s and `TRY`'s labels
+  ([the builtin shape table](../../src/parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact))
+  — so their written order says nothing; the most specific admitting guard is
+  chosen, by the order dispatch ranks candidates by.
+- *`MATCH` on values — open.* `MATCH` is to branch on a scrutinee's value as
+  well as its type. Today a `MATCH … WITH` guard is a type, and a value guard
+  (`true`, `1`) is refused `Inadmissible` where the shape is built. How a value
+  guard is written, typed and ranked against a type guard is undecided.
 
 ## Dependencies
 
 **Requires:**
 
-- [Dispatch](dispatch.md) — the evaluator, block evaluation and error values.
 
 **Unblocks:**
 
+- [Call traces](call-traces.md) — a caught error's record is where its frames are read.
 - [Retire the old runtime](retire-the-old-runtime.md) — the control surface `machine` still owns.

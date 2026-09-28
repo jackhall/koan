@@ -3,11 +3,9 @@
 //! is refused — and the last statement's unit marked.
 
 use crate::parse::KExpression;
-use crate::scope::{BodyShape, Builtins, Position, ShapeError, ShapeKind, Unit, UnitWork};
+use crate::scope::{BodyShape, Builtins, ShapeKind, Unit, UnitWork};
 
-use crate::symbols::BinderSymbol;
-
-use super::{Fixture, builtins, value_name, with_fixture};
+use super::{Fixture, builtins, with_fixture};
 
 /// Shape `source` and hand `check` the program shape.
 fn shaped<R>(
@@ -18,8 +16,15 @@ fn shaped<R>(
         let lines: Vec<KExpression<'_>> = fixture.parse(source);
         fixture.in_cell(|writer| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(fixture.program, &lines, table, fixture.scratch())
-                .unwrap_or_else(|error| panic!("`{source}` shapes: {error:?}"));
+            let shape = BodyShape::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            )
+            .unwrap_or_else(|error| panic!("`{source}` shapes: {error:?}"));
             check(fixture, shape)
         })
     })
@@ -64,16 +69,19 @@ fn independent_statements_run_as_written() {
 
 #[test]
 fn a_forward_capture_runs_its_binder_first_and_last_marks_the_last_statement() {
-    shaped("LET f = (FN :{} -> Number = (g))\nLET g = 5", |_, shape| {
-        assert_eq!(order(shape), [1, 0]);
-        assert_eq!(last(shape), Some(1), "the last statement's unit runs first");
-    });
+    shaped(
+        "LET f = (FN :{} -> Number = #(g))\nLET g = 5",
+        |_, shape| {
+            assert_eq!(order(shape), [1, 0]);
+            assert_eq!(last(shape), Some(1), "the last statement's unit runs first");
+        },
+    );
 }
 
 #[test]
 fn a_statement_binding_nothing_follows_what_it_reads() {
     shaped(
-        "LET y = 2\n(FN :{} -> Number = (x))\nLET x = 1",
+        "LET y = 2\n(FN :{} -> Number = #(x))\nLET x = 1",
         |_, shape| {
             assert_eq!(order(shape), [0, 2, 1]);
         },
@@ -83,7 +91,7 @@ fn a_statement_binding_nothing_follows_what_it_reads() {
 #[test]
 fn a_component_is_one_unit() {
     shaped(
-        "LET even = (FN :{} -> Number = (odd))\nLET odd = (FN :{} -> Number = (even))\n(odd)",
+        "LET even = (FN :{} -> Number = #(odd))\nLET odd = (FN :{} -> Number = #(even))\n(odd)",
         |_, shape| {
             assert_eq!(shape.units().len(), 2);
             assert_eq!(order(shape), [0, 2]);
@@ -91,60 +99,29 @@ fn a_component_is_one_unit() {
     );
 }
 
+/// An `EVAL` takes no hold on its frame: its statement waits only on what it reads, so a binder
+/// declared before it that reads what it binds runs after it.
 #[test]
-fn an_eval_follows_every_binder_declared_before_it_and_no_later_one() {
+fn an_eval_waits_on_nothing_it_does_not_read() {
     shaped(
-        "LET f = (FN :{} -> Number = (g))\n(EVAL #(origin))\nLET g = 5",
-        |_, shape| {
-            // Without the rule the `EVAL`, independent of both, would run before `f`'s unit.
-            assert_eq!(order(shape), [2, 0, 1]);
-        },
+        "LET f = (FN :{} -> Number = #(g))\n(EVAL #(origin))\nLET g = 5",
+        |_, shape| assert_eq!(order(shape), [1, 2, 0]),
     );
-    shaped("(EVAL #(origin))\nLET h = 9", |_, shape| {
-        assert_eq!(order(shape), [0, 1]);
-    });
-}
-
-#[test]
-fn an_eval_a_binder_before_it_waits_on_is_refused() {
-    // `f` is visible to the `EVAL` and reads `g`, which the `EVAL` binds: neither can run first.
-    // Declaring `f` after `g` would hide it from the `EVAL` and shape.
-    with_fixture(|fixture| {
-        for source in [
-            "LET f = (FN :{} -> Number = (g))\nLET g = (EVAL #(origin))",
-            // Through a binder between them.
-            "LET f = (FN :{} -> Number = (h))\nLET h = (FN :{} -> Number = (g))\nLET g = (EVAL #(origin))",
-        ] {
-            let lines: Vec<KExpression<'_>> = fixture.parse(source);
-            fixture.in_cell(|writer| {
-                let table: &Builtins = builtins(fixture, writer);
-                let shape =
-                    BodyShape::of_program(fixture.program, &lines, table, fixture.scratch());
-                let Err(ShapeError::EvalCycle { name, eval }) = shape else {
-                    panic!(
-                        "`{source}` is refused as an `EVAL` cycle: {:?}",
-                        shape.map(|_| ())
-                    );
-                };
-                assert_eq!(eval, Position::statement(lines.len() - 1));
-                let named =
-                    ["f", "h"].map(|text| BinderSymbol::Value(value_name(text, fixture.symbols)));
-                assert!(
-                    named.contains(&name),
-                    "`{source}` names a binder on the cycle"
-                );
-            });
-        }
-    });
-    shaped(
-        "LET g = (EVAL #(origin))\nLET f = (FN :{} -> Number = (g))",
-        |_, shape| assert_eq!(order(shape), [0, 1]),
-    );
+    for source in [
+        "LET f = (FN :{} -> Number = #(g))\nLET g = (EVAL #(origin))",
+        // Through a binder between them.
+        "LET f = (FN :{} -> Number = #(h))\nLET h = (FN :{} -> Number = #(g))\nLET g = (EVAL #(origin))",
+    ] {
+        shaped(source, |_, shape| {
+            let order = order(shape);
+            assert_eq!(order.last(), Some(&0), "`{source}`: `f` runs last");
+        });
+    }
 }
 
 #[test]
 fn a_parameter_is_no_unit() {
-    shaped("LET f = (FN :{x :Number} -> Number = (x))", |_, shape| {
+    shaped("LET f = (FN :{x :Number} -> Number = #(x))", |_, shape| {
         let (_, body) = shape
             .nested_shapes()
             .iter()

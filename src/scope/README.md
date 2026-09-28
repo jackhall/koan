@@ -4,9 +4,10 @@ Koan's lexical environments: the layer that answers what a name means at the
 point it is read, over the values in [`values`](../values/README.md) and the
 types in [`type_lattice`](../type_lattice/README.md).
 
-A scope resolves value names and type names. Keyword lookup — choosing a
-callable for a keyworded expression — is dispatch, the layer above, and it
-extends the resolution described here rather than replacing it.
+A scope resolves value names, type names and bucket keys. A keyworded use
+resolves where its shape is built, as a name does, to the list of callables it
+may select ([keyworded uses](#keyworded-uses)); choosing one of them per call is
+[dispatch](../dispatch/README.md), the layer above.
 
 ## Three tiers
 
@@ -71,7 +72,7 @@ Values are immutable, so a shallow copy of a binding means the same thing as a
 reference to it: every copy names the same value, and what the copy retains is
 the region that value lives in.
 
-**Four kinds of shape.** The program's top level is one shape with no
+**Five kinds of shape.** The program's top level is one shape with no
 captures. A function body (`FN`, `EXPR`, `OP`) is a *callable* shape: it
 captures, and it is a deferring boundary (below). Its parameters are the names
 its signature declares — each `<name> :<Type>` pair, a `:{…}` schema's fields,
@@ -80,8 +81,7 @@ every `FOR ALL` type parameter — or `left` and `right` for a binary `OP` and
 a *module* shape: it captures, since its activation outlives the frame that
 births it, but it is not a deferring boundary, because its statements run when
 the statement holding it runs. A `MATCH` or `TRY` arm, a `USING … SCOPE` body,
-the code an `EVAL`
-runs, and the block a [pairwise rewrite](#operator-groups) synthesizes to hoist
+and the block a [pairwise rewrite](#operator-groups) synthesizes to hoist
 a shared operand, is a *block* shape: an arm's one parameter is `it`, a `USING`
 body's are
 the names its operand surfaces (below), a synthesized block's are the anonymous
@@ -90,9 +90,13 @@ from `1`, its activation is laid down in the same frame as the enclosing one,
 and instead of captures it holds a pointer to the enclosing activation. A name
 declared in the block shadows the enclosing one from the next statement on and
 is gone once the block ends, because the block's activation is not the
+enclosing one. A quote's code is a *code* shape ([quotes](#quotes)): it
+captures its `$` names where the quote is written, as a callable captures, and
+holds its holes and unfilled `\` marks open for `USING` and `EVAL` to fill; its
+activation is laid down in the frame an `EVAL` runs in, with no pointer to the
 enclosing one.
 
-One builder serves all four kinds. It walks a body once, building every body
+One builder serves all five kinds. It walks a body once, building every body
 and arm nested in it as it meets them, and lays each finished shape down in
 program storage. A nested shape is found from its enclosing one by the address
 of the part that holds it, and a mention by the address of its own part — an
@@ -100,6 +104,38 @@ identity any holder of the part recomputes, and which program storage never
 moves. For a callable, the part that holds its body is its form's body-role
 part, and `Site::of_body` finds that site from the form node, so a caller that
 meets a `FN` no binder names finds its body shape.
+
+**Code is read where it is written.** Before the builder walks a builtin node's
+parts it checks each part the node's roles read as written
+([the builtin shape table](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)):
+a callable's body and an `EXPR` head are a quote; an arm set, a union's
+variants, a `FOR ALL` group and a `SIG` body are a list or dict of quotes; a
+binder name, an in-place body, a type expression and a `TRY` or `CATCH` operand
+are bare; and each admits one of its slot's code types. A type expression's and
+an in-place operand's slot type is the value it denotes, so only their spelling
+is checked. One static check does it, against the table's own types through
+[`admits_part`](../values/admission.rs) over the program's registry — the one
+rule a raw part is admitted by anywhere — so no position list and no second
+admission rule sits beside the table; the readers after it assume a well-formed
+part. A part no slot type admits is `Inadmissible`, which names the slot's type
+through the lattice's renderer. A callable's body shape is built over its quote's body and keyed by the
+quote part, so `Site::of_body` finds it as it finds any body. An `EXPR` head's
+names are read through its quote. An arm set is a dict of guard quotes to arm
+quotes, and each arm is a block shape binding `it`. A `MATCH … WITH` guard is a
+type — a type name, a `:(…)` or a `:{…}`, typed `Dict(TypeCode, Block)`, whose
+names are mentions read where the match runs — and a `MATCH … OVER` or `TRY`
+guard a label, typed `Dict(Name, Block)`; a value guard is `Inadmissible`. A
+`SIG` body's members and a bodyless `GROUP`'s heads are the statements of a
+list's quotes, each walked by its own builtin shape's roles.
+
+**An arm knows it is one.** An arm's block shape carries an `Arm`
+(`BodyShape::arm`): its guard as written — the key quote, a type under
+`MATCH … WITH` and a label under `MATCH … OVER` or `TRY` — or none for the `_`
+default arm, and whether the arm's last statement is in tail position. It is
+exactly where the `MATCH` or `TRY` is: at the root of a body's last statement,
+binding nothing, in a tail body. A callable's body is a tail body and an arm's
+is when its own tail is; the program, a module, a `USING` body and a
+synthesized block are not.
 
 ## Resolution
 
@@ -128,6 +164,19 @@ member's place in the component, which the birth turns into a knot edge the
 caller mints. That covers a callable a binder births and a `FN` a data binder's
 constructor slot holds alike.
 
+A code shape is where a [mark](#holes-and-marks) is spent, so its captures are
+keyed by name **and** mark: a hole `x`, a `$x` and a `\x` read in one body are
+three captures. A `$x` skips every binder in the code, the parameters of a
+callable nested in it included, and at the code shape resolves outward,
+unmarked, where the quote is written; its capture reads there as a callable's
+does, or names a fellow member. Every other name the code does not bind stays
+open: a hole is a `Hole` capture, which a `USING` fills, and a `\` mark an
+`Offered` one, which the `EVAL` running the code fills. A callable nested in the
+code captures each of the three through its own mark. An `EVAL` whose operand
+is a parameter typed `:(<kind> NEEDING #[…])` records what it offers, keyed by
+the operand's site (`BodyShape::offers`): each listed name resolved as an eager
+read at the `EVAL`'s statement, and unbound there when nothing binds it.
+
 **No reader sees a bare edge.** The scope layer is generic over the knot member
 a value holds — the parameter [`values`](../values/README.md#what-a-value-is)
 takes — and reads one only to resolve an edge. An activation of a callable
@@ -136,7 +185,7 @@ read of a capture that is an edge resolves through it to the sibling the edge
 names — a function or a data node — a bound value like any other. A capture read at birth through
 such a coordinate is therefore the sibling's value word.
 
-A search by symbol happens only where the shape is built and inside `EVAL`.
+A search by symbol happens only where a shape is built.
 How the shape's runs are searched — linear below some length, binary above —
 is an implementation detail measured, not a commitment of the design.
 
@@ -258,9 +307,10 @@ walk reads; `TYPE (Carrier UNDER Number)` declares `Carrier`, and its bound is a
 deferred mention like the rest of the definition; a `FOR ALL` group inside one of
 its heads declares its quantifiers, bounded or not;
 a manifest `LET` member declares its name, so a later `VAL` naming it is no
-mention either; and a parameterized `UNION (Elem AS Option) = (Some :Elem …)`
-declares `Elem` in its declarator, so a variant payload naming it is no
-mention. Every name a definition declares is the definition's own, and
+mention either; a union's tags name its variants and are no mentions, while
+each payload quote is read as a type expression; and a parameterized
+`UNION (Elem AS Option) = #{Some: Elem, …}` declares `Elem` in its declarator,
+so a variant payload naming it is no mention. Every name a definition declares is the definition's own, and
 the declaration door resolves it against the definition it is elaborating.
 
 ### Units
@@ -275,26 +325,24 @@ only the binder its reader needs. A read's wait is acyclic by construction,
 since a cycle among bindings is one component. Each unit records whether it
 holds the body's last statement, whose value a called body's is.
 
-A statement containing `EVAL` reads names no shape can enumerate, so it also
-follows every unit binding a name declared before its position, as firmly as a
-read does. A visible binder is therefore always bound when an `EVAL` runs. When
-a binder declared before the `EVAL` itself waits on the `EVAL`'s statement —
-`LET f = FN <reads g>` before `LET g = (EVAL …)` — neither can go first, and
-the shape refuses the body at load with `ShapeError::EvalCycle`, naming the
-binder and the `EVAL`'s statement. Declaring `f` after the `EVAL`'s statement
-hides it from the `EVAL` and makes its read of `g` an ordinary forward read.
+A statement containing `EVAL` is ordered like any other: the code an `EVAL`
+runs reads no name of the body around it by symbol ([quotes](#quotes)), so its
+operand is its only mention.
 
-## Two channels
+## Three channels
 
 A value name and a type name are different key types, so the value channel and
 the type channel cannot collide by construction. A name whose text classifies
 as neither is rejected where the text is classified, before any scope sees it.
-The partition lives in the shape: each channel is its own run of declared
-names, sorted by symbol, and the two share one index space — value names take
-the first slots and type names the slots after. The builtin table lays its two
-channels out the same way. An activation holds one run of slots over `Value`, since a type is a
-`Value` arm, and the shape's key types keep the two channels' indices apart.
-Keyword buckets are dispatch's to resolve.
+The third channel holds **registrations**: the slot a keyworded definition's
+function is bound to under its bucket key, a binder no text names. The
+partition lives in the shape: each channel is its own run of declared binders,
+sorted by symbol, and the three share one index space — value names take the
+first slots, type names the slots after, and registrations the last. The
+builtin table lays its names out the same way, with its overloads after them,
+grouped by bucket key. An activation holds one run of slots over `Value`, since
+a type and a function are `Value` arms, and the shape's key types keep the
+channels' indices apart.
 
 **Builtins are immutable and unshadowable.** A user binding whose name collides
 with a builtin's, in either channel, is a rebind error at any depth, never a
@@ -302,6 +350,61 @@ shadow. Because no scope can hide a builtin, a builtin name resolves in the
 shape to an index into the builtin table, and a read goes through a base
 pointer to that table carried in the activation's header. An activation copies
 no part of the builtin table.
+
+## Keyworded uses
+
+A **keyworded use** — a node holding a keyword whose key is no closed
+[builtin expression shape](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
+— resolves where its shape is built to a **candidate list**
+(`BodyShape::candidates`, keyed by the node's site): the builtin overloads at
+its full bucket key, in table order, then each registration at that key visible
+to the use, the enclosing bodies innermost first. The key is the whole key, so a
+registration at `MOVE _ TO _` is no candidate for `MOVE _`, and a lone keyword
+`(NOW)` is a use of the key `NOW`. A builtin expression shape whose slots
+dispatch evaluates — `ATTR`, `FROM`, `EVAL`, `USING` — is closed and lists its
+own overloads alone, and so does the `NOT` a `!=` is rewritten to. A keyworded
+node inside a type expression is no use.
+
+**A registration is read as a name is.** Each registration in a list is a
+mention of its registration's symbol, classified eager or deferred as a name
+mention is ([visibility](#visibility)): at a statement it reads at the
+statement's position, so a definition written after it is invisible, and in a
+callable body it is deferred, so the body sees its own registration and later
+ones and captures them. Captures, components and units therefore treat a
+registration as they treat a name, and mutually recursive definitions tie as one
+knot. A use with no candidate — no builtin overload and no visible registration,
+whatever declarations it sees — is refused as an unbound name is, save in a
+quote's code, where it is a hole ([holes and marks](#holes-and-marks)), and in a
+`USING … SCOPE` body, whose operand's registrations are
+[parameters](#names-that-arrive-at-run-time).
+
+**Every keyworded definition registers.** `EXPR`, `EXPR FOR ALL`, `OP` and
+`UNARY OP` declare a registration at their statement's position, a `UNARY OP`
+two — under `⊕ _` and `_ ⊕ _`. A combined `LET f = FN EXPR …` or
+`LET plus = OP …` declares its name and its registration in one component over
+one body, so both are born together. A definition at the key of a closed
+builtin expression shape, or at a key that spells no keyword anywhere, is
+refused.
+
+**One ranking per key.** A bucket declaration, `EXPR #(MOVE 2 TO 1)`, binds
+nothing: it gives its key a ranking, each slot's
+[priority class](../type_lattice/README.md#priority-classes). A definition
+takes the ranking of the declaration visible where it is written — visible as a
+name read at its statement is — and with none, its slots' written order; an
+operator takes its chaining's, fold left and pairwise ranking `left` first and
+fold right `right` first. A definition's head carries no integer. Two
+declarations of one ranking are one, so libraries that declare a key alike
+compose; two rankings of one key that meet are refused wherever the builder sees
+both — a declaration or a definition seeing another, or builtin overloads at the
+key ranked otherwise — so every candidate list carries one ranking. An inner
+declaration never shadows an outer definition's ranking: a use sees both scopes.
+Nothing indexes rankings by key across a program, so two libraries that never
+meet never conflict.
+
+**A binder is its statement's own.** A binder or bucket declaration anywhere
+but at its statement's root — `PRINT (LET doubled = 42)`,
+`LET a = (LET b = 1)` — is refused; a parenthesized statement, `(LET a = 1)`,
+is still its statement's own.
 
 ## Placeholders and writes
 
@@ -328,21 +431,19 @@ tied.
 
 Two forms introduce names no shape can see.
 
-- **`EVAL`** builds a block shape for the code it evaluates when it runs,
-  over the activation it appears in: every free name resolves by name, a
-  search of each enclosing shape's declared names from the innermost outward
-  with the same visibility rule, reading the enclosing shape at `EVAL`'s own
-  position as an eager mention there would. A by-name resolution picks the same binding the
-  shape's coordinate would. A binder in the evaluated code binds in that block
-  shape and is gone when it ends; nothing an `EVAL` runs declares into the
-  scope around it. Resolving outward needs the enclosing scopes to still
-  exist, so a shape containing `EVAL`, and every shape lexically enclosing
-  it, retains its defining scope. Every other shape resolves through
-  coordinates alone and keeps no link to its parent.
+- **`EVAL`** runs the shape built for its code from that code alone
+  ([quotes](#quotes)): a name binds to a binder in the
+  code, and a `\` mark the evaluating parameter's type supplies resolves where
+  the `EVAL` is written, as a coordinate like any written name. A binder in the
+  evaluated code binds in that block shape and is gone when it ends; nothing an
+  `EVAL` runs declares into the scope around it. No search reaches outward at
+  run time, so every shape resolves through coordinates alone and keeps no link
+  to its parent.
 - **`USING … SCOPE`** makes the names its operand surfaces the **parameters of
   its body's block shape**, so a mention of one resolves through the ordinary
   local read, a callable nested in the block captures it the ordinary way, and
-  no coordinate names a member. Only the binding is left to run time, which is
+  no coordinate names a member. The registrations it surfaces are parameters
+  the same way, and candidates for a keyworded use in the body. Only the binding is left to run time, which is
   [the module layer](../knot/module/README.md#entering-a-using--scope-block)'s.
 
   That works only if the names are readable where the shape is built, so the
@@ -359,6 +460,234 @@ Two forms introduce names no shape can see.
   that says nothing statically — a parameter, which may hold a module wider than
   its signature, a call, a member read — is refused `Unsurfaced`, naming the
   ascription the site needs.
+
+## Quotes
+
+A quote is code as a value: its syntax, and bindings for some of its names.
+Nothing in a quote resolves unless the quote says how, and the shape its code
+runs in is built only where that code is built — as a callable's body, or by
+`EVAL`. One rule holds the pieces together: **code fills holes, frames never
+do.** A binder anywhere in the code a quote is composed into binds a hole in
+it; a callable's parameters, locals and scope never reach code it merely
+receives; and a name bound with `$` is never re-resolved.
+
+### Holes and marks
+
+Inside a quote, a name or a keyworded use is in one of three states:
+
+| | a name | a keyworded use |
+|---|---|---|
+| a hole, unmarked | `x` | `GREET "bob"` |
+| resolved where the quote is written | `$x` | `$(GREET "bob")` |
+| resolved where its code is built | `\x` | `\(GREET "bob")` |
+
+- **A hole** binds only to a binder in the same code — a `LET` before it in the
+  quote, or one in code composed with the quote — or to a builtin value or
+  type, which belongs to no scope. A keyworded use that is a hole
+  also has the builtin table's overloads as candidates, since they belong to no
+  scope, and a registration is a candidate for it only when composed ahead of
+  it or filled in by a `USING`. So `#(PRINT x)` finds `PRINT` wherever it goes,
+  and `#(GREET "bob")` finds a user's `GREET` only through composition, a
+  `USING` or a mark. A user's overload of a builtin's key reaches an unmarked
+  use only through composition or a `USING`; one merely visible where the quote
+  is written or run never does.
+- **`$` resolves where the quote is written.** `$x` binds `x` to its binding
+  when the quote is born; the part stays a name and compares by its binding.
+  `$(…)` resolves the bucket key of the one keyworded use it wraps where the
+  quote is written, to a candidate list as a written use does. It covers only
+  that use: the use's arguments stay as written, each a hole or marked on its
+  own. Over an operator run the [operator rewrite](#the-four-rewrites)
+  expands, it covers every use the rewrite builds, a pairwise combiner
+  included, so every operator in it resolves the same way; over `a != b` it
+  covers the `==`, since the `NOT` around it is always the builtin's.
+  `$` never evaluates. A computed value enters a quote as a bound name, and
+  only so: `LET v = (…)`, then `#(… $v …)`.
+- **`\` resolves where the code is built**, as the list of free names a
+  syntactic closure leaves open does (Bawden and Rees). `\x` binds to the
+  nearest binder in the code it is composed into, and otherwise to what the
+  build supplies ([building code](#building-code)); `\(…)` does the same for
+  the one keyworded use it wraps, again covering only that use. A mark keeps
+  its `\` through every composition until something binds it.
+- **`code USING src`** binds the holes `src` surfaces — a record's fields, a
+  module's members, and a keyworded hole to the module's registrations at its
+  key — and returns code with the others still holes, as
+  [`USING … SCOPE`](#names-that-arrive-at-run-time) makes the names its operand
+  surfaces its body's parameters. It applies as often as a program likes, so a
+  template's holes can be filled in stages. A field naming no hole is ignored,
+  as record width subtyping ignores a field a slot does not name, so templates
+  can share one context record; a hole an earlier `USING` filled is no hole, and
+  is never rebound.
+
+Both marks work on value and type names alike, a type name's in a type
+expression too: `:(LIST OF $Alias)`, or `:($Alias)` alone, since the `:` sigil
+takes a type name or a group. A group mark wraps exactly one
+keyworded use, so `$(y)` is not `$y`: a group holding no keyworded use gives
+`$(…)` or `\(…)` nothing to resolve and is refused, and so is one wrapping a
+closed builtin expression shape such as `LET`, whose bucket resolves the same
+everywhere. A use of an open bucket — `PRINT`, `==`, an operator — can be
+overloaded, so a mark around it stands. A mark belongs to the innermost quote
+that is a value; a quote a builtin reads as written — a callable's body, a
+head, an arm — is syntax of the code around it, so a `$y` in an `FN` body
+inside `#(…)` is that quote's. Neither mark has a reading outside a quote
+value, where every name already resolves where it is written, and a mark there
+is refused; running code is `EVAL`'s. Neither leads a line: each prefixes one
+atom or glues to one group, so `$x` alone on a line is the bound name, and on a
+compound atom it marks the leading name, so `$a.b` is `ATTR $a b`. Both lex as the other
+[sigils](../parse/README.md#the-division-of-labour-with-sexlex) do: `\x` is one
+atom, and `\(` is the atom `\` glued to its group.
+
+### Composition
+
+Code values joined into one piece of code, by [splicing](#splicing), make one
+body whose binders bind its holes as if they had been written together. A block holding `#(LET x = 4)`
+followed by `#(PRINT x)` binds the second's `x` to the first's `LET`. Each
+quote is a closure over its `$` bindings, but not an opaque one. Holes fill in
+either direction: a binder in a composed part fills a hole in the code around
+it as readily as the code around it fills one in the part.
+
+A part carries its bindings into every composition, so a `$` name keeps the
+binding its own quote gave it whatever the code around it binds. Composition
+therefore only fills holes, and cannot capture a name its writer resolved. The
+one silent case is a forgotten `$`: a hole that a composed binder of the same
+name fills.
+
+### Splicing
+
+A splice's outer sigil says when it happens. `$..xs` spreads where the quote is
+written: `xs` names a list of code, and its elements become the quote's syntax
+when the quote is born. `..$xs` binds `xs` where the quote is written and
+spreads its value when the code runs, as `..` spreads outside a quote. `$`
+still never evaluates, since splitting a list runs no koan code, so the operand
+of `$..` is a name, and each element is code: a value element would be spliced
+syntax or a nested quote according to its kind. `\..xs` has no reading, since
+a `\` name binds where a body is built, to a slot whose value arrives with each
+call. A spread is one level deep, as Lisp's `,@xs` and Julia's `$(xs...)` are,
+and a spliced part [composes](#composition) as any part does.
+
+The level a splice acts at is read from the parts around it, never from the
+lines, since a block is any node of two or more groups
+([code kinds](../parse/README.md#the-ast-borrowed-copy-and-splice-free)),
+written on one line or several. A splice whose siblings other than splices are
+all groups acts at statement level, and each element adds its statements, since
+an `Expression` stands in for a `Block`. Any other acts at part level: each
+element becomes one part, bare when it is a single part and a group otherwise,
+as Julia's `$ex` is. With `args` bound to `[#(a + b) #(c)]`, `#(f $..args)` is
+the quote of `f (a + b) c`. A quote of splices alone is at statement level, so
+
+```koan
+LET stmts = [#(LET x = 4) #(PRINT x)]
+EVAL #($..stmts)
+```
+
+prints `4`. Lowering makes a layout line that is one splice atom the splice
+itself ([lowering](../parse/README.md#the-division-of-labour-with-sexlex)), so
+a block split across lines splices as it does on one line, while a written
+`($..xs)` stays a group, as every written paren does.
+
+Taking a fragment out of code is code's slice, as it is a list's. A hole names
+no binding, so a fragment taken away from the binder that filled it holds a
+hole again: `PRINT x` taken out of a block that also holds `LET x = 4` has `x`
+a hole. A fragment keeps its `$` bindings wherever it goes.
+
+### Building code
+
+A shape is built from code in two places, and each fills different names.
+
+- **A callable's body.** A body written in place resolves the names written in
+  it where it is written, which is where it is built: in
+  `FN :{name :Str} -> Str = #(GREET name)`, `name` is the parameter and `GREET`
+  a candidate list read in the callable's scope, as in any body. That is the
+  grant a defining expression gives the quote written as its body, and it
+  reaches only the names written in that quote. Code that arrives in a body —
+  code named as the body, or code composed into a written one — has its holes
+  filled only by binders in the composed body, and the callable's parameters
+  and scope fill only its `\` marks. Code named as the body of a callable with
+  parameters `w` and `h` is written `#(\w * \h)`, and a hole left in it is
+  refused as [unbound](#errors) where the callable is built.
+- **`EVAL`.** `EVAL code` runs a shape built from the code alone. The shape
+  depends on nothing else, since a `\` mark is filled by what the `EVAL`
+  offers, so a written quote's is built once, where the program loads, and every
+  `EVAL` of that quote runs it; code composed at run time builds its own once,
+  kept where the value lives. The build refuses nothing where the program
+  loads: an error in it is kept and reported by the `EVAL` that runs it, so a
+  quote is checked only where its code runs. The frame it runs in fills no hole, so a name left unbound is an
+  unbound-name error. No shape keeps a defining scope for an `EVAL` to search,
+  so an `EVAL` takes no hold on a frame and waits on no binder declared before
+  it: its operand is an eager mention like any other. Its `\` marks are filled
+  only through a [code parameter](#code-parameters)'s type, and any other mark
+  left is unbound.
+
+```koan
+EXPR #(GREET who :Str) -> Str = #(PRINT who)
+EXPR #(TWICE body :Expression) -> Any = #(
+  EVAL body
+  EVAL body
+)
+TWICE #($(GREET "bob"))
+```
+
+prints `bob` twice: `$(…)` resolves `GREET` where the quote is written, at the
+caller. `TWICE #(GREET "bob")` is an unbound-name error at the first `EVAL`, although
+`TWICE`'s own scope sees the same `GREET`, because `TWICE`'s frame fills no
+hole in code it receives. So is `TWICE #(PRINT x)`, whatever `TWICE`'s scope or
+parameters declare, while `TWICE #(PRINT $x)` prints the caller's `x`. A
+binder in `TWICE`'s body never binds a name in `body`.
+
+### Code parameters
+
+A parameter that takes code states the kind of code it takes and the names and
+bucket keys that code may need — a key stored as a symbol and written with `_`
+for each slot, `:(Block NEEDING #[(LOG _)])`, since a slot's name is invisible
+to dispatch — spelled from the code's side: when code is
+composed, its holes are its inputs and its binders its outputs. Offering them
+is the consent of the side that builds, as `\` is the consent of the side that
+writes. A quote's carried type is its code kind and the `\` marks no binder in
+its own code fills, so `#((LET x = 5) (PRINT (x + \y)))` is a
+`:(Block NEEDING #[y])`, and a quote needing nothing is its bare kind. `:Code`
+admits every quote. Dispatch reads a carried type as it reads any other, so a
+quote needing a name the parameter does not list is a non-match that falls
+through. An `EVAL` of the parameter resolves the supplied names and keys where
+the `EVAL` is written, statically, as it resolves a name written there, so
+nothing is searched at run time. Composition and slicing recompute a carried
+type: a binder composed ahead of `\it` binds it, and `it` leaves the list.
+Haskell's implicit parameters are the same consent by name: `?x` in a type,
+supplied where the value is used.
+
+A quote's carried type says nothing of the value its code returns, and nothing
+of its names' types, so a parameter cannot select on either. The types are
+those of the callee's own bindings, checked where the code is built.
+
+### Quotes and functions
+
+A function is built code and a quote is unbuilt. A function is opaque, is
+checked where it is written, declares its parameters' types and its return
+type, and captures every free name of its body where it is written. A quote can
+be inspected and composed, is checked only where its code is built, and
+captures only its `$` names. Code becomes a callable as the body of an `FN`:
+the `FN`'s parameters supply the code's `\` marks, and its declared return type
+is the annotation the code cannot carry.
+
+An `FN` written in a quote has one shape, built with the quote's code, and
+whatever differs between two code values of that quote — its `$` bindings, its
+`USING` supplies, the names an `EVAL` offers — reaches the function as its
+captures, so function equality counts it.
+
+### Equality and knots
+
+Code compares as a bisimulation, as circular data does
+([equality](../values/README.md#equality-and-rendering)): syntax part by part
+with spans ignored, a bound name followed through its binding under the
+coinductive pair set, a hole by its symbol, and a `\` mark by its symbol and
+its mark. A quote equals its copy, and two quotes of the same text whose `$`
+names bind different values are unequal. A function reached through a binding
+compares by its shape and captures, as [knots](../knot/README.md#equality-and-rendering)
+say. Printing code never follows a binding, and prints each mark as written, so
+printed code reads back with the same holes and marks.
+
+A `$` name naming a fellow knot member is a deferred mention, so a quote
+holding one is born in that member's knot as a function node is:
+`LET echo = #(PRINT $echo)` is a one-node knot, and it equals its copy. A hole
+or a `\` mark names no binding and adds no edge.
 
 ## Operator groups
 
@@ -402,8 +731,11 @@ A second `GROUP` over a claimed symbol is admitted only when its group is
 *equal*, and is then the same record; a `GROUP` written out equal to a builtin
 group says what the language already says and claims nothing. Any other overlap
 — with a builtin group, with another statement's group, with a unary mark, in
-either order — is `RedeclaresGroup`. The scan never enters a quote: the code
-inside one is data until an `EVAL` builds it.
+either order — is `RedeclaresGroup`. The scan enters exactly the quotes the
+builder reads where they are written — a callable's body, a head, an arm, a
+signature's members — since those are this program's code; any other quote is
+a quote value, whose code collects claims of its own, chained to the
+program's, where its [code shape is built](#evaluated-code).
 
 A **group frame** decides where an operator run may chain under a declared
 group. Only two kinds of body hold a group, both the way a parameter is held, so
@@ -444,9 +776,10 @@ Over operands `o0 … on` and operators `k1 … kn`, each operand already rewrit
 - **unary** — `k1 [o0 … on]`, one keyword-first call over a list literal. This
   is the form a union and a meet type take: `A | B | C` elaborates as that call,
   and only `A | B` is read as an infix pair. Koan has no precedence, so
-  `A | B & C` is `MixedGroups`. An operator run inside a bound — the third part
-  of a `FOR ALL` entry's or a `TYPE` declarator's `<Name> UNDER <bound>` — is
-  rewritten too;
+  `A | B & C` is `MixedGroups`. An operator run inside a quote the builder
+  reads — a head, a type guard, a union's payload, a `FOR ALL` bound, a
+  signature's member — or inside a `TYPE` declarator's `<Name> UNDER <bound>` is
+  rewritten too, and the quote rebuilt around it;
 - **pairwise** — the adjacent pairs `o(i-1) ki oi`, folded through the group's
   combiner written infix, in the group's direction.
 
@@ -467,33 +800,76 @@ opposite of `==` by construction — which is also why a declaration naming it i
 builds, bar the synthesized hoists, must spell no builtin bucket: an operator
 whose chained node a later reader would walk as a form is `SpellsForm`.
 
+Every node and part the rewrite builds carries a span of the source it was
+built from, so an error in rewritten code points into the program as written: a
+chained node spans its operands, a keyword the operator it came from, a hoist
+its operand, and the synthesized block and its last statement the whole run.
+
 A statement holding no operator run is returned unchanged, keeping its own part
 addresses, so the shape of untouched code is the shape of the parse.
 
+A run's length counts toward the
+[syntax depth limit](../parse/README.md#the-syntax-depth-limit): the parse
+counts each run as the most nesting any of these rewrites builds from it, so no
+rewrite deepens a statement past the depth the parse stored for it, and the
+parse's check bounds every walk over the rewritten body.
+
 ### Evaluated code
 
-The code an `EVAL` runs is rewritten where its own block shape is built, when
-the `EVAL` runs. Its claims chain to the program's, so a `GROUP` inside
-evaluated code is held to the program's declarations and chains that code's runs
-only, and its frame is rooted at the frame of the shape the `EVAL` sits in —
-found by a walk over shapes that reads no activation slot. A quoted operator run
-is data and is rewritten by nobody until then.
+A quote's code is rewritten where its code shape is built. Its claims chain to
+the program's, so a `GROUP` inside it is held to the program's declarations and
+chains that code's runs only, and its frame holds the builtin groups and the
+groups the code holds itself — none around the quote or the `EVAL` that runs
+it. A group frame is a frame, and frames fill nothing in code; a hole could not
+see a user's operator overloads anyway.
 
 ## Errors
 
 A shape that cannot be built is refused where it is built, with the first
-error in walk order:
+error in walk order — save a quote value's code shape, which keeps its error as
+its refusal (`BodyShape::refusal`) for the `EVAL` that runs it, and refuses the
+program only for a `$` name nothing binds where the quote is written:
 
 - a **rebind** — a name declared twice in one shape, parameters included;
 - a binding that **shadows a builtin**, in either channel;
-- an **unbound** name — no binding of it visible where the mention reads;
+- an **unbound** name — no binding of it visible where the mention reads, or
+  a hole left in code a callable's body is built from ([quotes](#quotes));
 - an **eager cycle** — a component with an eager mention of a fellow member;
+- a **mark outside a quote** — a `$` or `\` no quote value holds;
 - an **unsurfaced** `USING` — an operand that does not say, where the shape is
   built, which names it surfaces;
 - an **unsupported** form — `CLOSE` and `CLOSE OVER`, whose resolution has no
   rewrite home yet, and the reserved forms that exist only to diagnose a miss;
-- a **malformed** form — a body or a branch list that is not the shape its form
-  declares;
+- an **unquoted** part — one its role reads as a quote or a container of
+  quotes, written otherwise: a bare function body, a bare arm set, a bare `SIG`
+  body. The message says how the part is written;
+- an **inadmissible** part — one read as written whose syntax fills none of its
+  slot's types: `42` as a body, a value guard such as `#{1: (a)}` as a
+  `MATCH … WITH`'s arms, `#[(PRINT 1)]` as a signature's members, `#{}` as a
+  union's variants;
+- a **malformed** form — a quote where bare syntax is read (`LET #(x) = 1`,
+  `MODULE m = #(…)`, `MATCH x -> #(Number) WITH …`, `CATCH #(x)`), or a body
+  that is not the shape its form declares;
+- a **dict default** — a value dict holding a `_` key, refused until its default
+  has a reading (see [Open work](#open-work)); an arm set's `_` is its default
+  arm;
+
+six from [keyworded uses](#keyworded-uses), each naming the key it is about
+where it has one:
+
+- a **closed bucket** — a definition or bucket declaration at the key of a
+  closed builtin expression shape;
+- **no keyword** — a definition whose key spells no keyword;
+- a **ranked definition** — a definition head writing an integer in a slot;
+- a **nested binder** — a binder or bucket declaration that is not its
+  statement's own expression;
+- a **ranking disagreement** — two rankings of one key that meet;
+- **no candidate** — a keyworded use with no builtin overload and no visible
+  registration;
+
+one [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
+built and its types can be read — an **overlap**, a user overload taking
+operands a builtin overload at its key already takes;
 
 and six more from [operator groups](#operator-groups), each naming the symbol it
 is about:
@@ -510,8 +886,22 @@ is about:
   bucket;
 - **derived** — a declaration naming `!=`, which is always the opposite of `==`.
 
-Each renders with the names and positions a user needs, spelled through the
-symbol interner.
+Every error carries the [`SourceRef`](../source.rs) it was found at, and
+renders led by it as `path:line:col`. That is the part the error is about when
+the part carries a span — the unbound name, the operator, the inadmissible
+part — else the nearest spanned part or node around it, so an error about a
+list's item points at the list. A node-level error — an unsupported or
+malformed form, a group claim — points at the node. A rebind points at the
+second binding and names the first. A parameter is bound where the node
+declaring it is written: the `FN`, `EXPR` or `OP`, the `MATCH` or `TRY` whose
+arm binds `it`, the `USING` that surfaces it. An eager cycle is found at the
+statement of the member declared first. The walk records a part by its address, so a part's location is
+found by searching its statement, on the error path only
+([build/locate.rs](shape/build/locate.rs)): a shape that builds locates nothing.
+
+Each renders with the names a user needs spelled through the symbol interner,
+and an inadmissible part's slot type through the type registry's renderer —
+`:(LIST OF Declaration)` for a signature's members.
 
 ## Memory
 
@@ -525,20 +915,20 @@ outlives every frame, its closure bindings live in the callable value, which
 the caller keeps alive across the call, an enclosing activation lives in the
 same frame, and its slots hold values. An activation is therefore copied by
 copying its bytes. Each kind of body has its own constructor — a program's
-with neither closure bindings nor an enclosing activation, a callable's or
-module's with the callable and its closure bindings, a block's beside an
-enclosing activation whose builtin table and callable it shares — so no other
-combination can be built.
+with neither closure bindings nor an enclosing activation, a callable's with
+the callable and its closure bindings, a module's or a quote's code's with its
+closure bindings alone, a block's beside an enclosing activation whose builtin
+table and callable it shares — so no other combination can be built.
 
 A shape and everything it holds — declared-name runs, mentions, captures,
-components, nested shapes — rest in program storage and are `Copy`. An
-`EVAL`'s block shape is built into program storage each time the `EVAL` runs.
+components, nested shapes — rest in program storage and are `Copy`. A written
+quote's code shape is built into program storage once, where the program
+loads.
 
 ## The import rule
 
 `scope` names `crate::values`, `crate::type_lattice`, `crate::symbols`,
-`crate::memory` and
-`crate::parse`, and no scheduler type. From `type_lattice` it names the
+`crate::memory`, `crate::parse` and `crate::source`, and no scheduler type. From `type_lattice` it names the
 operator-group vocabulary — `DeclaredGroup` and its `ReductionMode` — so a
 signature's operator channel and a body's held group are one record rather than
 two that must be kept in step. The scheduler reaches scopes through its
@@ -549,8 +939,9 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [Dispatch](../../roadmap/rewrite/dispatch.md) — keyword lookup over scopes.
-- [Quotes resolve where they are written](../../roadmap/rewrite/eval-scope.md)
-  — a quote's names resolved where it is written, wherever it is evaluated.
+- [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
+  default, which lifts the dict-default refusal.
+- [Code splicing](../../roadmap/rewrite/code-splicing.md) — how several parts
+  are spliced into a quote at once, and a kind for built code.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
-  OVER`, and what an `EVAL` behind a forward reference may read.
+  OVER`, and a warning for an unmarked keyworded use in a quote.

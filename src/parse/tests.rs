@@ -9,6 +9,7 @@
 //! mistake reports, and the surface rules a renderer never writes.
 
 mod basics;
+mod depth;
 mod layout;
 mod list_dict;
 mod literals;
@@ -50,6 +51,17 @@ pub(super) fn describe(e: &KExpression<'_>, symbols: &SymbolInterner) -> String 
             // The quoted body renders as a nested expression (`#[...]`), so the wrapper the
             // parse-static capture holds is visible in every shape assertion.
             ExpressionPart::QuotedExpression(e) => format!("#{}", describe(e, symbols)),
+            ExpressionPart::MarkedName(mark, name) => {
+                let class = if matches!(name, crate::symbols::BinderSymbol::Type(_)) {
+                    'T'
+                } else {
+                    't'
+                };
+                format!("{}{class}({})", mark.sigil(), symbols.render(name.symbol()))
+            }
+            ExpressionPart::MarkedUse(mark, e) => {
+                format!("{}{}", mark.sigil(), describe(e, symbols))
+            }
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(|p| describe_part(p, symbols)).collect();
                 format!("L[{}]", inner.join(" "))
@@ -95,7 +107,7 @@ pub(super) fn describe(e: &KExpression<'_>, symbols: &SymbolInterner) -> String 
 }
 
 /// One line's parts, without the peel a statement gets: the run as written, so an expectation
-/// here names the parts a paren or sigil produced rather than what a redundant wrapper collapses
+/// here names the parts a paren or sigil produced rather than what a layout wrapper collapses
 /// to. Rejects an input that is not exactly one line.
 pub(super) fn tree(input: &str) -> Result<String, String> {
     let program = program_storage();

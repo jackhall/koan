@@ -1,12 +1,13 @@
 //! Whole programs under the drain: unit order, where a value is built, the slab holding the root
-//! alone, calls and recursion, components, eager parts, module bodies, and lambdas: born where
-//! they are written, returned from a frame, and held in a knot.
+//! alone, calls and recursion, components, eager parts, module bodies, lambdas — born where they
+//! are written, returned from a frame, and held in a knot — quotes run by `EVAL`, error values,
+//! the contract a frame ends under, and the tail a frame hands its last statement to.
 
-use crate::program::CellSubstrate;
 use crate::program::body::SUPPLIED_WAKES;
+use crate::program::{CellSubstrate, Outcome};
 
 use super::evaluator::{Mini, recorded, reset};
-use super::{loaded, read_back, run_and_read};
+use super::{compare_back, loaded, output, read_back, run_and_read, type_back, written};
 
 /// The depth a recursion runs to: past the slab cap, and small under Miri.
 const DEPTH: u32 = if cfg!(miri) { 8 } else { 300 };
@@ -42,7 +43,7 @@ fn independent_statements_run_in_source_order_without_interleaving() {
 #[test]
 fn a_forward_capture_runs_its_binder_first() {
     let mut substrate = loaded(
-        "LET f = (FN :{x :Number} -> Number = (g))\nLET g = 5\nLET r = (f 0)",
+        "LET f = (FN :{x :Number} -> Number = #(g))\nLET g = 5\nLET r = (f 0)",
         2,
     );
     assert_eq!(run_and_read(&mut substrate, &["r", "g"]), ["5", "5"]);
@@ -67,7 +68,7 @@ fn a_top_level_binding_is_built_in_the_root_from_the_start() {
     // A fresh list is built in the evaluation's home, which is the root; so is a call's value,
     // through a frame whose last statement forwards it there.
     let mut substrate = loaded(
-        "LET xs = [1 2 3]\nLET f = (FN :{n :Number} -> Any = ([4 5]))\nLET ys = (f 0)",
+        "LET xs = [1 2 3]\nLET f = (FN :{n :Number} -> Any = #([4 5]))\nLET ys = (f 0)",
         2,
     );
     reset();
@@ -92,8 +93,8 @@ fn a_result_built_in_its_own_region_crosses_into_the_root_at_the_verdicts_price(
     // long one pins, and the region splices into the root.
     let long = vec!["n"; 256].join(" ");
     let source = format!(
-        "LET f = (FN :{{n :Any}} -> Any = ((LET big = [{long}]) (LET small = [n n])))\n\
-         LET g = (FN :{{n :Any}} -> Any = ((LET small = [n n]) (LET big = [{long}])))\n\
+        "LET f = (FN :{{n :Any}} -> Any = #((LET big = [{long}]) (LET small = [n n])))\n\
+         LET g = (FN :{{n :Any}} -> Any = #((LET small = [n n]) (LET big = [{long}])))\n\
          LET copied = (f 1)\nLET pinned = (g 1)"
     );
     let mut substrate = loaded(&source, 2);
@@ -122,7 +123,7 @@ fn a_called_bodys_evaluations_are_tenants_of_the_frame() {
     // In a frame, `xs` is built by a tenant, at the frame's own brand, and the read after it finds
     // it where it lies.
     let mut substrate = loaded(
-        "LET f = (FN :{n :Number} -> Any = ((LET xs = [n n]) (xs)))\nLET r = (f 7)",
+        "LET f = (FN :{n :Number} -> Any = #((LET xs = [n n]) (xs)))\nLET r = (f 7)",
         2,
     );
     reset();
@@ -142,8 +143,8 @@ fn a_called_bodys_evaluations_are_tenants_of_the_frame() {
 #[test]
 fn a_component_is_one_unit_bound_from_one_knot() {
     let mut substrate = loaded(
-        "LET even = (FN :{n :Number} -> Number = (odd))\n\
-         LET odd = (FN :{n :Number} -> Number = (even))",
+        "LET even = (FN :{n :Number} -> Number = #(odd))\n\
+         LET odd = (FN :{n :Number} -> Number = #(even))",
         2,
     );
     let read = run_and_read(&mut substrate, &["even", "odd"]);
@@ -154,9 +155,9 @@ fn a_component_is_one_unit_bound_from_one_knot() {
 #[test]
 fn an_eager_part_is_supplied_by_site_in_one_wake() {
     let mut substrate = loaded(
-        "LET g = (FN :{x :Number} -> Number = (x))\n\
+        "LET g = (FN :{x :Number} -> Number = #(x))\n\
          LET a = [(g 1) f (g 2)]\n\
-         LET f = (FN :{x :Number} -> Any = (a))",
+         LET f = (FN :{x :Number} -> Any = #(a))",
         2,
     );
     SUPPLIED_WAKES.with(|wakes| wakes.set(0));
@@ -171,7 +172,7 @@ fn an_eager_part_is_supplied_by_site_in_one_wake() {
 #[test]
 fn a_recursion_deeper_than_the_slab_cap_runs_on_tree_cells() {
     let source = format!(
-        "LET count = (FN :{{n :Number}} -> Number = (WHEN n THEN (count (n MINUS 1)) ELSE 0))\n\
+        "LET count = (FN :{{n :Number}} -> Number = #(WHEN n THEN (count (n MINUS 1)) ELSE 0))\n\
          LET r = (count {DEPTH})"
     );
     let mut substrate = loaded(&source, 1);
@@ -198,20 +199,21 @@ fn a_module_binder_runs_its_body_inline_then_ties() {
 #[test]
 fn a_whole_program() {
     let source = format!(
-        "LET count = (FN :{{n :Number}} -> Number = (WHEN n THEN (count (n MINUS 1)) ELSE n))\n\
-         LET g = (FN :{{x :Number}} -> Number = (x))\n\
+        "LET count = (FN :{{n :Number}} -> Number = #(WHEN n THEN (count (n MINUS 1)) ELSE n))\n\
+         LET g = (FN :{{x :Number}} -> Number = #(x))\n\
          LET a = [(g 1) f (g 2)]\n\
-         LET f = (FN :{{x :Number}} -> Any = (a))\n\
+         LET f = (FN :{{x :Number}} -> Any = #(a))\n\
          MODULE m = ((LET inner = (g 3)))\n\
          LET deep = (count {DEPTH})\n\
          LET last = (f 0)"
     );
     let mut substrate = loaded(&source, 1);
-    let read = run_and_read(&mut substrate, &["deep", "m", "last", "a"]);
+    let read = run_and_read(&mut substrate, &["deep", "m"]);
     assert_eq!(read[0], "0");
     assert_eq!(read[1], "module(3)");
     assert_eq!(
-        read[2], read[3],
+        compare_back(&mut substrate, "last", "a"),
+        "Ok(true)",
         "`f` returns `a`, the data node it closes over"
     );
 }
@@ -219,11 +221,24 @@ fn a_whole_program() {
 #[test]
 fn a_quantified_lambda_is_called_by_name() {
     let mut substrate = loaded(
-        "LET id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))\nLET r = (id 7)",
+        "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nLET r = (id 7)",
         2,
     );
     let read = run_and_read(&mut substrate, &["r"]);
     assert_eq!(read[0], "7");
+}
+
+/// Run `substrate`'s program to completion and hand back every type value its bodies read.
+fn read_types(substrate: &mut CellSubstrate) -> Vec<String> {
+    reset();
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Completed)
+    );
+    recorded()
+        .into_iter()
+        .filter(|seen| seen.starts_with("read ") && !seen.contains("0x"))
+        .collect()
 }
 
 #[test]
@@ -231,13 +246,11 @@ fn a_call_binds_each_type_parameter_to_its_solution() {
     // The frame solves the callee's group against the arguments' carried types and binds `Elt` to
     // what it solved, so the body reads the argument's own type.
     let mut substrate = loaded(
-        "LET which = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (Elt))\n\
+        "LET which = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #((Elt) (x)))\n\
          LET n = (which 7)\nLET s = (which \"a\")",
         2,
     );
-    let read = run_and_read(&mut substrate, &["n", "s"]);
-    assert_eq!(read[0], "Number");
-    assert_eq!(read[1], "Str");
+    assert_eq!(read_types(&mut substrate), ["read Number", "read Str"]);
 }
 
 #[test]
@@ -245,13 +258,11 @@ fn a_combined_quantified_expression_called_by_name_binds_its_solution() {
     // A combined definition is typed by its function type, so a call through its `LET` name solves
     // the group as a `FN FOR ALL`'s does.
     let mut substrate = loaded(
-        "LET which = FN EXPR FOR ALL (Elt) (WHICH x :Elt) -> Elt = (Elt)\n\
+        "LET which = FN EXPR FOR ALL #[Elt] #(WHICH x :Elt) -> Elt = #((Elt) (x))\n\
          LET n = (which 7)\nLET s = (which \"a\")",
         2,
     );
-    let read = run_and_read(&mut substrate, &["n", "s"]);
-    assert_eq!(read[0], "Number");
-    assert_eq!(read[1], "Str");
+    assert_eq!(read_types(&mut substrate), ["read Number", "read Str"]);
 }
 
 /// A quantified return is no scalar, so a call through one shares its frame rather than placing
@@ -264,8 +275,8 @@ fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
     // frame that read the map positionally would hand one of them the other's answer. Both must
     // read `Unused` as `Any` whichever way the two symbols happen to sort.
     let mut substrate = loaded(
-        "LET ab = (FN FOR ALL (Held Unused) :{x :(LIST OF Held)} -> Held = (Unused))\n\
-         LET ba = (FN FOR ALL (Unused Held) :{x :(LIST OF Held)} -> Held = (Unused))\n\
+        "LET ab = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
+         LET ba = (FN FOR ALL #[Unused Held] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
          LET one = (ab [1 2])\nLET two = (ba [1 2])",
         2,
     );
@@ -281,7 +292,7 @@ fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
 fn a_lowercase_name_holds_a_value_a_type_or_code() {
     // An `Any` parameter binds a type argument and a quote without a refusal at bind.
     let mut substrate = loaded(
-        "LET f = (FN :{x :Any} -> Any = (x))\n\
+        "LET f = (FN :{x :Any} -> Any = #(x))\n\
          LET t = (f Number)\nLET q = (f #(1))\nLET u = Number",
         2,
     );
@@ -298,7 +309,7 @@ fn a_lowercase_name_holds_a_value_a_type_or_code() {
 fn a_generic_function_carries_types_and_code() {
     // A `FOR ALL` parameter's default bound is `Any`, so it stands for a type or a quote too.
     let mut substrate = loaded(
-        "LET id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))\n\
+        "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n\
          LET t = (id Number)\nLET q = (id #(1))",
         2,
     );
@@ -313,9 +324,9 @@ fn a_generic_function_carries_types_and_code() {
 #[test]
 fn a_capitalized_name_holds_only_a_type() {
     // Whether the refusal comes at load or at run is not this test's business.
-    let refused = |source: &str| match CellSubstrate::load::<Mini>(source, "<test>", 2) {
+    let refused = |source: &str| match CellSubstrate::load::<Mini>(source, "<test>", 2, output()) {
         Err(_) => true,
-        Ok(mut substrate) => substrate.with(|running| running.run()).is_err(),
+        Ok(mut substrate) => substrate.with(|running| running.run()) != Ok(Outcome::Completed),
     };
     assert!(!refused("LET Foo = Number"), "a type under a type name");
     assert!(refused("LET Foo = 1"), "a number under a type name");
@@ -326,17 +337,25 @@ fn a_capitalized_name_holds_only_a_type() {
 }
 
 #[test]
-fn a_call_whose_argument_cannot_solve_the_group_is_refused() {
+fn a_call_whose_argument_does_not_fit_its_parameter_is_refused() {
     // `Held` is reached only under a list, so a bare number admits nowhere and the walk refuses
     // before the frame binds anything.
     let mut substrate = loaded(
-        "LET first = (FN FOR ALL (Held) :{x :(LIST OF Held)} -> Held = (x))\nLET r = (first 7)",
+        "LET first = (FN FOR ALL #[Held] :{x :(LIST OF Held)} -> Held = #(x))\nLET r = (first 7)",
         2,
     );
-    let outcome = substrate.with(|running| running.run());
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught),
+        "an argument its parameter does not admit raises an error value"
+    );
+    let [error] = &written()[..] else {
+        panic!("one error written");
+    };
     assert!(
-        outcome.is_err(),
-        "a group the argument cannot solve refuses"
+        error.starts_with("error: :(FN FOR ALL #[Held]")
+            && error.ends_with("cannot be called with :{x :Number}"),
+        "{error}"
     );
 }
 
@@ -355,7 +374,7 @@ fn a_quantified_return_shares_its_frame() {
     // A quantified return places as `Shares`, so the frame forwards the argument rather than
     // copying it: `r` reads back at the very address `xs` was built at.
     let mut substrate = loaded(
-        "LET id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))\nLET xs = [1 2]\nLET r = (id xs)",
+        "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nLET xs = [1 2]\nLET r = (id xs)",
         2,
     );
     let read = run_and_read(&mut substrate, &["xs", "r"]);
@@ -365,18 +384,19 @@ fn a_quantified_return_shares_its_frame() {
 #[test]
 fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
     let mut substrate = loaded(
-        "LET num = (FN FOR ALL (Elt UNDER Number) :{x :Elt} -> Elt = (x))\nLET r = (num 7)",
+        "LET num = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(x))\nLET r = (num 7)",
         2,
     );
     assert_eq!(run_and_read(&mut substrate, &["r"]), ["7"]);
     for source in [
-        "LET num = (FN FOR ALL (Elt UNDER Number) :{x :Elt} -> Elt = (x))\nLET r = (num \"a\")",
+        "LET num = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(x))\nLET r = (num \"a\")",
         // A quote is code, not a value.
-        "LET v = (FN FOR ALL (Elt UNDER Value) :{x :Elt} -> Elt = (x))\nLET q = (v #(1))",
+        "LET v = (FN FOR ALL #{Elt: Value} :{x :Elt} -> Elt = #(x))\nLET q = (v #(1))",
     ] {
         let mut substrate = loaded(source, 2);
-        assert!(
-            substrate.with(|running| running.run()).is_err(),
+        assert_eq!(
+            substrate.with(|running| running.run()),
+            Ok(Outcome::Uncaught),
             "`{source}` refuses"
         );
     }
@@ -385,7 +405,7 @@ fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
 #[test]
 fn a_type_parameter_canonical_form_dropped_reads_as_its_bound() {
     let mut substrate = loaded(
-        "LET which = (FN FOR ALL ((Unused UNDER Value) Held) :{x :(LIST OF Held)} -> Held = (Unused))\n\
+        "LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Any = #(Unused))\n\
          LET t = (which [1 2])",
         2,
     );
@@ -394,7 +414,7 @@ fn a_type_parameter_canonical_form_dropped_reads_as_its_bound() {
 
 #[test]
 fn a_lambda_reads_a_later_binding_when_it_is_born() {
-    let mut substrate = loaded("(FN :{y :Number} -> Number = (later))\nLET later = 5", 2);
+    let mut substrate = loaded("(FN :{y :Number} -> Number = #(later))\nLET later = 5", 2);
     reset();
     substrate.with(|running| running.run().expect("the program runs"));
     let seen = recorded();
@@ -415,8 +435,8 @@ fn a_lambda_returned_from_a_frame_keeps_its_captures() {
     // the region is reclaimed. Each is called after, reading its capture where it now lies.
     let long = vec!["x"; 256].join(" ");
     let source = format!(
-        "LET constantly = (FN :{{x :Any}} -> Any = (FN :{{y :Number}} -> Any = (x)))\n\
-         LET wasteful = (FN :{{x :Any}} -> Any = ((LET big = [{long}]) (FN :{{y :Number}} -> Any = (x))))\n\
+        "LET constantly = (FN :{{x :Any}} -> Any = #(FN :{{y :Number}} -> Any = #(x)))\n\
+         LET wasteful = (FN :{{x :Any}} -> Any = #((LET big = [{long}]) (FN :{{y :Number}} -> Any = #(x))))\n\
          LET pinned = (constantly [1 2])\nLET copied = (wasteful [3 4])\n\
          LET r = (pinned 0)\nLET s = (copied 0)"
     );
@@ -474,7 +494,7 @@ fn a_lambda_returned_from_a_frame_keeps_its_captures() {
 #[test]
 fn a_lambda_in_a_knot_reads_its_fellow_through_an_edge() {
     let mut substrate = loaded(
-        "LET a = [(FN :{y :Number} -> Any = (a))]\nLET g = (FIRST a)\nLET r = (g 0)",
+        "LET a = [(FN :{y :Number} -> Any = #(a))]\nLET g = (FIRST a)\nLET r = (g 0)",
         2,
     );
     reset();
@@ -497,7 +517,7 @@ fn a_lambda_in_a_knot_reads_its_fellow_through_an_edge() {
 #[test]
 fn a_lambda_part_is_supplied_to_a_tie() {
     let mut substrate = loaded(
-        "LET k = 7\nLET a = [(FN :{} -> Number = (k)) f]\nLET f = (FN :{} -> Any = (a))",
+        "LET k = 7\nLET a = [(FN :{} -> Number = #(k)) f]\nLET f = (FN :{} -> Any = #(a))",
         2,
     );
     SUPPLIED_WAKES.with(|wakes| wakes.set(0));
@@ -513,4 +533,203 @@ fn a_lambda_part_is_supplied_to_a_tie() {
     let read = read_back(&mut substrate, &["a", "f"]);
     assert!(read[0].starts_with("node in "), "{read:?}");
     assert!(read[1].starts_with("fn in "), "{read:?}");
+}
+
+const TWICE: &str = "LET x = 7\nLET twice = (FN :{body :Expression} -> Any = #(EVAL body))";
+
+#[test]
+fn eval_runs_code_whose_dollar_name_binds_where_it_is_written() {
+    let mut substrate = loaded(&format!("{TWICE}\nLET r = (twice #($x MINUS 1))"), 4);
+    assert_eq!(run_and_read(&mut substrate, &["r"]), ["6"]);
+}
+
+#[test]
+fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
+    for twice in [
+        TWICE.to_string(),
+        TWICE.replace("#(EVAL body)", "#((LET x = 3) (EVAL body))"),
+    ] {
+        let mut substrate = loaded(&format!("{twice}\nLET r = (twice #(x MINUS 1))"), 4);
+        reset();
+        let outcome = substrate.with(|running| running.run());
+        assert_eq!(outcome, Ok(Outcome::Uncaught), "{twice}");
+        assert_eq!(
+            written(),
+            ["error: unbound name 'x'"],
+            "the refusal is an error value the top level reports"
+        );
+    }
+}
+
+/// A keyworded hole a use of the code selects from alone refuses the `EVAL` while unfilled; one
+/// beside a builtin overload holds no function, so `x MINUS 1` above runs.
+#[test]
+fn a_required_keyworded_hole_is_unbound_when_eval_runs() {
+    let mut substrate = loaded(&format!("{TWICE}\nLET r = (twice #(NOPE 1))"), 4);
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught)
+    );
+    assert_eq!(written(), ["error: unbound key (NOPE _)"]);
+}
+
+#[test]
+fn a_parameter_needing_a_name_is_offered_it_where_eval_is_written() {
+    let mut substrate = loaded(
+        "LET twice = (FN :{body :(Expression NEEDING #[it])} -> Any = \
+         #((LET it = 5) (EVAL body)))\n\
+         LET r = (twice #(\\it MINUS 1))",
+        4,
+    );
+    assert_eq!(run_and_read(&mut substrate, &["r"]), ["4"]);
+}
+
+#[test]
+fn a_function_built_from_code_carries_its_bindings_as_captures() {
+    let mut substrate = loaded(
+        "LET make = (FN :{v :Number} -> Any = #(EVAL #(FN :{} -> Number = #($v))))\n\
+         LET a = (make 1)\nLET b = (make 1)\nLET c = (make 2)",
+        4,
+    );
+    substrate.with(|running| running.run().expect("the program runs"));
+    assert_eq!(compare_back(&mut substrate, "a", "b"), "Ok(true)");
+    assert_eq!(compare_back(&mut substrate, "a", "c"), "Ok(false)");
+}
+
+#[test]
+fn a_quote_reading_its_own_binder_is_a_one_node_knot() {
+    let mut substrate = loaded("LET echo = #(PRINT $echo)", 2);
+    assert_eq!(
+        run_and_read(&mut substrate, &["echo"]),
+        ["#(PRINT $echo) in 1 binding [echo=self]"]
+    );
+    assert_eq!(compare_back(&mut substrate, "echo", "echo"), "Ok(true)");
+}
+
+#[test]
+fn a_binder_capturing_an_eval_statement_declared_after_it_runs_after_it() {
+    // `f` is born once `y` is bound, and `EVAL` waits on no binder declared before it.
+    let mut substrate = loaded(
+        "LET f = (FN :{n :Number} -> Number = #(y))\n\
+         LET y = (EVAL #(7 MINUS 2))\n\
+         LET r = (f 0)",
+        4,
+    );
+    assert_eq!(run_and_read(&mut substrate, &["r", "y"]), ["5", "5"]);
+}
+
+#[test]
+fn a_malformed_quote_loads_and_its_error_is_reported_when_eval_runs_it() {
+    let mut substrate = loaded("LET r = (EVAL #((LET x = 1) (LET x = 2) (PRINT x)))", 4);
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught)
+    );
+    let [error] = &written()[..] else {
+        panic!("one error written");
+    };
+    assert!(error.contains("is bound twice"), "{error}");
+}
+
+#[test]
+fn a_marked_type_name_in_a_signature_the_code_writes_binds_where_the_quote_is_written() {
+    let mut substrate = loaded(
+        "LET Alias = Number\n\
+         LET g = (EVAL #(FN :{v :($Alias)} -> Number = #(v)))\n\
+         LET r = (g 4)",
+        4,
+    );
+    assert_eq!(run_and_read(&mut substrate, &["r"]), ["4"]);
+}
+
+#[test]
+fn a_refused_tie_is_an_error_value_that_ends_the_program_uncaught() {
+    let mut substrate = loaded("LET before = 1\nLET a = [b]\nLET b = [a]\nLET after = 2", 2);
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Uncaught)
+    );
+    let [error] = &written()[..] else {
+        panic!("one error written");
+    };
+    // The members are named in component order, which is by symbol.
+    assert!(
+        error == "error: these bindings build values of no finite type: `a` `b`"
+            || error == "error: these bindings build values of no finite type: `b` `a`",
+        "{error}"
+    );
+    assert_eq!(
+        read_back(&mut substrate, &["before"]),
+        ["1"],
+        "what the top level bound before the error stays readable"
+    );
+}
+
+#[test]
+fn a_frame_s_value_is_retyped_to_its_declared_return() {
+    // The first body's last statement binds nothing, so the frame tails into its evaluation, which
+    // owes the contract; the second's is a `LET`, which the frame holds to it as it ends.
+    for body in ["#([1 2])", "#((LET xs = [1 2]))"] {
+        let mut substrate = loaded(
+            &format!("LET f = (FN :{{n :Number}} -> (LIST OF Any) = {body})\nLET r = (f 0)"),
+            2,
+        );
+        run_and_read(&mut substrate, &[]);
+        assert_eq!(type_back(&mut substrate, "r"), ":(LIST OF Any)", "{body}");
+    }
+}
+
+#[test]
+fn a_return_that_misses_its_declared_type_is_an_error_value() {
+    for body in ["#(n)", "#((LET m = n))"] {
+        let mut substrate = loaded(
+            &format!("LET f = (FN :{{n :Number}} -> Str = {body})\nLET r = (f 1)"),
+            2,
+        );
+        assert_eq!(
+            substrate.with(|running| running.run()),
+            Ok(Outcome::Uncaught),
+            "{body}"
+        );
+        assert_eq!(
+            written(),
+            ["error: :(FN :{n :Number} -> Str) returned Number, which does not satisfy Str"],
+            "{body}"
+        );
+    }
+}
+
+/// The most cells live at once while `(count depth)` runs, where `count`'s last statement is a
+/// `WHEN` whose branch calls `count` again.
+fn peak_counting_down(depth: u32) -> usize {
+    let mut substrate = loaded(
+        &format!(
+            "LET count = (FN :{{n :Number}} -> Number = #(WHEN n THEN (count (n MINUS 1)) ELSE n))\n\
+             LET r = (count {depth})"
+        ),
+        2,
+    );
+    substrate.with(|running| {
+        let work = crate::scheduler::Work {
+            step: crate::program::run,
+            state: crate::program::KBirth::Program {
+                program: running.program(),
+            },
+        };
+        let root = running.root();
+        let mut scheduler = running.scheduler();
+        scheduler
+            .run(work, root, crate::scheduler::Placement::Shares)
+            .expect("the program runs");
+        scheduler.peak_live_cells()
+    })
+}
+
+#[test]
+fn a_self_call_in_tail_position_holds_its_cells_constant_however_deep() {
+    // The frame tails its `WHEN` into the evaluator under its contract, the `WHEN` tails its branch,
+    // and the call — whose callee returns `Number`, which the contract asks — tails into the next
+    // frame, so no frame waits on the one after it.
+    let deep = if cfg!(miri) { 64 } else { 10_000 };
+    assert_eq!(peak_counting_down(deep), peak_counting_down(4));
 }

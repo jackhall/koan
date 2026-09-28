@@ -3,14 +3,16 @@
 
 use crate::memory::BumpAllocator;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BodyShape, Position, Site, Slot};
+use crate::scope::{BodyShape, Position, Site, Slot, Which};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{
-    DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
+    DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry, display_name,
 };
 use crate::values::Value;
 
-use super::super::{Canonical, Elaboration, callable_type, type_expression};
+use super::super::{
+    Canonical, Elaboration, ParameterBinding, callable_type, static_callable_type, type_expression,
+};
 use super::{Held, Program, nulls, scalars, with_program};
 
 /// The right-hand side of `LET <name> = <rhs>` on `line`.
@@ -41,7 +43,7 @@ LET Mapped = :(MAP Str -> (LIST OF Number))
 LET Either = :(Number | Str | Null)
 LET Fields = :{x :Number, y :Alias}
 LET Function = :(FN :{x :Number} -> Bool)
-LET Headed = :(EXPR (TWICE x :Number) -> Number)
+LET Headed = :(EXPR #(TWICE x :Number) -> Number)
 LET Bare = Alias";
     with_program(
         source,
@@ -83,7 +85,9 @@ LET Bare = Alias";
             ];
             assert_eq!(
                 elaborated(&program, 6),
-                Ok(types.shape_type(scratch, &[], &twice, KType::NUMBER).handle)
+                Ok(types
+                    .shape_type(scratch, &[], &twice, &[], KType::NUMBER)
+                    .handle)
             );
             assert_eq!(elaborated(&program, 7), Ok(KType::STR));
         },
@@ -93,9 +97,9 @@ LET Bare = Alias";
 #[test]
 fn a_quantified_head_interns_by_shape_whatever_its_names() {
     let source = "\
-LET Named = :(EXPR FOR ALL (Elt) (ID x :Elt) -> Elt)
-LET Renamed = :(EXPR FOR ALL (Other) (ID x :Other) -> Other)
-LET Fixed = :(EXPR (ID x :Number) -> Number)";
+LET Named = :(EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt)
+LET Renamed = :(EXPR FOR ALL #[Other] #(ID x :Other) -> Other)
+LET Fixed = :(EXPR #(ID x :Number) -> Number)";
     with_program(source, scalars, nulls, |program| {
         let named = elaborated(&program, 0).unwrap();
         assert_eq!(elaborated(&program, 1), Ok(named));
@@ -104,10 +108,41 @@ LET Fixed = :(EXPR (ID x :Number) -> Number)";
 }
 
 #[test]
+fn a_ranked_head_interns_by_its_dense_ranking() {
+    // A signature member ranks a head by the integers in its slots' places: `2 … 1` and `20 … 10`
+    // are one ranking, written order another, and a named slot sits in the unnumbered class.
+    let source = "\
+LET Ranked = :(EXPR #(MOVE 2 :Number TO 1 :Str) -> Number)
+LET Scaled = :(EXPR #(MOVE 20 :Number TO 10 :Str) -> Number)
+LET Written = :(EXPR #(MOVE _ :Number TO _ :Str) -> Number)
+LET Named = :(EXPR #(MOVE piece :Number TO 1 :Str) -> Number)";
+    with_program(source, scalars, nulls, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        let elements = [
+            keyword("MOVE", program.symbols),
+            DispatchTokenElement::Slot(KType::NUMBER),
+            keyword("TO", program.symbols),
+            DispatchTokenElement::Slot(KType::STR),
+        ];
+        let ranked = types
+            .shape_type(scratch, &[], &elements, &[1, 0], KType::NUMBER)
+            .handle;
+        assert_eq!(elaborated(&program, 0), Ok(ranked));
+        assert_eq!(elaborated(&program, 1), Ok(ranked));
+        assert_ne!(elaborated(&program, 2), Ok(ranked));
+        assert_eq!(elaborated(&program, 3), Ok(ranked));
+        assert_eq!(
+            display_name(ranked, types, program.symbols).to_string(),
+            ":(EXPR #(MOVE 2 :Number TO 1 :Str) -> Number)"
+        );
+    });
+}
+
+#[test]
 fn a_quantified_lambda_type_interns_by_shape_whatever_its_names() {
     let source = "\
-LET Named = :(FN FOR ALL (Elt) :{x :Elt} -> Elt)
-LET Renamed = :(FN FOR ALL (Other) :{x :Other} -> Other)
+LET Named = :(FN FOR ALL #[Elt] :{x :Elt} -> Elt)
+LET Renamed = :(FN FOR ALL #[Other] :{x :Other} -> Other)
 LET Fixed = :(FN :{x :Number} -> Number)";
     with_program(source, scalars, nulls, |program| {
         let named = elaborated(&program, 0).unwrap();
@@ -120,7 +155,7 @@ LET Fixed = :(FN :{x :Number} -> Number)";
 fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
     // A bare `FN` type opens no group, so its field and return keep reading the head's `Elt`.
     let source =
-        "LET Applied = :(EXPR FOR ALL (Elt) (APPLY f :(FN :{x :Elt} -> Elt) TO v :Elt) -> Elt)";
+        "LET Applied = :(EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO v :Elt) -> Elt)";
     with_program(source, scalars, nulls, |program| {
         let (types, scratch) = (program.types, program.scratch);
         let quantified = types.quantified(0, KType::ANY);
@@ -141,6 +176,7 @@ fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
                         keyword("TO", program.symbols),
                         DispatchTokenElement::Slot(quantified),
                     ],
+                    &[],
                     quantified
                 )
                 .handle)
@@ -151,8 +187,8 @@ fn a_function_type_inside_a_quantified_head_reads_the_heads_variable() {
 #[test]
 fn an_outer_quantifier_read_under_a_nested_function_group_is_refused() {
     // The nested `FN FOR ALL` opens a group of its own, which shadows the head's `Elt`.
-    let source = "LET Shadowed = :(EXPR FOR ALL (Elt) \
-                    (APPLY f :(FN FOR ALL (Other) :{x :Elt} -> Other) TO v :Elt) -> Elt)";
+    let source = "LET Shadowed = :(EXPR FOR ALL #[Elt] \
+                    #(APPLY f :(FN FOR ALL #[Other] :{x :Elt} -> Other) TO v :Elt) -> Elt)";
     with_program(source, scalars, nulls, |program| {
         assert!(matches!(
             elaborated(&program, 0),
@@ -227,40 +263,29 @@ LET Applied = :(Number AS Wrap)";
 #[test]
 fn a_callable_type_is_read_off_the_form_that_births_it() {
     let source = "\
-LET f = (FN :{x :Number, ys :(LIST OF Str)} -> Bool = (x))
-LET twice = FN EXPR (TWICE x :Number) -> Number = (x)
-LET id = FN EXPR FOR ALL (Elt) (ID x :Elt) -> Elt = (x)
-LET lambda_id = (FN FOR ALL (Elt) :{x :Elt} -> Elt = (x))
-LET plus = OP #(+) OVER Number = (left)
-LET less = OP #(<) OVER Number -> Bool = (left)
-LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
+LET f = (FN :{x :Number, ys :(LIST OF Str)} -> Bool = #(x))
+LET twice = FN EXPR #(TWICE x :Number) -> Number = #(x)
+LET id = FN EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)
+LET lambda_id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))
+LET plus = OP #(+) OVER Number = #(left)
+LET less = OP #(<) OVER Number -> Bool = #(left)
+LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
     with_program(source, scalars, nulls, |program| {
         let (types, scratch, symbols) = (program.types, program.scratch, program.symbols);
-        let typed = |name| {
-            let form = program
-                .birth(name)
-                .form()
-                .expect("a callable body sits in a form");
-            callable_type(form, program.activation, types, scratch).map(|callable| callable.ktype)
-        };
+        let typed = |name| program.callable(name, false).map(|callable| callable.ktype);
         let mapped = |name| {
-            let form = program
-                .birth(name)
-                .form()
-                .expect("a callable body sits in a form");
-            callable_type(form, program.activation, types, scratch)
+            program
+                .callable(name, false)
                 .expect("the definition elaborates")
                 .quantifier_map
                 .to_vec()
         };
         let registered = |name| {
-            let form = program
-                .birth(name)
-                .form()
-                .expect("a callable body sits in a form");
-            callable_type(form, program.activation, types, scratch)
+            program
+                .callable(name, true)
                 .expect("the definition elaborates")
                 .registered
+                .expect("born for its registration")
         };
         let x = BinderSymbol::classify("x").unwrap();
         let ys = BinderSymbol::classify("ys").unwrap();
@@ -279,7 +304,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
                 .handle)
         );
         let shape = |elements: &[DispatchTokenElement], ret| {
-            types.shape_type(scratch, &[], elements, ret).handle
+            types.shape_type(scratch, &[], elements, &[], ret).handle
         };
         let number = DispatchTokenElement::Slot(KType::NUMBER);
         // Every definition is typed by its function type, over its head's **slot names**: a call
@@ -339,48 +364,65 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
                 .handle),
             "a unary operator's body takes the whole run as a list"
         );
-        assert_eq!(registered("f"), None, "no bucket holds a `FN`");
-        assert_eq!(registered("lambda_id"), None);
         assert_eq!(
-            registered("twice"),
-            Some(shape(&[keyword("TWICE", symbols), number], KType::NUMBER))
+            program
+                .callable("twice", false)
+                .map(|callable| callable.registered),
+            Ok(None),
+            "a callable born for its name carries no bucket's shape"
         );
         assert_eq!(
-            registered("id"),
-            Some(
-                types
-                    .shape_type(
-                        scratch,
-                        &[elt],
-                        &[
-                            keyword("ID", symbols),
-                            DispatchTokenElement::Slot(quantified)
-                        ],
-                        quantified
-                    )
-                    .handle
-            )
+            registered("twice").shape,
+            shape(&[keyword("TWICE", symbols), number], KType::NUMBER)
         );
         assert_eq!(
-            registered("plus"),
-            Some(shape(
-                &[number, keyword("+", symbols), number],
-                KType::NUMBER
-            ))
+            registered("twice").parameters,
+            ParameterBinding::Named(&[x])
         );
         assert_eq!(
-            registered("less"),
-            Some(shape(&[number, keyword("<", symbols), number], KType::BOOL))
+            registered("id").quantifier_map,
+            &[(elt, Canonical::At(0))][..]
         );
         assert_eq!(
-            registered("negate"),
-            Some(shape(
+            registered("id").shape,
+            types
+                .shape_type(
+                    scratch,
+                    &[elt],
+                    &[
+                        keyword("ID", symbols),
+                        DispatchTokenElement::Slot(quantified)
+                    ],
+                    &[],
+                    quantified
+                )
+                .handle
+        );
+        assert_eq!(
+            registered("plus").shape,
+            shape(&[number, keyword("+", symbols), number], KType::NUMBER)
+        );
+        assert_eq!(
+            registered("plus").parameters,
+            ParameterBinding::Named(&[left, right])
+        );
+        assert_eq!(
+            registered("less").shape,
+            shape(&[number, keyword("<", symbols), number], KType::BOOL)
+        );
+        assert_eq!(
+            registered("negate").shape,
+            shape(
                 &[
                     keyword("~", symbols),
                     DispatchTokenElement::Slot(types.list(KType::NUMBER))
                 ],
                 KType::NUMBER
-            ))
+            )
+        );
+        assert_eq!(
+            registered("negate").parameters,
+            ParameterBinding::Named(&[operands])
         );
     });
 }
@@ -396,14 +438,14 @@ fn parameters(body: &BodyShape<'_>) -> Vec<BinderSymbol> {
 #[test]
 fn a_bare_definition_is_typed_as_its_combined_twin_is() {
     let source = "\
-EXPR FOR ALL (Elt) (WHICH x :Elt ys :(LIST OF Elt)) -> Elt = (x)
-LET which = FN EXPR FOR ALL (Elt) (WHICH x :Elt ys :(LIST OF Elt)) -> Elt = (x)
-EXPR (TWICE x :Number) -> Number = (x)
-LET twice = FN EXPR (TWICE x :Number) -> Number = (x)
-OP #(*) OVER Number = (left)
-LET times = OP #(*) OVER Number = (left)
-UNARY OP #(~) OVER Number -> Number = (operands)
-LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
+EXPR FOR ALL #[Elt] #(WHICH x :Elt ys :(LIST OF Elt)) -> Elt = #(x)
+LET which = FN EXPR FOR ALL #[Elt] #(WHICH x :Elt ys :(LIST OF Elt)) -> Elt = #(x)
+EXPR #(TWICE x :Number) -> Number = #(x)
+LET twice = FN EXPR #(TWICE x :Number) -> Number = #(x)
+OP #(*) OVER Number = #(left)
+LET times = OP #(*) OVER Number = #(left)
+UNARY OP #(~) OVER Number -> Number = #(operands)
+LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
     with_program(source, scalars, nulls, |program| {
         let (types, scratch) = (program.types, program.scratch);
         // A bare definition has no binder, so its body is reached by the site of its last part.
@@ -421,7 +463,8 @@ LET negate = UNARY OP #(~) OVER Number -> Number = (operands)";
         };
         let callable = |body| {
             let form = BodyShape::form(body).expect("a callable body sits in a form");
-            let callable = callable_type(form, program.activation, types, scratch)
+            let registration = Some(program.registration(body));
+            let callable = callable_type(form, program.activation, types, scratch, registration)
                 .expect("the definition elaborates");
             (
                 callable.ktype,
@@ -485,12 +528,11 @@ fn sorted_bounds(types: &TypeRegistry<'_>, handle: KType) -> Vec<KType> {
 #[test]
 fn a_bounded_quantifier_carries_its_bound() {
     let source = "\
-LET Pair = :(FN FOR ALL ((Elt UNDER Value) Key) :{a :Elt b :Key c :Elt d :Key} -> Elt)
-LET Shape = :(EXPR FOR ALL ((Elt UNDER Value) Key) (PAIR a :Elt b :Key c :Elt d :Key) -> Elt)
-LET Lone = :(FN FOR ALL (Elt UNDER Value) :{x :Elt y :Elt} -> Elt)
-LET Doubled = :(FN FOR ALL ((Elt UNDER Value)) :{x :Elt y :Elt} -> Elt)
-LET Free = :(FN FOR ALL (Elt) :{x :Elt y :Elt} -> Elt)
-LET Spanning = :(FN FOR ALL (Elt UNDER :(Number | Str | Bool)) :{x :Elt y :Elt} -> Elt)";
+LET Pair = :(FN FOR ALL #{Elt: Value, Key: Any} :{a :Elt b :Key c :Elt d :Key} -> Elt)
+LET Shape = :(EXPR FOR ALL #{Elt: Value, Key: Any} #(PAIR a :Elt b :Key c :Elt d :Key) -> Elt)
+LET Lone = :(FN FOR ALL #{Elt: Value} :{x :Elt y :Elt} -> Elt)
+LET Free = :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Elt)
+LET Spanning = :(FN FOR ALL #{Elt: :(Number | Str | Bool)} :{x :Elt y :Elt} -> Elt)";
     with_program(source, with_value, nulls, |program| {
         let (types, scratch) = (program.types, program.scratch);
         let mut expected = vec![KType::ANY_VALUE, KType::ANY];
@@ -501,13 +543,8 @@ LET Spanning = :(FN FOR ALL (Elt UNDER :(Number | Str | Bool)) :{x :Elt y :Elt} 
         }
         let lone = elaborated(&program, 2).expect("the type elaborates");
         assert_eq!(sorted_bounds(types, lone), vec![KType::ANY_VALUE]);
-        assert_eq!(
-            elaborated(&program, 3),
-            Ok(lone),
-            "one bounded name, however parenthesized"
-        );
-        assert_ne!(elaborated(&program, 4), Ok(lone), "a bound is identity");
-        let spanning = elaborated(&program, 5).expect("the type elaborates");
+        assert_ne!(elaborated(&program, 3), Ok(lone), "a bound is identity");
+        let spanning = elaborated(&program, 4).expect("the type elaborates");
         assert_eq!(
             sorted_bounds(types, spanning),
             vec![types.union_of(scratch, &[KType::NUMBER, KType::STR, KType::BOOL])]
@@ -539,10 +576,9 @@ LET Disjoint = :(Number & Str)";
 #[test]
 fn a_bound_naming_a_variable_or_never_is_refused() {
     let source = "\
-LET Own = :(FN FOR ALL ((Elt UNDER Key) Key) :{x :Elt y :Key} -> Elt)
-LET Empty = :(FN FOR ALL (Elt UNDER :(Number & Str)) :{x :Elt y :Elt} -> Elt)
-LET Over = :(FN FOR ALL ((Elt OVER Value)) :{x :Number} -> Number)
-LET Nested = :(FN FOR ALL (Outer) :{f :(FN FOR ALL (Elt UNDER Outer) :{x :Elt y :Elt} -> Elt) g :Outer} -> Outer)";
+LET Own = :(FN FOR ALL #{Elt: Key, Key: Any} :{x :Elt y :Key} -> Elt)
+LET Empty = :(FN FOR ALL #{Elt: :(Number & Str)} :{x :Elt y :Elt} -> Elt)
+LET Nested = :(FN FOR ALL #[Outer] :{f :(FN FOR ALL #{Elt: Outer} :{x :Elt y :Elt} -> Elt) g :Outer} -> Outer)";
     with_program(source, with_value, nulls, |program| {
         assert!(matches!(
             elaborated(&program, 0),
@@ -556,20 +592,16 @@ LET Nested = :(FN FOR ALL (Outer) :{f :(FN FOR ALL (Elt UNDER Outer) :{x :Elt y 
             elaborated(&program, 2),
             Err(Elaboration::Unsupported { .. })
         ));
-        assert!(matches!(
-            elaborated(&program, 3),
-            Err(Elaboration::Unsupported { .. })
-        ));
     });
 }
 
 #[test]
 fn a_callable_carries_its_bounds_and_maps_a_dropped_name_to_its_bound() {
     let source = "\
-LET lambda = (FN FOR ALL (Elt UNDER Number) :{x :Elt y :Elt} -> Elt = (x))
-LET id = FN EXPR FOR ALL (Elt UNDER Number) (ID x :Elt) -> Elt = (x)
-EXPR FOR ALL (Elt UNDER Number) (TWICE x :Elt y :Elt) -> Elt = (x)
-LET which = (FN FOR ALL ((Unused UNDER Value) Held) :{x :(LIST OF Held)} -> Held = (Unused))";
+LET lambda = (FN FOR ALL #{Elt: Number} :{x :Elt y :Elt} -> Elt = #(x))
+LET id = FN EXPR FOR ALL #{Elt: Number} #(ID x :Elt) -> Elt = #(x)
+EXPR FOR ALL #{Elt: Number} #(TWICE x :Elt y :Elt) -> Elt = #(x)
+LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held = #(Unused))";
     with_program(source, with_value, nulls, |program| {
         let (types, scratch) = (program.types, program.scratch);
         let twice = program
@@ -579,13 +611,14 @@ LET which = (FN FOR ALL ((Unused UNDER Value) Held) :{x :(LIST OF Held)} -> Held
             .expect("the definition births a body");
         for body in [program.birth("lambda"), program.birth("id"), twice] {
             let form = body.form().expect("a callable body sits in a form");
-            let ktype = callable_type(form, program.activation, types, scratch)
+            let ktype = callable_type(form, program.activation, types, scratch, None)
                 .expect("it elaborates")
                 .ktype;
             assert_eq!(sorted_bounds(types, ktype), vec![KType::NUMBER]);
         }
         let form = program.birth("which").form().expect("a form");
-        let which = callable_type(form, program.activation, types, scratch).expect("it elaborates");
+        let which =
+            callable_type(form, program.activation, types, scratch, None).expect("it elaborates");
         assert_eq!(
             which.quantifier_map.to_vec(),
             vec![
@@ -598,5 +631,112 @@ LET which = (FN FOR ALL ((Unused UNDER Value) Held) :{x :(LIST OF Held)} -> Held
                 (program.type_name("Held"), Canonical::At(0)),
             ]
         );
+    });
+}
+
+#[test]
+fn a_registered_shape_takes_the_ranking_its_declaration_gives_and_the_type_spells_it() {
+    let source = "\
+EXPR #(MOVE 2 TO 1)
+LET move = FN EXPR #(MOVE x :Number TO y :Str) -> Number = #(x)
+LET ranked = :(EXPR #(MOVE 2 :Number TO 1 :Str) -> Number)
+LET scaled = :(EXPR #(MOVE 20 :Number TO 10 :Str) -> Number)
+LET written = :(EXPR #(MOVE _ :Number TO _ :Str) -> Number)";
+    with_program(source, scalars, nulls, |program| {
+        let ranked = elaborated(&program, 2).expect("a ranked head elaborates");
+        assert_eq!(elaborated(&program, 3), Ok(ranked), "`20 10` is `2 1`");
+        assert_ne!(
+            elaborated(&program, 4),
+            Ok(ranked),
+            "written order is another ranking"
+        );
+        let registered = program
+            .callable("move", true)
+            .expect("the definition elaborates")
+            .registered
+            .expect("born for its registration");
+        assert_eq!(
+            registered.shape, ranked,
+            "the definition ranks as the declaration it sees"
+        );
+        assert_eq!(
+            registered.parameters,
+            ParameterBinding::Named(&[
+                BinderSymbol::classify("x").unwrap(),
+                BinderSymbol::classify("y").unwrap()
+            ])
+        );
+    });
+}
+
+#[test]
+fn a_unary_operator_at_its_binary_key_packs_its_slots_into_operands() {
+    let source = "UNARY OP #(~) OVER Number -> Number = #(operands)";
+    with_program(source, scalars, nulls, |program| {
+        let (types, scratch, symbols) = (program.types, program.scratch, program.symbols);
+        let shape = program.activation.shape();
+        let body = &program.lines[0]
+            .parts
+            .last()
+            .expect("a definition has a body")
+            .value;
+        let body = shape.nested(Site::of(body)).expect("the body is shaped");
+        let bridge = shape
+            .registrations()
+            .iter()
+            .find(|registration| registration.which == Which::Binary)
+            .expect("a unary operator registers under a binary key too");
+        let form = body.form().expect("a callable body sits in a form");
+        let registered = callable_type(form, program.activation, types, scratch, Some(bridge))
+            .expect("the operator elaborates")
+            .registered
+            .expect("born for its registration");
+        let number = DispatchTokenElement::Slot(KType::NUMBER);
+        assert_eq!(
+            registered.shape,
+            types
+                .shape_type(
+                    scratch,
+                    &[],
+                    &[number, keyword("~", symbols), number],
+                    &[],
+                    KType::NUMBER
+                )
+                .handle
+        );
+        assert_eq!(registered.parameters, ParameterBinding::Operands);
+    });
+}
+
+#[test]
+fn a_static_callable_type_reads_builtin_names_only() {
+    let source = "\
+NEWTYPE Dist = Number
+LET near = FN EXPR #(NEAR x :Number) -> Number = #(x)
+LET far = FN EXPR #(FAR x :Dist) -> Number = #(x)";
+    with_program(source, scalars, nulls, |program| {
+        let (types, scratch) = (program.types, program.scratch);
+        let (shape, builtins) = (program.activation.shape(), program.activation.builtins());
+        let statically = |name| {
+            let body = program.birth(name);
+            let form = body.form().expect("a callable body sits in a form");
+            let registration = Some(program.registration(body));
+            static_callable_type(form, shape, builtins, types, scratch, registration).map(
+                |callable| {
+                    callable
+                        .registered
+                        .expect("born for its registration")
+                        .shape
+                },
+            )
+        };
+        let near = program
+            .callable("near", true)
+            .expect("the definition elaborates")
+            .registered
+            .expect("born for its registration")
+            .shape;
+        assert_eq!(statically("near"), Some(near));
+        assert_eq!(statically("far"), None, "`Dist` is no builtin");
     });
 }

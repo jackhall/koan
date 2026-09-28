@@ -5,14 +5,15 @@ use proptest::prelude::*;
 
 use crate::memory::{ProgramBrand, program_storage};
 use crate::parse::builtin_shapes::binder::{
-    BinderFacts, bounded_name, quantifier_entries, type_decl_binder_name,
+    BinderFacts, SlotLabel, needed_key, needing, quantifier_entries, slot_label,
+    type_decl_binder_name,
 };
 use crate::parse::builtin_shapes::{
-    BUILTIN_SHAPES, BuiltinShape, ShapeElement, builtin_shape_for, render_key,
+    BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for, render_key,
 };
-use crate::parse::{ExpressionPart, KExpression, parse};
+use crate::parse::{ExpressionPart, KExpression, KeyElement, parse};
 use crate::source::Spanned;
-use crate::symbols::{Symbol, SymbolInterner};
+use crate::symbols::{BinderSymbol, Symbol, SymbolInterner};
 
 /// Every form the table gives binder facts, with those facts beside it.
 fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
@@ -70,21 +71,21 @@ const DECLARATIONS: &[(&str, Expectation)] = &[
     // the namespace a block introduces is legible from its statement keys alone.
     ("LET {n} = (LET {p} = 3)", Expectation::Named(0)),
     (
-        "LET {n} = (EXPR (KAPOW {p} :Number) -> Number = ({p}))",
+        "LET {n} = (EXPR #(KAPOW {p} :Number) -> Number = #({p}))",
         Expectation::Named(0),
     ),
     // Each combined form fills both channels: the LET value name and the bucket key(s) the
     // declaration's body registers. `LET … = UNARY OP …` is the two-bucket maximum.
     (
-        "LET {n} = FN EXPR (KAPOW {p} :Number) -> Number = ({p})",
+        "LET {n} = FN EXPR #(KAPOW {p} :Number) -> Number = #({p})",
         Expectation::Named(1),
     ),
     (
-        "LET {n} = OP #({o}) OVER Number = (left + right)",
+        "LET {n} = OP #({o}) OVER Number = #(left + right)",
         Expectation::Named(1),
     ),
     (
-        "LET {n} = OP #({o}) OVER Number -> Bool = (left < right)",
+        "LET {n} = OP #({o}) OVER Number -> Bool = #(left < right)",
         Expectation::Named(1),
     ),
     (
@@ -92,21 +93,21 @@ const DECLARATIONS: &[(&str, Expectation)] = &[
         Expectation::Named(2),
     ),
     (
-        "EXPR (KAPOW {p} :Number) -> Number = ({p})",
+        "EXPR #(KAPOW {p} :Number) -> Number = #({p})",
         Expectation::BucketsOnly,
     ),
     (
-        "OP #({o}) OVER Number = (left + right)",
+        "OP #({o}) OVER Number = #(left + right)",
         Expectation::BucketsOnly,
     ),
     (
-        "UNARY OP #({o}) OVER Number -> Number = (0 - operands)",
+        "UNARY OP #({o}) OVER Number -> Number = #(0 - operands)",
         Expectation::BucketsOnly,
     ),
     // A `VAL` declaration records into the decl scope's collector, and the anonymous `FN :{…}`
     // signature names no bucket, so neither caches a plan.
     ("VAL {n} :Number", Expectation::NoPlan),
-    ("FN :{{p} :Number} -> Number = ({p})", Expectation::NoPlan),
+    ("FN :{{p} :Number} -> Number = #({p})", Expectation::NoPlan),
 ];
 
 /// The operator glyphs a generated declaration draws from — each keyword-class and unclaimed by the
@@ -170,12 +171,12 @@ proptest! {
 
     /// A parsed builtin form caches the table entry its key matches, and every fact the node
     /// answers off that entry is the entry's: the declared-name position is the form's
-    /// `name_slot`, the lazy stamp is the form's, and where the extractors did find a name the
-    /// token at that position **is** that name. A redundant single-`Expression` paren wrapper is
-    /// not itself a binder — the submission path reads through it to the child.
+    /// `name_slot`, and where the extractors did find a name the token at that position **is**
+    /// that name. A written single-`Expression` paren wrapper is not itself a binder — the
+    /// submission path reads through it to the child.
     ///
-    /// A key the table does not spell caches nothing at all: no entry, no plan, no name position,
-    /// and no lazy stamp, so raw capture stays available to builtin registration alone.
+    /// A key the table does not spell caches nothing at all: no entry, no plan and no name
+    /// position.
     #[test]
     fn a_parsed_form_caches_its_entry_and_a_user_key_caches_nothing(
         value_fillers in prop::collection::vec("[a-z]{2,4}", 1..4),
@@ -207,9 +208,6 @@ proptest! {
                 statement.binder_name_slot(),
                 form.binder.and_then(|binder| binder.name_slot),
             );
-            for slot in 0..statement.parts.len() {
-                prop_assert_eq!(statement.lazy_kinds_at(slot), form.lazy_kinds_at(slot));
-            }
             if let Some(name) = statement.binder_plan().and_then(|plan| plan.name) {
                 let at = statement
                     .binder_name_slot()
@@ -218,11 +216,12 @@ proptest! {
             }
 
             // The redundant wrapper carries the child's plan through, with no aggregation.
-            let wrapped = KExpression::new(
+            let wrapped = KExpression::build(
                 brand.writer(),
                 &[Spanned::bare(ExpressionPart::Expression(
-                    brand.nested_node(statement.parts),
+                    brand.nested_node(statement.parts, statement.source),
                 ))],
+                statement.source,
             );
             prop_assert!(wrapped.binder_plan().is_none());
             let ExpressionPart::Expression(child) = wrapped.parts[0].value else {
@@ -241,17 +240,15 @@ proptest! {
                 .iter()
                 .map(|name| identifier_part(name)),
         );
-        let user = KExpression::new_from_iter(
+        let user = KExpression::build_from_iter(
             brand.writer(),
             run.into_iter().map(Spanned::bare),
+            crate::tests::source(),
         );
         prop_assume!(builtin_shape_for(user.stored_key().iter().copied()).is_none());
         prop_assert!(user.cache().builtin_shape().is_none());
         prop_assert!(user.binder_plan().is_none());
         prop_assert!(user.binder_name_slot().is_none());
-        for slot in 0..user.parts.len() {
-            prop_assert!(user.lazy_kinds_at(slot).is_empty());
-        }
     }
 
     /// A declaration's parse-time plan is its own spine and nothing else: the name channel carries
@@ -302,15 +299,14 @@ proptest! {
 fn entries(group: &ExpressionPart<'_>) -> Vec<(Symbol, bool)> {
     quantifier_entries(group)
         .map(|entry| {
-            let (name, bound) = bounded_name(entry).expect("a well-formed entry");
-            (name.symbol(), bound.is_some())
+            let name = entry.name.expect("a well-formed entry");
+            (name.symbol(), entry.bound.is_some())
         })
         .collect()
 }
 
-/// A bounded `TYPE` declarator names what its declarator names, and a lone bounded `FOR ALL` name
-/// is one entry however many parentheses it is written in — a value expression peels one pair, a
-/// type expression keeps both.
+/// A bounded `TYPE` declarator names what its declarator names, and a `FOR ALL` group is a list of
+/// name quotes or a dict of name quotes to bound quotes, in a value or a type expression alike.
 #[test]
 fn a_bound_is_read_off_its_declarator() {
     let program = program_storage();
@@ -327,21 +323,135 @@ fn a_bound_is_read_off_its_declarator() {
     let group = |source: &str| entries(&parse_one(brand, source).parts[3].value);
     let (elt, key) = (Symbol::of("Elt"), Symbol::of("Key"));
     assert_eq!(
-        group("FN FOR ALL ((Elt UNDER Value) Key) :{a :Elt b :Key} -> Elt = (a)"),
-        vec![(elt, true), (key, false)]
+        group("FN FOR ALL #{Elt: Value, Key: Any} :{a :Elt b :Key} -> Elt = #(a)"),
+        vec![(elt, true), (key, true)]
     );
-    for source in [
-        "FN FOR ALL ((Elt UNDER Value)) :{a :Elt} -> Elt = (a)",
-        "FN FOR ALL (Elt UNDER Value) :{a :Elt} -> Elt = (a)",
-    ] {
-        assert_eq!(group(source), vec![(elt, true)], "{source}");
-    }
+    assert_eq!(
+        group("FN FOR ALL #[Elt Key] :{a :Elt b :Key} -> Elt = #(a)"),
+        vec![(elt, false), (key, false)]
+    );
     let typed = parse_one(
         brand,
-        "LET t = :(FN FOR ALL ((Elt UNDER Value)) :{a :Elt} -> Elt)",
+        "LET t = :(FN FOR ALL #{Elt: Value} :{a :Elt} -> Elt)",
     );
     let ExpressionPart::SigiledTypeExpr(node) = typed.parts[3].value else {
         panic!("a sigiled type expression");
     };
     assert_eq!(entries(&node.reference().parts[3].value), vec![(elt, true)]);
+}
+
+// ---------- rankings ----------
+
+/// A bucket declaration is an `EXPR` of one head quote, whatever its slots write — integers, `_`,
+/// or both — and it installs nothing.
+#[test]
+fn a_bucket_declaration_is_its_own_shape() {
+    let program = program_storage();
+    for source in [
+        "EXPR #(MOVE 2 TO 1)",
+        "EXPR #(MOVE _ TO 1)",
+        "EXPR #(MOVE _)",
+    ] {
+        let statement = parse_one(program.brand(), source);
+        let shape = statement.cache().builtin_shape().expect("a builtin shape");
+        assert_eq!(shape.id, BuiltinShapeId::BucketDeclaration, "{source}");
+        assert!(statement.binder_plan().is_none(), "{source}");
+    }
+}
+
+/// A rank in a slot's name position labels a slot, so a definition head writing one keys the
+/// bucket its unranked twin keys; the shape builder refuses it there.
+#[test]
+fn a_ranked_head_keys_as_its_unranked_twin() {
+    let program = program_storage();
+    let key = |source: &str| {
+        let statement = parse_one(program.brand(), source);
+        let plan = statement.binder_plan().expect("a definition is a binder");
+        plan.buckets.expect("a definition registers").first.to_vec()
+    };
+    let ranked = key("EXPR #(MOVE 2 :Number TO 1 :Number) -> Number = #(1)");
+    assert_eq!(
+        ranked,
+        key("EXPR #(MOVE a :Number TO b :Number) -> Number = #(1)")
+    );
+    assert_eq!(
+        ranked,
+        key("EXPR #(MOVE _ :Number TO 1 :Number) -> Number = #(1)")
+    );
+}
+
+/// A slot's label is a name, `_`, or a whole number that fits a rank; anything else labels no slot.
+#[test]
+fn a_slot_label_is_a_name_a_wildcard_or_a_rank() {
+    let program = program_storage();
+    let statement = parse_one(program.brand(), "f x _ 2 20 2.5 -1 MOVE 'a'");
+    let labels: Vec<_> = statement
+        .parts
+        .iter()
+        .map(|part| slot_label(&part.value))
+        .collect();
+    let x = crate::symbols::ValueSymbol::classify("x").expect("a value token");
+    let f = crate::symbols::ValueSymbol::classify("f").expect("a value token");
+    assert_eq!(
+        labels,
+        [
+            Some(SlotLabel::Named(BinderSymbol::Value(f))),
+            Some(SlotLabel::Named(BinderSymbol::Value(x))),
+            Some(SlotLabel::Wildcard),
+            Some(SlotLabel::Ranked(2)),
+            Some(SlotLabel::Ranked(20)),
+            None,
+            None,
+            None,
+            None,
+        ]
+    );
+}
+
+/// A `NEEDING` list names a bucket key by a group of keywords and `_`: its key is the run a call
+/// spelling it computes, and the parse records its spelling for a type that names it.
+#[test]
+fn a_needed_key_is_the_run_it_spells() {
+    let program = program_storage();
+    let symbols = SymbolInterner::new();
+    let source =
+        "LET f = FN (run :(Block NEEDING #[y (LOG _) (_ SEND _ TO _) (_) (LOG x)])) -> Any = #(1)";
+    let statements = parse(program.brand(), &symbols, source).expect("the source parses");
+    let needing = find_needing(&statements[0]).expect("the source writes a NEEDING list");
+    let log = crate::symbols::KeywordSymbol::of("LOG").expect("a keyword token");
+    let send = crate::symbols::KeywordSymbol::of("SEND").expect("a keyword token");
+    let to = crate::symbols::KeywordSymbol::of("TO").expect("a keyword token");
+    let keys: Vec<Option<Vec<KeyElement>>> = needing
+        .iter()
+        .map(|quote| needed_key(quote).map(Iterator::collect))
+        .collect();
+    use KeyElement::{Keyword, Slot};
+    assert_eq!(
+        keys,
+        [
+            None,
+            Some(vec![Keyword(log), Slot]),
+            Some(vec![Slot, Keyword(send), Slot, Keyword(to), Slot]),
+            None,
+            None,
+        ]
+    );
+    let log_key = KeyElement::key([Keyword(log), Slot]);
+    assert_eq!(symbols.render(log_key.symbol()), "LOG _");
+    let send_key = KeyElement::key([Slot, Keyword(send), Slot, Keyword(to), Slot]);
+    assert_eq!(symbols.render(send_key.symbol()), "_ SEND _ TO _");
+}
+
+/// The quotes of the first `<kind> NEEDING #[…]` run nested anywhere in `node`.
+fn find_needing<'a>(node: &KExpression<'a>) -> Option<&'a [ExpressionPart<'a>]> {
+    if let Some((_, quotes)) = needing(node) {
+        return Some(quotes);
+    }
+    node.parts.iter().find_map(|part| match part.value {
+        ExpressionPart::Expression(child)
+        | ExpressionPart::SigiledTypeExpr(child)
+        | ExpressionPart::RecordType(child)
+        | ExpressionPart::QuotedExpression(child) => find_needing(child.reference()),
+        _ => None,
+    })
 }

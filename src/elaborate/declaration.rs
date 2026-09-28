@@ -12,20 +12,20 @@
 use crate::memory::{BumpAllocator, BumpVec, ScopeId};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::builtin_shapes::binder::{
-    bounded, declarator_parameters, symbol_from_quote_body,
+    bounded, declarator_parameters, quoted_body, quoted_part, symbol_from_quote_body,
 };
 use crate::parse::builtin_shapes::role::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{ActivationView, BuiltinGroup, Component, Site, is_equality};
+use crate::scope::{BuiltinGroup, Component, Site, is_equality};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, FoldDirection, KKind, KType, RecursiveGroupWindow, ReductionMode,
     RelativeSchema, SchemaDraft, TypeRegistry,
 };
-use crate::values::KnottedFamily;
 
 use super::Elaboration;
 use super::expression::{Elaborator, Fellow, Groups};
+use super::reads::Reads;
 use super::signature::operator_shape;
 
 /// One `KType` per member of `component`, in member order: a `NEWTYPE`'s newtype over its
@@ -39,9 +39,9 @@ use super::signature::operator_shape;
 /// does, naming the site, and writes nothing: the window, its member list and every staged run
 /// live in `scratch`, and the only durable write is the registry intern, which is content-
 /// addressed and idempotent.
-pub fn type_declarations<'graph, 'x, XF: KnottedFamily<'graph>>(
+pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
     component: &Component<'graph>,
-    reader: &ActivationView<'graph, '_, XF>,
+    reader: &R,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<&'x [KType], Elaboration> {
@@ -226,7 +226,7 @@ enum Declared<'graph, 'x> {
     NewType {
         repr: &'graph ExpressionPart<'graph>,
     },
-    /// `UNION <Name> = (<Tag> :<payload> …)`: one window member per variant, the binder itself
+    /// `UNION <Name> = #{<Tag>: <payload>, …}`: one window member per variant, the binder itself
     /// denoting their union. `UNION (<P>… AS <Name>) = …` declares `params`, symbol-sorted, and
     /// makes each variant a family over them; a bare name declares none.
     Union {
@@ -317,9 +317,9 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
     }
 
     /// The handle of a member declared alone, outside any window.
-    fn standalone<XF: KnottedFamily<'graph>>(
+    fn standalone<R: Reads<'graph> + ?Sized>(
         &self,
-        reader: &ActivationView<'graph, '_, XF>,
+        reader: &R,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<KType, Elaboration> {
@@ -338,28 +338,27 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
     }
 }
 
-/// A `UNION`'s `(<Tag> :<payload> …)` run as tag/payload pairs, in written order: the tags sit at
-/// the even indices, exactly as the shape builder skips them.
+/// A `UNION`'s `#{<Tag>: <payload>, …}` dict as tag/payload pairs, in written order: each key quotes
+/// a tag and each value the payload's type code. A repeated tag, or none, is refused.
 fn variants<'graph, 'x>(
     part: &'graph ExpressionPart<'graph>,
     scratch: BumpAllocator<'x>,
 ) -> Option<&'x [(TypeSymbol, &'graph ExpressionPart<'graph>)]> {
-    let ExpressionPart::Expression(run) = part else {
+    let ExpressionPart::DictLiteral(written) = part else {
         return None;
     };
-    let run = run.reference();
-    if run.parts.is_empty() || !run.parts.len().is_multiple_of(2) {
+    if written.is_empty() {
         return None;
     }
-    let mut pairs = BumpVec::with_capacity_in(run.parts.len() / 2, scratch);
-    for pair in run.parts.chunks_exact(2) {
-        let ExpressionPart::Type(tag) = pair[0].value else {
+    let mut pairs = BumpVec::with_capacity_in(written.len(), scratch);
+    for (tag, payload) in written.iter() {
+        let ExpressionPart::Type(tag) = *quoted_part(tag)? else {
             return None;
         };
         if pairs.iter().any(|(seen, _)| *seen == tag) {
             return None;
         }
-        pairs.push((tag, &pair[1].value));
+        pairs.push((tag, quoted_part(payload)?));
     }
     Some(pairs.leak())
 }
@@ -398,13 +397,13 @@ fn last_type_name(part: &ExpressionPart<'_>) -> Option<TypeSymbol> {
 /// local table rather than through a mention, since the shape declared them in the definition. A
 /// bodyless `EXPR`, `OP` or `UNARY OP` head is a keyworded member; a bodyless `GROUP` is the
 /// operator channel's and is refused here.
-fn signature_type<'graph, XF: KnottedFamily<'graph>>(
-    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, XF>,
+fn signature_type<'graph, R: Reads<'graph> + ?Sized>(
+    elaborator: &Elaborator<'_, '_, '_, R>,
     body: &'graph ExpressionPart<'graph>,
     site: Site,
 ) -> Result<KType, Elaboration> {
     let unsupported = Elaboration::Unsupported { site };
-    let ExpressionPart::Expression(body) = body else {
+    let ExpressionPart::ListLiteral(body) = body else {
         return Err(unsupported);
     };
     let scratch = elaborator.scratch;
@@ -419,8 +418,8 @@ fn signature_type<'graph, XF: KnottedFamily<'graph>>(
     let mut groups: BumpVec<'_, DeclaredGroup<'_>> = BumpVec::new_in(scratch);
     let mut returning: BumpVec<'_, (KeywordSymbol, Site)> = BumpVec::new_in(scratch);
 
-    for (statement, _) in body.reference().body_statements() {
-        let node = statement.statement_spine();
+    for member in body.iter() {
+        let node = quoted_body(member).ok_or(unsupported)?.statement_spine();
         let member = Elaborator {
             reader: elaborator.reader,
             types,
@@ -432,21 +431,17 @@ fn signature_type<'graph, XF: KnottedFamily<'graph>>(
         let unsupported = Elaboration::Unsupported { site };
         let form = node.cache().builtin_shape().ok_or(unsupported)?;
         let mut name_part = None;
-        let mut label = None;
         let mut rhs = None;
         let mut data = None;
-        let mut argument = None;
         let mut definition = None;
         let mut type_parts = [None; 2];
         let mut type_count = 0;
         for (role, part) in form.roles().zip(node.parts) {
             match role {
                 Role::Name => name_part = Some(&part.value),
-                Role::Label => label = Some(&part.value),
                 Role::Rhs => rhs = Some(&part.value),
                 Role::Data => data = Some(&part.value),
-                Role::Argument => argument = Some(&part.value),
-                Role::Definition(DefinitionKind::Plain) => definition = Some(&part.value),
+                Role::Definition(DefinitionKind::Members) => definition = Some(&part.value),
                 Role::TypeExpression => {
                     type_parts[type_count] = Some(&part.value);
                     type_count += 1;
@@ -490,7 +485,7 @@ fn signature_type<'graph, XF: KnottedFamily<'graph>>(
                 locals.push((*name, handle));
             }
             BuiltinShapeId::Val => {
-                let ExpressionPart::Identifier(name) = label.ok_or(unsupported)? else {
+                let ExpressionPart::Identifier(name) = name_part.ok_or(unsupported)? else {
                     return Err(unsupported);
                 };
                 let handle = member.part(type_parts[0].ok_or(unsupported)?, &TOP)?;
@@ -521,7 +516,7 @@ fn signature_type<'graph, XF: KnottedFamily<'graph>>(
             | BuiltinShapeId::GroupHeadFoldRight
             | BuiltinShapeId::GroupHeadPairwiseFoldLeft
             | BuiltinShapeId::GroupHeadPairwiseFoldRight => {
-                let mode = group_mode(form.id, argument).ok_or(unsupported)?;
+                let mode = group_mode(form.id, data).ok_or(unsupported)?;
                 let members = group_members(
                     &member,
                     definition.ok_or(unsupported)?,
@@ -576,14 +571,14 @@ fn signature_type<'graph, XF: KnottedFamily<'graph>>(
 /// pairwise head — the combiner it quotes.
 fn group_mode(
     form: BuiltinShapeId,
-    argument: Option<&ExpressionPart<'_>>,
+    combiner: Option<&ExpressionPart<'_>>,
 ) -> Option<ReductionMode> {
     match form {
         BuiltinShapeId::GroupHeadFoldLeft => Some(ReductionMode::FoldLeft),
         BuiltinShapeId::GroupHeadFoldRight => Some(ReductionMode::FoldRight),
         BuiltinShapeId::GroupHeadPairwiseFoldLeft | BuiltinShapeId::GroupHeadPairwiseFoldRight => {
             Some(ReductionMode::Pairwise {
-                combiner: quoted_operator(argument?)?,
+                combiner: quoted_operator(combiner?)?,
                 direction: match form {
                     BuiltinShapeId::GroupHeadPairwiseFoldLeft => FoldDirection::Left,
                     _ => FoldDirection::Right,
@@ -597,8 +592,8 @@ fn group_mode(
 /// The members a bodyless `GROUP` head declares, each head's shape pushed as a keyworded member as
 /// it is read. A group's body is binary operator heads and nothing else, and a head stating a
 /// result of its own belongs only to a pairwise group.
-fn group_members<'graph, 'x, XF: KnottedFamily<'graph>>(
-    elaborator: &Elaborator<'_, '_, 'graph, '_, '_, XF>,
+fn group_members<'graph, 'x, R: Reads<'graph> + ?Sized>(
+    elaborator: &Elaborator<'_, '_, '_, R>,
     definition: &'graph ExpressionPart<'graph>,
     mode: ReductionMode,
     draft: &mut SchemaDraft<'x>,
@@ -607,12 +602,12 @@ fn group_members<'graph, 'x, XF: KnottedFamily<'graph>>(
     let unsupported = Elaboration::Unsupported {
         site: Site::of(definition),
     };
-    let ExpressionPart::Expression(body) = definition else {
+    let ExpressionPart::ListLiteral(heads) = definition else {
         return Err(unsupported);
     };
     let mut members: BumpVec<'x, KeywordSymbol> = BumpVec::new_in(scratch);
-    for (statement, _) in body.reference().body_statements() {
-        let head = statement.statement_spine();
+    for head in heads.iter() {
+        let head = quoted_body(head).ok_or(unsupported)?.statement_spine();
         let form = head.cache().builtin_shape().ok_or(unsupported)?;
         let returns = match form.id {
             BuiltinShapeId::OperatorHead => false,

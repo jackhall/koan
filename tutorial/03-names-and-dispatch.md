@@ -23,16 +23,15 @@ PRINT copy
 A declaration may appear only at **statement position**: a line of a program, or
 a line of a body that is evaluated later — a function, module, or group body.
 Anywhere that is evaluated eagerly — a call argument, a list or dict element, an
-operator operand, another declaration's value slot — a declaration is a
-structured error:
+operator operand, another declaration's value slot — a declaration is an
+error:
 
 ```koan
 PRINT (LET doubled = 42)
 ```
 
 ```text
-error: binder declaration in an eagerly evaluated sub-expression `LET doubled = Number`; a binder must be a statement or a lazily-captured body
-  in PRINT <staged> (<bind>) at <input>:1:1
+error: <input>:1:7: a binding must be its statement's own expression, not a part of one
 ```
 
 ### Names are lexical
@@ -47,7 +46,7 @@ PRINT y
 ```
 
 ```text
-error: unbound name 'x'
+error: <input>:1:9: `x` names no binding visible here
 ```
 
 Put the binding first and the reference resolves:
@@ -70,7 +69,7 @@ LET total = 2
 ```
 
 ```text
-error: name 'total' is declared twice in this block, by statement 1 and statement 2; a binding is bind-once
+error: <input>:2:1: `total` is bound twice; first at <input>:1:1
 ```
 
 A nested scope — a function body, for instance — may *shadow* an outer name
@@ -83,11 +82,10 @@ differently:
 - **Function bodies** are re-resolved every time the function is called, not
   when it's defined. So sibling functions can call each other regardless of the
   order they're written in — mutual recursion just works.
-- **A type can refer to itself.** A union or record type may name itself in its
-  own definition (a list whose tail is another list, say). Two *different* types
-  that refer to each other are declared together inside a
-  [module](08-newtypes.md#mutually-recursive-types), whose body announces its type
-  declarations before it runs them.
+- **Types may name each other in any order.** A union or record type may name
+  itself in its own definition (a list whose tail is another list, say), and
+  [two types may name each other](08-newtypes.md#mutually-recursive-types), since
+  a body's type declarations are all announced before any of them runs.
 
 ## Token classes
 
@@ -136,8 +134,8 @@ Because matching is by shape, two functions can share keywords as long as their
 slots differ by type. Koan routes each call to the most specific match:
 
 ```koan
-EXPR (DESCRIBE x :Number) -> Str = ("a number")
-EXPR (DESCRIBE x :Str) -> Str = ("a string")
+EXPR #(DESCRIBE x :Number) -> Str = #("a number")
+EXPR #(DESCRIBE x :Str) -> Str = #("a string")
 PRINT (DESCRIBE 7)
 PRINT (DESCRIBE "hi")
 ```

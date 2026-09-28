@@ -25,8 +25,8 @@ representation. A slot typed `Number` rejects a `Distance`, and a slot typed
 
 ```koan
 NEWTYPE Distance = Number
-EXPR (SHOW x :Number) -> Str = ("a plain number")
-EXPR (SHOW x :Distance) -> Str = ("a distance")
+EXPR #(SHOW x :Number) -> Str = #("a plain number")
+EXPR #(SHOW x :Distance) -> Str = #("a distance")
 PRINT (SHOW 3.0)
 PRINT (SHOW (Distance 3.0))
 ```
@@ -47,7 +47,7 @@ Distance "far"
 ```
 
 ```text
-error: type mismatch for argument 'value': expected Number, got Str
+error: Distance cannot wrap Str: its representation is Number
 ```
 
 ## Wrapping other types
@@ -79,11 +79,8 @@ b.z
 ```
 
 ```text
-error: shape error: `Boxed` has no field `z`
+error: Boxed has no field z
 ```
-
-Wrapping a newtype in another newtype collapses to a single layer — however many
-times you wrap a value, the representation sits exactly one wrapper deep.
 
 ## Naming a field's type
 
@@ -94,7 +91,7 @@ restating it:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Str}
-EXPR (LABEL v :(Point.y)) -> Str = (v)
+EXPR #(LABEL v :(Point.y)) -> Str = #(v)
 PRINT (LABEL "north")
 ```
 
@@ -108,66 +105,43 @@ where a field is itself record-shaped — `:(Outer.inner.x)` — and works throu
 alias of the type name. Like field access on a value, it falls through a wrapping
 newtype: with `NEWTYPE Boxed = Point`, `:(Boxed.x)` is `Point`'s `x`.
 
-The sigil is not optional here. `x` and `y` are lowercase names, and a lowercase
-name never means a type in an ordinary expression — so the bare spelling asks for
-a *value* called `y`, and a record field is a declaration rather than a value. The
-error says exactly that, and points at the spelling that works:
+The sigil is optional, though: reading a field off a type, as off any other
+value, gives the type its record declares the field with. So `v :Point.y` is the
+same slot, and the read runs anywhere a value does:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Str}
-Point.y
+PRINT Point.y
 ```
 
 ```text
-error: shape error: type `Point` declares `y` as a record field, which names no value here — write `:(Point.y)` to name its declared type
+Str
 ```
 
-Uppercase members need no sigil, because an uppercase name already means a type:
-`Maybe.Some` names a union variant bare, and `:(Maybe.Some)` names the same thing.
+Uppercase members read the same way: `Maybe.Some` names a union variant bare, and
+`:(Maybe.Some)` names the same thing.
 
 ## Mutually recursive types
 
 A type may refer to itself directly — a union whose variant payload is the union
-itself, for instance. But two *different* types that refer to each other can't
-be declared one after another at the top level, because the first can't name the
-second before it exists. Declare them inside a module: a module body announces
-its type declarations before it runs any of them, so every one is in scope for
-every other regardless of order.
+itself, for instance — and two different types may refer to each other. A body
+announces its type declarations before it runs any of them, so every one is in
+scope for every other regardless of order:
 
 ```koan
-MODULE listy = (
-  NEWTYPE Cell = :{head :Number, tail :Rest}
-  NEWTYPE Rest = :{next :(Cell | Null)}
-)
-USING listy SCOPE (
-  LET empty = (Rest {next = null})
-  LET one = (Cell {head = 1, tail = empty})
-  LET chain = (Rest {next = one})
-  PRINT chain
-)
+NEWTYPE Cell = :{head :Number, tail :Rest}
+NEWTYPE Rest = :{next :(Cell | Null)}
+LET empty = (Rest {next = null})
+LET one = (Cell {head = 1, tail = empty})
+LET chain = (Rest {next = one})
+PRINT chain
 ```
 
 ```text
 Rest({next = Cell({head = 1, tail = Rest({next = null})})})
 ```
 
-Here `Cell` names `Rest` and `Rest` names `Cell` — each definition mentions the
-other. Each declaration is one statement of the module body, indented under the
-opening line. `USING listy SCOPE (…)` opens the module so its type names are
-reachable bare; outside such a window they are `listy`'s members.
-
-A mutually recursive group needs the module wrapper. At the program's own top
-level the same two declarations are an ordinary forward reference, and koan says
-exactly that where `Cell` names `Rest` — naming the late declaration and the
-spelling that fixes it:
-
-```koan
-NEWTYPE Cell = :{head :Number, tail :Rest}
-NEWTYPE Rest = :{next :(Cell | Null)}
-```
-
-```text
-error: `Rest` is used in NEWTYPE record repr for `tail` before being declared — move the declaration earlier, or group mutually recursive types in a MODULE body
-```
+Here `Cell` names `Rest` before `Rest` is declared, and `Rest` names `Cell` — each
+definition mentions the other.
 
 Next: [Errors](09-errors.md).

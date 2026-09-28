@@ -22,12 +22,11 @@
 use std::ops::Deref;
 
 use crate::memory::{Covariant, SlotArray, SlotConflict, SlotView, Writer};
-use crate::symbols::BinderSymbol;
 use crate::values::{Knotted, KnottedFamily, Link, NoKnot, Value, ValueFamily};
 
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
-use super::shape::{BodyShape, Coordinate, Position, ShapeKind, Slot, Target};
+use super::shape::{BodyShape, Coordinate, ShapeKind, Slot, Target};
 
 /// The read half of one body's bindings for one call or one block entry: what an evaluation is
 /// handed. Covariant in `'cell`, and without a door that binds a slot.
@@ -47,7 +46,7 @@ use super::shape::{BodyShape, Coordinate, Position, ShapeKind, Slot, Target};
 /// use koan::scope::{ActivationView, Coordinate};
 /// use koan::values::Value;
 ///
-/// fn read<'graph, 'cell>(view: ActivationView<'graph, 'cell>, at: Coordinate) -> Value<'graph, 'cell> {
+/// fn read<'graph, 'cell>(view: ActivationView<'graph, 'cell>, at: Coordinate) -> Value<'cell> {
 ///     view.read(at)
 /// }
 /// ```
@@ -64,8 +63,8 @@ pub struct ActivationView<
     'graph: 'cell,
 {
     shape: &'graph BodyShape<'graph>,
-    closure: &'cell ClosureBindings<'graph, 'cell, X>,
-    builtins: &'cell Builtins<'graph, 'cell, X>,
+    closure: &'cell ClosureBindings<'cell, X>,
+    builtins: &'cell Builtins<'cell, X>,
     enclosing: Option<&'cell ActivationView<'graph, 'cell, XF, X>>,
     /// The knot member this activation runs: `Some` for a callable's activation and every block
     /// inside one, `None` for the program's, a module's, and every block inside those. An edge
@@ -87,8 +86,8 @@ impl<'graph, XF: KnottedFamily<'graph>, X: Copy> Copy for ActivationView<'graph,
 /// Invariant in `'cell`, since it binds; it reads as its view through `Deref`.
 ///
 /// Each kind has its own constructor: a program has neither closure bindings nor an enclosing
-/// activation, a callable and a module each have closure bindings, and a block has an enclosing
-/// activation whose builtin table it shares.
+/// activation, a callable, a module and a quote's code each have closure bindings, and a block has
+/// an enclosing activation whose builtin table it shares.
 pub struct Activation<'graph, 'cell, XF: KnottedFamily<'graph> = NoKnot>
 where
     'graph: 'cell,
@@ -124,8 +123,8 @@ where
     fn laid_down(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
-        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
-        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
         enclosing: Option<&'cell ActivationView<'graph, 'cell, XF>>,
         callable: Option<XF::Closed<'cell>>,
     ) -> Self {
@@ -147,7 +146,7 @@ where
     pub fn of_program(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
-        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Program);
         Self::laid_down(
@@ -166,8 +165,8 @@ where
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
         callable: XF::Closed<'cell>,
-        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
-        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Callable);
         debug_assert_eq!(
@@ -184,8 +183,8 @@ where
     pub fn of_module(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
-        closure: &'cell ClosureBindings<'graph, 'cell, XF::Closed<'cell>>,
-        builtins: &'cell Builtins<'graph, 'cell, XF::Closed<'cell>>,
+        closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Module);
         debug_assert_eq!(
@@ -196,11 +195,32 @@ where
         Self::laid_down(writer, shape, closure, builtins, None, None)
     }
 
-    /// A fresh activation of the block shape `shape` beside `enclosing`, every slot empty.
+    /// A fresh activation of the code shape `shape` over its closure bindings — its `$` names, its
+    /// supplied holes and its offered names, in capture order — every slot empty. Like a module's,
+    /// it runs no knot member and reads through no enclosing activation: code reaches nothing the
+    /// `EVAL` running it does not hand it.
+    pub fn of_code(
+        writer: Writer<'cell>,
+        shape: &'graph BodyShape<'graph>,
+        closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
+    ) -> Self {
+        debug_assert_eq!(shape.kind(), ShapeKind::Code);
+        debug_assert_eq!(
+            closure.len(),
+            shape.captures().len(),
+            "the closure bindings follow the shape's capture layout",
+        );
+        Self::laid_down(writer, shape, closure, builtins, None, None)
+    }
+
+    /// A fresh activation of the block shape `shape` beside the resident view `enclosing`, every
+    /// slot empty. A view is all it needs, so an evaluation holding only a view can lay a block
+    /// down.
     pub fn of_block(
         writer: Writer<'cell>,
         shape: &'graph BodyShape<'graph>,
-        enclosing: &'cell Activation<'graph, 'cell, XF>,
+        enclosing: &'cell ActivationView<'graph, 'cell, XF>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Block);
         Self::laid_down(
@@ -208,7 +228,7 @@ where
             shape,
             ClosureBindings::empty(),
             enclosing.builtins,
-            Some(&enclosing.view),
+            Some(enclosing),
             enclosing.callable,
         )
     }
@@ -224,7 +244,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> Activation<'graph, 'cell, XF> {
     pub fn bind(
         &self,
         slot: Slot,
-        value: Value<'graph, 'cell, XF::Closed<'cell>>,
+        value: Value<'cell, XF::Closed<'cell>>,
     ) -> Result<(), SlotConflict> {
         self.slots.bind(slot.index(), value)
     }
@@ -235,7 +255,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
         self.shape
     }
 
-    pub fn builtins(&self) -> &'cell Builtins<'graph, 'cell, XF::Closed<'cell>> {
+    pub fn builtins(&self) -> &'cell Builtins<'cell, XF::Closed<'cell>> {
         self.builtins
     }
 
@@ -248,7 +268,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
     /// [`read`](ActivationView::read) does: a body is read whole only once its every unit has run.
     pub fn slots(
         &self,
-    ) -> impl ExactSizeIterator<Item = (Slot, Value<'graph, 'cell, XF::Closed<'cell>>)> + '_ {
+    ) -> impl ExactSizeIterator<Item = (Slot, Value<'cell, XF::Closed<'cell>>)> + '_ {
         (0..self.shape.slots()).map(|index| {
             let value = self.slots.get(index).expect(
                 "a slot read out of an activation is never empty: every unit of the body has run",
@@ -261,8 +281,8 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
     /// then one slot or capture. A capture that is an edge reads as the sibling member it names.
     ///
     /// Panics on an empty slot: the shape orders a body's units so every binder runs before its
-    /// readers and before every `EVAL` that sees it, so an empty slot here is a scheduler bug.
-    pub fn read(&self, at: Coordinate) -> Value<'graph, 'cell, XF::Closed<'cell>> {
+    /// readers, so an empty slot here is a scheduler bug.
+    pub fn read(&self, at: Coordinate) -> Value<'cell, XF::Closed<'cell>> {
         let (hops, target) = match at {
             Coordinate::Builtin(index) => return self.builtins.get(index),
             Coordinate::Activation { hops, target } => (hops, target),
@@ -287,25 +307,5 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
                 ),
             },
         }
-    }
-
-    /// Where `name` read at `at` lands, found by name: a builtin, a local visible at `at`, a capture,
-    /// then each enclosing block activation at the position its block was entered at.
-    pub fn coordinate_of(&self, name: BinderSymbol, at: Position) -> Option<Coordinate> {
-        if let Some(index) = self.builtins.lookup(name) {
-            return Some(Coordinate::Builtin(index));
-        }
-        self.through_chain(name, at)
-    }
-
-    /// [`coordinate_of`](Self::coordinate_of) for a name already known not to be a builtin.
-    pub(super) fn through_chain(&self, name: BinderSymbol, at: Position) -> Option<Coordinate> {
-        if let Some(target) = self.shape.resolve_here(name, at) {
-            return Some(Coordinate::Activation { hops: 0, target });
-        }
-        let outer = self
-            .enclosing?
-            .through_chain(name, self.shape.entered_at())?;
-        Some(outer.through_block())
     }
 }

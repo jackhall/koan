@@ -52,7 +52,7 @@ fn live_registrations(run: &TestRun<'_>) -> Vec<LiveBucket> {
 /// nothing raw. The runtime's own type handle, so this is `lazy.rs`'s derivation restated over it.
 fn exact_kind_of(ktype: KType) -> Option<LazyKinds> {
     match ktype {
-        KType::KEXPRESSION => Some(LazyKinds::CODE),
+        KType::EXPRESSION => Some(LazyKinds::CODE),
         KType::SIGILED_TYPE_EXPR => Some(LazyKinds::TYPE_EXPR),
         KType::RECORD_TYPE => Some(LazyKinds::RECORD_TYPE),
         _ => None,
@@ -187,7 +187,7 @@ fn the_form_table_matches_the_live_registrations() {
             assert!(
                 !slot_types
                     .iter()
-                    .any(|ktype| ktype.union_has_member(KType::KEXPRESSION, types)),
+                    .any(|ktype| ktype.union_has_member(KType::EXPRESSION, types)),
                 "form key {:?} masks slot {index}, which some registration reads as code",
                 render_key(form.elements)
             );

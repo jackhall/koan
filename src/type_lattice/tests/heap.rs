@@ -78,6 +78,7 @@ fn interning_and_relations_touch_no_heap() {
             scratch,
             &[elt],
             &[Keyword(pure), Slot(variable), Slot(variable)],
+            &[],
             variable,
         )
         .handle;
@@ -86,6 +87,7 @@ fn interning_and_relations_touch_no_heap() {
             scratch,
             &[],
             &[Keyword(pure), Slot(KType::NUMBER), Slot(KType::NUMBER)],
+            &[],
             KType::NUMBER,
         )
         .handle;
@@ -98,6 +100,7 @@ fn interning_and_relations_touch_no_heap() {
             scratch,
             &[],
             &[Slot(member), Keyword(plus), Slot(member)],
+            &[],
             member,
         )
         .handle;
@@ -120,6 +123,7 @@ fn interning_and_relations_touch_no_heap() {
             scratch,
             &[],
             &[Keyword(pure), Slot(KType::NUMBER)],
+            &[],
             KType::NUMBER,
         )
         .handle;
@@ -128,6 +132,7 @@ fn interning_and_relations_touch_no_heap() {
             scratch,
             &[],
             &[Keyword(pure), Slot(KType::STR)],
+            &[],
             KType::NUMBER,
         )
         .handle;

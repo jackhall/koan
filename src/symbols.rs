@@ -88,7 +88,7 @@ impl SymbolInterner {
     }
 
     /// Record `text` under `symbol`, the digest the caller already holds. The one write door the
-    /// three public ones funnel through: a caller that classified the text has minted its digest
+    /// public ones funnel through: a caller that classified the text has minted its digest
     /// already, so the recording costs a map lookup and no second hash.
     fn record_text(&self, symbol: Symbol, text: &str) {
         let mut texts = self.texts.borrow_mut();
@@ -333,18 +333,24 @@ impl Borrow<Symbol> for TypeSymbol {
     }
 }
 
-/// A **bindable** name: the two classes a declaration can actually install under. Keywords are
-/// fixed syntax and bind to nothing, so they are not a variant — [`declared`](Self::declared) of
-/// keyword text is `None`.
+/// A **bindable** name: the two classes a declaration can install under by name, and the
+/// registration a keyworded definition installs under its bucket key. Keywords are fixed syntax and
+/// bind to nothing, so they are not a variant — [`declared`](Self::declared) of keyword text is
+/// `None`.
 ///
-/// This is the currency of a seam that accepts either class and routes on the answer: an FN
-/// parameter name, a placeholder install, a member probe. The variant *is* the
-/// [`BindKind`], so a site carrying one threads no separate kind
-/// tag beside the name.
+/// This is the currency of a seam that accepts any class and routes on the answer: an FN
+/// parameter name, a slot of a body's shape, a capture. The variant is the channel, so a site
+/// carrying one threads no separate kind tag beside the name.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub enum BinderSymbol {
     Value(ValueSymbol),
     Type(TypeSymbol),
+    /// A registration slot, which no text spells: a keyworded use reaches it through its bucket
+    /// key.
+    Registration(RegistrationSymbol),
+    /// A bucket key named where a name could be: a keyworded hole or `\` mark of a quote's code,
+    /// or a key a `NEEDING` list or an `EVAL` offers. No binder declares one.
+    Key(KeySymbol),
 }
 
 impl BinderSymbol {
@@ -372,15 +378,115 @@ impl BinderSymbol {
         match self {
             BinderSymbol::Value(name) => name.symbol(),
             BinderSymbol::Type(name) => name.symbol(),
+            BinderSymbol::Registration(registration) => registration.symbol(),
+            BinderSymbol::Key(key) => key.symbol(),
         }
     }
 
-    /// Which side of the value/type partition this name binds on.
+    /// Which side of the value/type partition this name binds on. A registration binds a function,
+    /// and a key the list of functions filling it, which are values.
     pub fn bind_kind(self) -> BindKind {
         match self {
-            BinderSymbol::Value(_) => BindKind::Value,
+            BinderSymbol::Value(_) | BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
+                BindKind::Value
+            }
             BinderSymbol::Type(_) => BindKind::Type,
         }
+    }
+}
+
+/// One registration's identity: the slot a keyworded definition's function is bound to, under one
+/// of its bucket keys. No text spells it, and it is distinct on any chain of enclosing bodies: it
+/// digests the key, the depth of the body declaring it, the statement's position there, and which
+/// of the statement's keys it is. A diagnostic names the key, never this.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct RegistrationSymbol(Symbol);
+
+impl RegistrationSymbol {
+    /// The registration under `key` that the statement at `position` of a body `depth` bodies deep
+    /// declares as its key number `which`.
+    pub fn of(key: KeySymbol, depth: u32, position: u32, which: u8) -> RegistrationSymbol {
+        let mut hasher = blake3::Hasher::new();
+        hasher
+            .update(b"registration")
+            .update(&key.symbol().0.to_le_bytes())
+            .update(&depth.to_le_bytes())
+            .update(&position.to_le_bytes())
+            .update(&[which]);
+        RegistrationSymbol(Symbol::of_hash(hasher.finalize()))
+    }
+
+    /// The raw digest.
+    pub fn symbol(self) -> Symbol {
+        self.0
+    }
+}
+
+/// A **bucket key's** identity: a digest of its run of keywords and slots, so `LOG _` and a call
+/// spelling `LOG` beside one argument arrive at the same symbol. The run is digested as symbol bits,
+/// not text, so minting one needs no interner; [`SymbolInterner::record_key`] records the spelling
+/// (`LOG _`) where one is written, for a diagnostic or a rendered type naming it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct KeySymbol(Symbol);
+
+impl KeySymbol {
+    /// The key a run spells: each keyword's symbol, `None` at each slot. Tagged apart from a
+    /// token's own digest, so no key's bits are a name's.
+    pub fn of(run: impl IntoIterator<Item = Option<KeywordSymbol>>) -> KeySymbol {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"key");
+        for element in run {
+            match element {
+                Some(keyword) => hasher
+                    .update(&[1])
+                    .update(&keyword.symbol().0.to_le_bytes()),
+                None => hasher.update(&[0]),
+            };
+        }
+        KeySymbol(Symbol::of_hash(hasher.finalize()))
+    }
+
+    /// The raw digest.
+    pub fn symbol(self) -> Symbol {
+        self.0
+    }
+}
+
+impl SymbolInterner {
+    /// Mint the key `run` spells and record its spelling — each keyword's recorded text, `_` at a
+    /// slot, one space apart — so a rendering of the key reads as it is written.
+    pub fn record_key(
+        &self,
+        run: impl IntoIterator<Item = Option<KeywordSymbol>> + Clone,
+    ) -> KeySymbol {
+        let key = KeySymbol::of(run.clone());
+        let mut text = String::new();
+        for (index, element) in run.into_iter().enumerate() {
+            if index > 0 {
+                text.push(' ');
+            }
+            match element {
+                Some(keyword) => text.push_str(&self.render(keyword.symbol())),
+                None => text.push_str(WILDCARD.text()),
+            }
+        }
+        self.record_text(key.symbol(), &text);
+        key
+    }
+
+    /// The key `text` spells — keywords and a `_` per slot, one space apart, `PRINT _` — minted
+    /// and recorded as [`record_key`](Self::record_key) does, each keyword declared as it goes.
+    /// `None` when a word is neither a keyword nor `_`. How a builtin table names the key of an
+    /// overload.
+    pub fn key(&self, text: &str) -> Option<KeySymbol> {
+        let mut run = Vec::new();
+        for word in text.split(' ') {
+            run.push(match word {
+                "_" => None,
+                word => Some(KeywordSymbol::declared(word, self)?),
+            });
+        }
+        Some(self.record_key(run.iter().copied()))
     }
 }
 

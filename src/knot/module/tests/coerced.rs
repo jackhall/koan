@@ -14,7 +14,7 @@ use super::super::Coerced;
 
 const SOURCE: &str = "\
 NEWTYPE Dist = Number
-LET f = (FN :{} -> Number = (1))";
+LET f = (FN :{} -> Number = #(1))";
 
 /// What `Coerced::tie` prices a barrier over `underlying` at: the knot's run header, its one node, the
 /// barrier beside it and the whole knot the function behind it brings.
@@ -72,7 +72,7 @@ fn values_sees_a_barrier_as_the_function_it_stands_for() {
                 );
                 let value = Value::Knotted(barrier);
 
-                assert!(matches!(barrier.resolve(), Resolved::Function));
+                assert!(matches!(barrier.resolve(), Resolved::Barrier));
                 assert_eq!(value.as_callable(), Some(barrier));
                 assert_eq!(value.as_opaque(), Some(barrier));
                 assert_eq!(value.as_module(), None);

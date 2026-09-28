@@ -1,11 +1,13 @@
 //! BuiltinShape-table shape: the invariants every reader of [`BUILTIN_SHAPES`] depends on.
 
+use crate::memory::Bump;
 use crate::parse::builtin_shapes::binder::{BinderFacts, BinderSurface};
-use crate::parse::builtin_shapes::lazy::LazyKinds;
+use crate::parse::builtin_shapes::role::Reading;
 use crate::parse::builtin_shapes::{
     BUILTIN_SHAPES, BuiltinShape, BuiltinShapeId, ShapeElement, render_key,
 };
 use crate::parse::{DispatchShape, KeyElement, PartClass, classify_dispatch_shape};
+use crate::type_lattice::TypeRegistry;
 
 /// Every form the table gives binder facts, with those facts beside it.
 fn binder_forms() -> impl Iterator<Item = (&'static BuiltinShape, BinderFacts)> {
@@ -25,154 +27,149 @@ fn key_elements(form: &BuiltinShape) -> Vec<KeyElement> {
         .collect()
 }
 
-/// Every bucket's raw-capture kinds, written out by hand: one statement of what each entry's slots
-/// keep raw that is independent of the derivation, so the two can be compared. An index the run
-/// omits keeps nothing raw. This is the pin on `lazy_kinds_at` — a slot retyped in a way that
-/// changes what a reader sees fails here rather than silently moving when a group evaluates.
-const RECORDED_RAW_SLOTS: &[(BuiltinShapeId, &[(usize, LazyKinds)])] = &[
-    (BuiltinShapeId::LetValue, &[]),
-    (BuiltinShapeId::TypeDeclaration, &[(1, CODE)]),
-    (BuiltinShapeId::Module, &[(3, CODE)]),
-    (BuiltinShapeId::GroupFoldLeft, &[(5, CODE)]),
-    (BuiltinShapeId::GroupFoldRight, &[(5, CODE)]),
+/// Every bucket's readings, written out by hand: how the shape builder reads each slot that is not
+/// evaluated — as a written quote, as bare syntax, as a container of quotes, or as a label. One
+/// statement independent of [`Role::reading`], so the two can be compared; a slot the run omits is
+/// evaluated. A slot moved to another reading fails here rather than silently changing what a
+/// program must write there.
+const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
+    (BuiltinShapeId::LetValue, &[(1, B)]),
+    (BuiltinShapeId::TypeDeclaration, &[(1, B)]),
+    (BuiltinShapeId::Module, &[(1, B), (3, B)]),
+    (BuiltinShapeId::GroupFoldLeft, &[(1, B), (5, B)]),
+    (BuiltinShapeId::GroupFoldRight, &[(1, B), (5, B)]),
     (
         BuiltinShapeId::GroupPairwiseFoldLeft,
-        &[(4, CODE), (7, CODE)],
+        &[(1, B), (4, Q), (7, B)],
     ),
     (
         BuiltinShapeId::GroupPairwiseFoldRight,
-        &[(4, CODE), (7, CODE)],
+        &[(1, B), (4, Q), (7, B)],
     ),
-    (BuiltinShapeId::Sig, &[(3, CODE)]),
-    (BuiltinShapeId::Union, &[(1, CODE), (3, CODE)]),
-    (BuiltinShapeId::NewTypeDefinition, &[(3, RAW_TYPE)]),
-    (BuiltinShapeId::NewTypeDeclaration, &[(1, CODE)]),
-    (BuiltinShapeId::Val, &[]),
-    (BuiltinShapeId::Lambda, &[(3, RAW_TYPE), (5, CODE)]),
-    (BuiltinShapeId::LambdaType, &[]),
-    (
-        BuiltinShapeId::CombinedLambda,
-        &[(4, CODE), (6, RAW_TYPE), (8, CODE)],
-    ),
-    (
-        BuiltinShapeId::QuantifiedLambda,
-        &[(3, CODE), (4, RECORD_TYPE), (6, RAW_TYPE), (8, CODE)],
-    ),
-    (
-        BuiltinShapeId::QuantifiedLambdaType,
-        &[(3, CODE), (4, RECORD_TYPE), (6, RAW_TYPE)],
-    ),
-    (
-        BuiltinShapeId::CombinedQuantifiedLambda,
-        &[(6, CODE), (7, RECORD_TYPE), (9, RAW_TYPE), (11, CODE)],
-    ),
+    (BuiltinShapeId::Sig, &[(1, B), (3, C)]),
+    (BuiltinShapeId::Union, &[(1, B), (3, C)]),
+    (BuiltinShapeId::NewTypeDefinition, &[(1, B), (3, B)]),
+    (BuiltinShapeId::NewTypeDeclaration, &[(1, B)]),
+    (BuiltinShapeId::Val, &[(1, B), (2, B)]),
+    (BuiltinShapeId::Lambda, &[(3, B), (5, Q)]),
+    (BuiltinShapeId::LambdaType, &[(3, B)]),
+    (BuiltinShapeId::CombinedLambda, &[]),
+    (BuiltinShapeId::QuantifiedLambda, &[(3, C), (6, B), (8, Q)]),
+    (BuiltinShapeId::QuantifiedLambdaType, &[(3, C), (6, B)]),
+    (BuiltinShapeId::CombinedQuantifiedLambda, &[]),
     (
         BuiltinShapeId::ExpressionDefinition,
-        &[(1, CODE), (3, RAW_TYPE), (5, CODE)],
+        &[(1, Q), (3, B), (5, Q)],
     ),
-    (BuiltinShapeId::ExpressionHead, &[(1, CODE)]),
+    (BuiltinShapeId::ExpressionHead, &[(1, Q), (3, B)]),
     (
         BuiltinShapeId::QuantifiedExpressionDefinition,
-        &[(3, CODE), (4, CODE), (6, RAW_TYPE), (8, CODE)],
+        &[(3, C), (4, Q), (6, B), (8, Q)],
     ),
     (
         BuiltinShapeId::QuantifiedExpressionHead,
-        &[(3, CODE), (4, CODE), (6, RAW_TYPE)],
+        &[(3, C), (4, Q), (6, B)],
     ),
+    (BuiltinShapeId::BucketDeclaration, &[(1, Q)]),
     (
         BuiltinShapeId::CombinedExpression,
-        &[(5, CODE), (7, RAW_TYPE), (9, CODE)],
+        &[(1, B), (5, Q), (7, B), (9, Q)],
     ),
     (
         BuiltinShapeId::CombinedQuantifiedExpression,
-        &[(7, CODE), (8, CODE), (10, RAW_TYPE), (12, CODE)],
+        &[(1, B), (7, C), (8, Q), (10, B), (12, Q)],
     ),
     (
         BuiltinShapeId::OperatorDefinition,
-        &[(1, CODE), (3, RAW_TYPE), (5, CODE)],
+        &[(1, Q), (3, B), (5, Q)],
     ),
     (
         BuiltinShapeId::OperatorDefinitionReturning,
-        &[(1, CODE), (3, RAW_TYPE), (5, RAW_TYPE), (7, CODE)],
+        &[(1, Q), (3, B), (5, B), (7, Q)],
     ),
-    (
-        BuiltinShapeId::UnaryOperatorDefinition,
-        &[(2, CODE), (4, RAW_TYPE), (6, CODE)],
-    ),
+    (BuiltinShapeId::UnaryOperatorDefinition, &[]),
     (
         BuiltinShapeId::UnaryOperatorDefinitionReturning,
-        &[(2, CODE), (4, RAW_TYPE), (6, RAW_TYPE), (8, CODE)],
+        &[(2, Q), (4, B), (6, B), (8, Q)],
     ),
-    (BuiltinShapeId::OperatorHead, &[(1, CODE)]),
-    (BuiltinShapeId::OperatorHeadReturning, &[(1, CODE)]),
+    (BuiltinShapeId::OperatorHead, &[(1, Q), (3, B)]),
+    (
+        BuiltinShapeId::OperatorHeadReturning,
+        &[(1, Q), (3, B), (5, B)],
+    ),
     (BuiltinShapeId::UnaryOperatorHead, &[]),
-    (BuiltinShapeId::UnaryOperatorHeadReturning, &[(2, CODE)]),
+    (
+        BuiltinShapeId::UnaryOperatorHeadReturning,
+        &[(2, Q), (4, B), (6, B)],
+    ),
     (
         BuiltinShapeId::CombinedOperator,
-        &[(4, CODE), (6, RAW_TYPE), (8, CODE)],
+        &[(1, B), (4, Q), (6, B), (8, Q)],
     ),
     (
         BuiltinShapeId::CombinedOperatorReturning,
-        &[(4, CODE), (6, RAW_TYPE), (8, RAW_TYPE), (10, CODE)],
+        &[(1, B), (4, Q), (6, B), (8, B), (10, Q)],
     ),
-    (
-        BuiltinShapeId::CombinedUnaryOperator,
-        &[(5, CODE), (7, RAW_TYPE), (9, CODE)],
-    ),
+    (BuiltinShapeId::CombinedUnaryOperator, &[]),
     (
         BuiltinShapeId::CombinedUnaryOperatorReturning,
-        &[(5, CODE), (7, RAW_TYPE), (9, RAW_TYPE), (11, CODE)],
+        &[(1, B), (5, Q), (7, B), (9, B), (11, Q)],
     ),
-    (BuiltinShapeId::GroupHeadFoldLeft, &[(4, CODE)]),
-    (BuiltinShapeId::GroupHeadFoldRight, &[(4, CODE)]),
-    (
-        BuiltinShapeId::GroupHeadPairwiseFoldLeft,
-        &[(3, CODE), (6, CODE)],
-    ),
+    (BuiltinShapeId::GroupHeadFoldLeft, &[(4, C)]),
+    (BuiltinShapeId::GroupHeadFoldRight, &[(4, C)]),
+    (BuiltinShapeId::GroupHeadPairwiseFoldLeft, &[(3, Q), (6, C)]),
     (
         BuiltinShapeId::GroupHeadPairwiseFoldRight,
-        &[(3, CODE), (6, CODE)],
+        &[(3, Q), (6, C)],
     ),
-    (BuiltinShapeId::Match, &[(5, CODE)]),
-    (BuiltinShapeId::MatchOver, &[(7, CODE)]),
-    (BuiltinShapeId::Try, &[(1, CODE), (5, CODE)]),
-    (BuiltinShapeId::Catch, &[(1, CODE)]),
-    (BuiltinShapeId::UsingScope, &[(3, CODE)]),
-    (BuiltinShapeId::AscribeOpaque, &[]),
-    (BuiltinShapeId::AscribeTransparent, &[]),
-    (BuiltinShapeId::CloseOver, &[(2, CODE), (3, CODE)]),
-    (BuiltinShapeId::Close, &[(1, CODE)]),
-    (BuiltinShapeId::Projection, &[(0, CODE)]),
-    (BuiltinShapeId::Attribute, &[]),
+    (BuiltinShapeId::Match, &[(3, B), (5, C)]),
+    (BuiltinShapeId::MatchOver, &[(3, B), (5, B), (7, C)]),
+    (BuiltinShapeId::Try, &[(1, B), (3, B), (5, C)]),
+    (BuiltinShapeId::Catch, &[(1, B)]),
+    (BuiltinShapeId::UsingScope, &[(3, B)]),
+    (BuiltinShapeId::AscribeOpaque, &[(2, B)]),
+    (BuiltinShapeId::AscribeTransparent, &[(2, B)]),
+    (BuiltinShapeId::CloseOver, &[]),
+    (BuiltinShapeId::Close, &[]),
+    (BuiltinShapeId::Projection, &[]),
+    (BuiltinShapeId::Attribute, &[(2, L)]),
     (BuiltinShapeId::Eval, &[]),
+    (BuiltinShapeId::UsingCode, &[]),
 ];
 
-const CODE: LazyKinds = LazyKinds::CODE;
-const RECORD_TYPE: LazyKinds = LazyKinds::RECORD_TYPE;
-/// What a type-position slot captures raw: a `:(…)` type expression or a `:{…}` record type.
-const RAW_TYPE: LazyKinds = LazyKinds::TYPE_EXPR.with(LazyKinds::RECORD_TYPE);
+const Q: Reading = Reading::Quote;
+const B: Reading = Reading::Bare;
+const C: Reading = Reading::Container;
+const L: Reading = Reading::Label;
 
-/// The derivation answers the recorded column, at every index of every run — including the indices
-/// the column omits, which keep nothing raw, and one index past the run, which a reader asking
-/// about a part that is not there must survive.
+/// Each slot's role reads it as the recorded column says, and every slot the column omits is
+/// evaluated.
 #[test]
-fn the_derived_raw_slots_are_the_recorded_ones() {
-    assert_eq!(RECORDED_RAW_SLOTS.len(), BUILTIN_SHAPES.len());
-    for (form, (id, recorded)) in BUILTIN_SHAPES.iter().zip(RECORDED_RAW_SLOTS) {
+fn every_slot_is_read_as_recorded() {
+    assert_eq!(RECORDED_READINGS.len(), BUILTIN_SHAPES.len());
+    for (form, (id, recorded)) in BUILTIN_SHAPES.iter().zip(RECORDED_READINGS) {
         assert_eq!(
             form.id, *id,
             "the pin is out of table order at {:?}",
             form.id
         );
-        for index in 0..=form.elements.len() {
+        for (index, element) in form.elements.iter().enumerate() {
+            let ShapeElement::Slot { role, .. } = element else {
+                assert!(
+                    recorded.iter().all(|(slot, _)| *slot != index),
+                    "{:?} records a reading at its keyword {index}",
+                    form.id
+                );
+                continue;
+            };
             let expected = recorded
                 .iter()
                 .find(|(slot, _)| *slot == index)
-                .map_or(LazyKinds::EMPTY, |(_, kinds)| *kinds);
+                .map_or(Reading::Evaluated, |(_, reading)| *reading);
             assert_eq!(
-                form.lazy_kinds_at(index),
+                role.reading(),
                 expected,
-                "{:?} derives the wrong raw kinds at {index}",
+                "{:?} reads its slot {index} the wrong way",
                 render_key(form.elements)
             );
         }
@@ -226,7 +223,7 @@ fn no_reserved_form_declares_a_binder() {
 /// The tag vocabulary is exhaustive over the table: `BuiltinShapeId` gains no variant without a row.
 #[test]
 fn the_table_is_as_long_as_the_tag_vocabulary() {
-    assert_eq!(BUILTIN_SHAPES.len(), BuiltinShapeId::Eval as usize + 1);
+    assert_eq!(BUILTIN_SHAPES.len(), BuiltinShapeId::UsingCode as usize + 1);
 }
 
 /// Every masked index names a slot position of its own key — the flip writes `parts[index]`, so a
@@ -285,5 +282,29 @@ fn every_binder_form_key_classifies_keyworded() {
             "form key {:?} does not classify Keyworded",
             render_key(form.elements)
         );
+    }
+}
+
+/// Every slot type and return the table states names a node every registry pre-seeds, so a
+/// container-typed slot whose handle no registry seeds fails here, not at every program that
+/// writes it.
+#[test]
+fn every_slot_type_names_a_seeded_node() {
+    let region = Bump::new();
+    let types = TypeRegistry::in_region(&region);
+    for shape in BUILTIN_SHAPES {
+        for element in shape.elements {
+            if let ShapeElement::Slot {
+                types: slot_types, ..
+            } = element
+            {
+                for handle in *slot_types {
+                    let _ = types.node(*handle);
+                }
+            }
+        }
+        for handle in shape.returns {
+            let _ = types.node(*handle);
+        }
     }
 }

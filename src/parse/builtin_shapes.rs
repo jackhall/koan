@@ -6,12 +6,13 @@
 //! marks [`reserved`](BuiltinShape::reserved) is refused to user registration for the same reason.
 //!
 //! [`BUILTIN_SHAPES`] is the one table, and an entry is a **typed** run: keywords in position, and
-//! at each slot a [`Role`] beside one [`SlotType`] per overload of the bucket, with one return per
-//! overload. The untyped facts are erasures of that run rather than columns of their own — the
-//! bucket key a probe compares against is the elements with their types dropped
-//! ([`BuiltinShape::matches`]), and the part kinds a slot keeps raw are the raw-capture leaves
-//! among its overloads' types ([`BuiltinShape::lazy_kinds_at`]). What no erasure yields rides the
-//! entry beside them: the binder it installs and the reserved bit.
+//! at each slot a [`Role`] beside one [`KType`] per overload of the bucket, with one return per
+//! overload. The bucket key a probe compares against is an erasure of that run — the elements with
+//! their types dropped ([`BuiltinShape::matches`]). A slot's role says how the shape builder reads
+//! its part ([`Role::reading`]): as a written quote, as bare syntax, as a container of quotes, or
+//! evaluated. Its type says what fills it — a code kind for a part read as written, a value type
+//! for one evaluated — and no slot keeps a part raw. What no erasure yields rides the entry beside
+//! them: the binder it installs and the reserved bit.
 //!
 //! A node resolves its entry once, at construction ([`NodeCache`]), and every later reader indexes
 //! by the [`BuiltinShapeId`] tag rather than re-walking a key: the close-inference rules
@@ -20,7 +21,7 @@
 //! `(BuiltinShapeId, …)` pairs and hold no key of their own.
 //!
 //! A slot type rests here as a [`KType`], whose handle is a `const` content digest, so the table
-//! states a type without a registry in hand and both erasures run at build time. Interning an
+//! states a type without a registry in hand and its laws run at build time. Interning an
 //! entry's overloads as `ExpressionShape` handles is a separate door, in
 //! [`elaborate`](crate::elaborate).
 //!
@@ -28,7 +29,6 @@
 
 pub mod binder;
 pub mod layout;
-pub mod lazy;
 pub mod role;
 
 use crate::parse::ast::KeyElement;
@@ -36,7 +36,6 @@ use crate::parse::builtin_shapes::binder::{
     BinderFacts, BinderSurface, fn_def_binder_bucket, identifier_part_binder_name,
     op_def_binder_bucket, type_decl_binder_name, type_part_binder_name,
 };
-use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Heads, Role};
 use crate::symbols::{KeywordSymbol, StaticName};
 use crate::type_lattice::KType;
@@ -60,7 +59,7 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) newtype: StaticName<KeywordSymbol>,
     pub(crate) fn_: StaticName<KeywordSymbol>,
     pub(crate) expr: StaticName<KeywordSymbol>,
-    /// The two tokens of a quantifier group's head, `EXPR FOR ALL (<names>) …`.
+    /// The two tokens of a quantifier group's head, `EXPR FOR ALL #[<names>] …`.
     pub(crate) for_: StaticName<KeywordSymbol>,
     pub(crate) all: StaticName<KeywordSymbol>,
     /// A bound, `<Name> UNDER <bound>`: in a `FOR ALL` group and a `TYPE` declarator.
@@ -78,7 +77,7 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) scope: StaticName<KeywordSymbol>,
     pub(crate) close: StaticName<KeywordSymbol>,
     pub(crate) from: StaticName<KeywordSymbol>,
-    /// The head of the parse of `$(…)`; also its spelled-out surface.
+    /// The head that runs code.
     pub(crate) eval: StaticName<KeywordSymbol>,
     /// The head of the parse of `<record>.<field>`.
     pub(crate) attr: StaticName<KeywordSymbol>,
@@ -86,6 +85,11 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) opaque: StaticName<KeywordSymbol>,
     /// The transparent ascription operator `:!`.
     pub(crate) transparent: StaticName<KeywordSymbol>,
+    /// The connector of a code kind and the names its code needs, `Expression NEEDING #[y]`.
+    pub(crate) needing: StaticName<KeywordSymbol>,
+    /// `!=`, which the operator-run rewrite turns into `NOT (a == b)`; the parse's depth count
+    /// reads it to count the nesting that rewrite builds.
+    pub(crate) unequal: StaticName<KeywordSymbol>,
 }
 
 pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
@@ -123,60 +127,9 @@ pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
     attr: crate::static_name!(KeywordSymbol, "ATTR"),
     opaque: crate::static_name!(KeywordSymbol, ":|"),
     transparent: crate::static_name!(KeywordSymbol, ":!"),
+    needing: crate::static_name!(KeywordSymbol, "NEEDING"),
+    unequal: crate::static_name!(KeywordSymbol, "!="),
 };
-
-/// A slot's declared type, as it rests in a `static`.
-///
-/// A leaf is its own `const` handle. A compound's handle is a digest over its members, which no
-/// `const` computes, so the two compounds a builtin slot uses rest as the recipe the `elaborate`
-/// door interns.
-#[derive(Clone, Copy, Debug)]
-pub enum SlotType {
-    /// A type whose handle is a `const`.
-    Leaf(KType),
-    /// The canonical union of these leaves.
-    Union(&'static [KType]),
-    /// The empty record type.
-    EmptyRecord,
-}
-
-impl SlotType {
-    /// The part kinds this slot type captures raw, distributed over a union's members: a
-    /// union-typed slot admits every carrier spelling it lists, so it keeps each member's kind raw.
-    const fn raw_kinds(self) -> LazyKinds {
-        match self {
-            SlotType::Leaf(leaf) => raw_kind_of(leaf),
-            SlotType::Union(members) => raw_kinds_over(members),
-            SlotType::EmptyRecord => LazyKinds::EMPTY,
-        }
-    }
-}
-
-/// The kinds a run of union members keeps raw: every member's own kind, together. A union-typed
-/// slot admits each carrier spelling it lists, so each contributes.
-const fn raw_kinds_over(members: &[KType]) -> LazyKinds {
-    let mut kinds = LazyKinds::EMPTY;
-    let mut member = 0;
-    while member < members.len() {
-        kinds = kinds.with(raw_kind_of(members[member]));
-        member += 1;
-    }
-    kinds
-}
-
-/// The kind one raw-capture leaf stands for, empty for every other type: `KExpression` captures an
-/// `(…)` group or a `#(…)` quote, `SigiledTypeExpr` a `:(…)`, `RecordType` a `:{…}`.
-const fn raw_kind_of(leaf: KType) -> LazyKinds {
-    if leaf.same_as(KType::KEXPRESSION) {
-        LazyKinds::CODE
-    } else if leaf.same_as(KType::SIGILED_TYPE_EXPR) {
-        LazyKinds::TYPE_EXPR
-    } else if leaf.same_as(KType::RECORD_TYPE) {
-        LazyKinds::RECORD_TYPE
-    } else {
-        LazyKinds::EMPTY
-    }
-}
 
 /// One position of a builtin bucket: a fixed keyword token, or a slot under a role typed once per
 /// overload. [`BUILTIN_SHAPES`] is `static`, so a keyword rests as one of the [`KEYWORDS`] names and
@@ -188,7 +141,7 @@ pub enum ShapeElement {
     /// under one keyword run and cannot disagree about the key they erase to.
     Slot {
         role: Role,
-        types: &'static [SlotType],
+        types: &'static [KType],
     },
 }
 
@@ -212,7 +165,7 @@ pub struct BuiltinShape {
     /// per overload.
     pub elements: &'static [ShapeElement],
     /// `returns[n]` is overload `n`'s return; its length is the bucket's overload count.
-    pub returns: &'static [SlotType],
+    pub returns: &'static [KType],
     /// What the shape installs when submitted as a statement. `None` for a shape that binds nothing.
     pub binder: Option<BinderFacts>,
     /// True when nothing registers under this key: the shape is a diagnosable mistake, and the
@@ -231,24 +184,6 @@ impl BuiltinShape {
                 .iter()
                 .zip(key)
                 .all(|(element, actual)| element.matches(actual))
-    }
-
-    /// The kinds that stay raw at `index`, over every overload of the bucket. Empty when the slot
-    /// evaluates, when `index` names a keyword, and when it is past the run.
-    pub const fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
-        if index >= self.elements.len() {
-            return LazyKinds::EMPTY;
-        }
-        let ShapeElement::Slot { types, .. } = &self.elements[index] else {
-            return LazyKinds::EMPTY;
-        };
-        let mut kinds = LazyKinds::EMPTY;
-        let mut overload = 0;
-        while overload < types.len() {
-            kinds = kinds.with(types[overload].raw_kinds());
-            overload += 1;
-        }
-        kinds
     }
 
     /// Each part's role, element for element with the run and [`Role::Keyword`] at a keyword.
@@ -271,6 +206,14 @@ impl BuiltinShape {
                 }
             )
         })
+    }
+
+    /// True for a bucket whose every slot is an operand dispatch evaluates or a label it reads —
+    /// `ATTR`, `FROM`, `EVAL` and `USING` over code. A use of one selects among the builtin
+    /// overloads at its key, which the bucket being closed keeps the only ones.
+    pub fn dispatched(&self) -> bool {
+        self.roles()
+            .all(|role| matches!(role, Role::Keyword | Role::Argument | Role::Field))
     }
 
     /// How many typed overloads this bucket has.
@@ -303,32 +246,71 @@ const fn overload_counts_agree(table: &[BuiltinShape]) -> bool {
     true
 }
 
-/// The roles whose meaning is a claim about the slot's type. A part the machine reads as code — a
-/// body, a branch run, a `FOR ALL` group, a quoted symbol — must reach its reader unevaluated, so
-/// every overload types it `KExpression`; a binding's right-hand side is classified where it lands,
-/// so it keeps no part raw.
-const fn roles_agree_with_raw_kinds(table: &[BuiltinShape]) -> bool {
+/// Whether every overload types a slot as `want`.
+const fn every_overload_is(types: &[KType], want: KType) -> bool {
+    let mut overload = 0;
+    while overload < types.len() {
+        if !types[overload].same_as(want) {
+            return false;
+        }
+        overload += 1;
+    }
+    true
+}
+
+/// Whether every overload types a slot as a code kind at or under `kind`.
+const fn every_overload_within(types: &[KType], kind: KType) -> bool {
+    let mut overload = 0;
+    while overload < types.len() {
+        if !types[overload].within_code(kind) {
+            return false;
+        }
+        overload += 1;
+    }
+    true
+}
+
+/// The roles whose reading fixes the syntax that fills them, and so the slot's type: every body is
+/// a `Block`, an `EXPR` head an `Expression`, a quoted symbol a `Keyword`, a field label a code
+/// kind no larger than a `Name`, an arm set a `Dict(TypeCode, Block)` under type guards and a
+/// `Dict(Name, Block)` under labels, a union's variants a `Dict(Name, TypeCode)`, a signature's
+/// members a `List(Declaration)`, a representation `TypeCode`, a `FOR ALL` group a list of names or
+/// a dict of names to bounds, and a binder name a code kind no larger than an expression. A
+/// binding's right-hand side is classified where it lands, so it is `Any`.
+const fn roles_agree_with_code_types(table: &[BuiltinShape]) -> bool {
     let mut entry = 0;
     while entry < table.len() {
         let shape = &table[entry];
         let mut index = 0;
         while index < shape.elements.len() {
             if let ShapeElement::Slot { role, types } = &shape.elements[index] {
-                match role {
-                    Role::Body(_) | Role::Branches(_) | Role::Quantifiers | Role::Data => {
-                        let mut overload = 0;
-                        while overload < types.len() {
-                            let SlotType::Leaf(leaf) = types[overload] else {
-                                return false;
-                            };
-                            if !leaf.same_as(KType::KEXPRESSION) {
-                                return false;
-                            }
-                            overload += 1;
-                        }
+                let agrees = match role {
+                    Role::Body(_) => every_overload_is(types, KType::BLOCK),
+                    Role::Head => every_overload_is(types, KType::EXPRESSION),
+                    Role::Data => every_overload_is(types, KType::KEYWORD),
+                    Role::Field => every_overload_within(types, KType::NAME),
+                    Role::Branches(Heads::Types) => {
+                        every_overload_is(types, KType::DICT_TYPE_CODE_BLOCK)
                     }
-                    Role::Rhs if !shape.lazy_kinds_at(index).is_empty() => return false,
-                    _ => {}
+                    Role::Branches(Heads::Labels) => {
+                        every_overload_is(types, KType::DICT_NAME_BLOCK)
+                    }
+                    Role::Definition(DefinitionKind::Union) => {
+                        every_overload_is(types, KType::DICT_NAME_TYPE_CODE)
+                    }
+                    Role::Definition(DefinitionKind::Members) => {
+                        every_overload_is(types, KType::LIST_OF_DECLARATION)
+                    }
+                    Role::Definition(DefinitionKind::Plain) => {
+                        every_overload_is(types, KType::TYPE_CODE)
+                    }
+                    Role::Quantifiers => every_overload_is(types, KType::QUANTIFIER_CODE),
+                    Role::Name => every_overload_within(types, KType::EXPRESSION),
+                    Role::Rhs => every_overload_is(types, KType::ANY),
+                    _ => true,
+                };
+                if !agrees {
+                    return false;
                 }
             }
             index += 1;
@@ -339,7 +321,7 @@ const fn roles_agree_with_raw_kinds(table: &[BuiltinShape]) -> bool {
 }
 
 const _: () = assert!(overload_counts_agree(BUILTIN_SHAPE_SPEC));
-const _: () = assert!(roles_agree_with_raw_kinds(BUILTIN_SHAPE_SPEC));
+const _: () = assert!(roles_agree_with_code_types(BUILTIN_SHAPE_SPEC));
 
 /// One variant per [`BUILTIN_SHAPES`] entry, in table order — the tag every other table keys by, so a rule
 /// or a diagnostic names a shape without respelling its key. The table-order property pins each tag
@@ -368,6 +350,7 @@ pub enum BuiltinShapeId {
     ExpressionHead,
     QuantifiedExpressionDefinition,
     QuantifiedExpressionHead,
+    BucketDeclaration,
     CombinedExpression,
     CombinedQuantifiedExpression,
     OperatorDefinition,
@@ -398,6 +381,30 @@ pub enum BuiltinShapeId {
     Projection,
     Attribute,
     Eval,
+    UsingCode,
+}
+
+impl BuiltinShapeId {
+    /// True for a shape that declares a signature member without installing it where it is
+    /// written: a `VAL`, a `TYPE` declarator, and every bodyless head. A statement of one of these
+    /// shapes is a `Declaration`, and so, beside the binders, is every member a `SIG` body holds.
+    pub const fn declares_member(self) -> bool {
+        matches!(
+            self,
+            BuiltinShapeId::Val
+                | BuiltinShapeId::TypeDeclaration
+                | BuiltinShapeId::ExpressionHead
+                | BuiltinShapeId::QuantifiedExpressionHead
+                | BuiltinShapeId::OperatorHead
+                | BuiltinShapeId::OperatorHeadReturning
+                | BuiltinShapeId::UnaryOperatorHead
+                | BuiltinShapeId::UnaryOperatorHeadReturning
+                | BuiltinShapeId::GroupHeadFoldLeft
+                | BuiltinShapeId::GroupHeadFoldRight
+                | BuiltinShapeId::GroupHeadPairwiseFoldLeft
+                | BuiltinShapeId::GroupHeadPairwiseFoldRight
+        )
+    }
 }
 
 /// The [`BUILTIN_SHAPES`] entry `key` matches, or `None` for every user-defined bucket. The one
@@ -414,45 +421,46 @@ pub fn builtin_shape_for(
 use ShapeElement::Keyword as Kw;
 
 /// A slot under `role`, typed once per overload of its bucket.
-const fn slot(role: Role, types: &'static [SlotType]) -> ShapeElement {
+const fn slot(role: Role, types: &'static [KType]) -> ShapeElement {
     ShapeElement::Slot { role, types }
 }
 
 use Role::{
-    Argument, Body, Branches, Data, Definition, Label, Name, Quantifiers, Rhs, Signature,
-    TypeExpression as Te, Unsupported,
+    Argument, Body, Branches, Data, Definition, Field, Head, InPlace, Name, Quantifiers, Rhs,
+    Signature, TypeExpression as Te, Unsupported,
 };
 
-// The slot types the table spells, each a `const` handle or a recipe over them. Their names are the
-// lattice's own, so an entry reads as the types its overloads declare.
-const ANY: SlotType = SlotType::Leaf(KType::ANY);
-const NEVER: SlotType = SlotType::Leaf(KType::NEVER);
-const CODE: SlotType = SlotType::Leaf(KType::KEXPRESSION);
-const IDENTIFIER: SlotType = SlotType::Leaf(KType::IDENTIFIER);
-const NAME_TOKEN: SlotType = SlotType::Leaf(KType::NAME_TOKEN);
-const TYPE_NAME: SlotType = SlotType::Leaf(KType::TYPE_NAME_TOKEN);
-const SIGILED_TYPE: SlotType = SlotType::Leaf(KType::SIGILED_TYPE_EXPR);
-const RECORD_TYPE: SlotType = SlotType::Leaf(KType::RECORD_TYPE);
-const STR: SlotType = SlotType::Leaf(KType::STR);
-const PROPER_TYPE: SlotType = SlotType::Leaf(KType::PROPER_TYPE);
-const SIGNATURE_KIND: SlotType = SlotType::Leaf(KType::SIGNATURE_KIND);
-const ANY_TYPE: SlotType = SlotType::Leaf(KType::ANY_TYPE);
+// The slot types the table spells, each a `const` handle named as the lattice names it, so an
+// entry reads as the types its overloads declare.
+const ANY: KType = KType::ANY;
+const NEVER: KType = KType::NEVER;
+const IDENTIFIER: KType = KType::IDENTIFIER;
+const TYPE_NAME: KType = KType::TYPE_NAME_TOKEN;
+const NAME: KType = KType::NAME;
+const KEYWORD: KType = KType::KEYWORD;
+const EXPRESSION: KType = KType::EXPRESSION;
+const BLOCK: KType = KType::BLOCK;
+const ANY_CODE: KType = KType::ANY_CODE;
+/// The code a type is written as: a type name, a `:(…)` or a `:{…}`.
+const TYPE_CODE: KType = KType::TYPE_CODE;
+const LIST_OF_NAME: KType = KType::LIST_OF_NAME;
+const LIST_OF_DECLARATION: KType = KType::LIST_OF_DECLARATION;
+const DICT_NAME_BLOCK: KType = KType::DICT_NAME_BLOCK;
+const DICT_TYPE_CODE_BLOCK: KType = KType::DICT_TYPE_CODE_BLOCK;
+const DICT_NAME_TYPE_CODE: KType = KType::DICT_NAME_TYPE_CODE;
+/// A `FOR ALL` group: a list of names, or a dict of names to the code of their bounds.
+const QUANTIFIER_CODE: KType = KType::QUANTIFIER_CODE;
+const PROPER_TYPE: KType = KType::PROPER_TYPE;
+const SIGNATURE_KIND: KType = KType::SIGNATURE_KIND;
+const ANY_TYPE: KType = KType::ANY_TYPE;
 /// The empty signature: the type a module value is declared at, `:Module`'s own handle.
-const MODULE: SlotType = SlotType::Leaf(KType::EMPTY_SIGNATURE);
-/// What a declarator's type slot takes: a bare Type name, a `:(…)` type expression or a `:{…}`
-/// record type. The `:(…)` and `:{…}` spellings are what make such a slot keep its part raw; a bare
-/// `(…)` there evaluates.
-const TYPE_CARRIER: SlotType = SlotType::Union(&[
-    KType::TYPE_NAME_TOKEN,
-    KType::SIGILED_TYPE_EXPR,
-    KType::RECORD_TYPE,
-]);
-const EMPTY_RECORD: SlotType = SlotType::EmptyRecord;
+const MODULE: KType = KType::EMPTY_SIGNATURE;
+const EMPTY_RECORD: KType = KType::EMPTY_RECORD;
 
 /// The single source of truth for the builtin shapes. One entry per distinct bucket key, in
 /// [`BuiltinShapeId`] order; the keys are pinned against the live builtin registration table by the
 /// table⟺registration property, so an entry whose builtin was renamed, re-shaped, or dropped fails
-/// the suite, and so does a builtin that grows a raw-capture slot without an entry here.
+/// the suite.
 ///
 /// The table is spelled as a `const` and read through the `static` below because a `const` is what
 /// the two build-time laws above can be evaluated over — a `const` cannot read a `static`. Readers
@@ -465,7 +473,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         id: BuiltinShapeId::LetValue,
         elements: &[
             Kw(&KEYWORDS.let_),
-            slot(Name, &[NAME_TOKEN]),
+            slot(Name, &[NAME]),
             Kw(&KEYWORDS.equals),
             slot(Rhs, &[ANY]),
         ],
@@ -482,7 +490,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
     BuiltinShape {
         id: BuiltinShapeId::TypeDeclaration,
-        elements: &[Kw(&KEYWORDS.type_), slot(Name, &[TYPE_NAME, CODE])],
+        elements: &[Kw(&KEYWORDS.type_), slot(Name, &[TYPE_NAME, EXPRESSION])],
         returns: &[ANY, ANY],
         binder: Some(BinderFacts {
             names: &[type_decl_binder_name],
@@ -501,7 +509,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.module),
             slot(Name, &[IDENTIFIER]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Module), &[CODE]),
+            slot(Body(BodyKind::Module), &[BLOCK]),
         ],
         returns: &[MODULE],
         binder: Some(BinderFacts {
@@ -522,7 +530,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.fold),
             Kw(&KEYWORDS.left),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Module), &[CODE]),
+            slot(Body(BodyKind::Module), &[BLOCK]),
         ],
         returns: &[MODULE],
         binder: Some(BinderFacts {
@@ -543,7 +551,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.fold),
             Kw(&KEYWORDS.right),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Module), &[CODE]),
+            slot(Body(BodyKind::Module), &[BLOCK]),
         ],
         returns: &[MODULE],
         binder: Some(BinderFacts {
@@ -563,10 +571,10 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             slot(Name, &[IDENTIFIER]),
             Kw(&KEYWORDS.pairwise),
             Kw(&KEYWORDS.fold),
-            slot(Argument, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.left),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Module), &[CODE]),
+            slot(Body(BodyKind::Module), &[BLOCK]),
         ],
         returns: &[MODULE],
         binder: Some(BinderFacts {
@@ -586,10 +594,10 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             slot(Name, &[IDENTIFIER]),
             Kw(&KEYWORDS.pairwise),
             Kw(&KEYWORDS.fold),
-            slot(Argument, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.right),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Module), &[CODE]),
+            slot(Body(BodyKind::Module), &[BLOCK]),
         ],
         returns: &[MODULE],
         binder: Some(BinderFacts {
@@ -608,7 +616,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.sig),
             slot(Name, &[TYPE_NAME]),
             Kw(&KEYWORDS.equals),
-            slot(Definition(DefinitionKind::Plain), &[CODE]),
+            slot(Definition(DefinitionKind::Members), &[LIST_OF_DECLARATION]),
         ],
         returns: &[SIGNATURE_KIND],
         binder: Some(BinderFacts {
@@ -626,9 +634,12 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         id: BuiltinShapeId::Union,
         elements: &[
             Kw(&KEYWORDS.union),
-            slot(Name, &[TYPE_NAME, CODE]),
+            slot(Name, &[TYPE_NAME, EXPRESSION]),
             Kw(&KEYWORDS.equals),
-            slot(Definition(DefinitionKind::Union), &[CODE, CODE]),
+            slot(
+                Definition(DefinitionKind::Union),
+                &[DICT_NAME_TYPE_CODE, DICT_NAME_TYPE_CODE],
+            ),
         ],
         returns: &[ANY_TYPE, ANY_TYPE],
         binder: Some(BinderFacts {
@@ -640,22 +651,17 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
-    // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key). The repr slot takes a
-    // type but is deliberately unmasked: a bare `(…)` there already works by evaluation, so
-    // flipping it would change a working spelling's route for nothing. A `:(…)` or `:{…}` there is
-    // captured raw while a bare `(…)` evaluates — the mixed index the kind set exists for.
+    // NEWTYPE <name> = <repr>: the representation is type code read where it is written — a type
+    // name, a `:(…)` or a `:{…}`.
     BuiltinShape {
         id: BuiltinShapeId::NewTypeDefinition,
         elements: &[
             Kw(&KEYWORDS.newtype),
-            slot(Name, &[TYPE_NAME, TYPE_NAME, TYPE_NAME]),
+            slot(Name, &[TYPE_NAME]),
             Kw(&KEYWORDS.equals),
-            slot(
-                Definition(DefinitionKind::Plain),
-                &[PROPER_TYPE, SIGILED_TYPE, RECORD_TYPE],
-            ),
+            slot(Definition(DefinitionKind::Plain), &[TYPE_CODE]),
         ],
-        returns: &[ANY_TYPE, ANY_TYPE, ANY_TYPE],
+        returns: &[ANY_TYPE],
         binder: Some(BinderFacts {
             names: &[type_part_binder_name],
             bucket: None,
@@ -668,7 +674,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` shapes).
     BuiltinShape {
         id: BuiltinShapeId::NewTypeDeclaration,
-        elements: &[Kw(&KEYWORDS.newtype), slot(Name, &[CODE])],
+        elements: &[Kw(&KEYWORDS.newtype), slot(Name, &[EXPRESSION])],
         returns: &[ANY_TYPE],
         binder: Some(BinderFacts {
             names: &[type_decl_binder_name],
@@ -686,7 +692,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         id: BuiltinShapeId::Val,
         elements: &[
             Kw(&KEYWORDS.val),
-            slot(Label, &[IDENTIFIER]),
+            slot(Name, &[IDENTIFIER]),
             slot(Te, &[PROPER_TYPE]),
         ],
         returns: &[ANY],
@@ -712,9 +718,9 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.fn_),
             slot(Signature, &[PROPER_TYPE]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Lambda), &[CODE]),
+            slot(Body(BodyKind::Lambda), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -741,9 +747,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     },
     // LET <name> = FN <signature> -> <return type> = <body> — reserved: a combined statement
     // installs a dispatch bucket, and no `FN` signature has a head to key one on, so nothing
-    // registers here. The lazy stamp is what keeps its miss a miss, holding the body raw so the
-    // statement reports the shape it got rather than an error from evaluating a body whose
-    // parameters no binder ever bound.
+    // registers here.
     BuiltinShape {
         id: BuiltinShapeId::CombinedLambda,
         elements: &[
@@ -751,33 +755,31 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             slot(Unsupported, &[IDENTIFIER]),
             Kw(&KEYWORDS.equals),
             Kw(&KEYWORDS.fn_),
-            slot(Unsupported, &[CODE]),
+            slot(Unsupported, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
-            slot(Unsupported, &[TYPE_CARRIER]),
+            slot(Unsupported, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Unsupported, &[CODE]),
+            slot(Unsupported, &[EXPRESSION]),
         ],
         returns: &[NEVER],
         binder: None,
         reserved: true,
     },
-    // FN FOR ALL <names> <record schema> -> <return type> = <body> — the quantified lambda.
-    //
-    // The schema captures raw where the unquantified `Lambda`'s resolves: its field types name the
-    // group's quantifiers, so it must reach its reader unevaluated — the reason the names group
-    // and the return stage on every quantified entry.
+    // FN FOR ALL <names> <record schema> -> <return type> = <body> — the quantified lambda. Its
+    // schema's field types may name the group's quantifiers, so it is elaborated in the group's
+    // scope.
     BuiltinShape {
         id: BuiltinShapeId::QuantifiedLambda,
         elements: &[
             Kw(&KEYWORDS.fn_),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[CODE]),
-            slot(Signature, &[RECORD_TYPE]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
+            slot(Signature, &[PROPER_TYPE]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Lambda), &[CODE]),
+            slot(Body(BodyKind::Lambda), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -797,10 +799,10 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.fn_),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[CODE]),
-            slot(Signature, &[RECORD_TYPE]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
+            slot(Signature, &[PROPER_TYPE]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
         ],
         returns: &[ANY_TYPE],
         binder: None,
@@ -808,8 +810,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     },
     // LET <name> = FN FOR ALL <names> <signature> -> <return type> = <body> — reserved for the
     // same reason `CombinedLambda` is: a combined statement installs a dispatch bucket, and no
-    // `FN` signature has a head to key one on. The lazy stamp holds the body raw so the miss is
-    // diagnosable.
+    // `FN` signature has a head to key one on.
     BuiltinShape {
         id: BuiltinShapeId::CombinedQuantifiedLambda,
         elements: &[
@@ -819,12 +820,12 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.fn_),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Unsupported, &[CODE]),
-            slot(Unsupported, &[RECORD_TYPE]),
+            slot(Unsupported, &[EXPRESSION]),
+            slot(Unsupported, &[PROPER_TYPE]),
             Kw(&KEYWORDS.arrow),
-            slot(Unsupported, &[TYPE_CARRIER]),
+            slot(Unsupported, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Unsupported, &[CODE]),
+            slot(Unsupported, &[EXPRESSION]),
         ],
         returns: &[NEVER],
         binder: None,
@@ -835,11 +836,11 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         id: BuiltinShapeId::ExpressionDefinition,
         elements: &[
             Kw(&KEYWORDS.expr),
-            slot(Signature, &[CODE]),
+            slot(Head, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Lambda), &[CODE]),
+            slot(Body(BodyKind::Lambda), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -852,13 +853,13 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         reserved: false,
     },
     // EXPR <head> -> <return type> — the bodyless head, whose carrier is the head's expression
-    // shape. Only the head captures raw: it is the declarator's own operand and must reach it
-    // unevaluated, while the return slot is an ordinary kind expectation, as on every bodyless head.
+    // shape. The head is a quote, its tokens naming nothing until a definition binds them; the
+    // return slot is an ordinary kind expectation, as on every bodyless head.
     BuiltinShape {
         id: BuiltinShapeId::ExpressionHead,
         elements: &[
             Kw(&KEYWORDS.expr),
-            slot(Signature, &[CODE]),
+            slot(Head, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
             slot(Te, &[ANY_TYPE]),
         ],
@@ -873,12 +874,12 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.expr),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[CODE]),
-            slot(Signature, &[CODE]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
+            slot(Head, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Lambda), &[CODE]),
+            slot(Body(BodyKind::Lambda), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -890,21 +891,30 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
-    // EXPR FOR ALL <names> <head> -> <return type> — the quantified bodyless head. The names group
-    // captures raw beside the head: its tokens name nothing yet, so the lane must not try to
-    // resolve them. The return stages too, because it may name a quantifier and so resolves against
-    // the group's own scope rather than the surrounding one.
+    // EXPR FOR ALL <names> <head> -> <return type> — the quantified bodyless head. The return may
+    // name a quantifier, so it resolves against the group's own scope rather than the surrounding
+    // one.
     BuiltinShape {
         id: BuiltinShapeId::QuantifiedExpressionHead,
         elements: &[
             Kw(&KEYWORDS.expr),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[CODE]),
-            slot(Signature, &[CODE]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
+            slot(Head, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
         ],
+        returns: &[ANY],
+        binder: None,
+        reserved: false,
+    },
+    // EXPR <head> — a bucket declaration: keywords and one integer or `_` per slot, `EXPR #(MOVE
+    // 2 TO 1)`. It ranks its bucket's slots and nothing else: no types, no return, no binder, and
+    // in a module body no member.
+    BuiltinShape {
+        id: BuiltinShapeId::BucketDeclaration,
+        elements: &[Kw(&KEYWORDS.expr), slot(Head, &[EXPRESSION])],
         returns: &[ANY],
         binder: None,
         reserved: false,
@@ -920,11 +930,11 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.equals),
             Kw(&KEYWORDS.fn_),
             Kw(&KEYWORDS.expr),
-            slot(Signature, &[CODE]),
+            slot(Head, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Lambda), &[CODE]),
+            slot(Body(BodyKind::Lambda), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -947,12 +957,12 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.expr),
             Kw(&KEYWORDS.for_),
             Kw(&KEYWORDS.all),
-            slot(Quantifiers, &[CODE]),
-            slot(Signature, &[CODE]),
+            slot(Quantifiers, &[QUANTIFIER_CODE]),
+            slot(Head, &[EXPRESSION]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Lambda), &[CODE]),
+            slot(Body(BodyKind::Lambda), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -971,11 +981,11 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         id: BuiltinShapeId::OperatorDefinition,
         elements: &[
             Kw(&KEYWORDS.op),
-            slot(Data, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.over),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Operator), &[CODE]),
+            slot(Body(BodyKind::Operator), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -992,13 +1002,13 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         id: BuiltinShapeId::OperatorDefinitionReturning,
         elements: &[
             Kw(&KEYWORDS.op),
-            slot(Data, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.over),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Operator), &[CODE]),
+            slot(Body(BodyKind::Operator), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -1017,11 +1027,11 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         elements: &[
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
-            slot(Unsupported, &[CODE]),
+            slot(Unsupported, &[EXPRESSION]),
             Kw(&KEYWORDS.over),
-            slot(Unsupported, &[TYPE_CARRIER]),
+            slot(Unsupported, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Unsupported, &[CODE]),
+            slot(Unsupported, &[EXPRESSION]),
         ],
         returns: &[NEVER],
         binder: None,
@@ -1033,13 +1043,13 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         elements: &[
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
-            slot(Data, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.over),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::UnaryOperator), &[CODE]),
+            slot(Body(BodyKind::UnaryOperator), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -1056,16 +1066,15 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     // binding map any name lookup can see. They carry binder facts for the `type_slots` mask (so a
     // bare `(LIST OF Elt)` operand reads as a type expression, exactly as it does in the
     // definition) and for the `OperatorDef` marker, which is what a SIG group's member scan keys
-    // on. Only the quoted symbol captures raw: the operand and result are ordinary kind
-    // expectations, so a `:(…)` there sub-dispatches to a type eagerly, exactly as the bodyless
-    // `FN` head's return slot does.
+    // on. The symbol is a quote; the operand and result are ordinary kind expectations, so a `:(…)`
+    // there sub-dispatches to a type eagerly, exactly as the bodyless `FN` head's return slot does.
     //
     // OP <symbol> OVER <operand>.
     BuiltinShape {
         id: BuiltinShapeId::OperatorHead,
         elements: &[
             Kw(&KEYWORDS.op),
-            slot(Data, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.over),
             slot(Te, &[ANY_TYPE]),
         ],
@@ -1084,7 +1093,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         id: BuiltinShapeId::OperatorHeadReturning,
         elements: &[
             Kw(&KEYWORDS.op),
-            slot(Data, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.over),
             slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.arrow),
@@ -1108,9 +1117,9 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         elements: &[
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
-            slot(Unsupported, &[ANY]),
+            slot(Unsupported, &[KEYWORD]),
             Kw(&KEYWORDS.over),
-            slot(Unsupported, &[ANY]),
+            slot(Unsupported, &[ANY_TYPE]),
         ],
         returns: &[NEVER],
         binder: None,
@@ -1122,7 +1131,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         elements: &[
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
-            slot(Data, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.over),
             slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.arrow),
@@ -1146,11 +1155,11 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             slot(Name, &[IDENTIFIER]),
             Kw(&KEYWORDS.equals),
             Kw(&KEYWORDS.op),
-            slot(Data, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.over),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Operator), &[CODE]),
+            slot(Body(BodyKind::Operator), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -1170,13 +1179,13 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             slot(Name, &[IDENTIFIER]),
             Kw(&KEYWORDS.equals),
             Kw(&KEYWORDS.op),
-            slot(Data, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.over),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::Operator), &[CODE]),
+            slot(Body(BodyKind::Operator), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -1198,11 +1207,11 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.equals),
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
-            slot(Unsupported, &[CODE]),
+            slot(Unsupported, &[EXPRESSION]),
             Kw(&KEYWORDS.over),
-            slot(Unsupported, &[TYPE_CARRIER]),
+            slot(Unsupported, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Unsupported, &[CODE]),
+            slot(Unsupported, &[EXPRESSION]),
         ],
         returns: &[NEVER],
         binder: None,
@@ -1218,13 +1227,13 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.equals),
             Kw(&KEYWORDS.unary),
             Kw(&KEYWORDS.op),
-            slot(Data, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.over),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.arrow),
-            slot(Te, &[TYPE_CARRIER]),
+            slot(Te, &[ANY_TYPE]),
             Kw(&KEYWORDS.equals),
-            slot(Body(BodyKind::UnaryOperator), &[CODE]),
+            slot(Body(BodyKind::UnaryOperator), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: Some(BinderFacts {
@@ -1246,7 +1255,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.fold),
             Kw(&KEYWORDS.left),
             Kw(&KEYWORDS.equals),
-            slot(Definition(DefinitionKind::Plain), &[CODE]),
+            slot(Definition(DefinitionKind::Members), &[LIST_OF_DECLARATION]),
         ],
         returns: &[MODULE],
         binder: None,
@@ -1260,7 +1269,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.fold),
             Kw(&KEYWORDS.right),
             Kw(&KEYWORDS.equals),
-            slot(Definition(DefinitionKind::Plain), &[CODE]),
+            slot(Definition(DefinitionKind::Members), &[LIST_OF_DECLARATION]),
         ],
         returns: &[MODULE],
         binder: None,
@@ -1273,10 +1282,10 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.group),
             Kw(&KEYWORDS.pairwise),
             Kw(&KEYWORDS.fold),
-            slot(Argument, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.left),
             Kw(&KEYWORDS.equals),
-            slot(Definition(DefinitionKind::Plain), &[CODE]),
+            slot(Definition(DefinitionKind::Members), &[LIST_OF_DECLARATION]),
         ],
         returns: &[MODULE],
         binder: None,
@@ -1289,10 +1298,10 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.group),
             Kw(&KEYWORDS.pairwise),
             Kw(&KEYWORDS.fold),
-            slot(Argument, &[CODE]),
+            slot(Data, &[KEYWORD]),
             Kw(&KEYWORDS.right),
             Kw(&KEYWORDS.equals),
-            slot(Definition(DefinitionKind::Plain), &[CODE]),
+            slot(Definition(DefinitionKind::Members), &[LIST_OF_DECLARATION]),
         ],
         returns: &[MODULE],
         binder: None,
@@ -1309,7 +1318,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.arrow),
             slot(Te, &[PROPER_TYPE]),
             Kw(&KEYWORDS.with),
-            slot(Branches(Heads::Types), &[CODE]),
+            slot(Branches(Heads::Types), &[DICT_TYPE_CODE_BLOCK]),
         ],
         returns: &[ANY],
         binder: None,
@@ -1326,7 +1335,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.arrow),
             slot(Te, &[PROPER_TYPE]),
             Kw(&KEYWORDS.with),
-            slot(Branches(Heads::Labels), &[CODE]),
+            slot(Branches(Heads::Labels), &[DICT_NAME_BLOCK]),
         ],
         returns: &[ANY],
         binder: None,
@@ -1337,11 +1346,11 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         id: BuiltinShapeId::Try,
         elements: &[
             Kw(&KEYWORDS.try_),
-            slot(Argument, &[CODE]),
+            slot(InPlace, &[ANY]),
             Kw(&KEYWORDS.arrow),
             slot(Te, &[PROPER_TYPE]),
             Kw(&KEYWORDS.with),
-            slot(Branches(Heads::Labels), &[CODE]),
+            slot(Branches(Heads::Labels), &[DICT_NAME_BLOCK]),
         ],
         returns: &[ANY],
         binder: None,
@@ -1350,7 +1359,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     // CATCH <body>.
     BuiltinShape {
         id: BuiltinShapeId::Catch,
-        elements: &[Kw(&KEYWORDS.catch), slot(Argument, &[CODE])],
+        elements: &[Kw(&KEYWORDS.catch), slot(InPlace, &[ANY])],
         returns: &[ANY],
         binder: None,
         reserved: false,
@@ -1363,7 +1372,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
             Kw(&KEYWORDS.using),
             slot(Argument, &[MODULE]),
             Kw(&KEYWORDS.scope),
-            slot(Body(BodyKind::Surfaced), &[CODE]),
+            slot(Body(BodyKind::Surfaced), &[BLOCK]),
         ],
         returns: &[ANY],
         binder: None,
@@ -1399,8 +1408,8 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         elements: &[
             Kw(&KEYWORDS.close),
             Kw(&KEYWORDS.over),
-            slot(Unsupported, &[CODE]),
-            slot(Unsupported, &[CODE]),
+            slot(Unsupported, &[EXPRESSION]),
+            slot(Unsupported, &[EXPRESSION]),
         ],
         returns: &[ANY],
         binder: None,
@@ -1409,7 +1418,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     // CLOSE <body> — the inferred-capture form.
     BuiltinShape {
         id: BuiltinShapeId::Close,
-        elements: &[Kw(&KEYWORDS.close), slot(Unsupported, &[CODE])],
+        elements: &[Kw(&KEYWORDS.close), slot(Unsupported, &[EXPRESSION])],
         returns: &[ANY],
         binder: None,
         reserved: false,
@@ -1418,7 +1427,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     BuiltinShape {
         id: BuiltinShapeId::Projection,
         elements: &[
-            slot(Label, &[CODE]),
+            slot(Argument, &[LIST_OF_NAME]),
             Kw(&KEYWORDS.from),
             slot(Argument, &[EMPTY_RECORD]),
         ],
@@ -1426,26 +1435,36 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // ATTR <record> <field> — the parse of `m.x`.
+    // ATTR <record> <field> — the parse of `m.x`. A type's member is labelled by a type name, so
+    // `Point.y` is no overload's.
     BuiltinShape {
         id: BuiltinShapeId::Attribute,
         elements: &[
             Kw(&KEYWORDS.attr),
-            slot(Argument, &[IDENTIFIER, MODULE, ANY, ANY, ANY_TYPE, MODULE]),
-            slot(
-                Label,
-                &[NAME_TOKEN, NAME_TOKEN, NAME_TOKEN, STR, NAME_TOKEN, STR],
-            ),
+            slot(Argument, &[MODULE, ANY, ANY_TYPE]),
+            slot(Field, &[NAME, NAME, TYPE_NAME]),
         ],
-        returns: &[ANY, ANY, ANY, ANY, ANY, ANY],
+        returns: &[ANY, ANY, ANY],
         binder: None,
         reserved: false,
     },
-    // EVAL <expr> — the parse of `$(expr)`.
+    // EVAL <code> — runs code.
     BuiltinShape {
         id: BuiltinShapeId::Eval,
-        elements: &[Kw(&KEYWORDS.eval), slot(Argument, &[ANY])],
+        elements: &[Kw(&KEYWORDS.eval), slot(Argument, &[ANY_CODE])],
         returns: &[ANY],
+        binder: None,
+        reserved: false,
+    },
+    // <code> USING <source> — fills the code's holes from a record's fields or a module's members.
+    BuiltinShape {
+        id: BuiltinShapeId::UsingCode,
+        elements: &[
+            slot(Argument, &[ANY_CODE, ANY_CODE]),
+            Kw(&KEYWORDS.using),
+            slot(Argument, &[EMPTY_RECORD, MODULE]),
+        ],
+        returns: &[ANY_CODE, ANY_CODE],
         binder: None,
         reserved: false,
     },

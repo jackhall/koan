@@ -1,14 +1,30 @@
 //! The **shape**: one per body, built once into program storage and shared by every activation of
 //! that body.
 //!
-//! It holds the body's declared names as one two-channel run — value names first, type names
-//! after, each channel sorted by symbol and each name at its slot — every mention with its class
-//! and coordinate,
+//! It holds the body's declared names as one three-channel run — value names first, type names
+//! after, and each keyworded definition's registration last, each channel sorted by symbol and
+//! each entry at its slot — every mention with its class and coordinate, each bucket declaration's
+//! ranking and the ranking each registration carries, each keyworded use's candidate list,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
 //! components of the body's bindings, the shapes nested in it by site, the form node a callable's
 //! body sits in, the callable body each binder births, each `LET` binder's right-hand side, and
 //! each type binder's declaration node, and the order its units run in. [`build`] is the one
 //! builder every kind goes through.
+//!
+//! A **registration** is a binder no text names: the slot a definition's function is bound to
+//! under its bucket key. A keyworded use reaches it by key, through a [`CandidateList`] fixed where
+//! the shape is built — the builtin overloads at the key, then each registration visible to the
+//! use — and each registration in the list is resolved as an eager read at the use's statement, so
+//! captures, components and units treat it as they treat a name.
+//!
+//! A quote value's code is a [`ShapeKind::Code`] shape nested at the quote's site, built where the
+//! program loads. Its captures are its `$` names and `$(…)` uses' registrations, bound where the
+//! quote is written, its open holes and its open `\` marks. A keyworded use in it lists the builtin
+//! overloads and the code's own registrations, and — unmarked — its key as a hole a `USING` fills,
+//! or — under `\(…)` — its key alone, which the `EVAL` running the code offers; each is a
+//! [`Candidate::Spread`], a capture named by the key. The shape records the holes some use selects
+//! from alone, carries its type and, when its code is malformed, the error an `EVAL` of it reports.
+//! See [README.md § Quotes](README.md#quotes).
 //!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
 //! position is strictly greater than the binding's own. A parameter writes at `0`, statement `i` at
@@ -21,13 +37,13 @@ use std::fmt;
 
 use crate::memory::{BumpAllocator, ProgramBrand};
 use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::role::Role;
-use crate::parse::{ExpressionPart, KExpression};
-use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
-use crate::type_lattice::DeclaredGroup;
-use crate::values::{Knotted, KnottedFamily};
+use crate::parse::builtin_shapes::role::{DefinitionKind, Heads, Role};
+use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
+use crate::source::SourceRef;
+use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner};
+use crate::type_lattice::{DeclaredGroup, KType, TypeRegistry, display_name};
+use crate::values::Knotted;
 
-use super::activation::ActivationView;
 use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
@@ -36,7 +52,8 @@ mod build;
 
 pub(crate) use build::IMPLICIT;
 
-/// An index into an activation's slot run: value slots first, type slots after.
+/// An index into an activation's slot run: value slots first, type slots after, registration slots
+/// last.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Slot(pub(crate) u32);
 
@@ -44,7 +61,7 @@ pub struct Slot(pub(crate) u32);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct CaptureSlot(pub(crate) u32);
 
-/// An index into the builtin table: values first, types after.
+/// An index into the builtin table: values first, types after, overloads last.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct BuiltinIndex(pub(crate) u32);
 
@@ -142,6 +159,11 @@ impl Site {
         Site(std::ptr::from_ref(part) as usize)
     }
 
+    /// The site of a whole node — its parts run's address, which every copy of the node shares.
+    pub fn of_node(node: &KExpression<'_>) -> Site {
+        Site(node.parts.as_ptr() as usize)
+    }
+
     /// The site of `form`'s body part — where the shape enclosing `form` records the body nested in
     /// it — or `None` for a node whose builtin shape declares no body.
     pub fn of_body(form: &KExpression<'_>) -> Option<Site> {
@@ -166,7 +188,62 @@ pub struct Mention {
     pub coordinate: Coordinate,
 }
 
-/// The four kinds of body a shape describes.
+/// Which of a definition's bucket keys a registration is under: its only one, or for a `UNARY OP`,
+/// its unary key `⊕ _` or its binary key `_ ⊕ _`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Which {
+    Only,
+    Unary,
+    Binary,
+}
+
+/// One registration a body declares: a keyworded definition's function, bound at `slot`, under one
+/// of its bucket keys.
+#[derive(Clone, Copy, Debug)]
+pub struct Registration<'graph> {
+    pub slot: Slot,
+    pub key: KeySymbol,
+    /// The key as its keywords and slots.
+    pub elements: &'graph [KeyElement],
+    /// Each slot's dense priority class, in element order: the ranking of the declaration visible
+    /// where the definition is written, an operator's chaining, or written order.
+    pub classes: &'graph [u8],
+    pub which: Which,
+}
+
+/// A bucket declaration a body holds, `EXPR #(MOVE 2 TO 1)`: the ranking it gives its key, from
+/// the position it is written at. It binds nothing.
+#[derive(Clone, Copy, Debug)]
+pub struct Ranking<'graph> {
+    pub key: KeySymbol,
+    pub elements: &'graph [KeyElement],
+    pub at: Position,
+    pub classes: &'graph [u8],
+}
+
+/// One callable, or list of callables, a keyworded use may select.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Candidate {
+    /// A builtin overload, or a registration read where the use resolves it.
+    One(Coordinate),
+    /// A capture of a quote's code named by the use's key, whose value is a list of functions: a
+    /// keyworded hole a `USING` fills, or a `\(…)` use's key the `EVAL` running the code offers.
+    Spread(Coordinate),
+}
+
+/// What a keyworded use may select, fixed where its shape is built: the builtin overloads at its
+/// key, in table order, then each registration at the key visible to it, the enclosing bodies
+/// innermost first, then — in a quote's code — the capture its key names. Every candidate a shape
+/// sees carries one ranking, `classes`; a spread's is checked where it is filled.
+#[derive(Clone, Copy, Debug)]
+pub struct CandidateList<'graph> {
+    pub key: KeySymbol,
+    pub elements: &'graph [KeyElement],
+    pub classes: &'graph [u8],
+    pub candidates: &'graph [Candidate],
+}
+
+/// The five kinds of body a shape describes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShapeKind {
     /// The top level: no captures and no enclosing activation.
@@ -175,15 +252,22 @@ pub enum ShapeKind {
     Callable,
     /// A `MODULE` or `GROUP` body: captures, and is an eager context.
     Module,
-    /// A `MATCH` or `TRY` arm, or an `EVAL` body: activated in the enclosing frame beside a pointer
-    /// to the enclosing activation.
+    /// A `MATCH` or `TRY` arm, or a `USING … SCOPE` body: activated in the enclosing frame beside a
+    /// pointer to the enclosing activation.
     Block,
+    /// A quote value's code: captures its `$` names where the quote is written, like a callable,
+    /// and leaves every other free name an open hole or an open `\` mark. An `EVAL` activates it
+    /// with no enclosing activation.
+    Code,
 }
 
-/// One closure binding a callable's birth fills, and where from.
+/// One closure binding a birth fills, and where from. `mark` is the mark the name was read through
+/// — `None` for an unmarked name — so a hole `x`, a `$x` and a `\x` read in one body are three
+/// captures.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CaptureSpec {
     pub name: BinderSymbol,
+    pub mark: Option<Mark>,
     pub source: CaptureSource,
 }
 
@@ -198,6 +282,11 @@ pub enum CaptureSource {
         component: ComponentIndex,
         index: u32,
     },
+    /// An open hole of a code shape, a name or a keyworded use's key: a `USING` supplies it, or it
+    /// stays unbound — a key's then holds no function, unless some use selects from it alone.
+    Hole,
+    /// An open `\` mark of a code shape: the `EVAL` that runs the code offers it.
+    Offered,
 }
 
 /// A strongly connected component of a shape's bindings.
@@ -246,7 +335,7 @@ pub struct BodyShape<'graph> {
     /// operand surfaces. Empty for every other body.
     held: &'graph [&'graph DeclaredGroup<'graph>],
     /// The position in the enclosing shape this one is entered at: the statement's for an eager
-    /// boundary, the enclosing body's end for a deferred one, and `EVAL`'s own for an `EVAL` body.
+    /// boundary, the enclosing body's end for a deferred one.
     entered_at: Position,
     component_of: &'graph [ComponentIndex],
     components: &'graph [Component<'graph>],
@@ -263,7 +352,46 @@ pub struct BodyShape<'graph> {
     declarations: &'graph [(Slot, &'graph KExpression<'graph>)],
     /// The body's units in the order they are performed.
     units: &'graph [Unit],
-    keeps_defining_scope: bool,
+    /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
+    arm: Option<Arm<'graph>>,
+    /// A code shape's carried type: its code kind needing its open `\` marks. `Code` for every
+    /// other kind.
+    code_type: KType,
+    /// Why a code shape's code cannot be built — reported when an `EVAL` runs it. A refused code
+    /// shape holds its `$` captures and nothing else.
+    refusal: Option<&'graph ShapeError<'graph>>,
+    /// Each `EVAL` of a code parameter whose type needs names, by its operand's site, beside each
+    /// needed name or key and what the `EVAL` offers for it.
+    offers: &'graph [(Site, &'graph [(BinderSymbol, Offer<'graph>)])],
+    /// Each registration this body declares, by slot.
+    registrations: &'graph [Registration<'graph>],
+    /// Each bucket declaration this body holds, in statement order.
+    rankings: &'graph [Ranking<'graph>],
+    /// Each keyworded use's candidates, by the use's node site.
+    candidates: &'graph [(Site, CandidateList<'graph>)],
+    /// A code shape's keyworded holes some use selects from alone, sorted.
+    required: &'graph [KeySymbol],
+}
+
+/// What an `EVAL` of a code parameter offers the code it runs for one name its `NEEDING` list
+/// names.
+#[derive(Clone, Copy, Debug)]
+pub enum Offer<'graph> {
+    /// A name, where it resolves at the `EVAL`.
+    Name(Coordinate),
+    /// A bucket key, as a use at the key written at the `EVAL` resolves it.
+    Key(&'graph CandidateList<'graph>),
+}
+
+/// What a `MATCH` or `TRY` arm's block is to the expression shape holding it.
+#[derive(Clone, Copy, Debug)]
+pub struct Arm<'graph> {
+    /// The guard's quote as written — `it`'s type or label — or `None` for the `_` default.
+    pub guard: Option<&'graph ExpressionPart<'graph>>,
+    /// Whether a type (`MATCH … WITH`) or a label (`MATCH … OVER`, `TRY`) is written there.
+    pub heads: Heads,
+    /// Whether the block's last statement is in tail position.
+    pub tail: bool,
 }
 
 const _: () = assert!(!std::mem::needs_drop::<BodyShape<'static>>());
@@ -273,22 +401,12 @@ impl<'graph> BodyShape<'graph> {
     pub fn of_program<X: Knotted>(
         brand: ProgramBrand<'graph>,
         statements: &[KExpression<'graph>],
-        builtins: &Builtins<'_, '_, X>,
+        builtins: &Builtins<'_, X>,
+        types: &TypeRegistry<'graph>,
+        symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
-    ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
-        build::program(brand, statements, builtins, scratch)
-    }
-
-    /// The block shape of `body` evaluated by an `EVAL` reading at `at` in `site`: every free name
-    /// resolves by name over `site`'s chain, and a binder in `body` binds in this block.
-    pub fn for_eval<XF: KnottedFamily<'graph>>(
-        brand: ProgramBrand<'graph>,
-        body: &KExpression<'graph>,
-        site: &ActivationView<'graph, '_, XF>,
-        at: Position,
-        scratch: BumpAllocator<'_>,
-    ) -> Result<&'graph BodyShape<'graph>, ShapeError> {
-        build::eval(brand, body, site, at, scratch)
+    ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
+        build::program(brand, statements, builtins, types, symbols, scratch)
     }
 
     pub fn kind(&self) -> ShapeKind {
@@ -311,8 +429,8 @@ impl<'graph> BodyShape<'graph> {
         self.body
     }
 
-    /// The operator-group frame this body was built under — what an `EVAL` written here roots its
-    /// own frame at, and what decides which groups an operator run here may chain under.
+    /// The operator-group frame this body was built under — what decides which groups an operator
+    /// run here may chain under.
     pub fn group_frame(&self) -> &'graph GroupFrame<'graph> {
         self.group_frame
     }
@@ -357,6 +475,10 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// The capture layout, in closure-slot order. Empty for a program and a block.
+    ///
+    /// A code shape's captures are its `$` names, each read where the quote is written, its open
+    /// holes and its open `\` marks — every free name of its code, so nothing is searched when an
+    /// `EVAL` runs it.
     pub fn captures(&self) -> &'graph [CaptureSpec] {
         self.captures
     }
@@ -367,8 +489,7 @@ impl<'graph> BodyShape<'graph> {
 
     /// The body's units in the order they are performed: each after every unit it reads, two
     /// independent ones as they are written. A unit is a component whose members are not all
-    /// parameters, or a statement that binds nothing; a statement containing `EVAL` also follows
-    /// every unit binding a name declared before it, since no shape can enumerate what it reads.
+    /// parameters, or a statement that binds nothing.
     pub fn units(&self) -> &'graph [Unit] {
         self.units
     }
@@ -396,6 +517,11 @@ impl<'graph> BodyShape<'graph> {
         self.nested
     }
 
+    /// What this body is to the `MATCH` or `TRY` holding it: `Some` exactly for an arm.
+    pub fn arm(&self) -> Option<Arm<'graph>> {
+        self.arm
+    }
+
     /// The `FN`, `EXPR` or `OP` node whose body this shape is — where a callable's signature and
     /// return type are read. `None` for every other kind.
     pub fn form(&self) -> Option<&'graph KExpression<'graph>> {
@@ -403,10 +529,11 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// The body the binder at `slot` births: `Some` for a binder whose right-hand side is a
-    /// callable form at its root (`LET f = FN …`), for a combined form (`LET f = FN EXPR …`,
-    /// `LET f = OP …`), and for a `MODULE` or `GROUP` binder, whose body shape is
-    /// [`ShapeKind::Module`] and carries no [`form`](Self::form); `None` for a data binder, a
-    /// parameter, and a body nested under anything else.
+    /// callable form at its root (`LET f = FN …`), for both binders of a combined form (`LET f =
+    /// FN EXPR …`, `LET f = OP …`) and a bare definition's registration, and for a `MODULE` or
+    /// `GROUP` binder, whose body shape is [`ShapeKind::Module`] and carries no
+    /// [`form`](Self::form); `None` for a data binder, a parameter, and a body nested under
+    /// anything else.
     pub fn births(&self, slot: Slot) -> Option<&'graph BodyShape<'graph>> {
         let index = self
             .births
@@ -447,188 +574,462 @@ impl<'graph> BodyShape<'graph> {
         Some(self.declarations[index].1)
     }
 
-    /// Whether this shape holds an `EVAL` or encloses a shape that does, so its activation must
-    /// stay reachable from the shapes inside it.
-    pub fn keeps_defining_scope(&self) -> bool {
-        self.keeps_defining_scope
+    /// A code shape's carried type — its code kind needing its open `\` marks — and `Code` for
+    /// every other kind.
+    pub fn code_type(&self) -> KType {
+        self.code_type
     }
 
-    /// `name` by name within this shape alone: a local visible at `at`, else a capture.
-    pub(crate) fn resolve_here(&self, name: BinderSymbol, at: Position) -> Option<Target> {
-        resolve_here(self.names, self.captures, name, at)
+    /// Why this code shape's code cannot be built, reported when an `EVAL` runs it.
+    pub fn refusal(&self) -> Option<&'graph ShapeError<'graph>> {
+        self.refusal
+    }
+
+    /// The names and keys the `EVAL` whose operand sits at `site` offers the code it runs, each
+    /// beside what it offers. Empty for an `EVAL` of anything but a parameter needing names.
+    pub fn offers(&self, site: Site) -> &'graph [(BinderSymbol, Offer<'graph>)] {
+        self.offers
+            .binary_search_by_key(&site, |(offered, _)| *offered)
+            .map_or(&[], |index| self.offers[index].1)
+    }
+
+    /// Every registration this body declares, by slot.
+    pub fn registrations(&self) -> &'graph [Registration<'graph>] {
+        self.registrations
+    }
+
+    /// The registration bound at `slot`, or `None` for a name's slot.
+    pub fn registration(&self, slot: Slot) -> Option<&'graph Registration<'graph>> {
+        let index = self
+            .registrations
+            .binary_search_by_key(&slot, |registration| registration.slot)
+            .ok()?;
+        Some(&self.registrations[index])
+    }
+
+    /// Every bucket declaration this body holds, in statement order.
+    pub fn rankings(&self) -> &'graph [Ranking<'graph>] {
+        self.rankings
+    }
+
+    /// A code shape's keyworded holes that some use of the code has no other candidate for: an
+    /// `EVAL` refuses the code while one is unfilled, and binds any other unfilled hole to no
+    /// function.
+    pub fn required_holes(&self) -> &'graph [KeySymbol] {
+        self.required
+    }
+
+    /// Whether every keyworded use at `key` that lists a candidate of its own beside a spread —
+    /// here, and in each body nested here short of another quote's code — carries the ranking
+    /// `classes`: what a `USING` filling this code's hole at `key` must agree with.
+    pub fn ranks_alike(&self, key: KeySymbol, classes: &[u8]) -> bool {
+        let own = self.candidates.iter().all(|(_, list)| {
+            list.key != key
+                || list.classes == classes
+                || list
+                    .candidates
+                    .iter()
+                    .all(|candidate| matches!(candidate, Candidate::Spread(_)))
+        });
+        own && self
+            .nested
+            .iter()
+            .all(|(_, body)| body.kind == ShapeKind::Code || body.ranks_alike(key, classes))
+    }
+
+    /// The candidates of the keyworded use whose node sits at `site` ([`Site::of_node`]).
+    pub fn candidates(&self, site: Site) -> Option<&'graph CandidateList<'graph>> {
+        let index = self
+            .candidates
+            .binary_search_by_key(&site, |(use_site, _)| *use_site)
+            .ok()?;
+        Some(&self.candidates[index].1)
     }
 }
 
-/// `name` read at `at` over one body's declared names and captures: a local visible at `at`, else a
-/// capture of that name.
+/// `name` read through `mark` at `at` over one body's declared names and captures: a local visible
+/// at `at`, else a capture of that name through the same mark. A `$` name never binds to a local,
+/// since it resolves where the quote holding it is written.
 fn resolve_here(
     names: Channels<'_, Position>,
     captures: &[CaptureSpec],
     name: BinderSymbol,
+    mark: Option<Mark>,
     at: Position,
 ) -> Option<Target> {
-    if let Some(index) = names.find(name)
+    if mark != Some(Mark::Written)
+        && let Some(index) = names.find(name)
         && at.sees(names.get(index))
     {
         return Some(Target::Local(Slot(index as u32)));
     }
     captures
         .iter()
-        .position(|capture| capture.name == name)
+        .position(|capture| capture.name == name && capture.mark == mark)
         .map(|index| Target::Capture(CaptureSlot(index as u32)))
 }
 
-/// Why a shape could not be built.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ShapeError {
-    /// A name declared twice in one shape; the positions are where each declaration writes.
+/// Why a shape could not be built. Every error carries where it was found, as a [`SourceRef`]:
+/// the part it is about when that part carries a span, else the nearest spanned part or node
+/// around it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShapeError<'graph> {
+    /// A name declared twice in one shape, at where each declaration is written.
     Rebind {
         name: BinderSymbol,
-        first: Position,
-        second: Position,
+        first: SourceRef,
+        second: SourceRef,
     },
     /// A binding under a builtin's name, declared at `at`.
-    ShadowsBuiltin { name: BinderSymbol, at: Position },
-    /// A name read where no binding of it is visible.
+    ShadowsBuiltin { name: BinderSymbol, at: SourceRef },
+    /// A name read at `at`, where no binding of it is visible.
     Unbound {
         name: BinderSymbol,
         site: Site,
-        at: Position,
+        at: SourceRef,
     },
-    /// A component containing an eager mention of one of its own members.
-    EagerCycle { members: Vec<BinderSymbol> },
-    /// An `EVAL` at `eval` that may read `name`, declared before it, whose binding waits on the
-    /// `EVAL`'s statement.
-    EvalCycle { name: BinderSymbol, eval: Position },
+    /// A component containing an eager mention of one of its own members, found at the statement
+    /// of the member declared first: its named members, and the key of each registration in it.
+    EagerCycle {
+        members: &'graph [BinderSymbol],
+        definitions: &'graph [&'graph [KeyElement]],
+        at: SourceRef,
+    },
+    /// A `$` or `\` mark at `at` that no quote value holds.
+    MarkOutsideQuote { at: SourceRef },
     /// A form the shape builder does not resolve.
-    Unsupported { form: BuiltinShapeId, at: Position },
+    Unsupported { form: BuiltinShapeId, at: SourceRef },
     /// A form whose body or branches are not the shape it declares.
-    Malformed { form: BuiltinShapeId, at: Position },
-    /// A `USING` whose operand does not say, where the shape is built, which names it surfaces.
-    Unsurfaced { at: Position, site: Site },
-    /// An operator run naming a symbol whose group no enclosing body holds.
-    Unchained { symbol: KeywordSymbol, at: Position },
-    /// An operator run whose symbols chain under two different groups.
+    Malformed { form: BuiltinShapeId, at: SourceRef },
+    /// A `USING` whose operand, at `at`, does not say where the shape is built which names it
+    /// surfaces.
+    Unsurfaced { at: SourceRef, site: Site },
+    /// An operator run naming a symbol, at `at`, whose group no enclosing body holds.
+    Unchained {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
+    /// An operator run whose symbols chain under two different groups; `at` is the second's.
     MixedGroups {
         first: KeywordSymbol,
         second: KeywordSymbol,
-        at: Position,
+        at: SourceRef,
     },
     /// A `GROUP` — or a `USING` surfacing one — over a symbol another group already covers, or
     /// over one a `UNARY OP` has marked unary.
-    RedeclaresGroup { symbol: KeywordSymbol, at: Position },
+    RedeclaresGroup {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
     /// A binary `OP` declaring a result type of its own whose symbol does not chain pairwise.
-    ResultOutsidePairwise { symbol: KeywordSymbol, at: Position },
-    /// An operator run whose chained node would spell a builtin form.
-    SpellsForm { symbol: KeywordSymbol, at: Position },
+    ResultOutsidePairwise {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
+    /// An operator run whose chained node would spell a builtin form; `at` is the operator's.
+    SpellsForm {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
     /// A declaration naming `!=`, which is always the opposite of `==` and is declared by nobody.
-    Derived { symbol: KeywordSymbol, at: Position },
+    Derived {
+        symbol: KeywordSymbol,
+        at: SourceRef,
+    },
+    /// A part read as a quote, or as a container of quotes, written some other way.
+    Unquoted {
+        form: BuiltinShapeId,
+        part: QuotedPart,
+        at: SourceRef,
+    },
+    /// A part read as written whose syntax admits none of its slot's types; `index` counts the
+    /// form's elements from zero, and `slot` is the first overload's type there.
+    Inadmissible {
+        form: BuiltinShapeId,
+        index: usize,
+        slot: KType,
+        at: SourceRef,
+    },
+    /// A value dict written with a `_` key, whose default has no reading yet.
+    DictDefault { site: Site, at: SourceRef },
+    /// A definition or bucket declaration at the key of a builtin expression shape, which is
+    /// closed.
+    ClosedBucket {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
+    /// A definition or bucket declaration whose key spells no keyword.
+    NoKeyword { at: SourceRef },
+    /// A definition whose head ranks a slot, which only a bucket declaration may.
+    RankedDefinition { at: SourceRef },
+    /// A binder or bucket declaration that is not its statement's own expression.
+    NestedBinder { at: SourceRef },
+    /// Two rankings of one key that meet: a declaration or definition seeing another, or a
+    /// keyworded use seeing both.
+    RankingDisagrees {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
+    /// A keyworded use at a key with no builtin overload and no registration visible to it.
+    NoCandidate {
+        key: &'graph [KeyElement],
+        at: SourceRef,
+    },
+    /// A registration whose operand types, spelled from builtin names alone, meet those of the
+    /// builtin overload `builtin` at its key, whose operands are not all `Any`.
+    Overlaps {
+        key: &'graph [KeyElement],
+        builtin: KType,
+        at: SourceRef,
+    },
 }
 
-impl ShapeError {
-    /// The error rendered with its names spelled through `symbols`.
-    pub fn display<'x>(&'x self, symbols: &'x SymbolInterner) -> ShapeErrorDisplay<'x> {
+/// Which part of a form a quote, or a container of quotes, was wanted for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QuotedPart {
+    Body,
+    Head,
+    Symbol,
+    Arms,
+    Variants,
+    Quantifiers,
+    Members,
+}
+
+impl QuotedPart {
+    /// The part a slot under `role` holds, for a role read as a quote or a container.
+    pub(crate) fn of(role: Role) -> QuotedPart {
+        match role {
+            Role::Head => QuotedPart::Head,
+            Role::Data => QuotedPart::Symbol,
+            Role::Branches(_) => QuotedPart::Arms,
+            Role::Definition(DefinitionKind::Union) => QuotedPart::Variants,
+            Role::Definition(DefinitionKind::Members) => QuotedPart::Members,
+            Role::Quantifiers => QuotedPart::Quantifiers,
+            _ => QuotedPart::Body,
+        }
+    }
+
+    /// How the part is written, as a diagnostic tells the writer to write it.
+    fn spelling(self) -> &'static str {
+        match self {
+            QuotedPart::Body => "body as a quote: write #(…)",
+            QuotedPart::Head => "head as a quote: write #(…)",
+            QuotedPart::Symbol => "symbol as a quote: write #(…)",
+            QuotedPart::Arms => "arms as a dict of quotes: write #{…}",
+            QuotedPart::Variants => "variants as a dict of quotes: write #{…}",
+            QuotedPart::Quantifiers => {
+                "quantifiers as a list or dict of quotes: write #[…] or #{…}"
+            }
+            QuotedPart::Members => "members as a list of quotes: write #[…]",
+        }
+    }
+}
+
+impl ShapeError<'_> {
+    /// Where the error was found: a rebind's second declaration, every other error's `at`.
+    pub fn at(&self) -> SourceRef {
+        match self {
+            ShapeError::Rebind { second, .. } => *second,
+            ShapeError::ShadowsBuiltin { at, .. }
+            | ShapeError::Unbound { at, .. }
+            | ShapeError::EagerCycle { at, .. }
+            | ShapeError::MarkOutsideQuote { at }
+            | ShapeError::Unsupported { at, .. }
+            | ShapeError::Malformed { at, .. }
+            | ShapeError::Unsurfaced { at, .. }
+            | ShapeError::Unchained { at, .. }
+            | ShapeError::MixedGroups { at, .. }
+            | ShapeError::RedeclaresGroup { at, .. }
+            | ShapeError::ResultOutsidePairwise { at, .. }
+            | ShapeError::SpellsForm { at, .. }
+            | ShapeError::Derived { at, .. }
+            | ShapeError::Unquoted { at, .. }
+            | ShapeError::Inadmissible { at, .. }
+            | ShapeError::DictDefault { at, .. }
+            | ShapeError::ClosedBucket { at, .. }
+            | ShapeError::NoKeyword { at }
+            | ShapeError::RankedDefinition { at }
+            | ShapeError::NestedBinder { at }
+            | ShapeError::RankingDisagrees { at, .. }
+            | ShapeError::NoCandidate { at, .. }
+            | ShapeError::Overlaps { at, .. } => *at,
+        }
+    }
+
+    /// The error rendered, led by where it was found (`path:line:col: `), with its names spelled
+    /// through `symbols` and its types through `types`.
+    pub fn display<'x, 'run>(
+        &'x self,
+        symbols: &'x SymbolInterner,
+        types: &'x TypeRegistry<'run>,
+    ) -> ShapeErrorDisplay<'x, 'run> {
         ShapeErrorDisplay {
             error: self,
             symbols,
+            types,
         }
     }
 }
 
-/// A [`ShapeError`] beside the interner its names render through.
-pub struct ShapeErrorDisplay<'x> {
-    error: &'x ShapeError,
+/// A [`ShapeError`] beside the interner its names render through and the registry its types
+/// render through.
+pub struct ShapeErrorDisplay<'x, 'run> {
+    error: &'x ShapeError<'x>,
     symbols: &'x SymbolInterner,
+    types: &'x TypeRegistry<'run>,
 }
 
-impl fmt::Display for ShapeErrorDisplay<'_> {
+impl fmt::Display for ShapeErrorDisplay<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
+        write!(f, "{}: ", self.error.at())?;
         match self.error {
             ShapeError::Rebind {
-                name: bound,
-                first,
-                second,
-            } => write!(
+                name: bound, first, ..
+            } => write!(f, "`{}` is bound twice; first at {first}", name(bound)),
+            ShapeError::ShadowsBuiltin { name: bound, .. } => write!(
                 f,
-                "`{}` is bound twice: at {first} and again at {second}",
+                "`{}` names a builtin, which cannot be rebound",
                 name(bound)
             ),
-            ShapeError::ShadowsBuiltin { name: bound, at } => write!(
-                f,
-                "`{}` at {at} names a builtin, which cannot be rebound",
-                name(bound)
-            ),
-            ShapeError::Unbound { name: read, at, .. } => {
-                write!(f, "`{}` in {at} names no binding visible there", name(read))
+            ShapeError::Unbound { name: read, .. } => {
+                write!(f, "`{}` names no binding visible here", name(read))
             }
-            ShapeError::EagerCycle { members } => {
+            ShapeError::EagerCycle {
+                members,
+                definitions,
+                ..
+            } => {
                 f.write_str("these bindings need each other's values before any of them exists:")?;
-                for member in members {
+                for member in members.iter() {
                     write!(f, " `{}`", name(member))?;
+                }
+                for key in definitions.iter() {
+                    write!(f, " `{}`", self.key(key))?;
                 }
                 Ok(())
             }
-            ShapeError::EvalCycle { name: read, eval } => write!(
-                f,
-                "the `EVAL` in {eval} may read `{}`, which needs that statement's value first",
-                name(read)
+            ShapeError::MarkOutsideQuote { .. } => f.write_str(
+                "a `$` or `\\` mark belongs to a quote value, and no quote value holds this one",
             ),
-            ShapeError::Unsupported { form, at } => {
-                write!(f, "`{form:?}` in {at} is not supported here yet")
+            ShapeError::Unsupported { form, .. } => {
+                write!(f, "`{form:?}` is not supported here yet")
             }
-            ShapeError::Malformed { form, at } => {
-                write!(f, "`{form:?}` in {at} is not the shape it declares")
+            ShapeError::Malformed { form, .. } => {
+                write!(f, "`{form:?}` is not the shape it declares")
             }
-            ShapeError::Unsurfaced { at, .. } => write!(
-                f,
-                "`USING` in {at} cannot tell which names this module surfaces; \
-                 ascribe it here: `USING (m :! Sig) SCOPE (…)`"
+            ShapeError::Unsurfaced { .. } => f.write_str(
+                "`USING` cannot tell which names this module surfaces; \
+                 ascribe it here: `USING (m :! Sig) SCOPE (…)`",
             ),
-            ShapeError::Unchained { symbol, at } => write!(
+            ShapeError::Unchained { symbol, .. } => write!(
                 f,
-                "`{}` in {at} chains under a group no body around it holds; \
+                "`{}` chains under a group no body around it holds; \
                  surface it here: `USING <group> SCOPE (…)`",
                 operator(symbol)
             ),
-            ShapeError::MixedGroups { first, second, at } => write!(
+            ShapeError::MixedGroups { first, second, .. } => write!(
                 f,
-                "`{}` and `{}` in {at} chain under different groups, so this run has no one \
-                 shape; parenthesize it",
+                "`{}` and `{}` chain under different groups, so this run has no one shape; \
+                 parenthesize it",
                 operator(first),
                 operator(second)
             ),
-            ShapeError::RedeclaresGroup { symbol, at } => write!(
+            ShapeError::RedeclaresGroup { symbol, .. } => write!(
                 f,
-                "`{}` in {at} already chains another way; a symbol chains one way in one program",
+                "`{}` already chains another way; a symbol chains one way in one program",
                 operator(symbol)
             ),
-            ShapeError::ResultOutsidePairwise { symbol, at } => write!(
+            ShapeError::ResultOutsidePairwise { symbol, .. } => write!(
                 f,
-                "`{}` in {at} declares a result of its own, which only a pairwise operator may do",
+                "`{}` declares a result of its own, which only a pairwise operator may do",
                 operator(symbol)
             ),
-            ShapeError::SpellsForm { symbol, at } => write!(
+            ShapeError::SpellsForm { symbol, .. } => write!(
                 f,
-                "a run of `{}` in {at} chains into a node spelling a builtin form",
+                "a run of `{}` chains into a node spelling a builtin form",
                 operator(symbol)
             ),
-            ShapeError::Derived { symbol, at } => write!(
+            ShapeError::Derived { symbol, .. } => write!(
                 f,
-                "`{}` in {at} is always the opposite of `==` and is declared by nobody",
+                "`{}` is always the opposite of `==` and is declared by nobody",
                 operator(symbol)
+            ),
+            ShapeError::Unquoted { form, part, .. } => {
+                write!(f, "`{form:?}` takes its {}", part.spelling())
+            }
+            ShapeError::Inadmissible {
+                form, index, slot, ..
+            } => write!(
+                f,
+                "`{form:?}` takes {} as its part {index}",
+                display_name(*slot, self.types, self.symbols)
+            ),
+            ShapeError::DictDefault { .. } => {
+                f.write_str("a dict's `_` default is not supported yet")
+            }
+            ShapeError::ClosedBucket { key, .. } => write!(
+                f,
+                "`{}` is a builtin expression shape, which no definition adds to",
+                self.key(key)
+            ),
+            ShapeError::NoKeyword { .. } => {
+                f.write_str("a definition's head must spell at least one keyword")
+            }
+            ShapeError::RankedDefinition { .. } => f.write_str(
+                "a definition's head ranks no slot; declare the ranking on its own: `EXPR #(…)`",
+            ),
+            ShapeError::NestedBinder { .. } => {
+                f.write_str("a binding must be its statement's own expression, not a part of one")
+            }
+            ShapeError::RankingDisagrees { key, .. } => {
+                write!(f, "`{}` is ranked two ways here", self.key(key))
+            }
+            ShapeError::NoCandidate { key, .. } => {
+                write!(f, "`{}` has no overload visible here", self.key(key))
+            }
+            ShapeError::Overlaps { key, builtin, .. } => write!(
+                f,
+                "this overload of `{}` takes operands the builtin {} already takes",
+                self.key(key),
+                display_name(*builtin, self.types, self.symbols)
             ),
         }
     }
 }
 
-/// A position as a diagnostic names it: a parameter, or a statement counted from one.
-impl fmt::Display for Position {
+impl ShapeErrorDisplay<'_, '_> {
+    fn key<'k>(&'k self, key: &'k [KeyElement]) -> KeyDisplay<'k> {
+        spelled(key, self.symbols)
+    }
+}
+
+/// `key` spelled as it is written: its keywords, `_` at each slot.
+pub fn spelled<'k>(key: &'k [KeyElement], symbols: &'k SymbolInterner) -> KeyDisplay<'k> {
+    KeyDisplay { key, symbols }
+}
+
+/// A bucket key beside the interner its keywords render through.
+pub struct KeyDisplay<'k> {
+    key: &'k [KeyElement],
+    symbols: &'k SymbolInterner,
+}
+
+impl fmt::Display for KeyDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            0 => f.write_str("a parameter"),
-            statement => write!(f, "statement {statement}"),
+        for (index, element) in self.key.iter().enumerate() {
+            if index > 0 {
+                f.write_str(" ")?;
+            }
+            match element {
+                KeyElement::Keyword(keyword) => {
+                    write!(f, "{}", self.symbols.display(keyword.symbol()))?
+                }
+                KeyElement::Slot => f.write_str("_")?,
+            }
         }
+        Ok(())
     }
 }

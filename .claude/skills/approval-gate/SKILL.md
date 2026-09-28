@@ -1,6 +1,6 @@
 ---
 name: approval-gate
-description: Reusable user-approval gate for orchestration skills that delegate to sub-agents. Defines the standard Accept / Abort / Iterate pattern — verbatim agent output, AskUserQuestion with two explicit options plus "Other" as the iterate channel, and a 3-cycle iterate cap.
+description: Reusable user-approval gate for orchestration skills that delegate to sub-agents. Defines the standard Accept / Abort / Iterate pattern — verbatim agent output, a plain-text gate with two explicit options plus free-text feedback as the iterate channel, and a 3-cycle iterate cap.
 ---
 
 # approval-gate
@@ -20,19 +20,18 @@ After a sub-agent returns and before advancing to the next step. The caller supp
 
 1. **Write `agent_output` to a file in `scratch/`, complete and verbatim, and point the user at that file.** Do not summarize, paraphrase, condense, or bullet-ify. The user cannot see sub-agent output directly — your text is their only window into it.
 
-2. **In the same turn, call AskUserQuestion with exactly two explicit options.** Iterate is the built-in "Other" channel, not its own option — AskUserQuestion always exposes "Other" with a free-text input, and adding an explicit "Iterate" alongside it splits the iterate path.
+2. **In the same turn, end the message with the gate in plain text — never through `AskUserQuestion` — and wait for the reply.** Offer exactly two explicit options, and say that any other reply is feedback for another iteration:
    - **Accept** — `accept_label`.
    - **Abort** — `abort_consequence`.
-
-   The question text itself must point users at Other, e.g. "How do you want to proceed? (Pick Other to give feedback for another iteration.)"
+   - Or reply with feedback — `iterate_action`.
 
 3. **When the response comes back:**
    - "Accept" → advance to the next step. If the sub-agent's work touched Rust source (an in-place refactor or other code-writing pass), run the `verify-koan` skill first so the advance lands on a build that has tests + clippy green and a recorded modgraph baseline.
    - "Abort" → run the abort consequence.
-   - Otherwise (the user picked "Other" with custom text — or any other variant) → treat the response text as iterate feedback and re-spawn `iterate_action` with that feedback appended.
+   - Anything else → treat the reply as iterate feedback and re-spawn `iterate_action` with that feedback appended.
 
 4. **Cap iterate cycles at 3.** After three iterate rounds, ask the user in plain text whether to continue iterating or abort.
 
 ## Allowed overrides
 
-Callers may replace the second explicit option (Abort) with a domain-specific exit when the gate's context calls for it. Example: a plan-phase gate might use **Discuss language design** instead of **Abort**, with a custom consequence that exits to `/design`. The two-explicit-options-plus-Other-as-iterate shape is preserved either way.
+Callers may replace the second explicit option (Abort) with a domain-specific exit when the gate's context calls for it. Example: a plan-phase gate might use **Discuss language design** instead of **Abort**, with a custom consequence that exits to `/design`. The two-explicit-options-plus-free-text-iterate shape is preserved either way.

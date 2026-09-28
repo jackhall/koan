@@ -18,50 +18,6 @@ pub fn strongly_connected_components<'a>(
     scratch: BumpAllocator<'a>,
     edges: &[&[usize]],
 ) -> BumpVec<'a, BumpVec<'a, usize>> {
-    struct State<'e, 'a> {
-        scratch: BumpAllocator<'a>,
-        edges: &'e [&'e [usize]],
-        index: usize,
-        indices: BumpVec<'a, Option<usize>>,
-        lowlink: BumpVec<'a, usize>,
-        on_stack: BumpVec<'a, bool>,
-        stack: BumpVec<'a, usize>,
-        components: BumpVec<'a, BumpVec<'a, usize>>,
-    }
-
-    fn strong_connect(state: &mut State<'_, '_>, v: usize) {
-        state.indices[v] = Some(state.index);
-        state.lowlink[v] = state.index;
-        state.index += 1;
-        state.stack.push(v);
-        state.on_stack[v] = true;
-        for edge in 0..state.edges[v].len() {
-            let w = state.edges[v][edge];
-            match state.indices[w] {
-                None => {
-                    strong_connect(state, w);
-                    state.lowlink[v] = state.lowlink[v].min(state.lowlink[w]);
-                }
-                Some(w_index) if state.on_stack[w] => {
-                    state.lowlink[v] = state.lowlink[v].min(w_index);
-                }
-                Some(_) => {}
-            }
-        }
-        if state.lowlink[v] == state.indices[v].expect("v was just indexed") {
-            let mut component = BumpVec::new_in(state.scratch);
-            loop {
-                let w = state.stack.pop().expect("the stack holds v");
-                state.on_stack[w] = false;
-                component.push(w);
-                if w == v {
-                    break;
-                }
-            }
-            state.components.push(component);
-        }
-    }
-
     fn filled<'a, T: Clone>(scratch: BumpAllocator<'a>, count: usize, value: T) -> BumpVec<'a, T> {
         let mut cells = BumpVec::with_capacity_in(count, scratch);
         cells.resize(count, value);
@@ -69,22 +25,57 @@ pub fn strongly_connected_components<'a>(
     }
 
     let count = edges.len();
-    let mut state = State {
-        scratch,
-        edges,
-        index: 0,
-        indices: filled(scratch, count, None),
-        lowlink: filled(scratch, count, 0),
-        on_stack: filled(scratch, count, false),
-        stack: BumpVec::with_capacity_in(count, scratch),
-        components: BumpVec::with_capacity_in(count, scratch),
-    };
-    for v in 0..count {
-        if state.indices[v].is_none() {
-            strong_connect(&mut state, v);
+    let mut next_index = 0;
+    let mut indices: BumpVec<'a, Option<usize>> = filled(scratch, count, None);
+    let mut lowlink = filled(scratch, count, 0);
+    let mut on_stack = filled(scratch, count, false);
+    let mut stack = BumpVec::with_capacity_in(count, scratch);
+    let mut components = BumpVec::with_capacity_in(count, scratch);
+    // The walk's own call stack, held here rather than on the thread's: each entry is a node being
+    // visited and the next of its edges to follow, so a chain as long as the graph costs no depth.
+    let mut visiting: BumpVec<'a, (usize, usize)> = BumpVec::with_capacity_in(count, scratch);
+    for root in 0..count {
+        if indices[root].is_some() {
+            continue;
+        }
+        visiting.push((root, 0));
+        while let Some(&mut (v, ref mut edge)) = visiting.last_mut() {
+            if *edge == 0 && indices[v].is_none() {
+                indices[v] = Some(next_index);
+                lowlink[v] = next_index;
+                next_index += 1;
+                stack.push(v);
+                on_stack[v] = true;
+            }
+            if let Some(&w) = edges[v].get(*edge) {
+                *edge += 1;
+                match indices[w] {
+                    None => visiting.push((w, 0)),
+                    Some(w_index) if on_stack[w] => lowlink[v] = lowlink[v].min(w_index),
+                    Some(_) => {}
+                }
+                continue;
+            }
+            // Every edge of `v` is followed: close it, and fold its lowlink into its caller's.
+            visiting.pop();
+            if lowlink[v] == indices[v].expect("v was indexed on entry") {
+                let mut component = BumpVec::new_in(scratch);
+                loop {
+                    let w = stack.pop().expect("the stack holds v");
+                    on_stack[w] = false;
+                    component.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                components.push(component);
+            }
+            if let Some(&(caller, _)) = visiting.last() {
+                lowlink[caller] = lowlink[caller].min(lowlink[v]);
+            }
         }
     }
-    state.components
+    components
 }
 
 #[cfg(test)]

@@ -24,7 +24,9 @@ use crate::type_lattice::kind::KKind;
 use crate::type_lattice::operators::{FoldDirection, ReductionMode};
 use crate::type_lattice::registry::TypeRegistry;
 use crate::type_lattice::schema::SchemaDraft;
-use crate::type_lattice::shape::{DeferredReturnSurface, DispatchTokenElement};
+use crate::type_lattice::shape::{
+    DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes,
+};
 use crate::type_lattice::window::{RecursiveGroupWindow, RelativeSchema};
 
 /// An arena that lives for the rest of the test process, so a strategy can hold handles into it.
@@ -181,9 +183,15 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
         Just(KType::ANY_CODE),
         Just(KType::NEVER),
         Just(KType::IDENTIFIER),
-        Just(KType::NAME_TOKEN),
+        Just(KType::SYMBOL),
         Just(KType::TYPE_NAME_TOKEN),
-        Just(KType::KEXPRESSION),
+        Just(KType::EXPRESSION),
+        Just(KType::LITERAL),
+        Just(KType::BLOCK),
+        Just(KType::DECLARATION),
+        Just(KType::BINDER),
+        Just(KType::NAME),
+        Just(KType::KEYWORD),
         Just(KType::of_kind(KKind::ProperType)),
         Just(KType::of_kind(KKind::AnyType)),
         Just(KType::of_kind(KKind::NewType)),
@@ -213,13 +221,23 @@ fn arb_leaf(world: World, bound: Rc<Vec<KType>>, members: Rc<Vec<KType>>) -> Box
                 )
             })
         });
+    // A code kind needing names: a kind from three levels of the code tree, needing one to three
+    // names of the binder alphabet.
+    let needing_world = world.clone();
+    let needing = (
+        prop::sample::select(&[KType::BLOCK, KType::EXPRESSION, KType::BINDER][..]),
+        prop::sample::subsequence(world.binders.as_ref().clone(), 1..=3),
+    )
+        .prop_map(move |(kind, names)| {
+            with_scratch(|scratch| needing_world.types.code_needing(scratch, kind, &names))
+        });
     let mut rigid: Vec<KType> = bound.as_ref().clone();
     rigid.extend(members.iter().copied());
     if rigid.is_empty() {
-        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque].boxed();
+        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => needing].boxed();
     }
     let in_scope = (0..rigid.len()).prop_map(move |index| rigid[index]);
-    prop_oneof![6 => atoms, 1 => deferred, 2 => opaque, 4 => in_scope].boxed()
+    prop_oneof![6 => atoms, 1 => deferred, 2 => opaque, 2 => needing, 4 => in_scope].boxed()
 }
 
 /// The declaring scope a generated opaque mint is sourced at — any id that is not the canonical
@@ -252,7 +270,8 @@ fn arb_fields(
 /// A variable is planted at **two** argument positions on purpose: canonical form replaces a single
 /// occurrence by its bound or by `Never`, so a group whose variables were only sprinkled at random
 /// would almost never survive interning, and the laws about quantified shapes would run over
-/// nothing.
+/// nothing. Each slot is ranked `_` or by a small integer, so written order and rankings with ties
+/// both occur.
 fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy<KType> {
     let grounds = world.grounds();
     (
@@ -286,8 +305,9 @@ fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy
             (
                 prop::collection::vec((0..world.keywords.len(), slot), positions),
                 ret,
+                prop::collection::vec(prop::option::of(0..3u32), positions),
             )
-                .prop_map(move |(drawn, ret)| {
+                .prop_map(move |(drawn, ret, ranks)| {
                     let mut keywords: Vec<KeywordSymbol> = Vec::new();
                     let mut slots: Vec<KType> = Vec::new();
                     for (keyword, slot) in drawn {
@@ -308,8 +328,16 @@ fn arb_shape(world: World, depth: u32, members: Rc<Vec<KType>>) -> BoxedStrategy
                         run.push(DispatchTokenElement::Keyword(keyword));
                         run.push(DispatchTokenElement::Slot(slot));
                     }
+                    let ranks: Vec<RawRank> = ranks
+                        .into_iter()
+                        .map(|rank| rank.map_or(RawRank::Unnumbered, RawRank::Numbered))
+                        .collect();
                     with_scratch(|scratch| {
-                        world.types.shape_type(scratch, &names, &run, ret).handle
+                        let classes = dense_classes(scratch, &ranks);
+                        world
+                            .types
+                            .shape_type(scratch, &names, &run, classes, ret)
+                            .handle
                     })
                 })
         })

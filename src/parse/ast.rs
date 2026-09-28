@@ -13,13 +13,16 @@
 //! region, so nothing here has a reach to describe. Lowering a literal part to a value is
 //! [`Value::lower_part`](crate::values::Value::lower_part).
 
-use crate::source::{FileId, Span, Spanned};
+use crate::source::{SourceRef, Spanned};
 
 use crate::memory::{ProgramBrand, Writer, collect, resident};
 use crate::parse::builtin_shapes::binder::{StoredBinderKey, binder_plan_for};
 use crate::parse::builtin_shapes::layout::SlotLayout;
-use crate::parse::builtin_shapes::lazy::LazyKinds;
-use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
+use crate::parse::depth::node_depth;
+use crate::symbols::{
+    BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol, WILDCARD,
+};
+use crate::type_lattice::KType;
 
 pub mod program;
 pub mod shape;
@@ -69,10 +72,34 @@ pub enum ExpressionPart<'a> {
     /// A `#(...)` quote: the parenthesized body captured at parse time as data. The parser folds
     /// the sigil and its group into this part, so quoting is static syntax — there is no runtime
     /// quoting operation and the body never dispatches. Behaves as a literal everywhere: it is a
-    /// `Slot` in the untyped key, a single one classifies [`DispatchShape::LiteralPassThrough`],
-    /// and it resolves to `KObject::KExpression(<body>)` — the value `$(...)` evaluates. See
+    /// `Slot` in the untyped key and a single one classifies [`DispatchShape::LiteralPassThrough`].
+    /// In an evaluated position it is a quote value, whose code `EVAL` runs. See
     /// [README.md](README.md) § The AST: borrowed, `Copy`, and splice-free.
     QuotedExpression(ProgramNode<'a>),
+    /// A marked name, `$x` or `\x`: inside a quote value, a name resolved where the quote is written
+    /// or where its code is built rather than left a hole. Classifies as the name it marks.
+    MarkedName(Mark, BinderSymbol),
+    /// A marked group, `$(…)` or `\(…)`, wrapping exactly one keyworded use. It evaluates nothing:
+    /// the mark says where the use's keywords resolve. Classifies as a nested expression.
+    MarkedUse(Mark, ProgramNode<'a>),
+}
+
+/// Where a marked part of a quote resolves: `$` where the quote is written, `\` where its code is
+/// built. See [scope README](../scope/README.md#quotes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Mark {
+    Written,
+    Built,
+}
+
+impl Mark {
+    /// The sigil this mark is written with.
+    pub fn sigil(self) -> char {
+        match self {
+            Mark::Written => '$',
+            Mark::Built => '\\',
+        }
+    }
 }
 
 /// A parts run on its way into a node's region, as a construction door takes it: either a borrowed
@@ -101,6 +128,9 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::RecordLiteral(_) => PartClass::RecordLiteral,
             ExpressionPart::Literal(_) => PartClass::Literal,
             ExpressionPart::QuotedExpression(_) => PartClass::QuotedExpression,
+            ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => PartClass::Type,
+            ExpressionPart::MarkedName(..) => PartClass::Identifier,
+            ExpressionPart::MarkedUse(..) => PartClass::Expression,
         }
     }
 
@@ -113,23 +143,57 @@ impl<'a> ExpressionPart<'a> {
         }
     }
 
+    /// The code kind this part is written as, or `None` for a part that is no code: a bare literal
+    /// is a value, and a keyword fills no slot. A bare group is code of its own kind, as a quote is.
+    pub fn code_kind(&self) -> Option<KType> {
+        match self {
+            ExpressionPart::Type(_) | ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => {
+                Some(KType::TYPE_NAME_TOKEN)
+            }
+            ExpressionPart::Identifier(_) | ExpressionPart::MarkedName(..) => {
+                Some(KType::IDENTIFIER)
+            }
+            ExpressionPart::Expression(node) | ExpressionPart::QuotedExpression(node) => {
+                Some(node.reference().code_kind())
+            }
+            ExpressionPart::MarkedUse(..) => Some(KType::EXPRESSION),
+            ExpressionPart::SigiledTypeExpr(_) => Some(KType::SIGILED_TYPE_EXPR),
+            ExpressionPart::RecordType(_) => Some(KType::RECORD_TYPE),
+            ExpressionPart::Keyword(_)
+            | ExpressionPart::Literal(_)
+            | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_) => None,
+        }
+    }
+
+    /// Whether this part is `_` — as a dict's key, the dict's default.
+    pub fn is_wildcard(&self) -> bool {
+        matches!(self, ExpressionPart::Keyword(symbol) if *symbol == WILDCARD.symbol())
+    }
+
     /// Wrap a run of parts as a nested `Expression` part, writing both the run and the node into
     /// the program storage `brand` names. Takes a [`ProgramBrand`] because the arm it builds is a
     /// value-channel conduit: the marker on its payload is the proof the cell doors cite.
     pub fn expression(
         brand: ProgramBrand<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
+        source: SourceRef,
     ) -> ExpressionPart<'a> {
-        ExpressionPart::Expression(brand.nested_node(parts))
+        ExpressionPart::Expression(brand.nested_node(parts, source))
     }
 
     /// [`expression`](Self::expression)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn expression_from_iter<I>(brand: ProgramBrand<'a>, parts: I) -> ExpressionPart<'a>
+    pub fn expression_from_iter<I>(
+        brand: ProgramBrand<'a>,
+        parts: I,
+        source: SourceRef,
+    ) -> ExpressionPart<'a>
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        ExpressionPart::Expression(brand.nested_node_from_iter(parts))
+        ExpressionPart::Expression(brand.nested_node_from_iter(parts, source))
     }
 
     /// Per-part subset of [`KExpression::write_summary`], written straight into `f`.
@@ -155,6 +219,14 @@ impl<'a> ExpressionPart<'a> {
             }
             ExpressionPart::QuotedExpression(e) => {
                 f.write_str("#(")?;
+                e.write_summary(f, symbols)?;
+                f.write_str(")")
+            }
+            ExpressionPart::MarkedName(mark, name) => {
+                write!(f, "{}{}", mark.sigil(), symbols.display(name.symbol()))
+            }
+            ExpressionPart::MarkedUse(mark, e) => {
+                write!(f, "{}(", mark.sigil())?;
                 e.write_summary(f, symbols)?;
                 f.write_str(")")
             }
@@ -223,7 +295,8 @@ impl<'a> ExpressionPart<'a> {
 /// A parsed Koan expression: an ordered run of [`ExpressionPart`]s borrowed from the storage that
 /// parsed them.
 ///
-/// `span` and `file` are `None` for hand-built ASTs.
+/// Every node carries a [`SourceRef`]: code always comes from somewhere, so no door builds a node
+/// without one.
 ///
 /// [`cache`](Self::cache) is the structural cache the construction doors fill once the parts run is
 /// complete — the bucket key, the dispatch shape, the matched builtin shape and the binder plan —
@@ -238,50 +311,33 @@ impl<'a> ExpressionPart<'a> {
 #[derive(Clone, Copy)]
 pub struct KExpression<'a> {
     pub parts: &'a [Spanned<ExpressionPart<'a>>],
-    pub span: Option<Span>,
-    pub file: Option<FileId>,
+    /// Where this node's code came from: its own text, or, for a node built from other code, the
+    /// code it was built from or where it was generated.
+    pub source: SourceRef,
     cache: NodeCache<'a>,
     body_layout: &'a SlotLayout<'a>,
+    /// How deep this node's syntax nests, counted by [`node_depth`] at construction.
+    depth: u32,
 }
 
 impl<'a> KExpression<'a> {
-    /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.
-    pub fn new(writer: Writer<'a>, parts: &[Spanned<ExpressionPart<'a>>]) -> Self {
-        Self::build(writer, parts, None, None)
-    }
-
-    /// [`new`](Self::new)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn new_from_iter<I>(writer: Writer<'a>, parts: I) -> Self
-    where
-        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
-        RunIter<I>: ExactSizeIterator,
-    {
-        Self::build_from_iter(writer, parts, None, None)
-    }
-
     /// Construction door for a borrowed run: copy it into `writer`'s store, then fill the
     /// structural cache.
     pub fn build(
         writer: Writer<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
-        span: Option<Span>,
-        file: Option<FileId>,
+        source: SourceRef,
     ) -> Self {
-        Self::from_run(writer, collect(writer, parts.iter().copied()), span, file)
+        Self::from_run(writer, collect(writer, parts.iter().copied()), source)
     }
 
     /// [`build`](Self::build)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn build_from_iter<I>(
-        writer: Writer<'a>,
-        parts: I,
-        span: Option<Span>,
-        file: Option<FileId>,
-    ) -> Self
+    pub fn build_from_iter<I>(writer: Writer<'a>, parts: I, source: SourceRef) -> Self
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        Self::from_run(writer, collect(writer, parts.into_iter()), span, file)
+        Self::from_run(writer, collect(writer, parts.into_iter()), source)
     }
 
     /// Construction chokepoint, over a parts run **already resident** in `writer`'s store: fills the
@@ -291,17 +347,12 @@ impl<'a> KExpression<'a> {
     fn from_run(
         writer: Writer<'a>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
-        span: Option<Span>,
-        file: Option<FileId>,
+        source: SourceRef,
     ) -> Self {
         let key = stored_untyped_key(writer, parts.iter().map(|part| part.value.key_element()));
-        Self::seal(
-            writer,
-            parts,
-            span,
-            file,
-            NodeCache::build(key, parts.first().map(|part| part.value.class())),
-        )
+        let cache = NodeCache::build(key, parts.first().map(|part| part.value.class()));
+        let depth = node_depth(parts, &cache);
+        Self::seal(writer, parts, source, cache, depth)
     }
 
     /// The node itself, over a resident run and a settled structural cache: fills the binder plan
@@ -310,16 +361,16 @@ impl<'a> KExpression<'a> {
     fn seal(
         writer: Writer<'a>,
         parts: &'a [Spanned<ExpressionPart<'a>>],
-        span: Option<Span>,
-        file: Option<FileId>,
+        source: SourceRef,
         cache: NodeCache<'a>,
+        depth: u32,
     ) -> Self {
         let mut expression = KExpression {
             parts,
-            span,
-            file,
+            source,
             cache,
             body_layout: SlotLayout::EMPTY,
+            depth,
         };
         // The extractors read the node, so the plan is filled once it stands. It is written behind
         // a reference rather than stored inline: it is the widest thing a node would carry, and
@@ -340,17 +391,22 @@ impl<'a> KExpression<'a> {
     pub fn nested(
         writer: Writer<'a>,
         parts: &[Spanned<ExpressionPart<'a>>],
+        source: SourceRef,
     ) -> &'a KExpression<'a> {
-        resident(writer, Self::new(writer, parts))
+        resident(writer, Self::build(writer, parts, source))
     }
 
     /// [`nested`](Self::nested)'s peer for a run whose slots are computed — see [`RunIter`].
-    pub fn nested_from_iter<I>(writer: Writer<'a>, parts: I) -> &'a KExpression<'a>
+    pub fn nested_from_iter<I>(
+        writer: Writer<'a>,
+        parts: I,
+        source: SourceRef,
+    ) -> &'a KExpression<'a>
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        resident(writer, Self::new_from_iter(writer, parts))
+        resident(writer, Self::build_from_iter(writer, parts, source))
     }
 
     /// The [`SlotLayout`] of this node **as a body**: the value binders its statements declare,
@@ -359,6 +415,13 @@ impl<'a> KExpression<'a> {
     /// a spliced-out array could outlive.
     pub fn body_layout(&self) -> &'a SlotLayout<'a> {
         self.body_layout
+    }
+
+    /// How deep this node's syntax nests, an operator run counted as the nesting its rewrite
+    /// builds. A program deeper than [`MAX_SYNTAX_DEPTH`](crate::parse::MAX_SYNTAX_DEPTH) is
+    /// refused at parse; see [`node_depth`].
+    pub fn depth(&self) -> usize {
+        self.depth as usize
     }
 
     /// The structural facts this node cached at construction. Every accessor below reads it, and
@@ -372,16 +435,17 @@ impl<'a> KExpression<'a> {
         self.cache.binder_plan()
     }
 
-    /// The statement this node stands for. A redundant single-`Expression` paren wrapper
-    /// (`((…))`) is the same statement as its child, so it reads through; every other shape is its
-    /// own statement.
+    /// The statement this node stands for. A written paren around a statement (`((…))`) is the
+    /// same statement as its child, so it reads through every such wrapper; every other shape is
+    /// its own statement.
     pub(crate) fn statement_spine(&self) -> &KExpression<'a> {
-        if let [only] = self.parts
+        let mut spine = self;
+        while let [only] = spine.parts
             && let ExpressionPart::Expression(child) = only.value
         {
-            return child.reference();
+            spine = child.reference();
         }
-        self
+        spine
     }
 
     /// What this statement installs. The statement's *own* plan key, never anything its slots
@@ -415,10 +479,44 @@ impl<'a> KExpression<'a> {
             .map(|(i, statement)| (statement, i + 1))
     }
 
-    /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates. Read by the
-    /// scheduler to decide which children submit.
-    pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
-        self.cache.lazy_kinds_at(index)
+    /// The code kind of a quote whose body is this node, read off the body as written — see the
+    /// lattice [README.md](../type_lattice/README.md) § The code family. Two or more statements are
+    /// a `Block`; a statement of a member-declaring builtin shape a `Declaration`, and one that
+    /// installs a `Binder`; a lone scalar literal or nested quote a `Literal`; a lone name, keyword,
+    /// `:(…)` or `:{…}` its own kind; and every other statement an `Expression`. A written paren is
+    /// a part of its own, so `((y))` and `((LET x = 1))` are expressions.
+    pub fn code_kind(&self) -> KType {
+        if self.is_statement_block() {
+            return KType::BLOCK;
+        }
+        if self
+            .cache
+            .builtin_shape()
+            .is_some_and(|shape| shape.id.declares_member())
+        {
+            return KType::DECLARATION;
+        }
+        if self.binder_plan().is_some() {
+            return KType::BINDER;
+        }
+        let [only] = self.parts else {
+            return KType::EXPRESSION;
+        };
+        match only.value {
+            ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => KType::LITERAL,
+            ExpressionPart::Type(_) | ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => {
+                KType::TYPE_NAME_TOKEN
+            }
+            ExpressionPart::Identifier(_) | ExpressionPart::MarkedName(..) => KType::IDENTIFIER,
+            ExpressionPart::Keyword(_) => KType::KEYWORD,
+            ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
+            ExpressionPart::RecordType(_) => KType::RECORD_TYPE,
+            ExpressionPart::MarkedUse(..)
+            | ExpressionPart::Expression(_)
+            | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_) => KType::EXPRESSION,
+        }
     }
 
     /// The declared-name position of the binder form this node's bucket key matches

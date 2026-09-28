@@ -13,7 +13,7 @@
 //! See [README.md](README.md) § The node vocabulary.
 
 use crate::memory::ScopeId;
-use crate::symbols::TypeSymbol;
+use crate::symbols::{BinderSymbol, TypeSymbol};
 
 use super::digest::TypeDigest;
 use super::handle::KType;
@@ -31,27 +31,51 @@ pub enum TypeNode<'run> {
     Str,
     Bool,
     Null,
+    /// A lone value name of code (`#(y)`), under [`Self::Name`].
     Identifier,
-    /// Binder-position slot: captures a bare name token of either class raw. Never resolves.
-    NameToken,
-    /// Binder-position slot for a Type-class name only, captured raw. Never resolves — unlike
+    /// A lone token of code — spelled `Symbol`: a [`Self::Name`] or a [`Self::Keyword`].
+    Symbol,
+    /// A lone type name of code (`#(Carrier)`), under [`Self::Name`]. Never resolves — unlike
     /// `OfKind(ProperType)`, which is a type *reference* slot and lowers builtin names.
     TypeNameToken,
-    /// Lazy slot: accepts an unevaluated expression, so the builtin chooses when (or whether) to
-    /// run it.
-    KExpression,
-    /// Lazy slot for a `:(...)` type expression — captured raw so a builtin can defer a
-    /// param-referencing dotted/sigil return to per-call elaboration.
+    /// One statement of code — spelled `Expression`: a lone part or a run of parts.
+    Expression,
+    /// A lone `:(…)` type expression of code, under [`Self::Expression`].
     SigiledTypeExpr,
-    /// Lazy slot for a `:{…}` record type — captured raw so the NEWTYPE record-repr declarator
-    /// owns its elaboration and threads its own binder name.
+    /// A lone `:{…}` record type of code, under [`Self::Expression`].
     RecordType,
+    /// A lone scalar literal or nested quote of code (`#(42)`, `#(#(x))`), under
+    /// [`Self::Expression`].
+    Literal,
+    /// Statements of code — the kind every body slot takes; written, it is two or more statements.
+    /// The one code kind directly under [`Self::AnyCode`].
+    Block,
+    /// One statement that declares a name or a shape: a `VAL`, a `TYPE` declarator, a bodyless
+    /// head, or a [`Self::Binder`].
+    Declaration,
+    /// One statement that declares and installs where it is written, as `LET x = 1` does.
+    Binder,
+    /// A lone value or type name of code — what a declaration binds.
+    Name,
+    /// A lone keyword of code, as an operator's symbol (`#(+)`).
+    Keyword,
     /// The lattice top: above the three family tops, and the default bound of a rigid variable.
     Any,
     /// The value family's top, spelled `Value`: above every type whose values are ordinary values.
     AnyValue,
-    /// The code family's top, spelled `Code`: above every raw-part type.
+    /// The code family's top, spelled `Code`: above every code kind.
     AnyCode,
+    /// A code kind and the names its code needs where it is built, spelled
+    /// `:(Expression NEEDING #[y])`: the carried type of a quote whose `\` marks no binder in its
+    /// own code fills. Below `Code`, above the same kind needing more, and below the same kind
+    /// needing fewer; the bare kind is the kind needing nothing, so `names` is never empty. Build
+    /// through [`TypeRegistry::code_needing`](super::registry::TypeRegistry::code_needing).
+    CodeNeeding {
+        /// A code kind below `Code`.
+        kind: KType,
+        /// Symbol-sorted and deduplicated: the needed names are a set.
+        names: &'run [BinderSymbol],
+    },
     /// The uninhabited bottom: admitted by no value, below every other type, and the identity
     /// element of both [`join`](super::lattice::join) and union canonicalization. Spellable as
     /// the builtin name `Never`, where it declares a slot nothing fills.
@@ -137,6 +161,10 @@ pub enum TypeNode<'run> {
         bounds: &'run [KType],
         /// The call shape: fixed keywords interleaved with the argument positions' declared types.
         elements: &'run [DispatchTokenElement],
+        /// Each slot's priority class, in slot order, dense from 0 — the ranking a dispatch admits
+        /// and ranks the slots by, class by class. Empty for written order, the canonical spelling
+        /// of `0..n`, so an unranked shape stores and digests nothing for it.
+        classes: &'run [u8],
         ret: KType,
     },
     /// A **rigid variable bound by the enclosing binder** — a [`Self::ExpressionShape`], or a

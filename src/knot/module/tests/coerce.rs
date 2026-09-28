@@ -13,7 +13,7 @@ use super::super::view::{Ascription, Unascribable, ascribe};
 use super::{member, module, schema};
 
 const BAG: &str = "\
-SIG Bag = ((TYPE Carrier) \
+SIG Bag = #[(TYPE Carrier) \
 (VAL one :Carrier) \
 (VAL many :(LIST OF Carrier)) \
 (VAL none :(LIST OF Carrier)) \
@@ -21,7 +21,7 @@ SIG Bag = ((TYPE Carrier) \
 (VAL pair :{a :Carrier, b :Number}) \
 (VAL maybe :(Carrier | Null)) \
 (VAL step :(FN :{x :Carrier} -> Carrier)) \
-(VAL plain :Number))
+(VAL plain :Number)]
 MODULE m = ((LET Carrier = Number) \
 (LET one = 1) \
 (LET many = [1 2]) \
@@ -29,7 +29,7 @@ MODULE m = ((LET Carrier = Number) \
 (LET by_name = {\"a\": 1}) \
 (LET pair = {a = 1 b = 2}) \
 (LET maybe = 3) \
-(LET step = (FN :{x :Number} -> Number = (x))) \
+(LET step = (FN :{x :Number} -> Number = #(x))) \
 (LET plain = 7))";
 
 #[test]
@@ -138,7 +138,7 @@ fn a_function_member_is_born_behind_a_barrier() {
                 panic!("a function slot stays a knot member");
             };
             let barrier = step.coerced().expect("a function member is wrapped");
-            assert!(matches!(step.resolve(), Resolved::Function));
+            assert!(matches!(step.resolve(), Resolved::Barrier));
             assert!(
                 step.function().is_none(),
                 "the wrapper is not itself a function"
@@ -197,8 +197,8 @@ fn a_transparent_view_coerces_nothing() {
 /// Whether two values point at the same thing — a stronger claim than equality, and the one a
 /// transparent view makes.
 fn same_referent(
-    left: Value<'_, '_, crate::knot::Knotted<'_, '_>>,
-    right: Value<'_, '_, crate::knot::Knotted<'_, '_>>,
+    left: Value<'_, crate::knot::Knotted<'_, '_>>,
+    right: Value<'_, crate::knot::Knotted<'_, '_>>,
 ) -> bool {
     match (left, right) {
         (Value::List(left), Value::List(right)) => ptr::eq(left, right),
@@ -216,8 +216,8 @@ fn a_signature_typed_slot_naming_no_member_is_carried() {
     // another's slot names none of the enclosing signature's members unless the declaration
     // specializes it to one. Where it does not, both sides agree and the module is carried.
     let source = "\
-SIG Inner = ((TYPE Elem) (VAL v :Elem))
-SIG Outer = ((TYPE Carrier) (VAL one :Carrier) (VAL inner :Inner))
+SIG Inner = #[(TYPE Elem) (VAL v :Elem)]
+SIG Outer = #[(TYPE Carrier) (VAL one :Carrier) (VAL inner :Inner)]
 MODULE m = ((LET Carrier = Number) (LET one = 1) \
 (MODULE inner = ((LET Elem = Number) (LET v = 5))))";
     with_fixture(|fixture| {
@@ -258,7 +258,7 @@ fn a_nested_module_is_re_viewed_at_the_outer_mint() {
     // the coercion door is driven directly: what is pinned is that the nested view's `Elem` *is*
     // the outer mint, arriving through the declaration rather than minted again at the boundary.
     let source = "\
-SIG Inner = ((TYPE Elem) (VAL v :Elem))
+SIG Inner = #[(TYPE Elem) (VAL v :Elem)]
 MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
@@ -324,8 +324,8 @@ MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
 #[test]
 fn a_signature_slot_over_something_that_is_no_module_is_refused() {
     let source = "\
-SIG Inner = ((TYPE Elem) (VAL v :Elem))
-LET f = (FN :{} -> Number = (1))";
+SIG Inner = #[(TYPE Elem) (VAL v :Elem)]
+LET f = (FN :{} -> Number = #(1))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());
@@ -367,9 +367,9 @@ fn a_cyclic_data_member_refuses_the_barrier() {
     // A container that is a knot's data node is a knot member, not a container word, so the arm
     // its declaration takes has nothing to rebuild. Nobody yet rebuilds a cycle through a barrier.
     let source = "\
-SIG Bag = ((TYPE Carrier) (VAL ring :(LIST OF Carrier)))
+SIG Bag = #[(TYPE Carrier) (VAL ring :(LIST OF Carrier))]
 MODULE m = ((LET Carrier = Any) (LET ring = [1 spin]) \
-(LET spin = (FN :{} -> Any = (ring))))";
+(LET spin = (FN :{} -> Any = #(ring))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let (types, scratch) = (fixture.types, fixture.scratch());

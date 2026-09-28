@@ -7,12 +7,12 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{KKind, KType, NodeSchema, TypeNode, is_subtype_of};
 use crate::values::construction;
 
-use super::super::{Elaboration, builtin_result};
+use super::super::{Elaboration, builtin_error, builtin_result};
 use super::{Program, brought, declared};
 
-const RESULT: &str = "UNION (Ok Error AS Result) = (Ok :Ok Error :Error)";
-const OPTION: &str = "UNION (Elem AS Option) = (Some :Elem None :Null)";
-const TREE: &str = "UNION (Elem AS Tree) = (Leaf :Null Node :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)})";
+const RESULT: &str = "UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}";
+const OPTION: &str = "UNION (Elem AS Option) = #{Some: Elem, None: Null}";
+const TREE: &str = "UNION (Elem AS Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)}}";
 
 /// The variant `tag` of the union `binder` is bound to.
 fn variant(program: &Program<'_, '_, '_>, binder: &str, tag: &str) -> KType {
@@ -65,7 +65,7 @@ fn parameter(program: &Program<'_, '_, '_>, params: &[TypeSymbol], name: &str) -
 #[test]
 fn a_parameterized_union_declares_a_family_per_variant() {
     brought(
-        &format!("{RESULT}\nUNION Shape = (Circle :Number)"),
+        &format!("{RESULT}\nUNION Shape = #{{Circle: Number}}"),
         |program| {
             let TypeNode::Union { members } = program.types.node(program.bound("Result")) else {
                 panic!("a UNION binds a union");
@@ -101,6 +101,16 @@ fn the_builtin_result_is_the_declared_one() {
         assert_eq!(
             builtin_result(program.types, program.symbols, program.scratch),
             program.bound("Result")
+        );
+    });
+}
+
+#[test]
+fn the_builtin_error_is_the_declared_one() {
+    brought("NEWTYPE Error = :{message :Str}", |program| {
+        assert_eq!(
+            builtin_error(program.types, program.symbols, program.scratch),
+            program.bound("Error")
         );
     });
 }
@@ -221,8 +231,8 @@ fn a_tree_is_a_recursive_family() {
         );
     });
     brought(
-        "UNION (Elem AS Tree) = (Leaf :Null Branch :{value :Elem, kids :(Elem AS Forest)})\n\
-         UNION (Elem AS Forest) = (Nil :Null Cons :{head :(Elem AS Tree), tail :(Elem AS Forest)})",
+        "UNION (Elem AS Tree) = #{Leaf: Null, Branch: :{value :Elem, kids :(Elem AS Forest)}}\n\
+         UNION (Elem AS Forest) = #{Nil: Null, Cons: :{head :(Elem AS Tree), tail :(Elem AS Forest)}}",
         |program| {
             let (_, params) = family(&program, variant(&program, "Forest", "Cons"));
             assert_eq!(params, [program.type_name("Elem")]);
@@ -236,12 +246,12 @@ fn a_family_declaration_is_refused() {
     for (source, left) in [
         // An application is covariant in its arguments.
         (
-            "UNION (Elem AS Sink) = (Take :(FN :{x :Elem} -> Null))",
+            "UNION (Elem AS Sink) = #{Take: :(FN :{x :Elem} -> Null)}",
             "Sink",
         ),
-        ("UNION (Elem Elem AS Twice) = (One :Elem)", "Twice"),
+        ("UNION (Elem Elem AS Twice) = #{One: Elem}", "Twice"),
         // A family's parameters take no bound.
-        ("UNION ((Elem AS Opt) UNDER Any) = (None :Null)", "Opt"),
+        ("UNION ((Elem AS Opt) UNDER Any) = #{None: Null}", "Opt"),
         (
             &format!("{RESULT}\nLET Bad = :(Result {{Ok = Number}})"),
             "Bad",
@@ -252,7 +262,7 @@ fn a_family_declaration_is_refused() {
         ),
         // A nested group shadows the union's parameters.
         (
-            "UNION (Elem AS Poly) = (Map :(FN FOR ALL (Held) :{x :Held} -> Elem))",
+            "UNION (Elem AS Poly) = #{Map: :(FN FOR ALL #[Held] :{x :Held} -> Elem)}",
             "Poly",
         ),
     ] {
@@ -266,8 +276,8 @@ fn a_family_declaration_is_refused() {
     }
     // A parameter at a covariant position declares, however many flips put it there.
     for source in [
-        "UNION (Elem AS Source) = (Give :(FN :{} -> Elem))",
-        "UNION (Elem AS Wrapper) = (Nest :(FN :{f :(FN :{x :Elem} -> Null)} -> Null))",
+        "UNION (Elem AS Source) = #{Give: :(FN :{} -> Elem)}",
+        "UNION (Elem AS Wrapper) = #{Nest: :(FN :{f :(FN :{x :Elem} -> Null)} -> Null)}",
     ] {
         brought(source, |_| ());
     }

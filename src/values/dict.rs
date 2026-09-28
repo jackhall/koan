@@ -35,7 +35,7 @@ impl<'cell> Key<'cell> {
     /// The key a value makes, borrowing its bytes where they already live. A sealed scalar whose
     /// seal [`unsealed`] reads through keys as the scalar; a refusal names the value's own type.
     pub fn of<X: Knotted>(
-        value: &Value<'_, 'cell, X>,
+        value: &Value<'cell, X>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<Key<'cell>, KeyRejected> {
@@ -65,7 +65,7 @@ impl<'cell> Key<'cell> {
     }
 
     /// The key as the value it was made from.
-    pub fn value<'graph, X>(&self) -> Value<'graph, 'cell, X> {
+    pub fn value<X>(&self) -> Value<'cell, X> {
         match self.0 {
             Scalar::Str(text) => Value::Str(text),
             Scalar::Number(number) => Value::Number(number),
@@ -147,25 +147,25 @@ impl fmt::Display for Key<'_> {
 /// A dict value, resident in the region its keys and cells live in. Its cells are value words, or
 /// [`Link`]s when the dict is a knot's data node.
 #[derive(Clone, Copy, Debug)]
-pub struct Dict<'graph, 'cell, X = Nothing, C = Value<'graph, 'cell, X>> {
+pub struct Dict<'cell, X = Nothing, C = Value<'cell, X>> {
     keys: &'cell [Key<'cell>],
     cells: &'cell [C],
     ktype: KType,
     weight: Weight,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
-    member: PhantomData<Value<'graph, 'cell, X>>,
+    member: PhantomData<Value<'cell, X>>,
 }
 
-impl<'graph, 'cell, X: Knotted> Dict<'graph, 'cell, X> {
+impl<'cell, X: Knotted> Dict<'cell, X> {
     /// Lay down `entries` sorted by key; where a key repeats, its last occurrence wins. Keys are
     /// written into `writer`'s region wherever they borrowed from, and the key and value types are
     /// the joins over what stays. The sort is staged over `scratch`.
     pub fn new(
         writer: Writer<'cell>,
-        entries: &[(Key<'_>, Value<'graph, 'cell, X>)],
+        entries: &[(Key<'_>, Value<'cell, X>)],
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> &'cell Dict<'graph, 'cell, X> {
+    ) -> &'cell Dict<'cell, X> {
         let kept = kept_entries(entries, scratch);
         let mut weight = Weight::flat::<Self>();
         let keys = writer.fill(kept.len(), |at| {
@@ -189,12 +189,12 @@ impl<'graph, 'cell, X: Knotted> Dict<'graph, 'cell, X> {
     }
 }
 
-impl<'graph, 'cell, X: Knotted> Dict<'graph, 'cell, X, Link<'graph, 'cell, X>> {
+impl<'cell, X: Knotted> Dict<'cell, X, Link<'cell, X>> {
     /// Lay down `entries` as a knot's data node under the finished memo `ktype`, sorted by key with
     /// the last of a repeated key kept, as [`Dict::new`] does; the sort is staged over `scratch`.
     pub fn linked(
         writer: Writer<'cell>,
-        entries: &[(Key<'_>, Link<'graph, 'cell, X>)],
+        entries: &[(Key<'_>, Link<'cell, X>)],
         ktype: KType,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Self {
@@ -240,7 +240,7 @@ pub fn kept_entries<'x, C>(
     kept
 }
 
-impl<'graph, 'cell, X: Copy, C: Copy> Dict<'graph, 'cell, X, C> {
+impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
     /// A dict over sorted keys and aligned cells already resident in `writer`'s region, under a type
     /// and weight the caller already knows — the deep copy's arm.
     pub(crate) fn from_runs(
@@ -279,8 +279,7 @@ impl<'graph, 'cell, X: Copy, C: Copy> Dict<'graph, 'cell, X, C> {
     /// The entries in key order.
     pub fn entries(
         &self,
-    ) -> impl ExactSizeIterator<Item = (&'cell Key<'cell>, &'cell C)> + use<'graph, 'cell, X, C>
-    {
+    ) -> impl ExactSizeIterator<Item = (&'cell Key<'cell>, &'cell C)> + use<'cell, X, C> {
         self.keys.iter().zip(self.cells.iter())
     }
 

@@ -110,6 +110,5 @@ needs dispatch.
 
 **Requires:**
 
-- [Dispatch](dispatch.md) — calibrating the presize needs running programs.
 
 **Unblocks:** none — a leaf.

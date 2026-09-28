@@ -1,8 +1,9 @@
 //! Shared scaffolding for `knot`'s suites: program storage with a registry and an interner, a
 //! builtin table, and a runner that activates a program in a cell and brings every binding it can
 //! into being — each component of type binders through the declaration door, each cyclic component
-//! of value binders and each component of callable binders through the tie, and each lone data
-//! binder whose right-hand side lowers — beside readers for what a slot then holds.
+//! of value binders and each component of callable binders through the tie, each lone data binder
+//! whose right-hand side lowers, and each lone binder of a quote through the quote door — beside
+//! readers for what a slot then holds.
 //!
 //! A module binder is brought body-first: the runner builds its body's activation, runs every
 //! component of that body, and only then ties the binder with the finished activation. The
@@ -10,6 +11,7 @@
 
 mod birth;
 mod boundary;
+mod code;
 mod copy;
 mod equality;
 mod families;
@@ -22,14 +24,14 @@ use crate::memory::{
     Writer, program_storage, reattachable, resident,
 };
 use crate::parse::builtin_shapes::role::{BodyKind, Role};
-use crate::parse::{KExpression, parse};
+use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::scope::{BodyShape, Builtins, Component, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{Circular, Knotted as _, Link, TypeValue, Value};
 
 use super::module::body_activation;
-use super::{KActivation, KValue, Knotted, Supplied, tie};
+use super::{KActivation, KValue, Knotted, Supplied, quote, tie};
 
 /// A continuation family for a graph whose cells only store.
 pub(crate) struct Step;
@@ -92,11 +94,12 @@ impl<'graph> Fixture<'_, 'graph> {
         BinderSymbol::declared(text, self.symbols).expect("a binder name")
     }
 
-    /// `origin = 0` and the scalar types, laid down in `writer`'s region.
+    /// `origin = 0`, the scalar types, and a `Null` overload at the generated plans' `ZZ _` and
+    /// `ZZ _ _`, laid down in `writer`'s region.
     pub fn builtins<'cell>(
         &self,
         writer: Writer<'cell>,
-    ) -> &'cell Builtins<'graph, 'cell, Knotted<'graph, 'cell>> {
+    ) -> &'cell Builtins<'cell, Knotted<'graph, 'cell>> {
         let origin = ValueSymbol::declared("origin", self.symbols).expect("a value token");
         let types: Vec<_> = [
             ("Number", KType::NUMBER),
@@ -120,6 +123,10 @@ impl<'graph> Fixture<'_, 'graph> {
             self.scratch,
             &[(origin, Value::Number(0.0))],
             &types,
+            &[
+                (self.symbols.key("ZZ _").expect("a key"), Value::Null),
+                (self.symbols.key("ZZ _ _").expect("a key"), Value::Null),
+            ],
         )
     }
 
@@ -133,8 +140,20 @@ impl<'graph> Fixture<'_, 'graph> {
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
         let builtins = self.builtins(writer);
-        let shape = BodyShape::of_program(self.program, lines, builtins, self.scratch)
-            .unwrap_or_else(|error| panic!("the program shapes: {}", error.display(self.symbols)));
+        let shape = BodyShape::of_program(
+            self.program,
+            lines,
+            builtins,
+            self.types,
+            self.symbols,
+            self.scratch,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "the program shapes: {}",
+                error.display(self.symbols, self.types)
+            )
+        });
         let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
         let left: Vec<BinderSymbol> = leave.iter().map(|name| self.name(name)).collect();
         // A reader takes a body's statements from its shape, never from the parse: the shape owns
@@ -153,7 +172,8 @@ impl<'graph> Fixture<'_, 'graph> {
     /// Bring one component of `activation` into being, if the runner can: declare a component of
     /// type binders through the door, tie a component of value binders when it is cyclic or every
     /// member births a callable, run and tie a module binder, else bind each member whose
-    /// right-hand side lowers. `statements` is the body `activation`'s shape was built from.
+    /// right-hand side lowers or is a quote. `statements` is the body `activation`'s shape was built
+    /// from.
     fn bring_in<'cell>(
         &self,
         writer: Writer<'cell>,
@@ -162,11 +182,11 @@ impl<'graph> Fixture<'_, 'graph> {
         component: &Component<'graph>,
     ) {
         let shape = activation.shape();
-        let values = component
+        let declares_types = component
             .members
             .iter()
-            .all(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Value(_)));
-        if !values {
+            .any(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Type(_)));
+        if declares_types {
             let handles = type_declarations(component, activation, self.types, self.scratch)
                 .expect("the component declares its types");
             for (slot, handle) in component.members.iter().zip(handles) {
@@ -212,7 +232,16 @@ impl<'graph> Fixture<'_, 'graph> {
             let Some(rhs) = spine.parts.get(3) else {
                 continue;
             };
-            if let Some(value) = Value::lower_part(writer, &rhs.value, self.types, self.scratch) {
+            let value = match rhs.value {
+                ExpressionPart::QuotedExpression(_) => Some(Value::Knotted(quote(
+                    writer,
+                    activation,
+                    &rhs.value,
+                    self.scratch,
+                ))),
+                _ => Value::lower_part(writer, &rhs.value, self.types, self.scratch),
+            };
+            if let Some(value) = value {
                 activation.bind(*slot, value).expect("an empty slot binds");
             }
         }
@@ -329,12 +358,63 @@ pub(crate) fn callable<'graph, 'cell>(
         .unwrap_or_else(|| panic!("`{name}` is bound to a callable"))
 }
 
+/// The callable bound at the registration the body `name` births is born for too — a combined
+/// statement's bucket half, a `UNARY OP`'s keyword-first one.
+pub(crate) fn registered<'graph, 'cell>(
+    fixture: &Fixture<'_, 'graph>,
+    activation: &KActivation<'graph, 'cell>,
+    name: &str,
+) -> Knotted<'graph, 'cell> {
+    let shape = activation.shape();
+    let (slot, _) = shape.slot(fixture.name(name)).expect("a declared binder");
+    let body = shape.births(slot).expect("the binder births a body");
+    let registration = shape
+        .registrations()
+        .iter()
+        .find(|registration| {
+            registration.which != crate::scope::Which::Binary
+                && shape
+                    .births(registration.slot)
+                    .is_some_and(|born| std::ptr::eq(born, body))
+        })
+        .expect("the body is registered");
+    activation
+        .read(crate::scope::Coordinate::Activation {
+            hops: 0,
+            target: crate::scope::Target::Local(registration.slot),
+        })
+        .as_callable()
+        .expect("a registration is bound to a callable")
+}
+
+/// The callable bound at the registration under the key `text` spells, `_` for each slot.
+pub(crate) fn at_key<'graph, 'cell>(
+    fixture: &Fixture<'_, 'graph>,
+    activation: &KActivation<'graph, 'cell>,
+    text: &str,
+) -> Knotted<'graph, 'cell> {
+    let key = fixture.symbols.key(text).expect("a key");
+    let registration = activation
+        .shape()
+        .registrations()
+        .iter()
+        .find(|registration| registration.key == key)
+        .expect("a registration at the key");
+    activation
+        .read(crate::scope::Coordinate::Activation {
+            hops: 0,
+            target: crate::scope::Target::Local(registration.slot),
+        })
+        .as_callable()
+        .expect("a registration is bound to a callable")
+}
+
 /// The data node `value` is, which must be one.
 pub(crate) fn circular<'graph, 'cell>(
     value: KValue<'graph, 'cell>,
 ) -> (
     Knotted<'graph, 'cell>,
-    Circular<'cell, 'cell, Knotted<'graph, 'cell>>,
+    Circular<'cell, Knotted<'graph, 'cell>>,
 ) {
     value.as_circular().expect("a data node")
 }
@@ -342,7 +422,7 @@ pub(crate) fn circular<'graph, 'cell>(
 /// The link at the edge `link` names, resolved through `holder` to the data node it is.
 pub(crate) fn follow<'graph, 'cell>(
     holder: Knotted<'graph, 'cell>,
-    link: Link<'_, '_, Knotted<'graph, 'cell>>,
+    link: Link<'_, Knotted<'graph, 'cell>>,
 ) -> Knotted<'graph, 'cell> {
     match link {
         Link::Edge(edge) => holder.sibling(edge),

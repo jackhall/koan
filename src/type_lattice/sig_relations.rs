@@ -18,100 +18,53 @@ use super::lattice::meet;
 use super::node::TypeNode;
 use super::operators::ReductionMode;
 use super::order::{dominant, is_more_specific_than, is_subtype_of, satisfied_by};
+use super::ranking::{Ranked, admits_by_class, class_at_least, select_by_class};
 use super::registry::TypeRegistry;
 use super::schema::{
     DeclaredGroup, Members, SchemaDraft, SigSchema, canonical_groups, constructor_param_names,
-    elements_key_equal, is_shape, member, merge_join, merged_bindings, name_sets_equal,
+    elements_key_equal, member, merge_join, merged_bindings, name_sets_equal, shape_classes,
     shape_keys_equal, shape_quantifiers, shape_slots,
 };
-use super::shape::{DispatchTokenElement, Specificity};
+use super::shape::Specificity;
 use super::substitute::{slot_satisfied_by, substitute_sig_members};
 use super::unify::{Collector, admits_with};
 use super::walk::Variance;
 
 // --- Specificity ---
 
-/// Whether [`admits_shape`] compares the return positions. Dispatch never selects on a return, so
-/// specificity leaves them out; the order's instantiation clause reads them.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Returns {
-    Ignored,
-    Checked,
-}
-
-/// Whether `declared` admits `candidate` position by position — `declared`'s variables solved,
-/// `candidate`'s rigid — and, under [`Returns::Checked`], `declared`'s return under `candidate`'s.
+/// Whether `declared` admits `candidate` class by class — `declared`'s variables solved,
+/// `candidate`'s rigid — then `declared`'s return under `candidate`'s: the order's instantiation
+/// clause for two shapes.
 ///
-/// The one door specificity, keyworded selection, interface canonicalization and the order's
-/// shape-instantiation clause all rank through, so none can drift. Prenex instantiation through
+/// It admits as a keyworded call does ([`admit_by_class`](super::ranking::admit_by_class)). Prenex instantiation through
 /// the collector: each slot pair asks the candidate's slot to lie under the declared one
-/// (covariant for the collector, since a slot's own polarity is contravariant), the return pair
-/// asks the declared return to lie under the candidate's, and `solve` decides. The candidate's
+/// (covariant for the collector, since a slot's own polarity is contravariant), class by class,
+/// then the return pair asks the declared return to lie under the candidate's. The candidate's
 /// `Quantified` nodes fall to the rigid rule automatically, because the collector only ever solves
 /// declared-side variables and the carried side is never substituted. Two things that are not both
-/// shapes under one key admit nothing.
+/// shapes under one key and one ranking admit nothing.
 pub(super) fn admits_shape(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     declared: KType,
     candidate: KType,
-    returns: Returns,
 ) -> bool {
-    let (
-        TypeNode::ExpressionShape {
-            quantifiers,
-            elements: declared_elements,
-            ret: declared_ret,
-            ..
-        },
-        TypeNode::ExpressionShape {
-            elements: candidate_elements,
-            ret: candidate_ret,
-            ..
-        },
-    ) = (types.node(declared), types.node(candidate))
+    let (Some(declared), Some(candidate)) =
+        (Ranked::of(types, declared), Ranked::of(types, candidate))
     else {
         return false;
     };
-    if !elements_key_equal(declared_elements, candidate_elements) {
-        return false;
-    }
-    let mut collector = Collector::new(scratch, quantifiers.len());
-    for pair in declared_elements.iter().zip(candidate_elements) {
-        if let (DispatchTokenElement::Slot(slot), DispatchTokenElement::Slot(argument)) = pair
-            && admits_with(
-                types,
-                scratch,
-                *slot,
-                *argument,
-                Variance::Co,
-                &mut collector,
-            )
-            .is_err()
-        {
-            return false;
-        }
-    }
-    if returns == Returns::Checked
-        && admits_with(
-            types,
-            scratch,
-            declared_ret,
-            candidate_ret,
-            Variance::Contra,
-            &mut collector,
-        )
-        .is_err()
+    if !elements_key_equal(declared.elements, candidate.elements)
+        || declared.classes != candidate.classes
     {
         return false;
     }
-    collector.solve(types).is_ok()
+    admits_by_class(types, scratch, declared, candidate)
 }
 
 /// Whether `declared` admits `candidate` name by name — `declared`'s variables solved,
 /// `candidate`'s rigid — with `declared`'s return under `candidate`'s. The function twin of
-/// [`admits_shape`], reached from the order alone: a function type ranks in no bucket, so there is
-/// no [`Returns::Ignored`] reading of it.
+/// [`admits_shape`], reached from the order alone.
 ///
 /// Width is the order's own: every name `declared` asks for, `candidate` must have, and a name
 /// only `candidate` has is one `declared` never needs. A parameter pair asks the candidate's
@@ -164,31 +117,47 @@ pub(super) fn admits_function(
     collector.solve(types).is_ok()
 }
 
-/// Rank two candidates under one bucket key by mutual admission.
+/// Rank two candidates under one bucket key and ranking, lexicographically by class.
 ///
-/// `a` is at least as specific as `b` when `b` admits `a`'s slot types as arguments. For
-/// monomorphic shapes this is the pointwise fold of the order over paired slots; for a generic
-/// candidate it is the classic "more specific method" rule, so `(f _ :Number)` beats
-/// `(f FOR ALL (Elt) _ :Elt)` and `(f _ :Any)` ties with it.
+/// At each class in turn, `a` is at least as specific as `b` when `b`'s slots there admit `a`'s
+/// ([`class_at_least`]); the first class at which exactly one side holds decides. For monomorphic
+/// shapes each class is the pointwise order over its slots; for a generic candidate it is the
+/// classic "more specific method" rule, so `(f _ :Number)` beats `(f FOR ALL (Elt) _ :Elt)` and
+/// `(f _ :Any)` ties with it. Every class holding both ways is `Equal`; a pair no class orders and
+/// some class leaves unrelated is `Incomparable`, as are shapes under different keys or rankings.
 pub fn shape_specificity(
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
     a: KType,
     b: KType,
 ) -> Specificity {
-    if !is_shape(a, types) || !is_shape(b, types) {
+    let (Some(ranked_a), Some(ranked_b)) = (Ranked::of(types, a), Ranked::of(types, b)) else {
         // Two things that are not both shapes have no bucket in common to rank under, which is a
         // refusal rather than a tie: the empty element run a non-shape reads as would otherwise
         // make every pair of leaves compare `Equal`.
         return Specificity::Incomparable;
+    };
+    if !elements_key_equal(ranked_a.elements, ranked_b.elements)
+        || ranked_a.classes != ranked_b.classes
+    {
+        return Specificity::Incomparable;
     }
-    let more = admits_shape(types, scratch, b, a, Returns::Ignored);
-    let less = admits_shape(types, scratch, a, b, Returns::Ignored);
-    match (more, less) {
-        (true, false) => Specificity::StrictlyMore,
-        (false, true) => Specificity::StrictlyLess,
-        (true, true) => Specificity::Equal,
-        (false, false) => Specificity::Incomparable,
+    let mut every_class_both = true;
+    for class in 0..ranked_a.class_count() {
+        let class = u8::try_from(class).expect("a shape has fewer than 256 classes");
+        let more = class_at_least(types, scratch, a, b, class);
+        let less = class_at_least(types, scratch, b, a, class);
+        match (more, less) {
+            (true, false) => return Specificity::StrictlyMore,
+            (false, true) => return Specificity::StrictlyLess,
+            (true, true) => {}
+            (false, false) => every_class_both = false,
+        }
+    }
+    if every_class_both {
+        Specificity::Equal
+    } else {
+        Specificity::Incomparable
     }
 }
 
@@ -249,6 +218,12 @@ pub enum SigSubtypeFailure<'run, 's> {
     /// The sub schema declares no dispatch bucket under the declared member's key at all.
     MissingKeyworded {
         head: KType,
+    },
+    /// The bucket exists under a different ranking than the declared member's: one keyword pattern
+    /// carries one order, so no overload in it can satisfy the member.
+    RankingMismatch {
+        head: KType,
+        got: KType,
     },
     /// The bucket exists but no overload in it satisfies the declared member.
     KeywordedMismatch {
@@ -376,6 +351,16 @@ pub fn sig_subtype<'run, 's>(
     // specific is the one it selects. An incomparable tie is a dispatch ambiguity, and rejects here
     // rather than at the call.
     for declared in sup.keyworded.iter().copied() {
+        let ranking = shape_classes(declared, types);
+        if let Some(got) = sub.keyworded.iter().copied().find(|candidate| {
+            shape_keys_equal(declared, *candidate, types)
+                && shape_classes(*candidate, types) != ranking
+        }) {
+            return Err(SigSubtypeFailure::RankingMismatch {
+                head: declared,
+                got,
+            });
+        }
         let mut candidates = BumpVec::with_capacity_in(sub.keyworded.len(), scratch);
         candidates.extend(
             sub.keyworded
@@ -481,8 +466,8 @@ fn quantified_position_failure(
 /// the member the view installs.
 ///
 /// Two steps, mirroring dispatch: keep the candidates that **satisfy** the declared overload, then
-/// rank the survivors by [`shape_specificity`] and take the one strictly more specific than every
-/// peer. A lone satisfier wins with no ranking.
+/// run the class-by-class elimination ([`select_by_class`]) over them and take its lone survivor.
+/// A lone satisfier wins with no ranking.
 ///
 /// `substitution` is how a declared type that references a binder's abstract members is read. A
 /// caller whose `declared` is already substituted into the candidates' own world passes `None` and
@@ -513,26 +498,19 @@ pub fn select_keyworded_satisfier<'s>(
     if let [only] = satisfiers[..] {
         return Ok(only);
     }
-    dominant(satisfiers.len(), |i, j| {
-        matches!(
-            shape_specificity(
-                types,
-                scratch,
-                candidates[satisfiers[i]],
-                candidates[satisfiers[j]]
-            ),
-            Specificity::StrictlyMore
-        )
-    })
-    .map(|i| satisfiers[i])
-    .ok_or(satisfiers)
+    let mut shapes = BumpVec::with_capacity_in(satisfiers.len(), scratch);
+    shapes.extend(satisfiers.iter().map(|index| candidates[*index]));
+    match select_by_class(types, scratch, &shapes)[..] {
+        [only] => Ok(satisfiers[only]),
+        _ => Err(satisfiers),
+    }
 }
 
 // --- Meet of schemas ---
 
 /// The greatest lower bound of two schemas, interned, or `None` when they make conflicting claims:
-/// two manifest bindings for one name, two parameter-name sets for one member, or two chaining
-/// modes for one operator run.
+/// two manifest bindings for one name, two parameter-name sets for one member, two chaining
+/// modes for one operator run, or two rankings for one keyword pattern.
 ///
 /// Width unions — a lower bound may promise everything either operand promises — and depth
 /// reconciles per member, so a shared value slot meets and a shared type member takes the stronger
@@ -637,7 +615,16 @@ pub(super) fn meet_schemas(
     }
 
     // A lower bound declares every overload either operand does; the signature door's
-    // canonicalization then drops whichever of a pair the other already admits.
+    // canonicalization then drops whichever of a pair the other already admits. A keyword pattern
+    // carries one ranking, so two members under one key ranked two ways have no meet.
+    for left in a.keyworded {
+        if b.keyworded.iter().any(|right| {
+            shape_keys_equal(*left, *right, types)
+                && shape_classes(*left, types) != shape_classes(*right, types)
+        }) {
+            return None;
+        }
+    }
     for shape in a.keyworded.iter().chain(b.keyworded) {
         draft.keyworded.push(resolve(*shape));
     }

@@ -43,16 +43,17 @@ PRINT name
 world
 ```
 
-Anything that goes wrong surfaces as a structured error printed to standard
-error, and the program stops. For example, referring to a name that was never
-bound:
+Anything that goes wrong surfaces as an error printed to standard error, and
+the program stops. A mistake koan can see in the text itself is reported with
+its line and column before anything runs — referring to a name that was never
+bound, for example:
 
 ```koan
 PRINT mystery
 ```
 
 ```text
-error: unbound name 'mystery'
+error: <input>:1:7: `mystery` names no binding visible here
 ```
 
 ## Expressions and grouping
@@ -108,19 +109,19 @@ Both print `3`. The indentation rules are strict and small:
 This is the idiomatic way to lay out anything beyond a trivial expression:
 rather than piling parentheses onto one line, break a complex expression across
 lines and let the indentation group it. Throughout the tutorial you'll see a
-function body, a `MATCH`, or a long argument written indented under the line it
-belongs to. Indentation groups *one* nested expression — a *sequence* of
-separate statements (a module body with several members, a multi-step function
-body) is written as parenthesized groups instead, a form those chapters show.
+`MATCH` or a long argument written indented under the line it belongs to.
+Indentation groups *one* nested expression — a *sequence* of separate statements
+(a module body with several members, a multi-step function body) is written
+inside one pair of parentheses instead, a form those chapters show.
 
 ### When nested expressions run
 
 A nested `(...)` whose result feeds a *value* position runs **eagerly** —
 before its parent, so the parent sees the finished value. That is the common
-case and the one above. A handful of forms instead take a nested expression
-as *unevaluated* data and decide for themselves when (or whether) to run it —
-the body of a function, the branches of a match, and quoted expressions. Those
-are introduced in their own chapters; until then, every `(...)` you write runs
+case and the one above. Code that should *not* run where it is written — the
+body of a function, the branches of a match — is quoted instead, written
+`#(...)`, and the form it belongs to decides when (or whether) to run it. Those
+are introduced in their own chapters; every `(...)` you write without a `#` runs
 eagerly.
 
 ## A note on comments

@@ -1,7 +1,6 @@
 //! Structural equality: IEEE numbers, nominal identity first, containers gated on related types,
-//! quotes compared as syntax.
+//! quotes compared as syntax, functions by identity.
 
-use crate::parse::ExpressionPart;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{Key, TypeValue};
@@ -14,7 +13,7 @@ fn scalars_compare_by_ieee_and_types_by_handle() {
         let (types, scratch) = (fixture.types, fixture.scratch());
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let equal = |left: &Value<'_, '_>, right: &Value<'_, '_>| {
+            let equal = |left: &Value<'_>, right: &Value<'_>| {
                 left.equals(right, types, scratch).expect("no callable")
             };
             assert!(!equal(&Value::Number(f64::NAN), &Value::Number(f64::NAN)));
@@ -38,7 +37,7 @@ fn containers_compare_contents_only_under_related_types() {
         let x = BinderSymbol::declared("x", symbols).unwrap();
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let equal = |left: Value<'_, '_>, right: Value<'_, '_>| {
+            let equal = |left: Value<'_>, right: Value<'_>| {
                 left.equals(&right, types, scratch).expect("no callable")
             };
             let list =
@@ -118,61 +117,39 @@ fn a_tagged_value_never_equals_its_payload() {
 }
 
 #[test]
-fn quotes_compare_as_syntax() {
+fn quotes_compare_as_syntax_marks_included() {
+    use super::{Stand, quote};
+    use crate::values::Value as Holding;
     with_fixture(|fixture| {
         let (types, scratch) = (fixture.types, fixture.scratch());
-        let quote = |source| match fixture.part(source) {
-            ExpressionPart::QuotedExpression(node) => Value::Expression(node),
-            _ => panic!("`{source}` parses to a quote"),
+        let code = |source: &str| Holding::Knotted(Stand::Code(quote(fixture, source)));
+        let equal = |left: &str, right: &str| {
+            code(left)
+                .equals(&code(right), types, scratch)
+                .expect("code is comparable")
         };
-        assert!(
-            quote("#(a [1 2] {x = \"s\"})")
-                .equals(&quote("#(a [1 2] {x = \"s\"})"), types, scratch)
-                .expect("no callable")
-        );
-        assert!(
-            !quote("#(a [1 2])")
-                .equals(&quote("#(a [2 1])"), types, scratch)
-                .expect("no callable")
-        );
-        assert!(
-            !quote("#(a)")
-                .equals(&quote("#(a b)"), types, scratch)
-                .expect("no callable")
-        );
+        assert!(equal("#(a [1 2] {x = \"s\"})", "#(a [1 2] {x = \"s\"})"));
+        assert!(!equal("#(a [1 2])", "#(a [2 1])"));
+        assert!(!equal("#(a)", "#(a b)"));
+        assert!(equal("#($a PLUS \\(PRINT c))", "#($a PLUS \\(PRINT c))"));
+        assert!(!equal("#($a)", "#(a)"), "a mark is syntax");
+        assert!(!equal("#($a)", "#(\\a)"), "and so is which mark");
     });
 }
 
-/// A stand-in function: `values` compares none, so all it needs is a type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct Opaque;
-
-impl crate::values::Knotted for Opaque {
-    fn ktype(&self) -> KType {
-        KType::ANY
-    }
-
-    fn weight(&self) -> crate::values::Weight {
-        crate::values::Weight::ZERO
-    }
-
-    fn sibling(&self, _: crate::memory::Edge) -> Self {
-        *self
-    }
-
-    fn resolve<'a>(&self) -> crate::values::Resolved<'a, Self> {
-        crate::values::Resolved::Function
-    }
-}
-
 #[test]
-fn a_comparison_reaching_a_callable_is_incomparable() {
+fn a_function_compares_by_identity_and_a_barrier_is_incomparable() {
+    use super::Stand;
     use crate::values::{Incomparable, Value as Holding};
     with_fixture(|fixture| {
         let (types, scratch) = (fixture.types, fixture.scratch());
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let callable = Holding::Knotted(Opaque);
+            let (one, other) = (
+                Holding::Knotted(Stand::Function(1)),
+                Holding::Knotted(Stand::Function(2)),
+            );
+            let barrier = Holding::Knotted(Stand::Barrier);
             let list = |items: &[_]| {
                 Holding::List(crate::values::List::new(
                     writer,
@@ -181,22 +158,21 @@ fn a_comparison_reaching_a_callable_is_incomparable() {
                     scratch,
                 ))
             };
+            assert_eq!(one.equals(&one, types, scratch), Ok(true));
+            assert_eq!(one.equals(&other, types, scratch), Ok(false));
+            assert_eq!(barrier.equals(&barrier, types, scratch), Err(Incomparable));
             assert_eq!(
-                callable.equals(&callable, types, scratch),
+                Holding::<Stand>::Number(1.0).equals(&barrier, types, scratch),
                 Err(Incomparable)
             );
             assert_eq!(
-                Value::Number(1.0).equals(&callable, types, scratch),
-                Err(Incomparable)
-            );
-            assert_eq!(
-                list(&[Holding::Number(1.0), callable]).equals(
-                    &list(&[Holding::Number(2.0), callable]),
+                list(&[Holding::Number(1.0), barrier]).equals(
+                    &list(&[Holding::Number(2.0), barrier]),
                     types,
                     scratch
                 ),
                 Err(Incomparable),
-                "an unequal pair before the callable does not decide"
+                "an unequal pair before the barrier does not decide"
             );
             let numbers =
                 list(&[Holding::Number(1.0)]).retyped(writer, types.list(KType::NUMBER), types);
@@ -219,7 +195,7 @@ fn circular_values_compare_as_a_bisimulation() {
         let next = BinderSymbol::declared("next", symbols).unwrap();
         fixture.in_cell(pin, |context| {
             let writer = context.writer();
-            let equal = |left: Holding<'_, '_>, right: Holding<'_, '_>| {
+            let equal = |left: Holding<'_>, right: Holding<'_>| {
                 left.equals(&right, types, scratch).expect("no function")
             };
             let one = |cell| ring(fixture, writer, KType::STR, &[cell])[0];
@@ -302,7 +278,7 @@ fn a_seal_its_bound_reveals_is_read_through_and_any_other_stays() {
                 let tagged = Tagged::seal(writer, five, mint, KType::NUMBER, types, scratch);
                 Value::Tagged(tagged.expect("5 satisfies its witness"))
             };
-            let equal = |left: Value<'_, '_>, right: Value<'_, '_>| {
+            let equal = |left: Value<'_>, right: Value<'_>| {
                 left.equals(&right, types, scratch).expect("no callable")
             };
             assert!(equal(sealed(by_number), five));
@@ -326,6 +302,48 @@ fn a_seal_its_bound_reveals_is_read_through_and_any_other_stays() {
             // A newtype is no seal: it is nominal whatever it wraps.
             let wrapped = Value::Tagged(Tagged::hold(writer, five, distance));
             assert!(!equal(wrapped, five));
+        })
+    });
+}
+
+/// Every quote is one representation, so a seal bounded by any code kind reveals every quote it
+/// holds, whatever that quote's own kind; one bounded past `Code` keeps it.
+#[test]
+fn a_seal_bounded_by_a_code_kind_reveals_every_quote() {
+    use super::{Stand, quote};
+    use crate::memory::ScopeId;
+    use crate::values::Value as Holding;
+    with_fixture(|fixture| {
+        let (types, scratch, symbols) = (fixture.types, fixture.scratch(), fixture.symbols);
+        let carrier = crate::symbols::TypeSymbol::declared("Carrier", symbols).unwrap();
+        let mint = |bound| {
+            let nonce = ScopeId::next();
+            types.abstract_type(scratch, nonce, carrier, &[], Some(nonce), bound)
+        };
+        let name = quote(fixture, "#(y)");
+        let call = quote(fixture, "#(f x)");
+        fixture.in_cell(pin, |context| {
+            let writer = context.writer();
+            let equal = |left: Holding<'_, Stand<'_>>, right: Holding<'_, Stand<'_>>| {
+                left.equals(&right, types, scratch).expect("no callable")
+            };
+            for node in [name, call] {
+                let quote = Holding::Knotted(Stand::Code(node));
+                let sealed = |bound| {
+                    let tagged = crate::values::Tagged::seal(
+                        writer,
+                        quote,
+                        mint(bound),
+                        quote.ktype(),
+                        types,
+                        scratch,
+                    );
+                    Holding::Tagged(tagged.expect("the quote satisfies its witness"))
+                };
+                assert!(equal(sealed(KType::EXPRESSION), quote), "{quote:?}");
+                assert!(equal(sealed(KType::ANY_CODE), quote), "{quote:?}");
+                assert!(!equal(sealed(KType::ANY), quote), "{quote:?}");
+            }
         })
     });
 }

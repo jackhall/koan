@@ -9,16 +9,20 @@
 
 use std::fmt::Write as _;
 
-use crate::symbols::{KeywordSymbol, Symbol, SymbolDisplay, SymbolInterner, TypeSymbol};
+use crate::symbols::{
+    BinderSymbol, KeywordSymbol, Symbol, SymbolDisplay, SymbolInterner, TypeSymbol,
+};
 
 use super::digest::empty_schema_digest;
 use super::handle::{
-    ANY_NAME, BOOL_NAME, CODE_NAME, IDENTIFIER_NAME, KEXPRESSION_NAME, KType, MODULE_NAME,
-    NAME_TOKEN_NAME, NEVER_NAME, NULL_NAME, NUMBER_NAME, RECORD_TYPE_NAME, SIGILED_TYPE_EXPR_NAME,
-    STR_NAME, TYPE_NAME_TOKEN_NAME, VALUE_NAME,
+    ANY_NAME, BINDER_NAME, BLOCK_NAME, BOOL_NAME, CODE_NAME, DECLARATION_NAME, EXPRESSION_NAME,
+    IDENTIFIER_NAME, KEYWORD_NAME, KType, LITERAL_NAME, MODULE_NAME, NAME_NAME, NEVER_NAME,
+    NULL_NAME, NUMBER_NAME, RECORD_TYPE_NAME, SIGILED_TYPE_EXPR_NAME, STR_NAME, SYMBOL_NAME,
+    TYPE_NAME_TOKEN_NAME, VALUE_NAME,
 };
 use super::node::TypeNode;
 use super::operators::{FoldDirection, ReductionMode};
+use super::ranking::Ranked;
 use super::record::Record;
 use super::registry::TypeRegistry;
 use super::schema::{DeclaredGroup, SigSchema, shape_elements, shape_return, shape_slots};
@@ -56,16 +60,37 @@ fn write_name_in(
         TypeNode::Bool => f.write_str(BOOL_NAME.text()),
         TypeNode::Null => f.write_str(NULL_NAME.text()),
         TypeNode::Identifier => f.write_str(IDENTIFIER_NAME.text()),
-        TypeNode::NameToken => f.write_str(NAME_TOKEN_NAME.text()),
+        TypeNode::Symbol => f.write_str(SYMBOL_NAME.text()),
         TypeNode::TypeNameToken => f.write_str(TYPE_NAME_TOKEN_NAME.text()),
-        TypeNode::KExpression => f.write_str(KEXPRESSION_NAME.text()),
+        TypeNode::Expression => f.write_str(EXPRESSION_NAME.text()),
         TypeNode::SigiledTypeExpr => f.write_str(SIGILED_TYPE_EXPR_NAME.text()),
         TypeNode::RecordType => f.write_str(RECORD_TYPE_NAME.text()),
+        TypeNode::Literal => f.write_str(LITERAL_NAME.text()),
+        TypeNode::Block => f.write_str(BLOCK_NAME.text()),
+        TypeNode::Declaration => f.write_str(DECLARATION_NAME.text()),
+        TypeNode::Binder => f.write_str(BINDER_NAME.text()),
+        TypeNode::Name => f.write_str(NAME_NAME.text()),
+        TypeNode::Keyword => f.write_str(KEYWORD_NAME.text()),
         TypeNode::Any => f.write_str(ANY_NAME.text()),
         TypeNode::AnyValue => f.write_str(VALUE_NAME.text()),
         TypeNode::AnyCode => f.write_str(CODE_NAME.text()),
         TypeNode::Never => f.write_str(NEVER_NAME.text()),
         TypeNode::OfKind(kind) => f.write_str(kind.surface_keyword()),
+        TypeNode::CodeNeeding { kind, names } => {
+            f.write_str(":(")?;
+            write_name_in(*kind, f, types, symbols, binder)?;
+            f.write_str(" NEEDING #[")?;
+            for (index, name) in names.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(" ")?;
+                }
+                match name {
+                    BinderSymbol::Key(key) => write!(f, "({})", symbols.display(key.symbol()))?,
+                    _ => write!(f, "{}", symbols.display(name.symbol()))?,
+                }
+            }
+            f.write_str("])")
+        }
         TypeNode::List { element } => {
             f.write_str(":(LIST OF ")?;
             write_name_in(*element, f, types, symbols, binder)?;
@@ -85,7 +110,7 @@ fn write_name_in(
             write_param_record(f, *fields, types, symbols, binder)?;
             f.write_str("}")
         }
-        // `:(FN FOR ALL (Elt) :{x :Elt} -> Elt)`, and without the group where it binds none — the
+        // `:(FN FOR ALL #[Elt] :{x :Elt} -> Elt)`, and without the group where it binds none — the
         // group writer emits its own trailing space and nothing at all for an empty group, so the
         // monomorphic surface is unchanged. Params and return read against the function's own
         // group where it has one, and against the enclosing binder's where it has none.
@@ -112,10 +137,18 @@ fn write_name_in(
             quantifiers,
             bounds,
             elements,
+            classes,
             ret,
         } => {
             f.write_str(":(EXPR ")?;
-            write_shape_surface(f, quantifiers, bounds, elements, *ret, types, symbols)?;
+            let shape = Ranked {
+                quantifiers,
+                bounds,
+                elements,
+                classes,
+                ret: *ret,
+            };
+            write_shape_surface(f, shape, types, symbols)?;
             f.write_str(")")
         }
         // A quantified position renders as the name its enclosing binder bound it to. The
@@ -260,32 +293,36 @@ fn write_param_record(
     Ok(())
 }
 
-/// `FOR ALL (Elt UNDER Number) (PURE _ :Elt) -> :(Elt AS Wrap)` — an expression shape's surface below
+/// `FOR ALL #{Elt: Number} #(PURE _ :Elt) -> :(Elt AS Wrap)` — an expression shape's surface below
 /// the `:(EXPR …)` wrapper. The one spelling of a shape, shared by the type surface and by the head
 /// a signature's rendered member is named with, so a declaration and the error naming it read
 /// alike.
 ///
-/// `bounds` are the group's bounds as the shape node stores them, one per quantifier.
-pub(super) fn write_shape_surface(
+/// The group's bounds are read as the shape node stores them, one per quantifier.
+fn write_shape_surface(
     f: &mut std::fmt::Formatter<'_>,
-    quantifiers: &[TypeSymbol],
-    bounds: &[KType],
-    elements: &[DispatchTokenElement],
-    ret: KType,
+    shape: Ranked<'_>,
     types: &TypeRegistry<'_>,
     symbols: &SymbolInterner,
 ) -> std::fmt::Result {
-    write_quantifier_group(f, quantifiers, bounds, types, symbols)?;
-    write_shape_head(f, elements, types, symbols, quantifiers)?;
+    let quantifiers = shape.quantifiers;
+    write_quantifier_group(f, quantifiers, shape.bounds, types, symbols)?;
+    write_shape_head(
+        f,
+        shape.elements,
+        shape.classes,
+        types,
+        symbols,
+        quantifiers,
+    )?;
     f.write_str(" -> ")?;
-    write_name_in(ret, f, types, symbols, quantifiers)
+    write_name_in(shape.ret, f, types, symbols, quantifiers)
 }
 
-/// `FOR ALL (<names>) ` — the quantifier group a binder's surface opens with, or nothing at all
-/// when it quantifies over nothing. A variable whose bound is not `Any` spells it:
-/// `FOR ALL ((Elt UNDER Number) Key) `, and a group of one bounded name drops its own parentheses,
-/// `FOR ALL (Elt UNDER Number) `. The trailing space is the group's, so the head that follows
-/// spells the same either way.
+/// `FOR ALL #[<names>] ` — the quantifier group a binder's surface opens with, or nothing at all
+/// when it quantifies over nothing. A group where some variable's bound is not `Any` is a dict of
+/// each name to its bound, `FOR ALL #{Elt: Number, Key: Any} `. The trailing space is the group's,
+/// so the head that follows spells the same either way.
 fn write_quantifier_group(
     f: &mut std::fmt::Formatter<'_>,
     quantifiers: &[TypeSymbol],
@@ -296,36 +333,36 @@ fn write_quantifier_group(
     if quantifiers.is_empty() {
         return Ok(());
     }
-    let bound_of = |index: usize| bounds.get(index).copied().filter(|b| *b != KType::ANY);
-    let lone = quantifiers.len() == 1 && bound_of(0).is_some();
-    f.write_str(if lone { "FOR ALL " } else { "FOR ALL (" })?;
+    let bound_of = |index: usize| bounds.get(index).copied().unwrap_or(KType::ANY);
+    let bounded = (0..quantifiers.len()).any(|index| bound_of(index) != KType::ANY);
+    f.write_str(if bounded { "FOR ALL #{" } else { "FOR ALL #[" })?;
     for (index, name) in quantifiers.iter().enumerate() {
         if index > 0 {
-            f.write_str(" ")?;
+            f.write_str(if bounded { ", " } else { " " })?;
         }
-        let name = display_symbol(name.symbol(), symbols);
-        match bound_of(index) {
-            Some(bound) => {
-                write!(f, "({name} UNDER ")?;
-                write_name_in(bound, f, types, symbols, &[])?;
-                f.write_str(")")?;
-            }
-            None => write!(f, "{name}")?,
+        write!(f, "{}", display_symbol(name.symbol(), symbols))?;
+        if bounded {
+            f.write_str(": ")?;
+            write_name_in(bound_of(index), f, types, symbols, &[])?;
         }
     }
-    f.write_str(if lone { " " } else { ") " })
+    f.write_str(if bounded { "} " } else { "] " })
 }
 
-/// `(<keyword> _ :<Type> …)` — an expression shape's head. Every argument position is the wildcard
-/// `_`: the type carries no argument names, so there is none to print.
+/// `#(<keyword> _ :<Type> …)` — an expression shape's head, quoted as an `EXPR` head is written.
+/// Every argument position is the wildcard `_`, as the type carries no argument names — or, in a
+/// ranked shape, its priority class counted from 1, as a `SIG` member writes it (`#(MOVE 2 :Any TO
+/// 1 :Any)`).
 fn write_shape_head(
     f: &mut std::fmt::Formatter<'_>,
     elements: &[DispatchTokenElement],
+    classes: &[u8],
     types: &TypeRegistry<'_>,
     symbols: &SymbolInterner,
     binder: &[TypeSymbol],
 ) -> std::fmt::Result {
-    f.write_str("(")?;
+    f.write_str("#(")?;
+    let mut slot = 0;
     for (index, element) in elements.iter().enumerate() {
         if index > 0 {
             f.write_str(" ")?;
@@ -335,7 +372,11 @@ fn write_shape_head(
                 write!(f, "{}", display_symbol(symbol.symbol(), symbols))?;
             }
             DispatchTokenElement::Slot(kt) => {
-                f.write_str("_ ")?;
+                match classes.get(slot) {
+                    Some(class) => write!(f, "{} ", u32::from(*class) + 1)?,
+                    None => f.write_str("_ ")?,
+                }
+                slot += 1;
                 if !surface_opens_sigil(*kt, types) {
                     f.write_str(":")?;
                 }
@@ -413,7 +454,7 @@ fn write_sig_schema(
     f.write_str(")")
 }
 
-/// Render a keyworded member as the head declaring it — `(PURE _ :Number) -> Number`, the `EXPR`
+/// Render a keyworded member as the head declaring it — `#(PURE _ :Number) -> Number`, the `EXPR`
 /// head minus its keyword and its type sigil.
 ///
 /// The one diagnostic currency for a keyworded member: the subtyping failures name a head with it,
@@ -428,46 +469,27 @@ pub fn render_keyworded_head(
     if let Some(head) = render_operator_head(shape, operators, types, symbols) {
         return head;
     }
-    match types.node(shape) {
-        TypeNode::ExpressionShape {
-            quantifiers,
-            bounds,
-            elements,
-            ret,
-        } => ShapeSurface {
-            quantifiers,
-            bounds,
-            elements,
-            ret,
+    match Ranked::of(types, shape) {
+        Some(shape) => ShapeSurface {
+            shape,
             types,
             symbols,
         }
         .to_string(),
-        _ => display_name(shape, types, symbols).to_string(),
+        None => display_name(shape, types, symbols).to_string(),
     }
 }
 
 /// [`write_shape_surface`] as a `Display` view, for the diagnostics that keep the text.
 struct ShapeSurface<'r, 'run> {
-    quantifiers: &'r [TypeSymbol],
-    bounds: &'r [KType],
-    elements: &'r [DispatchTokenElement],
-    ret: KType,
+    shape: Ranked<'run>,
     types: &'r TypeRegistry<'run>,
     symbols: &'r SymbolInterner,
 }
 
 impl std::fmt::Display for ShapeSurface<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write_shape_surface(
-            f,
-            self.quantifiers,
-            self.bounds,
-            self.elements,
-            self.ret,
-            self.types,
-            self.symbols,
-        )
+        write_shape_surface(f, self.shape, self.types, self.symbols)
     }
 }
 
@@ -684,6 +706,11 @@ pub fn render_sig_failure(
         SigSubtypeFailure::MissingKeyworded { head: shape } => {
             format!("missing keyworded member `{}`", head(*shape))
         }
+        SigSubtypeFailure::RankingMismatch { head: shape, got } => format!(
+            "keyworded member `{}` is ranked two ways (found `{}`)",
+            head(*shape),
+            head(*got)
+        ),
         SigSubtypeFailure::KeywordedMismatch { head: shape, got } => format!(
             "no overload satisfies keyworded member `{}` (found {})",
             head(*shape),

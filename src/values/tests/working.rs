@@ -26,8 +26,7 @@ fn a_working_copy_carries_the_parsed_cache() {
             ));
             assert_eq!(working.binder_name_slot(), ast.binder_name_slot());
             assert_eq!(working.shape(), ast.shape());
-            assert_eq!(working.span, ast.span);
-            assert_eq!(working.file, ast.file);
+            assert_eq!(working.source, ast.source);
             assert!(matches!(
                 working.parts[1].value,
                 WorkingPart::Ast(ExpressionPart::Identifier(_))
@@ -66,7 +65,7 @@ fn a_splice_keeps_the_key_and_reads_the_head_again() {
                 classify_dispatch_shape(working.stored_key(), Some(PartClass::Spliced))
             );
             assert!(spliced.parts[0].value.as_value().is_some());
-            assert_eq!(spliced.span, working.span);
+            assert_eq!(spliced.source, working.source);
         })
     });
 }
@@ -85,13 +84,13 @@ fn a_built_node_computes_its_key_and_a_synthesized_one_takes_its_origin() {
                 spanned(WorkingPart::StagedSlot, 7, 9),
             ];
             let synthesized = WorkingExpression::synthesized(writer, &parts, &origin);
-            assert_eq!(synthesized.span, Some(Span { start: 3, end: 9 }));
-            assert_eq!(synthesized.file, origin.file);
+            assert_eq!(synthesized.source.span, Span { start: 3, end: 9 });
+            assert_eq!(synthesized.source.file, origin.source.file);
             assert_eq!(synthesized.stored_key(), origin.stored_key());
             assert!(synthesized.binder_plan().is_none());
             let bare = [Spanned::bare(WorkingPart::StagedSlot)];
             let fallback = WorkingExpression::synthesized(writer, &bare, &origin);
-            assert_eq!(fallback.span, origin.span);
+            assert_eq!(fallback.source, origin.source);
             assert_eq!(fallback.stored_key(), [KeyElement::Slot]);
             assert!(fallback.in_type_context().under_type_sigil());
         })
@@ -120,7 +119,7 @@ fn admission_reads_each_part_kind() {
             let nested = WorkingPart::Expression(crate::memory::resident(writer, working));
             for unfilled in [WorkingPart::StagedSlot, nested] {
                 assert!(admits(KType::ANY, &unfilled, types, scratch));
-                assert!(!admits(KType::KEXPRESSION, &unfilled, types, scratch));
+                assert!(!admits(KType::EXPRESSION, &unfilled, types, scratch));
             }
         })
     });
@@ -197,5 +196,37 @@ fn a_quantified_slot_takes_a_raw_part_its_bound_takes() {
         assert!(!admits_part(by_value, &fixture.part("#(a)"), types));
         assert!(admits_part(free, &fixture.part("1"), types));
         assert!(admits_part(free, &fixture.part("#(a)"), types));
+    });
+}
+
+/// A code slot admits a raw part whose code kind lies under it — a bare group as a quote of its
+/// own kind — and a container slot admits a literal by its elements, a `_` key admitting any key
+/// type.
+#[test]
+fn admission_reads_the_code_order_and_a_containers_elements() {
+    with_fixture(|fixture| {
+        let types = fixture.types;
+        let admits = |slot: KType, source: &str| admits_part(slot, &fixture.part(source), types);
+        assert!(admits(KType::LIST_OF_NAME, "#[x y]"));
+        assert!(!admits(KType::LIST_OF_NAME, "#[x (f y)]"));
+        assert!(admits(KType::DICT_NAME_BLOCK, "#{Some: (a), _: (b)}"));
+        // A bare group admits by its kind; its reading is the shape builder's to refuse.
+        assert!(admits(KType::DICT_NAME_BLOCK, "{Some: (a)}"));
+        // A literal quote is an expression of one statement, so a block.
+        assert!(admits(KType::DICT_NAME_BLOCK, "#{Some: 1}"));
+        assert!(!admits(KType::DICT_NAME_BLOCK, "#{1: (a)}"));
+        assert!(admits(KType::BLOCK, "(LET x = 1)"));
+        assert!(admits(KType::BINDER, "(LET x = 1)"));
+        assert!(!admits(KType::SYMBOL, "(LET x = 1)"));
+        assert!(admits(
+            KType::LIST_OF_DECLARATION,
+            "#[(VAL x :Str) (TYPE Carrier) (LET Key = Str)]"
+        ));
+        assert!(!admits(KType::LIST_OF_DECLARATION, "#[(PRINT 1)]"));
+        assert!(!admits(types.list(KType::NUMBER), "[1 'a']"));
+        assert!(admits(types.list(KType::NUMBER), "[1 2]"));
+        assert!(admits(KType::KEYWORD, "#(+)"));
+        assert!(!admits(KType::NAME, "#(+)"));
+        assert!(!admits(KType::ANY_CODE, "1"));
     });
 }

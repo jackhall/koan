@@ -10,11 +10,11 @@
 use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Writer, covariant, reattachable};
 use crate::scheduler::StepBundle;
-use crate::scope::Site;
+use crate::scope::{BodyShape, Site};
 use crate::values::copy_severed;
 
 use super::body::Runner;
-use super::record::{Evaluated, Program};
+use super::record::{CallKind, Contract, Evaluated, Program};
 
 /// The bundle a koan program's steps run over.
 pub struct KBundle;
@@ -25,17 +25,35 @@ pub enum KBirth<'graph, 'cell> {
     /// The top level's root work.
     Program { program: &'graph Program<'graph> },
     /// A call: the frame's first step lays its activation down and binds the parameters from
-    /// `arguments`, a record of them by name.
+    /// `arguments`, a record of them by name, checked as `kind` says.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
         arguments: KValue<'graph, 'cell>,
+        kind: CallKind,
+    },
+    /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
+    /// carries and the names `offered`, a record of them by name, supplies.
+    Eval {
+        program: &'graph Program<'graph>,
+        code: KValue<'graph, 'cell>,
+        offered: KValue<'graph, 'cell>,
     },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
+    /// A frame's tail hands its last statement over with the frame's `contract`, which the
+    /// evaluation then owes its value.
     Evaluate {
         program: &'graph Program<'graph>,
         node: Evaluated<'graph>,
         view: KActivationView<'graph, 'cell>,
+        contract: Option<Contract>,
+    },
+    /// A block — a synthesized block part's shape — run beside the view of the activation it sits
+    /// in, its last statement's value its own.
+    Block {
+        program: &'graph Program<'graph>,
+        shape: &'graph BodyShape<'graph>,
+        enclosing: KActivationView<'graph, 'cell>,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
     /// work to read a top-level binding through.
@@ -52,8 +70,8 @@ pub enum KState<'graph, 'cell> {
     Born(KBirth<'graph, 'cell>),
     /// The body runner, between units.
     Runner(Runner<'graph, 'cell>),
-    /// An evaluator's resumption: what it was born with, and how far it got. Dispatch reshapes this
-    /// arm; the tests' miniature evaluator needs nothing more.
+    /// An evaluator's resumption: what it was born with, and how far it got — which parts of the
+    /// node it has asked for is read again off the node itself.
     Evaluating {
         birth: KBirth<'graph, 'cell>,
         stage: u32,
@@ -83,8 +101,9 @@ impl<'graph> StepBundle<'graph> for KBundle {
     type Scratch = KScratchFamily;
 
     /// A view is weighed at no bound, so the verdict never copies one: it is a borrow of another
-    /// cell's region, and an evaluation or an inspection is born under the cell it views, where
-    /// pinning it costs nothing.
+    /// cell's region. An evaluation, a block or an inspection is born under the cell it views,
+    /// where pinning it costs nothing, or is a frame's `Shares` tail, which pins the frame into the
+    /// ancestor its successor is a tenant of.
     fn weight<'cell>(birth: &KBirth<'graph, 'cell>) -> usize
     where
         'graph: 'cell,
@@ -94,7 +113,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
             KBirth::Call {
                 callee, arguments, ..
             } => callee.weight().plus(arguments.weight()).bytes(),
-            KBirth::Evaluate { .. } | KBirth::Inspect { .. } => usize::MAX,
+            KBirth::Eval { code, offered, .. } => code.weight().plus(offered.weight()).bytes(),
+            KBirth::Evaluate { .. } | KBirth::Block { .. } | KBirth::Inspect { .. } => usize::MAX,
         }
     }
 
@@ -109,19 +129,40 @@ impl<'graph> StepBundle<'graph> for KBundle {
             CrossedOperand::Pinned { view, .. } => *view,
             CrossedOperand::Copied { view: copied, .. } => match *copied {
                 KBirth::Program { program } => KBirth::Program { program },
+                // The values of one birth cross through one copy, so they share each knot.
                 KBirth::Call {
                     program,
                     callee,
                     arguments,
-                } => KBirth::Call {
+                    kind,
+                } => {
+                    let [callee, arguments] =
+                        copy_severed::<_, KnottedFamily, 2>(writer, view, [&callee, &arguments]);
+                    KBirth::Call {
+                        program,
+                        callee,
+                        arguments,
+                        kind,
+                    }
+                }
+                KBirth::Eval {
                     program,
-                    callee: copy_severed::<_, KnottedFamily>(writer, view, &callee),
-                    arguments: copy_severed::<_, KnottedFamily>(writer, view, &arguments),
-                },
-                // Only a forced copy reaches here with a view — a tail hop's successor, which is a
-                // sibling of the cell the view names. No step hops holding a view.
-                KBirth::Evaluate { .. } | KBirth::Inspect { .. } => {
-                    unreachable!("a birth holding a view is born under the cell it views")
+                    code,
+                    offered,
+                } => {
+                    let [code, offered] =
+                        copy_severed::<_, KnottedFamily, 2>(writer, view, [&code, &offered]);
+                    KBirth::Eval {
+                        program,
+                        code,
+                        offered,
+                    }
+                }
+                // Only a forced copy reaches here with a view: a `Fresh` hop's successor, a sibling
+                // of the cell the view names. A view is born under the cell it views, or handed on
+                // by a `Shares` hop, whose successor is a tenant of an ancestor and pins it.
+                KBirth::Evaluate { .. } | KBirth::Block { .. } | KBirth::Inspect { .. } => {
+                    unreachable!("a birth holding a view is never copied")
                 }
             },
         }

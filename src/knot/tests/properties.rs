@@ -73,6 +73,9 @@ fn synthetic<'graph, 'cell>(
             *next += 1.0;
             Value::Number(*next)
         }
+        BinderSymbol::Registration(_) | BinderSymbol::Key(_) => {
+            unreachable!("the plans declare no registration")
+        }
     }
 }
 
@@ -157,7 +160,7 @@ fn follows_layout<'graph, 'cell>(
 /// Every link `member` holds: a function's closure bindings, or a planned data node's cells.
 fn links<'graph, 'cell>(
     member: Knotted<'graph, 'cell>,
-) -> Vec<Link<'cell, 'cell, Knotted<'graph, 'cell>>> {
+) -> Vec<Link<'cell, Knotted<'graph, 'cell>>> {
     match member.function() {
         Some(function) => (0..function.closure().len())
             .map(|at| function.closure().get(CaptureSlot(at as u32)))
@@ -344,7 +347,9 @@ fn run<'graph, 'cell>(
                     activation.builtins(),
                 )
             }
-            ShapeKind::Program | ShapeKind::Module => panic!("a plan nests no such shape"),
+            ShapeKind::Program | ShapeKind::Module | ShapeKind::Code => {
+                panic!("a plan nests no such shape")
+            }
         };
         run(
             fixture,
@@ -376,8 +381,8 @@ proptest! {
                 .enter(home, |context| {
                     let writer = context.writer();
                     let builtins = fixture.builtins(writer);
-                    let shape = crate::scope::BodyShape::of_program(fixture.program, &lines, builtins, fixture.scratch())
-                        .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(fixture.symbols)));
+                    let shape = crate::scope::BodyShape::of_program(fixture.program, &lines, builtins, fixture.types, fixture.symbols, fixture.scratch())
+                        .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(fixture.symbols, fixture.types)));
                     let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
                     let mut tied = Vec::new();
                     run(fixture, writer, activation, &mut 0.0, &mut tied);

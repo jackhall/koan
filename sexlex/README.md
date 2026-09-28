@@ -104,6 +104,11 @@ at all, so a blank line inside a block never ends it. Two decisions live here:
 **The reader** is recursive descent with two pieces of state: `layout_indent`,
 the indentation of the layout line currently being read, and `flat`, the depth of
 enclosing `[` / `{`. Everything about the three regimes falls out of those two.
+A third count, of every group open around the next item, keeps the descent
+bounded: opening a group past `MAX_DEPTH` (1024) is an error rather than a
+stack overflow. Layout groups count too, a top-level line's at depth 1, since
+the descent recurses through them as it does through brackets. The limit bounds
+the reader's own stack only; a language on top picks the stack it reads on.
 
 ## The three regimes
 
@@ -155,7 +160,8 @@ reader's job rather than the caller's.
 
 The set is small and total: tab indentation, odd indentation, unclosed string,
 unclosed group, unexpected closer, mismatched closer, dangling paren, dedented
-closer. There is no "unexpected token" case, because there is no token the crate
+closer, and groups nested too deep, which points at the opener, or the line,
+that would pass the limit. There is no "unexpected token" case, because there is no token the crate
 does not accept — only structures that do not close.
 
 ## Rendering

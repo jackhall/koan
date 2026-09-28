@@ -13,9 +13,8 @@
 
 use crate::memory::{Writer, collect};
 use crate::parse::builtin_shapes::binder::StoredBinderKey;
-use crate::parse::builtin_shapes::lazy::LazyKinds;
 use crate::parse::builtin_shapes::{BuiltinShape, builtin_shape_for};
-use crate::symbols::KeywordSymbol;
+use crate::symbols::{KeySymbol, KeywordSymbol};
 
 /// One position of a bucket key: a fixed token as its [`KeywordSymbol`], or an argument slot.
 /// `Copy` and lifetime-free, so a key run is the same type whether it sits in a `Vec` a caller
@@ -28,6 +27,21 @@ use crate::symbols::KeywordSymbol;
 pub enum KeyElement {
     Slot,
     Keyword(KeywordSymbol),
+}
+
+impl KeyElement {
+    /// The keyword this position pins, `None` at a slot — the run [`KeySymbol::of`] digests.
+    pub fn keyword(self) -> Option<KeywordSymbol> {
+        match self {
+            KeyElement::Keyword(symbol) => Some(symbol),
+            KeyElement::Slot => None,
+        }
+    }
+
+    /// The [`KeySymbol`] a key run names.
+    pub fn key(run: impl IntoIterator<Item = KeyElement>) -> KeySymbol {
+        KeySymbol::of(run.into_iter().map(KeyElement::keyword))
+    }
 }
 
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
@@ -244,8 +258,8 @@ impl<'a> NodeCache<'a> {
     /// declaring anything. A synthesis writes its own keyword spine — a unary chain reduction emits
     /// `<operator> <operands>`, the shape `TYPE _` and `NEWTYPE _` also spell — so its key can match
     /// a binder shape by coincidence. Such a node is not that declaration, so it reports no
-    /// declared name and installs nothing, while still reading the shape for its raw-capture kinds,
-    /// which are a fact about the key alone.
+    /// declared name and installs nothing, while still reading the shape, which is a fact about
+    /// the key alone.
     pub fn declaring(self, binder_plan: Option<&'a StoredBinderKey<'a>>) -> Self {
         NodeCache {
             declared: self.builtin_shape,
@@ -296,11 +310,5 @@ impl<'a> NodeCache<'a> {
     /// declared name (`FN`, `OP`).
     pub fn binder_name_slot(&self) -> Option<usize> {
         self.declared?.binder?.name_slot
-    }
-
-    /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates.
-    pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
-        self.builtin_shape
-            .map_or(LazyKinds::EMPTY, |shape| shape.lazy_kinds_at(index))
     }
 }

@@ -19,9 +19,9 @@
 #
 # Every cargo step builds the default feature set: the modules the rewrite keeps — plus
 # `workgraph/test-hooks` on a workspace-wide step, since workgraph's doctests read the fixture that
-# feature compiles and no other crate turns it on. The old runtime behind `pending_rewrite` — and
-# with it the interpreter binary the tutorial-snippet check and the allocation audit read — is not
-# part of either tier; TEST.md § The pending rewrite lists the commands that run it on demand.
+# feature compiles and no other crate turns it on. The old runtime behind `pending_rewrite` is not
+# part of either tier; TEST.md § The pending rewrite lists the commands that run it on demand. The
+# interpreter binary is the rewrite's, and the routine tier runs the tutorial's snippets through it.
 #
 # One line per step, then one summary line. A step that passes is worth a count, a score, or a
 # delta — not its runner chatter — so the whole green slate reads without scrolling, and the
@@ -176,6 +176,17 @@ clippy_step() {
     fi
 }
 
+# Every runnable tutorial snippet through the interpreter binary, against the output the tutorial
+# shows; a snippet using an expression shape the rewrite does not run yet is skipped.
+snippets_step() {
+    run snippets 'snippets FAILED' cargo build --quiet --bin koan
+    run snippets 'snippets FAILED' python3 tools/verify_snippets.py
+    local matched pending
+    matched="$(grep -oE '^[0-9]+/[0-9]+' <<<"$OUT")"
+    pending="$(grep -oE '[0-9]+ pending' <<<"$OUT")"
+    ok snippets "$matched matched, $pending" 'snippets ok'
+}
+
 # --gates-only drops the informational source-tree changes report; the four
 # gating audits (links, deps, orphans, next-items) still run and still gate.
 doclinks_step() {
@@ -277,6 +288,7 @@ if [ "$TIER" = routine ]; then
     run tests 'tests FAILED' cargo test --workspace --features workgraph/test-hooks --quiet
     ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
 
+    snippets_step
     cellgraph_surface
     clippy_step --workspace --all-targets --features workgraph/test-hooks
     doclinks_step

@@ -38,15 +38,36 @@ Lowering is where koan's vocabulary enters, and six rules cover it
 
 - A **run** of sibling items becomes a run of parts, with the context —
   expression, list element, brace entry — deciding where each part lands.
-- A **body** is a run that becomes a node, and is where a redundant wrapper is
-  peeled: `((a b))` and `(a b)` name the same expression, and so does the group a
-  body line nests in.
-- A **sigil** is `#`, `$` or `:` glued to the group after it. Because `sexlex`
-  recorded the glue and kept the atom whole, a sigil needs no table and adding
-  one changes nothing below.
-- A **sigil-led line** is a whole layout line whose first atom starts with `#` or
-  `$`; the line's own body is what it quotes.
-- **Adjacency** rejects a `[` or `{` glued to a neighbouring token.
+- A **body** is a run that becomes a node. A paren the program writes is kept:
+  `((a b))` is `(a b)` wrapped once more, and `#((y))` is no `#(y)`. Only a layout
+  line that is a group's whole content comes off, since nobody wrote it as parens.
+  A compound atom that classifies to one sub-expression (`a.b`) is that
+  sub-expression, not a statement holding it.
+- A **sigil** is `#`, `$`, `\` or `:` glued to the group after it. Because
+  `sexlex` recorded the glue and kept the atom whole, a sigil needs no table and
+  adding one changes nothing below. `$` and `\` are **marks**
+  ([quotes](../scope/README.md#holes-and-marks)): glued to a paren, `$(…)` or
+  `\(…)` wraps exactly one keyworded use, and one wrapping no keyword, or a
+  closed builtin expression shape such as `LET`, is a parse error. Leading an
+  atom, a mark marks the name the atom starts with, `$x` or `\x`, so `$a.b` is
+  `ATTR $a b`, and an atom that starts with no name (`$3`, `\true`) is a parse
+  error naming it. The parser marks wherever it meets a mark; the shape builder
+  refuses one no quote value holds. `$..` leads a splice, `$..xs`
+  ([splicing](../scope/README.md#splicing)). `#` also glues to
+  a `[…]` or `{…}` literal and quotes each element: a paren-group element is
+  quoted as that group, any other element as a one-part quote, and a `_` key or
+  a record's field name stays bare, so `#{Some: (x), _: (y)}` is
+  `{#(Some): #(x), _: #(y)}`. The result is the bare literal — a container of
+  quotes, not a quote.
+- A **sigil-led line** is a whole layout line whose first atom starts with `#`;
+  the line's own body is what it quotes. A mark leads no line, so `$x` alone on
+  a line is the marked name. A line that is only a sigil glued to
+  its group is that glued sigil. A layout line that is one splice or spread
+  atom, `$..xs` or `..xs`, is that atom's part rather than a statement holding
+  it, so a splice reads the same in a block laid out on one line or several; a
+  written `($..xs)` stays a group.
+- **Adjacency** rejects a `[` or `{` glued to a neighbouring token, and a closer
+  followed by anything but whitespace, another closer or a `,`.
 - Everything else is an **atom**, which [atom.rs](atom.rs) classifies.
 
 Atom classification is the one place text is read closely: literals; a split on
@@ -60,7 +81,8 @@ knowing it exists.
 Brace literals get their own sub-state-machine ([brace.rs](brace.rs)) because
 one `{…}` frame serves two containers: a **dict** (`{k: v}`) and a **record**
 (`{x = 1}`). The first pairing operator selects the mode, mixing the two is an
-error, and an empty `{}` is the empty record.
+error, and an empty `{}` is the empty record. No keyword enters a literal but `_`
+as a dict's key, which names the dict's default.
 
 ## The AST: borrowed, `Copy`, and splice-free
 
@@ -70,12 +92,43 @@ another region is a slice copy rather than a rebuild.
 
 `ExpressionPart` is the vocabulary a run is spelled in: keywords, identifiers and
 type names as classified symbols; nested expressions; the two type sigils
-(`:(…)` and `:{…}`); list, dict and record literals; scalar literals; and
-`QuotedExpression`, the `#(…)` body captured at parse time as data.
+(`:(…)` and `:{…}`); list, dict and record literals; scalar literals;
+`QuotedExpression`, the `#(…)` body captured at parse time as data; and the two
+marked parts, `MarkedName` (`$x`, `\x`), which classifies as the name it marks,
+and `MarkedUse` (`$(…)`, `\(…)`), which classifies as a nested expression. A
+`Mark` is `Written` (`$`) or `Built` (`\`).
+
+**Every node carries a source.** Code always comes from somewhere, so a node
+holds the [`SourceRef`](../source.rs) — extent and registered file — of the text
+it was lowered from, and every construction door takes one. A part's span stays
+optional: the parts a brace frame collects keep none, so the sub-expression
+wrapping a multi-part key or value is sourced at the whole brace group, and the
+one-part quote made for an element of a `#[…]` or `#{…}` literal at the whole
+literal. A node built from other code, such as the shape builder's
+[operator-run rewrite](../scope/README.md#the-four-rewrites), carries the source
+of the code it was built from.
 
 **Quoting is static syntax.** The parser folds the sigil and its group into one
 part, so there is no runtime quoting operation and the body never dispatches — a
 quote behaves as a literal everywhere.
+
+**Code is taken as a quote.** A callee takes code through a slot typed by a
+[code kind](../type_lattice/README.md#the-code-family), and its caller quotes
+it, as a builtin's caller quotes a part that runs later: hygienic fexprs, with
+no expansion system and no global execution phase. Rewriting stays the shape
+builder's own, as its [pairwise rewrite](../scope/README.md#operator-groups) is,
+since a user's rewrite rule would act at a distance.
+
+**A quote is typed by its body as written.** `KExpression::code_kind` reads the
+body's [code kind](../type_lattice/README.md#the-code-family): two or more
+statements are a `Block`; a statement of a member-declaring builtin shape a
+`Declaration`, and one that installs a `Binder`; a lone scalar literal or nested
+quote a `Literal`; a lone name, keyword, `:(…)` or `:{…}` its own kind; and every
+other statement an `Expression`. The declaration test is a table fact,
+`BuiltinShapeId::declares_member`, asked before the binder plan, since a `TYPE`
+declarator carries a plan yet installs nothing. A written paren is a part of its
+own, so `#((LET x = 1))` is an `Expression`. `ExpressionPart::code_kind` answers
+the same for a bare part: a bare group is code of its own kind, as a quote is.
 
 The node here is structurally **splice-free**: an AST node names no producer
 region, so nothing in it has a reach to describe. The scheduler's per-dispatch
@@ -105,8 +158,8 @@ structural question — the bucket key it spells and the class of the head part 
 and the cache holds all the answers derived from them: the `ExpressionKey`, the
 dispatch shape, the matched builtin shape, and the binder plan.
 
-So every later reader — the dispatch driver, the scheduler's laziness decision,
-the close-inference walk, the miss diagnosis — **reads a cached fact rather than
+So every later reader — the dispatch driver, the shape builder, the
+close-inference walk, the miss diagnosis — **reads a cached fact rather than
 re-walking the run**. Both expression families carry the same cache and answer
 these questions the same way, so there is one classifier rather than two.
 
@@ -140,23 +193,40 @@ and every later reader indexes by the `BuiltinShapeId` tag — the close-inferen
 rules and the miss diagnostics are `(BuiltinShapeId, …)` pairs and hold no key of
 their own.
 
-**The untyped facts are erasures of that run**, not columns of their own:
+**The bucket key is an erasure of that run**, not a column of its own: the
+elements with their types dropped, which is what `BuiltinShape::matches` walks.
 
-- the **bucket key** a probe compares against is the elements with their types
-  dropped, which is what `BuiltinShape::matches` walks;
-- the **part kinds a slot keeps raw** are the raw-capture leaves among that slot's
-  overload types, which is what `BuiltinShape::lazy_kinds_at` computes: a
-  `KExpression` slot keeps an `(…)` group or a `#(…)` quote raw, a
-  `SigiledTypeExpr` slot a `:(…)`, a `RecordType` slot a `:{…}`, and a union-typed
-  slot keeps each member's kind raw, because it admits every carrier spelling it
-  lists.
+**The role says the reading; the type says the syntax.** A slot's role says how
+the shape builder reads its part (`Role::reading`), one of four ways: as a written
+**quote**, for a part that runs later, conditionally or never — a callable's
+body, an `EXPR` head (`Role::Head`), an `OP` symbol or a `PAIRWISE` combiner
+(`Data`); as **bare** syntax, for a part that declares or runs where it is
+written, once — a binder name, an in-place `MODULE`, `GROUP` or `USING` body,
+`NEWTYPE`'s representation, a type expression (`Role::TypeExpression`), a `TRY`
+or `CATCH` operand (`Role::InPlace`); as a **container** of quotes, for a part
+that names things as data — an arm set, a union's variants, a `FOR ALL` group, and a `SIG`
+body or the heads a bodyless `GROUP` declares (`DefinitionKind::Members`); or
+**evaluated**. `ATTR`'s label (`Role::Field`) is the one hybrid: a bare name is
+the label itself, and any other part is evaluated. The slot's type says what
+syntax fills it — a code kind, or a container of code kinds, for a part read as
+written, and a value type for one evaluated — and no slot keeps a part raw. A
+type expression and an in-place operand are the exceptions: they are bare, but
+their slot type is the value they denote, so the builder checks their spelling
+alone. The table only states those types: the shape builder's static check
+([scope](../scope/README.md#three-tiers)) admits a written part against them
+through [`admits_part`](../values/admission.rs) over the program's registry, the
+one admission rule, so no rule here restates a container's elements.
 
 A slot type rests in the table as a [`KType`](../type_lattice/handle.rs), whose
 handle is a `const` content digest, so an entry states its types with no registry
-in hand and both erasures are computed at build time. The two compounds a builtin
-slot uses — a union of leaves, the empty record — rest as a small recipe instead,
-since no `const` computes a compound's digest; interning them is
-[`elaborate`](../elaborate/README.md#builtin-shapes)'s.
+in hand and its erasure and laws are computed at build time. Every compound a
+slot is typed by is a pinned constant of the same kind: the code containers
+`List(Name)`, `List(Declaration)`, `Dict(TypeCode, Block)`, `Dict(Name, Block)`
+and `Dict(Name, TypeCode)`, the union `TypeCode`, a `FOR ALL` group's union
+`List(Name) | Dict(Name, TypeCode)` (`KType::QUANTIFIER_CODE`), and the empty
+record. Each is stated once, in the registry's seeding, which every registry
+runs; a test asks a fresh registry for every slot type and return, so a table
+type no registry seeds fails there.
 
 **Two laws hold the table together at build time**, asserted over the spec as
 `const` and so a compile error rather than a test failure:
@@ -164,9 +234,15 @@ since no `const` computes a compound's digest; interning them is
 - every slot of an entry types exactly as many overloads as the entry returns, and
   every bucket has at least one — a slot one type short would leave an overload
   untyped there, and nothing downstream could say which;
-- a `Body`, `Branches`, `Quantifiers` or `Data` slot is typed `KExpression` in
-  every overload, and an `Rhs` slot keeps nothing raw — a part the machine reads
-  as code must reach its reader unevaluated, and a binding's right-hand side is
+- every slot the builder reads as written, save a type expression and an
+  in-place operand, is typed by its reading's code type in every overload
+  (`roles_agree_with_code_types`): a body `Block`, a head `Expression`, a symbol
+  `Keyword`, a label `Name`, an arm set `Dict(TypeCode, Block)` under type
+  guards (`MATCH … WITH`) and `Dict(Name, Block)` under labels
+  (`MATCH … OVER`, `TRY`), a union's variants `Dict(Name, TypeCode)`, a member
+  list `List(Declaration)`, `NEWTYPE`'s representation `TypeCode`, a `FOR ALL` group
+  the union `List(Name) | Dict(Name, TypeCode)`, and a binder name a code kind within
+  `Expression`; and an `Rhs` slot is `Any`, since a binding's right-hand side is
   classified where it lands.
 
 The table is spelled as a `const` and read through a `static` of the same
@@ -174,12 +250,13 @@ contents, because a `const` is what those laws can be evaluated over — a `cons
 cannot read a `static`. Every reader takes the `static`, so each
 `&'static BuiltinShape` a node caches names one address.
 
-Four readers hang off the table:
+Three readers hang off the table:
 
 - **Roles** ([builtin_shapes/role.rs](builtin_shapes/role.rs)) — what each part of
   an entry is to name resolution: a keyword, a declared name, a right-hand side, a
-  body that opens a shape of its own, an arm run, a type declaration's definition,
-  data, a label. A part's role decides whether a name in it is a mention at all,
+  head, a body that opens a shape of its own, an arm set, a type declaration's
+  definition, data, a field label. A part's role decides how it is read and
+  whether a name in it is a mention at all,
   and how the mention's class moves on the way down (see
   [scope § Visibility](../scope/README.md#visibility)). A body slot also says
   *which kind* of body it opens — a lambda, an operator, a unary operator, a
@@ -190,17 +267,16 @@ Four readers hang off the table:
   fact, not an `ExpressionShape` one: a user-defined bucket declares no roles.
 - **Binder discovery** ([builtin_shapes/binder.rs](builtin_shapes/binder.rs)) —
   pure structural readers plus the facts that ride an entry. A shape is a binder
-  *because* its entry carries them, and nothing else declares it. What a binder
-  then *does* is the machine's.
-- **Raw-capture kinds** ([builtin_shapes/lazy.rs](builtin_shapes/lazy.rs)) — which
-  child slots a shape captures raw instead of evaluating. This is a **seal-time**
-  fact, not a dispatch-time one: a bare `(…)` evaluates before its parent
-  dispatches everywhere except a raw slot of a fixed builtin shape, the node's
-  entry is the single source of truth, and the scheduler reads the derivation off
-  it to decide child submission. So dispatch selects among overloads over values
-  that have already landed, and a reader can tell locally whether a group runs.
-  Raw capture is available only to builtin registration — a user `FN` signature
-  never receives a raw unquoted group.
+  *because* its entry carries them, and nothing else declares it. The same
+  readers take a definition's head apart into its bucket key, reading each
+  slot's label as a name, `_`, or an integer rank — which only a **bucket
+  declaration** writes: `EXPR #(MOVE 2 TO 1)`, an entry of its own whose head
+  spells a rank or `_` per slot, typed nothing and returning nothing, which
+  binds no name and ranks its key
+  ([keyworded uses](../scope/README.md#keyworded-uses)). A `NEEDING` list's
+  entry reads as a name, or — a one-node quote of keywords and a `_` per slot,
+  `#[(LOG _)]` — as a bucket key. What a binder then *does* is the layers
+  above's.
 - **Slot layout** ([builtin_shapes/layout.rs](builtin_shapes/layout.rs)) — a body's
   value binders as a symbol-sorted run, computed once where the shape is lexically
   fixed and read by every activation of that body, so an activation allocates one
@@ -213,6 +289,44 @@ Four readers hang off the table:
 Both the binder facts and the entry's slot types are pinned against the live
 builtin registration table by a property test, so an entry whose builtin was
 renamed, re-shaped or dropped fails the suite rather than drifting.
+
+## The syntax depth limit
+
+Every walk over parsed syntax — lowering, the operator-run rewrite, the shape
+builder, a quote's comparison — recurses once per nested part, so how deep a
+program's syntax nests is how much stack those walks need. One constant,
+`MAX_SYNTAX_DEPTH` ([depth.rs](depth.rs)), bounds it; it is `sexlex`'s
+`MAX_DEPTH`, 1024. A program nested past it is refused at load with a parse
+error naming the limit, never a crash.
+
+Two checks share the constant, each where the nesting first becomes visible:
+
+- **`sexlex` refuses a group** opened past the limit while it reads, since its
+  own descent recurses per group ([sexlex](../../sexlex/README.md#errors)). Every
+  group counts, a top-level line's layout group at depth 1, so `PRINT (1)` is 2
+  deep. That bounds every paren, bracket and brace a program writes, and so
+  every literal.
+- **`parse_with_source` refuses a top-level expression** whose stored depth
+  passes the limit. The lowered syntax nests where no group does: a dotted
+  chain `r.a.a…` is an `ATTR` node per link, and an operator run parses flat
+  but is rewritten into nodes nested once per operator.
+
+So every node stores its depth, computed once at construction from its parts'
+own stored depths, and no check walks a tree. A node is one level over its
+deepest part, where a nested node counts its stored depth, a list, dict or
+record literal one more than its deepest element, and anything else nothing.
+Two shapes count more, as the nesting the
+[operator-run rewrite](../scope/README.md#the-four-rewrites) builds from them:
+a run of `k` operators counts `k + 3` levels, the most any rewrite builds — a
+pairwise run's block, its `k - 1` combiners, a pair, the `NOT` of a `!=` pair,
+and a statement's wrapper around the block — and a lone `a != b` counts 2, for
+`NOT (a == b)`. `PRINT ((1))`, `PRINT [[1]]` and `PRINT r.a.a` are 3 deep, and
+`PRINT (1 + 2 + 3)` is 6. The rewrite therefore never deepens a statement past
+the depth the parse stored for it, and a run too long for the limit is refused
+like deep parentheses, with no cap on run length of its own.
+
+The limit is sized against a known stack: a host runs a program on a thread of
+[`STACK_BYTES`](../program/README.md#the-stack).
 
 ## Errors
 
@@ -237,7 +351,8 @@ as the shape it names.
 `properties` states the parser's **laws** over random trees rendered under random
 layouts, in that same notation. The files beside it hold what a law does not
 state: the diagnostic a mistake reports, and the surface rules a renderer never
-writes.
+writes. [depth](tests/depth.rs) pins the depth small shapes store, and a dotted
+chain and an operator run refused one level past the limit.
 
 ## A note on `pending_rewrite`
 

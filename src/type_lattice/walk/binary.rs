@@ -268,19 +268,21 @@ fn pairing<'n>(
             TypeNode::ExpressionShape {
                 quantifiers: xq,
                 elements: xe,
+                classes: xc,
                 ret: xr,
                 ..
             },
             TypeNode::ExpressionShape {
                 quantifiers: yq,
                 elements: ye,
+                classes: yc,
                 ret: yr,
                 ..
             },
         ) => {
             // A quantified shape relates to another by instantiation, which is a leaf door, not a
-            // child pairing.
-            if !xq.is_empty() || !yq.is_empty() || xe.len() != ye.len() {
+            // child pairing; two rankings of one key are two buckets' orders, which relate not at all.
+            if !xq.is_empty() || !yq.is_empty() || xe.len() != ye.len() || xc != yc {
                 return Pairing::Leaf;
             }
             let mut pairs = BumpVec::with_capacity_in(xe.len() + 1, scratch);
@@ -302,7 +304,7 @@ fn pairing<'n>(
                 width: Width::Positional,
                 only_a: BumpVec::new_in(scratch),
                 only_b: BumpVec::new_in(scratch),
-                assembly: Assembly::Shape(xe),
+                assembly: Assembly::Shape(xe, xc),
             }
         }
         (
@@ -392,7 +394,7 @@ enum Assembly<'n> {
     Dict,
     Record(&'n [BinderSymbol]),
     Function(&'n [BinderSymbol]),
-    Shape(&'n [DispatchTokenElement]),
+    Shape(&'n [DispatchTokenElement], &'n [u8]),
     Apply(&'n [BinderSymbol]),
 }
 
@@ -420,7 +422,7 @@ impl Rebuilder<'_, '_> {
                     .function_type(scratch, &[], &named(scratch, keys, values, extra), ret[0])
                     .handle
             }
-            Assembly::Shape(elements) => {
+            Assembly::Shape(elements, classes) => {
                 let mut slots = paired.iter();
                 let mut rebuilt = BumpVec::with_capacity_in(elements.len(), scratch);
                 rebuilt.extend(elements.iter().map(|element| match element {
@@ -430,7 +432,9 @@ impl Rebuilder<'_, '_> {
                     keyword => *keyword,
                 }));
                 let ret = *slots.next().expect("the return follows the slots");
-                types.shape_type(scratch, &[], &rebuilt, ret).handle
+                types
+                    .shape_type(scratch, &[], &rebuilt, classes, ret)
+                    .handle
             }
             Assembly::Apply(keys) => types.constructor_apply(
                 scratch,

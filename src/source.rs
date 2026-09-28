@@ -4,6 +4,7 @@
 //! metadata through the AST.
 
 use std::cell::{Cell, RefCell};
+use std::fmt;
 use std::rc::Rc;
 
 /// Index into the thread-local `SOURCES` registry.
@@ -37,6 +38,17 @@ impl SourceRef {
                 .collect::<Vec<_>>()
                 .join(" ")
         })
+    }
+}
+
+/// `path:line:col`, the extent's start resolved through the registry of the thread that registered
+/// its file: the source registry is per thread.
+impl fmt::Display for SourceRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (path, (line, col)) = with(self.file, |file| {
+            (file.path.clone(), file.resolve(self.span.start))
+        });
+        write!(f, "{path}:{line}:{col}")
     }
 }
 
@@ -240,6 +252,16 @@ mod tests {
             file,
         };
         assert_eq!(extent.text(), "WIDE 1 2");
+    }
+
+    #[test]
+    fn source_ref_displays_as_path_line_col() {
+        let file = register(SourceFile::new("<t>", "ab\ncd".to_string()));
+        let at = SourceRef {
+            span: Span { start: 4, end: 5 },
+            file,
+        };
+        assert_eq!(at.to_string(), "<t>:2:2");
     }
 
     #[test]

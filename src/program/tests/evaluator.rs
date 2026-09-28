@@ -1,26 +1,35 @@
 //! The miniature evaluator the program suites supply as their [`Language`]: not dispatch, and kept
 //! small. Its builtin table is `origin = 0` and the scalar types, and it evaluates exactly a
-//! literal, a quote, a name, a list of literals and names, `(WHEN c THEN a ELSE b)`,
+//! literal, a quote — born through the [quote door](crate::knot::quote) — a name, marked or not, a
+//! list of literals, names and quotes, `(EVAL code)` through the [`EVAL` door](crate::program::eval),
+//! `(WHEN c THEN a ELSE b)`,
 //! `(a MINUS b)`, `(FIRST xs)` over a list data node whose first cell is an edge, a call `(f x)` of a function with one
 //! parameter, and a `FN`, born through the [lambda door](crate::knot::lambda). `WHEN`, `THEN`,
 //! `ELSE`, `MINUS` and `FIRST` are no builtin shapes, so the shape builder walks them as plain
 //! calls; anything else is refused.
 //!
+//! Born under a frame's [`Contract`], it owes the frame its value: a `WHEN` tails into its branch
+//! with the contract, a call whose callee's declared return satisfies it tails into the callee's
+//! frame, and every other value is held to it where it is finished. An `EVAL` refused, or an
+//! error value received from a call, finishes with the error value.
+//!
 //! A step is a bare `fn`, so what it observes it records in a thread-local for the test around it.
 
 use std::cell::RefCell;
 
-use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda};
+use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda, quote};
 use crate::memory::{Active, Bump, BumpAllocator, Writer};
 use crate::parse::builtin_shapes::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
-use crate::program::{Evaluated, KBirth, KBundle, KState, Language, Program, call};
+use crate::program::{
+    CallKind, Contract, Evaluated, KBirth, KBundle, KState, Language, Program, call, eval,
+};
 use crate::scheduler::{
     Action, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{Builtins, CaptureSlot, Position, Site, Slot};
+use crate::scope::{Builtins, CaptureSlot, Offer, Position, Site, Slot};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{KType, TypeRegistry};
+use crate::type_lattice::{KType, TypeNode, TypeRegistry, satisfied_by};
 use crate::values::{Circular, Knotted as _, Link, List, Record, TypeValue, Value};
 
 thread_local! {
@@ -60,6 +69,8 @@ impl Language for Mini {
             ("Null", KType::NULL),
             ("Any", KType::ANY),
             ("Value", KType::ANY_VALUE),
+            ("Expression", KType::EXPRESSION),
+            ("Code", KType::ANY_CODE),
         ]
         .into_iter()
         .map(|(name, handle)| {
@@ -67,7 +78,19 @@ impl Language for Mini {
             (name, Value::Type(TypeValue::new(writer, handle, types)))
         })
         .collect();
-        Builtins::new(writer, scratch, &[(origin, Value::Number(0.0))], &scalars)
+        // Its keyworded calls are no builtin shapes, so each key holds an overload for the shape
+        // builder to find; the evaluator reads the keyword itself and never the overload.
+        let overloads: Vec<_> = ["WHEN _ THEN _ ELSE _", "_ MINUS _", "FIRST _"]
+            .into_iter()
+            .map(|text| (symbols.key(text).expect("a key"), Value::Null))
+            .collect();
+        Builtins::new(
+            writer,
+            scratch,
+            &[(origin, Value::Number(0.0))],
+            &scalars,
+            &overloads,
+        )
     }
 
     fn evaluator<'graph>() -> NativeStep<'graph, KBundle> {
@@ -165,6 +188,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
         program,
         node,
         view,
+        contract,
     } = birth
     else {
         return step.failed(StepError::Refused);
@@ -172,27 +196,42 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
     let types = program.types();
     let scratch = Bump::new();
     let parts = match form(node) {
-        Form::Leaf(part @ (ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_))) => {
-            if let ExpressionPart::Literal(KLiteral::Number(number)) = part {
+        Form::Leaf(part @ ExpressionPart::Literal(literal)) => {
+            if let KLiteral::Number(number) = literal {
                 record(format!("literal {number}"));
             }
             return step.finish_fresh(|writer, _| {
-                Active::new(
-                    Value::lower_part(writer, part, types, &scratch)
-                        .expect("a literal or a quote lowers"),
-                )
+                let value =
+                    Value::lower_part(writer, part, types, &scratch).expect("a literal lowers");
+                Active::new(held(program, contract, writer, value))
             });
+        }
+        Form::Leaf(part @ ExpressionPart::QuotedExpression(_)) => {
+            let member = quote(step.writer(), &view, part, &scratch);
+            return {
+                let writer = step.writer();
+                step.finish(held(program, contract, writer, Value::Knotted(member)))
+            };
         }
         // A Type-class name reads through the activation like any other mention: a frame binds
         // its callee's type parameters, so `Elt` inside a quantified body is an ordinary read.
-        Form::Leaf(part @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
+        Form::Leaf(
+            part @ (ExpressionPart::Identifier(_)
+            | ExpressionPart::Type(_)
+            | ExpressionPart::MarkedName(..)),
+        ) => {
             let Some(value) = read(&view, part) else {
                 return step.failed(StepError::Refused);
             };
-            if let Value::List(list) = value {
-                record(format!("read {:p}", list));
+            match value {
+                Value::List(list) => record(format!("read {:p}", list)),
+                Value::Type(_) => record(format!("read {}", super::describe(value, program))),
+                _ => {}
             }
-            return step.finish(value);
+            return {
+                let writer = step.writer();
+                step.finish(held(program, contract, writer, value))
+            };
         }
         Form::Leaf(ExpressionPart::ListLiteral(items)) => {
             if items
@@ -206,7 +245,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                     });
                     let list = List::new(writer, cells, types, &scratch);
                     record(format!("built {:p}", list));
-                    Active::new(Value::List(list))
+                    Active::new(held(program, contract, writer, Value::List(list)))
                 });
             }
             let writer = step.writer();
@@ -217,6 +256,9 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                         Some(value) => cells.push(value),
                         None => return step.failed(StepError::Refused),
                     },
+                    ExpressionPart::QuotedExpression(_) => {
+                        cells.push(Value::Knotted(quote(writer, &view, item, &scratch)));
+                    }
                     _ => match Value::lower_part(writer, item, types, &scratch) {
                         Some(value) => cells.push(value),
                         None => return step.failed(StepError::Refused),
@@ -226,7 +268,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             // Built here and crossed into the home at the verdict's price.
             let list = List::new(writer, cells.into_iter(), types, &scratch);
             record(format!("built {:p}", list));
-            return step.finish(Value::List(list));
+            return step.finish(held(program, contract, writer, Value::List(list)));
         }
         Form::Leaf(_) => return step.failed(StepError::Refused),
         Form::Lambda(node) => {
@@ -236,7 +278,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 return step.failed(StepError::Refused);
             };
             record(format!("born {}", born(member, program)));
-            return step.finish(Value::Knotted(member));
+            return step.finish(held(program, contract, writer, Value::Knotted(member)));
         }
         Form::Call(parts) => parts,
     };
@@ -256,6 +298,10 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 Received::Here(value) => truthy(&value),
             };
             let branch = if holds { taken } else { other };
+            if contract.is_some() {
+                let work = program.evaluate(Evaluated::Part(&branch.value), view, contract);
+                return step.tail(Placement::Shares, work);
+            }
             let asked = ask(&mut step, birth, &branch.value, Use::Forwards);
             park(step, asked, birth, 2)
         }
@@ -272,7 +318,9 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             let [Some(left), Some(right)] = operands[..] else {
                 return step.failed(StepError::Refused);
             };
-            step.finish_fresh(move |_, _| Active::new(Value::Number(left - right)))
+            step.finish_fresh(move |writer, _| {
+                Active::new(held(program, contract, writer, Value::Number(left - right)))
+            })
         }
         ([first, operand], 0) if keyword(first, "FIRST") => {
             let Some((holder, Circular::List(list))) =
@@ -281,8 +329,50 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
                 return step.failed(StepError::Refused);
             };
             match list.cells().first() {
-                Some(Link::Edge(edge)) => step.finish(Value::Knotted(holder.sibling(*edge))),
+                Some(Link::Edge(edge)) => {
+                    let writer = step.writer();
+                    step.finish(held(
+                        program,
+                        contract,
+                        writer,
+                        Value::Knotted(holder.sibling(*edge)),
+                    ))
+                }
                 _ => step.failed(StepError::Refused),
+            }
+        }
+        ([head, operand], 0) if keyword(head, "EVAL") => {
+            let asked = ask(&mut step, birth, &operand.value, Use::Keeps);
+            park(step, asked, birth, 3)
+        }
+        ([_, operand], 3) => {
+            let Some(Ok(Received::Here(code))) = step.results().next() else {
+                return step.failed(StepError::Unredeemable);
+            };
+            let Some(code) = code.as_code() else {
+                return step.failed(StepError::Refused);
+            };
+            let fields: Vec<_> = view
+                .shape()
+                .offers(Site::of(&operand.value))
+                .iter()
+                .map(|(name, offer)| match offer {
+                    Offer::Name(at) => (*name, view.read(*at)),
+                    Offer::Key(_) => unreachable!("the miniature evaluator offers names alone"),
+                })
+                .collect();
+            let offered = Record::new(step.writer(), &fields, types, &scratch);
+            match eval(program, code, Value::Record(offered), Use::Forwards) {
+                Ok(request) => {
+                    let asked = step.spawn(request);
+                    park(step, asked, birth, 2)
+                }
+                Err(refused) => {
+                    let message = refused.display(program.symbols(), types).to_string();
+                    record(format!("refused {message}"));
+                    let error = program.error(step.writer(), message);
+                    step.finish(error)
+                }
             }
         }
         ([_, argument], 0) => {
@@ -301,18 +391,28 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, KBundle>) -> Action<'grap
             };
             let writer = step.writer();
             let arguments = Record::new(writer, &[(parameter, argument)], types, &scratch);
-            let asked = step.spawn(call(
+            let request = call(
                 program,
                 callee,
                 Value::Record(arguments),
+                CallKind::ByName,
                 Use::Forwards,
-            ));
+            );
+            if let Some(contract) = contract
+                && keeps(program, callee, contract)
+            {
+                return step.tail(request.placement, request.work);
+            }
+            let asked = step.spawn(request);
             park(step, asked, birth, 2)
         }
         (_, 2) => {
             let received = step.results().next();
             match received {
-                Some(Ok(Received::Here(value))) => step.finish(value),
+                Some(Ok(Received::Here(value))) => {
+                    let writer = step.writer();
+                    step.finish(held(program, contract, writer, value))
+                }
                 _ => step.failed(StepError::Unredeemable),
             }
         }
@@ -337,7 +437,7 @@ fn ask<'graph, 'here>(
     step.spawn(Request {
         placement: Placement::Fresh,
         use_,
-        work: program.evaluate(Evaluated::Part(part), view),
+        work: program.evaluate(Evaluated::Part(part), view, None),
     })
 }
 
@@ -359,4 +459,33 @@ fn parameter(callee: KValue<'_, '_>) -> Option<crate::symbols::BinderSymbol> {
         .map(|slot| shape.slot_name(Slot(slot as u32)))
         .filter(|name| matches!(name, crate::symbols::BinderSymbol::Value(_)))
         .find(|name| shape.slot(*name).map(|(_, at)| at) == Some(Position::PARAMETER))
+}
+
+/// Whether `callee`, unquantified, declares a return that satisfies `contract` — so a call of it
+/// can be the contract's tail.
+fn keeps(program: &Program<'_>, callee: KValue<'_, '_>, contract: Contract) -> bool {
+    let Some(function) = callee.as_callable().and_then(Knotted::function) else {
+        return false;
+    };
+    match program.types().node(function.ktype()) {
+        TypeNode::KFunction {
+            quantifiers: [],
+            ret,
+            ..
+        } => satisfied_by(program.types(), &Bump::new(), contract.returns, ret),
+        _ => false,
+    }
+}
+
+/// `value` held to `contract`, when the evaluation was born under one.
+fn held<'graph, 'cell>(
+    program: &Program<'graph>,
+    contract: Option<Contract>,
+    writer: crate::memory::Writer<'cell>,
+    value: KValue<'graph, 'cell>,
+) -> KValue<'graph, 'cell> {
+    match contract {
+        Some(contract) => program.fulfilled(writer, value, contract),
+        None => value,
+    }
 }

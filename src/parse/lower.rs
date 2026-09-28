@@ -4,12 +4,16 @@
 //!
 //! Six rules cover it. A **run** of sibling items becomes a run of parts ([`Lower::lower_run`]),
 //! with the context (expression, list element, brace entry) deciding where each part lands. A
-//! **body** is a run that becomes a node ([`Lower::lower_body`]), and is where a redundant wrapper
-//! is peeled: `((a b))` and `(a b)` name the same expression, and so does the group a body line
-//! nests in. A **sigil** is `#`, `$` or `:` glued to the group after it, and a **sigil-led line**
-//! is a whole layout line whose first atom starts with `#` or `$` — the line's own body is what it
-//! quotes. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. Everything else is an
-//! atom, which [`super::atom`] classifies.
+//! **body** is a run that becomes a node ([`Lower::lower_body`]). A paren the program writes is
+//! kept, so `((a b))` is `(a b)` wrapped once more and `#((y))` is no `#(y)`; only a layout line
+//! that is a group's whole content comes off, since nobody wrote it as parens. A **sigil** is `#`,
+//! `$`, `\` or `:` glued to the group after it — `#` also to a `[…]` or `{…}` literal, quoting each
+//! element — and a **sigil-led line** is a whole layout line whose first atom starts with `#`: the
+//! line's own body is what it quotes. A `$` or `\` is a mark: glued to a paren it wraps one
+//! keyworded use, and leading an atom it marks the name the atom starts with, so no line is led by
+//! one. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. Everything else is an
+//! atom, which [`super::atom`] classifies. The one fact lowering records beyond the tree is the
+//! spelling of each bucket key a `NEEDING` list names, since past the parse a key is its symbol.
 //!
 //! See [README.md](README.md) § The division of labour with `sexlex`.
 
@@ -17,21 +21,24 @@ use sexlex::{Item, Kind, Node};
 
 use super::error::ParseError;
 use crate::memory::{ProgramBrand, collect};
-use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
-use crate::parse::builtin_shapes::binder::admit_bare_type_slots;
-use crate::source::{FileId, Span, Spanned};
-use crate::symbols::{KeywordSymbol, SymbolInterner};
+use crate::parse::ast::{
+    ExpressionPart, KExpression, KLiteral, KeyElement, Mark, ProgramExpression,
+};
+use crate::parse::builtin_shapes::KEYWORDS;
+use crate::parse::builtin_shapes::binder::{admit_bare_type_slots, needed_key};
+use crate::source::{FileId, SourceRef, Span, Spanned};
+use crate::symbols::{SymbolInterner, WILDCARD};
 
 use super::atom;
 use super::brace::{BraceContents, DictFrame};
 
-/// Read `source` into its layout tree and lower every top-level line. `file` is read once by the
-/// caller and stamped on every node this produces.
+/// Read `source` into its layout tree and lower every top-level line. `file` is the registered
+/// source `source` is the text of, and every node this produces is sourced in it.
 pub(super) fn lower_source<'a>(
     program: ProgramBrand<'a>,
     symbols: &SymbolInterner,
     source: &str,
-    file: Option<FileId>,
+    file: FileId,
 ) -> Result<Vec<KExpression<'a>>, ParseError> {
     let lines = sexlex::read(source).map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
     let lower = Lower {
@@ -51,26 +58,19 @@ enum Context<'c, 'a> {
     Brace(&'c mut DictFrame<'a>),
 }
 
-/// Whether a group that wraps nothing but another group is redundant. In a value expression it
-/// is — `((a b))` and `(a b)` name the same call — so it peels. Inside `:(...)` it is not: a
-/// paren there is structure the dispatcher reads, and `(Function ((List Number)) -> Bool)` takes
-/// one argument whose own type is parenthesized. The mode carries into everything a type
-/// expression nests, since the whole payload reaches the dispatcher verbatim.
+/// Whether a layout line that is a body's whole content comes off. In a value expression it does:
+/// nobody wrote it as parens, so `#(⏎  x y⏎)` quotes `x y`. Inside `:(...)` nothing comes off,
+/// since the whole payload reaches the dispatcher verbatim, and the mode carries into everything a
+/// type expression nests.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Wrappers {
     Peel,
     Keep,
 }
 
-/// A sigil-led line or a sigil glued to its group, resolved down to the body it captures.
-/// `#` keeps the body as data; `$` wraps it in the `EVAL` call the runtime performs.
-struct Sigil<'a> {
-    kind: char,
+/// A `#`-led line or a `#` glued to its paren, resolved down to the body it quotes.
+struct Quote<'a> {
     body: ProgramExpression<'a>,
-    /// The body's own extent: the parens for `#(...)`, the line past its sigil byte for `#rest`.
-    body_span: Span,
-    /// The sigil byte alone, which the `EVAL` keyword part takes.
-    sigil_span: Span,
     /// Sigil through body: what the part this becomes covers.
     outer: Span,
 }
@@ -78,13 +78,20 @@ struct Sigil<'a> {
 struct Lower<'a, 'l, 's> {
     program: ProgramBrand<'a>,
     symbols: &'l SymbolInterner,
-    file: Option<FileId>,
+    file: FileId,
     source: &'s str,
 }
 
 impl<'a, 's> Lower<'a, '_, 's> {
-    /// One top-level line. A `#`-led line is a statement that holds a quote; a `$`-led line *is*
-    /// the `EVAL` call, since evaluation is what the line asks for.
+    /// The source of the text at `span`.
+    fn at(&self, span: Span) -> SourceRef {
+        SourceRef {
+            span,
+            file: self.file,
+        }
+    }
+
+    /// One top-level line. A `#`-led line is a statement that holds a quote.
     fn statement(&self, line: &Item<'s>) -> Result<KExpression<'a>, ParseError> {
         let Node::Group {
             kind: Kind::Layout,
@@ -97,27 +104,26 @@ impl<'a, 's> Lower<'a, '_, 's> {
             ));
         };
         match self.sigil_led_line(items, line.span, Wrappers::Peel)? {
-            Some(sigil) if sigil.kind == '$' => Ok(self.eval_call(sigil).node()),
-            Some(sigil) => {
-                let quoted = self.sigil_part(sigil);
+            Some(quote) => {
+                let quoted = self.quote_part(quote);
                 Ok(self
                     .program
-                    .build_expression(&[quoted], Some(line.span), self.file)
+                    .build_expression(&[quoted], self.at(line.span))
                     .node())
             }
             None => Ok(self.lower_body(items, line.span, Wrappers::Peel)?.node()),
         }
     }
 
-    /// A run of items that becomes a node. A body that is exactly one group names the same
-    /// expression the group does, so the wrapper comes off the *tree* before anything is built —
-    /// `((a b))`, `(a b)` and a one-line paren body all reach the builder as the same run. The
-    /// peel stops at a sigil-led line, whose group is the quote's body rather than a wrapper.
+    /// A run of items that becomes a node. A body that is exactly one layout line is that line, so
+    /// the line comes off the *tree* before anything is built; a written paren never does, so
+    /// `((a b))` is a node holding `(a b)`. The peel stops at a sigil-led line, whose group is the
+    /// quote's body rather than a wrapper.
     ///
-    /// A compound atom reaches the same shape through classification rather than through a group
-    /// (`a.b` is one `ATTR` sub-expression), so a run that came out as a single sub-expression is
-    /// unwrapped too — a line reading `a.b` is that call, not a statement holding it. The
-    /// outermost span is stamped on the survivor so diagnostics point at what the user wrote.
+    /// A compound atom is one written token that classifies to a sub-expression (`a.b` is one
+    /// `ATTR` call), so a run of one atom that came out as a single sub-expression is unwrapped —
+    /// a line reading `a.b` is that call, not a statement holding it. The outermost span is
+    /// stamped on the survivor so diagnostics point at what the user wrote.
     fn lower_body(
         &self,
         mut items: &[Item<'s>],
@@ -133,8 +139,16 @@ impl<'a, 's> Lower<'a, '_, 's> {
         }
         let mut parts = self.lower_run(items.iter(), &mut Context::Expression, wrappers)?;
         admit_bare_type_slots(&mut parts);
+        let one_atom = matches!(
+            items,
+            [Item {
+                node: Node::Atom(_),
+                ..
+            }]
+        );
         let mut survivor: Option<KExpression<'a>> = None;
         while wrappers == Wrappers::Peel
+            && one_atom
             && let [
                 Spanned {
                     value: ExpressionPart::Expression(node),
@@ -145,15 +159,26 @@ impl<'a, 's> Lower<'a, '_, 's> {
             survivor = Some(**node);
         }
         Ok(match survivor {
-            Some(expression) => self.program.build_expression_from_iter(
-                expression.parts.iter().copied(),
-                Some(span),
-                self.file,
-            ),
+            Some(expression) => self
+                .program
+                .build_expression_from_iter(expression.parts.iter().copied(), self.at(span)),
             None => self
                 .program
-                .build_expression_from_iter(parts, Some(span), self.file),
+                .build_expression_from_iter(parts, self.at(span)),
         })
+    }
+
+    /// Record the spelling of each bucket key a `<kind> NEEDING #[…]` run lists, so a type naming
+    /// the key renders it as written (`LOG _`): past the parse, a key is its symbol alone.
+    fn record_needed_keys(&self, parts: &[Spanned<ExpressionPart<'a>>]) {
+        if let [_, needing, list] = parts
+            && matches!(needing.value, ExpressionPart::Keyword(symbol) if symbol == KEYWORDS.needing.symbol())
+            && let ExpressionPart::ListLiteral(quotes) = list.value
+        {
+            for key in quotes.iter().filter_map(needed_key) {
+                self.symbols.record_key(key.map(KeyElement::keyword));
+            }
+        }
     }
 
     /// Walk a run of sibling items in order, emitting the parts they stand for. A sigil consumes
@@ -219,13 +244,17 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 }
             }
         }
+        if matches!(context, Context::Expression) {
+            self.record_needed_keys(&parts);
+        }
         Ok(parts)
     }
 
     /// A list, dict or record literal holds values, and the only keyword-shaped things its syntax
     /// has are the `,` / `:` / `=` delimiters the run consumes itself — so a keyword reaching one
-    /// is refused here, the single funnel every part passes through. Every other run still admits
-    /// keywords, which is what `#(+)` bodies and `OP` declarations rest on.
+    /// is refused here, the single funnel every part passes through. The one exception is `_` as a
+    /// dict's key, naming the dict's default. Every other run still admits keywords, which is what
+    /// `#(+)` bodies and `OP` declarations rest on.
     fn push_part(
         &self,
         context: &mut Context<'_, 'a>,
@@ -234,11 +263,13 @@ impl<'a, 's> Lower<'a, '_, 's> {
     ) -> Result<(), ParseError> {
         if !matches!(context, Context::Expression)
             && let ExpressionPart::Keyword(symbol) = part.value
+            && !(symbol == WILDCARD.symbol()
+                && matches!(context, Context::Brace(dict) if dict.admits_wildcard()))
         {
             return Err(ParseError::new(
                 format!(
                     "`{}` is a keyword, so it cannot be an element of a list, dict, or record \
-                     literal",
+                     literal; only `_` may be written, as a dict's key",
                     self.symbols.display(symbol.symbol()),
                 ),
                 part.span,
@@ -251,10 +282,11 @@ impl<'a, 's> Lower<'a, '_, 's> {
         Ok(())
     }
 
-    /// One atom. A bare `#` / `$` that reached here took no group, and neither did one written
-    /// with its operand glued on (`#3`). A bare `:`, and the `:` an atom like `a:` ends in, either
-    /// pairs a brace entry or names nothing — and a pairing separator closes the key before it, so
-    /// the atom's own parts land first.
+    /// One atom. A bare `#`, `$` or `\` that reached here took no group, and neither did a `#`
+    /// written with its operand glued on (`#3`); a `$` or `\` so written marks the name the atom
+    /// leads with. A bare `:`, and the `:` an atom like `a:` ends in, either pairs a brace entry or
+    /// names nothing — and a pairing separator closes the key before it, so the atom's own parts
+    /// land first.
     fn lower_atom(
         &self,
         text: &str,
@@ -271,8 +303,13 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 _ => Err(self.colon_error(item.span.end)),
             };
         }
-        if let Some(sigil @ ('#' | '$')) = text.chars().next() {
-            return Err(self.missing_sigil_group(sigil, item.span.start));
+        let mark = match text.chars().next() {
+            Some('#') => return Err(self.missing_sigil_group('#', item.span.start)),
+            Some(sigil) => mark_of(sigil),
+            None => None,
+        };
+        if mark.is_some() && !text[1..].starts_with(|c: char| c.is_alphabetic() || c == '_') {
+            return Err(atom::unmarkable(text, item.span));
         }
         // Inside a brace `=` is the record-pair separator (`{x = 1}`); everywhere else it stays an
         // ordinary keyword token (`LET x = 1`, kwargs, FN bodies).
@@ -281,7 +318,8 @@ impl<'a, 's> Lower<'a, '_, 's> {
         {
             return dict.accept_equals();
         }
-        let classified = atom::classify(self.program, self.symbols, text, item.span)?;
+        let classified =
+            atom::classify(self.program, self.symbols, text, item.span, self.file, mark)?;
         for part in classified.parts {
             self.push_part(context, parts, part)?;
         }
@@ -294,8 +332,8 @@ impl<'a, 's> Lower<'a, '_, 's> {
         Ok(())
     }
 
-    /// A `(...)` or a body line: a nested expression. A body line that leads with `#` or `$`
-    /// quotes itself instead.
+    /// A `(...)` or a body line: a nested expression. A body line that leads with `#` quotes itself
+    /// instead.
     fn group_part(
         &self,
         item: &Item<'s>,
@@ -304,9 +342,9 @@ impl<'a, 's> Lower<'a, '_, 's> {
         wrappers: Wrappers,
     ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
         if kind == Kind::Layout
-            && let Some(sigil) = self.sigil_led_line(inner, item.span, wrappers)?
+            && let Some(quote) = self.sigil_led_line(inner, item.span, wrappers)?
         {
-            return Ok(self.sigil_part(sigil));
+            return Ok(self.quote_part(quote));
         }
         let expr = self.lower_body(inner, item.span, wrappers)?;
         Ok(Spanned::at(
@@ -330,7 +368,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
             let items = collect(writer, parts.into_iter().map(|part| part.value));
             return Ok(Spanned::at(ExpressionPart::ListLiteral(items), item.span));
         }
-        let mut dict = DictFrame::new(self.program);
+        let mut dict = DictFrame::new(self.program, self.at(item.span));
         self.lower_run(inner.iter(), &mut Context::Brace(&mut dict), wrappers)?;
         let part = match dict.finish(self.symbols)? {
             BraceContents::Dict(pairs) => {
@@ -343,9 +381,10 @@ impl<'a, 's> Lower<'a, '_, 's> {
         Ok(Spanned::at(part, item.span))
     }
 
-    /// A sigil glued to its group. `#` and `$` take an expression body; `:` takes a type
-    /// expression (`:(List Number)`) or a record type (`:{x :Number}`), both of which the parser
-    /// stores verbatim — reading a shape out of the payload is the dispatcher's job.
+    /// A sigil glued to its group. `#` takes an expression body, or a list, dict or record literal
+    /// whose elements it quotes; `$` and `\` a keyworded use they mark; `:` a type expression
+    /// (`:(List Number)`) or a record type (`:{x :Number}`), both of which the parser stores
+    /// verbatim — reading a shape out of the payload is the dispatcher's job.
     fn glued_sigil_part(
         &self,
         sigil_kind: char,
@@ -359,18 +398,21 @@ impl<'a, 's> Lower<'a, '_, 's> {
             start: sigil.span.start,
             end: group.span.end,
         };
-        if sigil_kind != ':' {
-            let body = self.lower_body(inner, group.span, wrappers)?;
-            return Ok(self.sigil_part(Sigil {
-                kind: sigil_kind,
-                body,
-                body_span: group.span,
-                sigil_span: Span {
-                    start: sigil.span.start,
-                    end: sigil.span.start + 1,
-                },
+        if sigil_kind == '#' && matches!(group_kind, Kind::Bracket | Kind::Brace) {
+            self.check_close_adjacency(group, group_kind)?;
+            let literal = self.collection_part(group, inner, group_kind, wrappers)?;
+            return Ok(Spanned::at(
+                self.quote_elements(literal.value, outer),
                 outer,
-            }));
+            ));
+        }
+        if let Some(mark) = mark_of(sigil_kind) {
+            let body = self.lower_body(inner, group.span, wrappers)?;
+            return self.marked_use(mark, body, outer);
+        }
+        if sigil_kind == '#' {
+            let body = self.lower_body(inner, group.span, wrappers)?;
+            return Ok(self.quote_part(Quote { body, outer }));
         }
         // A `:{...}` closes like any brace literal, so its closer takes the same rule.
         if group_kind == Kind::Brace {
@@ -388,12 +430,10 @@ impl<'a, 's> Lower<'a, '_, 's> {
         {
             return Ok(Spanned::at(ExpressionPart::SigiledTypeExpr(node), outer));
         }
-        let node = self
-            .program
-            .alloc_node(
-                self.program
-                    .build_expression_from_iter(parts, Some(outer), self.file),
-            );
+        let node = self.program.alloc_node(
+            self.program
+                .build_expression_from_iter(parts, self.at(outer)),
+        );
         let part = if group_kind == Kind::Paren {
             ExpressionPart::SigiledTypeExpr(node)
         } else {
@@ -404,28 +444,47 @@ impl<'a, 's> Lower<'a, '_, 's> {
         Ok(Spanned::at(part, outer))
     }
 
-    /// A layout line whose first atom starts with `#` or `$` quotes (or evaluates) the whole
-    /// line, its child lines included: the sigil byte comes off the first atom and everything
-    /// left is the body.
+    /// A layout line whose first atom starts with `#` quotes the whole line, its child lines
+    /// included: the sigil byte comes off the first atom and everything left is the body. A line
+    /// that is only a sigil glued to its group is that glued sigil: a paren is the quote's own
+    /// delimiter, and `#[…]` or `#{…}` is a statement holding the literal, so it is no sigil-led
+    /// line.
     fn sigil_led_line(
         &self,
         items: &[Item<'s>],
         span: Span,
         wrappers: Wrappers,
-    ) -> Result<Option<Sigil<'a>>, ParseError> {
-        let Some(kind) = sigil_lead(items) else {
+    ) -> Result<Option<Quote<'a>>, ParseError> {
+        if !sigil_lead(items) {
             return Ok(None);
-        };
+        }
         let first = &items[0];
         let Node::Atom(text) = &first.node else {
             unreachable!("sigil_lead matched an atom")
         };
         let text: &'s str = text;
+        let rest = &text[1..];
+        if rest.is_empty()
+            && first.glued
+            && let [_, group] = items
+            && let Node::Group {
+                kind: group_kind,
+                items: inner,
+            } = &group.node
+            && sigil_takes('#', *group_kind)
+        {
+            if *group_kind != Kind::Paren {
+                return Ok(None);
+            }
+            return Ok(Some(Quote {
+                body: self.lower_body(inner, group.span, wrappers)?,
+                outer: span,
+            }));
+        }
         let body_span = Span {
             start: first.span.start + 1,
             end: span.end,
         };
-        let rest = &text[1..];
         let body = if rest.is_empty() {
             self.lower_body(&items[1..], body_span, wrappers)?
         } else {
@@ -444,44 +503,90 @@ impl<'a, 's> Lower<'a, '_, 's> {
             )?;
             admit_bare_type_slots(&mut parts);
             self.program
-                .build_expression_from_iter(parts, Some(body_span), self.file)
+                .build_expression_from_iter(parts, self.at(body_span))
         };
-        Ok(Some(Sigil {
-            kind,
-            body,
-            body_span,
-            sigil_span: Span {
-                start: first.span.start,
-                end: first.span.start + 1,
-            },
-            outer: span,
-        }))
+        Ok(Some(Quote { body, outer: span }))
     }
 
-    fn sigil_part(&self, sigil: Sigil<'a>) -> Spanned<ExpressionPart<'a>> {
-        let outer = sigil.outer;
-        let part = match sigil.kind {
-            // `#(...)` captures its body as data: no keyword head, no call.
-            '#' => ExpressionPart::QuotedExpression(self.program.alloc_node(sigil.body)),
-            // `$(...)` keeps the head channel — evaluation is a runtime operation.
-            _ => ExpressionPart::Expression(self.program.alloc_node(self.eval_call(sigil))),
-        };
-        Spanned::at(part, outer)
+    /// `#[…]`, `#{…}`: the literal, bare, with every element quoted. A paren-group element is
+    /// quoted as that group and any other element as a one-part quote; a `_` key and a record's
+    /// field names stay bare. A brace frame keeps no element spans, so a one-part quote is sourced
+    /// at the whole literal, `span`.
+    fn quote_elements(&self, literal: ExpressionPart<'a>, span: Span) -> ExpressionPart<'a> {
+        let writer = self.program.writer();
+        match literal {
+            ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(collect(
+                writer,
+                items.iter().map(|item| self.quoted(*item, span)),
+            )),
+            ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(collect(
+                writer,
+                pairs.iter().map(|(key, value)| {
+                    let key = match key {
+                        ExpressionPart::Keyword(symbol) if *symbol == WILDCARD.symbol() => *key,
+                        _ => self.quoted(*key, span),
+                    };
+                    (key, self.quoted(*value, span))
+                }),
+            )),
+            ExpressionPart::RecordLiteral(fields) => ExpressionPart::RecordLiteral(collect(
+                writer,
+                fields
+                    .iter()
+                    .map(|(name, value)| (*name, self.quoted(*value, span))),
+            )),
+            _ => unreachable!("a bracket or brace lowers to a container literal"),
+        }
     }
 
-    fn eval_call(&self, sigil: Sigil<'a>) -> ProgramExpression<'a> {
-        let head = KeywordSymbol::declared("EVAL", self.symbols).expect("`EVAL` is keyword-class");
-        self.program.build_expression(
-            &[
-                Spanned::at(ExpressionPart::Keyword(head), sigil.sigil_span),
-                Spanned::at(
-                    ExpressionPart::Expression(self.program.alloc_node(sigil.body)),
-                    sigil.body_span,
+    /// One element of a `#[…]` or `#{…}` literal, quoted; a one-part quote is sourced at `span`.
+    fn quoted(&self, element: ExpressionPart<'a>, span: Span) -> ExpressionPart<'a> {
+        match element {
+            ExpressionPart::Expression(node) => ExpressionPart::QuotedExpression(node),
+            other => ExpressionPart::QuotedExpression(
+                self.program.alloc_node(
+                    self.program
+                        .build_expression(&[Spanned::bare(other)], self.at(span)),
                 ),
-            ],
-            Some(sigil.outer),
-            self.file,
-        )
+            ),
+        }
+    }
+
+    /// `#(...)` captures its body as data: no keyword head, no call.
+    fn quote_part(&self, quote: Quote<'a>) -> Spanned<ExpressionPart<'a>> {
+        let part = ExpressionPart::QuotedExpression(self.program.alloc_node(quote.body));
+        Spanned::at(part, quote.outer)
+    }
+
+    /// `$(…)` or `\(…)`: a mark around exactly one keyworded use. A body with no keyword is no
+    /// keyworded use, and a closed builtin expression shape (`LET`, `FN`, `MATCH`, …) resolves the
+    /// same wherever it is built, so a mark around either is refused.
+    fn marked_use(
+        &self,
+        mark: Mark,
+        body: ProgramExpression<'a>,
+        outer: Span,
+    ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
+        let node = body.node();
+        let keyworded = node
+            .stored_key()
+            .iter()
+            .any(|element| matches!(element, KeyElement::Keyword(_)));
+        if !keyworded || node.cache().builtin_shape().is_some() {
+            return Err(ParseError::new(
+                format!(
+                    "`{}(…)` wraps exactly one keyworded use, and `{}` is none; a closed builtin \
+                     expression shape such as `LET` resolves the same everywhere",
+                    mark.sigil(),
+                    node.summary(self.symbols),
+                ),
+                Some(outer),
+            ));
+        }
+        Ok(Spanned::at(
+            ExpressionPart::MarkedUse(mark, self.program.alloc_node(body)),
+            outer,
+        ))
     }
 
     /// A collection literal can't be glued to a token on either side: `foo[1]` would read as an
@@ -507,14 +612,14 @@ impl<'a, 's> Lower<'a, '_, 's> {
     fn check_close_adjacency(&self, item: &Item<'s>, kind: Kind) -> Result<(), ParseError> {
         let closer = kind.delimiters().expect("bracket kinds carry delimiters").1;
         let next = self.source[item.span.end as usize..].chars().next();
-        if matches!(next, None | Some(')' | ']' | '}'))
+        if matches!(next, None | Some(')' | ']' | '}' | ','))
             || matches!(next, Some(c) if c.is_whitespace())
         {
             return Ok(());
         }
         Err(ParseError::new(
             format!(
-                "'{closer}' must be followed by whitespace, ')', ']', or '}}' \
+                "'{closer}' must be followed by whitespace, ',', ')', ']', or '}}' \
                  (got {next:?}); collection literals can't be glued to a token",
             ),
             Some(item.span),
@@ -538,13 +643,22 @@ impl<'a, 's> Lower<'a, '_, 's> {
         }
     }
 
-    /// `#` and `$` take a `(...)` group and nothing else. The message names what was found in its
-    /// place, which is the character right after the sigil byte.
+    /// `#` takes a `(...)`, `[...]` or `{...}` group, and a bare `$` or `\` a `(...)` group. The
+    /// message names what was found in its place, which is the character right after the sigil
+    /// byte.
     fn missing_sigil_group(&self, sigil: char, at: u32) -> ParseError {
+        let expected = if sigil == '#' {
+            "'(', '[' or '{'"
+        } else {
+            "'('"
+        };
         match self.source[at as usize..].chars().nth(1) {
-            Some(c) => ParseError::new(format!("expected '(' after '{sigil}', found '{c}'"), None),
+            Some(c) => ParseError::new(
+                format!("expected {expected} after '{sigil}', found '{c}'"),
+                None,
+            ),
             None => ParseError::new(
-                format!("trailing '{sigil}' sigil at end of input; expected '('"),
+                format!("trailing '{sigil}' sigil at end of input; expected {expected}"),
                 None,
             ),
         }
@@ -559,11 +673,12 @@ impl<'a, 's> Lower<'a, '_, 's> {
     }
 }
 
-/// The group kinds a sigil may take: `#` and `$` capture an expression, `:` a type expression or
-/// a record type.
+/// The group kinds a sigil may take: `#` captures an expression or quotes a literal's elements,
+/// `$` and `\` mark a keyworded use, and `:` a type expression or a record type.
 fn sigil_takes(sigil: char, kind: Kind) -> bool {
     match sigil {
         ':' => matches!(kind, Kind::Paren | Kind::Brace),
+        '#' => matches!(kind, Kind::Paren | Kind::Bracket | Kind::Brace),
         _ => kind == Kind::Paren,
     }
 }
@@ -573,40 +688,41 @@ fn sigil_kind(text: &str) -> Option<char> {
     match text {
         "#" => Some('#'),
         "$" => Some('$'),
+        "\\" => Some('\\'),
         ":" => Some(':'),
         _ => None,
     }
 }
 
-/// The sigil a layout line leads with, if any.
-fn sigil_lead(items: &[Item<'_>]) -> Option<char> {
-    let Node::Atom(text) = &items.first()?.node else {
-        return None;
-    };
-    match text.chars().next() {
-        Some(c @ ('#' | '$')) => Some(c),
+/// The mark a sigil character writes, if it writes one.
+fn mark_of(sigil: char) -> Option<Mark> {
+    match sigil {
+        '$' => Some(Mark::Written),
+        '\\' => Some(Mark::Built),
         _ => None,
     }
 }
 
-/// The items a single-group body collapses to, when the group is a wrapper rather than a
-/// quote's own body. A bracket or brace is a literal, never a wrapper.
+/// Whether a layout line leads with `#`, the one sigil that quotes a line.
+fn sigil_lead(items: &[Item<'_>]) -> bool {
+    matches!(items.first().map(|item| &item.node), Some(Node::Atom(text)) if text.starts_with('#'))
+}
+
+/// The items a single-group body collapses to: a layout line nobody wrote as parens, unless it is
+/// sigil-led, when the group is the quote's own body. A written paren is never a wrapper, and a
+/// bracket or brace is a literal.
 fn peelable<'r, 's>(item: &'r Item<'s>) -> Option<&'r [Item<'s>]> {
     match &item.node {
         Node::Group {
-            kind: Kind::Paren,
-            items,
-        } => Some(items),
-        Node::Group {
             kind: Kind::Layout,
             items,
-        } if sigil_lead(items).is_none() => Some(items),
+        } if !sigil_lead(items) => Some(items),
         _ => None,
     }
 }
 
 /// One line's parts run, built straight from [`Lower::lower_run`] — the shape the tests assert
-/// against, where a redundant wrapper is still visible. It skips what [`Lower::lower_body`] adds
+/// against, where a layout wrapper is still visible. It skips what [`Lower::lower_body`] adds
 /// around that run, the peel and `admit_bare_type_slots`, so an expectation here names the parts
 /// a paren or sigil produced. Rejects input that is not exactly one line.
 #[cfg(test)]
@@ -616,8 +732,16 @@ pub(super) fn lower_run_for_tests<'a>(
     source: &str,
 ) -> Result<KExpression<'a>, ParseError> {
     let lines = sexlex::read(source).map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
+    let file =
+        crate::source::register(crate::source::SourceFile::new("<test>", source.to_string()));
     let line = match lines.as_slice() {
-        [] => return Ok(program.build_expression(&[], None, None).node()),
+        [] => {
+            let source = SourceRef {
+                span: Span { start: 0, end: 0 },
+                file,
+            };
+            return Ok(program.build_expression(&[], source).node());
+        }
         [line] => line,
         _ => return Err(ParseError::new("this helper reads exactly one line", None)),
     };
@@ -631,11 +755,11 @@ pub(super) fn lower_run_for_tests<'a>(
     let lower = Lower {
         program,
         symbols,
-        file: None,
+        file,
         source,
     };
     let parts = lower.lower_run(items.iter(), &mut Context::Expression, Wrappers::Peel)?;
     Ok(program
-        .build_expression_from_iter(parts, Some(line.span), None)
+        .build_expression_from_iter(parts, lower.at(line.span))
         .node())
 }

@@ -24,14 +24,17 @@
 //! See [README.md § Operator groups](README.md#operator-groups).
 
 use crate::memory::{BumpAllocator, BumpVec, ProgramBrand, collect, resident};
-use crate::parse::builtin_shapes::BuiltinShapeId;
-use crate::parse::builtin_shapes::binder::{OpArity, op_declaration_arity, symbol_from_quote_body};
-use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Role};
+use crate::parse::builtin_shapes::binder::{
+    OpArity, op_declaration_arity, quoted_body, symbol_from_quote_body,
+};
+use crate::parse::builtin_shapes::role::{BodyKind, DefinitionKind, Reading, Role};
+use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::symbols::{KeywordSymbol, StaticName};
 use crate::type_lattice::{DeclaredGroup, FoldDirection, ReductionMode};
 
-use super::shape::{Position, ShapeError};
+use super::shape::ShapeError;
+use crate::source::SourceRef;
 
 /// The operator symbols the builtin groups and the rewrite are spelled with, each declared once and
 /// minted once — the same discipline the surface keywords keep.
@@ -51,7 +54,6 @@ struct OperatorSymbols {
     /// What the rewrite of `a != b` negates through.
     not: StaticName<KeywordSymbol>,
     equal: StaticName<KeywordSymbol>,
-    unequal: StaticName<KeywordSymbol>,
 }
 
 static OPERATORS: OperatorSymbols = OperatorSymbols {
@@ -68,7 +70,6 @@ static OPERATORS: OperatorSymbols = OperatorSymbols {
     and: crate::static_name!(KeywordSymbol, "AND"),
     not: crate::static_name!(KeywordSymbol, "NOT"),
     equal: crate::static_name!(KeywordSymbol, "=="),
-    unequal: crate::static_name!(KeywordSymbol, "!="),
 };
 
 /// The members of each builtin group, as the names they are declared under.
@@ -95,7 +96,7 @@ pub(crate) fn equal_symbol() -> KeywordSymbol {
 /// Whether `symbol` is `==` or `!=` — the two symbols that belong to no group, take `Any`, and join
 /// whichever pairwise group the rest of an operator run chains under.
 pub fn is_equality(symbol: KeywordSymbol) -> bool {
-    symbol == OPERATORS.equal.symbol() || symbol == OPERATORS.unequal.symbol()
+    symbol == OPERATORS.equal.symbol() || is_unequal(symbol)
 }
 
 /// Whether `symbol` is `==`, the one equality symbol a program declares over its own types. Its
@@ -108,7 +109,7 @@ pub fn is_equal(symbol: KeywordSymbol) -> bool {
 /// Whether `symbol` is `!=`, which no declaration may name: the builder rewrites every infix
 /// `a != b` as `NOT (a == b)`, so it never reaches dispatch and is opposite by construction.
 pub fn is_unequal(symbol: KeywordSymbol) -> bool {
-    symbol == OPERATORS.unequal.symbol()
+    symbol == KEYWORDS.unequal.symbol()
 }
 
 /// The five groups the language itself declares. They cover their members everywhere, no
@@ -199,7 +200,7 @@ pub(crate) enum Claim<'graph> {
 }
 
 /// Every claim the code being built makes, collected once before the first draft and read by
-/// symbol. A `Claims` of an `EVAL`'s code chains to the program's, so evaluated code is held to the
+/// symbol. A `Claims` of a quote's code chains to the claims around it, so code is held to the
 /// program's declarations.
 #[derive(Clone, Copy)]
 pub(crate) struct Claims<'graph> {
@@ -294,10 +295,6 @@ impl<'graph> GroupFrame<'graph> {
         }
     }
 
-    pub(crate) fn claims(&self) -> &'graph Claims<'graph> {
-        self.claims
-    }
-
     /// The held group covering `symbol`, walking outward. `None` when no enclosing body holds one.
     pub fn visible(&self, symbol: KeywordSymbol) -> Option<&'graph DeclaredGroup<'graph>> {
         let mut frame = Some(self);
@@ -343,20 +340,26 @@ impl<'graph> GroupFrame<'graph> {
     /// signature's bodyless `GROUP` claims nothing and reaches a body only as a held group, so a
     /// declaration under a `USING` that surfaces one is admitted by the frame alone.
     pub fn pairwise(&self, symbol: KeywordSymbol) -> bool {
+        matches!(self.mode(symbol), Some(ReductionMode::Pairwise { .. }))
+    }
+
+    /// How a binary run of `symbol` reduces, read as [`pairwise`](Self::pairwise) reads it:
+    /// equality's own mode, its group's wherever that group is declared, or `None` for a symbol no
+    /// group covers — a unary operator's among them.
+    pub(crate) fn mode(&self, symbol: KeywordSymbol) -> Option<ReductionMode> {
         if is_equality(symbol) {
-            return true;
+            return Some(equality_mode());
         }
-        let mode = match BuiltinGroup::of(symbol) {
+        Some(match BuiltinGroup::of(symbol) {
             Some(group) => group.mode(),
             None => match self.visible(symbol) {
                 Some(group) => group.mode,
                 None => match self.claims.get(symbol) {
                     Some(Claim::Group(group)) => group.mode,
-                    Some(Claim::Unary) | None => return false,
+                    Some(Claim::Unary) | None => return None,
                 },
             },
-        };
-        matches!(mode, ReductionMode::Pairwise { .. })
+        })
     }
 }
 
@@ -391,7 +394,7 @@ pub(crate) fn declared_group<'x>(
         return Ok(None);
     }
     let body_role = if definition {
-        Role::Definition(DefinitionKind::Plain)
+        Role::Definition(DefinitionKind::Members)
     } else {
         Role::Body(BodyKind::Module)
     };
@@ -400,7 +403,7 @@ pub(crate) fn declared_group<'x>(
     for (role, part) in form.roles().zip(node.parts) {
         match role {
             role if role == body_role => body = Some(&part.value),
-            Role::Argument => combiner = Some(&part.value),
+            Role::Data => combiner = Some(&part.value),
             _ => {}
         }
     }
@@ -420,24 +423,34 @@ pub(crate) fn declared_group<'x>(
             },
         },
     };
-    let ExpressionPart::Expression(body) = body.ok_or(())? else {
-        return Err(());
+    // A `GROUP` statement's body is an in-place block; a bodyless head's is a list of head quotes.
+    let members = match body.ok_or(())? {
+        ExpressionPart::Expression(body) => scan_members(
+            body.reference()
+                .body_statements()
+                .map(|(statement, _)| statement),
+            scratch,
+        )?,
+        ExpressionPart::ListLiteral(heads) => {
+            scan_members(heads.iter().filter_map(quoted_body), scratch)?
+        }
+        _ => return Err(()),
     };
-    let members = scan_members(body.reference(), scratch)?;
     Ok(Some(DeclaredGroup {
         members: members.leak(),
         mode,
     }))
 }
 
-/// The member symbols of a `GROUP` body: the symbol of every top-level binary operator declaration,
-/// sorted and deduped. A `UNARY OP` among them, or a body declaring no operator at all, is refused.
-pub(crate) fn scan_members<'x>(
-    body: &KExpression<'_>,
+/// The member symbols of a `GROUP` body's statements: the symbol of every binary operator
+/// declaration among them, sorted and deduped. A `UNARY OP` among them, or no operator declared at
+/// all, is refused.
+pub(crate) fn scan_members<'n, 'g: 'n, 'x>(
+    statements: impl Iterator<Item = &'n KExpression<'g>>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, KeywordSymbol>, ()> {
     let mut members: BumpVec<'x, KeywordSymbol> = BumpVec::new_in(scratch);
-    for (statement, _) in body.body_statements() {
+    for statement in statements {
         let node = statement.statement_spine();
         match op_declaration_arity(node) {
             Some(OpArity::Binary) => {}
@@ -493,15 +506,15 @@ fn is_unary_declaration(form: BuiltinShapeId) -> bool {
 /// the first draft and blind to position, so how a symbol chains never depends on where its
 /// declarations sit.
 ///
-/// `outer` is the enclosing code's claims — the program's, for the code an `EVAL` runs — so
-/// evaluated code is held to the program's declarations. A `GROUP` inside a quote is data and is
-/// not walked.
+/// `outer` is the claims of the code around a quote value's, so a quote's code is held to the
+/// program's declarations. The scan enters exactly the quotes the shape builder reads where they
+/// are written; a quote value's code is scanned when the builder enters it.
 pub(crate) fn claims<'graph, 'n, 'x>(
     brand: ProgramBrand<'graph>,
     scratch: BumpAllocator<'x>,
     statements: impl Iterator<Item = &'n KExpression<'graph>>,
     outer: Option<&'graph Claims<'graph>>,
-) -> Result<&'graph Claims<'graph>, ShapeError>
+) -> Result<&'graph Claims<'graph>, ShapeError<'graph>>
 where
     'graph: 'n,
 {
@@ -545,12 +558,12 @@ impl<'graph> Scan<'graph, '_> {
     }
 
     /// One node: what it declares, then everything its parts reach.
-    fn node(&mut self, node: &KExpression<'graph>) -> Result<(), ShapeError> {
+    fn node(&mut self, node: &KExpression<'graph>) -> Result<(), ShapeError<'graph>> {
         if let Some(form) = node.cache().builtin_shape() {
             if let Some(group) =
                 declared_group(node, self.scratch).map_err(|()| ShapeError::Malformed {
                     form: form.id,
-                    at: Position::PARAMETER,
+                    at: node.source,
                 })?
             {
                 // A `SIG` body's bodyless `GROUP` declares in the signature's operator channel and
@@ -562,7 +575,7 @@ impl<'graph> Scan<'graph, '_> {
                         | BuiltinShapeId::GroupHeadPairwiseFoldLeft
                         | BuiltinShapeId::GroupHeadPairwiseFoldRight
                 ) {
-                    self.claim_group(&group)?;
+                    self.claim_group(&group, node.source)?;
                 }
             }
             if form
@@ -570,8 +583,32 @@ impl<'graph> Scan<'graph, '_> {
                 .is_some_and(|binder| binder.surface == crate::parse::BinderSurface::OperatorDef)
                 && let Ok(symbol) = declaration_symbol(node)
             {
-                self.claim_declaration(form.id, symbol)?;
+                self.claim_declaration(form.id, symbol, node.source)?;
             }
+            // The quotes the shape builder reads where they are written — a callable's body, a
+            // head, an arm, a signature's members — are code of this program; every other quote
+            // is data.
+            for (role, part) in form.roles().zip(node.parts) {
+                match (role.reading(), &part.value) {
+                    (Reading::Quote, ExpressionPart::QuotedExpression(quoted)) => {
+                        self.node(quoted.reference())?
+                    }
+                    (Reading::Container, ExpressionPart::ListLiteral(items)) => {
+                        for item in items.iter().filter_map(quoted_body) {
+                            self.node(item)?;
+                        }
+                    }
+                    (Reading::Container, ExpressionPart::DictLiteral(pairs)) => {
+                        for (key, value) in pairs.iter() {
+                            for quoted in [key, value].into_iter().filter_map(quoted_body) {
+                                self.node(quoted)?;
+                            }
+                        }
+                    }
+                    (_, part) => self.part(part)?,
+                }
+            }
+            return Ok(());
         }
         for part in node.parts {
             self.part(&part.value)?;
@@ -579,11 +616,12 @@ impl<'graph> Scan<'graph, '_> {
         Ok(())
     }
 
-    fn part(&mut self, part: &ExpressionPart<'graph>) -> Result<(), ShapeError> {
+    fn part(&mut self, part: &ExpressionPart<'graph>) -> Result<(), ShapeError<'graph>> {
         match part {
             ExpressionPart::Expression(node)
             | ExpressionPart::SigiledTypeExpr(node)
-            | ExpressionPart::RecordType(node) => self.node(node.reference()),
+            | ExpressionPart::RecordType(node)
+            | ExpressionPart::MarkedUse(_, node) => self.node(node.reference()),
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
                     self.part(item)?;
@@ -603,22 +641,25 @@ impl<'graph> Scan<'graph, '_> {
                 }
                 Ok(())
             }
-            // A quote is data: the code inside it is rewritten where an `EVAL` of it is built,
-            // under that site's own claims.
+            // A quote no builtin reads as written is a quote value, whose code is scanned under
+            // its own claims when the builder enters it.
             ExpressionPart::QuotedExpression(_)
             | ExpressionPart::Keyword(_)
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Type(_)
+            | ExpressionPart::MarkedName(..)
             | ExpressionPart::Literal(_) => Ok(()),
         }
     }
 
-    /// Record a `GROUP` statement's claim over each of its members.
-    fn claim_group(&mut self, group: &DeclaredGroup<'_>) -> Result<(), ShapeError> {
-        let refused = |symbol| ShapeError::RedeclaresGroup {
-            symbol,
-            at: Position::PARAMETER,
-        };
+    /// Record a `GROUP` statement's claim over each of its members; the statement is written at
+    /// `at`.
+    fn claim_group(
+        &mut self,
+        group: &DeclaredGroup<'_>,
+        at: SourceRef,
+    ) -> Result<(), ShapeError<'graph>> {
+        let refused = |symbol| ShapeError::RedeclaresGroup { symbol, at };
         if let Some(symbol) = group.members.iter().find(|symbol| is_equality(**symbol)) {
             return Err(refused(*symbol));
         }
@@ -657,25 +698,21 @@ impl<'graph> Scan<'graph, '_> {
     }
 
     /// Record what one operator declaration says about its symbol: `!=` is nobody's to declare, a
-    /// `UNARY OP` marks its symbol unary, and a bare `OP` declares an overload and nothing else.
+    /// `UNARY OP` marks its symbol unary, and a bare `OP` declares an overload and nothing else. The
+    /// declaration is written at `at`.
     fn claim_declaration(
         &mut self,
         form: BuiltinShapeId,
         symbol: KeywordSymbol,
-    ) -> Result<(), ShapeError> {
+        at: SourceRef,
+    ) -> Result<(), ShapeError<'graph>> {
         if is_unequal(symbol) {
-            return Err(ShapeError::Derived {
-                symbol,
-                at: Position::PARAMETER,
-            });
+            return Err(ShapeError::Derived { symbol, at });
         }
         if !is_unary_declaration(form) {
             return Ok(());
         }
-        let refused = Err(ShapeError::RedeclaresGroup {
-            symbol,
-            at: Position::PARAMETER,
-        });
+        let refused = Err(ShapeError::RedeclaresGroup { symbol, at });
         if BuiltinGroup::of(symbol).is_some_and(|group| group.mode() != ReductionMode::Unary) {
             return refused;
         }

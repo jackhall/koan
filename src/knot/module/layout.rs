@@ -1,15 +1,17 @@
 //! Layout order: where a member sits in a module, and the one place that rule is spelled.
 //!
 //! > Value members, sorted by name; then type members, sorted by name, abstract and manifest
-//! > merged into one run.
+//! > merged into one run; then a body-born module's registrations, in slot order.
 //!
 //! Three things agree on it, and none of them consults the others. A body shape lays its value
-//! slots out first and its type slots after, each channel sorted
-//! ([`scope`](crate::scope)'s two channels), so a body-born module's member run is its finished
+//! slots out first, its type slots after and its registration slots last, each channel sorted
+//! ([`scope`](crate::scope)'s three channels), so a body-born module's member run is its finished
 //! activation's slots read out in slot order. A signature's member tables are symbol-sorted by
 //! name, so a view's member run is built by walking them. A `USING` block's parameters are the
 //! surfaced names, which the shape builder sorts the same way. So member `k` of a channel is slot
-//! `k` of that channel everywhere, and `m.f` is an index, not a search.
+//! `k` of that channel everywhere, and `m.f` is an index, not a search. A signature names a
+//! keyworded member by its shape, never by a slot, so the registration run is the tail past every
+//! named member, and a view has none.
 //!
 //! The sort is by interned symbol, which is a hash — not by the text of the name. Nothing reads
 //! the order as alphabetical, and a test that pins one must read the symbols, not the source.
@@ -51,7 +53,28 @@ pub fn member_index(
         BinderSymbol::Type(name) => {
             rank(&type_members(schema, scratch), name).map(|rank| value_count(schema) + rank)
         }
+        // A signature names a keyworded member by its shape, never by a slot's name.
+        BinderSymbol::Registration(_) | BinderSymbol::Key(_) => None,
     }
+}
+
+/// The registration members of `module` — the tail of its run past the named members, each a
+/// function a keyworded use at its registered shape's key may select. Empty for a view, and for
+/// anything that is no module.
+pub fn registrations<'graph, 'cell>(
+    module: Knotted<'graph, 'cell>,
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+) -> &'cell [KValue<'graph, 'cell>] {
+    let Some((node, schema)) = module
+        .module()
+        .and_then(|node| Some((node, schema_of(node.ktype(), types)?)))
+    else {
+        return &[];
+    };
+    node.members()
+        .get(member_count(&schema, scratch)..)
+        .unwrap_or(&[])
 }
 
 /// Where `name` sits in a symbol-sorted member table — a binary search, since a table is built

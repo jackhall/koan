@@ -146,16 +146,16 @@ fn build_part<'a>(
         PartShape::Boolean(b) => ExpressionPart::Literal(KLiteral::Boolean(*b)),
         PartShape::Null => ExpressionPart::Literal(KLiteral::Null),
         PartShape::Nested(items) => ExpressionPart::Expression(
-            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
         ),
         PartShape::Sigil(items) => ExpressionPart::SigiledTypeExpr(
-            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
         ),
         PartShape::RecordType(items) => ExpressionPart::RecordType(
-            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
         ),
         PartShape::Quote(items) => ExpressionPart::QuotedExpression(
-            brand.nested_node_from_iter(build_run(brand, items, symbols)),
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
         ),
         PartShape::List(items) => ExpressionPart::ListLiteral(collect(
             writer,
@@ -182,7 +182,7 @@ fn build_part<'a>(
     }
 }
 
-/// The spanless parts run `shapes` names.
+/// The unspanned parts run `shapes` names.
 fn build_run<'a>(
     brand: ProgramBrand<'a>,
     shapes: &[PartShape],
@@ -200,7 +200,11 @@ fn build<'a>(
     shapes: &[PartShape],
     symbols: &SymbolInterner,
 ) -> KExpression<'a> {
-    KExpression::new_from_iter(brand.writer(), build_run(brand, shapes, symbols))
+    KExpression::build_from_iter(
+        brand.writer(),
+        build_run(brand, shapes, symbols),
+        crate::tests::source(),
+    )
 }
 
 /// The bucket key a parts run spells, recomputed from the parts rather than read off the cache.
@@ -423,7 +427,10 @@ proptest! {
         let symbols = &registries.labels;
 
         let make = |shapes: &[PartShape]| {
-            KObject::KExpression(brand.new_expression_from_iter(build_run(brand, shapes, symbols)))
+            KObject::KExpression(brand.build_expression_from_iter(
+                build_run(brand, shapes, symbols),
+                crate::tests::source(),
+            ))
         };
         let a = make(&left);
         let b = make(&left);
@@ -431,6 +438,56 @@ proptest! {
 
         prop_assert_eq!(a.value_equal(&b, &registries), Ok(true));
         prop_assert_eq!(a.value_equal(&c, &registries), Ok(left == right));
-        prop_assert_eq!(a.ktype(), KType::KEXPRESSION);
+        prop_assert_eq!(a.ktype(), KType::EXPRESSION);
+    }
+}
+
+/// A quote's code kind is read off its body as written: each source here is one quote, and its
+/// body's kind is the one beside it.
+#[test]
+fn a_quote_is_typed_by_its_body_as_written() {
+    use crate::type_lattice::KType as Kind;
+    let cases: &[(&str, Kind)] = &[
+        ("#(y)", Kind::IDENTIFIER),
+        ("#(Carrier)", Kind::TYPE_NAME_TOKEN),
+        ("#(+)", Kind::KEYWORD),
+        ("#(NOOP)", Kind::KEYWORD),
+        ("#(42)", Kind::LITERAL),
+        ("#('y')", Kind::LITERAL),
+        ("#(#(x))", Kind::LITERAL),
+        ("#(:(LIST OF Number))", Kind::SIGILED_TYPE_EXPR),
+        ("#(:{x :Number})", Kind::RECORD_TYPE),
+        ("#((y))", Kind::EXPRESSION),
+        ("#(f x)", Kind::EXPRESSION),
+        ("#((LET x = 1))", Kind::EXPRESSION),
+        ("#([1 2])", Kind::EXPRESSION),
+        ("#({a: 1})", Kind::EXPRESSION),
+        ("#({x = 1})", Kind::EXPRESSION),
+        ("#((f x) (g y))", Kind::BLOCK),
+        ("#(\n  f x\n  g y\n)", Kind::BLOCK),
+        ("#(LET x = 1)", Kind::BINDER),
+        ("#(EXPR #(FOO a :Number) -> Number = #(a))", Kind::BINDER),
+        ("#(VAL x :Str)", Kind::DECLARATION),
+        ("#(TYPE Carrier)", Kind::DECLARATION),
+        ("#(TYPE (Carrier UNDER Number))", Kind::DECLARATION),
+        ("#(EXPR #(FOO _ :Number) -> Number)", Kind::DECLARATION),
+        // A bucket declaration ranks a bucket and declares no member.
+        ("#(EXPR #(MOVE 2 TO 1))", Kind::EXPRESSION),
+    ];
+    let program = program_storage();
+    let symbols = SymbolInterner::new();
+    for (source, kind) in cases {
+        let statements = crate::parse::parse(program.brand(), &symbols, source)
+            .unwrap_or_else(|error| panic!("{source:?}: {error}"));
+        let [statement] = statements.as_slice() else {
+            panic!("{source:?} is one statement");
+        };
+        let [part] = statement.parts else {
+            panic!("{source:?} is one part");
+        };
+        let ExpressionPart::QuotedExpression(body) = part.value else {
+            panic!("{source:?} is a quote");
+        };
+        assert_eq!(body.reference().code_kind(), *kind, "{source}");
     }
 }

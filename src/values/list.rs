@@ -10,23 +10,23 @@ use super::{Knotted, Link, Nothing, Value, Weight, list_type};
 
 /// A list value, resident in the region its cells live in.
 #[derive(Clone, Copy, Debug)]
-pub struct List<'graph, 'cell, X = Nothing, C = Value<'graph, 'cell, X>> {
+pub struct List<'cell, X = Nothing, C = Value<'cell, X>> {
     cells: &'cell [C],
     ktype: KType,
     weight: Weight,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
-    member: PhantomData<Value<'graph, 'cell, X>>,
+    member: PhantomData<Value<'cell, X>>,
 }
 
-impl<'graph, 'cell, X: Knotted> List<'graph, 'cell, X> {
+impl<'cell, X: Knotted> List<'cell, X> {
     /// Lay down `items` as the list's cells. The element type is the join of the cells' types —
     /// `Never` for an empty list — and the weight is summed in the same pass.
     pub fn new(
         writer: Writer<'cell>,
-        items: impl ExactSizeIterator<Item = Value<'graph, 'cell, X>>,
+        items: impl ExactSizeIterator<Item = Value<'cell, X>>,
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> &'cell List<'graph, 'cell, X> {
+    ) -> &'cell List<'cell, X> {
         let mut items = items;
         let mut weight = Weight::flat::<Self>();
         let cells = writer.fill(items.len(), |_| {
@@ -41,14 +41,10 @@ impl<'graph, 'cell, X: Knotted> List<'graph, 'cell, X> {
     }
 }
 
-impl<'graph, 'cell, X: Knotted> List<'graph, 'cell, X, Link<'graph, 'cell, X>> {
+impl<'cell, X: Knotted> List<'cell, X, Link<'cell, X>> {
     /// Lay down `cells` as a knot's data node under the finished memo `ktype`, which the tie
     /// derived from the cells and the members their edges name.
-    pub fn linked(
-        writer: Writer<'cell>,
-        cells: &[Link<'graph, 'cell, X>],
-        ktype: KType,
-    ) -> &'cell Self {
+    pub fn linked(writer: Writer<'cell>, cells: &[Link<'cell, X>], ktype: KType) -> &'cell Self {
         let weight = cells.iter().fold(Weight::flat::<Self>(), |weight, cell| {
             weight.plus(cell.weight())
         });
@@ -61,7 +57,7 @@ impl<'graph, 'cell, X: Knotted> List<'graph, 'cell, X, Link<'graph, 'cell, X>> {
     }
 }
 
-impl<'graph, 'cell, X: Copy, C: Copy> List<'graph, 'cell, X, C> {
+impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
     /// A list over cells already resident in `writer`'s region, under a type and weight the caller
     /// already knows — the deep copy's arm.
     pub(crate) fn from_run(

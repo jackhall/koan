@@ -85,4 +85,4 @@ summary line; report the substance of it, not just the clause.
 - **`cargo fmt`.** Format drift isn't gated here. Run `cargo fmt --all` separately when needed.
 - **Rebaseline the trend logs.** The total tier's coverage and modgraph steps report a delta against the newest recorded entry but write nothing; only `KOAN_REBASELINE=1` records a new one, and the routine tier has no reading to record.
 - **Gate on the modgraph score.** It reports; it never fails the run. Use the delta as input to a code-review judgment call, and report it to the user.
-- **The tutorial snippets and the allocation audit.** Both read the old runtime's binary; run `tools/verify_snippets.py` (after `cargo build --features pending_rewrite`) and `tools/alloc_audit.py` on demand.
+- **The allocation audit.** Run `tools/alloc_audit.py` on demand. The tutorial snippets, by contrast, are a routine-tier step: the script builds the interpreter binary and runs `tools/verify_snippets.py` through it.

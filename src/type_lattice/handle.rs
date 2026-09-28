@@ -36,16 +36,22 @@ pub(super) static BOOL_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSy
 pub(super) static NULL_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Null");
 pub(super) static IDENTIFIER_NAME: StaticName<TypeSymbol> =
     crate::static_name!(TypeSymbol, "Identifier");
-pub(super) static NAME_TOKEN_NAME: StaticName<TypeSymbol> =
-    crate::static_name!(TypeSymbol, "NameToken");
+pub(super) static SYMBOL_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Symbol");
 pub(super) static TYPE_NAME_TOKEN_NAME: StaticName<TypeSymbol> =
     crate::static_name!(TypeSymbol, "TypeNameToken");
-pub(super) static KEXPRESSION_NAME: StaticName<TypeSymbol> =
-    crate::static_name!(TypeSymbol, "KExpression");
+pub(super) static EXPRESSION_NAME: StaticName<TypeSymbol> =
+    crate::static_name!(TypeSymbol, "Expression");
 pub(super) static SIGILED_TYPE_EXPR_NAME: StaticName<TypeSymbol> =
     crate::static_name!(TypeSymbol, "SigiledTypeExpr");
 pub(super) static RECORD_TYPE_NAME: StaticName<TypeSymbol> =
     crate::static_name!(TypeSymbol, "RecordType");
+pub(super) static LITERAL_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Literal");
+pub(super) static BLOCK_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Block");
+pub(super) static DECLARATION_NAME: StaticName<TypeSymbol> =
+    crate::static_name!(TypeSymbol, "Declaration");
+pub(super) static BINDER_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Binder");
+pub(super) static NAME_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Name");
+pub(super) static KEYWORD_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Keyword");
 pub(super) static ANY_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Any");
 pub(super) static VALUE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Value");
 pub(super) static CODE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Code");
@@ -59,25 +65,40 @@ static SIGNATURE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, 
 impl KType {
     // --- Fixed handles ---
     //
-    // The fourteen leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>` and the empty
-    // signature name content every registry pre-seeds (`TypeRegistry::in_region`), so their digests are
-    // known at compile time and lowering a builtin type name needs no registry in hand. The
-    // literals below are the digest recipe's output; `constants_match_freshly_interned_nodes` in
-    // the golden module recomputes each one from its own node, so a recipe change fails loudly
-    // here rather than silently re-identifying a leaf.
+    // The twenty leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>`, the code
+    // composites, the empty record and the empty signature name content every registry pre-seeds
+    // (`TypeRegistry::in_region`), so their digests are known at compile time and lowering a
+    // builtin type name needs no registry in hand. The literals below are the digest recipe's
+    // output; `constants_match_freshly_interned_nodes` in the golden module recomputes each one
+    // from its own node, so a recipe change fails loudly here rather than silently re-identifying a
+    // leaf.
 
     pub const NUMBER: KType = KType(TypeDigest(0xe21d67f1_7aa25f92_e072c1bb_1f72fc48));
     pub const STR: KType = KType(TypeDigest(0xda8a6add_c7627c0f_ae4be842_dfbe13ab));
     pub const BOOL: KType = KType(TypeDigest(0x01210944_fd6fb8f8_0c9ba36e_1de8e0e1));
     pub const NULL: KType = KType(TypeDigest(0xbc9d88bb_75d5fb35_a4fd343e_749a380c));
+    /// A lone value name of code, under [`Self::NAME`].
     pub const IDENTIFIER: KType = KType(TypeDigest(0x41b73c3e_2391bbb4_6b850e4f_e740cb84));
-    /// A binder position taking a bare name of either class — never resolved, never lowered.
-    pub const NAME_TOKEN: KType = KType(TypeDigest(0x7dec3e82_f44adbda_2f8cc4c2_47b790eb));
-    /// A binder position taking a bare Type-class name — never resolved, never lowered.
+    /// A lone token of code: a name or a keyword.
+    pub const SYMBOL: KType = KType(TypeDigest(0x7dec3e82_f44adbda_2f8cc4c2_47b790eb));
+    /// A lone type name of code, under [`Self::NAME`] — never resolved, never lowered.
     pub const TYPE_NAME_TOKEN: KType = KType(TypeDigest(0xb9978361_a0bb1460_82127faa_0711eeca));
-    pub const KEXPRESSION: KType = KType(TypeDigest(0x63c296ef_dbe5d41c_9969ddda_6b0b311c));
+    /// One statement of code.
+    pub const EXPRESSION: KType = KType(TypeDigest(0x63c296ef_dbe5d41c_9969ddda_6b0b311c));
     pub const SIGILED_TYPE_EXPR: KType = KType(TypeDigest(0xf6d652dc_848e0f69_4a152496_ddd88b44));
     pub const RECORD_TYPE: KType = KType(TypeDigest(0x387dfced_dc0a5d96_da3b29a5_dde0f32e));
+    /// A lone scalar literal or nested quote of code.
+    pub const LITERAL: KType = KType(TypeDigest(0xe0ba0587_757a04b5_57551481_dc141482));
+    /// Statements of code: what every body slot takes.
+    pub const BLOCK: KType = KType(TypeDigest(0x30bf1d87_d3e4dc58_e64d3a9d_f3cfc6bb));
+    /// One statement that declares a name or a shape.
+    pub const DECLARATION: KType = KType(TypeDigest(0x45826e93_1678c023_0193898d_a4337e86));
+    /// One statement that declares and installs where it is written.
+    pub const BINDER: KType = KType(TypeDigest(0x33085145_8c8174df_bcb3e348_b6f3c6e2));
+    /// A lone value or type name of code.
+    pub const NAME: KType = KType(TypeDigest(0x368aa850_9c281105_1746c919_0b150e96));
+    /// A lone keyword of code.
+    pub const KEYWORD: KType = KType(TypeDigest(0x3ad3317d_c24be1d3_f80ceb6a_f4087539));
     pub const ANY: KType = KType(TypeDigest(0xd9f70f99_49f95b5c_44d7ce99_10aa1972));
     /// The value family's top — what `Value` lowers to.
     pub const ANY_VALUE: KType = KType(TypeDigest(0xf04a0d81_ff131a48_101bccdb_85dac271));
@@ -101,6 +122,26 @@ impl KType {
     /// constrains nothing, so every module value satisfies it.
     pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0xb80aaa8d_7e3507bd_e06a1496_5250ca90));
 
+    /// `TypeNameToken | SigiledTypeExpr | RecordType` — the code a type is written as: a union's
+    /// variant payload or a quantifier's bound. Not spellable.
+    pub const TYPE_CODE: KType = KType(TypeDigest(0xc41b235d_9ca37012_2069fcb7_39c1082e));
+    /// `List<Name>` — a `FOR ALL` group or `FROM`'s field list.
+    pub const LIST_OF_NAME: KType = KType(TypeDigest(0xe4ef6471_b3309818_6e9fe04f_0c66f18a));
+    /// `List<Declaration>` — a `SIG` body, or the heads a bodyless `GROUP` declares.
+    pub const LIST_OF_DECLARATION: KType = KType(TypeDigest(0xdaf2c481_09b90725_35f0053e_594b6591));
+    /// `Dict<Name, Block>` — a `MATCH … OVER` or `TRY` arm set, each guard a label.
+    pub const DICT_NAME_BLOCK: KType = KType(TypeDigest(0xd62f630b_16626d22_68df48ae_99aab59a));
+    /// `Dict<TypeCode, Block>` — a `MATCH … WITH` arm set, each guard a type.
+    pub const DICT_TYPE_CODE_BLOCK: KType =
+        KType(TypeDigest(0xf1066a0f_f0fe9f2f_9ba1351a_fb9f479f));
+    /// `Dict<Name, TypeCode>` — a union's variants.
+    pub const DICT_NAME_TYPE_CODE: KType = KType(TypeDigest(0x34fd5145_6f54557d_3aeab867_9093541d));
+    /// `List<Name> | Dict<Name, TypeCode>` — the code a `FOR ALL` group is written as: a list of
+    /// names, or a dict of names to the code of their bounds.
+    pub const QUANTIFIER_CODE: KType = KType(TypeDigest(0xf2388522_88d6156a_8a8a6e23_acdbbf30));
+    /// The empty record type — `FROM`'s argument and return.
+    pub const EMPTY_RECORD: KType = KType(TypeDigest(0xe7e914e1_0d893b27_988dbbdf_9ae2e427));
+
     /// The type-accepting slot admitting `kind` — one of the pre-seeded `OfKind` handles.
     pub const fn of_kind(kind: KKind) -> KType {
         match kind {
@@ -109,6 +150,48 @@ impl KType {
             KKind::AnyType => KType::ANY_TYPE,
             KKind::NewType => KType::NEW_TYPE,
             KKind::TypeConstructor => KType::TYPE_CONSTRUCTOR,
+        }
+    }
+
+    /// The code kind directly above this one in the code family's tree, or `None` for a handle that
+    /// is no code kind below `Code`. A smaller syntax lies under a larger one wherever it can stand
+    /// in its place; see [README.md](README.md) § The code family.
+    pub const fn code_parent(self) -> Option<KType> {
+        let parent = if self.same_as(KType::BLOCK) {
+            KType::ANY_CODE
+        } else if self.same_as(KType::EXPRESSION) {
+            KType::BLOCK
+        } else if self.same_as(KType::DECLARATION)
+            || self.same_as(KType::LITERAL)
+            || self.same_as(KType::SYMBOL)
+            || self.same_as(KType::SIGILED_TYPE_EXPR)
+            || self.same_as(KType::RECORD_TYPE)
+        {
+            KType::EXPRESSION
+        } else if self.same_as(KType::BINDER) {
+            KType::DECLARATION
+        } else if self.same_as(KType::NAME) || self.same_as(KType::KEYWORD) {
+            KType::SYMBOL
+        } else if self.same_as(KType::IDENTIFIER) || self.same_as(KType::TYPE_NAME_TOKEN) {
+            KType::NAME
+        } else {
+            return None;
+        };
+        Some(parent)
+    }
+
+    /// Whether this code kind lies at or under `kind` in the code family's tree — the walk up
+    /// [`Self::code_parent`]. A handle that is no code kind is within only itself.
+    pub const fn within_code(self, kind: KType) -> bool {
+        let mut at = self;
+        loop {
+            if at.same_as(kind) {
+                return true;
+            }
+            match at.code_parent() {
+                Some(parent) => at = parent,
+                None => return false,
+            }
         }
     }
 
@@ -125,8 +208,8 @@ impl KType {
     }
 
     /// Handle equality in `const` context — the one digest word compared. Derived `PartialEq` is
-    /// not `const`, and a `static` table of slot types is checked against the raw-capture leaves
-    /// where it is built.
+    /// not `const`, and a `static` table of slot types is checked against the code types where it
+    /// is built.
     pub const fn same_as(self, other: KType) -> bool {
         self.0.0 == other.0.0
     }
@@ -161,11 +244,17 @@ impl KType {
             TypeNode::Bool => fixed(&BOOL_NAME),
             TypeNode::Null => fixed(&NULL_NAME),
             TypeNode::Identifier => fixed(&IDENTIFIER_NAME),
-            TypeNode::NameToken => fixed(&NAME_TOKEN_NAME),
+            TypeNode::Symbol => fixed(&SYMBOL_NAME),
             TypeNode::TypeNameToken => fixed(&TYPE_NAME_TOKEN_NAME),
-            TypeNode::KExpression => fixed(&KEXPRESSION_NAME),
+            TypeNode::Expression => fixed(&EXPRESSION_NAME),
             TypeNode::SigiledTypeExpr => fixed(&SIGILED_TYPE_EXPR_NAME),
             TypeNode::RecordType => fixed(&RECORD_TYPE_NAME),
+            TypeNode::Literal => fixed(&LITERAL_NAME),
+            TypeNode::Block => fixed(&BLOCK_NAME),
+            TypeNode::Declaration => fixed(&DECLARATION_NAME),
+            TypeNode::Binder => fixed(&BINDER_NAME),
+            TypeNode::Name => fixed(&NAME_NAME),
+            TypeNode::Keyword => fixed(&KEYWORD_NAME),
             TypeNode::Any => fixed(&ANY_NAME),
             TypeNode::AnyValue => fixed(&VALUE_NAME),
             TypeNode::AnyCode => fixed(&CODE_NAME),
@@ -185,6 +274,7 @@ impl KType {
             | TypeNode::DeferredReturn(_)
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. }
+            | TypeNode::CodeNeeding { .. }
             | TypeNode::Sibling(_) => None,
         })
     }
@@ -213,8 +303,8 @@ impl KType {
 /// `Never` names the lattice bottom, so a slot written `:Never` is legal and admits nothing.
 ///
 /// Each name is a [`StaticName`], so its symbol is minted at first read and loaded thereafter:
-/// seeding a second run's root re-registers the same fourteen names without hashing a spelling.
-pub fn builtin_types() -> [(&'static StaticName<TypeSymbol>, KType); 14] {
+/// seeding a second run's root re-registers the same names without hashing a spelling.
+pub fn builtin_types() -> [(&'static StaticName<TypeSymbol>, KType); 21] {
     [
         (&NUMBER_NAME, KType::NUMBER),
         (&STR_NAME, KType::STR),
@@ -222,7 +312,14 @@ pub fn builtin_types() -> [(&'static StaticName<TypeSymbol>, KType); 14] {
         (&NULL_NAME, KType::NULL),
         (&LIST_NAME, KType::LIST_OF_ANY),
         (&DICT_NAME, KType::DICT_ANY_ANY),
-        (&KEXPRESSION_NAME, KType::KEXPRESSION),
+        (&EXPRESSION_NAME, KType::EXPRESSION),
+        (&SYMBOL_NAME, KType::SYMBOL),
+        (&LITERAL_NAME, KType::LITERAL),
+        (&BLOCK_NAME, KType::BLOCK),
+        (&DECLARATION_NAME, KType::DECLARATION),
+        (&BINDER_NAME, KType::BINDER),
+        (&NAME_NAME, KType::NAME),
+        (&KEYWORD_NAME, KType::KEYWORD),
         (&ANY_TYPE_NAME, KType::of_kind(KKind::AnyType)),
         (&MODULE_NAME, KType::EMPTY_SIGNATURE),
         (&SIGNATURE_NAME, KType::of_kind(KKind::Signature)),

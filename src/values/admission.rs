@@ -4,7 +4,8 @@
 //! kind's memo is derived by.
 //!
 //! A value is checked by the one lattice relation over its memoized type, never by walking its
-//! contents. A raw part is checked by shape, since an unevaluated literal has no value yet.
+//! contents. A raw part is checked by shape, since an unevaluated literal has no value yet;
+//! [`admits_part`] is also the one rule the shape builder's static check admits a written part by.
 //!
 //! [`unsealed`] is the one peel: a value sealed behind an opaque view read through each seal whose
 //! bound reveals the payload's kind.
@@ -17,7 +18,7 @@ use crate::type_lattice::{
     is_subtype_of, join, satisfied_by,
 };
 
-use super::{Knotted, Value, WorkingPart};
+use super::{Knotted, Resolved, Value, WorkingPart};
 
 /// Whether `slot` takes `value`: one relation over the value's memoized type. A slot reading a
 /// quantifier admits by unification against that type under a fresh collector, which checks the
@@ -25,7 +26,7 @@ use super::{Knotted, Value, WorkingPart};
 /// own collector checks when it solves.
 pub fn satisfies<X: Knotted>(
     slot: KType,
-    value: &Value<'_, '_, X>,
+    value: &Value<'_, X>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> bool {
@@ -47,6 +48,7 @@ pub enum ConstructionRefused {
     Misfit {
         identity: KType,
         representation: KType,
+        payload: KType,
     },
     /// The payload's type cannot be solved against the family's representation: a structural
     /// mismatch, or contributions to one parameter with no maximum.
@@ -79,6 +81,7 @@ pub fn construction(
                 Err(ConstructionRefused::Misfit {
                     identity: head,
                     representation,
+                    payload,
                 })
             }
         }
@@ -184,11 +187,11 @@ fn is_mint(types: &TypeRegistry<'_>, ktype: KType) -> bool {
 /// lies under its payload's kind. A seal bounded by `Value`, or by a union spanning kinds, stays.
 /// A seal re-tags rather than wraps ([`Tagged::seal`](super::Tagged::seal)), so there is one layer
 /// to read through. Equality and dict keys read a value through this.
-pub fn unsealed<'graph, 'cell, X: Knotted>(
-    value: Value<'graph, 'cell, X>,
+pub fn unsealed<'cell, X: Knotted>(
+    value: Value<'cell, X>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> Value<'graph, 'cell, X> {
+) -> Value<'cell, X> {
     let Value::Tagged(tagged) = value else {
         return value;
     };
@@ -200,9 +203,10 @@ pub fn unsealed<'graph, 'cell, X: Knotted>(
 }
 
 /// The top of `value`'s own kind — `Number` for a number, `LIST OF Any` for a list, the empty
-/// record for a record — or `None` for a knot member, which no seal reads through.
+/// record for a record, `Code` for a quote's code, since every quote is one representation whatever
+/// its carried type — or `None` for every other knot member, which no seal reads through.
 fn kind_of<X: Knotted>(
-    value: &Value<'_, '_, X>,
+    value: &Value<'_, X>,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KType> {
@@ -211,20 +215,22 @@ fn kind_of<X: Knotted>(
         Value::Bool(_) => KType::BOOL,
         Value::Null => KType::NULL,
         Value::Str(_) => KType::STR,
-        Value::Expression(_) => KType::KEXPRESSION,
         Value::Type(_) => KType::ANY_TYPE,
         Value::List(_) => KType::LIST_OF_ANY,
         Value::Dict(_) => KType::DICT_ANY_ANY,
         Value::Record(_) => types.record(scratch, &[]),
         Value::Tagged(tagged) => tagged.ktype(),
-        Value::Knotted(_) => return None,
+        Value::Knotted(member) => match member.resolve() {
+            Resolved::Code(_) => KType::ANY_CODE,
+            _ => return None,
+        },
     })
 }
 
 /// The type dispatch matches a raw part on, and the one a diagnostic naming the slot renders. `None`
 /// for a keyword, which fills no slot. A literal is its leaf, a container literal the join of its
 /// elements' part types — the rule its value will memoize once it evaluates — a name token
-/// `Identifier`, a parenthesized or quoted body `KExpression`, a sigiled body its slot leaf and a
+/// `Identifier`, a parenthesized or quoted body its code kind, a sigiled body its slot leaf and a
 /// type token `ProperType`, the kind a type name denotes.
 pub fn part_ktype(
     part: &ExpressionPart<'_>,
@@ -252,11 +258,16 @@ pub fn part_ktype(
             scratch,
             fields.iter().map(|(name, value)| (*name, element(value))),
         ),
-        ExpressionPart::Identifier(_) => KType::IDENTIFIER,
-        ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_) => KType::KEXPRESSION,
+        ExpressionPart::MarkedUse(..) => KType::EXPRESSION,
+        ExpressionPart::Expression(node) | ExpressionPart::QuotedExpression(node) => {
+            node.reference().code_kind()
+        }
         ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
         ExpressionPart::RecordType(_) => KType::RECORD_TYPE,
-        ExpressionPart::Type(_) => KType::PROPER_TYPE,
+        ExpressionPart::Type(_) | ExpressionPart::MarkedName(_, BinderSymbol::Type(_)) => {
+            KType::PROPER_TYPE
+        }
+        ExpressionPart::Identifier(_) | ExpressionPart::MarkedName(..) => KType::IDENTIFIER,
     })
 }
 
@@ -307,12 +318,12 @@ pub fn record_type(
     types.record(scratch, &field_types)
 }
 
-/// Whether `slot` takes a raw part, by shape. An unevaluated container literal admits on its kind
-/// alone, since its element types are unknown until it runs; a union admits what any member admits;
-/// a family top admits what some concrete type of its family admits, as a union does; a kind slot
-/// takes a type token only for `ProperType` and `AnyType`; a quantified slot takes what its bound
-/// takes. A function, nominal, signature, shape, constructor-application, deferred or sibling slot
-/// admits no raw part — only a resolved value.
+/// Whether `slot` takes a raw part, by shape. A container literal admits by its elements; a union
+/// admits what any member admits; a family top admits what some concrete type of its family
+/// admits, as a union does; a code kind admits a part whose own code kind lies under it; a kind
+/// slot takes a type token only for `ProperType` and `AnyType`; a quantified slot takes what its
+/// bound takes. A function, nominal, signature, shape, constructor-application, deferred or sibling
+/// slot admits no raw part — only a resolved value.
 pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<'_>) -> bool {
     match types.node(slot) {
         TypeNode::Any => true,
@@ -325,36 +336,47 @@ pub fn admits_part(slot: KType, part: &ExpressionPart<'_>, types: &TypeRegistry<
                 | ExpressionPart::DictLiteral(_)
                 | ExpressionPart::RecordLiteral(_)
         ),
-        TypeNode::AnyCode => matches!(
-            part,
-            ExpressionPart::Identifier(_)
-                | ExpressionPart::Type(_)
-                | ExpressionPart::Expression(_)
-                | ExpressionPart::QuotedExpression(_)
-                | ExpressionPart::SigiledTypeExpr(_)
-                | ExpressionPart::RecordType(_)
-        ),
+        TypeNode::Identifier
+        | TypeNode::Symbol
+        | TypeNode::TypeNameToken
+        | TypeNode::Expression
+        | TypeNode::SigiledTypeExpr
+        | TypeNode::RecordType
+        | TypeNode::Literal
+        | TypeNode::Block
+        | TypeNode::Declaration
+        | TypeNode::Binder
+        | TypeNode::Name
+        | TypeNode::Keyword
+        | TypeNode::AnyCode => part.code_kind().is_some_and(|kind| kind.within_code(slot)),
+        // A raw part reports its kind alone, so the names a slot offers constrain nothing here.
+        TypeNode::CodeNeeding { kind, .. } => {
+            part.code_kind().is_some_and(|part| part.within_code(kind))
+        }
         TypeNode::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),
         TypeNode::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
         TypeNode::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),
         TypeNode::Null => matches!(part, ExpressionPart::Literal(KLiteral::Null)),
-        TypeNode::List { .. } => matches!(part, ExpressionPart::ListLiteral(_)),
-        TypeNode::Dict { .. } => matches!(part, ExpressionPart::DictLiteral(_)),
-        TypeNode::Record { .. } => matches!(part, ExpressionPart::RecordLiteral(_)),
-        TypeNode::Identifier => matches!(part, ExpressionPart::Identifier(_)),
-        TypeNode::NameToken => {
-            matches!(
-                part,
-                ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
-            )
-        }
-        TypeNode::TypeNameToken => matches!(part, ExpressionPart::Type(_)),
-        TypeNode::KExpression => matches!(
+        TypeNode::List { element } => matches!(
             part,
-            ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_)
+            ExpressionPart::ListLiteral(items)
+                if items.iter().all(|item| admits_part(element, item, types))
         ),
-        TypeNode::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
-        TypeNode::RecordType => matches!(part, ExpressionPart::RecordType(_)),
+        TypeNode::Dict { key, value } => matches!(
+            part,
+            ExpressionPart::DictLiteral(pairs) if pairs.iter().all(|(k, v)| {
+                (k.is_wildcard() || admits_part(key, k, types)) && admits_part(value, v, types)
+            })
+        ),
+        TypeNode::Record { fields } => match part {
+            ExpressionPart::RecordLiteral(written) => fields.iter().all(|(name, field)| {
+                written
+                    .iter()
+                    .find(|(held, _)| *held == name)
+                    .is_some_and(|(_, part)| admits_part(field, part, types))
+            }),
+            _ => false,
+        },
         TypeNode::OfKind(kind) => {
             matches!(part, ExpressionPart::Type(_))
                 && matches!(kind, KKind::ProperType | KKind::AnyType)

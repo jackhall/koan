@@ -5,7 +5,9 @@ use crate::scope::{Activation, ActivationView, BodyShape, Builtins};
 use crate::symbols::BinderSymbol;
 use crate::values::Value;
 
-use super::{BUILTIN_TYPES, BUILTIN_VALUES, builtins, type_name, value_name, with_fixture};
+use super::{
+    BUILTIN_KEYS, BUILTIN_TYPES, BUILTIN_VALUES, builtins, type_name, value_name, with_fixture,
+};
 
 fn assert_copy<T: Copy>() {}
 
@@ -19,8 +21,15 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape =
-                BodyShape::of_program(fixture.program, &lines, table, fixture.scratch()).unwrap();
+            let shape = BodyShape::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            )
+            .unwrap();
             let activation: Activation = Activation::of_program(writer, shape, table);
             let view = activation.view();
             let b_reads_a = shape.mentions()[0];
@@ -46,8 +55,15 @@ fn reading_an_empty_slot_breaks_the_scheduler_invariant() {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer| {
             let table: &Builtins = Builtins::empty();
-            let shape =
-                BodyShape::of_program(fixture.program, &lines, table, fixture.scratch()).unwrap();
+            let shape = BodyShape::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            )
+            .unwrap();
             let activation: Activation = Activation::of_program(writer, shape, table);
             activation.read(shape.mentions()[0].coordinate);
         });
@@ -59,7 +75,18 @@ fn the_builtin_table_sorts_each_channel_and_counts_types_after_values() {
     with_fixture(|fixture| {
         fixture.in_cell(|writer| {
             let table: &Builtins = builtins(fixture, writer);
-            assert_eq!(table.len(), BUILTIN_VALUES.len() + BUILTIN_TYPES.len());
+            let names = BUILTIN_VALUES.len() + BUILTIN_TYPES.len();
+            assert_eq!(table.len(), names + BUILTIN_KEYS.len());
+            // Each key's overloads follow every name, one per key in this table.
+            for text in BUILTIN_KEYS {
+                let key = fixture.symbols.key(text).expect("a key");
+                let overloads: Vec<_> = table.overloads(key).collect();
+                assert_eq!(overloads.len(), 1, "{text}");
+                assert!(overloads[0].index() >= names);
+                assert!(matches!(table.get(overloads[0]), Value::Null));
+            }
+            let unheld = fixture.symbols.key("NOWHERE _").expect("a key");
+            assert_eq!(table.overloads(unheld).count(), 0);
             let origin = table
                 .lookup(BinderSymbol::Value(value_name("origin", fixture.symbols)))
                 .unwrap();

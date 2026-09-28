@@ -37,7 +37,7 @@ When the conversation reveals what should change for the next exploration, work 
 
 The concept file is *not* a changelog. Do not include "rejected last iteration" or diffs from the prior version. Write it as if it were the only iteration. Do not limit the size of this file; it should develop more detail as we iterate. 
 
-Get the user's approval for the new concept using AskUserQuestion, then loop back to step 2.
+Get the user's approval for the new concept in plain text — do not use AskUserQuestion — then loop back to step 2.
 
 ### 5. Stop when the user is ready to write a roadmap item
 

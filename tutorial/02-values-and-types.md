@@ -146,15 +146,15 @@ The type names you can write in source are:
 | `:(FN :{<params>} -> <result>)`| function value                     | see [Functions](04-functions.md) |
 | `Value`                       | any ordinary value                  | `42`, `"hi"`, `[1, 2]`         |
 | `Type`                        | any type                            | `Number`, `:(LIST OF Str)`     |
-| `Code`                        | any [quoted](10-quoting.md) code    | `#(PRINT "hi")`                |
+| `Code`                        | any [quoted](10-quoting.md) code: a `Block`, an `Expression`, a `Name`, … | `#(PRINT "hi")` |
 | `Any`                         | wildcard — accepts any value, type or code | used only in annotations |
 
 `Value`, `Type` and `Code` split everything `Any` accepts into three families
 that never overlap: a slot typed `Value` never receives a type or a piece of
-code. You'll also occasionally see `Module`, `Signature`, and `KExpression`
-in error messages or signatures — these are real types, but you rarely write
-them by hand. `KExpression` is an unevaluated, [quoted](10-quoting.md)
-expression carried as a value.
+code. You'll also occasionally see `Module` and `Signature` in error messages
+or signatures — these are real types, but you rarely write them by hand. The
+kinds of code under `Code` — `Block`, `Expression`, `Name` and the rest — say
+what a [quoted](10-quoting.md#what-kind-of-code-a-quote-is) piece of code is.
 
 Types you declare yourself with [`UNION`](05-tagged-unions.md) and
 [`NEWTYPE`](07-records.md) get their own names and join this vocabulary.

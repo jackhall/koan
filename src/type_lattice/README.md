@@ -27,10 +27,17 @@ property suite below is only possible because nothing here has a runtime.
 
 The edge runs the other way too, for constants alone: `parse`'s builtin shape
 table types each slot by a `KType`, and since a builtin leaf's handle is a `const`
-content digest the table states a type with no registry in hand. `KType::same_as`
-is the equality that comparison uses, handle against handle in `const` context,
-where the derived `PartialEq` cannot go. Nothing but the handles and that
-comparison crosses back.
+content digest the table states a type with no registry in hand. Every
+composite the table spells — the code containers `List(Name)`,
+`List(Declaration)`, `Dict(TypeCode, Block)`, `Dict(Name, Block)` and
+`Dict(Name, TypeCode)`, the unions `TypeCode` and `List(Name) | Dict(Name,
+TypeCode)` (`QUANTIFIER_CODE`, a `FOR ALL` group), and the empty record — is
+pinned the same way, and every registry pre-seeds them, so the table's static
+data names no type a registry must first intern.
+`KType::same_as` is the equality that comparison uses, handle against handle in
+`const` context, where the derived `PartialEq` cannot go. Nothing but the handles,
+that comparison and the code order's walk over them ([The code
+family](#the-code-family), below) crosses back.
 
 ## Identity: a handle *is* a content digest
 
@@ -69,16 +76,23 @@ a node holds is a slice in the run region, so a node is `Copy` and carries no
 drop glue, and reading one out of the registry copies a few words rather than a
 subtree.
 
-- **Leaves** — `Number`, `Str`, `Bool`, `Null`, `Identifier`, the two bounds
-  `Any` (the top, and the default bound of a rigid variable) and `Never` (the
-  uninhabited bottom, the identity element of both `join` and union
-  canonicalization), and two of the three family tops, `AnyValue` (spelled
-  `Value`) and `AnyCode` (spelled `Code`). See *Three families*, below.
-- **Binder-position slots** that capture syntax raw and never resolve —
-  `NameToken`, `TypeNameToken`, `KExpression`, `SigiledTypeExpr`, `RecordType`.
-  They are types because a declarator's slot has to be typed like any other, not
-  because anything is ever matched against them structurally. With `Identifier`,
-  they are the code family: every one lies under `Code`.
+- **Leaves** — `Number`, `Str`, `Bool`, `Null`, the two bounds `Any` (the top,
+  and the default bound of a rigid variable) and `Never` (the uninhabited bottom,
+  the identity element of both `join` and union canonicalization), and two of the
+  three family tops, `AnyValue` (spelled `Value`) and `AnyCode` (spelled `Code`).
+  See *Three families*, below.
+- **Code kinds** — what a piece of written code is: `Block`, `Expression`,
+  `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`, and the four
+  unspellable kinds `Identifier` (a value name), `TypeNameToken` (a type name),
+  `SigiledTypeExpr` (a lone `:(…)`) and `RecordType` (a lone `:{…}`). A quote
+  needing no name is typed by one, and a builtin slot read as written is typed
+  by one or by a container of them. They are
+  ordered among themselves by the code tree (*The code family*, below) and all
+  lie under `Code`.
+- **`CodeNeeding`** — a code kind and the names its code needs where it is
+  built, spelled `:(Expression NEEDING #[y])`: a quote's carried type, and a
+  code parameter's. Its names are a symbol-sorted set and never empty, since a
+  kind needing nothing is the bare kind.
 - **`OfKind(KKind)`** — a type-accepting argument slot carrying the shallow
   [`KKind`](kind.rs) it admits. It is **type-channel only**: it admits a type
   *value*, never a runtime instance. A value is matched by a type, never by a
@@ -90,7 +104,8 @@ subtree.
   more, in the order first written), and `ConstructorApply`.
 - **`ExpressionShape`** — the type of a keyworded, positional definition reached
   by dispatch: the interleaved keyword/argument element sequence a call must
-  spell, the type parameters bound ahead of it, and the return. It is
+  spell, each slot's [priority class](#priority-classes), the type parameters
+  bound ahead of it, and the return. It is
   *representationally* distinct from `KFunction`: a lambda takes a record of named
   arguments and is reached by name; a shape is reached by its keyword sequence and
   its argument *positions* are load-bearing, which a canonically ordered record
@@ -203,7 +218,9 @@ dispatch would make, and each operator record covered at an equal mode.
 `meet_schemas` is what two signatures meet at; **the module lattice has no join
 of its own**, since two unordered signatures join to their union.
 `shape_specificity` ranks two candidates under one bucket key — and it reads
-shapes alone, since a function type ranks in no bucket.
+shapes alone, since a function type ranks in no bucket. A keyworded member
+whose sub-side bucket ranks its slots otherwise fails as `RankingMismatch`, and
+two signatures whose keyworded members at one key rank otherwise do not meet.
 
 A quantified binder relates to another of its kind by **instantiation**, not
 structurally: some instantiation of the subject's variables, each under its
@@ -228,6 +245,39 @@ alpha-variants are one handle; the door hands its caller back the
 declaration-index → canonical-index map alongside the handle, which is what a
 call needs to bind each type parameter to its solution.
 
+### Priority classes
+
+A shape's slots sit in **priority classes**: dense ranks, one per slot in
+element order, normalized by [`dense_classes`](shape.rs) from what a bucket
+declaration writes — `2 1` and `20 10` are one ranking, `_` slots come after the
+numbered ones in written order, and slots sharing an integer share a class.
+Written order puts each slot in a class of its own. The ranking is part of the
+shape's identity, fed to its digest and rendered in `_`'s place, so
+`:(EXPR #(MOVE 2 :Any TO 1 :Any) -> Any)` and the written-order
+`:(EXPR #(MOVE _ :Any TO _ :Any) -> Any)` are two types, and the binary walks
+treat two shapes of unequal rankings as unrelated.
+
+The classes order **admission**. [`admit_by_class`](ranking.rs) solves a
+quantified group one class at a time: the first class whose slots mention a
+variable solves it, jointly over that class's slots and every position inside
+them, and each later class admits its arguments against that solution. So
+`FOR ALL #[Elt] #(PAIR x :(LIST OF Elt) WITH y :(LIST OF Elt))` fixes `Elt`
+from `x` and refuses a `y` that does not lie under it, while one class over both
+slots — or a call by name, whose record has no order — solves them jointly.
+`admits_shape` runs the same loop with a candidate shape's slot types as the
+arguments, so a signature's view never promises a call its overload refuses.
+
+The classes order **ranking**. [`class_at_least`](ranking.rs) is the verdict
+"`a` is at least as specific as `b` at class `c`": `b`'s slots in class `c`
+admit `a`'s, with each variable an earlier class admitted read as an unknown
+type under its solution and each one an earlier class did not admit read as its
+bound. It reads two shape handles and a class, so the registry records it in
+the verdict table (`Relation::ClassAtLeast`) the first time a pair meets.
+[`select_by_class`](ranking.rs) eliminates over a candidate list class by
+class: every candidate another strictly beats at a class drops out, and a
+class that orders neither of two leaves both to the next. `shape_specificity`
+is the same comparison between two shapes.
+
 ### Three families
 
 Below `Any` lie three disjoint family tops: `Value`, `Type` (`OfKind(AnyType)`,
@@ -237,7 +287,7 @@ shape, per the table in [`family_top`](order.rs):
 | Family top | Node variants |
 |---|---|
 | `Value` | `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `Record`, `KFunction`, `ExpressionShape`, `ConstructorApply`, `Signature` (a module is a value), `SetMember`, `Sibling` |
-| `Code` | `Identifier`, `NameToken`, `TypeNameToken`, `KExpression`, `SigiledTypeExpr`, `RecordType` |
+| `Code` | every code kind: `Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`, `Identifier`, `TypeNameToken`, `SigiledTypeExpr`, `RecordType` |
 | `Type` | every `OfKind` |
 
 The other nodes take their family from elsewhere. A union lies under a top when
@@ -254,6 +304,55 @@ union holding all three tops is canonicalized to `Any` by
 [`union_of`](registry.rs), so the three families together are the whole
 lattice. Left uncollapsed, that union would be a second top strictly below
 `Any`, missing only the variables bounded by `Any`, which lie under no member.
+
+### The code family
+
+The code kinds form a tree under `Code`. A smaller syntax lies under a larger one
+wherever it can stand in its place:
+
+```text
+Code
+└─ Block                  statements; written, two or more
+   └─ Expression          one statement
+      ├─ Declaration      declares a name or a shape: VAL, a TYPE declarator, a bodyless head
+      │  └─ Binder        also installs where it is written: LET, an EXPR definition, …
+      ├─ Literal          a lone scalar literal or nested quote
+      ├─ Symbol           a lone token
+      │  ├─ Name          a value or type name — what a declaration binds
+      │  │  ├─ Identifier
+      │  │  └─ TypeNameToken
+      │  └─ Keyword
+      ├─ SigiledTypeExpr  a lone :(…)
+      └─ RecordType       a lone :{…}
+```
+
+A lone literal, name or keyword is an expression because dispatch evaluates it as
+a statement in its own shape, and an expression is a block of one statement, so
+a body slot typed `Block` takes `#(x)`. A block is no expression, since a slot
+wanting one statement cannot take several. The tree is written once, as
+[`KType::code_parent`](handle.rs) — the kind directly above a code kind — and
+`within_code` walks it; both are `const` over handles, so the order's leaf arm
+and a registry-free admission read the same edges. Join needs nothing of its
+own: a union drops a member under another, so `Literal | Expression` is
+`Expression`, and two kinds on different branches meet at `Never`.
+
+**A code kind needing names** is `CodeNeeding`, built through
+[`TypeRegistry::code_needing`](registry.rs), which sorts and deduplicates the
+names and answers the bare kind for none. A bare kind is the kind needing
+nothing, so one order covers both: a code type lies under a kind needing names
+when its kind lies under that kind and every name it needs is among them. So
+`:(Expression NEEDING #[y])` lies over `Expression`, over `Binder` needing `y`,
+and under `Expression` needing `y` and `z`, and all of them lie under `Code`. A
+parameter of that type therefore admits a quote whose needed names its list
+covers. Two code types meet at their kinds' meet needing the names both need,
+and at `Never` when the kinds do; the join is the ordinary union. A code kind
+needing names holds no variable, so every walk treats it as ground.
+
+Which kind a written quote is belongs to `parse`
+([`KExpression::code_kind`](../parse/ast.rs)); the lattice holds only the order.
+Containers of code are ordinary value types — `List(Name)` lies under
+`List(Code)` and so under `Value` — since a container is a value whatever its
+elements are.
 
 ### Substitute, then ask
 
@@ -399,7 +498,10 @@ current position.
 
 [Rendering](render.rs) is exempt, and for a stated reason: it spells syntax
 *between* children and inherits the quantifier binder from above, which neither
-driver expresses. Every entry point takes the registry and the symbol interner,
+driver expresses. It spells a type as a program writes it: a quantifier group
+as `FOR ALL #[Elt Key]`, or as a dict of each name to its bound,
+`FOR ALL #{Elt: Number, Key: Any}`, once any bound is not `Any`; and an
+expression shape's head quoted, `#(PURE _ :Elt)`. Every entry point takes the registry and the symbol interner,
 never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Laws, not shapes
@@ -420,6 +522,11 @@ vocabulary so an identity move is visible in a diff
 
 ## Open work
 
+- [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)
+  — a group interned with every declared variable kept, for solving only.
+- [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
+  — every structural walk, relation and rendering over types as deep as a
+  run-time value's carried type.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
   signature meet that bounds an abstract member by `Never`, which the
   closed-bound rule forbids.

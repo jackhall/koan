@@ -76,18 +76,19 @@ p.w
 ```
 
 ```text
-error: shape error: `Point` has no field `w`
+error: Point has no field w
 ```
 
 ## Reading a field named at runtime
 
 `.` needs the field name spelled out. When the name is only known at runtime,
-write the read out longhand as `ATTR <value> <name>` and give it a string:
+write the read out longhand as `ATTR <value> <name>` and give it the name as
+code — a [quoted](10-quoting.md) name:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Number}
 LET p = (Point {x = 3, y = 4})
-LET which = "y"
+LET which = #(y)
 PRINT (ATTR p (which))
 ```
 
@@ -95,14 +96,14 @@ PRINT (ATTR p (which))
 4
 ```
 
-A string literal works the same way — `ATTR p "x"` reads the same field `p.x`
+A quoted name works the same way — `ATTR p #(x)` reads the same field `p.x`
 does. A bare name in that position is always the *field's* name, never a
 variable holding one, even when both spellings exist:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Number}
 LET p = (Point {x = 3, y = 4})
-LET x = "y"
+LET x = #(y)
 PRINT p.x
 ```
 
@@ -115,8 +116,8 @@ the binding you have to ask for it, with `ATTR p (x)`. Modules answer a computed
 name too, out of their own bindings:
 
 ```koan
-MODULE m = ((LET x = 7))
-LET which = "x"
+MODULE m = (LET x = 7)
+LET which = #(x)
 PRINT (ATTR m (which))
 ```
 
@@ -136,7 +137,7 @@ Point {x = 3}
 ```
 
 ```text
-error: type mismatch for argument 'value': expected :{x :Number y :Number}, got :{x :Number}
+error: Point cannot wrap :{x :Number}: its representation is :{x :Number y :Number}
 ```
 
 ```koan
@@ -145,7 +146,7 @@ Point {x = "oops", y = 4}
 ```
 
 ```text
-error: type mismatch for argument 'value': expected :{x :Number y :Number}, got :{x :Str y :Number}
+error: Point cannot wrap :{x :Str y :Number}: its representation is :{x :Number y :Number}
 ```
 
 The required fields are a *minimum*, though — a record may carry **more** fields
@@ -202,8 +203,7 @@ PRINT person.email
 ```
 
 ```text
-error: shape error: `:{name :Str age :Number}` has no field `email`
-  in PRINT <staged> (<bind>) at <input>:2:1
+error: :{name :Str age :Number} has no field email
 ```
 
 Width subtyping has a cost in dispatch: a wide record can satisfy two different
@@ -211,25 +211,25 @@ field-subset schemas at once, with neither more specific, so a call is
 ambiguous:
 
 ```koan
-EXPR (PICK r :{x :Number, y :Str}) -> Str = ("got xy")
-EXPR (PICK r :{x :Number, z :Str}) -> Str = ("got xz")
+EXPR #(PICK r :{x :Number, y :Str}) -> Str = #("got xy")
+EXPR #(PICK r :{x :Number, z :Str}) -> Str = #("got xz")
 LET both = {x = 1, y = "a", z = "b"}
 PICK both
 ```
 
 ```text
-error: ambiguous dispatch: 2 candidates match PICK :{x :Number y :Str z :Str} at <input>:4:1 with equal specificity
+error: ambiguous call of PICK _: 2 overloads admit (:{x :Number y :Str z :Str}) and none ranks first
 ```
 
-`(<fields>) FROM <record>` resolves this by *projecting* a record to exactly the
-named fields, narrowing the type the dispatcher sees so just one overload
-matches:
+`#[<fields>] FROM <record>` resolves this by *projecting* a record to exactly the
+named fields — a list of quoted names, so `#[x y]` — narrowing the type the
+dispatcher sees so just one overload matches:
 
 ```koan
-EXPR (PICK r :{x :Number, y :Str}) -> Str = ("got xy")
-EXPR (PICK r :{x :Number, z :Str}) -> Str = ("got xz")
+EXPR #(PICK r :{x :Number, y :Str}) -> Str = #("got xy")
+EXPR #(PICK r :{x :Number, z :Str}) -> Str = #("got xz")
 LET both = {x = 1, y = "a", z = "b"}
-PRINT (PICK ((x y) FROM both))
+PRINT (PICK (#[x y] FROM both))
 ```
 
 ```text
@@ -243,18 +243,17 @@ field read as well as of dispatch:
 
 ```koan
 LET both = {x = 1, y = "a", z = "b"}
-LET view = ((x y) FROM both)
+LET view = (#[x y] FROM both)
 PRINT view.y
 PRINT view.z
 ```
 
 ```text
 a
-error: shape error: `:{x :Number y :Str}` has no field `z`
-  in PRINT <staged> (<bind>) at <input>:4:1
+error: :{x :Number y :Str} has no field z
 ```
 
-When you bind a projection, wrap the whole right-hand side: `LET v = ((x y) FROM
-both)`.
+When you bind a projection, wrap the whole right-hand side:
+`LET v = (#[x y] FROM both)`.
 
 Next: [Newtypes](08-newtypes.md).

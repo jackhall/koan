@@ -11,11 +11,12 @@
 //! step with this one.
 
 use crate::memory::{BumpAllocator, BumpVec};
+use crate::symbols::BinderSymbol;
 
 use super::handle::KType;
 use super::node::TypeNode;
 use super::registry::{Relation, TypeRegistry};
-use super::sig_relations::{Returns, admits_function, admits_shape, sig_subtype};
+use super::sig_relations::{admits_function, admits_shape, sig_subtype};
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
 
@@ -162,7 +163,7 @@ impl Lockstep for Order {
             // A quantified shape is below another when some instantiation of its group puts every
             // slot and the return under the other's, with the other's rigid.
             (TypeNode::ExpressionShape { .. }, TypeNode::ExpressionShape { .. }) => {
-                admits_shape(types, scratch, a, b, Returns::Checked)
+                admits_shape(types, scratch, a, b)
             }
             // The same clause for a pair of function types, related name by name. Only a pair
             // where one quantifies reaches here — two monomorphic ones pair structurally.
@@ -175,6 +176,16 @@ impl Lockstep for Order {
                 TypeNode::ConstructorApply { constructor, .. },
                 TypeNode::SetMember { .. } | TypeNode::Sibling(_),
             ) => constructor == b,
+            // A code kind needing names is above a kind under its own needing no more of them;
+            // a bare kind needs none.
+            (_, TypeNode::CodeNeeding { kind, names }) => {
+                code_needs(types, a).is_some_and(|(sub, needs)| {
+                    sub.within_code(kind) && needs.iter().all(|name| names.contains(name))
+                })
+            }
+            // A code kind below `Code` is above exactly the code kinds under it in the code
+            // family's tree.
+            _ if b.code_parent().is_some() => a.within_code(b),
             // A family top is above every type whose own family it is.
             (_, TypeNode::AnyValue | TypeNode::AnyCode) => family_top(&na) == Some(b),
             _ => false,
@@ -210,6 +221,19 @@ impl Lockstep for Order {
     }
 }
 
+/// A code kind below `Code` as its kind and the names it needs: a bare kind needs none. `None` for
+/// every other type.
+pub(super) fn code_needs<'run>(
+    types: &TypeRegistry<'run>,
+    ktype: KType,
+) -> Option<(KType, &'run [BinderSymbol])> {
+    match types.node(ktype) {
+        TypeNode::CodeNeeding { kind, names } => Some((kind, names)),
+        _ if ktype.code_parent().is_some() => Some((ktype, &[])),
+        _ => None,
+    }
+}
+
 /// The family top `node` lies under by its own shape — `Value`, `Type` or `Code` — or `None` for a
 /// node whose family is decided elsewhere: the lattice's top and bottom, a union by its members, a
 /// type variable by its bound, and a deferred return by the return it defers. No arm is a wildcard,
@@ -231,11 +255,18 @@ fn family_top(node: &TypeNode<'_>) -> Option<KType> {
         | TypeNode::Sibling(_)
         | TypeNode::AnyValue => Some(KType::ANY_VALUE),
         TypeNode::Identifier
-        | TypeNode::NameToken
+        | TypeNode::Symbol
         | TypeNode::TypeNameToken
-        | TypeNode::KExpression
+        | TypeNode::Expression
         | TypeNode::SigiledTypeExpr
         | TypeNode::RecordType
+        | TypeNode::Literal
+        | TypeNode::Block
+        | TypeNode::Declaration
+        | TypeNode::Binder
+        | TypeNode::Name
+        | TypeNode::Keyword
+        | TypeNode::CodeNeeding { .. }
         | TypeNode::AnyCode => Some(KType::ANY_CODE),
         TypeNode::OfKind(_) => Some(KType::ANY_TYPE),
         TypeNode::Any

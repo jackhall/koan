@@ -14,12 +14,14 @@ use crate::memory::{
     program_storage, reattachable, resident,
 };
 use crate::parse::{KExpression, parse};
-use crate::scope::{Activation, BodyShape, Builtins, ClosureBindings, Coordinate, Slot, Target};
+use crate::scope::{
+    Activation, BodyShape, Builtins, ClosureBindings, Coordinate, Registration, Slot, Target, Which,
+};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{KType, TypeRegistry};
 use crate::values::{TypeValue, Value};
 
-use super::{Elaboration, type_declarations};
+use super::{Callable, Elaboration, callable_type, type_declarations};
 
 /// This activation's own `slot`.
 fn local(slot: Slot) -> Coordinate {
@@ -34,8 +36,8 @@ struct Step;
 reattachable!(Step => ());
 
 /// What a slot of the program holds when the check runs.
-pub(super) enum Held<'graph, 'cell> {
-    Bound(Value<'graph, 'cell>),
+pub(super) enum Held<'cell> {
+    Bound(Value<'cell>),
     /// Empty: its unit has not run.
     Empty,
 }
@@ -50,7 +52,7 @@ pub(super) struct Program<'p, 'graph, 'cell> {
     pub writer: Writer<'cell>,
 }
 
-impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
+impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
     pub fn type_name(&self, text: &str) -> TypeSymbol {
         TypeSymbol::declared(text, self.symbols).expect("a Type token")
     }
@@ -122,12 +124,7 @@ impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
     }
 
     /// Bind `name`'s slot in `body` to `value`.
-    pub fn bind_member(
-        &self,
-        body: &Activation<'graph, 'cell>,
-        name: &str,
-        value: Value<'graph, 'cell>,
-    ) {
+    pub fn bind_member(&self, body: &Activation<'graph, 'cell>, name: &str, value: Value<'cell>) {
         let name = BinderSymbol::classify(name).expect("a binder name");
         let (slot, _) = body.shape().slot(name).expect("a declared binder");
         body.bind(slot, value).expect("an empty slot binds");
@@ -146,6 +143,35 @@ impl<'graph, 'cell> Program<'_, 'graph, 'cell> {
             .births(slot)
             .expect("the binder births a body")
     }
+
+    /// The registration `body` is born for — a `UNARY OP`'s keyword-first one of its two.
+    pub fn registration(&self, body: &BodyShape<'graph>) -> &'graph Registration<'graph> {
+        let shape = self.activation.shape();
+        shape
+            .registrations()
+            .iter()
+            .find(|registration| {
+                registration.which != Which::Binary
+                    && shape
+                        .births(registration.slot)
+                        .is_some_and(|born| std::ptr::eq(born, body))
+            })
+            .expect("the body is registered")
+    }
+
+    /// The type of the callable `name` births, born for its registration when `registered`.
+    pub fn callable(&self, name: &str, registered: bool) -> Result<Callable<'p>, Elaboration> {
+        let body = self.birth(name);
+        let form = body.form().expect("a callable body sits in a form");
+        let registration = registered.then(|| self.registration(body));
+        callable_type(
+            form,
+            self.activation,
+            self.types,
+            self.scratch,
+            registration,
+        )
+    }
 }
 
 /// Parse and shape `source` over the scalar types and `extra` builtin types, bind every slot to what
@@ -157,7 +183,7 @@ pub(super) fn with_program<R>(
         BumpAllocator<'_>,
         &SymbolInterner,
     ) -> Vec<(&'static str, KType)>,
-    hold: impl for<'graph, 'cell> Fn(&str, Writer<'cell>, &TypeRegistry<'graph>) -> Held<'graph, 'cell>,
+    hold: impl for<'graph, 'cell> Fn(&str, Writer<'cell>, &TypeRegistry<'graph>) -> Held<'cell>,
     check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
 ) -> R {
     let storage = program_storage();
@@ -193,9 +219,12 @@ pub(super) fn with_program<R>(
                     (name, Value::Type(TypeValue::new(writer, *handle, &types)))
                 })
                 .collect();
-            let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table);
-            let shape = BodyShape::of_program(program, &lines, builtins, &scratch)
-                .unwrap_or_else(|error| panic!("`{source}` shapes: {}", error.display(&symbols)));
+            let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table, &[]);
+            let shape =
+                BodyShape::of_program(program, &lines, builtins, &types, &symbols, &scratch)
+                    .unwrap_or_else(|error| {
+                        panic!("`{source}` shapes: {}", error.display(&symbols, &types))
+                    });
             let activation: &Activation =
                 resident(writer, Activation::of_program(writer, shape, builtins));
             for slot in 0..shape.slots() {
@@ -258,7 +287,7 @@ pub(super) fn nulls<'graph, 'cell>(
     _: &str,
     _: Writer<'cell>,
     _: &TypeRegistry<'graph>,
-) -> Held<'graph, 'cell> {
+) -> Held<'cell> {
     Held::Bound(Value::Null)
 }
 

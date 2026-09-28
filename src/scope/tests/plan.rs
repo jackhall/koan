@@ -101,7 +101,6 @@ pub(super) enum Kind {
     Program,
     Callable,
     Arm,
-    Eval,
 }
 
 /// Where a read resolves.
@@ -122,8 +121,6 @@ pub(super) struct Read {
     pub name: Name,
     pub class: Class,
     pub lands: Lands,
-    /// An eager value read wrapped in `EVAL`.
-    pub eval: bool,
 }
 
 impl Read {
@@ -132,7 +129,6 @@ impl Read {
             name,
             class,
             lands: Lands::Builtin,
-            eval: false,
         }
     }
 
@@ -141,7 +137,6 @@ impl Read {
             name,
             class,
             lands: Lands::Binder { up: 0 },
-            eval: false,
         }
     }
 }
@@ -200,51 +195,15 @@ impl Statement {
         }
         out
     }
-
-    /// The carriers an `EVAL` may wrap a read of.
-    fn carriers_mut(&mut self) -> &mut [Carrier] {
-        match &mut self.form {
-            BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => carriers,
-            BuiltinShape::Function(_) | BuiltinShape::Union(_) => &mut [],
-        }
-    }
-
-    /// Whether an `EVAL` sits in this statement or any scope nested in it.
-    fn holds_eval(&self) -> bool {
-        let here = match &self.form {
-            BuiltinShape::Let(carriers) | BuiltinShape::Bare(carriers) => carriers
-                .iter()
-                .any(|carrier| matches!(carrier, Carrier::Read(read) if read.eval)),
-            BuiltinShape::Function(_) | BuiltinShape::Union(_) => false,
-        };
-        here || self
-            .children()
-            .iter()
-            .any(|child| child.keeps_defining_scope())
-    }
-
-    /// Unwrap every `EVAL` in this statement and the scopes nested in it.
-    fn clear_evals(&mut self) {
-        for carrier in self.carriers_mut() {
-            if let Carrier::Read(read) = carrier {
-                read.eval = false;
-            }
-        }
-        for child in self.children_mut() {
-            for statement in &mut child.statements {
-                statement.clear_evals();
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
 pub(super) enum BuiltinShape {
     /// `LET x = <carriers>`.
     Let(Vec<Carrier>),
-    /// `LET x = FN EXPR (ZZ <signature>) -> <returns> = <body>`.
+    /// `LET x = (FN :{<signature>} -> <returns> = #<body>)`.
     Function(Callable),
-    /// `UNION Tx = (<tag> :<read> …)`, every read deferred.
+    /// `UNION Tx = #{<tag>: <read> …}`, every read deferred.
     Union(Vec<Read>),
     /// `(<carriers>)`.
     Bare(Vec<Carrier>),
@@ -333,11 +292,6 @@ impl Scope {
             }
         }
         out
-    }
-
-    /// Whether an `EVAL` sits in this scope or any scope nested in it.
-    pub fn keeps_defining_scope(&self) -> bool {
-        self.statements.iter().any(Statement::holds_eval)
     }
 
     /// The scope at `path` of child indices below this one.
@@ -474,19 +428,6 @@ impl<'c> Generator<'c> {
 
     pub fn program(&mut self) -> Scope {
         self.scope(Kind::Program, 0, Vec::new(), &[], Vec::new())
-    }
-
-    /// An `EVAL` body read at depth `depth`, where `visible` are the names the site sees, each with
-    /// the depth of the scope declaring it.
-    pub fn eval_body(&mut self, depth: usize, visible: &[(Name, usize)]) -> Scope {
-        let count = if visible.is_empty() { 0 } else { self.pick(4) };
-        let obligations = (0..count)
-            .map(|_| {
-                let (name, declared) = visible[self.pick(visible.len())];
-                (name, Owed::Declared(declared))
-            })
-            .collect();
-        self.scope(Kind::Eval, depth, Vec::new(), visible, obligations)
     }
 
     /// One scope at `depth`. `visible` are the enclosing names it may read wherever it likes (each
@@ -675,7 +616,6 @@ impl<'c> Generator<'c> {
                         lands: Lands::Binder {
                             up: depth - declared,
                         },
-                        eval: false,
                     });
                 }
             }
@@ -703,12 +643,7 @@ impl<'c> Generator<'c> {
                 },
                 Owed::Nowhere => Lands::Nowhere,
             };
-            reads[reader].push(Read {
-                name,
-                class,
-                lands,
-                eval: false,
-            });
+            reads[reader].push(Read { name, class, lands });
         }
         // The injected unbound read: eager at or before its binder's statement, or of a name
         // nothing declares.
@@ -743,30 +678,11 @@ impl<'c> Generator<'c> {
                 name,
                 class,
                 lands: Lands::Nowhere,
-                eval: false,
             };
             reads[reader].insert(at, read);
             self.refusal = Some(Refusal::Unbound { name });
         }
-        for (reader, own) in reads.iter_mut().enumerate() {
-            if matches!(drafts[reader], Draft::Let | Draft::Bare) {
-                for read in own.iter_mut() {
-                    read.eval =
-                        read.class == Class::Eager && !read.name.is_type() && self.chance(6);
-                }
-            }
-        }
 
-        // The binders of this scope each statement reads, wherever the read ends up nested.
-        let local_reads: Vec<Vec<Name>> = reads
-            .iter()
-            .map(|own| {
-                own.iter()
-                    .filter(|read| read.lands == Lands::Binder { up: 0 })
-                    .map(|read| read.name)
-                    .collect()
-            })
-            .collect();
         // What the scopes nested here may read wherever they like.
         let enclosing: Vec<(Name, usize)> = visible
             .iter()
@@ -793,7 +709,6 @@ impl<'c> Generator<'c> {
                 form,
             });
         }
-        break_eval_cycles(&mut statements, &group_of, &local_reads);
         let components = parameters
             .iter()
             .map(|name| BTreeSet::from([*name]))
@@ -867,7 +782,7 @@ impl<'c> Generator<'c> {
         let mut deferred = Vec::new();
         let mut eager = Vec::new();
         for read in own {
-            if !read.eval && self.nestable(depth) && self.chance(3) {
+            if self.nestable(depth) && self.chance(3) {
                 match read.class {
                     Class::Deferred => deferred.push(read),
                     Class::Eager => eager.push(read),
@@ -929,9 +844,9 @@ impl<'c> Generator<'c> {
         enclosing: &[(Name, usize)],
     ) -> Carrier {
         let mut take = |generator: &mut Self, is_type: bool| {
-            let found = direct.iter().position(|read| {
-                read.class == Class::Eager && !read.eval && read.name.is_type() == is_type
-            });
+            let found = direct
+                .iter()
+                .position(|read| read.class == Class::Eager && read.name.is_type() == is_type);
             match found {
                 Some(index) if generator.chance(2) => Some(direct.remove(index)),
                 _ => None,
@@ -968,60 +883,6 @@ impl<'c> Generator<'c> {
             scrutinee,
             ty,
             arms,
-        }
-    }
-}
-
-/// Unwrap the `EVAL`s of each statement, in order, whose waits would close a cycle: an `EVAL`
-/// waits on every binder declared before it, and a body where one of those waits on the `EVAL`'s
-/// statement is refused. A unit is a component, or a statement that binds nothing.
-fn break_eval_cycles(statements: &mut [Statement], group_of: &[usize], local_reads: &[Vec<Name>]) {
-    let unit = |statement: usize| match statements[statement].binder {
-        Some(_) => group_of[statement],
-        None => group_of.len() + statement,
-    };
-    let units: Vec<usize> = (0..statements.len()).map(unit).collect();
-    // `(waiter, waited on)`.
-    let mut waits: Vec<(usize, usize)> = Vec::new();
-    for (reader, names) in local_reads.iter().enumerate() {
-        for name in names {
-            if let Some(bound) = statements.iter().position(|s| s.binder == Some(*name))
-                && units[bound] != units[reader]
-            {
-                waits.push((units[reader], units[bound]));
-            }
-        }
-    }
-    let reaches = |waits: &[(usize, usize)], from: usize, to: usize| {
-        let mut seen = BTreeSet::from([from]);
-        let mut stack = vec![from];
-        while let Some(at) = stack.pop() {
-            if at == to {
-                return true;
-            }
-            for (waiter, bound) in waits {
-                if *waiter == at && seen.insert(*bound) {
-                    stack.push(*bound);
-                }
-            }
-        }
-        false
-    };
-    for reader in 0..statements.len() {
-        if !statements[reader].holds_eval() {
-            continue;
-        }
-        let earlier: Vec<usize> = (0..reader)
-            .filter(|bound| statements[*bound].binder.is_some() && units[*bound] != units[reader])
-            .map(|bound| units[bound])
-            .collect();
-        if earlier
-            .iter()
-            .any(|bound| reaches(&waits, *bound, units[reader]))
-        {
-            statements[reader].clear_evals();
-        } else {
-            waits.extend(earlier.iter().map(|bound| (units[reader], *bound)));
         }
     }
 }
@@ -1187,17 +1048,15 @@ const INJECTIONS: [Injection; 5] = [
     Injection::ShadowsBuiltin,
 ];
 
-/// The refusal a refused plan must be refused with.
+/// The refusal a refused plan must be refused with. Where each is found is read off the rendered
+/// source's declared offsets.
 #[derive(Clone, Debug)]
 pub(super) enum Refusal {
     Rebind {
         name: Name,
-        first: u32,
-        second: u32,
     },
     ShadowsBuiltin {
         name: Name,
-        at: u32,
     },
     /// The read landing [`Lands::Nowhere`].
     Unbound {
@@ -1242,14 +1101,10 @@ impl Generator<'_> {
             }
         }
         let (place, later) = pairs[self.pick(pairs.len())];
-        let (name, first) = declared[place];
+        let name = declared[place].0;
         let second = declared[later].1;
         binders[second as usize - 1] = Some(name);
-        self.refusal = Some(Refusal::Rebind {
-            name,
-            first,
-            second,
-        });
+        self.refusal = Some(Refusal::Rebind { name });
     }
 
     /// Name a binder or parameter of a scope after a builtin of its channel.
@@ -1274,7 +1129,7 @@ impl Generator<'_> {
             }
             _ => binders[at as usize - 1] = Some(name),
         }
-        self.refusal = Some(Refusal::ShadowsBuiltin { name, at });
+        self.refusal = Some(Refusal::ShadowsBuiltin { name });
     }
 }
 
@@ -1381,6 +1236,8 @@ pub(super) struct Placed<'p> {
     pub read: &'p Read,
     pub scope: usize,
     pub statement: u32,
+    /// Where in the source the read's name is written.
+    pub offset: u32,
 }
 
 pub(super) struct Rendered<'p> {
@@ -1397,6 +1254,8 @@ pub(super) struct Rendering<'p> {
     pub tokens: Vec<Token>,
     pub reads: Vec<Placed<'p>>,
     pub scopes: Vec<Rendered<'p>>,
+    /// Every binder and parameter name, beside where in the source it is written.
+    pub declared: Vec<(Name, u32)>,
 }
 
 struct Renderer<'p> {
@@ -1422,14 +1281,6 @@ pub(super) fn render_program(program: &Scope) -> Rendering<'_> {
     renderer.out
 }
 
-/// An `EVAL` body's quoted source, its scope checked at `level`.
-pub(super) fn render_eval(body: &Scope, level: usize) -> Rendering<'_> {
-    let mut renderer = Renderer::new(body, level);
-    renderer.text("#");
-    renderer.statements(body);
-    renderer.out
-}
-
 impl<'p> Renderer<'p> {
     fn new(root: &'p Scope, level: usize) -> Self {
         Renderer {
@@ -1443,6 +1294,7 @@ impl<'p> Renderer<'p> {
                     statement: 0,
                     level,
                 }],
+                declared: Vec::new(),
             },
             scope: 0,
             statement: 0,
@@ -1454,6 +1306,7 @@ impl<'p> Renderer<'p> {
     }
 
     fn other(&mut self, name: Name) {
+        self.out.declared.push((name, self.out.source.len() as u32));
         self.text(&name.text());
         self.out.tokens.push(Token::Other);
     }
@@ -1464,6 +1317,7 @@ impl<'p> Renderer<'p> {
             read,
             scope: self.scope,
             statement: self.statement,
+            offset: self.out.source.len() as u32,
         });
         self.text(&read.name.text());
     }
@@ -1512,29 +1366,33 @@ impl<'p> Renderer<'p> {
             BuiltinShape::Function(callable) => {
                 self.text("LET ");
                 self.other(statement.binder.expect("a function binds"));
-                self.text(" = FN EXPR (ZZ");
-                for (parameter, ty) in callable.body.parameters.iter().zip(&callable.types) {
-                    self.text(" ");
+                self.text(" = (FN :{");
+                let parameters = callable.body.parameters.iter().zip(&callable.types);
+                for (index, (parameter, ty)) in parameters.enumerate() {
+                    if index > 0 {
+                        self.text(", ");
+                    }
                     self.other(*parameter);
                     self.text(" :");
                     self.read(ty);
                 }
-                self.text(") -> ");
+                self.text("} -> ");
                 self.read(&callable.returns);
-                self.text(" = ");
+                self.text(" = #");
                 self.body(&callable.body);
+                self.text(")");
             }
             BuiltinShape::Union(reads) => {
                 self.text("UNION ");
                 self.other(statement.binder.expect("a UNION binds"));
-                self.text(" = (");
+                self.text(" = #{");
                 for (tag, read) in reads.iter().enumerate() {
                     let tag = char::from(b'a' + tag as u8);
-                    self.text(&format!("{}K{tag} :", if tag == 'a' { "" } else { " " }));
+                    self.text(&format!("{}K{tag}: ", if tag == 'a' { "" } else { ", " }));
                     self.out.tokens.push(Token::Other);
                     self.read(read);
                 }
-                self.text(")");
+                self.text("}");
             }
             BuiltinShape::Bare(carriers) => {
                 self.text("(");
@@ -1556,7 +1414,7 @@ impl<'p> Renderer<'p> {
         match (deferred.len(), eager.len()) {
             (0, 0) => self.text("1"),
             (0, 1) => match eager[0] {
-                Carrier::Read(read) if !read.eval && !read.name.is_type() => self.read(read),
+                Carrier::Read(read) if !read.name.is_type() => self.read(read),
                 Carrier::Read(read) if read.name.is_type() => self.call(&eager),
                 Carrier::Lambda(_, callable) => {
                     self.text("(");
@@ -1593,22 +1451,23 @@ impl<'p> Renderer<'p> {
         }
     }
 
+    /// A call of the builtin `ZZ` over each argument in turn, nested — `(ZZ a (ZZ b (ZZ c)))` — so
+    /// every call takes one argument or two, the arities the suites' table holds `ZZ` at.
     fn call(&mut self, arguments: &[&'p Carrier]) {
-        self.text("(ZZ");
-        for &argument in arguments {
-            self.text(" ");
+        for (index, &argument) in arguments.iter().enumerate() {
+            if index > 0 {
+                self.text(" ");
+            }
+            self.text("(ZZ ");
             self.eager(argument);
         }
-        self.text(")");
+        for _ in arguments {
+            self.text(")");
+        }
     }
 
     fn eager(&mut self, carrier: &'p Carrier) {
         match carrier {
-            Carrier::Read(read) if read.eval => {
-                self.text("(EVAL ");
-                self.read(read);
-                self.text(")");
-            }
             Carrier::Read(read) => self.read(read),
             Carrier::Lambda(_, callable) => self.lambda(callable),
             Carrier::Arm {
@@ -1623,16 +1482,16 @@ impl<'p> Renderer<'p> {
                 }
                 self.text(" -> :");
                 self.read(ty);
-                self.text(" WITH (");
+                self.text(" WITH #{");
                 for (index, (head, body)) in arms.iter().enumerate() {
                     if index > 0 {
-                        self.text(" ");
+                        self.text(", ");
                     }
                     self.read(head);
-                    self.text(" -> ");
+                    self.text(": ");
                     self.body(body);
                 }
-                self.text("))");
+                self.text("})");
             }
         }
     }
@@ -1655,7 +1514,7 @@ impl<'p> Renderer<'p> {
         }
         self.text("} -> ");
         self.read(&callable.returns);
-        self.text(" = ");
+        self.text(" = #");
         self.body(&callable.body);
         self.text(")");
     }

@@ -1,8 +1,9 @@
 //! Koan's lexical environments: what a name means at the point it is read, in three tiers.
 //!
 //! - The [`BodyShape`] — one per body, built once into program storage — declares the body's value and
-//!   type names, classifies every mention eager or deferred, delimits the components its bindings
-//!   form, and resolves every name the body reads to a [`Coordinate`].
+//!   type names and its definitions' registrations, classifies every mention eager or deferred,
+//!   delimits the components its bindings form, resolves every name the body reads to a
+//!   [`Coordinate`], and every keyworded use to a [`CandidateList`] of them.
 //! - [`ClosureBindings`] — one run per callable, born from the enclosing activation through the
 //!   shape's capture layout: a value word per capture, or an edge into the callable's own knot.
 //! - An [`Activation`] — one per call or block entry, laid down in the frame's region: a pointer to
@@ -14,9 +15,8 @@
 //! takes — the activation and its view over the callable's family, since a slot holds its value
 //! erased; `scope` threads it through and reads a callable only to resolve an edge capture.
 //!
-//! A read through a coordinate searches nothing by name. The walk `EVAL` runs is
-//! [`BodyShape::for_eval`], which resolves each free name through [`ActivationView::coordinate_of`] and lands
-//! where the coordinate would.
+//! A read through a coordinate searches nothing by name, `EVAL` included: a quote value's code is
+//! shaped where the program loads, so every free name of it is a capture its `EVAL` fills.
 //!
 //! **Imports.** This module may name `crate::memory`, `crate::parse`, `crate::symbols`,
 //! `crate::type_lattice` and `crate::values`, and no scheduler type. From `type_lattice` it names
@@ -38,14 +38,15 @@ mod signature;
 pub(crate) mod tests;
 
 pub(crate) use shape::IMPLICIT;
-pub(crate) use signature::pair_name;
+pub(crate) use signature::pair_label;
 
 pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use shape::{
-    BodyShape, BuiltinIndex, CaptureSlot, CaptureSource, CaptureSpec, Component, ComponentIndex,
-    Coordinate, Mention, MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target, Unit,
-    UnitWork,
+    Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
+    CaptureSpec, Component, ComponentIndex, Coordinate, Mention, MentionClass, Offer, Position,
+    QuotedPart, Ranking, Registration, ShapeError, ShapeKind, Site, Slot, Target, Unit, UnitWork,
+    Which, spelled,
 };

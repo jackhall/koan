@@ -9,7 +9,8 @@ that keeps a program across calls — a language server, a REPL — keeps one of
 these, and repeats no setup order of its own.
 
 The layer above supplies what a program *means*: a [`Language`](record.rs),
-which lays the builtin table down and names the step every evaluation runs.
+which lays the builtin table down, names the step every evaluation runs, and
+checks a built shape; [dispatch](../dispatch/README.md) is koan's.
 Everything here is the same for any language over it — where a binding lives,
 which cell performs a statement, in what order a body's units are performed —
 and nothing here names an expression form.
@@ -63,17 +64,23 @@ one call leaves in the graph or interns in the registry the next call finds.
 `self_cell`'s builder closure, which sees the same `'graph` every later call
 does: it parses the source into program storage, lays the registry in the owner's
 bump, has
-`L` lay the builtin table down, builds the program's shape over that table,
-takes the root, and lays the record down. It returns a `Result`, and
-`LoadError` carries the parse error or the `ShapeError` that stopped it. The
+`L` lay the builtin table down, builds the program's shape over that table, has
+`L` check it, takes the root, and lays the record down, beside the
+[output sinks](#errors-and-output) the embedder hands `load`. It returns a `Result`, and
+`LoadError` carries the parse error, or the rendering of the `ShapeError` that
+stopped it. A shape error borrows program storage and names symbols and types
+through the interner and registry, all of which a refused builder drops with
+its owner, so it is rendered on the error branch, while they stand; a load that
+succeeds renders nothing. The
+`LoadError`'s `Display` is the whole diagnostic, led by `path:line:col`. The
 table comes before the shape because a shape resolves a builtin name to an
 index into it.
 
 ## The program record
 
 [`Program`](record.rs) is what a loaded program's steps read, at `'graph`: the
-top level's shape, the builtin table, the registry and interner, and the
-evaluator's step. It rests in program storage beside the table, written through
+top level's shape, the builtin table, the registry and interner, the
+evaluator's step, the output sinks and the sealed `Error` type. It rests in program storage beside the table, written through
 `cellgraph`'s [`Storage`](../memory/README.md#two-tiers-and-why-the-boundary-falls-where-it-does)
 writer, so every step names it by a `'graph` borrow that crosses at no price.
 The builtin table is there for the same reason: it is covariant in its cell
@@ -89,9 +96,11 @@ holding `KBirth::Evaluate`. The caller picks the placement and the `Use`; what
 the node means is the evaluator's. That keeps evaluating an expression
 dispatch's, and everything in this module below it free of expression forms.
 
-**`Language` is a trait**, with two methods generic over `'graph`: `builtins`,
-which lays the table down through program storage's writer, and `evaluator`,
-the step an evaluation runs. A record of function pointers ranked over `'graph`
+**`Language` is a trait**, with three methods generic over `'graph`: `builtins`,
+which lays the table down through program storage's writer, `evaluator`, the
+step an evaluation runs, and `check`, which may refuse the program's shape once
+it is built and its types can be read, as dispatch's
+[overlap check](../dispatch/README.md#the-overlap-check) does. A record of function pointers ranked over `'graph`
 cannot name the bundle's projections (rustc #100013); a method generic over
 `'graph` is handed the one the program loads at. Dispatch implements it; the
 tests implement a [miniature](tests/evaluator.rs).
@@ -102,9 +111,12 @@ tests implement a [miniature](tests/evaluator.rs).
 a program's steps run over, with its three families:
 
 - **`KBirth`**, what a cell is born holding, which crosses and is covariant:
-  `Program`, the top level's root work; `Call`, a callee and a record of its
-  arguments by name; `Evaluate`, a node and the view it is read through; and
-  `Inspect`, the view the top level leaves at rest. The family's `covariant!`
+  `Program`, the top level's root work; `Call`, a callee, a record of its
+  arguments by name and how the call reached it — by keyword or by name; `Eval`, a quote's code and a record of the names its
+  `EVAL` offers; `Evaluate`, a node, the view it is read through and the
+  [contract](#frames-contracts-and-tails) it owes, if any; `Block`, a
+  synthesized block's shape and the view it sits in; and `Inspect`, the view
+  the top level leaves at rest. The family's `covariant!`
   witness is what checks that an activation's view is covariant in its brand.
 - **`KState`**, what a cell holds at a step and parks with: the birth on a
   first step, the body runner between units, or an evaluator's resumption.
@@ -122,7 +134,7 @@ until the end.
 the verdict always pins it: it borrows another cell's region, and an evaluation
 or an inspection is born under the cell it views, where pinning costs nothing.
 A birth that is copied rebuilds what it carries: a `Call`'s callee and
-arguments are deep-copied through
+arguments, and an `Eval`'s code and offered names, are deep-copied through
 [`copy_severed`](../values/README.md#crossing), the crossing's door for a value
 held inside a copied operand of another family, so the copy is still one the
 graph priced.
@@ -148,24 +160,53 @@ tenant of the root, which reads a top-level binding where it lies and leaves
 the view at rest again. That is how a REPL or a test reads a binding after the
 drain, in a separate call from the one that ran it.
 
+## The stack
+
+A program's load and run need a stack of a known size: the walks over parsed
+syntax recurse once per nested part, and a debug build's frames are many times
+a release build's, while a platform's main-thread stack is whatever the
+platform chose. `STACK_BYTES` ([substrate.rs](substrate.rs)), 64 MiB, is the
+stack a program nested to the parser's
+[depth limit](../parse/README.md#the-syntax-depth-limit) loads and runs in under
+a debug build, and a host runs a program on a thread of that size. The
+interpreter binary does, re-raising a panic on that thread as its own.
+
 ## The body runner
 
-[`run`](body.rs) is one step that performs the top level and every called
-body. Its state is the activation, the next unit, and the stage it parked at.
+[`run`](body.rs) is one step that performs the top level, every called body,
+the code every `EVAL` runs, and every block a pairwise operator run hoists an
+operand into. Its state is the activation, the next unit, and the stage it parked at.
 It claims nothing ahead, ties and binds each unit itself, and no unit has a
 cell of its own: a cell per unit would cost a create, an enter, a release and a
 receipt slot per statement per call, for statements that mostly never park.
 Born as `KBirth::Program` it lays the top level's activation down; born as
 `KBirth::Call` it lays the callee's activation down in the frame's own cell and
 binds each value parameter from the argument record, which must name them
-exactly. A **quantified** callee's frame first solves its group: every declared
-parameter type against the argument's carried type, under one collector, and
-each type-parameter slot is then bound to a type value holding its solution,
-looked up **by its own name** through the callee's
+exactly; born as `KBirth::Eval` it lays the code's activation down in the
+frame's own cell over a closure run it assembles in the code shape's capture
+order — each `$` name from the bindings the code carries, each hole from those
+a `USING` supplied, each `\` name from the offered record — every edge resolved
+to the member it names, so the run holds value words only.
+
+**How a frame binds depends on how the call reached it.** A keyworded call's
+arguments were admitted by the [selection](../dispatch/README.md#selection) that
+chose the callee, which also put each type parameter's solution in the record
+by name, so the frame trusts both. A call by name's arguments were written by
+the caller, so the frame **admits** every argument against its parameter's
+declared type under one collector — `:(FN :{x :Number} -> Str) cannot be called
+with :{x :Str}` when one does not fit — and, for a **quantified** callee, solves
+the group from that collector itself; a type parameter the caller writes into
+the record names no parameter, and misnames the call. Either way each
+type-parameter slot is then bound to a type value holding its solution, looked
+up **by its own name** through the callee's
 [quantifier map](../knot/README.md) — the slots arrive symbol-sorted, not in the
 order the `FOR ALL` group was written. A name the map says canonical form dropped
-binds that variable's bound. A group the arguments cannot solve binds nothing and
-refuses the call, as an argument record that misnames a parameter does.
+binds that variable's bound. A callee that is no function, an argument record
+that misnames a parameter, an argument that does not fit its parameter, and a
+group the arguments cannot solve are each an
+[error value](#errors-and-output). Born as `KBirth::Block` it lays a block's
+activation down beside the view it sits in, in the asker's own cell, and yields
+its last statement's value.
 
 It performs the units in the order the shape emitted them
 ([Units](../scope/README.md#units)), each after every unit it reads, over a
@@ -191,10 +232,11 @@ interleaving. Per unit:
   supplied by site.
 - **A lone data binder** is one evaluation of its right-hand side, asked with
   `Keeps`, and bound on the wake.
-- **A statement that binds nothing** is one evaluation, asked with `Forwards`
-  when it is a called body's last statement — so the value is built where the
-  frame's result goes — and with `Reads` otherwise. A body whose last unit is a
-  binder yields that binding's value.
+- **A statement that binds nothing** is one evaluation, asked with `Reads` —
+  save a frame's last unit, which the runner [tails](#frames-contracts-and-tails)
+  into, and a block's last statement, asked with `Forwards` so the value is
+  built where the block's result goes. A body whose last unit is a binder
+  yields that binding's value.
 
 The only children the runner asks for are evaluations, through
 `Program::evaluate`, each handed the view of the runner's activation. The
@@ -207,9 +249,44 @@ builds is at the frame's `'here`, binding a slot is a plain write, and a reader
 reads it where it lies.
 
 Transients inside a step — the parts a tie named, the values supplied back to
-it — go on a local bump for that step, never a `Vec`. A tie or a declaration
-the runner cannot proceed on, a callee that is no function, or arguments that
-do not name its parameters exactly end the step with `StepError::Refused`.
+it — go on a local bump for that step, never a `Vec`.
+
+### Frames, contracts and tails
+
+A called frame owes its caller a value satisfying its callee's declared return,
+with the frame's own type-parameter solution substituted: a
+[`Contract`](record.rs), which names the callee so a miss can say whose return
+it was. The frame's value is **retyped** to the declared return — a container to
+the declared type, a tagged value to the union member naming its constructor —
+and a value that does not satisfy it is an error value
+(`:(FN :{} -> Number) returned Str, which does not satisfy Number`).
+
+When a frame's last unit is a statement that binds nothing, the runner does not
+wait on it: it **tails** into the evaluator, a `Shares` successor in the frame's
+own place, handing it the contract, and the evaluation owes the frame's caller
+the value. An evaluation whose selected call's declared return satisfies the
+contract tails again, into the callee's frame, so a tail recursion N deep holds
+a constant number of cells; any other value is held to the contract where the
+evaluation finishes. An `EVAL`'s frame owes no contract, and a block never
+tails.
+
+### Errors and output
+
+A koan **error value** is a tagged value of the builtin nominal `Error` over
+`{message :Str}`, sealed at load ([`builtin_error`](../elaborate/builtin.rs)) and
+built by `Program::error`. Every unit that receives one — an evaluation's value,
+an eager part a tie named — stops the body with it, and so does every refusal
+the program is to blame for: a tie or a declaration refused, a callee that is no
+function, arguments that do not fit it. A frame finishes with the error value; a
+block does the same. At the top level, the runner writes `error: <message>` to
+the error sink, marks the run uncaught, and leaves its view at rest as it always
+does, so the bindings bound before the error stay inspectable.
+`StepError::Refused` is left for invariant breaks alone.
+
+`load` takes an [`Output`](record.rs) of two sinks, `print` and `error`, which
+the program record holds; the builtin `PRINT` writes through the first.
+`Running::run` answers an `Outcome`: `Completed`, or `Uncaught` when an error
+value reached the top level.
 
 **The placement bit.** [`call`](body.rs) is what an evaluator asks for to call a
 function: a frame running the callee's body, placed by the bit its return type
@@ -217,6 +294,21 @@ derives. `placement_of` makes a return of `Number`, `Bool` or `Null` `Fresh`,
 since no value of those shares bytes with an argument, and every other return
 `Shares`. A builtin's native step states its own placement in the request it
 makes.
+
+**Running code.** [`eval`](body.rs) is what an evaluator asks for to run code
+under `EVAL`, beside `call`: a `Shares` frame running the code's shape, which
+was built where the program loaded, so nothing builds a shape at run time. The
+evaluator hands it the names the `EVAL` offers, read at the coordinates the
+shape recorded for its operand (`BodyShape::offers`), as a record. It refuses
+before anything is spawned, with a `CodeRefused`: `Shape` for code whose shape
+kept an error, and `Unbound` for the first name hole no `USING` filled, `\` name
+the `EVAL` does not offer, or keyworded hole some use in the code selects from
+alone. A keyworded hole nothing filled that every use of it can do without binds
+the empty list of functions. That the operand is code at all is what `EVAL`'s
+overload admitted. The frame
+reads nothing of the scope the `EVAL` is written in but those names, so code
+fills no hole from the frame that runs it
+([building code](../scope/README.md#building-code)).
 
 ## The scheduler is a view
 
@@ -246,19 +338,33 @@ module body run inline, lambdas — born through the
 [lambda door](../knot/README.md#a-lambda) after a later binding they read,
 returned from a frame and called with their captures, held in a knot and
 reading their fellow through an edge, and supplied to a tie as an eager part —
+`EVAL` running code whose `$` name binds the caller's value, a hole unbound
+whatever the callee declares, a parameter needing a name offered it, a function
+built from code carrying its bindings as captures, a quote reading its own
+binder, a binder before an `EVAL` statement run after it, a malformed quote
+refused only when run, a required keyworded hole unbound, an argument a call by name does not fit
+refused, a refused tie ending
+the program uncaught, a frame's value retyped to its declared return and a
+return that misses it, a self-call in tail position holding its cells constant,
 and one whole program with all of them.
 [`tests/substrate.rs`](tests/substrate.rs) loads two programs through a helper,
 moves them into a `Vec`, runs each, and reads a binding back in a separate call
 through a resumed root work; it also checks both load errors, an inspection
 before the program ran, and a stalled substrate. The two-program test,
 `a_whole_program`, `an_eager_part_is_supplied_by_site_in_one_wake`,
-`a_call_binds_each_type_parameter_to_its_solution` and
-`a_lambda_returned_from_a_frame_keeps_its_captures` are on the
+`a_call_binds_each_type_parameter_to_its_solution`,
+`a_lambda_returned_from_a_frame_keeps_its_captures` and
+`a_self_call_in_tail_position_holds_its_cells_constant_however_deep` are on the
 [Miri slate](../../observe/miri_slate.md).
 
 ## Open work
 
-- [Dispatch](../../roadmap/rewrite/dispatch.md) — the evaluator itself, and a
-  runner refusal turned into a koan error value rather than a stalled drain.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a `Call`
-  birth copied by a tail hop, and a receipt run laid down anew per park.
+- [Control expression shapes and errors](../../roadmap/rewrite/control-and-errors.md)
+  — catching an error value, and the payload `CATCH` needs.
+- [Call traces](../../roadmap/rewrite/call-traces.md) — the frames an error
+  value passed through.
+- [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
+  — a refused load kept, so its shape error renders on demand rather than once.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
+  receipt run laid down anew per park, and the bytes a `Shares` tail hop leaves
+  in its host.

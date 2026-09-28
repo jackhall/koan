@@ -13,25 +13,25 @@ use super::{Knotted, Link, Nothing, Value, Weight, record_type};
 /// nominal identity, only its fields; equality over two is blind to the order they were written in.
 /// Its cells are value words, or [`Link`]s when the record is a knot's data node.
 #[derive(Clone, Copy, Debug)]
-pub struct Record<'graph, 'cell, X = Nothing, C = Value<'graph, 'cell, X>> {
+pub struct Record<'cell, X = Nothing, C = Value<'cell, X>> {
     names: &'cell [Symbol],
     cells: &'cell [C],
     ktype: KType,
     weight: Weight,
     /// The knot member a cell's word may hold, which a link cell names only through `C`.
-    member: PhantomData<Value<'graph, 'cell, X>>,
+    member: PhantomData<Value<'cell, X>>,
 }
 
-impl<'graph, 'cell, X: Knotted> Record<'graph, 'cell, X> {
+impl<'cell, X: Knotted> Record<'cell, X> {
     /// Lay down `fields`, whose names are distinct, sorted by symbol. The type is the record over
     /// each field's type in the order the fields were written; the sort and the field-type run are
     /// staged over `scratch`.
     pub fn new(
         writer: Writer<'cell>,
-        fields: &[(BinderSymbol, Value<'graph, 'cell, X>)],
+        fields: &[(BinderSymbol, Value<'cell, X>)],
         types: &TypeRegistry<'_>,
         scratch: BumpAllocator<'_>,
-    ) -> &'cell Record<'graph, 'cell, X> {
+    ) -> &'cell Record<'cell, X> {
         let order = symbol_order(fields, scratch);
         let mut weight = Weight::flat::<Self>();
         let names = writer.fill(order.len(), |at| {
@@ -52,12 +52,12 @@ impl<'graph, 'cell, X: Knotted> Record<'graph, 'cell, X> {
     }
 }
 
-impl<'graph, 'cell, X: Knotted> Record<'graph, 'cell, X, Link<'graph, 'cell, X>> {
+impl<'cell, X: Knotted> Record<'cell, X, Link<'cell, X>> {
     /// Lay down `fields`, whose names are distinct, sorted by symbol, as a knot's data node under
     /// the finished memo `ktype`; the sort is staged over `scratch`.
     pub fn linked(
         writer: Writer<'cell>,
-        fields: &[(BinderSymbol, Link<'graph, 'cell, X>)],
+        fields: &[(BinderSymbol, Link<'cell, X>)],
         ktype: KType,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Self {
@@ -93,7 +93,7 @@ fn symbol_order<'x, C>(
     order
 }
 
-impl<'graph, 'cell, X: Copy, C: Copy> Record<'graph, 'cell, X, C> {
+impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
     /// A record over sorted names and aligned cells already resident in `writer`'s region, under a
     /// type and weight the caller already knows — the deep copy's arm.
     pub(crate) fn from_runs(
@@ -127,9 +127,7 @@ impl<'graph, 'cell, X: Copy, C: Copy> Record<'graph, 'cell, X, C> {
     }
 
     /// The fields in symbol order.
-    pub fn fields(
-        &self,
-    ) -> impl ExactSizeIterator<Item = (Symbol, &'cell C)> + use<'graph, 'cell, X, C> {
+    pub fn fields(&self) -> impl ExactSizeIterator<Item = (Symbol, &'cell C)> + use<'cell, X, C> {
         self.names.iter().copied().zip(self.cells.iter())
     }
 

@@ -24,7 +24,7 @@ fn a_record_field_names_its_declared_type() {
 fn a_field_read_chains_where_a_field_is_record_shaped() {
     brought(
         "NEWTYPE Inner = :{x :Number}\nNEWTYPE Outer = :{inner :Inner, bare :{y :Str}}\n\
-         UNION Shape = (Circle :{r :Number} Square :{side :Number})\n\
+         UNION Shape = #{Circle: :{r :Number}, Square: :{side :Number}}\n\
          LET Nominal = :(Outer.inner.x)\nLET Structural = :(Outer.bare.y)\n\
          LET Radius = :(Shape.Circle.r)",
         |program| {
@@ -74,14 +74,14 @@ fn a_field_the_type_does_not_declare_is_refused() {
 #[test]
 fn a_slot_typed_by_a_field_reads_its_declared_type() {
     brought(
-        "NEWTYPE Point = :{x :Number, y :Str}\nLET label = FN EXPR (LABEL v :(Point.y)) -> Str = (v)",
+        "NEWTYPE Point = :{x :Number, y :Str}\nLET label = FN EXPR #(LABEL v :(Point.y)) -> Str = #(v)",
         |program| {
             let (types, scratch) = (program.types, program.scratch);
             let form = program
                 .birth("label")
                 .form()
                 .expect("a callable body sits in a form");
-            let callable = callable_type(form, program.activation, types, scratch)
+            let callable = callable_type(form, program.activation, types, scratch, None)
                 .expect("the definition elaborates");
             let v = BinderSymbol::classify("v").unwrap();
             assert_eq!(

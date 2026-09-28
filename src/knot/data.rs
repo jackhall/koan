@@ -1,18 +1,19 @@
 //! A knot's data members: a `LET` whose right-hand side, through one-part groups, is a list, dict or
-//! record literal or a nominal construction `(Head payload)`.
+//! record literal, a nominal construction `(Head payload)`, or a quote whose `$` name reads a fellow
+//! member.
 //!
 //! **Staging** reads a member's right-hand side into scratch with no writer in reach. A literal waits
 //! to be lowered; a mention of a fellow member is an edge; any other mention is the word the
-//! activation reads, or a refusal while its binder runs; a `FN` that captures a
-//! fellow member is a function node of the knot; a part the walk cannot build itself — a call, a
-//! keyword form, any other `FN` — is asked of the caller's evaluator by site. Every constructor on
-//! the path from a member's root to a fellow mention or such a `FN` is an anonymous node of the same
-//! knot; that node and the function node are indexed after the members in the order the walk meets
-//! them, and the cell that held each holds an edge. A nested constructor with no edge below it
-//! stays an ordinary value.
+//! activation reads, or a refusal while its binder runs; a `FN` that captures a fellow member is a
+//! function node of the knot, and a quote whose `$` name reads one is a code node; a part the walk
+//! cannot build itself — a call, a keyword use, any other `FN` or quote — is asked of the caller's
+//! evaluator by site. Every constructor on the path from a member's root to a fellow mention or
+//! such a `FN` or quote is an anonymous node of the same knot; that node, the function node and the
+//! code node are indexed after the members in the order the walk meets them, and the cell that held
+//! each holds an edge. A nested constructor with no edge below it stays an ordinary value.
 //!
-//! **Memos** follow the nominal cut. A function's memo is its signature type and a tagged node's is
-//! the head it names, both known before the knot exists. A *derived* node's memo is read
+//! **Memos** follow the nominal cut. A function's memo is its signature type, a code node's its
+//! carried type and a tagged node's the head it names, all known before the knot exists. A *derived* node's memo is read
 //! off its cells, an edge contributing its target's memo: a container's is what the plain door of
 //! its kind would memoize, and a construction through a family's is the application the
 //! construction rule solves from its payload. So derived memos are computed in reverse topological
@@ -23,7 +24,7 @@
 //! rule an ordinary construction goes through too, before anything is written.
 
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected_components};
-use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression, KLiteral, ProgramNode};
 use crate::scope::{BodyShape, CaptureSource, Component, Coordinate, ShapeKind, Site, Target};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeRegistry};
@@ -36,7 +37,7 @@ use super::{Eager, KActivationView, KValue, Knotted, Supplied, Untieable};
 
 /// One part of a data member's right-hand side, read and not yet written.
 pub(super) enum Staged<'graph, 'cell, 'x> {
-    /// A scalar or string literal, or a quote, lowered where it is written.
+    /// A scalar or string literal, lowered where it is written.
     Literal(&'graph ExpressionPart<'graph>),
     Value(KValue<'graph, 'cell>),
     /// The knot node at this index.
@@ -54,6 +55,12 @@ pub(super) enum Staged<'graph, 'cell, 'x> {
     /// A `FN` that captures a fellow member: a function node of this knot, running `body`. Only
     /// ever a node's shape, reached through an edge.
     Function(&'graph BodyShape<'graph>),
+    /// A quote whose `$` name reads a fellow member: a code node of this knot over code shape
+    /// `shape`. Only ever a node's shape — a member's own, or one reached through an edge.
+    Code {
+        body: ProgramNode<'graph>,
+        shape: &'graph BodyShape<'graph>,
+    },
 }
 
 /// A staged data node: the member whose right-hand side holds it, and its constructor.
@@ -74,10 +81,19 @@ impl<'graph> Node<'graph, '_, '_> {
             _ => None,
         }
     }
+
+    /// The quote and its code shape, if this is a code node.
+    pub(super) fn code(&self) -> Option<(ProgramNode<'graph>, &'graph BodyShape<'graph>)> {
+        match self.shape {
+            Staged::Code { body, shape } => Some((body, shape)),
+            _ => None,
+        }
+    }
 }
 
-/// The constructor a data member's right-hand side is rooted at, through one-part groups: a list,
-/// dict or record literal, or a nominal construction. `None` for anything else.
+/// The node a data member's right-hand side is rooted at, through one-part groups: a list, dict or
+/// record literal, a nominal construction, or a quote whose `$` name reads a fellow member. `None`
+/// for anything else.
 pub(super) fn root<'graph>(
     shape: &BodyShape<'graph>,
     part: &'graph ExpressionPart<'graph>,
@@ -86,6 +102,7 @@ pub(super) fn root<'graph>(
         ExpressionPart::ListLiteral(_)
         | ExpressionPart::DictLiteral(_)
         | ExpressionPart::RecordLiteral(_) => Some(part),
+        ExpressionPart::QuotedExpression(_) => fellow_quote(shape, part).map(|_| part),
         ExpressionPart::Expression(node) => {
             let node = node.reference();
             match node.parts {
@@ -131,6 +148,23 @@ fn fellow_lambda<'graph>(
         .iter()
         .any(|capture| matches!(capture.source, CaptureSource::Member { .. }));
     (body.kind() == ShapeKind::Callable && fellow).then_some(body)
+}
+
+/// The quote `part` and its code shape when a `$` name in it reads a fellow member — a node of the
+/// knot being tied, as [`fellow_lambda`]'s callable is.
+fn fellow_quote<'graph>(
+    shape: &BodyShape<'graph>,
+    part: &ExpressionPart<'graph>,
+) -> Option<(ProgramNode<'graph>, &'graph BodyShape<'graph>)> {
+    let ExpressionPart::QuotedExpression(body) = part else {
+        return None;
+    };
+    let code = shape.nested(Site::of(part))?;
+    let fellow = code
+        .captures()
+        .iter()
+        .any(|capture| matches!(capture.source, CaptureSource::Member { .. }));
+    (code.kind() == ShapeKind::Code && fellow).then_some((*body, code))
 }
 
 /// The walk over data members' right-hand sides.
@@ -221,8 +255,24 @@ impl<'stage, 'graph, 'cell, 'run> Stager<'stage, 'graph, 'cell, 'run> {
         let shape = self.activation.shape();
         let scratch = self.scratch;
         let staged = match part {
-            ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => {
-                return Ok(Staged::Literal(part));
+            ExpressionPart::Literal(_) => return Ok(Staged::Literal(part)),
+            ExpressionPart::QuotedExpression(_) => {
+                let Some((body, shape)) = fellow_quote(shape, part) else {
+                    return self.evaluate(part);
+                };
+                let staged = Staged::Code { body, shape };
+                if root {
+                    return Ok(staged);
+                }
+                let index = self.nodes.len() as u32;
+                self.nodes.push(Some(Node {
+                    owner: self.owner,
+                    shape: staged,
+                }));
+                return Ok(Staged::Edge(index));
+            }
+            ExpressionPart::MarkedName(..) | ExpressionPart::MarkedUse(..) => {
+                unreachable!("the shape builder refuses a mark outside a quote value")
             }
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
                 return match shape.mention(Site::of(part)) {
@@ -386,7 +436,11 @@ fn each_child<'a, 'graph, 'cell, 'x>(
         Staged::Dict(entries) => entries.iter().for_each(|(_, value)| visit(value)),
         Staged::Record(fields) => fields.iter().for_each(|(_, value)| visit(value)),
         Staged::Tagged { payload, .. } => visit(payload),
-        Staged::Literal(_) | Staged::Value(_) | Staged::Edge(_) | Staged::Function(_) => {}
+        Staged::Literal(_)
+        | Staged::Value(_)
+        | Staged::Edge(_)
+        | Staged::Function(_)
+        | Staged::Code { .. } => {}
     }
 }
 
@@ -523,8 +577,8 @@ fn staged_type(
                 .map_err(|refused| (*site, refused))?
         }
         Staged::Tagged { head, .. } => head.handle(),
-        Staged::Function(_) => {
-            unreachable!("a function sits only at a node, reached through an edge")
+        Staged::Function(_) | Staged::Code { .. } => {
+            unreachable!("a function or a quote sits only at a node, whose memo is its own")
         }
     })
 }
@@ -607,8 +661,8 @@ fn write<'graph, 'cell>(
             Tagged::construct(writer, head, value(payload), types, scratch)
                 .expect("every construction is checked before the first write"),
         ),
-        Staged::Function(_) => {
-            unreachable!("a function sits only at a node, reached through an edge")
+        Staged::Function(_) | Staged::Code { .. } => {
+            unreachable!("a function or a quote sits only at a node, reached through an edge")
         }
     }
 }
@@ -620,7 +674,7 @@ fn link<'graph, 'cell>(
     plan: &KnotPlan,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> Link<'graph, 'cell, Knotted<'graph, 'cell>> {
+) -> Link<'cell, Knotted<'graph, 'cell>> {
     match staged {
         Staged::Edge(target) => Link::Edge(
             plan.edge(*target)
@@ -638,7 +692,7 @@ pub(super) fn lay_down<'graph, 'cell>(
     plan: &KnotPlan,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
-) -> Circular<'graph, 'cell, Knotted<'graph, 'cell>> {
+) -> Circular<'cell, Knotted<'graph, 'cell>> {
     let cell = |staged| link(writer, staged, plan, types, scratch);
     match &node.shape {
         Staged::List(items) => {
@@ -659,8 +713,10 @@ pub(super) fn lay_down<'graph, 'cell>(
         Staged::Tagged { payload, .. } => {
             Circular::Tagged(Tagged::linked(writer, cell(payload), memo))
         }
-        Staged::Literal(_) | Staged::Value(_) | Staged::Edge(_) | Staged::Function(_) => {
-            unreachable!("a data node is a constructor")
-        }
+        Staged::Literal(_)
+        | Staged::Value(_)
+        | Staged::Edge(_)
+        | Staged::Function(_)
+        | Staged::Code { .. } => unreachable!("a data node is a constructor"),
     }
 }

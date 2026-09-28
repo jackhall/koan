@@ -281,14 +281,22 @@ pub fn children(
         | TypeNode::Bool
         | TypeNode::Null
         | TypeNode::Identifier
-        | TypeNode::NameToken
+        | TypeNode::Symbol
         | TypeNode::TypeNameToken
-        | TypeNode::KExpression
+        | TypeNode::Expression
         | TypeNode::SigiledTypeExpr
         | TypeNode::RecordType
+        | TypeNode::Literal
+        | TypeNode::Block
+        | TypeNode::Declaration
+        | TypeNode::Binder
+        | TypeNode::Name
+        | TypeNode::Keyword
         | TypeNode::Any
         | TypeNode::AnyValue
         | TypeNode::AnyCode
+        // Its kind is a ground code leaf, so nothing under it is ever rebuilt.
+        | TypeNode::CodeNeeding { .. }
         | TypeNode::Never
         | TypeNode::OfKind(_)
         | TypeNode::DeferredReturn(_)
@@ -387,6 +395,7 @@ fn reassemble(
         TypeNode::ExpressionShape {
             quantifiers,
             elements,
+            classes,
             ..
         } => {
             let mut slots = new.iter();
@@ -398,7 +407,9 @@ fn reassemble(
                 keyword => *keyword,
             }));
             let ret = *slots.next().expect("the return follows the slots");
-            types.shape_type(scratch, quantifiers, &rebuilt, ret).handle
+            types
+                .shape_type(scratch, quantifiers, &rebuilt, classes, ret)
+                .handle
         }
         TypeNode::Union { .. } => match cfg.union {
             UnionDoor::Canonical => types.union_of(scratch, new),

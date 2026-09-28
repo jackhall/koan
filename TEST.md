@@ -43,12 +43,12 @@ PROPTEST_CASES=16384 tools/verify.sh --total   # an overnight sweep of the latti
 
 The runtime is being rewritten from the ground up. The modules the rewrite keeps —
 `memory`, `parse`, `scope`, `source`, `type_lattice`, `values`, `elaborate`,
-`knot`, `scheduler`, `program` and the embedded crates `cellgraph` and
-`sexlex` — are
+`knot`, `scheduler`, `program`, `dispatch` and the embedded crates `cellgraph`
+and `sexlex` — and the interpreter binary over them are
 what a default koan build compiles and a default `cargo test` runs. `workgraph`
 is no longer a koan dependency; it still builds and tests as a workspace member.
-Everything above the kept modules — `machine`, `builtins`, the
-interpreter binary, the guard fixtures and every `tests/*.rs` integration binary —
+The old runtime — `machine`, `builtins`, the guard fixtures and every
+`tests/*.rs` integration binary —
 sits behind the `pending_rewrite` cargo feature, and **that build no longer
 compiles**: `memory` is narrowed onto `cellgraph`, the old runtime names the
 items it deleted, and the `pub use workgraph::scheduler` re-export
@@ -56,9 +56,9 @@ items it deleted, and the `pub use workgraph::scheduler` re-export
 `scheduler` module. It is re-implemented layer by layer rather than kept building;
 [old_design/](old_design/) and
 [observe/miri_slate_pending_rewrite.md](observe/miri_slate_pending_rewrite.md) are
-its requirements record. Every other koan feature (`alloc-count`, `dhat`,
-`region-audit`, the two seam-force features) is a knob on the old runtime and
-turns it on.
+its requirements record. `region-audit` and the two seam-force features are
+knobs on the old runtime and turn it on; `alloc-count` and `dhat` instrument
+the interpreter binary.
 
 ```sh
 cargo test --workspace --features workgraph/test-hooks   # every kept module and embedded crate
@@ -71,10 +71,11 @@ clippy run names the feature; `tools/verify.sh` passes it on every workspace
 step.
 
 The verify slate (`tools/verify.sh`), the pre-commit hook and CI run the default
-build. The tools that only mean something over the old runtime —
-`tools/verify_snippets.py`, `tools/alloc_audit.py`, `tools/seam_equivalence.sh`
-and `tools/miri.py --pending-rewrite` — have no binary to run until the rewrite
-re-points them. A test in a kept module that reaches the old runtime — the
+build, and the routine tier runs the [tutorial snippets](#tutorial-snippets)
+through the interpreter. The tools that only mean something over the old
+runtime — `tools/seam_equivalence.sh`, `tools/miri.py --pending-rewrite` and
+the bounded regression test `tools/alloc_audit.py` runs — have nothing to run
+until the rewrite re-points them. A test in a kept module that reaches the old runtime — the
 form-table⟺registration law, the AST cache laws that ride a `WorkingExpression` —
 is gated with it and comes back as the rewrite replaces what it reached.
 
@@ -121,14 +122,14 @@ beside its sibling unit tests. Seven files hold the twenty-nine properties:
 - [`src/symbols/tests.rs`](src/symbols/tests.rs) — interning laws, beside
   the four fixed-name pins described under [Symbol mints](#symbol-mints).
 - [`src/parse/builtin_shapes/tests/`](src/parse/builtin_shapes/tests.rs) — the builtin shape
-  table, split four ways: static table-shape walks including the
-  `BuiltinShapeId`-equals-index pin and the pin holding the derived raw-capture
-  kinds to the column they replaced (`table.rs`), the caching and binder-plan laws
-  (`binder.rs`), the raw-kind derivation's distribution over union members
-  (`lazy.rs`), and the table⟺registration law pinning every `BUILTIN_SHAPES` key
+  table, split three ways: static table-shape walks including the
+  `BuiltinShapeId`-equals-index pin and the pin holding every slot's reading to a
+  column written out by hand (`table.rs`), the caching and binder-plan laws
+  (`binder.rs`), and the table⟺registration law pinning every `BUILTIN_SHAPES` key
   against the live builtin registration set, which is derived once, here
-  (`registration.rs`). The two laws relating a slot's role to its type are build-time
-  `const` assertions in `builtin_shapes.rs`, not tests.
+  (`registration.rs`). The two table laws — every slot typed once per overload,
+  and each role's slot typed by its reading's code type — are build-time `const`
+  assertions in `builtin_shapes.rs`, not tests.
 - [`src/parse/builtin_shapes/layout/tests.rs`](src/parse/builtin_shapes/layout/tests.rs) —
   slot-layout laws: symbol order, the lexical position beside each entry, parameter merge.
 - [`src/machine/model/close_inference/tests.rs`](src/machine/model/close_inference/tests.rs)
@@ -153,12 +154,14 @@ what the builtin groups cover, what a `GROUP` body's member scan reads, and each
 refusal the position-blind claims pre-scan makes — and
 [`src/scope/tests/rewrite.rs`](src/scope/tests/rewrite.rs) covers the rewrite
 itself, asserting on the shape a body owns: the four rewrites, where an operator
-run is reached, equality and the `!=` negation, the groups a `USING` body and an
-`EVAL` see, and each refusal.
-[`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds five laws:
+run is reached, equality and the `!=` negation, the groups a `USING` body and a
+quote's code see, and each refusal. [`src/scope/tests/quotes.rs`](src/scope/tests/quotes.rs)
+covers a quote value's code shape by example: how a hole, a `$` name and a `\` name each resolve,
+its carried type, a malformed quote kept as a refusal, a mark no quote value holds, and the names
+an `EVAL` offers.
+[`src/scope/tests/properties.rs`](src/scope/tests/properties.rs) holds four laws:
 
-- a planned program — the planner unwraps any `EVAL` whose waits would close a cycle, which the
-  shape refuses — shapes back into its plan: kinds, layouts, components and whether each is
+- a planned program shapes back into its plan: kinds, layouts, components and whether each is
   cyclic, one mention per planned read with its class, statement and landing, nested scopes,
   which captures are knot edges, and a unit order in which a unit runs after every unit it reads
   and every statement is in exactly one unit;
@@ -166,19 +169,17 @@ run is reached, equality and the `!=` negation, the groups a `USING` body and an
   name, a rebind, a shadowed builtin) is refused with that refusal;
 - a name re-declared inside a nested scope takes the reads nearest it;
 - every activation of a planned program reads by name what its coordinates name, and closure
-  bindings copy the enclosing words or hold knot edges;
-- an `EVAL` body planned over what a program or arm statement sees shapes back into its plan over
-  that chain, and its enclosing reads agree with the site's by-name reads.
+  bindings copy the enclosing words or hold knot edges.
 
 ## Tutorial snippets
 
 Every runnable code block in [`tutorial/`](tutorial/README.md) is checked against
 the interpreter by [`tools/verify_snippets.py`](tools/verify_snippets.py): it runs
 each `koan` block that is immediately followed by a `text` expected-output block
-and diffs the result. The interpreter is the old runtime's binary, which no
-longer builds (see [The pending rewrite](#the-pending-rewrite)), so the check is
-not in the verify slate and has nothing to run against until the rewrite ships an
-interpreter.
+and diffs the result, through the interpreter binary, which the routine tier
+builds first. A snippet using an expression shape on the script's `PENDING`
+list — one the rewrite does not run yet — is skipped and counted apart; the
+roadmap items that ship those shapes shrink the list.
 
 ## Linting and formatting
 
@@ -226,8 +227,8 @@ under the bump tier — under Miri's tree-borrows mode, with zero process-exit
 leaks and zero UB required for sign-off. `memory`'s knot adds no layout or
 retype over `thin_run` (cellgraph's slate runs it at every edge its arithmetic
 has, including a fill writing into the same region); what koan's slate pins is
-`knot`'s copy of a knot, whose node run is filled while closure runs, data
-node residents and deep copies are written into the same region. `src/` carries no `unsafe` at all — koan's only
+`knot`'s copy of a knot, whose node run is filled while closure runs and data
+node residents are written into the same region. `src/` carries no `unsafe` at all — koan's only
 `unsafe` is the counting global allocator in
 [`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding
 outside the tree the slate audit censuses (`tools/observe_tests.py` walks `src/`
@@ -277,19 +278,22 @@ the old runtime's keeps the same shape in
 
 ## Region debug audits
 
-Two diagnostics report **over-pinning** — a region kept alive longer than the
-values reaching it need, which every other check passes silently because it
-breaks no invariant. Both are compiled out of a release build, and both only
+Two diagnostics of the old runtime report **over-pinning** — a region kept
+alive longer than the values reaching it need, which every other check passes
+silently because it breaks no invariant. The interpreter binary is the
+rewrite's and reports neither, so the commands below wait on the old runtime
+building again. Both are compiled out of a release build, and both only
 record: neither panics, and neither changes what is retained
 ([old_design/memory-model.md § Debug region audits](old_design/memory-model.md#debug-region-audits)).
 
 ```sh
-cargo run -- program.koan                       # debug build: pin rings reported
-cargo run --features region-audit -- program.koan   # also reports over-folds
+cargo run --features pending_rewrite -- program.koan   # debug build: pin rings reported
+cargo run --features region-audit -- program.koan      # also reports over-folds
 ```
 
-Findings print to stderr after the run. The pin-ring detector needs no feature —
-any debug build has it — while the reach-tightness report is `region-audit`'s.
+Findings print to stderr after the run. The pin-ring detector needs no feature
+beyond the old runtime — any debug build of it has it — while the
+reach-tightness report is `region-audit`'s.
 Silence means the run detected nothing, which is the expected result; a report is
 a real finding worth chasing.
 

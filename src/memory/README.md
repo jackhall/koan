@@ -201,7 +201,9 @@ graph: `edges[i]` lists the nodes `i` references, and the components come back
 as runs of node indices, every buffer staged in a bump the caller passes. The
 emission order is reverse topological on the condensation — a component comes
 out only after every component it references — which is the order a caller
-that finishes each component against the ones below it relies on.
+that finishes each component against the ones below it relies on. The walk
+keeps its own stack of frames in the bump rather than recursing, since a
+program's chain of bindings is as long as its author writes it.
 
 It lives here because it names nothing of what a node stands for and has two
 callers above `memory` that must not depend on each other: the

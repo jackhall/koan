@@ -1,19 +1,18 @@
 //! One type expression, part by part: a name read through the activation, a composite built from
 //! the handles its parts elaborate to.
 
+use super::Elaboration;
+use super::reads::Reads;
 use crate::memory::{BumpAllocator, BumpVec};
-use crate::parse::builtin_shapes::binder::{bounded_name, quantifier_entries};
+use crate::parse::builtin_shapes::binder::{SlotLabel, needed_entry, needing, quantifier_entries};
 use crate::parse::builtin_shapes::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{ActivationView, Coordinate, Site, Slot, Target, pair_name};
+use crate::scope::{Coordinate, Site, Slot, Target, pair_label};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, GroupIntern, KType, NodeSchema, TypeNode, TypeRegistry,
-    constructor_param_names, meet,
+    constructor_param_names, dense_classes, meet, shape_keys_equal,
 };
-use crate::values::{KnottedFamily, Value};
-
-use super::Elaboration;
 
 /// The connector keywords of the formless composites.
 struct Connectors {
@@ -39,9 +38,9 @@ static CONNECTORS: Connectors = Connectors {
 /// `part` as a type, its names read through `reader`: every name is the mention `reader`'s shape
 /// recorded at its site, which must read as a type, save one a `FOR ALL` group inside `part`
 /// declares.
-pub fn type_expression<'graph, XF: KnottedFamily<'graph>>(
+pub fn type_expression<'graph, R: Reads<'graph> + ?Sized>(
     part: &ExpressionPart<'graph>,
-    reader: &ActivationView<'graph, '_, XF>,
+    reader: &R,
     types: &TypeRegistry<'_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, Elaboration> {
@@ -122,8 +121,8 @@ pub(super) struct Fellow<'f> {
 }
 
 /// What elaborating one expression reads through.
-pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, XF: KnottedFamily<'graph>> {
-    pub(super) reader: &'e ActivationView<'graph, 'cell, XF>,
+pub(super) struct Elaborator<'e, 'run, 'x, R: ?Sized> {
+    pub(super) reader: &'e R,
     pub(super) types: &'e TypeRegistry<'run>,
     pub(super) scratch: BumpAllocator<'x>,
     /// Fellow members of the component being declared, each at the relative handle it is named by
@@ -136,7 +135,7 @@ pub(super) struct Elaborator<'e, 'run, 'graph, 'cell, 'x, XF: KnottedFamily<'gra
     pub(super) locals: &'e [(TypeSymbol, KType)],
 }
 
-impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, XF> {
+impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, 'x, R> {
     pub(super) fn part(
         &self,
         part: &ExpressionPart<'graph>,
@@ -145,6 +144,9 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let site = Site::of(part);
         match part {
             ExpressionPart::Type(name) => self.name(site, *name, groups),
+            // A marked name resolves past the definition's own quantifiers and names, through the
+            // mention the shape recorded.
+            ExpressionPart::MarkedName(_, BinderSymbol::Type(name)) => self.mention(site, *name),
             ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
                 self.node(site, node.reference(), groups)
             }
@@ -180,6 +182,11 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         if let Some((_, handle)) = self.locals.iter().find(|(declared, _)| *declared == name) {
             return Ok(*handle);
         }
+        self.mention(site, name)
+    }
+
+    /// A type name read through the mention the shape recorded at `site`.
+    fn mention(&self, site: Site, name: TypeSymbol) -> Result<KType, Elaboration> {
         // A definition declares its own names, so the shape records no mention for one. Every
         // other name a type expression reads has one; a definition-local name reaching here has
         // not been declared yet — a forward reference the local table cannot answer.
@@ -197,10 +204,9 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         {
             return Ok(fellow.handle);
         }
-        match self.reader.read(mention.coordinate) {
-            Value::Type(value) => Ok(value.handle()),
-            _ => Err(Elaboration::NotAType { name, site }),
-        }
+        self.reader
+            .type_at(mention.coordinate)
+            .ok_or(Elaboration::NotAType { name, site })
     }
 
     /// A parenthesized or sigiled type expression.
@@ -256,7 +262,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                     };
                     self.types
                         .union_member_named(owner, name)
-                        .or_else(|| self.field(owner, name))
+                        .or_else(|| declared_field(self.types, self.scratch, owner, name))
                         .ok_or(Elaboration::NoSuchMember { owner, name })
                 }
                 _ => Err(unsupported),
@@ -275,6 +281,19 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
                 };
                 let argument = self.part(&parts[0].value, groups)?;
                 self.apply(site, constructor, &[(BinderSymbol::Type(*param), argument)])
+            }
+            // `Kind NEEDING #[y …]` — a code kind below `Code`, and a list of quotes each of one
+            // name or of a bucket key.
+            3 if let Some((kind, quotes)) = needing(node) => {
+                let kind = self.part(kind, groups)?;
+                if kind.code_parent().is_none() {
+                    return Err(unsupported);
+                }
+                let mut names = BumpVec::with_capacity_in(quotes.len(), self.scratch);
+                for quote in quotes.iter() {
+                    names.push(needed_entry(quote).ok_or(unsupported)?);
+                }
+                Ok(self.types.code_needing(self.scratch, kind, &names))
             }
             4 if keyword(0, &CONNECTORS.map) && keyword(2, &KEYWORDS.arrow) => {
                 let key = self.part(&parts[1].value, groups)?;
@@ -303,19 +322,18 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
             }
             // `A & B`, and `& [A B C]`, its chained form — the meet, as a union is the join. A meet
             // that comes out `Never` is a type like any other; only a bound refuses it.
-            3 if keyword(1, &CONNECTORS.meet) => Ok(meet(
-                self.types,
-                self.scratch,
-                self.part(&parts[0].value, groups)?,
-                self.part(&parts[2].value, groups)?,
-            )),
+            3 if keyword(1, &CONNECTORS.meet) => {
+                let left = self.part(&parts[0].value, groups)?;
+                let right = self.part(&parts[2].value, groups)?;
+                self.meet(site, left, right)
+            }
             2 if keyword(0, &CONNECTORS.meet) => {
                 let ExpressionPart::ListLiteral(operands) = parts[1].value else {
                     return Err(unsupported);
                 };
                 let mut met = KType::ANY;
                 for operand in operands.iter() {
-                    met = meet(self.types, self.scratch, met, self.part(operand, groups)?);
+                    met = self.meet(site, met, self.part(operand, groups)?)?;
                 }
                 Ok(met)
             }
@@ -323,31 +341,34 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         }
     }
 
-    /// The type the record under `owner` declares `name` with, read through every newtype layer
-    /// above it — a `NEWTYPE`'s representation, a union variant's payload. `None` when no record
-    /// lies under `owner` or it declares no `name`; a ring of newtypes with no record under it,
-    /// `NEWTYPE Loop = Loop`, is peeled once round and then refused.
-    fn field(&self, owner: KType, name: Symbol) -> Option<KType> {
-        let mut peeled = BumpVec::new_in(self.scratch);
-        let mut layer = owner;
-        loop {
-            match self.types.node(layer) {
-                TypeNode::Record { fields } => return fields.get(name),
-                TypeNode::SetMember {
-                    schema: NodeSchema::NewType(repr),
-                    ..
-                } if !peeled.contains(&repr) => {
-                    peeled.push(layer);
-                    layer = repr;
-                }
-                _ => return None,
-            }
+    /// The meet of `left` and `right`, written at `site`. Two signatures that rank one keyword
+    /// pattern two ways have none, and are refused rather than met at `Never`: every declaration
+    /// and definition at a key carries one ranking.
+    fn meet(&self, site: Site, left: KType, right: KType) -> Result<KType, Elaboration> {
+        let keyworded = |handle| match self.types.node(handle) {
+            TypeNode::Signature { schema, .. } => Some(schema.keyworded),
+            _ => None,
+        };
+        let classes = |shape| match self.types.node(shape) {
+            TypeNode::ExpressionShape { classes, .. } => classes,
+            _ => unreachable!("a keyworded member is an expression shape"),
+        };
+        if let (Some(ours), Some(theirs)) = (keyworded(left), keyworded(right))
+            && ours.iter().any(|mine| {
+                theirs.iter().any(|other| {
+                    shape_keys_equal(*mine, *other, self.types) && classes(*mine) != classes(*other)
+                })
+            })
+        {
+            return Err(Elaboration::RankingDisagrees { site });
         }
+        Ok(meet(self.types, self.scratch, left, right))
     }
 
-    /// A `FOR ALL` group's names and bounds, in written order. Each entry is a bare name or
-    /// `(<Name> UNDER <bound>)`; anything else is unsupported. Every bound is read under the group
-    /// with no bounds of its own, so a bound naming one of the group's names is refused.
+    /// A `FOR ALL` group's names and bounds, in written order: a list of name quotes, or a dict of
+    /// name quotes to bound quotes; an entry naming no lone type is unsupported. Every bound is
+    /// read under the group with no bounds of its own, so a bound naming one of the group's names
+    /// is refused.
     pub(super) fn group(
         &self,
         part: &ExpressionPart<'graph>,
@@ -356,11 +377,11 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let mut group = QuantifierGroup::empty(self.scratch);
         let mut written = BumpVec::new_in(self.scratch);
         for entry in quantifier_entries(part) {
-            let (name, bound) = bounded_name(entry).ok_or(Elaboration::Unsupported {
-                site: Site::of(entry),
+            let name = entry.name.ok_or(Elaboration::Unsupported {
+                site: Site::of(entry.written),
             })?;
             group.names.push(name);
-            written.push(bound);
+            written.push(entry.bound);
         }
         let unbounded = Groups {
             names: &group.names,
@@ -511,14 +532,14 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let unsupported = Elaboration::Unsupported {
             site: Site::of(head),
         };
-        let ExpressionPart::Expression(run) = head else {
+        let ExpressionPart::QuotedExpression(run) = head else {
             return Err(unsupported);
         };
         let run = run.reference();
         let mut params = BumpVec::with_capacity_in(run.parts.len() / 2, self.scratch);
         walk_head(run, unsupported, |element| {
-            if let HeadElement::Slot(name, slot) = element {
-                params.push((name.ok_or(unsupported)?, self.part(slot, groups)?));
+            if let HeadElement::Slot(label, slot) = element {
+                params.push((label.name().ok_or(unsupported)?, self.part(slot, groups)?));
             }
             Ok(())
         })?;
@@ -529,7 +550,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
     }
 
     /// `EXPR [FOR ALL <names>] <head> -> <return>`: the head's keywords and typed slots, under a
-    /// group of its own.
+    /// group of its own, ranked by the integers a signature member writes in its slots' places.
     pub(super) fn shape(
         &self,
         group: &QuantifierGroup<'_>,
@@ -545,22 +566,27 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
         let unsupported = Elaboration::Unsupported {
             site: Site::of(head),
         };
-        let ExpressionPart::Expression(run) = head else {
+        let ExpressionPart::QuotedExpression(run) = head else {
             return Err(unsupported);
         };
         let run = run.reference();
         let mut elements = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
+        let mut ranks = BumpVec::with_capacity_in(run.parts.len() / 2, self.scratch);
         walk_head(run, unsupported, |element| {
             elements.push(match element {
                 HeadElement::Keyword(symbol) => DispatchTokenElement::Keyword(symbol),
-                HeadElement::Slot(_, slot) => DispatchTokenElement::Slot(self.part(slot, &own)?),
+                HeadElement::Slot(label, slot) => {
+                    ranks.push(label.rank());
+                    DispatchTokenElement::Slot(self.part(slot, &own)?)
+                }
             });
             Ok(())
         })?;
+        let classes = dense_classes(self.scratch, &ranks);
         let ret = self.part(ret, &own)?;
         Ok(self
             .types
-            .shape_type(self.scratch, &group.names, &elements, ret)
+            .shape_type(self.scratch, &group.names, &elements, classes, ret)
             .handle)
     }
 
@@ -575,7 +601,7 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
     ) -> Result<(), Elaboration> {
         let mut index = 0;
         while index < run.parts.len() {
-            let Some(Some(name)) = pair_name(run, index) else {
+            let Some(SlotLabel::Named(name)) = pair_label(run, index) else {
                 return Err(Elaboration::Unsupported { site });
             };
             field(name, self.part(&run.parts[index + 1].value, groups)?)?;
@@ -589,11 +615,11 @@ impl<'graph, 'x, XF: KnottedFamily<'graph>> Elaborator<'_, '_, 'graph, '_, 'x, X
 #[derive(Clone, Copy)]
 pub(super) enum HeadElement<'p, 'graph> {
     Keyword(KeywordSymbol),
-    /// A `<name> :<Type>` pair: its name, `None` for `_`, and its type part.
-    Slot(Option<BinderSymbol>, &'p ExpressionPart<'graph>),
+    /// A `<label> :<Type>` pair: its label — a name, `_`, or a rank — and its type part.
+    Slot(SlotLabel, &'p ExpressionPart<'graph>),
 }
 
-/// Hand each keyword and `<name> :<Type>` pair of an `EXPR` head's `run` to `each`, in written
+/// Hand each keyword and `<label> :<Type>` pair of an `EXPR` head's `run` to `each`, in written
 /// order, or fail with `malformed` at the first part that is neither. The one walk every reader of
 /// a head shares: its shape, its function type, and the shape a definition registers.
 pub(super) fn walk_head<'p, 'graph, E>(
@@ -603,7 +629,7 @@ pub(super) fn walk_head<'p, 'graph, E>(
 ) -> Result<(), E> {
     let mut index = 0;
     while index < run.parts.len() {
-        match (&run.parts[index].value, pair_name(run, index)) {
+        match (&run.parts[index].value, pair_label(run, index)) {
             (_, Some(name)) => {
                 each(HeadElement::Slot(name, &run.parts[index + 1].value))?;
                 index += 2;
@@ -616,4 +642,31 @@ pub(super) fn walk_head<'p, 'graph, E>(
         }
     }
     Ok(())
+}
+
+/// The type the record under `owner` declares `name` with, read through every newtype layer above
+/// it — a `NEWTYPE`'s representation, a union variant's payload. `None` when no record lies under
+/// `owner` or it declares no `name`; a ring of newtypes with no record under it, `NEWTYPE Loop =
+/// Loop`, is peeled once round and then refused.
+pub fn declared_field(
+    types: &TypeRegistry<'_>,
+    scratch: BumpAllocator<'_>,
+    owner: KType,
+    name: Symbol,
+) -> Option<KType> {
+    let mut peeled = BumpVec::new_in(scratch);
+    let mut layer = owner;
+    loop {
+        match types.node(layer) {
+            TypeNode::Record { fields } => return fields.get(name),
+            TypeNode::SetMember {
+                schema: NodeSchema::NewType(repr),
+                ..
+            } if !peeled.contains(&repr) => {
+                peeled.push(layer);
+                layer = repr;
+            }
+            _ => return None,
+        }
+    }
 }

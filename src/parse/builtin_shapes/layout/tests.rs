@@ -99,11 +99,11 @@ proptest! {
     ) {
         let program = program_storage();
         let brand = program.brand();
-        let source: String = std::iter::once("(".to_string())
-            .chain(statements.iter().map(Statement::source))
-            .chain(std::iter::once(")".to_string()))
+        let source: String = statements
+            .iter()
+            .map(Statement::source)
             .collect::<Vec<_>>()
-            .join("");
+            .join(" ");
         let layout = SlotLayout::of_body(brand.writer(), &body(brand, &source));
 
         let slots = expected(
@@ -155,11 +155,11 @@ proptest! {
     ) {
         let program = program_storage();
         let brand = program.brand();
-        let source: String = std::iter::once("(".to_string())
-            .chain(statements.iter().map(Statement::source))
-            .chain(std::iter::once(")".to_string()))
+        let source: String = statements
+            .iter()
+            .map(Statement::source)
             .collect::<Vec<_>>()
-            .join("");
+            .join(" ");
         let inner = SlotLayout::of_body(brand.writer(), &body(brand, &source));
 
         let typed: Vec<(BinderSymbol, KType)> = parameters
@@ -172,7 +172,7 @@ proptest! {
             .iter()
             .filter_map(|binder| match binder {
                 BinderSymbol::Value(name) => Some((*name, 0)),
-                BinderSymbol::Type(_) => None,
+                _ => None,
             })
             .collect();
         entries.extend(pairs(inner));
