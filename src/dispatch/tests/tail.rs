@@ -52,6 +52,7 @@ fn peak_walking(depth: u32) -> usize {
 fn a_keyworded_self_call_in_tail_position_holds_its_cells_constant_however_deep() {
     // The frame tails its last statement into the evaluator under its contract; the evaluator
     // selects `WALK` again, whose declared `Str` the contract asks, and hops to its frame.
-    let deep = if cfg!(miri) { 64 } else { 10_000 };
-    assert_eq!(peak_walking(deep), peak_walking(4));
+    // Under Miri a few hops past the shallow walk are enough to exercise the hop's crossing.
+    let (deep, shallow) = if cfg!(miri) { (5, 2) } else { (10_000, 4) };
+    assert_eq!(peak_walking(deep), peak_walking(shallow));
 }

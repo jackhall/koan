@@ -240,16 +240,16 @@ in a tenant's storage and crossed into the callee's birth.
 - `a_keyworded_self_call_in_tail_position_holds_its_cells_constant_however_deep`
   a keyworded call as a frame's last statement selects its own overload by the carried type of a
   link read through a newtype, and the evaluation owing the frame's contract tails into the next
-  frame with the argument record it built — sixty-four hops under Miri.
+  frame with the argument record it built — five hops under Miri, against two.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-28: 231s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 531s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 199s — 25 tests, 0 leaks, 0 UB
 - 2026-09-24: 175s — 23 tests, 0 leaks, 0 UB
 - 2026-09-22: 106s — 22 tests, 0 leaks, 0 UB
-- 2026-09-22: 108s — 22 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
