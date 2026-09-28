@@ -31,8 +31,8 @@ without bound.
 - Code composed at run time has its shape built once per code value and laid
   down where the value lives rather than in program storage, so an `EVAL` of
   composed code evaluated in a loop does not grow program storage.
-- Composing code whose syntax would nest deeper than the parser's limit
-  ([recursion over runtime data](recursion-over-runtime-data.md)) yields an
+- Composing code whose syntax would nest deeper than the parser's
+  [depth limit](../../src/parse/README.md#the-syntax-depth-limit) yields an
   error value naming the limit, never a crash.
 
 **Directions.**
@@ -87,7 +87,7 @@ without bound.
 **Requires:**
 
 - [Slicing and splicing](slicing-and-splicing.md) — slice as a builtin, views, and `..` outside a quote.
-- [Recursion over runtime data](recursion-over-runtime-data.md) — the syntax depth limit composed code is checked against.
+- [`parse`](../../src/parse/README.md#the-syntax-depth-limit) — shipped: the syntax depth limit composed code is checked against.
 
 **Unblocks:**
 

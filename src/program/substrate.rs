@@ -12,14 +12,14 @@ use crate::symbols::SymbolInterner;
 use crate::type_lattice::TypeRegistry;
 
 use super::body;
+use super::bundle::{KBirth, KBundle};
+use super::record::{Language, LoadError, Outcome, Output, Program};
 
 /// The stack a program's load and run need: the walks over parsed syntax recurse once per nested
 /// part, so a program nested [`MAX_SYNTAX_DEPTH`](crate::parse::MAX_SYNTAX_DEPTH) deep fits in it
 /// in a debug build. A host runs a program on a thread of this size rather than on whatever stack
 /// its platform's main thread has.
 pub const STACK_BYTES: usize = 64 << 20;
-use super::bundle::{KBirth, KBundle};
-use super::record::{Language, LoadError, Outcome, Output, Program};
 
 /// What the substrate owns outright. It borrows nothing, and `self_cell` boxes it and only ever
 /// lends it shared, so everything that borrows it lives in [`Running`].

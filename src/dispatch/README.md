@@ -204,7 +204,10 @@ across scopes, the no-overload miss, fall-through, builtin tie-wins, shadowed
 disagreement site, a ranking as part of the shape type, and a written-order
 module failing a ranked signature member; [programs](tests/programs.rs) — the
 builtin library, combined definitions, lambdas, type parameters, contracts,
-record access, construction and error values; [quotes](tests/quotes.rs) —
+record access, construction, error values, and a program nested to the
+[syntax depth limit](../parse/README.md#the-syntax-depth-limit) in each nesting
+shape run on a [`STACK_BYTES`](../program/README.md#the-stack) thread, one
+level more refused at load; [quotes](tests/quotes.rs) —
 unmarked uses, `USING` fills, both marks and `NEEDING` keys; and
 [tail](tests/tail.rs), a keyworded tail recursion holding its cells constant,
 which is on the [Miri slate](../../observe/miri_slate.md). Every runnable
@@ -217,8 +220,6 @@ tutorial snippet is checked against its shown output by
   — `MATCH`, `TRY`, `CATCH` and `Result`, and the payload catching needs.
 - [Module programs](../../roadmap/rewrite/modules.md) — the module expression
   shapes, `ATTR` over a module, and a `USING … SCOPE` body's registrations.
-- [Recursion over runtime data](../../roadmap/rewrite/recursion-over-runtime-data.md)
-  — rendering, comparing and copying a value deeper than the stack.
 - [Call traces](../../roadmap/rewrite/call-traces.md) — the frames an error
   passed through, printed under an uncaught one and read off a caught one.
 - [Solving dropped type parameters](../../roadmap/rewrite/solving-dropped-type-parameters.md)

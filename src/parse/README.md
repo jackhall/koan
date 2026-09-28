@@ -290,6 +290,44 @@ Both the binder facts and the entry's slot types are pinned against the live
 builtin registration table by a property test, so an entry whose builtin was
 renamed, re-shaped or dropped fails the suite rather than drifting.
 
+## The syntax depth limit
+
+Every walk over parsed syntax — lowering, the operator-run rewrite, the shape
+builder, a quote's comparison — recurses once per nested part, so how deep a
+program's syntax nests is how much stack those walks need. One constant,
+`MAX_SYNTAX_DEPTH` ([depth.rs](depth.rs)), bounds it; it is `sexlex`'s
+`MAX_DEPTH`, 1024. A program nested past it is refused at load with a parse
+error naming the limit, never a crash.
+
+Two checks share the constant, each where the nesting first becomes visible:
+
+- **`sexlex` refuses a group** opened past the limit while it reads, since its
+  own descent recurses per group ([sexlex](../../sexlex/README.md#errors)). Every
+  group counts, a top-level line's layout group at depth 1, so `PRINT (1)` is 2
+  deep. That bounds every paren, bracket and brace a program writes, and so
+  every literal.
+- **`parse_with_source` refuses a top-level expression** whose stored depth
+  passes the limit. The lowered syntax nests where no group does: a dotted
+  chain `r.a.a…` is an `ATTR` node per link, and an operator run parses flat
+  but is rewritten into nodes nested once per operator.
+
+So every node stores its depth, computed once at construction from its parts'
+own stored depths, and no check walks a tree. A node is one level over its
+deepest part, where a nested node counts its stored depth, a list, dict or
+record literal one more than its deepest element, and anything else nothing.
+Two shapes count more, as the nesting the
+[operator-run rewrite](../scope/README.md#the-four-rewrites) builds from them:
+a run of `k` operators counts `k + 3` levels, the most any rewrite builds — a
+pairwise run's block, its `k - 1` combiners, a pair, the `NOT` of a `!=` pair,
+and a statement's wrapper around the block — and a lone `a != b` counts 2, for
+`NOT (a == b)`. `PRINT ((1))`, `PRINT [[1]]` and `PRINT r.a.a` are 3 deep, and
+`PRINT (1 + 2 + 3)` is 6. The rewrite therefore never deepens a statement past
+the depth the parse stored for it, and a run too long for the limit is refused
+like deep parentheses, with no cap on run length of its own.
+
+The limit is sized against a known stack: a host runs a program on a thread of
+[`STACK_BYTES`](../program/README.md#the-stack).
+
 ## Errors
 
 A [`ParseError`](error.rs) is a message, the span it was observed at, and the
@@ -313,7 +351,8 @@ as the shape it names.
 `properties` states the parser's **laws** over random trees rendered under random
 layouts, in that same notation. The files beside it hold what a law does not
 state: the diagnostic a mistake reports, and the surface rules a renderer never
-writes.
+writes. [depth](tests/depth.rs) pins the depth small shapes store, and a dotted
+chain and an operator run refused one level past the limit.
 
 ## A note on `pending_rewrite`
 

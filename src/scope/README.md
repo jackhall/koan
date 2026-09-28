@@ -808,6 +808,12 @@ its operand, and the synthesized block and its last statement the whole run.
 A statement holding no operator run is returned unchanged, keeping its own part
 addresses, so the shape of untouched code is the shape of the parse.
 
+A run's length counts toward the
+[syntax depth limit](../parse/README.md#the-syntax-depth-limit): the parse
+counts each run as the most nesting any of these rewrites builds from it, so no
+rewrite deepens a statement past the depth the parse stored for it, and the
+parse's check bounds every walk over the rewritten body.
+
 ### Evaluated code
 
 A quote's code is rewritten where its code shape is built. Its claims chain to

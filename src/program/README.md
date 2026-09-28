@@ -160,6 +160,17 @@ tenant of the root, which reads a top-level binding where it lies and leaves
 the view at rest again. That is how a REPL or a test reads a binding after the
 drain, in a separate call from the one that ran it.
 
+## The stack
+
+A program's load and run need a stack of a known size: the walks over parsed
+syntax recurse once per nested part, and a debug build's frames are many times
+a release build's, while a platform's main-thread stack is whatever the
+platform chose. `STACK_BYTES` ([substrate.rs](substrate.rs)), 64 MiB, is the
+stack a program nested to the parser's
+[depth limit](../parse/README.md#the-syntax-depth-limit) loads and runs in under
+a debug build, and a host runs a program on a thread of that size. The
+interpreter binary does, re-raising a panic on that thread as its own.
+
 ## The body runner
 
 [`run`](body.rs) is one step that performs the top level, every called body,

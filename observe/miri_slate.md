@@ -51,13 +51,13 @@ silence the stale-anchor check; delete a redundant test instead.
   discharges residence at compile time. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s `fill`.
 - `src/values/crossing.rs` — the crossing verb's deep copy lays a value down through the
-  destination's `Writer`, nesting `fill` inside `fill` with `text` between and embedding program
-  nodes at `'graph`. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s placement doors
+  destination's `Writer`, each composite after its children, writing a dict's string keys inside
+  its key run's `fill` and embedding program nodes at `'graph`. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s placement doors
   and reattach seam, whose pin and keep paths its own slate pins.
 - `src/knot/copy.rs` — a knot member's copy re-ties its whole knot through the destination's
   `Writer`: `thin_run` fills the node run while each function's closure run, each data node's
-  resident and cell runs, each module's member run, each barrier's resident and every held value's
-  deep copy are written into the same region. No `unsafe` of its own; the backing `unsafe` is
+  resident and cell runs, each module's member run and each barrier's resident are written into
+  the same region, over the finished copies of the values the knot holds. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s `thin_run`, `fill` and reattach seam.
 - `src/scheduler/drain.rs` — the drain performs every birth and every death: it creates a tail
   successor, wakes its state out of its predecessor, and only then releases that predecessor, whose
@@ -151,13 +151,13 @@ destination's writer, and is read through its edges after the region it came fro
 - `a_copied_module_outlives_its_home`
   a module holding a string list, a two-function knot and a newtype handle crosses under a copy
   verdict, is kept, its home released, and redeemed: every member is rebuilt through the one
-  crossing, each function member bringing its whole knot with it, and every captured byte reads
-  back.
+  crossing, the two function members through one copy of their knot, and every captured byte
+  reads back.
 - `a_copied_barrier_outlives_its_home`
   an opaque view's barrier over a closure-holding function crosses under a copy verdict, is kept,
-  its home released, and redeemed: the barrier beside the node and the whole knot behind it are
-  written at the destination while the copy's node run is still being filled, and the captured
-  bytes read back.
+  its home released, and redeemed: the whole knot behind the barrier is copied first, the barrier
+  beside the node is written at the destination while the copy's node run is still being filled,
+  and the captured bytes read back.
 - `a_copied_quote_outlives_its_home`
   a quote whose `$` names bind its own binder and a string crosses under a copy verdict, is kept,
   its home released, and redeemed: the code beside the node and its bound run are written at the
@@ -247,9 +247,9 @@ in a tenant's storage and crossed into the callee's birth.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-09-28: 293s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 231s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 531s — 26 tests, 0 leaks, 0 UB
 - 2026-09-28: 199s — 25 tests, 0 leaks, 0 UB
 - 2026-09-24: 175s — 23 tests, 0 leaks, 0 UB
-- 2026-09-22: 106s — 22 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

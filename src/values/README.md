@@ -239,22 +239,37 @@ another cell's region and hands back the carrier resting there, and
 value the step may embed or its continuation capture. Both price the operand at
 its weight, and both build through `cross_view`, which turns one crossed operand
 into a value at the destination's brand: a **pinned** operand arrives there and
-embeds as it is, and a **copied** one is rebuilt through
-`copy_into` — region parts written again through the destination's writer,
-memoized types and weights carried over
-unchanged, and a knot member handed to its family's copy together with
-`copy_into` itself, so every value its knot holds is rebuilt by the same
-copy. A data node rebuilds through `Circular::copied`: each value link through
-that copy, each edge verbatim — an edge names a node by index, so it means the
-same node in the copy — and its memo and weight carried over.
+embeds as it is, and a **copied** one is rebuilt by the deep copy — region
+parts written again through the destination's writer, memoized types and
+weights carried over unchanged, and a knot member's whole knot re-tied by its
+family.
 
-`copy_into` is private to the crossing, and its callers are two public doors,
+**The deep copy runs over an explicit stack**, in a bump of its own, since no
+step scratch reaches a birth's crossing; so a value of any depth copies without
+growing the call stack. A composite is a frame whose children are copied first,
+and it is laid down once they are all finished. A knot member is a frame over
+the values its family **lists** (`KnottedFamily::held`): the copy copies each of
+them, then hands the family's `copy_into` a cursor that answers each value it
+asks for with its finished copy, in the order `held` listed them, so the knot is
+tied once, after everything it holds has a copy. A data node lists and rebuilds
+through `Circular::held` and `Circular::copied`: each value link through that
+copy, each edge verbatim — an edge names a node by index, so it means the same
+node in the copy — and its memo and weight carried over.
+
+**One copy per knot per placement.** A copy keys every knot it has re-tied by
+the knot's root member, so a second reference to that knot is the copy's member
+at the same index: two members of one knot crossing together arrive as members
+of one copy of it. A plain value reached twice still copies twice, and a
+value's [weight](#weight) still counts a knot once per reference to it.
+
+The copy is private to the crossing, and its callers are two public doors,
 because a placement a layer above builds over values hands them the views.
 `cross_view` rebuilds a value that is itself the crossed operand — a
-scheduler's result built in its home. `copy_severed` rebuilds a value held
+scheduler's result built in its home. `copy_severed` rebuilds values held
 inside a *copied* operand of another family — a birth that carries values, such
 as a call's callee and arguments woken into its frame — at the operand's
-severed brand. Each takes a `CrossedOperand`, which only a priced placement
+severed brand, all through one copy, so the values of one birth share each knot
+they reach. Each takes a `CrossedOperand`, which only a priced placement
 mints — its arms are
 [non-exhaustive](../../cellgraph/README.md#the-crossing-verdict), so nothing
 outside `cellgraph` can build one — so every copy is one the graph priced.
@@ -363,6 +378,15 @@ finite and bounds the descent. Plain and linked composites share one reading,
 the private `Composite` view in [circular.rs](circular.rs), so equality,
 rendering and the mark pass below are written once over both.
 
+**Every walk here runs over an explicit stack** in the scratch it is handed, so
+none grows the call stack with a value's depth. Equality pops pending pairs: a
+pair is a gate — related types, keys, names, lengths, identity — or a leaf, and
+a gate that passes pushes its children's pairs. Every answer is a conjunction
+and any incomparable pair decides, so neither the answer nor `Incomparable`
+depends on the order pairs are visited in. A quote's syntax is the exception: it
+compares recursively, since parsed syntax nests no deeper than the parser's
+[depth limit](../parse/README.md#the-syntax-depth-limit).
+
 `Value::render` is the surface `PRINT` writes: a string bare, a dict key quoted
 so `{"1": x}` and `{1: x}` read apart, `[a, b]`, `{k: v}` in key order,
 `{x = 1}` in field-name order, a tagged value as its type's name around its
@@ -381,6 +405,9 @@ its first occurrence, `@0 = …`, and writes every later occurrence as `@0`, so
 it stops wherever a cycle closes: `LET a = (Ring {next = a})` prints
 `@0 = Ring({next = @0})`. Labels count from zero per render in order of first
 appearance, and a node that is no target prints inline each time it is reached.
+The mark pass keeps a frame per composite it is inside, and the write keeps a
+stack of pieces still to write: a composite writes its opener and pushes its
+children, separators and closer in reverse.
 
 `Value::lower_part` builds a value straight from a region-pure AST part — a
 scalar or string literal, or a container literal whose every element lowers and
@@ -442,14 +469,17 @@ whose every node is a data node, tied through `KnotPlan` with memos supplied
 by hand, and the suites cover the `linked` doors, the construction rule and the
 seal ([tests/construction.rs](tests/construction.rs)), bisimilar and unequal rings
 ([tests/equality.rs](tests/equality.rs)), labelled and shared-inline renders
-([tests/render.rs](tests/render.rs)), a ring crossed under a copy and a pin
-([tests/crossing.rs](tests/crossing.rs)), and `satisfies` by a node's memo
-([tests/satisfaction.rs](tests/satisfaction.rs)). One test joins the koan
+([tests/render.rs](tests/render.rs)), a ring crossed under a copy and a pin,
+and two members of one ring crossing as one copy of it
+([tests/crossing.rs](tests/crossing.rs)), `satisfies` by a node's memo
+([tests/satisfaction.rs](tests/satisfaction.rs)), and a chain of newtypes a
+hundred thousand deep rendered, compared and crossed on the default test
+thread ([tests/depth.rs](tests/depth.rs)). One test joins the koan
 [Miri slate](../../observe/miri_slate.md): `a_copied_list_outlives_its_home`,
-the one path only `values` drives — a deep copy nesting `fill` inside `fill`
-with string writes between, read after the region it was copied from is
-released. The pinned and kept paths it would otherwise
-pair with are `cellgraph`'s own slate.
+the one path only `values` drives — a deep copy laying down strings, a list and
+a dict whose string keys are written inside its key run's `fill`, read after
+the region it was copied from is released. The pinned and kept paths it would
+otherwise pair with are `cellgraph`'s own slate.
 
 ## Open work
 
@@ -457,9 +487,8 @@ pair with are `cellgraph`'s own slate.
   over lists and strings, resolved at a crossing.
 - [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,
   the lazy transformations that run koan code.
-- [Recursion over runtime data](../../roadmap/rewrite/recursion-over-runtime-data.md)
-  — rendering, equality and the crossing's deep copy walking a value deeper
-  than the stack.
+- [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
+  — the lattice walks over a value's carried type, as deep as the value.
 - [Module programs](../../roadmap/rewrite/modules.md) — a builtin native
   reading a sealed builtin value its overload admitted through the seal, once
   a view's members reach a program.

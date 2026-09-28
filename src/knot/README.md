@@ -327,26 +327,27 @@ crossing rebuilds that knot whole. It is summed at the tie and memoized on every
 crossing prices a member by reading one field, under the ordinary
 [verdict](../values/README.md#crossing).
 
-**Every knot member copies.** The value family's deep copy hands a member to
-this module's family together with the copy itself, and
-[`copy_into`](copy.rs) re-ties the whole knot in the destination's region:
-every node rebuilt in index order — a function's closure run through
-`ClosureBindings::copied` and its typing record re-homed beside it through the
-destination's writer, a code node's bound and supplied runs through the same
-copy, a data node through `Circular::copied`, a module's
-member run and a barrier's underlying function through that same copy — each held
-value deep-copied through the copy the crossing priced, each edge carried
-verbatim, since an edge names a node by index and so means the same node in
-the copy, anonymous nodes included, and the types, body and code shapes, quote
-bodies and knot weight carried over. The copied member is the one at the source's own index. A copy
-never shares a node with its source, so a copied knot outlives the region it
-was copied from.
+**Every knot member copies.** The copy is two walks over the knot, in
+[copy.rs](copy.rs). `held` lists every value the knot holds — each node in
+index order, and within a node exactly the values its rebuild asks for — and
+the value family's deep copy copies each of them over its own
+[explicit stack](../values/README.md#crossing). `copy_into` then re-ties the
+whole knot in the destination's region, answered each value it asks for with
+that finished copy: every node rebuilt in index order — a function's closure
+run through `ClosureBindings::copied` and its typing record re-homed beside it
+through the destination's writer, a code node's bound and supplied runs, a data
+node through `Circular::copied`, a module's member run and a barrier's
+underlying function — each edge carried verbatim, since an edge names a node by
+index and so means the same node in the copy, anonymous nodes included, and
+the types, body and code shapes, quote bodies and knot weight carried over. The
+copied member is the one at the source's own index. A copy never shares a node
+with its source, so a copied knot outlives the region it was copied from.
 
-A module's members are rebuilt through that one copy, so a member that is itself
-a knot member brings its whole knot with it — and two members of one foreign
-knot arrive as two copies of that knot, the price of "a member brings its knot",
-which a data node holding two such words already pays. A barrier's underlying
-function goes the same way, as the value word a member holding it would be.
+A module's member that is itself a knot member brings its whole knot with it,
+and one placement copies each knot once, so two members of one foreign knot
+arrive as members of one copy of it and still capture each other. A barrier's
+underlying function goes the same way, as the value word a member holding it
+would be.
 
 ## Equality and rendering
 
@@ -425,7 +426,9 @@ carries the scalar types alone.
 - [`tests/copy.rs`](tests/copy.rs) — a two-node knot crossed under a copy is the
   same knot rebuilt and its function equal to the source's, and so is a tagged ring beside a function capturing it
   (`a_copied_ring_is_the_same_graph_rebuilt`) and a module whose members are
-  themselves knot members (`a_copied_module_is_the_same_members_rebuilt`).
+  themselves knot members (`a_copied_module_is_the_same_members_rebuilt`); and
+  two members of one knot copied together through `copy_severed` share one copy
+  of it (`values_copied_in_one_placement_share_one_copy_of_a_knot`).
 - [`tests/code.rs`](tests/code.rs) — the quote door binding `$` names where the
   quote is written and printing its marks, code compared by its text and the
   values its names bind, a quote reading its own binder as a one-node knot, and
@@ -445,12 +448,13 @@ carries the scalar types alone.
 
 Five tests join the koan [Miri slate](../../observe/miri_slate.md), the paths
 only `knot` drives: `a_copied_knot_outlives_its_home` — a knot's node run
-filled while closure runs and deep copies are written into the same region,
-read through its edges after the region it was copied from is released —
+filled while closure runs are written into the same region, read through its
+edges after the region it was copied from is released —
 `a_copied_ring_outlives_its_home`, the same for a tagged ring whose record
 holds a string cell and an anonymous list node,
 `a_copied_module_outlives_its_home`, the same for a module whose member run is
-rebuilt member by member with each member's own knot behind it, and
+laid down over its members' copies, one copy of the function knot behind two
+of them, and
 `a_copied_barrier_outlives_its_home`, for a barrier's resident written beside
 the node while the copy's node run is still being filled, and
 `a_copied_quote_outlives_its_home`, the same for a code node's resident and its

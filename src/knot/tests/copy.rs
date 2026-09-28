@@ -3,9 +3,9 @@
 //! `a_copied_knot_outlives_its_home`, `a_copied_ring_outlives_its_home`,
 //! `a_copied_module_outlives_its_home`, `a_copied_barrier_outlives_its_home` and
 //! `a_copied_quote_outlives_its_home` are on the Miri slate: they are the paths only `knot` drives —
-//! a knot's run laid down with closure runs, typing records, bound runs, data nodes and deep copies
-//! written into the region while the node run is being filled, read through edges after the region
-//! it was copied from is gone.
+//! a knot's run laid down with closure runs, typing records, bound runs and data nodes written into
+//! the region while the node run is being filled, over the held values' finished copies, read
+//! through edges after the region it was copied from is gone.
 
 use std::ptr;
 

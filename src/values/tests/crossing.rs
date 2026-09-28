@@ -1,8 +1,8 @@
 //! The crossing verb over both verdicts and both cell tiers, and the verdict itself.
 //!
 //! `a_copied_list_outlives_its_home` is on the Miri slate: it is the one path only `values` drives —
-//! a deep copy nesting `fill` inside `fill` with string writes between, read after the region it was
-//! copied from is gone.
+//! a deep copy laying down strings, a list and a dict whose string keys are written inside its key
+//! run's `fill`, read after the region it was copied from is gone.
 
 use std::ptr;
 

@@ -11,7 +11,8 @@
 //! A node's depth is computed once, at construction, from its parts' stored depths ([`node_depth`]),
 //! so no check walks a tree. An operator run counts as the nesting the rewrite in
 //! [scope/shape/build/rewrite.rs](../scope/shape/build/rewrite.rs) will fold it into, so a node the
-//! rewrite builds is never deeper than the node it replaces. See [README.md](README.md).
+//! rewrite builds is never deeper than the node it replaces. See
+//! [README.md § The syntax depth limit](README.md#the-syntax-depth-limit).
 
 use crate::parse::ast::{DispatchShape, ExpressionPart, NodeCache};
 use crate::parse::builtin_shapes::KEYWORDS;
